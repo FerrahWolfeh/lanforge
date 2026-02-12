@@ -1,0 +1,15 @@
+[package]
+name = "ipv6_namer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+netlink-packet-route = "0.28.0"
+rtnetlink = "0.20.0"
+anyhow = "1.0"
+pnet_base = "0.35.0"
+tracing = { version = "0.1.44", features = ["log"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+sysinfo = "0.38.1"
