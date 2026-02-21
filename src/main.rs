@@ -18,7 +18,7 @@ const OUTPUT_FILE: &str = "/mnt/ram/dnsmasq/ipv6_slaac_hosts";
 const TARGET_PREFIX: &str = "fd97:f00d:cafe:3731";
 
 // Hosts estáticos no dnsmasq (não recebem sufixo -slaac)
-const DNSMASQ_CONFIG: &str = "/etc/dnsmasq.conf";
+const DNSMASQ_CONFIG: &str = "/etc/dnsmasq-dhcp.conf";
 
 // Hosts estáticos identificados via dnsmasq.conf
 
@@ -274,14 +274,16 @@ fn reload_dnsmasq() {
     let mut system = System::new_all();
     system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
-    let sent_signal = system.processes_by_name("dnsmasq".as_ref()).any(|process| {
-        if process.name() == "dnsmasq" {
-            info!("Sending SIGHUP to dnsmasq (PID: {})", process.pid());
-            process.kill_with(Signal::Hangup).unwrap_or(false)
-        } else {
-            false
-        }
-    });
+    let sent_signal = system
+        .processes_by_name("pihole-FTL".as_ref())
+        .any(|process| {
+            if process.name() == "pihole-FTL" {
+                info!("Sending SIGHUP to dnsmasq (PID: {})", process.pid());
+                process.kill_with(Signal::Hangup).unwrap_or(false)
+            } else {
+                false
+            }
+        });
 
     if sent_signal {
         info!("Signal sent successfully.");
