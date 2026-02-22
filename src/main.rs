@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
+use clap::Parser;
 use futures::stream::TryStreamExt;
-use tracing::{error, info, warn};
-// Importamos os bitflags de estado corretamente
 use netlink_packet_route::neighbour::{
     NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState,
 };
@@ -9,22 +8,64 @@ use rtnetlink::{IpVersion, new_connection};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use sysinfo::{Signal, System};
 use tokio::signal::unix::{SignalKind, signal};
+use tracing::{error, info, warn};
 
-// --- CONFIGURAÇÃO ---
-const LEASES_FILE: &str = "/mnt/ram/dnsmasq/dnsmasq.leases";
-const OUTPUT_FILE: &str = "/mnt/ram/dnsmasq/ipv6_slaac_hosts";
-const TARGET_PREFIX: &str = "fd97:f00d:cafe:3731";
+// ---------------------------------------------------------------------------
+// CLI / environment configuration
+// ---------------------------------------------------------------------------
 
-// Hosts estáticos no dnsmasq (não recebem sufixo -slaac)
-const DNSMASQ_CONFIG: &str = "/etc/dnsmasq-dhcp.conf";
+/// IPv6 SLAAC host tracker for dnsmasq / pihole-FTL.
+///
+/// All options can also be supplied via the matching environment variable
+/// shown in brackets.
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Config {
+    /// dnsmasq leases file
+    #[arg(
+        long,
+        env = "IPV6N_LEASES_FILE",
+        default_value = "/mnt/ram/dnsmasq/dnsmasq.leases"
+    )]
+    leases_file: String,
 
-// Hosts estáticos identificados via dnsmasq.conf
+    /// Output hosts file written for dnsmasq
+    #[arg(
+        long,
+        env = "IPV6N_OUTPUT_FILE",
+        default_value = "/mnt/ram/dnsmasq/ipv6_slaac_hosts"
+    )]
+    output_file: String,
 
-#[tokio::main]
+    /// IPv6 prefix to watch (only neighbours matching this prefix are recorded)
+    #[arg(
+        long,
+        env = "IPV6N_TARGET_PREFIX",
+        default_value = "fd97:f00d:cafe:3731"
+    )]
+    target_prefix: String,
+
+    /// dnsmasq static-host config file (parsed for dhcp-host entries)
+    #[arg(
+        long,
+        env = "IPV6N_DNSMASQ_CONFIG",
+        default_value = "/etc/dnsmasq-dhcp.conf"
+    )]
+    dnsmasq_config: String,
+
+    /// Name of the DNS process to send SIGHUP to after updating the hosts file
+    #[arg(long, env = "IPV6N_DNS_PROCESS", default_value = "pihole-FTL")]
+    dns_process: String,
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    // 1. Configurar logs sem timestamp (systemd já coloca)
+    // Logging — systemd already adds timestamps, so we skip them.
     tracing_subscriber::fmt()
         .without_time()
         .with_env_filter(
@@ -33,66 +74,68 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    info!("Iniciando ipv6_namer em modo daemon (aguardando SIGUSR1)...");
+    let cfg = Config::parse();
 
-    // 2. Verificação de robustez: Configuração do Dnsmasq deve existir
-    if !std::path::Path::new(DNSMASQ_CONFIG).exists() {
+    info!("Starting ipv6_namer daemon (waiting for SIGUSR1)...");
+    info!("  leases_file   = {}", cfg.leases_file);
+    info!("  output_file   = {}", cfg.output_file);
+    info!("  target_prefix = {}", cfg.target_prefix);
+    info!("  dnsmasq_config= {}", cfg.dnsmasq_config);
+    info!("  dns_process   = {}", cfg.dns_process);
+
+    // Robustness check: config must exist before we even enter the loop.
+    if !std::path::Path::new(&cfg.dnsmasq_config).exists() {
         error!(
-            "CRÍTICO: Arquivo de configuração {} não encontrado. Abortando.",
-            DNSMASQ_CONFIG
+            "CRITICAL: config file {} not found. Aborting.",
+            cfg.dnsmasq_config
         );
         std::process::exit(1);
     }
 
-    // 3. Configurar handler de sinal SIGUSR1
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
 
-    // 4. Loop principal
     loop {
-        // Executa o scan imediatamente e depois espera sinal
-        if let Err(e) = process_cycle().await {
-            error!("Erro no ciclo de processamento: {:?}", e);
+        if let Err(e) = process_cycle(&cfg).await {
+            error!("Error in processing cycle: {:?}", e);
         }
 
-        info!("Ciclo concluído. Aguardando sinal SIGUSR1 para próximo scan...");
+        info!("Cycle complete. Waiting for SIGUSR1...");
         sigusr1.recv().await;
-        info!("Sinal SIGUSR1 recebido! Iniciando scan...");
+        info!("SIGUSR1 received! Starting scan...");
     }
 }
 
-async fn process_cycle() -> Result<()> {
-    // Leases podem não existir logo após boot, isso é recuperável (apenas warning)
-    let mac_map = get_mac_hostname_map().unwrap_or_else(|e| {
-        warn!("Não foi possível ler leases (pode ser temporário): {}", e);
+// ---------------------------------------------------------------------------
+// Core logic
+// ---------------------------------------------------------------------------
+
+async fn process_cycle(cfg: &Config) -> Result<()> {
+    let mac_map = get_mac_hostname_map(&cfg.leases_file).unwrap_or_else(|e| {
+        warn!("Could not read leases (may be temporary): {}", e);
         HashMap::new()
     });
 
     if mac_map.is_empty() {
-        // Apenas log de debug/info, pois pode ser normal em um sistema recém-iniciado
-        info!("Nenhum lease encontrado no momento.");
+        info!("No leases found at the moment.");
     }
 
-    let static_suffixes = get_static_suffixes().unwrap_or_else(|e| {
-        warn!("Falha ao ler {}: {}", DNSMASQ_CONFIG, e);
+    let static_suffixes = get_static_suffixes(&cfg.dnsmasq_config).unwrap_or_else(|e| {
+        warn!("Failed to read {}: {}", cfg.dnsmasq_config, e);
         HashMap::new()
     });
 
-    let neighbors = get_ipv6_neighbors().await?;
+    let neighbors = get_ipv6_neighbors(&cfg.target_prefix).await?;
 
-    let mut new_lines = HashSet::new();
+    let mut new_lines: HashSet<String> = HashSet::new();
 
     for (ip, mac) in neighbors {
         let mac_norm = mac.to_lowercase();
 
         if let Some(hostname) = mac_map.get(&mac_norm) {
-            // Hostname já vem minúsculo do get_mac_hostname_map
-            let is_static_ip = if let Some(suffix) = static_suffixes.get(&mac_norm) {
-                // Checa se o final do IP bate com o sufixo configurado
-                let clean_suffix = suffix.trim_matches(|c| c == '[' || c == ']');
-                ip.ends_with(clean_suffix)
-            } else {
-                false
-            };
+            let is_static_ip = static_suffixes
+                .get(&mac_norm)
+                .map(|suffix| ip.ends_with(suffix.trim_matches(|c| c == '[' || c == ']')))
+                .unwrap_or(false);
 
             let entry = if is_static_ip {
                 format!("{} {}", ip, hostname)
@@ -103,13 +146,18 @@ async fn process_cycle() -> Result<()> {
         }
     }
 
-    update_file_if_changed(new_lines)?;
+    update_file_if_changed(&cfg.output_file, new_lines)?;
+    reload_dns(&cfg.dns_process).await;
     Ok(())
 }
 
-fn get_mac_hostname_map() -> Result<HashMap<String, String>> {
+// ---------------------------------------------------------------------------
+// File helpers
+// ---------------------------------------------------------------------------
+
+fn get_mac_hostname_map(leases_file: &str) -> Result<HashMap<String, String>> {
     let file =
-        File::open(LEASES_FILE).with_context(|| format!("Falha ao abrir {}", LEASES_FILE))?;
+        File::open(leases_file).with_context(|| format!("Failed to open {}", leases_file))?;
     let reader = BufReader::new(file);
     let mut map = HashMap::new();
 
@@ -117,8 +165,8 @@ fn get_mac_hostname_map() -> Result<HashMap<String, String>> {
         let line = line?;
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 4 {
-            let mac = parts[1].to_string().to_lowercase();
-            let hostname = parts[3].to_string().to_lowercase();
+            let mac = parts[1].to_lowercase();
+            let hostname = parts[3].to_lowercase();
             if hostname != "*" {
                 map.insert(mac, hostname);
             }
@@ -127,9 +175,9 @@ fn get_mac_hostname_map() -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
-fn get_static_suffixes() -> Result<HashMap<String, String>> {
+fn get_static_suffixes(dnsmasq_config: &str) -> Result<HashMap<String, String>> {
     let file =
-        File::open(DNSMASQ_CONFIG).with_context(|| format!("Falha ao abrir {}", DNSMASQ_CONFIG))?;
+        File::open(dnsmasq_config).with_context(|| format!("Failed to open {}", dnsmasq_config))?;
     let reader = BufReader::new(file);
     let mut map = HashMap::new();
 
@@ -140,21 +188,17 @@ fn get_static_suffixes() -> Result<HashMap<String, String>> {
             continue;
         }
 
-        // Ex: dhcp-host=e0:d5:5e:e2:d4:89,[::1057:cafe],192.168.0.2,Archie,infinite
+        // Example: dhcp-host=e0:d5:5e:e2:d4:89,[::1057:cafe],192.168.0.2,Archie,infinite
         let content = line.trim_start_matches("dhcp-host=");
         let parts: Vec<&str> = content.split(',').collect();
 
-        // Precisamos encontrar MAC e Sufixo IPv6
         let mut mac = None;
         let mut ipv6_suffix = None;
 
         for part in parts {
             let part = part.trim();
-            // Heurística simples:
-            // MAC tem : e não tem [] (len 17 tipicamente, mas pode variar)
-            // IPv6 sufixo tem [] ou pelo menos :
             if part.contains(':') && !part.contains('[') && part.len() == 17 {
-                mac = Some(part.to_lowercase());
+                mac = Some(part.to_string());
             } else if part.starts_with('[') && part.ends_with(']') {
                 ipv6_suffix = Some(part.to_string());
             }
@@ -167,7 +211,52 @@ fn get_static_suffixes() -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
-async fn get_ipv6_neighbors() -> Result<Vec<(String, String)>> {
+fn update_file_if_changed(output_file: &str, new_lines: HashSet<String>) -> Result<()> {
+    let mut old_lines: HashSet<String> = HashSet::new();
+
+    if let Ok(file) = File::open(output_file) {
+        for l in BufReader::new(file).lines().map_while(Result::ok) {
+            old_lines.insert(l.trim().to_string());
+        }
+    }
+
+    let added: Vec<_> = new_lines.difference(&old_lines).collect();
+    let removed: Vec<_> = old_lines.difference(&new_lines).collect();
+
+    if !added.is_empty() {
+        info!("Changes detected. Adding:");
+        for item in &added {
+            info!("  + {}", item);
+        }
+    }
+    if !removed.is_empty() {
+        info!("Changes detected. Removing:");
+        for item in &removed {
+            info!("  - {}", item);
+        }
+    }
+
+    if !added.is_empty() || !removed.is_empty() {
+        info!("Writing updated hosts file...");
+        let mut content: Vec<_> = new_lines.into_iter().collect();
+        content.sort();
+
+        let mut file = File::create(output_file).context("Error writing hosts file")?;
+        for line in &content {
+            writeln!(file, "{}", line)?;
+        }
+    } else {
+        info!("No changes detected.");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Netlink neighbour discovery
+// ---------------------------------------------------------------------------
+
+async fn get_ipv6_neighbors(target_prefix: &str) -> Result<Vec<(String, String)>> {
     let (connection, handle, _) = new_connection()?;
     tokio::spawn(connection);
 
@@ -180,7 +269,7 @@ async fn get_ipv6_neighbors() -> Result<Vec<(String, String)>> {
 
     while let Some(msg) = stream.try_next().await? {
         if let Some((ip, mac)) = parse_neighbor(msg)
-            && ip.starts_with(TARGET_PREFIX)
+            && ip.starts_with(target_prefix)
         {
             neighbors.push((ip, mac));
         }
@@ -190,8 +279,6 @@ async fn get_ipv6_neighbors() -> Result<Vec<(String, String)>> {
 }
 
 fn parse_neighbor(msg: NeighbourMessage) -> Option<(String, String)> {
-    // CORREÇÃO 1: Usar bitflags methods para verificar o estado
-    // Ignora se for INCOMPLETE ou FAILED
     if msg.header.state == NeighbourState::Incomplete || msg.header.state == NeighbourState::Failed
     {
         return None;
@@ -202,11 +289,9 @@ fn parse_neighbor(msg: NeighbourMessage) -> Option<(String, String)> {
 
     for attr in msg.attributes {
         match attr {
-            // CORREÇÃO 2: Extrair IP do enum NeighbourAddress
             NeighbourAttribute::Destination(NeighbourAddress::Inet6(ipv6)) => {
                 ip_str = ipv6.to_string();
             }
-            // CORREÇÃO 3: Nome correto da variante é LinkLocalAddress
             NeighbourAttribute::LinkLocalAddress(mac_bytes) => {
                 mac_str = mac_bytes
                     .iter()
@@ -225,69 +310,25 @@ fn parse_neighbor(msg: NeighbourMessage) -> Option<(String, String)> {
     }
 }
 
-fn update_file_if_changed(new_lines: HashSet<String>) -> Result<()> {
-    let mut old_lines = HashSet::new();
+// ---------------------------------------------------------------------------
+// DNS process reload  (lightweight: just pkill -HUP <name>)
+// ---------------------------------------------------------------------------
 
-    if std::path::Path::new(OUTPUT_FILE).exists()
-        && let Ok(file) = File::open(OUTPUT_FILE)
+async fn reload_dns(process_name: &str) {
+    // Use pkill to send SIGHUP by process name — no sysinfo needed, minimal overhead.
+    match tokio::process::Command::new("pkill")
+        .args(["-HUP", process_name])
+        .status()
+        .await
     {
-        for l in BufReader::new(file).lines().map_while(Result::ok) {
-            old_lines.insert(l.trim().to_string());
+        Ok(status) if status.success() => {
+            info!("Sent SIGHUP to '{}'.", process_name);
         }
-    }
-
-    let added: Vec<_> = new_lines.difference(&old_lines).collect();
-    let removed: Vec<_> = old_lines.difference(&new_lines).collect();
-
-    if !added.is_empty() {
-        info!("Changes detected. Adding:");
-        for item in &added {
-            info!("+ {}", item);
+        Ok(_) => {
+            warn!("Could not find process '{}' to reload.", process_name);
         }
-    }
-    if !removed.is_empty() {
-        info!("Changes detected. Removing:");
-        for item in &removed {
-            info!("- {}", item);
+        Err(e) => {
+            warn!("Failed to run pkill: {}", e);
         }
-    }
-
-    if !added.is_empty() || !removed.is_empty() {
-        info!("Updating file and reloading dnsmasq...");
-
-        let mut content = new_lines.clone().into_iter().collect::<Vec<_>>();
-        content.sort();
-
-        let mut file = File::create(OUTPUT_FILE).context("Erro ao gravar arquivo de hosts")?;
-        for line in &content {
-            writeln!(file, "{}", line)?;
-        }
-
-        reload_dnsmasq();
-    } else {
-        info!("No changes detected - file would remain unchanged");
-    }
-    Ok(())
-}
-
-fn reload_dnsmasq() {
-    let mut system = System::new_all();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-
-    let sent_signal = system
-        .processes_by_name("pihole-FTL".as_ref())
-        .any(|process| {
-            if process.name() == "pihole-FTL" {
-                info!("Sending SIGHUP to dnsmasq (PID: {})", process.pid());
-                process.kill_with(Signal::Hangup).unwrap_or(false)
-            } else {
-                false
-            }
-        });
-
-    if sent_signal {
-        info!("Signal sent successfully.");
-    } else {
-        warn!("Could not find dnsmasq process to reload.");
     }
 }

@@ -1,0 +1,20 @@
+[Unit]
+Description=IPv6 SLAAC Host Updater for Dnsmasq
+After=network.target dnsmasq.service
+
+[Service]
+ExecStart=/usr/local/bin/ipv6_namer
+Environment=IPV6N_LEASES_FILE=/mnt/ram/dnsmasq/dnsmasq.leases
+Environment=IPV6N_OUTPUT_FILE=/mnt/ram/dnsmasq/ipv6_slaac_hosts
+Environment=IPV6N_TARGET_PREFIX=fd97:f00d:cafe:3731
+Environment=IPV6N_DNSMASQ_CONFIG=/etc/dnsmasq-dhcp.conf
+Environment=IPV6N_DNS_PROCESS=pihole-FTL
+
+Type=simple
+User=root
+Group=root
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
