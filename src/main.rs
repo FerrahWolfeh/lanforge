@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, Instant, interval, sleep_until};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
 // CLI / environment configuration
@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
             Some((msg, _)) = messages.next() => {
                 if is_relevant_neigh_event(&msg, &cfg.target_prefix) {
                     if scan_deadline.is_none() {
-                        info!("Neighbour event detected, debouncing {}s...", cfg.debounce_secs);
+                        debug!("Neighbour event detected, debouncing {}s...", cfg.debounce_secs);
                     }
                     // Push the deadline forward on every burst event
                     scan_deadline = Some(Instant::now() + debounce_window);
@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
                 }
             } => {
                 scan_deadline = None;
-                info!("Debounce window elapsed, running scan...");
+                debug!("Debounce window elapsed, running scan...");
                 if let Err(e) = process_cycle(&cfg, &handle).await {
                     error!("Error in event-triggered scan: {:?}", e);
                 }
@@ -161,7 +161,7 @@ async fn main() -> Result<()> {
 
             // ── Periodic fallback scan ───────────────────────────────────
             _ = fallback.tick() => {
-                info!("Periodic fallback scan...");
+                debug!("Periodic fallback scan...");
                 if let Err(e) = process_cycle(&cfg, &handle).await {
                     error!("Error in fallback scan: {:?}", e);
                 }
@@ -187,10 +187,9 @@ async fn main() -> Result<()> {
 fn is_relevant_neigh_event(msg: &NetlinkMessage<RouteNetlinkMessage>, target_prefix: &str) -> bool {
     match &msg.payload {
         NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(neigh)) => {
-            // Skip transient states — only care once the entry is confirmed
-            if neigh.header.state == NeighbourState::Incomplete
-                || neigh.header.state == NeighbourState::Failed
-            {
+            // Only purely transient states should be completely ignored.
+            // When an entry transitions to Failed, we WANT a scan so we can immediately drop it.
+            if neigh.header.state == NeighbourState::Incomplete {
                 return false;
             }
             neigh_matches_prefix(neigh, target_prefix)
@@ -357,7 +356,7 @@ fn update_file_if_changed(output_file: &str, new_lines: HashSet<String>) -> Resu
         }
         Ok(true)
     } else {
-        info!("No changes.");
+        debug!("No changes.");
         Ok(false)
     }
 }
