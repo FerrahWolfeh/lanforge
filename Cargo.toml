@@ -4,11 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# Minimal tokio: only what we actually use (signal + macros for #[tokio::main])
-tokio = { version = "1", features = ["macros", "rt", "signal", "process"] }
+tokio = { version = "1", features = [
+    "macros",
+    "rt",
+    "signal",
+    "process",
+    "time",
+] }
 futures = { version = "0.3", default-features = false, features = ["std"] }
-netlink-packet-route = "0.28.0"
-rtnetlink = "0.20.0"
+netlink-packet-core = "0.8"
+netlink-packet-route = "0.28"
+netlink-sys = "0.8"
+rtnetlink = "0.20"
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = [
@@ -16,12 +23,11 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
     "fmt",
     "ansi",
 ] }
-# clap for CLI args — small_vec feature keeps binary thin
 clap = { version = "4", features = ["derive", "env"] }
 
 [profile.release]
-opt-level = "z"   # Optimise for size
-lto = true        # Link-time optimisation
-codegen-units = 1 # Single codegen unit → better LTO
-strip = true      # Strip debug symbols
-panic = "abort"   # Smaller panic handler
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

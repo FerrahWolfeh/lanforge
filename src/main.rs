@@ -1,14 +1,18 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use futures::stream::TryStreamExt;
-use netlink_packet_route::neighbour::{
-    NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState,
+use futures::{StreamExt, stream::TryStreamExt};
+use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
+use netlink_packet_route::{
+    RouteNetlinkMessage,
+    neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState},
 };
-use rtnetlink::{IpVersion, new_connection};
+use netlink_sys::AsyncSocket;
+use rtnetlink::{Handle, IpVersion, new_connection};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::time::{Duration, Instant, interval, sleep_until};
 use tracing::{error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -17,8 +21,7 @@ use tracing::{error, info, warn};
 
 /// IPv6 SLAAC host tracker for dnsmasq / pihole-FTL.
 ///
-/// All options can also be supplied via the matching environment variable
-/// shown in brackets.
+/// All options can also be supplied via the matching environment variable.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Config {
@@ -57,6 +60,14 @@ struct Config {
     /// Name of the DNS process to send SIGHUP to after updating the hosts file
     #[arg(long, env = "IPV6N_DNS_PROCESS", default_value = "pihole-FTL")]
     dns_process: String,
+
+    /// Debounce window in seconds: coalesces rapid NDP events into a single scan
+    #[arg(long, env = "IPV6N_DEBOUNCE_SECS", default_value_t = 2)]
+    debounce_secs: u64,
+
+    /// Interval in minutes for a periodic fallback full scan (guards against missed events)
+    #[arg(long, env = "IPV6N_FALLBACK_MINS", default_value_t = 5)]
+    fallback_mins: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +76,6 @@ struct Config {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    // Logging — systemd already adds timestamps, so we skip them.
     tracing_subscriber::fmt()
         .without_time()
         .with_env_filter(
@@ -76,14 +86,15 @@ async fn main() -> Result<()> {
 
     let cfg = Config::parse();
 
-    info!("Starting ipv6_namer daemon (waiting for SIGUSR1)...");
+    info!("Starting ipv6_namer (event-driven netlink monitor)");
     info!("  leases_file   = {}", cfg.leases_file);
     info!("  output_file   = {}", cfg.output_file);
     info!("  target_prefix = {}", cfg.target_prefix);
     info!("  dnsmasq_config= {}", cfg.dnsmasq_config);
     info!("  dns_process   = {}", cfg.dns_process);
+    info!("  debounce      = {}s", cfg.debounce_secs);
+    info!("  fallback scan = every {}min", cfg.fallback_mins);
 
-    // Robustness check: config must exist before we even enter the loop.
     if !std::path::Path::new(&cfg.dnsmasq_config).exists() {
         error!(
             "CRITICAL: config file {} not found. Aborting.",
@@ -92,24 +103,121 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
+    // -----------------------------------------------------------------------
+    // Single netlink connection for the whole daemon lifetime.
+    // Subscribe to RTNLGRP_NEIGH (group 3) for unsolicited neighbour events,
+    // and keep the Handle for periodic on-demand RTM_GETNEIGH queries.
+    // -----------------------------------------------------------------------
+    let (mut connection, handle, mut messages) = new_connection()?;
+
+    // RTNLGRP_NEIGH = 3 (Linux kernel constant, stable since 2.6)
+    connection.socket_mut().socket_mut().add_membership(3)?;
+    tokio::spawn(connection);
+
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
 
-    loop {
-        if let Err(e) = process_cycle(&cfg).await {
-            error!("Error in processing cycle: {:?}", e);
-        }
+    let debounce_window = Duration::from_secs(cfg.debounce_secs);
+    let mut scan_deadline: Option<Instant> = None;
 
-        info!("Cycle complete. Waiting for SIGUSR1...");
-        sigusr1.recv().await;
-        info!("SIGUSR1 received! Starting scan...");
+    // Periodic fallback timer. Consume the first tick so it doesn't fire immediately
+    // (we run an initial scan manually right below).
+    let mut fallback = interval(Duration::from_secs(cfg.fallback_mins * 60));
+    fallback.tick().await;
+
+    // Initial scan on startup
+    info!("Running initial scan...");
+    if let Err(e) = process_cycle(&cfg, &handle).await {
+        error!("Error in initial scan: {:?}", e);
     }
+
+    info!("Listening for neighbour events (SIGUSR1 = manual scan)...");
+
+    loop {
+        tokio::select! {
+            // ── Netlink neighbour event ──────────────────────────────────
+            Some((msg, _)) = messages.next() => {
+                if is_relevant_neigh_event(&msg, &cfg.target_prefix) {
+                    if scan_deadline.is_none() {
+                        info!("Neighbour event detected, debouncing {}s...", cfg.debounce_secs);
+                    }
+                    // Push the deadline forward on every burst event
+                    scan_deadline = Some(Instant::now() + debounce_window);
+                }
+            }
+
+            // ── Debounce timer fires ─────────────────────────────────────
+            _ = async {
+                match scan_deadline {
+                    Some(dl) => sleep_until(dl).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                scan_deadline = None;
+                info!("Debounce window elapsed, running scan...");
+                if let Err(e) = process_cycle(&cfg, &handle).await {
+                    error!("Error in event-triggered scan: {:?}", e);
+                }
+            }
+
+            // ── Periodic fallback scan ───────────────────────────────────
+            _ = fallback.tick() => {
+                info!("Periodic fallback scan...");
+                if let Err(e) = process_cycle(&cfg, &handle).await {
+                    error!("Error in fallback scan: {:?}", e);
+                }
+            }
+
+            // ── Manual SIGUSR1 ───────────────────────────────────────────
+            _ = sigusr1.recv() => {
+                info!("SIGUSR1 received, running immediate scan...");
+                scan_deadline = None;
+                if let Err(e) = process_cycle(&cfg, &handle).await {
+                    error!("Error in manual scan: {:?}", e);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Neighbour event filter
+// ---------------------------------------------------------------------------
+
+/// Returns true if `msg` is a NEW or DEL neighbour event for our target prefix.
+fn is_relevant_neigh_event(msg: &NetlinkMessage<RouteNetlinkMessage>, target_prefix: &str) -> bool {
+    match &msg.payload {
+        NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(neigh)) => {
+            // Skip transient states — only care once the entry is confirmed
+            if neigh.header.state == NeighbourState::Incomplete
+                || neigh.header.state == NeighbourState::Failed
+            {
+                return false;
+            }
+            neigh_matches_prefix(neigh, target_prefix)
+        }
+        NetlinkPayload::InnerMessage(RouteNetlinkMessage::DelNeighbour(neigh)) => {
+            // A deletion always warrants a rescan to remove the entry
+            neigh_matches_prefix(neigh, target_prefix)
+        }
+        _ => false,
+    }
+}
+
+fn neigh_matches_prefix(neigh: &NeighbourMessage, target_prefix: &str) -> bool {
+    neigh.attributes.iter().any(|attr| {
+        matches!(
+            attr,
+            NeighbourAttribute::Destination(NeighbourAddress::Inet6(ip))
+                if ip.to_string().starts_with(target_prefix)
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Core logic
 // ---------------------------------------------------------------------------
 
-async fn process_cycle(cfg: &Config) -> Result<()> {
+async fn process_cycle(cfg: &Config, handle: &Handle) -> Result<()> {
     let mac_map = get_mac_hostname_map(&cfg.leases_file).unwrap_or_else(|e| {
         warn!("Could not read leases (may be temporary): {}", e);
         HashMap::new()
@@ -124,7 +232,7 @@ async fn process_cycle(cfg: &Config) -> Result<()> {
         HashMap::new()
     });
 
-    let neighbors = get_ipv6_neighbors(&cfg.target_prefix).await?;
+    let neighbors = get_ipv6_neighbors(handle, &cfg.target_prefix).await?;
 
     let mut new_lines: HashSet<String> = HashSet::new();
 
@@ -146,8 +254,10 @@ async fn process_cycle(cfg: &Config) -> Result<()> {
         }
     }
 
-    update_file_if_changed(&cfg.output_file, new_lines)?;
-    reload_dns(&cfg.dns_process).await;
+    let changed = update_file_if_changed(&cfg.output_file, new_lines)?;
+    if changed {
+        reload_dns(&cfg.dns_process).await;
+    }
     Ok(())
 }
 
@@ -166,7 +276,7 @@ fn get_mac_hostname_map(leases_file: &str) -> Result<HashMap<String, String>> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 4 {
             let mac = parts[1].to_lowercase();
-            let hostname = parts[3].to_lowercase();
+            let hostname = parts[3].to_string();
             if hostname != "*" {
                 map.insert(mac, hostname);
             }
@@ -211,7 +321,8 @@ fn get_static_suffixes(dnsmasq_config: &str) -> Result<HashMap<String, String>> 
     Ok(map)
 }
 
-fn update_file_if_changed(output_file: &str, new_lines: HashSet<String>) -> Result<()> {
+/// Returns `true` if the file was actually changed (and written).
+fn update_file_if_changed(output_file: &str, new_lines: HashSet<String>) -> Result<bool> {
     let mut old_lines: HashSet<String> = HashSet::new();
 
     if let Ok(file) = File::open(output_file) {
@@ -224,20 +335,19 @@ fn update_file_if_changed(output_file: &str, new_lines: HashSet<String>) -> Resu
     let removed: Vec<_> = old_lines.difference(&new_lines).collect();
 
     if !added.is_empty() {
-        info!("Changes detected. Adding:");
+        info!("Adding:");
         for item in &added {
             info!("  + {}", item);
         }
     }
     if !removed.is_empty() {
-        info!("Changes detected. Removing:");
+        info!("Removing:");
         for item in &removed {
             info!("  - {}", item);
         }
     }
 
     if !added.is_empty() || !removed.is_empty() {
-        info!("Writing updated hosts file...");
         let mut content: Vec<_> = new_lines.into_iter().collect();
         content.sort();
 
@@ -245,21 +355,18 @@ fn update_file_if_changed(output_file: &str, new_lines: HashSet<String>) -> Resu
         for line in &content {
             writeln!(file, "{}", line)?;
         }
+        Ok(true)
     } else {
-        info!("No changes detected.");
+        info!("No changes.");
+        Ok(false)
     }
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Netlink neighbour discovery
+// Netlink neighbour query (uses the shared Handle)
 // ---------------------------------------------------------------------------
 
-async fn get_ipv6_neighbors(target_prefix: &str) -> Result<Vec<(String, String)>> {
-    let (connection, handle, _) = new_connection()?;
-    tokio::spawn(connection);
-
+async fn get_ipv6_neighbors(handle: &Handle, target_prefix: &str) -> Result<Vec<(String, String)>> {
     let mut neighbors = Vec::new();
     let mut stream = handle
         .neighbours()
@@ -311,11 +418,10 @@ fn parse_neighbor(msg: NeighbourMessage) -> Option<(String, String)> {
 }
 
 // ---------------------------------------------------------------------------
-// DNS process reload  (lightweight: just pkill -HUP <name>)
+// DNS process reload  (pkill -HUP <name>)
 // ---------------------------------------------------------------------------
 
 async fn reload_dns(process_name: &str) {
-    // Use pkill to send SIGHUP by process name — no sysinfo needed, minimal overhead.
     match tokio::process::Command::new("pkill")
         .args(["-HUP", process_name])
         .status()
