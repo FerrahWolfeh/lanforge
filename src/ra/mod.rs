@@ -482,3 +482,66 @@ fn extract_ipv6(msg: &netlink_packet_route::address::AddressMessage) -> Option<I
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn state_rate_limits_multicast_and_unicast() {
+        let mut state = RaState::new();
+        let ip: Ipv6Addr = "fe80::1".parse().unwrap();
+
+        // Inicialmente, tudo liberado
+        assert!(state.can_multicast_now());
+        assert!(state.can_unicast_now(&ip));
+
+        // Após registrar um envio, deve bloquear pelo MIN_DELAY_BETWEEN_RAS (3s)
+        state.record_multicast();
+        assert!(
+            !state.can_multicast_now(),
+            "Multicast deve sofrer rate limit"
+        );
+
+        state.record_unicast(ip);
+        assert!(
+            !state.can_unicast_now(&ip),
+            "Unicast deve sofrer rate limit"
+        );
+
+        // Um IP diferente não deve ser afetado pelo rate limit do primeiro
+        let ip2: Ipv6Addr = "fe80::2".parse().unwrap();
+        assert!(state.can_unicast_now(&ip2));
+    }
+
+    #[test]
+    fn state_startup_phase_uses_short_intervals() {
+        let cfg = RaConfig {
+            max_interval: Duration::from_secs(100),
+            ..Default::default()
+        };
+        let mut state = RaState::new();
+
+        // Os 3 primeiros RAs devem ter um intervalo curto (<= 16s)
+        for _ in 0..3 {
+            let interval = state.next_interval(&cfg);
+            assert!(
+                interval <= MAX_INITIAL_RTR_ADVERT_INTERVAL,
+                "Intervalo de startup muito longo: {:?}",
+                interval
+            );
+            state.record_multicast();
+        }
+
+        // Do 4º em diante, deve entrar no regime normal [Min, Max]
+        // Min = 0.33 * Max = 33s. Max = 100s.
+        let normal_interval = state.next_interval(&cfg);
+        assert!(
+            normal_interval >= Duration::from_secs(33)
+                && normal_interval <= Duration::from_secs(100),
+            "Intervalo normal fora dos limites: {:?}",
+            normal_interval
+        );
+    }
+}

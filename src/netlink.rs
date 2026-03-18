@@ -208,3 +208,132 @@ fn parse_neighbor(msg: NeighbourMessage) -> Option<(String, String)> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};
+    use netlink_packet_route::neighbour::{NeighbourHeader, NeighbourMessage};
+
+    // -----------------------------------------------------------------------
+    // Helper para gerar mensagens Netlink simuladas
+    // -----------------------------------------------------------------------
+    fn mock_neigh_msg(
+        state: NeighbourState,
+        ip: Ipv6Addr,
+        mac: Option<[u8; 6]>,
+        is_delete: bool,
+    ) -> NetlinkMessage<RouteNetlinkMessage> {
+        let mut attributes = vec![NeighbourAttribute::Destination(NeighbourAddress::Inet6(ip))];
+        if let Some(m) = mac {
+            attributes.push(NeighbourAttribute::LinkLocalAddress(m.to_vec()));
+        }
+
+        // Contornando o #[non_exhaustive] instanciando com default() e mutando depois
+        let header = NeighbourHeader {
+            family: AddressFamily::Inet6,
+            ifindex: 1,
+            state,
+            ..Default::default()
+        };
+
+        let mut neigh = NeighbourMessage::default();
+        neigh.header = header;
+        neigh.attributes = attributes;
+
+        let payload = if is_delete {
+            RouteNetlinkMessage::DelNeighbour(neigh)
+        } else {
+            RouteNetlinkMessage::NewNeighbour(neigh)
+        };
+
+        // O mesmo vale para a NetlinkMessage para evitar problemas com versões futuras
+        NetlinkMessage::new(
+            NetlinkHeader::default(),
+            NetlinkPayload::InnerMessage(payload),
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // Testes de Parse/Filtro Netlink
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_neigh_info_success() {
+        let ip: Ipv6Addr = "fe80::1".parse().unwrap();
+        let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+
+        let msg = mock_neigh_msg(NeighbourState::Reachable, ip, Some(mac), false);
+
+        let extracted = extract_neigh_info(&msg);
+        assert_eq!(extracted, Some((ip, mac)));
+    }
+
+    #[test]
+    fn extract_neigh_info_ignores_incomplete_states() {
+        let ip: Ipv6Addr = "fe80::1".parse().unwrap();
+        let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+
+        // Estado Incomplete (MAC ainda sendo descoberto) não deve ser extraído
+        let msg1 = mock_neigh_msg(NeighbourState::Incomplete, ip, Some(mac), false);
+        assert_eq!(extract_neigh_info(&msg1), None);
+
+        // Estado Failed (host não respondeu) também é ignorado
+        let msg2 = mock_neigh_msg(NeighbourState::Failed, ip, Some(mac), false);
+        assert_eq!(extract_neigh_info(&msg2), None);
+    }
+
+    #[test]
+    fn is_relevant_event_matches_prefix_and_state() {
+        let target_prefix = "fd97:f00d:cafe:3731::";
+        let valid_ip: Ipv6Addr = "fd97:f00d:cafe:3731::1234".parse().unwrap();
+        let invalid_ip: Ipv6Addr = "2001:db8::1234".parse().unwrap();
+
+        let msg_valid = mock_neigh_msg(NeighbourState::Reachable, valid_ip, None, false);
+        let msg_invalid = mock_neigh_msg(NeighbourState::Reachable, invalid_ip, None, false);
+        let msg_incomplete = mock_neigh_msg(NeighbourState::Incomplete, valid_ip, None, false);
+
+        assert!(
+            is_relevant_neigh_event(&msg_valid, target_prefix),
+            "Deve aceitar IP do prefixo alvo"
+        );
+        assert!(
+            !is_relevant_neigh_event(&msg_invalid, target_prefix),
+            "Deve ignorar prefixo alienígena"
+        );
+        assert!(
+            !is_relevant_neigh_event(&msg_incomplete, target_prefix),
+            "Deve ignorar estado Incomplete"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Testes de Matemática de IP (EUI-64)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mac_from_eui64_valid() {
+        // IP EUI-64 gerado a partir do MAC: 3c:0a:7a:d8:11:78
+        // O bit U/L (bit 6 do primeiro octeto) é invertido, 0x3C vira 0x3E.
+        let ip: Ipv6Addr = "fe80::3e0a:7aff:fed8:1178".parse().unwrap();
+
+        let extracted_mac = mac_from_eui64_link_local(&ip);
+        let expected_mac = [0x3c, 0x0a, 0x7a, 0xd8, 0x11, 0x78];
+
+        assert_eq!(extracted_mac, Some(expected_mac));
+    }
+
+    #[test]
+    fn mac_from_eui64_ignores_non_link_local() {
+        // Um GUA usando EUI-64. Nossa função é estrita a link-local (fe80::)
+        let ip: Ipv6Addr = "2001:db8::3e0a:7aff:fed8:1178".parse().unwrap();
+        assert_eq!(mac_from_eui64_link_local(&ip), None);
+    }
+
+    #[test]
+    fn mac_from_eui64_ignores_privacy_extensions() {
+        // Link-local opaco aleatório (não contém FF:FE no meio)
+        let ip: Ipv6Addr = "fe80::1234:5678:9abc:def0".parse().unwrap();
+        assert_eq!(mac_from_eui64_link_local(&ip), None);
+    }
+}

@@ -407,3 +407,225 @@ fn encode_msg(msg: &Message) -> Vec<u8> {
         .expect("Encoding DHCPv6 message should not fail");
     buf
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dhcproto::v6::{DhcpOptions, IANA, OptionCode};
+    use std::net::Ipv6Addr;
+
+    // -----------------------------------------------------------------------
+    // Factories & Helpers para os Testes
+    // -----------------------------------------------------------------------
+
+    fn dummy_server() -> Dhcpv6Server {
+        let cfg = Dhcpv6Config {
+            enabled: true,
+            iface: "lo".to_string(),
+            lease_time: 86400,
+            ula_prefix: Some("fd97:f00d:cafe:3731::".parse().unwrap()),
+            range_start: Some("fd97:f00d:cafe:3731::100".parse().unwrap()),
+            range_end: Some("fd97:f00d:cafe:3731::200".parse().unwrap()),
+        };
+        let pool = Ipv6Pool::new(cfg.range_start, cfg.range_end, cfg.ula_prefix);
+        let server_duid = Duid::new(vec![
+            0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        ]);
+        Dhcpv6Server::new(cfg, pool, server_duid)
+    }
+
+    fn dummy_client_duid() -> Duid {
+        Duid::new(vec![
+            0x00, 0x03, 0x00, 0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+        ])
+    }
+
+    fn dummy_mac() -> MacAddr {
+        MacAddr([0x01, 0x02, 0x03, 0x04, 0x05, 0x06])
+    }
+
+    fn peer_ip() -> Ipv6Addr {
+        "fe80::1".parse().unwrap()
+    }
+
+    fn build_solicit(with_rapid_commit: bool) -> Message {
+        let mut msg = Message::new(MessageType::Solicit);
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: 12345,
+            t1: 0,
+            t2: 0,
+            opts: DhcpOptions::new(),
+        }));
+        if with_rapid_commit {
+            msg.opts_mut().insert(DhcpOption::RapidCommit);
+        }
+        msg
+    }
+
+    fn decode_reply(bytes: &[u8]) -> Message {
+        Message::decode(&mut Decoder::new(bytes)).expect("Should decode valid DHCPv6 reply")
+    }
+
+    // -----------------------------------------------------------------------
+    // Suíte de Testes DORA / DHCPv6
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn solicit_without_mac_is_ignored() {
+        let mut srv = dummy_server();
+        let msg = build_solicit(false);
+
+        // Passando None para o MAC deve forçar o HandleResult::Ignore
+        let res = srv.handle_solicit(&msg, dummy_client_duid(), None, peer_ip());
+        assert!(matches!(res, HandleResult::Ignore));
+    }
+
+    #[test]
+    fn solicit_standard_yields_advertise() {
+        let mut srv = dummy_server();
+        let msg = build_solicit(false);
+
+        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(dummy_mac()), peer_ip());
+
+        match res {
+            HandleResult::Reply(bytes, target, _, _) => {
+                let reply = decode_reply(&bytes);
+                assert_eq!(reply.msg_type(), MessageType::Advertise);
+                assert_eq!(target, peer_ip());
+
+                // Verifica se a option Preference foi setada com autoridade máxima (255)
+                assert!(reply.opts().get(OptionCode::Preference).is_some());
+
+                // Verifica se tem a oferta de IP (IA_NA -> IAAddr)
+                if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
+                    assert!(iana.opts.get(OptionCode::IAAddr).is_some());
+                } else {
+                    panic!("Missing IA_NA in Advertise");
+                }
+            }
+            _ => panic!("Expected HandleResult::Reply"),
+        }
+    }
+
+    #[test]
+    fn solicit_with_rapid_commit_yields_reply() {
+        let mut srv = dummy_server();
+        let msg = build_solicit(true); // Habilita Rapid Commit
+
+        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(dummy_mac()), peer_ip());
+
+        match res {
+            HandleResult::Reply(bytes, _, _, _) => {
+                let reply = decode_reply(&bytes);
+                // Rapid commit pula a fase ADVERTISE e vai direto para REPLY
+                assert_eq!(reply.msg_type(), MessageType::Reply);
+
+                // O servidor TEM que devolver a flag de Rapid Commit na resposta segundo a RFC
+                assert!(reply.opts().get(OptionCode::RapidCommit).is_some());
+            }
+            _ => panic!("Expected Reply"),
+        }
+    }
+
+    #[test]
+    fn request_missing_server_id_is_ignored() {
+        let mut srv = dummy_server();
+        let msg = Message::new(MessageType::Request); // Sem Server ID
+
+        let res = srv.handle_request(&msg, dummy_client_duid(), Some(dummy_mac()), peer_ip());
+        assert!(matches!(res, HandleResult::Ignore));
+    }
+
+    #[test]
+    fn request_valid_yields_reply_with_ip() {
+        let mut srv = dummy_server();
+        let mut msg = Message::new(MessageType::Request);
+
+        // Insere o Server ID legítimo (mock)
+        msg.opts_mut()
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: 999,
+            t1: 0,
+            t2: 0,
+            opts: DhcpOptions::new(),
+        }));
+
+        let res = srv.handle_request(&msg, dummy_client_duid(), Some(dummy_mac()), peer_ip());
+
+        match res {
+            HandleResult::Reply(bytes, _, _, _) => {
+                let reply = decode_reply(&bytes);
+                assert_eq!(reply.msg_type(), MessageType::Reply);
+
+                if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
+                    // Tem que retornar um endereço real do range
+                    let has_ip = iana.opts.get(OptionCode::IAAddr).is_some();
+                    assert!(has_ip, "Server failed to allocate IP in Reply");
+                } else {
+                    panic!("Missing IA_NA in Reply");
+                }
+            }
+            _ => panic!("Expected Reply"),
+        }
+    }
+
+    #[test]
+    fn release_frees_allocated_ip() {
+        let mut srv = dummy_server();
+        let mac = dummy_mac();
+        let requested_ip: Ipv6Addr = "fd97:f00d:cafe:3731::100".parse().unwrap();
+
+        // 1. Forçamos a alocação de um IP para este MAC diretamente na pool
+        srv.pool.allocate(mac, Some(requested_ip));
+        assert_eq!(srv.last_assignment_for(&mac), Some(requested_ip));
+
+        // 2. Montamos a mensagem de Release
+        let mut msg = Message::new(MessageType::Release);
+        msg.opts_mut()
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
+
+        let mut ia_opts = DhcpOptions::new();
+        ia_opts.insert(DhcpOption::IAAddr(IAAddr {
+            addr: requested_ip,
+            preferred_life: 0,
+            valid_life: 0,
+            opts: DhcpOptions::new(),
+        }));
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: 1,
+            t1: 0,
+            t2: 0,
+            opts: ia_opts,
+        }));
+
+        // 3. Enviamos o Release para o servidor
+        let res = srv.handle_release(&msg, dummy_client_duid(), Some(mac), peer_ip());
+
+        // 4. Verificamos se o IP foi liberado da pool com sucesso
+        assert!(matches!(res, HandleResult::Reply(..)));
+        assert_eq!(
+            srv.last_assignment_for(&mac),
+            None,
+            "IP should have been released from the pool"
+        );
+    }
+
+    #[test]
+    fn information_request_yields_reply_without_ia_na() {
+        let srv = dummy_server();
+        let msg = Message::new(MessageType::InformationRequest);
+
+        let res = srv.handle_information_request(&msg, dummy_client_duid(), peer_ip());
+
+        match res {
+            HandleResult::Reply(bytes, _, _, _) => {
+                let reply = decode_reply(&bytes);
+                assert_eq!(reply.msg_type(), MessageType::Reply);
+                // Information request pede parâmetros de rede (DNS), NUNCA endereços IPs
+                assert!(reply.opts().get(OptionCode::IANA).is_none());
+            }
+            _ => panic!("Expected Reply"),
+        }
+    }
+}

@@ -322,21 +322,65 @@ mod tests {
     }
 
     #[test]
-    fn ra_state_rate_limiting() {
-        use super::super::RaState;
-        let mut state = RaState::new();
-        // Sem envios anteriores, sempre pode enviar
-        assert!(state.can_multicast_now());
-        let ip: Ipv6Addr = "fe80::1".parse().unwrap();
-        assert!(state.can_unicast_now(&ip));
+    fn mtu_option_included_when_configured() {
+        let mac = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
 
-        // Após registrar envio, deve respeitar rate limit
-        state.record_multicast();
+        // Sem MTU configurado
+        let cfg_no_mtu = RaConfig::default();
+        let pkt_no_mtu = build_ra_packet(&cfg_no_mtu, &mac, None);
+        // Não deve conter o byte de type '5' (MTU option) após o Source Link-Layer (type 1)
+        assert!(!pkt_no_mtu.windows(2).any(|w| w[0] == 5 && w[1] == 1));
+
+        // Com MTU (ex: 1492 para PPPoE)
+        let cfg_with_mtu = RaConfig {
+            mtu: Some(1492),
+            ..Default::default()
+        };
+        let pkt_with_mtu = build_ra_packet(&cfg_with_mtu, &mac, None);
+
+        // Deve conter Type 5, Length 1, Reservado (2 bytes), MTU 1492 (0x05D4)
+        let expected_mtu_block = [5u8, 1, 0, 0, 0, 0, 0x05, 0xD4];
         assert!(
-            !state.can_multicast_now(),
-            "deve respeitar MIN_DELAY_BETWEEN_RAS"
+            pkt_with_mtu.windows(8).any(|w| w == expected_mtu_block),
+            "Opção de MTU não foi encodada corretamente"
         );
-        state.record_unicast(ip);
-        assert!(!state.can_unicast_now(&ip));
+    }
+
+    #[test]
+    fn empty_dns_lists_omit_options() {
+        // Se RDNSS ou DNSSL estiverem vazios, não devem sujar o pacote com opções Type 25 ou 31
+        let cfg = RaConfig {
+            rdnss: vec![],
+            dnssl: vec![],
+            ..Default::default()
+        };
+        let mac = [0x11; 6];
+        let pkt = build_ra_packet(&cfg, &mac, None);
+
+        assert!(!pkt.contains(&25u8), "Pacote não deve conter option RDNSS");
+        assert!(!pkt.contains(&31u8), "Pacote não deve conter option DNSSL");
+    }
+
+    #[test]
+    fn multiple_prefixes_appended_correctly() {
+        let cfg = RaConfig {
+            prefixes: vec![
+                PrefixConfig::ula("fd00::"),
+                PrefixConfig::gua_dynamic(), // AutoGua
+            ],
+            ..Default::default()
+        };
+
+        let mac = [0x11; 6];
+        let gua: Ipv6Addr = "2001:db8::".parse().unwrap();
+
+        let pkt = build_ra_packet(&cfg, &mac, Some(&gua));
+
+        // Opção de prefixo (Type 3) deve aparecer exatamente duas vezes
+        let prefix_count = pkt.windows(2).filter(|w| w[0] == 3 && w[1] == 4).count();
+        assert_eq!(
+            prefix_count, 2,
+            "Deveriam existir 2 blocos de Prefix Information"
+        );
     }
 }

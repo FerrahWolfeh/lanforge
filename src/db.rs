@@ -362,7 +362,11 @@ mod tests {
         let loaded = db.load_table().unwrap();
 
         let loaded_dev = loaded.devices().next().unwrap();
-        assert_eq!(loaded_dev.slaac.len(), 3);
+        assert_eq!(
+            loaded_dev.slaac.len(),
+            3,
+            "Deveria recuperar todos os IPs SLAAC do MAC"
+        );
     }
 
     #[test]
@@ -385,7 +389,7 @@ mod tests {
         let loaded_dev = loaded.devices().next().unwrap();
         assert_eq!(loaded_dev.duid.as_ref().unwrap().bytes, duid.bytes);
 
-        // Also verify DUID index works
+        // Verifica se o índice reverso de DUID foi reconstruído corretamente
         let found = loaded.find_by_duid(&duid);
         assert!(found.is_some());
         assert_eq!(found.unwrap().hostname, "DuidDevice");
@@ -421,22 +425,68 @@ mod tests {
     fn save_overwrites_previous() {
         let db = LeaseDb::open_in_memory().unwrap();
 
-        // Save first version
         let mut table = DeviceTable::new();
         let mac = make_mac(1);
-        let dev = table.get_or_insert(mac);
-        dev.hostname = "First".into();
+
+        // Salva a versão 1
+        table.get_or_insert(mac).hostname = "First".into();
         db.save_table(&table).unwrap();
 
-        // Save second version with different hostname
-        let mut table2 = DeviceTable::new();
-        let dev = table2.get_or_insert(mac);
-        dev.hostname = "Second".into();
-        db.save_table(&table2).unwrap();
+        // Salva a versão 2 (atualiza o hostname)
+        table.get_or_insert(mac).hostname = "Second".into();
+        db.save_table(&table).unwrap();
 
         let loaded = db.load_table().unwrap();
         let loaded_dev = loaded.devices().next().unwrap();
-        assert_eq!(loaded_dev.hostname, "Second");
-        assert_eq!(loaded.devices().count(), 1);
+
+        assert_eq!(
+            loaded_dev.hostname, "Second",
+            "A transação deve sobreescrever o estado antigo"
+        );
+        assert_eq!(
+            loaded.devices().count(),
+            1,
+            "Não deve duplicar os devices na tabela"
+        );
+    }
+
+    #[test]
+    fn skips_invalid_database_records_gracefully() {
+        // Testa a resiliência do sistema de parsing na inicialização
+        let db = LeaseDb::open_in_memory().unwrap();
+
+        // 1. Injetamos "lixo" diretamente no SQLite passando por cima da DeviceTable
+        db.conn.execute(
+            "INSERT INTO devices (mac, hostname, is_static, last_seen) VALUES ('bad-mac', 'Lixo', 0, 0)", 
+            []
+        ).unwrap();
+
+        db.conn.execute(
+            "INSERT INTO devices (mac, hostname, is_static, last_seen) VALUES ('aa:bb:cc:dd:ee:ff', 'Valido', 0, 0)", 
+            []
+        ).unwrap();
+
+        db.conn.execute(
+            "INSERT INTO v4_leases (mac, ip, expires) VALUES ('aa:bb:cc:dd:ee:ff', '999.999.999.999', 0)", 
+            []
+        ).unwrap();
+
+        // 2. O load_table NÃO DEVE falhar ou dar panic. Ele deve ignorar as linhas inválidas.
+        let table = db
+            .load_table()
+            .expect("O banco com lixo não deve causar erro fatal no load");
+
+        assert_eq!(
+            table.devices().count(),
+            1,
+            "O MAC inválido 'bad-mac' deve ter sido ignorado"
+        );
+
+        let dev = table.devices().next().unwrap();
+        assert_eq!(dev.hostname, "Valido");
+        assert!(
+            dev.v4.is_none(),
+            "O IP 999.999... não pode ser parseado, portanto o lease deve ser descartado"
+        );
     }
 }

@@ -121,38 +121,85 @@ pub async fn reload_dns(process_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::StaticDeviceCfg;
+    use crate::state::{MacAddr, V4Lease, V6Lease};
     use std::fs;
+    use std::time::SystemTime;
 
     #[test]
-    fn test_update_file_if_changed() {
+    fn writes_correct_host_formats_for_v4_v6_and_slaac() {
         let dir = std::env::temp_dir();
-        let file_path = dir.join("lanforge_test_hosts.txt");
+        let file_path = dir.join("lanforge_format_hosts.txt");
         let path_str = file_path.to_str().unwrap();
+        let _ = fs::remove_file(&file_path);
 
-        // Cleanup before test
+        let mut table = DeviceTable::new();
+        let mac = MacAddr::parse("e0:d5:5e:e2:d4:89").unwrap();
+
+        // Simulando a configuração estática com sufixo customizado
+        table.load_static_devices(&[StaticDeviceCfg {
+            mac: "e0:d5:5e:e2:d4:89".into(),
+            hostname: "Archie".into(),
+            v4_ip: None,
+            v6_suffix: Some("::1057:cafe".into()),
+        }]);
+
+        let dev = table.get_or_insert(mac);
+        dev.v4 = Some(V4Lease {
+            ip: "192.168.0.2".parse().unwrap(),
+            expires: SystemTime::now(),
+        });
+        dev.v6 = Some(V6Lease {
+            ip: "fd97::100".parse().unwrap(),
+            expires: SystemTime::now(),
+        });
+
+        // SLAAC 1: Bate com o sufixo estático (NÃO deve ter o alias -slaac)
+        table.record_slaac(mac, "fd97:f00d:cafe:3731::1057:cafe".parse().unwrap());
+        // SLAAC 2: IP aleatório de Privacy Extension (DEVE ter o alias -slaac)
+        table.record_slaac(
+            mac,
+            "fd97:f00d:cafe:3731:7c5a:23c3:41dc:7d9e".parse().unwrap(),
+        );
+
+        // Executa a função
+        let changed = write_hosts_from_table(&table, path_str).unwrap();
+        assert!(changed, "Deveria acusar mudança no arquivo novo");
+
+        let content = fs::read_to_string(&file_path).unwrap();
+
+        assert!(content.contains("192.168.0.2 Archie"), "Faltou V4");
+        assert!(content.contains("fd97::100 Archie"), "Faltou V6 dinâmico");
+        assert!(
+            content.contains("fd97:f00d:cafe:3731::1057:cafe Archie\n")
+                || content.contains("fd97:f00d:cafe:3731::1057:cafe Archie\r"),
+            "SLAAC que bate com o sufixo não deve ganhar alias -slaac"
+        );
+        assert!(
+            content.contains("fd97:f00d:cafe:3731:7c5a:23c3:41dc:7d9e Archie Archie-slaac"),
+            "SLAAC aleatório deve ganhar alias -slaac"
+        );
+    }
+
+    #[test]
+    fn updates_file_only_when_content_differs() {
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("lanforge_diff_hosts.txt");
+        let path_str = file_path.to_str().unwrap();
         let _ = fs::remove_file(&file_path);
 
         let mut lines = BTreeSet::new();
         lines.insert("192.168.0.10 test-host".to_string());
         lines.insert("fe80::10 test-v6".to_string());
 
-        // Initial write should return true
-        let changed = update_file_if_changed(path_str, lines.clone()).unwrap();
-        assert!(changed);
-        let content = fs::read_to_string(&file_path).unwrap();
-        assert!(content.contains("192.168.0.10 test-host"));
-        assert!(content.contains("fe80::10 test-v6"));
+        // 1ª Escrita: Arquivo novo, deve retornar true
+        assert!(update_file_if_changed(path_str, lines.clone()).unwrap());
 
-        // Second write with same content should return false
-        let changed2 = update_file_if_changed(path_str, lines.clone()).unwrap();
-        assert!(!changed2);
+        // 2ª Escrita: Mesmo conteúdo, deve pular (false) e não fazer I/O inútil
+        assert!(!update_file_if_changed(path_str, lines.clone()).unwrap());
 
-        // Third write with differing content should return true
+        // 3ª Escrita: Adicionou linha, deve retornar true
         lines.insert("192.168.0.11 new-host".to_string());
-        let changed3 = update_file_if_changed(path_str, lines).unwrap();
-        assert!(changed3);
-
-        // Cleanup after test
-        let _ = fs::remove_file(&file_path);
+        assert!(update_file_if_changed(path_str, lines).unwrap());
     }
 }

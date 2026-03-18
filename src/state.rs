@@ -321,15 +321,15 @@ mod tests {
 
     #[test]
     fn mac_parse_uppercase() {
-        let mac = MacAddr::parse("E0:D5:5E:E2:D4:89").expect("should parse uppercase");
+        let mac = MacAddr::parse("E0:D5:5E:E2:D4:89").unwrap();
         assert_eq!(mac.to_string(), "e0:d5:5e:e2:d4:89");
     }
 
     #[test]
     fn mac_parse_invalid() {
         assert!(MacAddr::parse("not-a-mac").is_none());
-        assert!(MacAddr::parse("e0:d5:5e:e2:d4").is_none()); // 5 octets
-        assert!(MacAddr::parse("e0:d5:5e:e2:d4:89:ff").is_none()); // 7 octets
+        assert!(MacAddr::parse("e0:d5:5e:e2:d4").is_none()); // 5 octetos
+        assert!(MacAddr::parse("e0:d5:5e:e2:d4:89:ff").is_none()); // 7 octetos
     }
 
     #[test]
@@ -337,11 +337,8 @@ mod tests {
         let mut table = DeviceTable::new();
         let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-        // Dynamic hostname
-        let dev = table.get_or_insert(mac);
-        dev.hostname = "dynamic".into();
+        table.get_or_insert(mac).hostname = "dynamic".into();
 
-        // Static entry overrides
         table.load_static_devices(&[StaticDeviceCfg {
             mac: "aa:bb:cc:dd:ee:ff".into(),
             hostname: "StaticName".into(),
@@ -349,6 +346,7 @@ mod tests {
             v6_suffix: None,
         }]);
 
+        // O nome da config estática sempre tem precedência
         assert_eq!(table.hostname_for(&mac), Some("StaticName"));
     }
 
@@ -356,13 +354,73 @@ mod tests {
     fn record_slaac_deduplicates() {
         let mut table = DeviceTable::new();
         let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-        let addr: Ipv6Addr = "fd97:f00d:cafe:3731::1234".parse().unwrap();
+        let addr: Ipv6Addr = "fd97::1234".parse().unwrap();
 
         table.record_slaac(mac, addr);
-        table.record_slaac(mac, addr); // duplicate
-        table.record_slaac(mac, "fd97:f00d:cafe:3731::5678".parse().unwrap());
+        table.record_slaac(mac, addr); // Tentativa de duplicar
+        table.record_slaac(mac, "fd97::5678".parse().unwrap());
 
-        let dev = table.devices.get(&mac).unwrap();
-        assert_eq!(dev.slaac.len(), 2);
+        let dev = table.devices().next().unwrap();
+        assert_eq!(dev.slaac.len(), 2, "Não deveria duplicar IPs SLAAC iguais");
+    }
+
+    #[test]
+    fn ndp_cache_stores_and_retrieves_mac() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+        let ip: Ipv6Addr = "fe80::1".parse().unwrap();
+
+        assert!(table.get_mac_from_ndp_cache(&ip).is_none());
+
+        table.update_ndp_cache(ip, mac);
+        assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
+    }
+
+    #[test]
+    fn duid_indexing_resolves_devices() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+        let duid = Duid::new(vec![1, 2, 3, 4]);
+
+        table.get_or_insert(mac).hostname = "DuidHost".to_string();
+        table.set_duid(mac, duid.clone());
+
+        let found = table
+            .find_by_duid(&duid)
+            .expect("Device deveria ser encontrado via DUID");
+        assert_eq!(found.hostname, "DuidHost");
+    }
+
+    #[test]
+    fn expire_stale_removes_old_leases_but_keeps_fresh_ones() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+
+        let past = SystemTime::now() - std::time::Duration::from_secs(100);
+        let future = SystemTime::now() + std::time::Duration::from_secs(100);
+
+        let dev = table.get_or_insert(mac);
+        dev.v4 = Some(V4Lease {
+            ip: "192.168.0.2".parse().unwrap(),
+            expires: past,
+        });
+        dev.v6 = Some(V6Lease {
+            ip: "fd00::1".parse().unwrap(),
+            expires: future,
+        });
+
+        let changed = table.expire_stale();
+
+        assert!(changed, "Deveria acusar mudança na tabela");
+
+        let dev_after = table.devices().next().unwrap();
+        assert!(
+            dev_after.v4.is_none(),
+            "O Lease V4 expirado deveria ter sido limpo"
+        );
+        assert!(
+            dev_after.v6.is_some(),
+            "O Lease V6 no futuro deve ser mantido"
+        );
     }
 }

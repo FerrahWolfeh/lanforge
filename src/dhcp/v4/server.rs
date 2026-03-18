@@ -260,3 +260,255 @@ impl DhcpServer {
         self.pool.lookup(mac)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode};
+    use dhcproto::{Decodable, Decoder, Encodable, Encoder};
+    use std::net::Ipv4Addr;
+
+    // -----------------------------------------------------------------------
+    // Helpers e Factories para os Testes
+    // -----------------------------------------------------------------------
+
+    fn dummy_config() -> Dhcpv4Config {
+        Dhcpv4Config {
+            iface: "eth0".to_string(),
+            range_start: Ipv4Addr::new(192, 168, 1, 100),
+            range_end: Ipv4Addr::new(192, 168, 1, 200),
+            lease_time: 3600,
+            router: Ipv4Addr::new(192, 168, 1, 1),
+            dns: vec![Ipv4Addr::new(1, 1, 1, 1)],
+            subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
+            server_id: Ipv4Addr::new(192, 168, 1, 1),
+            domain_name: Some("lanforge.local".to_string()),
+        }
+    }
+
+    fn dummy_server() -> DhcpServer {
+        DhcpServer::new(dummy_config())
+    }
+
+    fn dummy_mac() -> MacAddr {
+        MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF])
+    }
+
+    fn build_raw_msg(
+        msg_type: MessageType,
+        mac: MacAddr,
+        req_ip: Option<Ipv4Addr>,
+        ciaddr: Option<Ipv4Addr>,
+        server_id: Option<Ipv4Addr>,
+    ) -> Vec<u8> {
+        let mut msg = Message::default();
+        msg.set_opcode(Opcode::BootRequest).set_chaddr(&mac.0);
+
+        if let Some(ci) = ciaddr {
+            msg.set_ciaddr(ci);
+        }
+
+        let opts = msg.opts_mut();
+        opts.insert(DhcpOption::MessageType(msg_type));
+
+        if let Some(ip) = req_ip {
+            opts.insert(DhcpOption::RequestedIpAddress(ip));
+        }
+        if let Some(sid) = server_id {
+            opts.insert(DhcpOption::ServerIdentifier(sid));
+        }
+
+        let mut buf = Vec::new();
+        let mut enc = Encoder::new(&mut buf);
+        msg.encode(&mut enc).unwrap();
+        buf
+    }
+
+    fn decode_reply(bytes: &[u8]) -> Message {
+        Message::decode(&mut Decoder::new(bytes)).expect("Should decode valid DHCPv4 reply")
+    }
+
+    // -----------------------------------------------------------------------
+    // Suíte de Testes da Máquina de Estados (DORA)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn invalid_packet_is_ignored() {
+        let mut srv = dummy_server();
+        let junk_data = vec![0x00, 0xFF, 0xAA, 0xBB]; // Lixo puro
+
+        let res = srv.handle_packet(&junk_data);
+        assert!(matches!(res, HandleResult::Ignore));
+    }
+
+    #[test]
+    fn discover_yields_offer() {
+        let mut srv = dummy_server();
+        let mac = dummy_mac();
+        let raw_msg = build_raw_msg(MessageType::Discover, mac, None, None, None);
+
+        let res = srv.handle_packet(&raw_msg);
+
+        match res {
+            HandleResult::Reply(bytes, _is_bcast, target_ip, _) => {
+                let reply = decode_reply(&bytes);
+                assert_eq!(
+                    reply.opts().get(v4::OptionCode::MessageType),
+                    Some(&DhcpOption::MessageType(MessageType::Offer))
+                );
+
+                // O IP ofertado deve vir no yiaddr (Your IP Address)
+                assert_eq!(reply.yiaddr(), target_ip);
+                assert!(target_ip >= Ipv4Addr::new(192, 168, 1, 100));
+            }
+            _ => panic!("Expected Reply for DISCOVER"),
+        }
+    }
+
+    #[test]
+    fn request_valid_yields_ack() {
+        let mut srv = dummy_server();
+        let mac = dummy_mac();
+        let requested_ip = Ipv4Addr::new(192, 168, 1, 150);
+
+        let raw_msg = build_raw_msg(MessageType::Request, mac, Some(requested_ip), None, None);
+        let res = srv.handle_packet(&raw_msg);
+
+        match res {
+            HandleResult::Reply(bytes, _, target_ip, _) => {
+                let reply = decode_reply(&bytes);
+                assert_eq!(
+                    reply.opts().get(v4::OptionCode::MessageType),
+                    Some(&DhcpOption::MessageType(MessageType::Ack))
+                );
+                assert_eq!(target_ip, requested_ip);
+                assert_eq!(reply.yiaddr(), requested_ip);
+
+                // O lease deve ter sido gravado internamente no servidor
+                assert_eq!(srv.last_assignment_for(&mac), Some(requested_ip));
+            }
+            _ => panic!("Expected ACK Reply for valid REQUEST"),
+        }
+    }
+
+    #[test]
+    fn request_for_different_server_is_ignored() {
+        let mut srv = dummy_server();
+        let mac = dummy_mac();
+
+        // Simula o cliente escolhendo um servidor concorrente (ServerID = 10.0.0.1)
+        let alien_server = Ipv4Addr::new(10, 0, 0, 1);
+        let raw_msg = build_raw_msg(
+            MessageType::Request,
+            mac,
+            Some(Ipv4Addr::new(192, 168, 1, 150)),
+            None,
+            Some(alien_server),
+        );
+
+        // Como o ServerID não é o nosso, devemos ignorar silenciosamente
+        let res = srv.handle_packet(&raw_msg);
+        assert!(matches!(res, HandleResult::Ignore));
+    }
+
+    #[test]
+    fn request_unavailable_ip_yields_nak() {
+        let mut srv = dummy_server();
+        let mac1 = MacAddr([0x11, 0x11, 0x11, 0x11, 0x11, 0x11]);
+        let mac2 = MacAddr([0x22, 0x22, 0x22, 0x22, 0x22, 0x22]);
+        let contested_ip = Ipv4Addr::new(192, 168, 1, 105);
+
+        // 1. MAC1 aloca o IP primeiro
+        srv.pool.allocate(mac1, Some(contested_ip));
+
+        // 2. MAC2 tenta pedir o IP que já é do MAC1
+        let raw_msg = build_raw_msg(MessageType::Request, mac2, Some(contested_ip), None, None);
+        let res = srv.handle_packet(&raw_msg);
+
+        match res {
+            HandleResult::Reply(bytes, is_broadcast, _, _) => {
+                let reply = decode_reply(&bytes);
+                assert_eq!(
+                    reply.opts().get(v4::OptionCode::MessageType),
+                    Some(&DhcpOption::MessageType(MessageType::Nak))
+                );
+                assert!(
+                    is_broadcast,
+                    "NAKs no IPv4 devem ser enviados via Broadcast L2 (segundo a RFC)"
+                );
+            }
+            _ => panic!("Expected NAK for contested IP"),
+        }
+    }
+
+    #[test]
+    fn release_frees_allocated_ip() {
+        let mut srv = dummy_server();
+        let mac = dummy_mac();
+        let ip = Ipv4Addr::new(192, 168, 1, 100);
+
+        srv.pool.allocate(mac, Some(ip));
+        assert_eq!(srv.last_assignment_for(&mac), Some(ip));
+
+        // Envia o Release informando o IP no ciaddr (Client IP Address)
+        let raw_msg = build_raw_msg(MessageType::Release, mac, None, Some(ip), None);
+        let res = srv.handle_packet(&raw_msg);
+
+        assert!(
+            matches!(res, HandleResult::Ignore),
+            "RELEASE não deve gerar resposta"
+        );
+        assert_eq!(
+            srv.last_assignment_for(&mac),
+            None,
+            "IP deve ter sido liberado no pool interno"
+        );
+    }
+
+    #[test]
+    fn decline_clears_mac_assignment() {
+        let mut srv = dummy_server();
+        let mac = dummy_mac();
+        let ip = Ipv4Addr::new(192, 168, 1, 100);
+
+        srv.pool.allocate(mac, Some(ip));
+
+        // Cliente detectou conflito de ARP e enviou DECLINE
+        let raw_msg = build_raw_msg(MessageType::Decline, mac, None, Some(ip), None);
+        let res = srv.handle_packet(&raw_msg);
+
+        assert!(matches!(res, HandleResult::Ignore));
+        assert_eq!(
+            srv.last_assignment_for(&mac),
+            None,
+            "DECLINE deve revogar a associação do MAC"
+        );
+    }
+
+    #[test]
+    fn inform_yields_ack_without_allocating_ip() {
+        let mut srv = dummy_server();
+        let mac = dummy_mac();
+        let client_static_ip = Ipv4Addr::new(192, 168, 1, 50); // Fora do range dinâmico
+
+        let raw_msg = build_raw_msg(MessageType::Inform, mac, None, Some(client_static_ip), None);
+        let res = srv.handle_packet(&raw_msg);
+
+        match res {
+            HandleResult::Reply(bytes, _, target_ip, _) => {
+                let reply = decode_reply(&bytes);
+                assert_eq!(
+                    reply.opts().get(v4::OptionCode::MessageType),
+                    Some(&DhcpOption::MessageType(MessageType::Ack))
+                );
+
+                // Em um INFORM, o yiaddr (Your IP) deve vir ZERADO, pois o servidor não está alocando IP.
+                assert_eq!(reply.yiaddr(), Ipv4Addr::UNSPECIFIED);
+
+                // Mas a resposta é direcionada para o ciaddr (o IP que o cliente disse já possuir)
+                assert_eq!(target_ip, client_static_ip);
+            }
+            _ => panic!("Expected ACK for INFORM request"),
+        }
+    }
+}

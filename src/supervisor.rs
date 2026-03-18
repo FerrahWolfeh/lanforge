@@ -42,9 +42,7 @@ pub async fn supervise_task<F, Fut>(
             }
             Err(e) => {
                 consecutive_failures += 1;
-                error!(
-                    "[supervisor] Service '{name}' failed ({consecutive_failures}x): {e:#}"
-                );
+                error!("[supervisor] Service '{name}' failed ({consecutive_failures}x): {e:#}");
 
                 if max_retries > 0 && consecutive_failures >= max_retries {
                     if critical {
@@ -84,8 +82,8 @@ pub async fn supervise_task<F, Fut>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     #[tokio::test]
     async fn gives_up_after_max_retries_non_critical() {
@@ -111,12 +109,12 @@ mod tests {
         assert_eq!(
             attempts.load(Ordering::Relaxed),
             3,
-            "should attempt exactly max_retries times"
+            "Supervisor deveria tentar exatamente max_retries vezes"
         );
     }
 
     #[tokio::test]
-    async fn resets_on_success() {
+    async fn resets_failure_counter_on_success() {
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
@@ -131,13 +129,12 @@ mod tests {
                 async move {
                     let n = a.fetch_add(1, Ordering::Relaxed);
                     if n == 0 {
-                        // First call succeeds
+                        // Primeira chamada é um sucesso
                         Ok(())
                     } else if n < 4 {
-                        // Next calls fail
+                        // Próximas chamadas falham
                         anyhow::bail!("fails after success")
                     } else {
-                        // Should never reach here with max_retries=3
                         Ok(())
                     }
                 }
@@ -145,7 +142,9 @@ mod tests {
         )
         .await;
 
-        // 1 success (resets counter) + 3 failures = 4 total attempts
+        // O supervisor executou 1x (sucesso) -> O contador de falha zerou.
+        // Depois falhou 3x seguidas até desistir (atingiu o max_retries = 3).
+        // Total de tentativas de loop = 4.
         assert_eq!(attempts.load(Ordering::Relaxed), 4);
     }
 }
