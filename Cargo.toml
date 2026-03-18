@@ -14,12 +14,12 @@ tokio = { version = "1", features = [
     "sync",
     "io-util",
 ] }
-futures = { version = "0.3", default-features = false, features = ["std"] }
+futures = { version = "0.3.32", default-features = false, features = ["std"] }
 
 # CLI e config
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4.6.0", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "0.9.8"
 
 # Networking / netlink
 netlink-packet-core = "0.8"
@@ -28,16 +28,16 @@ netlink-sys = "0.8"
 rtnetlink = "0.20"
 
 # Raw sockets (RA)
-socket2 = { version = "0.5", features = ["all"] }
-libc = "0.2"
+socket2 = { version = "0.6.3", features = ["all"] }
+libc = "0.2.183"
 
 # RNG (usa hardware RNG do BCM2711 via getrandom no RPi4)
-rand = "0.8"
+rand = "0.10.0"
 
 # Observabilidade
-anyhow = { version = "1.0", default-features = false, features = ["std"] }
+anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-tracing-subscriber = { version = "0.3", default-features = false, features = [
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
     "env-filter",
     "fmt",
     "ansi",

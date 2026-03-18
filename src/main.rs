@@ -8,14 +8,16 @@ mod state;
 mod supervisor;
 
 use anyhow::Result;
+use bus::EventBus;
 use clap::Parser;
 use config::Config;
 use futures::StreamExt;
 use netlink_sys::AsyncSocket;
 use rtnetlink::new_connection;
+use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, Instant, interval, sleep_until};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -41,6 +43,7 @@ async fn main() -> Result<()> {
     info!("  dns_process   = {}", cfg.dns_process);
     info!("  debounce      = {}s", cfg.debounce_secs);
     info!("  fallback scan = every {}min", cfg.fallback_mins);
+    info!("  ra_enabled    = {}", cfg.ra_enabled);
 
     if !std::path::Path::new(&cfg.dnsmasq_config).exists() {
         error!(
@@ -49,6 +52,11 @@ async fn main() -> Result<()> {
         );
         std::process::exit(1);
     }
+
+    // -----------------------------------------------------------------------
+    // EventBus — shared between all services
+    // -----------------------------------------------------------------------
+    let bus = Arc::new(EventBus::new());
 
     // -----------------------------------------------------------------------
     // Single netlink connection for the whole daemon lifetime.
@@ -60,6 +68,42 @@ async fn main() -> Result<()> {
     // RTNLGRP_NEIGH = 3 (Linux kernel constant, stable since 2.6)
     connection.socket_mut().socket_mut().add_membership(3)?;
     tokio::spawn(connection);
+
+    // -----------------------------------------------------------------------
+    // Spawn RA service (if enabled) via supervisor
+    // -----------------------------------------------------------------------
+    if cfg.ra_enabled {
+        let ra_cfg = cfg.to_ra_config();
+        let ra_handle = handle.clone();
+        let ra_bus = bus.clone();
+
+        info!(
+            "RA service enabled: iface={}, M={}, O={}, MaxInterval={}s",
+            ra_cfg.iface,
+            ra_cfg.managed as u8,
+            ra_cfg.other_config as u8,
+            ra_cfg.max_interval.as_secs(),
+        );
+
+        tokio::spawn(supervisor::supervise_task(
+            "ra",
+            true, // critical — RA failure should restart
+            0,    // infinite retries
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            move || {
+                let cfg = ra_cfg.clone();
+                let handle = ra_handle.clone();
+                let bus = ra_bus.clone();
+                async move { ra::ra_service(cfg, handle, bus).await }
+            },
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // EventBus consumer — log events for now, react to PrefixChanged
+    // -----------------------------------------------------------------------
+    let mut bus_rx = bus.subscribe();
 
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
 
@@ -122,11 +166,36 @@ async fn main() -> Result<()> {
                     error!("Error in manual scan: {:?}", e);
                 }
             }
+
+            // ── EventBus events ──────────────────────────────────────────
+            event = bus_rx.recv() => {
+                match event {
+                    Ok(bus::LanforgeEvent::PrefixChanged { gua }) => {
+                        info!("EventBus: GUA prefix changed to {:?}, triggering scan", gua);
+                        // GUA changed — force an immediate scan to update hosts file
+                        if let Err(e) = run_scan(&cfg, &handle).await {
+                            error!("Error in prefix-change scan: {:?}", e);
+                        }
+                    }
+                    Ok(event) => {
+                        debug!("EventBus: {:?}", event);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("EventBus: consumer lagged, missed {n} events");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        error!("EventBus: channel closed unexpectedly");
+                        break;
+                    }
+                }
+            }
         }
     }
+
+    Ok(())
 }
 
-/// Wrapper que delegates to slaac::process_cycle with the config fields.
+/// Wrapper that delegates to slaac::process_cycle with the config fields.
 async fn run_scan(cfg: &Config, handle: &rtnetlink::Handle) -> Result<()> {
     slaac::process_cycle(
         &cfg.leases_file,

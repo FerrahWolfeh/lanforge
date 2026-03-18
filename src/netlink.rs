@@ -64,10 +64,10 @@ pub async fn get_ipv6_neighbors(
         .execute();
 
     while let Some(msg) = stream.try_next().await? {
-        if let Some((ip, mac)) = parse_neighbor(msg) {
-            if ip.starts_with(target_prefix) {
-                neighbors.push((ip, mac));
-            }
+        if let Some((ip, mac)) = parse_neighbor(msg)
+            && ip.starts_with(target_prefix)
+        {
+            neighbors.push((ip, mac));
         }
     }
 
