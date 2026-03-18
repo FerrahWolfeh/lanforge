@@ -27,7 +27,7 @@ pub async fn dhcpv4_service(
     table: Arc<RwLock<DeviceTable>>,
 ) -> Result<()> {
     info!(
-        "[DHCPv4] Starting server: range {}–{}, lease {}s, router {}, server_id {}",
+        "Starting server: range {}–{}, lease {}s, router {}, server_id {}",
         cfg.range_start, cfg.range_end, cfg.lease_time, cfg.router, cfg.server_id
     );
 
@@ -38,18 +38,18 @@ pub async fn dhcpv4_service(
         for entry in t.static_entries() {
             if let Some(ip) = entry.v4_ip {
                 server.pool.add_reservation(ip, entry.mac);
-                info!("[DHCPv4] Static reservation: {} → {ip}", entry.mac);
+                info!("Static reservation: {} → {ip}", entry.mac);
             }
         }
     }
 
     // Bind to 0.0.0.0:67 with SO_BROADCAST for receiving
     let socket = bind_dhcp_socket(&cfg.iface).await?;
-    info!("[DHCPv4] Receiving on 0.0.0.0:67 (iface: {})", cfg.iface);
+    info!("Receiving on 0.0.0.0:67 (iface: {})", cfg.iface);
 
     // Initialize raw AF_PACKET sender for transmitting
     let mut raw_tx = RawSender::new(&cfg.iface)?;
-    info!("[DHCPv4] Transmitting via AF_PACKET raw sock (Layer 2)");
+    info!("Transmitting via AF_PACKET raw sock (Layer 2)");
 
     let mut buf = vec![0u8; 1500];
 
@@ -57,13 +57,13 @@ pub async fn dhcpv4_service(
         let (len, src) = match socket.recv_from(&mut buf).await {
             Ok(r) => r,
             Err(e) => {
-                warn!("[DHCPv4] recv_from error: {e}");
+                warn!("recv_from error: {e}");
                 continue;
             }
         };
 
         let data = &buf[..len];
-        debug!("[DHCPv4] Received {len} bytes from {src}");
+        debug!("Received {len} bytes from {src}");
 
         // Extract MAC before processing (for event publishing)
         let mac_bytes = if len >= 34 {
@@ -83,7 +83,7 @@ pub async fn dhcpv4_service(
                 };
 
                 if let Err(e) = raw_tx.send_dhcp(&reply, cfg.server_id, final_dst_ip, dst_mac_arr) {
-                    error!("[DHCPv4] AF_PACKET injection error: {e}");
+                    error!("AF_PACKET injection error: {e}");
                     continue;
                 }
 

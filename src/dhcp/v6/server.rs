@@ -43,7 +43,7 @@ impl Dhcpv6Server {
         let msg = match Message::decode(&mut Decoder::new(data)) {
             Ok(m) => m,
             Err(e) => {
-                debug!("[DHCPv6] Failed to decode packet: {e}");
+                debug!("Failed to decode packet: {e}");
                 return HandleResult::Ignore;
             }
         };
@@ -54,7 +54,7 @@ impl Dhcpv6Server {
             _ => {
                 // If there's no Client ID, we must drop it unless it's InformationRequest
                 if msg.msg_type() != MessageType::InformationRequest {
-                    debug!("[DHCPv6] No ClientId option, ignoring");
+                    debug!("No ClientId option, ignoring");
                     return HandleResult::Ignore;
                 }
                 Duid::new(vec![])
@@ -85,13 +85,13 @@ impl Dhcpv6Server {
         if mac.is_none()
             && let Some(cached_mac) = table.read().await.get_mac_from_ndp_cache(&peer)
         {
-            debug!("[DHCPv6] MAC recuperado instantaneamente do cache NDP para {peer}");
+            debug!("MAC recuperado instantaneamente do cache NDP para {peer}");
             mac = Some(cached_mac);
         }
 
         // Fallback 2: O dump do Netlink original (síncrono com kernel)
         if mac.is_none() {
-            debug!("[DHCPv6] Cache miss. Fazendo lookup síncrono no kernel para {peer}...");
+            debug!("Cache miss. Fazendo lookup síncrono no kernel para {peer}...");
             if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
                 mac = Some(MacAddr(ndp_mac));
                 // Opcional: já preenche o cache caso aconteça de novo
@@ -101,7 +101,7 @@ impl Dhcpv6Server {
 
         let Some(mac) = mac else {
             warn!(
-                "[DHCPv6] SOLICIT from {peer}: sem MAC (DUID: {}). Dando um cutucão no Kernel...",
+                "SOLICIT from {peer}: sem MAC (DUID: {}). Dando um cutucão no Kernel...",
                 client_duid.duid_type()
             );
 
@@ -137,7 +137,7 @@ impl Dhcpv6Server {
                 self.handle_information_request(&msg, client_duid, peer)
             }
             other => {
-                debug!("[DHCPv6] Ignoring message type: {other:?}");
+                debug!("Ignoring message type: {other:?}");
                 HandleResult::Ignore
             }
         }
@@ -151,7 +151,7 @@ impl Dhcpv6Server {
         peer: Ipv6Addr,
     ) -> HandleResult {
         let Some(mac) = mac else {
-            warn!("[DHCPv6] SOLICIT from {peer} with no extractable MAC. Ignoring.");
+            warn!("SOLICIT from {peer} with no extractable MAC. Ignoring.");
             return HandleResult::Ignore;
         };
 
@@ -183,7 +183,7 @@ impl Dhcpv6Server {
                 } else {
                     "ADVERTISE"
                 };
-                info!("[DHCPv6] SOLICIT from {mac} -> {action} {ip}");
+                info!("SOLICIT from {mac} -> {action} {ip}");
 
                 let mut ia_opts = DhcpOptions::new();
                 ia_opts.insert(DhcpOption::IAAddr(IAAddr {
@@ -201,7 +201,7 @@ impl Dhcpv6Server {
                 }));
                 learned_duid = Some(client_duid);
             } else {
-                warn!("[DHCPv6] SOLICIT from {mac}: pool exhausted");
+                warn!("SOLICIT from {mac}: pool exhausted");
                 return self.send_status(
                     msg,
                     MessageType::Advertise,
@@ -230,7 +230,7 @@ impl Dhcpv6Server {
         }
 
         let Some(mac) = mac else {
-            warn!("[DHCPv6] REQUEST from {peer} with no extractable MAC.");
+            warn!("REQUEST from {peer} with no extractable MAC.");
             return HandleResult::Ignore;
         };
 
@@ -247,7 +247,7 @@ impl Dhcpv6Server {
             });
 
             if let Some(ip) = self.pool.allocate(mac, requested_ip) {
-                info!("[DHCPv6] REQUEST from {mac} -> REPLY {ip}");
+                info!("REQUEST from {mac} -> REPLY {ip}");
                 let mut ia_opts = DhcpOptions::new();
                 ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                     addr: ip,
@@ -323,7 +323,7 @@ impl Dhcpv6Server {
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
             && let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr)
         {
-            info!("[DHCPv6] RELEASE from {mac} for {}", ia_addr.addr);
+            info!("RELEASE from {mac} for {}", ia_addr.addr);
             self.pool.release(&ia_addr.addr);
         }
 

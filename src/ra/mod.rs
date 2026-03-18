@@ -136,7 +136,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
     cfg.validate()?;
 
     info!(
-        "[RA] Iniciando na interface '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
+        "Iniciando na interface '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
         cfg.iface,
         cfg.managed as u8,
         cfg.other_config as u8,
@@ -152,7 +152,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
     let mac = get_iface_mac(&cfg.iface)?;
 
     info!(
-        "[RA] ifindex={iface_index}, MAC={}",
+        "ifindex={iface_index}, MAC={}",
         mac.iter()
             .map(|b| format!("{b:02x}"))
             .collect::<Vec<_>>()
@@ -177,7 +177,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
 
     loop {
         let next = state.next_interval(&cfg);
-        debug!("[RA] Próximo RA periódico em {:.1}s", next.as_secs_f64());
+        debug!("Próximo RA periódico em {:.1}s", next.as_secs_f64());
 
         tokio::select! {
             // ── RA periódico ──────────────────────────────────────────────
@@ -206,12 +206,12 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
                         }
 
                         let rs_src = src_sa.as_socket_ipv6().map(|s| *s.ip());
-                        debug!("[RA] RS recebido de {rs_src:?}");
+                        debug!("RS recebido de {rs_src:?}");
 
                         handle_rs(&ctx, rs_src, &mut state).await;
                     }
                     Ok(Ok(_))  => {}
-                    Ok(Err(e)) => warn!("[RA] Erro de leitura no socket: {e}"),
+                    Ok(Err(e)) => warn!("Erro de leitura no socket: {e}"),
                     Err(_)     => {}  // WouldBlock — AsyncFd reseta automaticamente
                 }
             }
@@ -236,10 +236,10 @@ async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut Ra
         Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
             match send_ra(ctx, Some(unicast_dst), state).await {
                 Ok(()) => {
-                    debug!("[RA] RA unicast -> {unicast_dst}");
+                    debug!("RA unicast -> {unicast_dst}");
                     state.record_unicast(unicast_dst);
                 }
-                Err(e) => warn!("[RA] Erro RA unicast: {e:?}"),
+                Err(e) => warn!("Erro RA unicast: {e:?}"),
             }
         }
         None if state.can_multicast_now() => {
@@ -248,7 +248,7 @@ async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut Ra
         }
         _ => {
             // Rate limit ativo — RFC 4861 §6.2.6 permite descartar silenciosamente
-            debug!("[RA] RS descartado: rate limit MIN_DELAY_BETWEEN_RAS ativo");
+            debug!("RS descartado: rate limit MIN_DELAY_BETWEEN_RAS ativo");
         }
     }
 }
@@ -256,10 +256,10 @@ async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut Ra
 async fn do_multicast_ra(ctx: &RaContext<'_>, state: &mut RaState) {
     match send_ra(ctx, None, state).await {
         Ok(()) => {
-            debug!("[RA] RA multicast -> ff02::1");
+            debug!("RA multicast -> ff02::1");
             state.record_multicast();
         }
-        Err(e) => warn!("[RA] Erro RA multicast: {e:?}"),
+        Err(e) => warn!("Erro RA multicast: {e:?}"),
     }
 }
 
@@ -279,7 +279,7 @@ async fn send_ra(
 
     // Publica PrefixChanged no EventBus se o GUA mudou
     if gua != state.last_gua {
-        info!("[RA] GUA prefix changed: {:?} -> {:?}", state.last_gua, gua);
+        info!("GUA prefix changed: {:?} -> {:?}", state.last_gua, gua);
         state.last_gua = gua;
         ctx.bus.publish(LanforgeEvent::PrefixChanged { gua });
     }
@@ -332,7 +332,7 @@ fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket> {
 
     sock.set_nonblocking(true).context("O_NONBLOCK")?;
 
-    info!("[RA] Socket ICMPv6 raw OK — filtro ICMP6_FILTER ativo (apenas RS), inscrito em ff02::2");
+    info!("Socket ICMPv6 raw OK — filtro ICMP6_FILTER ativo (apenas RS), inscrito em ff02::2");
     Ok(sock)
 }
 

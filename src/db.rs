@@ -43,7 +43,7 @@ impl LeaseDb {
         let db = LeaseDb { conn };
         db.create_tables()?;
 
-        info!("[db] SQLite aberto em {}", path.display());
+        info!("SQLite aberto em {}", path.display());
         Ok(db)
     }
 
@@ -87,9 +87,9 @@ impl LeaseDb {
             );
         ",
             )
-            .context("[db] falha ao criar tabelas")?;
+            .context("falha ao criar tabelas")?;
 
-        debug!("[db] Schema verificado/criado");
+        debug!("Schema verificado/criado");
         Ok(())
     }
 
@@ -144,7 +144,7 @@ impl LeaseDb {
         }
 
         tx.commit()?;
-        debug!("[db] DeviceTable salva com sucesso");
+        debug!("DeviceTable salva com sucesso");
         Ok(())
     }
 
@@ -178,7 +178,7 @@ impl LeaseDb {
 
         for (mac_str, hostname, is_static, duid_bytes, last_seen_unix) in &devices {
             let Some(mac) = MacAddr::parse(mac_str) else {
-                warn!("[db] MAC inválido no DB: '{mac_str}', pulando");
+                warn!("MAC inválido no DB: '{mac_str}', pulando");
                 continue;
             };
 
@@ -222,7 +222,7 @@ impl LeaseDb {
                 continue;
             };
             let Ok(ip) = ip_str.parse::<Ipv4Addr>() else {
-                warn!("[db] IPv4 inválido no DB: '{ip_str}'");
+                warn!("IPv4 inválido no DB: '{ip_str}'");
                 continue;
             };
             let dev = table.get_or_insert(mac);
@@ -252,7 +252,7 @@ impl LeaseDb {
                 continue;
             };
             let Ok(ip) = ip_str.parse::<Ipv6Addr>() else {
-                warn!("[db] IPv6 inválido no DB: '{ip_str}'");
+                warn!("IPv6 inválido no DB: '{ip_str}'");
                 continue;
             };
             let dev = table.get_or_insert(mac);
@@ -282,7 +282,7 @@ impl LeaseDb {
         }
 
         let count = table.devices().count();
-        info!("[db] Carregados {count} dispositivos do SQLite");
+        info!("Carregados {count} dispositivos do SQLite");
         Ok(table)
     }
 }

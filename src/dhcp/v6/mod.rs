@@ -29,7 +29,7 @@ pub async fn dhcpv6_service(
     nl_handle: &Handle,
 ) -> Result<()> {
     if !config.enabled {
-        info!("[DHCPv6] DHCPv6 is disabled in config.");
+        info!("DHCPv6 is disabled in config.");
         return std::future::pending().await;
     }
 
@@ -52,7 +52,7 @@ pub async fn dhcpv6_service(
     // Obter index da interface não é estritamente obrigatório em todas as OS, mas recomendado se soubermos a iface
     // Para simplificar a POC, juntamos na iface 0 (todas as interfaces)
     if let Err(e) = socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
-        warn!("[DHCPv6] Failed to join DHCPv6 multicast group ff02::1:2 - check iface config: {e}");
+        warn!("Failed to join DHCPv6 multicast group ff02::1:2 - check iface config: {e}");
     }
 
     let udp = std::net::UdpSocket::from(socket);
@@ -60,7 +60,7 @@ pub async fn dhcpv6_service(
     let udp = UdpSocket::from_std(udp)?;
 
     info!(
-        "[DHCPv6] Server listening on UDP [ff02::1:2]:547 (interface {})",
+        "Server listening on UDP [ff02::1:2]:547 (interface {})",
         config.iface
     );
 
@@ -91,9 +91,9 @@ pub async fn dhcpv6_service(
                 // Junta o ULA da rede com o sufixo do TOML
                 if let Some(ip) = server.pool.construct_static_ula(suffix) {
                     server.pool.add_reservation(ip, entry.mac);
-                    tracing::info!("[DHCPv6] Static reservation: {} → {}", entry.mac, ip);
+                    tracing::info!("Static reservation: {} → {}", entry.mac, ip);
                 } else {
-                    tracing::warn!("[DHCPv6] Falha ao construir ULA para o sufixo: {}", suffix);
+                    tracing::warn!("Falha ao construir ULA para o sufixo: {}", suffix);
                 }
             }
         }
@@ -101,7 +101,7 @@ pub async fn dhcpv6_service(
 
     let mut buf = [0u8; 2048];
 
-    info!("[DHCPv6] State Machine started");
+    info!("State Machine started");
 
     loop {
         match udp.recv_from(&mut buf).await {
@@ -124,7 +124,7 @@ pub async fn dhcpv6_service(
 
                         // Agora o .send_to sabe exatamente por qual interface cuspir o pacote!
                         if let Err(e) = udp.send_to(&reply_bytes, dest_addr).await {
-                            warn!("[DHCPv6] send error to {dest_ip} (port 546): {e}");
+                            warn!("send error to {dest_ip} (port 546): {e}");
                         }
 
                         if let (Some(mac), Some(duid)) = (opt_mac, learned_duid) {
@@ -162,7 +162,7 @@ pub async fn dhcpv6_service(
                 }
             }
             Err(e) => {
-                warn!("[DHCPv6] recv error: {e}");
+                warn!("recv error: {e}");
             }
         }
     }

@@ -37,7 +37,7 @@ impl DhcpServer {
         let msg = match Message::decode(&mut Decoder::new(data)) {
             Ok(m) => m,
             Err(e) => {
-                debug!("[DHCPv4] Failed to decode packet: {e}");
+                debug!("Failed to decode packet: {e}");
                 return HandleResult::Ignore;
             }
         };
@@ -50,14 +50,14 @@ impl DhcpServer {
         let msg_type = match msg.opts().get(v4::OptionCode::MessageType) {
             Some(DhcpOption::MessageType(t)) => *t,
             _ => {
-                debug!("[DHCPv4] No MessageType option, ignoring");
+                debug!("No MessageType option, ignoring");
                 return HandleResult::Ignore;
             }
         };
 
         let chaddr = msg.chaddr();
         if chaddr.len() < 6 {
-            debug!("[DHCPv4] chaddr too short, ignoring");
+            debug!("chaddr too short, ignoring");
             return HandleResult::Ignore;
         }
 
@@ -73,7 +73,7 @@ impl DhcpServer {
             MessageType::Decline => self.handle_decline(&msg, mac),
             MessageType::Inform => self.handle_inform(&msg, mac),
             other => {
-                debug!("[DHCPv4] Ignoring message type: {other:?}");
+                debug!("Ignoring message type: {other:?}");
                 HandleResult::Ignore
             }
         }
@@ -84,11 +84,11 @@ impl DhcpServer {
     fn handle_discover(&mut self, msg: &Message, mac: MacAddr, broadcast: bool) -> HandleResult {
         let requested = self.get_requested_ip(msg);
         let Some(offered_ip) = self.pool.allocate(mac, requested) else {
-            warn!("[DHCPv4] DISCOVER from {mac}: pool exhausted, no IP available");
+            warn!("DISCOVER from {mac}: pool exhausted, no IP available");
             return HandleResult::Ignore;
         };
 
-        info!("[DHCPv4] DISCOVER from {mac} → OFFER {offered_ip}");
+        info!("DISCOVER from {mac} → OFFER {offered_ip}");
         let reply = self.build_reply(msg, MessageType::Offer, offered_ip);
         HandleResult::Reply(reply, broadcast, offered_ip, self.get_hostname(msg))
     }
@@ -107,7 +107,7 @@ impl DhcpServer {
             && *sid != self.cfg.server_id
         {
             // Client selected a different server — release our offer
-            debug!("[DHCPv4] REQUEST from {mac}: selected different server {sid}");
+            debug!("REQUEST from {mac}: selected different server {sid}");
             self.pool.release_mac(&mac);
             return HandleResult::Ignore;
         }
@@ -123,23 +123,23 @@ impl DhcpServer {
         });
 
         let Some(wanted) = wanted_ip else {
-            warn!("[DHCPv4] REQUEST from {mac}: no IP specified");
+            warn!("REQUEST from {mac}: no IP specified");
             return self.send_nak(msg, "No IP address specified");
         };
 
         // Try to allocate (will be sticky if already allocated)
         let Some(assigned_ip) = self.pool.allocate(mac, Some(wanted)) else {
-            warn!("[DHCPv4] REQUEST from {mac} for {wanted}: not available");
+            warn!("REQUEST from {mac} for {wanted}: not available");
             return self.send_nak(msg, "Requested IP not available");
         };
 
         if assigned_ip != wanted {
             // Pool gave us a different IP (requested was taken)
-            warn!("[DHCPv4] REQUEST from {mac} for {wanted}: assigned {assigned_ip} instead");
+            warn!("REQUEST from {mac} for {wanted}: assigned {assigned_ip} instead");
             return self.send_nak(msg, "Requested IP not available");
         }
 
-        info!("[DHCPv4] REQUEST from {mac} for {assigned_ip} → ACK");
+        info!("REQUEST from {mac} for {assigned_ip} → ACK");
         let reply = self.build_reply(msg, MessageType::Ack, assigned_ip);
         HandleResult::Reply(reply, broadcast, assigned_ip, self.get_hostname(msg))
     }
@@ -148,7 +148,7 @@ impl DhcpServer {
 
     fn handle_release(&mut self, msg: &Message, mac: MacAddr) -> HandleResult {
         let ip = msg.ciaddr();
-        info!("[DHCPv4] RELEASE from {mac} for {ip}");
+        info!("RELEASE from {mac} for {ip}");
         self.pool.release(ip);
         HandleResult::Ignore // no reply for RELEASE
     }
@@ -157,7 +157,7 @@ impl DhcpServer {
 
     fn handle_decline(&mut self, _msg: &Message, mac: MacAddr) -> HandleResult {
         // Client detected IP conflict — release and don't reuse
-        info!("[DHCPv4] DECLINE from {mac}");
+        info!("DECLINE from {mac}");
         self.pool.release_mac(&mac);
         HandleResult::Ignore
     }
@@ -167,7 +167,7 @@ impl DhcpServer {
     fn handle_inform(&mut self, msg: &Message, mac: MacAddr) -> HandleResult {
         // Client has static IP, wants config options (DNS, etc.)
         let ip = msg.ciaddr();
-        info!("[DHCPv4] INFORM from {mac} ({ip}) → ACK (config only)");
+        info!("INFORM from {mac} ({ip}) → ACK (config only)");
         let reply = self.build_reply(msg, MessageType::Ack, ip);
         HandleResult::Reply(reply, false, ip, self.get_hostname(msg)) // INFORM responses are always unicast
     }
