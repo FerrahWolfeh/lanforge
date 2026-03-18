@@ -75,15 +75,15 @@ pub fn update_file_if_changed(output_file: &str, new_lines: BTreeSet<String>) ->
     let removed: Vec<_> = old_lines.difference(&new_lines).collect();
 
     if !added.is_empty() {
-        info!("Adding:");
+        info!("[hosts] Adding:");
         for item in &added {
-            info!("  + {item}");
+            info!("[hosts]   + {item}");
         }
     }
     if !removed.is_empty() {
-        info!("Removing:");
+        info!("[hosts] Removing:");
         for item in &removed {
-            info!("  - {item}");
+            info!("[hosts]   - {item}");
         }
     }
 
@@ -94,7 +94,7 @@ pub fn update_file_if_changed(output_file: &str, new_lines: BTreeSet<String>) ->
         }
         Ok(true)
     } else {
-        debug!("No changes.");
+        debug!("[hosts] No changes.");
         Ok(false)
     }
 }
@@ -107,15 +107,52 @@ pub async fn reload_dns(process_name: &str) {
         .await
     {
         Ok(status) if status.success() => {
-            info!("Sent SIGHUP to '{process_name}'.");
+            info!("[hosts] Sent SIGHUP to '{process_name}'.");
         }
         Ok(_) => {
-            warn!("Could not find process '{process_name}' to reload.");
+            warn!("[hosts] Could not find process '{process_name}' to reload.");
         }
         Err(e) => {
-            warn!("Failed to run pkill: {e}");
+            warn!("[hosts] Failed to run pkill: {e}");
         }
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
 
+    #[test]
+    fn test_update_file_if_changed() {
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("lanforge_test_hosts.txt");
+        let path_str = file_path.to_str().unwrap();
+
+        // Cleanup before test
+        let _ = fs::remove_file(&file_path);
+
+        let mut lines = BTreeSet::new();
+        lines.insert("192.168.0.10 test-host".to_string());
+        lines.insert("fe80::10 test-v6".to_string());
+
+        // Initial write should return true
+        let changed = update_file_if_changed(path_str, lines.clone()).unwrap();
+        assert!(changed);
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert!(content.contains("192.168.0.10 test-host"));
+        assert!(content.contains("fe80::10 test-v6"));
+
+        // Second write with same content should return false
+        let changed2 = update_file_if_changed(path_str, lines.clone()).unwrap();
+        assert!(!changed2);
+
+        // Third write with differing content should return true
+        lines.insert("192.168.0.11 new-host".to_string());
+        let changed3 = update_file_if_changed(path_str, lines).unwrap();
+        assert!(changed3);
+
+        // Cleanup after test
+        let _ = fs::remove_file(&file_path);
+    }
+}

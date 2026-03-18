@@ -38,6 +38,9 @@ rand = "0.10.0"
 dhcproto = "0.14"
 pnet = "0.35.0"
 
+# Persistência de leases
+rusqlite = { version = "0.34", features = ["bundled"] }
+
 # Observabilidade
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }

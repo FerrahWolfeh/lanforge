@@ -112,6 +112,7 @@ pub struct StaticEntry {
 // ---------------------------------------------------------------------------
 
 /// Tabela de dispositivos — compartilhada via Arc<RwLock<..>>
+#[derive(Debug, Clone)]
 pub struct DeviceTable {
     devices: HashMap<MacAddr, Device>,
     duid_index: HashMap<Duid, MacAddr>,
@@ -230,6 +231,54 @@ impl DeviceTable {
     /// Iterate over all static entries.
     pub fn static_entries(&self) -> impl Iterator<Item = &StaticEntry> {
         self.static_entries.values()
+    }
+
+    /// Remove expired dynamic leases and inactive dynamic devices.
+    pub fn expire_stale(&mut self) -> bool {
+        let now = SystemTime::now();
+        let max_age = std::time::Duration::from_secs(7 * 24 * 3600); // 7 days
+        let mut changed = false;
+
+        let macs: Vec<MacAddr> = self.devices.keys().copied().collect();
+        for mac in macs {
+            let mut remove_device = false;
+            if let Some(dev) = self.devices.get_mut(&mac) {
+                // Expire v4
+                if let Some(v4) = &dev.v4
+                    && v4.expires < now
+                {
+                    dev.v4 = None;
+                    changed = true;
+                }
+                // Expire v6
+                if let Some(v6) = &dev.v6
+                    && v6.expires < now
+                {
+                    dev.v6 = None;
+                    changed = true;
+                }
+                // Check if device is entirely stale (dynamic and unseen for 7 days)
+                if !dev.is_static
+                    && dev.v4.is_none()
+                    && dev.v6.is_none()
+                    && dev.slaac.is_empty()
+                    && dev.last_seen.elapsed().unwrap_or(std::time::Duration::ZERO) > max_age
+                {
+                    remove_device = true;
+                }
+            }
+
+            if remove_device {
+                if let Some(dev) = self.devices.remove(&mac)
+                    && let Some(duid) = dev.duid
+                {
+                    self.duid_index.remove(&duid);
+                }
+                changed = true;
+                tracing::debug!("[state] Removed stale dynamic device {}", mac);
+            }
+        }
+        changed
     }
 }
 

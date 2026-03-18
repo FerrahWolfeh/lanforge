@@ -215,6 +215,7 @@ pub struct Config {
     pub hosts_file: String,
     pub dns_process: String,
     pub target_prefix: String,
+    pub leases_db: String,
     pub debounce_secs: u64,
     pub fallback_mins: u64,
 
@@ -255,6 +256,7 @@ impl Config {
                     .to_string()
             }),
             target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),
+            leases_db: toml_cfg.general.leases_db,
             debounce_secs: cli.debounce_secs.unwrap_or(toml_cfg.general.debounce_secs),
             fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
 
@@ -363,10 +365,19 @@ impl Config {
 
     /// Builds a `Dhcpv6Config` from the merged configuration.
     pub fn to_dhcpv6_config(&self) -> crate::dhcp::v6::config::Dhcpv6Config {
+        let ula_prefix = self.ra_toml.prefix.iter().find_map(|p| {
+            if p.source == "ula" {
+                p.address.as_deref().and_then(|a| a.parse().ok())
+            } else {
+                None
+            }
+        });
+
         crate::dhcp::v6::config::Dhcpv6Config {
             enabled: self.dhcpv6_enabled,
             iface: self.iface_lan.clone(),
             lease_time: self.dhcpv6_toml.lease_time,
+            ula_prefix,
         }
     }
 }
@@ -376,7 +387,7 @@ fn load_toml(path: &str) -> TomlConfig {
     if !Path::new(path).exists() {
         if path != "/etc/lanforge/lanforge.toml" {
             // User explicitly specified a path that doesn't exist
-            warn!("Config file '{path}' not found, using defaults");
+            warn!("[config] Config file '{path}' not found, using defaults");
         }
         return TomlConfig::default();
     }
@@ -384,9 +395,9 @@ fn load_toml(path: &str) -> TomlConfig {
     match std::fs::read_to_string(path) {
         Ok(content) => match toml::from_str::<TomlConfig>(&content) {
             Ok(cfg) => {
-                info!("Loaded config from '{path}'");
+                info!("[config] Loaded config from '{path}'");
                 info!(
-                    "  {} static device(s), RA {}",
+                    "[config]   {} static device(s), RA {}",
                     cfg.devices.len(),
                     if cfg.ra.enabled {
                         "enabled"
@@ -397,12 +408,12 @@ fn load_toml(path: &str) -> TomlConfig {
                 cfg
             }
             Err(e) => {
-                warn!("Failed to parse '{path}': {e} — using defaults");
+                warn!("[config] Failed to parse '{path}': {e} — using defaults");
                 TomlConfig::default()
             }
         },
         Err(e) => {
-            warn!("Failed to read '{path}': {e} — using defaults");
+            warn!("[config] Failed to read '{path}': {e} — using defaults");
             TomlConfig::default()
         }
     }

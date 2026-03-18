@@ -27,7 +27,7 @@ pub async fn dhcpv6_service(
     bus: Arc<EventBus>,
 ) -> Result<()> {
     if !config.enabled {
-        info!("DHCPv6 is disabled in config.");
+        info!("[DHCPv6] DHCPv6 is disabled in config.");
         return std::future::pending().await;
     }
 
@@ -48,7 +48,7 @@ pub async fn dhcpv6_service(
     // Obter index da interface não é estritamente obrigatório em todas as OS, mas recomendado se soubermos a iface
     // Para simplificar a POC, juntamos na iface 0 (todas as interfaces)
     if let Err(e) = socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
-        warn!("Failed to join DHCPv6 multicast group ff02::1:2 - check iface config: {e}");
+        warn!("[DHCPv6] Failed to join DHCPv6 multicast group ff02::1:2 - check iface config: {e}");
     }
 
     let udp = std::net::UdpSocket::from(socket);
@@ -56,13 +56,13 @@ pub async fn dhcpv6_service(
     let udp = UdpSocket::from_std(udp)?;
 
     info!(
-        "DHCPv6 Server listening on UDP [ff02::1:2]:547 (interface {})",
+        "[DHCPv6] Server listening on UDP [ff02::1:2]:547 (interface {})",
         config.iface
     );
 
     let mut server = Dhcpv6Server::new(
         config.clone(),
-        Ipv6Pool::new(vec![], None),
+        Ipv6Pool::new(vec![], config.ula_prefix),
         Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0x02, 0x04, 0x06, 0x08, 0x0a, 0x0c,
         ]),
@@ -70,7 +70,7 @@ pub async fn dhcpv6_service(
 
     let mut buf = [0u8; 2048];
 
-    info!("DHCPv6 State Machine started");
+    info!("[DHCPv6] State Machine started");
 
     loop {
         match udp.recv_from(&mut buf).await {
@@ -86,7 +86,7 @@ pub async fn dhcpv6_service(
                         let dest_addr =
                             std::net::SocketAddr::new(std::net::IpAddr::V6(dest_ip), 546);
                         if let Err(e) = udp.send_to(&reply_bytes, dest_addr).await {
-                            warn!("DHCPv6 send error to {dest_ip} (port 546): {e}");
+                            warn!("[DHCPv6] send error to {dest_ip} (port 546): {e}");
                         }
 
                         if let (Some(mac), Some(duid)) = (opt_mac, learned_duid) {
@@ -103,8 +103,14 @@ pub async fn dhcpv6_service(
                             && let Some(ip) = server.last_assignment_for(&mac)
                         {
                             let hostname = {
-                                let t = table.read().await;
-                                t.hostname_for(&mac).unwrap_or("").to_string()
+                                let mut t = table.write().await;
+                                let dev = t.get_or_insert(mac);
+                                dev.v6 = Some(crate::state::V6Lease {
+                                    ip,
+                                    expires: std::time::SystemTime::now()
+                                        + std::time::Duration::from_secs(config.lease_time as u64),
+                                });
+                                dev.hostname.clone()
                             };
                             bus.publish(LanforgeEvent::LeaseGranted {
                                 mac: mac.0,
@@ -118,7 +124,7 @@ pub async fn dhcpv6_service(
                 }
             }
             Err(e) => {
-                warn!("DHCPv6 recv error: {e}");
+                warn!("[DHCPv6] recv error: {e}");
             }
         }
     }
