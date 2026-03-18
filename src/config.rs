@@ -78,6 +78,7 @@ pub struct TomlConfig {
 #[serde(default)]
 pub struct DhcpCfg {
     pub v4: DhcpV4Cfg,
+    pub v6: DhcpV6Cfg,
 }
 
 #[derive(Deserialize, Debug)]
@@ -104,6 +105,22 @@ impl Default for DhcpV4Cfg {
             dns: vec!["192.168.0.1".into()],
             subnet_mask: None,
             domain_name: None,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(default)]
+pub struct DhcpV6Cfg {
+    pub enabled: bool,
+    pub lease_time: u32,
+}
+
+impl Default for DhcpV6Cfg {
+    fn default() -> Self {
+        DhcpV6Cfg {
+            enabled: false,
+            lease_time: 86400,
         }
     }
 }
@@ -209,6 +226,10 @@ pub struct Config {
     pub dhcpv4_enabled: bool,
     pub dhcpv4_toml: DhcpV4Cfg,
 
+    // DHCPv6
+    pub dhcpv6_enabled: bool,
+    pub dhcpv6_toml: DhcpV6Cfg,
+
     // static devices
     pub devices: Vec<StaticDeviceCfg>,
 }
@@ -242,6 +263,9 @@ impl Config {
 
             dhcpv4_enabled: toml_cfg.dhcp.v4.enabled,
             dhcpv4_toml: toml_cfg.dhcp.v4,
+
+            dhcpv6_enabled: toml_cfg.dhcp.v6.enabled,
+            dhcpv6_toml: toml_cfg.dhcp.v6,
 
             devices: toml_cfg.devices,
         })
@@ -314,17 +338,35 @@ impl Config {
         Dhcpv4Config {
             iface: self.iface_lan.clone(),
             server_id,
-            range_start: parse_ip(&self.dhcpv4_toml.range_start, Ipv4Addr::new(192, 168, 0, 100)),
+            range_start: parse_ip(
+                &self.dhcpv4_toml.range_start,
+                Ipv4Addr::new(192, 168, 0, 100),
+            ),
             range_end: parse_ip(&self.dhcpv4_toml.range_end, Ipv4Addr::new(192, 168, 0, 254)),
             lease_time: self.dhcpv4_toml.lease_time as u32,
             router: server_id,
-            dns: self.dhcpv4_toml.dns.iter()
+            dns: self
+                .dhcpv4_toml
+                .dns
+                .iter()
                 .map(|s| parse_ip(s, Ipv4Addr::new(192, 168, 0, 1)))
                 .collect(),
-            subnet_mask: self.dhcpv4_toml.subnet_mask.as_deref()
+            subnet_mask: self
+                .dhcpv4_toml
+                .subnet_mask
+                .as_deref()
                 .map(|s| parse_ip(s, Ipv4Addr::new(255, 255, 255, 0)))
                 .unwrap_or(Ipv4Addr::new(255, 255, 255, 0)),
             domain_name: self.dhcpv4_toml.domain_name.clone(),
+        }
+    }
+
+    /// Builds a `Dhcpv6Config` from the merged configuration.
+    pub fn to_dhcpv6_config(&self) -> crate::dhcp::v6::config::Dhcpv6Config {
+        crate::dhcp::v6::config::Dhcpv6Config {
+            enabled: self.dhcpv6_enabled,
+            iface: self.iface_lan.clone(),
+            lease_time: self.dhcpv6_toml.lease_time,
         }
     }
 }

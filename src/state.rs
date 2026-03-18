@@ -9,6 +9,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
 use crate::config::StaticDeviceCfg;
+use crate::dhcp::v6::duid::Duid;
 use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,17 @@ impl MacAddr {
         }
         Some(MacAddr(bytes))
     }
+
+    /// Construct from a raw 6-byte slice
+    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() == 6 {
+            let mut arr = [0u8; 6];
+            arr.copy_from_slice(bytes);
+            Some(MacAddr(arr))
+        } else {
+            None
+        }
+    }
 }
 
 impl fmt::Display for MacAddr {
@@ -54,10 +66,6 @@ impl fmt::Debug for MacAddr {
 // ---------------------------------------------------------------------------
 // Device + Lease types
 // ---------------------------------------------------------------------------
-
-/// DUID opaco (DUID-LLT, DUID-LL ou DUID-EN).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Duid(pub Vec<u8>);
 
 /// Tudo que se sabe sobre um dispositivo na rede.
 #[derive(Debug, Clone)]
@@ -163,6 +171,13 @@ impl DeviceTable {
             slaac: Vec::new(),
             last_seen: SystemTime::now(),
         })
+    }
+
+    pub fn set_duid(&mut self, mac: MacAddr, duid: Duid) {
+        if let Some(dev) = self.devices.get_mut(&mac) {
+            dev.duid = Some(duid.clone());
+        }
+        self.duid_index.insert(duid, mac);
     }
 
     #[allow(dead_code)]

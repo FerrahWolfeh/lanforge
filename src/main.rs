@@ -128,6 +128,34 @@ async fn main() -> Result<()> {
     }
 
     // -----------------------------------------------------------------------
+    // Spawn DHCPv6 service (if enabled) via supervisor
+    // -----------------------------------------------------------------------
+    if cfg.dhcpv6_enabled {
+        let dhcp_cfg = cfg.to_dhcpv6_config();
+        let dhcp_bus = bus.clone();
+        let dhcp_table = table.clone();
+
+        info!(
+            "DHCPv6 service enabled on {}, lease {}s",
+            dhcp_cfg.iface, dhcp_cfg.lease_time,
+        );
+
+        tokio::spawn(supervisor::supervise_task(
+            "dhcpv6",
+            true,
+            0,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            move || {
+                let cfg = dhcp_cfg.clone();
+                let bus = dhcp_bus.clone();
+                let table = dhcp_table.clone();
+                async move { dhcp::v6::dhcpv6_service(cfg, table, bus).await }
+            },
+        ));
+    }
+
+    // -----------------------------------------------------------------------
     // EventBus consumer
     // -----------------------------------------------------------------------
     let mut bus_rx = bus.subscribe();
