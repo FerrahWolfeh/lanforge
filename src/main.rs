@@ -46,10 +46,7 @@ async fn main() -> Result<()> {
     info!("  fallback scan = every {}min", cfg.fallback_mins);
     info!("  ra_enabled    = {}", cfg.ra_enabled);
     info!("  dhcpv4_enabled= {}", cfg.dhcpv4_enabled);
-    info!(
-        "[main]   devices       = {} static entries",
-        cfg.devices.len()
-    );
+    info!("devices       = {} static entries", cfg.devices.len());
 
     // -----------------------------------------------------------------------
     // DeviceTable — shared state for all services
