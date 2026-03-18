@@ -32,27 +32,27 @@ pub async fn supervise_task<F, Fut>(
     let mut consecutive_failures: u32 = 0;
 
     loop {
-        info!("[supervisor] Starting service '{name}'");
+        info!("Starting service '{name}'");
 
         match factory().await {
             Ok(()) => {
                 // Task terminou normalmente — reinicia (pode ser um ciclo finito)
-                info!("[supervisor] Service '{name}' exited cleanly, restarting");
+                info!("Service '{name}' exited cleanly, restarting");
                 consecutive_failures = 0;
             }
             Err(e) => {
                 consecutive_failures += 1;
-                error!("[supervisor] Service '{name}' failed ({consecutive_failures}x): {e:#}");
+                error!("Service '{name}' failed ({consecutive_failures}x): {e:#}");
 
                 if max_retries > 0 && consecutive_failures >= max_retries {
                     if critical {
                         error!(
-                            "[supervisor] Critical service '{name}' exhausted {max_retries} retries — aborting process"
+                            "Critical service '{name}' exhausted {max_retries} retries — aborting process"
                         );
                         std::process::exit(1);
                     } else {
                         warn!(
-                            "[supervisor] Non-critical service '{name}' exhausted {max_retries} retries — giving up"
+                            "Non-critical service '{name}' exhausted {max_retries} retries — giving up"
                         );
                         return;
                     }
@@ -63,7 +63,7 @@ pub async fn supervise_task<F, Fut>(
                 let backoff = exp.min(max_backoff);
 
                 warn!(
-                    "[supervisor] Restarting '{name}' in {:.1}s (attempt {}/{})",
+                    "Restarting '{name}' in {:.1}s (attempt {}/{})",
                     backoff.as_secs_f64(),
                     consecutive_failures + 1,
                     if max_retries == 0 {
