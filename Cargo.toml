@@ -1,21 +1,40 @@
 [package]
-name = "ipv6_namer"
+name = "lanforge"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Async runtime
 tokio = { version = "1", features = [
     "macros",
     "rt",
     "signal",
     "process",
     "time",
+    "sync",
+    "io-util",
 ] }
 futures = { version = "0.3", default-features = false, features = ["std"] }
+
+# CLI e config
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Networking / netlink
 netlink-packet-core = "0.8"
 netlink-packet-route = "0.28"
 netlink-sys = "0.8"
 rtnetlink = "0.20"
+
+# Raw sockets (RA)
+socket2 = { version = "0.5", features = ["all"] }
+libc = "0.2"
+
+# RNG (usa hardware RNG do BCM2711 via getrandom no RPi4)
+rand = "0.8"
+
+# Observabilidade
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = [
@@ -23,7 +42,6 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
     "fmt",
     "ansi",
 ] }
-clap = { version = "4", features = ["derive", "env"] }
 
 [profile.release]
 opt-level = "z"
