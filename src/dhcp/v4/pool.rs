@@ -126,6 +126,7 @@ impl IpPool {
     }
 
     /// Total number of active dynamic allocations.
+    #[allow(dead_code)]
     pub fn active_count(&self) -> usize {
         self.active.len()
     }

@@ -201,10 +201,6 @@ pub struct Config {
     pub debounce_secs: u64,
     pub fallback_mins: u64,
 
-    // legacy compat (still used by slaac v1 until 2C)
-    pub leases_file: String,
-    pub dnsmasq_config: String,
-
     // RA
     pub ra_enabled: bool,
     pub ra_toml: RaCfg,
@@ -240,10 +236,6 @@ impl Config {
             target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),
             debounce_secs: cli.debounce_secs.unwrap_or(toml_cfg.general.debounce_secs),
             fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
-
-            // Legacy compat — still needed during transition
-            leases_file: "/mnt/ram/dnsmasq/dnsmasq.leases".into(),
-            dnsmasq_config: "/etc/dnsmasq-dhcp.conf".into(),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: toml_cfg.ra,

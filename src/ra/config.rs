@@ -34,6 +34,7 @@ pub const LIFETIME_INFINITY: u32 = u32::MAX;
 /// Prioridade do roteador padrão (RFC 4191 §2.1).
 /// Influencia qual roteador é preferido quando há múltiplos na rede.
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)]
 pub enum RouterPriority {
     Low,
     #[default]
@@ -54,6 +55,7 @@ impl RouterPriority {
 
 /// Lifetime de um prefixo — finito em segundos ou infinito.
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum PrefixLifetime {
     Secs(u32),
     Infinity,
@@ -123,6 +125,7 @@ impl PrefixConfig {
     }
 
     /// Prefixo estático com controle total dos parâmetros.
+    #[allow(dead_code)]
     pub fn static_full(
         prefix: std::net::Ipv6Addr,
         on_link: bool,

@@ -77,12 +77,14 @@ pub struct Device {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct V4Lease {
     pub ip: Ipv4Addr,
     pub expires: SystemTime,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct V6Lease {
     pub ip: Ipv6Addr,
     pub expires: SystemTime,
@@ -163,6 +165,7 @@ impl DeviceTable {
         })
     }
 
+    #[allow(dead_code)]
     pub fn find_by_duid(&self, duid: &Duid) -> Option<&Device> {
         self.duid_index
             .get(duid)
