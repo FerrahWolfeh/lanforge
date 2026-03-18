@@ -12,6 +12,20 @@ impl Duid {
         Self { bytes }
     }
 
+    /// Retorna o tipo do DUID como string legível — útil para logs de diagnóstico.
+    pub fn duid_type(&self) -> &'static str {
+        if self.bytes.len() < 2 {
+            return "unknown (too short)";
+        }
+        match u16::from_be_bytes([self.bytes[0], self.bytes[1]]) {
+            1 => "DUID-LLT (contains MAC)",
+            2 => "DUID-EN (no MAC — enterprise number)",
+            3 => "DUID-LL (contains MAC)",
+            4 => "DUID-UUID (no MAC)",
+            _ => "DUID-unknown",
+        }
+    }
+
     /// Tenta extrair um MAC (Link-Layer Address) a partir do DUID, se for do tipo LL ou LLT.
     /// Retorna None se não for possível extrair com segurança.
     pub fn extract_mac(&self) -> Option<MacAddr> {

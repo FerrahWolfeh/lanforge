@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use rtnetlink::Handle;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::Ipv6Addr;
 use std::sync::Arc;
@@ -25,6 +26,7 @@ pub async fn dhcpv6_service(
     config: Dhcpv6Config,
     table: Arc<RwLock<DeviceTable>>,
     bus: Arc<EventBus>,
+    nl_handle: &Handle,
 ) -> Result<()> {
     if !config.enabled {
         info!("[DHCPv6] DHCPv6 is disabled in config.");
@@ -37,12 +39,14 @@ pub async fn dhcpv6_service(
 
     // Bind à porta 547 (qualquer IP)
     let addr = std::net::SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::UNSPECIFIED), 547);
+
+    // Configura para apenas uso IPv6
+    socket
+        .set_only_v6(true)
+        .context("Failed to set IPV6_V6ONLY")?;
     socket
         .bind(&addr.into())
         .context("Failed to bind DHCPv6 port 547")?;
-
-    // Configura para apenas uso IPv6
-    socket.set_only_v6(true)?;
 
     // Junta-se ao grupo multicast ff02::1:2
     // Obter index da interface não é estritamente obrigatório em todas as OS, mas recomendado se soubermos a iface
@@ -81,7 +85,10 @@ pub async fn dhcpv6_service(
                     _ => continue,
                 };
 
-                match server.handle_packet(payload, peer_ip) {
+                match server
+                    .handle_packet(payload, peer_ip, &table, nl_handle)
+                    .await
+                {
                     HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac) => {
                         let dest_addr =
                             std::net::SocketAddr::new(std::net::IpAddr::V6(dest_ip), 546);

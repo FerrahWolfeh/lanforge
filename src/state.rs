@@ -117,6 +117,7 @@ pub struct DeviceTable {
     devices: HashMap<MacAddr, Device>,
     duid_index: HashMap<Duid, MacAddr>,
     static_entries: HashMap<MacAddr, StaticEntry>,
+    ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
 }
 
 impl DeviceTable {
@@ -125,6 +126,7 @@ impl DeviceTable {
             devices: HashMap::new(),
             duid_index: HashMap::new(),
             static_entries: HashMap::new(),
+            ndp_cache: HashMap::new(),
         }
     }
 
@@ -233,11 +235,35 @@ impl DeviceTable {
         self.static_entries.values()
     }
 
+    /// Atualiza o cache NDP com informações em tempo real do Netlink.
+    pub fn update_ndp_cache(&mut self, ip: Ipv6Addr, mac: MacAddr) {
+        self.ndp_cache.insert(ip, (mac, SystemTime::now()));
+
+        // Aproveitamos o evento do kernel para dar um "bump" no last_seen do dispositivo físico
+        let dev = self.get_or_insert(mac);
+        dev.last_seen = SystemTime::now();
+    }
+
+    /// Recupera o MAC associado a um IP via cache NDP.
+    pub fn get_mac_from_ndp_cache(&self, ip: &Ipv6Addr) -> Option<MacAddr> {
+        self.ndp_cache.get(ip).map(|(mac, _)| *mac)
+    }
+
     /// Remove expired dynamic leases and inactive dynamic devices.
     pub fn expire_stale(&mut self) -> bool {
         let now = SystemTime::now();
         let max_age = std::time::Duration::from_secs(7 * 24 * 3600); // 7 days
+        let ndp_max_age = std::time::Duration::from_secs(24 * 3600); // 1 dia para IP link-local
         let mut changed = false;
+
+        // Limpa o cache NDP velho
+        let initial_ndp_len = self.ndp_cache.len();
+        self.ndp_cache.retain(|_, (_, timestamp)| {
+            timestamp.elapsed().unwrap_or(std::time::Duration::ZERO) <= ndp_max_age
+        });
+        if self.ndp_cache.len() != initial_ndp_len {
+            changed = true;
+        }
 
         let macs: Vec<MacAddr> = self.devices.keys().copied().collect();
         for mac in macs {

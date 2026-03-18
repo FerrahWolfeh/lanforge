@@ -198,6 +198,7 @@ async fn main() -> Result<()> {
         let dhcp_cfg = cfg.to_dhcpv6_config();
         let dhcp_bus = bus.clone();
         let dhcp_table = table.clone();
+        let dhcp_handle = handle.clone();
 
         info!(
             "[main] DHCPv6 service enabled on {}, lease {}s",
@@ -211,10 +212,11 @@ async fn main() -> Result<()> {
             Duration::from_secs(5),
             Duration::from_secs(60),
             move || {
+                let handle = dhcp_handle.clone();
                 let cfg = dhcp_cfg.clone();
                 let bus = dhcp_bus.clone();
                 let table = dhcp_table.clone();
-                async move { dhcp::v6::dhcpv6_service(cfg, table, bus).await }
+                async move { dhcp::v6::dhcpv6_service(cfg, table, bus, &handle).await }
             },
         ));
     }
@@ -247,6 +249,14 @@ async fn main() -> Result<()> {
         tokio::select! {
             // ── Netlink neighbour event ──────────────────────────────────
             Some((msg, _)) = messages.next() => {
+                // 1. Otimização: Alimentar cache NDP em tempo real na sua tabela
+                if let Some((ip, mac_bytes)) = netlink::extract_neigh_info(&msg) {
+                    let mut t = table.write().await;
+                    // Implemente este método no DeviceTable (ou crie um HashMap separado no state.rs)
+                    t.update_ndp_cache(ip, state::MacAddr(mac_bytes));
+                }
+
+                // 2. Lógica original para acionar o SLAAC scan
                 if netlink::is_relevant_neigh_event(&msg, &cfg.target_prefix) {
                     if scan_deadline.is_none() {
                         debug!("[main] Neighbour event detected, debouncing {}s...", cfg.debounce_secs);

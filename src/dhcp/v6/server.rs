@@ -33,7 +33,13 @@ impl Dhcpv6Server {
         }
     }
 
-    pub fn handle_packet(&mut self, data: &[u8], peer: Ipv6Addr) -> HandleResult {
+    pub async fn handle_packet(
+        &mut self,
+        data: &[u8],
+        peer: Ipv6Addr,
+        table: &tokio::sync::RwLock<crate::state::DeviceTable>, // <-- Injetando a tabela aqui
+        nl_handle: &rtnetlink::Handle,
+    ) -> HandleResult {
         let msg = match Message::decode(&mut Decoder::new(data)) {
             Ok(m) => m,
             Err(e) => {
@@ -56,25 +62,57 @@ impl Dhcpv6Server {
         };
 
         // Try extracting MAC from DUID or Option 79 (Client Link-Layer Address)
-        let mac = client_duid.extract_mac().or_else(|| {
-            msg.opts().iter().find_map(|opt| {
-                if let DhcpOption::Unknown(u) = opt
-                    && u.code() == 79.into()
-                    && u.data().len() >= 8
-                {
-                    // 2 bytes type, then MAC
-                    return MacAddr::from_slice(&u.data()[2..8]);
-                }
-                None
+        let mut mac = client_duid // <-- Mude de 'let' para 'let mut'
+            .extract_mac()
+            .or_else(|| {
+                // Opção 79 (Client Link-Layer Address) — já existia
+                msg.opts().iter().find_map(|opt| {
+                    if let DhcpOption::Unknown(u) = opt
+                        && u.code() == 79.into()
+                        && u.data().len() >= 8
+                    {
+                        return MacAddr::from_slice(&u.data()[2..8]);
+                    }
+                    None
+                })
             })
-        });
+            .or_else(|| {
+                // EUI-64 do link-local do peer — cobre DUID-EN/UUID do systemd-networkd
+                crate::netlink::mac_from_eui64_link_local(&peer).map(MacAddr)
+            });
+
+        // Fallback 1: Cache passivo ultra-rápido na memória
+        if mac.is_none()
+            && let Some(cached_mac) = table.read().await.get_mac_from_ndp_cache(&peer)
+        {
+            debug!("[DHCPv6] MAC recuperado instantaneamente do cache NDP em memória para {peer}");
+            mac = Some(cached_mac);
+        }
+
+        // Fallback 2: O dump do Netlink original (apenas para lidar com a rara "race condition"
+        // onde o pacote UDP é processado milissegundos ANTES do evento multicast do kernel)
+        if mac.is_none() {
+            debug!("[DHCPv6] Cache miss. Fazendo lookup síncrono no kernel para {peer}...");
+            if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
+                mac = Some(MacAddr(ndp_mac));
+                // Opcional: Atualizar o cache aqui também
+            }
+        }
+
+        let Some(mac) = mac else {
+            warn!(
+                "[DHCPv6] SOLICIT from {peer}: sem MAC (DUID type: {})",
+                client_duid.duid_type()
+            );
+            return HandleResult::Ignore;
+        };
 
         match msg.msg_type() {
-            MessageType::Solicit => self.handle_solicit(&msg, client_duid, mac, peer),
-            MessageType::Request => self.handle_request(&msg, client_duid, mac, peer),
-            MessageType::Renew => self.handle_renew(&msg, client_duid, mac, peer),
-            MessageType::Rebind => self.handle_rebind(&msg, client_duid, mac, peer),
-            MessageType::Release => self.handle_release(&msg, client_duid, mac, peer),
+            MessageType::Solicit => self.handle_solicit(&msg, client_duid, Some(mac), peer),
+            MessageType::Request => self.handle_request(&msg, client_duid, Some(mac), peer),
+            MessageType::Renew => self.handle_renew(&msg, client_duid, Some(mac), peer),
+            MessageType::Rebind => self.handle_rebind(&msg, client_duid, Some(mac), peer),
+            MessageType::Release => self.handle_release(&msg, client_duid, Some(mac), peer),
             MessageType::InformationRequest => {
                 self.handle_information_request(&msg, client_duid, peer)
             }

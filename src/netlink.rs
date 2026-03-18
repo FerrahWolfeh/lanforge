@@ -7,10 +7,11 @@ use anyhow::Result;
 use futures::stream::TryStreamExt;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_packet_route::{
-    RouteNetlinkMessage,
+    AddressFamily, RouteNetlinkMessage,
     neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState},
 };
 use rtnetlink::{Handle, IpVersion};
+use std::net::Ipv6Addr;
 
 // ---------------------------------------------------------------------------
 // Neighbour event filter
@@ -43,14 +44,116 @@ fn neigh_matches_prefix(neigh: &NeighbourMessage, target_prefix: &str) -> bool {
         matches!(
             attr,
             NeighbourAttribute::Destination(NeighbourAddress::Inet6(ip))
-                if ip.to_string().starts_with(target_prefix)
+            if ip.to_string().starts_with(target_prefix)
         )
     })
+}
+
+/// Extrai proativamente IP e MAC de eventos Netlink (RTM_NEWNEIGH)
+pub fn extract_neigh_info(
+    msg: &NetlinkMessage<RouteNetlinkMessage>,
+) -> Option<(Ipv6Addr, [u8; 6])> {
+    if let NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(neigh)) = &msg.payload {
+        if neigh.header.family != AddressFamily::Inet6 {
+            return None;
+        }
+
+        // Ignora estados onde o MAC ainda não é conhecido
+        if neigh.header.state == NeighbourState::Incomplete
+            || neigh.header.state == NeighbourState::Failed
+        {
+            return None;
+        }
+
+        let mut ip = None;
+        let mut mac = None;
+
+        for attr in &neigh.attributes {
+            match attr {
+                NeighbourAttribute::Destination(NeighbourAddress::Inet6(i)) => ip = Some(*i),
+                NeighbourAttribute::LinkLocalAddress(m) if m.len() >= 6 => {
+                    mac = Some([m[0], m[1], m[2], m[3], m[4], m[5]]);
+                }
+                _ => {}
+            }
+        }
+
+        if let (Some(ip), Some(mac)) = (ip, mac) {
+            return Some((ip, mac));
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
 // Netlink neighbour query (uses the shared Handle)
 // ---------------------------------------------------------------------------
+
+/// Procura o MAC de um vizinho IPv6 específico na tabela NDP do kernel.
+///
+/// Usado como fallback no DHCPv6 quando o DUID não contém MAC (DUID-EN, DUID-UUID)
+/// e o endereço link-local do peer não é EUI-64.
+/// O kernel sempre tem o par IP↔MAC para qualquer host que enviou um pacote recentemente.
+pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<[u8; 6]> {
+    let target = ip.to_string();
+    let mut stream = handle
+        .neighbours()
+        .get()
+        .set_family(IpVersion::V6)
+        .execute();
+
+    while let Ok(Some(msg)) = stream.try_next().await {
+        if msg.header.state == NeighbourState::Incomplete
+            || msg.header.state == NeighbourState::Failed
+        {
+            continue;
+        }
+        let mut found_ip = false;
+        let mut mac_bytes: Option<[u8; 6]> = None;
+
+        for attr in &msg.attributes {
+            match attr {
+                NeighbourAttribute::Destination(NeighbourAddress::Inet6(addr))
+                    if addr.to_string() == target =>
+                {
+                    found_ip = true;
+                }
+                NeighbourAttribute::LinkLocalAddress(b) if b.len() == 6 => {
+                    mac_bytes = Some([b[0], b[1], b[2], b[3], b[4], b[5]]);
+                }
+                _ => {}
+            }
+        }
+
+        if found_ip {
+            return mac_bytes;
+        }
+    }
+    None
+}
+
+/// Tenta recuperar o MAC de um endereço IPv6 link-local EUI-64.
+///
+/// O IID EUI-64 é formado assim:
+///   MAC:  AA:BB:CC:DD:EE:FF
+///   IID:  (AA^0x02):BB:CC:FF:FE:DD:EE:FF
+///
+/// Ou seja: bytes 8,9,10 = primeiros 3 do MAC (bit U/L revertido no byte 8),
+///           bytes 11,12 = FF:FE (marcador EUI-64),
+///           bytes 13,14,15 = últimos 3 do MAC.
+///
+/// Retorna None se o endereço não for link-local ou não usar EUI-64.
+pub fn mac_from_eui64_link_local(ip: &Ipv6Addr) -> Option<[u8; 6]> {
+    let o = ip.octets();
+    if o[0] != 0xfe || (o[1] & 0xc0) != 0x80 {
+        return None; // não é fe80::/10
+    }
+    if o[11] != 0xff || o[12] != 0xfe {
+        return None; // não é EUI-64 (privacy address ou manual)
+    }
+    // Reverte o bit U/L (bit 6 do primeiro octeto do IID)
+    Some([o[8] ^ 0x02, o[9], o[10], o[13], o[14], o[15]])
+}
 
 pub async fn get_ipv6_neighbors(
     handle: &Handle,
