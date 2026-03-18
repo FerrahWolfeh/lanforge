@@ -13,7 +13,7 @@ pub mod config;
 pub mod packet;
 
 pub use config::*;
-pub use packet::{ICMPV6_TYPE_RA, build_ra_packet, icmpv6_checksum};
+pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::bus::{EventBus, LanforgeEvent};
 

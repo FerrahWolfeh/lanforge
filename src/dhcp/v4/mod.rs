@@ -8,7 +8,7 @@ pub mod raw;
 pub mod server;
 
 use anyhow::{Context, Result};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;

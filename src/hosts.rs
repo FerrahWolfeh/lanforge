@@ -118,11 +118,4 @@ pub async fn reload_dns(process_name: &str) {
     }
 }
 
-/// Legacy compat: accepts HashSet (used by slaac v1).
-/// Will be removed in Phase 2C.
-pub fn update_file_if_changed_legacy(
-    output_file: &str,
-    lines: std::collections::HashSet<String>,
-) -> Result<bool> {
-    update_file_if_changed(output_file, lines.into_iter().collect())
-}
+

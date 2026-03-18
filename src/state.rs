@@ -139,10 +139,7 @@ impl DeviceTable {
                 v6_suffix: e.v6_suffix.clone(),
             };
 
-            info!(
-                "  Static device: {} → {} (v4={:?})",
-                mac, e.hostname, v4_ip
-            );
+            info!("  Static device: {} → {} (v4={:?})", mac, e.hostname, v4_ip);
 
             self.static_entries.insert(mac, static_entry);
 

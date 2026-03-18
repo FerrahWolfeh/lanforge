@@ -275,10 +275,10 @@ impl RaConfig {
             ));
         }
 
-        if let Some(mtu) = self.mtu {
-            if mtu < 1280 {
-                return Err(anyhow!("mtu={mtu} < 1280 (mínimo IPv6, RFC 8200 §5)"));
-            }
+        if let Some(mtu) = self.mtu
+            && mtu < 1280
+        {
+            return Err(anyhow!("mtu={mtu} < 1280 (mínimo IPv6, RFC 8200 §5)"));
         }
 
         Ok(())

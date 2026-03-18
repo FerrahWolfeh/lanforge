@@ -4,7 +4,7 @@
 //! não configurados (quando o cliente tem IP mas a tabela ARP do servidor
 //! não tem a entrada). Evita o broadcast em L3 para pacotes unicast.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use pnet::datalink::{self, MacAddr as PnetMac};
 use pnet::packet::MutablePacket;
 use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
