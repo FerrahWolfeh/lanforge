@@ -62,10 +62,10 @@ impl Dhcpv6Server {
         };
 
         // Try extracting MAC from DUID or Option 79 (Client Link-Layer Address)
-        let mut mac = client_duid // <-- Mude de 'let' para 'let mut'
+        let mut mac = client_duid
             .extract_mac()
             .or_else(|| {
-                // Opção 79 (Client Link-Layer Address) — já existia
+                // Opção 79 (Client Link-Layer Address)
                 msg.opts().iter().find_map(|opt| {
                     if let DhcpOption::Unknown(u) = opt
                         && u.code() == 79.into()
@@ -77,7 +77,7 @@ impl Dhcpv6Server {
                 })
             })
             .or_else(|| {
-                // EUI-64 do link-local do peer — cobre DUID-EN/UUID do systemd-networkd
+                // EUI-64 matemático link-local
                 crate::netlink::mac_from_eui64_link_local(&peer).map(MacAddr)
             });
 
@@ -85,25 +85,45 @@ impl Dhcpv6Server {
         if mac.is_none()
             && let Some(cached_mac) = table.read().await.get_mac_from_ndp_cache(&peer)
         {
-            debug!("[DHCPv6] MAC recuperado instantaneamente do cache NDP em memória para {peer}");
+            debug!("[DHCPv6] MAC recuperado instantaneamente do cache NDP para {peer}");
             mac = Some(cached_mac);
         }
 
-        // Fallback 2: O dump do Netlink original (apenas para lidar com a rara "race condition"
-        // onde o pacote UDP é processado milissegundos ANTES do evento multicast do kernel)
+        // Fallback 2: O dump do Netlink original (síncrono com kernel)
         if mac.is_none() {
             debug!("[DHCPv6] Cache miss. Fazendo lookup síncrono no kernel para {peer}...");
             if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
                 mac = Some(MacAddr(ndp_mac));
-                // Opcional: Atualizar o cache aqui também
+                // Opcional: já preenche o cache caso aconteça de novo
+                table.write().await.update_ndp_cache(peer, MacAddr(ndp_mac));
             }
         }
 
         let Some(mac) = mac else {
             warn!(
-                "[DHCPv6] SOLICIT from {peer}: sem MAC (DUID type: {})",
+                "[DHCPv6] SOLICIT from {peer}: sem MAC (DUID: {}). Dando um cutucão no Kernel...",
                 client_duid.duid_type()
             );
+
+            // O HACK SALVADOR (Agora com Scope/Interface):
+            // Usamos a crate 'socket2' para atrelar o socket diretamente à interface (ex: end0).
+            // Isso garante que o pacote nulo saia fisicamente pela placa de rede,
+            // obrigando o Linux a resolver o MAC instantaneamente.
+            let peer_ip = peer;
+            let iface = self.cfg.iface.clone(); // Pega o nome da interface ("end0")
+
+            tokio::spawn(async move {
+                if let Ok(sock) = socket2::Socket::new(
+                    socket2::Domain::IPV6,
+                    socket2::Type::DGRAM,
+                    Some(socket2::Protocol::UDP),
+                ) {
+                    let _ = sock.bind_device(Some(iface.as_bytes()));
+                    let addr = std::net::SocketAddrV6::new(peer_ip, 546, 0, 0);
+                    let _ = sock.send_to(&[0], &addr.into());
+                }
+            });
+
             return HandleResult::Ignore;
         };
 
@@ -135,14 +155,36 @@ impl Dhcpv6Server {
             return HandleResult::Ignore;
         };
 
-        let mut reply = self.base_reply(msg, MessageType::Advertise, &client_duid);
+        // NetworkManager adora Rapid Commit. Se ele pedir, pulamos o ADVERTISE e damos REPLY direto.
+        let is_rapid_commit = msg.opts().get(OptionCode::RapidCommit).is_some();
+        let reply_type = if is_rapid_commit {
+            MessageType::Reply
+        } else {
+            MessageType::Advertise
+        };
+
+        let mut reply = self.base_reply(msg, reply_type, &client_duid);
         let mut learned_duid = None;
+
+        // Preference 255: Diz ao cliente para não esperar por outros servidores na rede.
+        reply.opts_mut().insert(DhcpOption::Preference(255));
+
+        // Se o cliente pediu Rapid Commit, a RFC exige que o servidor devolva a opção para confirmar
+        if is_rapid_commit {
+            reply.opts_mut().insert(DhcpOption::RapidCommit);
+        }
 
         // Ensure we offer IA_NA if requested
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             // Allocate an IP
             if let Some(ip) = self.pool.allocate(mac, None) {
-                info!("[DHCPv6] SOLICIT from {mac} -> ADVERTISE {ip}");
+                let action = if is_rapid_commit {
+                    "REPLY (Rapid Commit)"
+                } else {
+                    "ADVERTISE"
+                };
+                info!("[DHCPv6] SOLICIT from {mac} -> {action} {ip}");
+
                 let mut ia_opts = DhcpOptions::new();
                 ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                     addr: ip,
@@ -150,6 +192,7 @@ impl Dhcpv6Server {
                     valid_life: self.cfg.lease_time,
                     opts: DhcpOptions::new(),
                 }));
+
                 reply.opts_mut().insert(DhcpOption::IANA(IANA {
                     id: iana.id,
                     t1: self.cfg.lease_time / 2,

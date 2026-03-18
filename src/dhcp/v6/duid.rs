@@ -59,18 +59,36 @@ impl Duid {
         }
         None
     }
+
+    /// Gera um DUID-LL (Link-Layer) válido de 10 bytes usando o MAC da interface.
+    /// Formato: Type (0x0003) + Hardware Type (0x0001 para Ethernet) + MAC (6 bytes)
+    pub fn generate_ll_from_mac(mac: &[u8; 6]) -> Self {
+        let mut bytes = vec![0x00, 0x03, 0x00, 0x01];
+        bytes.extend_from_slice(mac);
+        Self::new(bytes)
+    }
 }
 
 impl fmt::Debug for Duid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hex: String = self.bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(":");
+        let hex: String = self
+            .bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join(":");
         write!(f, "Duid({})", hex)
     }
 }
 
 impl fmt::Display for Duid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hex: String = self.bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(":");
+        let hex: String = self
+            .bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join(":");
         write!(f, "{}", hex)
     }
 }

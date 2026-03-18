@@ -114,6 +114,8 @@ impl Default for DhcpV4Cfg {
 pub struct DhcpV6Cfg {
     pub enabled: bool,
     pub lease_time: u32,
+    pub range_start: Option<String>,
+    pub range_end: Option<String>,
 }
 
 impl Default for DhcpV6Cfg {
@@ -121,6 +123,8 @@ impl Default for DhcpV6Cfg {
         DhcpV6Cfg {
             enabled: false,
             lease_time: 86400,
+            range_start: None,
+            range_end: None,
         }
     }
 }
@@ -373,11 +377,18 @@ impl Config {
             }
         });
 
+        let parse_ipv6 = |s: &Option<String>| -> Option<Ipv6Addr> {
+            s.as_deref().and_then(|ip_str| ip_str.parse().ok())
+        };
+
         crate::dhcp::v6::config::Dhcpv6Config {
             enabled: self.dhcpv6_enabled,
             iface: self.iface_lan.clone(),
             lease_time: self.dhcpv6_toml.lease_time,
             ula_prefix,
+            // Certifique-se de que sua config interna do v6 suporte esses campos!
+            range_start: parse_ipv6(&self.dhcpv6_toml.range_start),
+            range_end: parse_ipv6(&self.dhcpv6_toml.range_end),
         }
     }
 }

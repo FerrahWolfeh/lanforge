@@ -64,13 +64,40 @@ pub async fn dhcpv6_service(
         config.iface
     );
 
+    // Lê o MAC real da interface (ex: "end0") para gerar um DUID legítimo
+    let mac_str = std::fs::read_to_string(format!("/sys/class/net/{}/address", config.iface))
+        .unwrap_or_else(|_| "02:04:06:08:0a:0c\n".to_string());
+
+    let mut server_mac = [0u8; 6];
+    let mac_bytes: Vec<u8> = mac_str
+        .trim()
+        .split(':')
+        .filter_map(|x| u8::from_str_radix(x, 16).ok())
+        .collect();
+    if mac_bytes.len() == 6 {
+        server_mac.copy_from_slice(&mac_bytes);
+    }
+
     let mut server = Dhcpv6Server::new(
         config.clone(),
-        Ipv6Pool::new(vec![], config.ula_prefix),
-        Duid::new(vec![
-            0x00, 0x03, 0x00, 0x01, 0x02, 0x04, 0x06, 0x08, 0x0a, 0x0c,
-        ]),
+        Ipv6Pool::new(config.range_start, config.range_end, config.ula_prefix),
+        Duid::generate_ll_from_mac(&server_mac), // <-- DUID Legítimo e dinâmico!
     );
+
+    {
+        let t = table.read().await;
+        for entry in t.static_entries() {
+            if let Some(suffix) = &entry.v6_suffix {
+                // Junta o ULA da rede com o sufixo do TOML
+                if let Some(ip) = server.pool.construct_static_ula(suffix) {
+                    server.pool.add_reservation(ip, entry.mac);
+                    tracing::info!("[DHCPv6] Static reservation: {} → {}", entry.mac, ip);
+                } else {
+                    tracing::warn!("[DHCPv6] Falha ao construir ULA para o sufixo: {}", suffix);
+                }
+            }
+        }
+    }
 
     let mut buf = [0u8; 2048];
 
@@ -80,8 +107,10 @@ pub async fn dhcpv6_service(
         match udp.recv_from(&mut buf).await {
             Ok((len, peer)) => {
                 let payload = &buf[..len];
-                let peer_ip = match peer.ip() {
-                    std::net::IpAddr::V6(ip) => ip,
+
+                // 1. Extrai o IP puro e o scope_id
+                let (peer_ip, scope_id) = match peer {
+                    std::net::SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
                     _ => continue,
                 };
 
@@ -90,8 +119,10 @@ pub async fn dhcpv6_service(
                     .await
                 {
                     HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac) => {
-                        let dest_addr =
-                            std::net::SocketAddr::new(std::net::IpAddr::V6(dest_ip), 546);
+                        // 2. Constrói a resposta usando SocketAddrV6 e INJETANDO o scope_id
+                        let dest_addr = std::net::SocketAddrV6::new(dest_ip, 546, 0, scope_id);
+
+                        // Agora o .send_to sabe exatamente por qual interface cuspir o pacote!
                         if let Err(e) = udp.send_to(&reply_bytes, dest_addr).await {
                             warn!("[DHCPv6] send error to {dest_ip} (port 546): {e}");
                         }

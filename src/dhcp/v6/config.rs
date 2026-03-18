@@ -6,4 +6,6 @@ pub struct Dhcpv6Config {
     pub iface: String,
     pub lease_time: u32,
     pub ula_prefix: Option<Ipv6Addr>,
+    pub range_start: Option<Ipv6Addr>,
+    pub range_end: Option<Ipv6Addr>,
 }
