@@ -20,7 +20,7 @@ use crate::bus::{EventBus, LanforgeEvent};
 use anyhow::{Context, Result, anyhow};
 use futures::TryStreamExt;
 use netlink_packet_route::address::AddressAttribute;
-use rand::{Rng, RngExt, rng};
+use rand::{RngExt, rng};
 use rtnetlink::Handle;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
@@ -115,6 +115,15 @@ impl RaState {
     }
 }
 
+pub(crate) struct RaContext<'a> {
+    pub(crate) async_fd: &'a AsyncFd<Socket>,
+    pub(crate) cfg: &'a RaConfig,
+    pub(crate) handle: &'a Handle,
+    pub(crate) mac: &'a [u8; 6],
+    pub(crate) iface_index: u32,
+    pub(crate) bus: &'a EventBus,
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -154,17 +163,17 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
     let async_fd = AsyncFd::new(socket)?;
     let mut state = RaState::new();
 
-    // RA imediato no startup — clientes já ativos recebem configuração sem esperar
-    do_multicast_ra(
-        &async_fd,
-        &cfg,
-        &handle,
-        &mac,
+    let ctx = RaContext {
+        async_fd: &async_fd,
+        cfg: &cfg,
+        handle: &handle,
+        mac: &mac,
         iface_index,
-        &mut state,
-        &bus,
-    )
-    .await;
+        bus: &bus,
+    };
+
+    // RA imediato no startup — clientes já ativos recebem configuração sem esperar
+    do_multicast_ra(&ctx, &mut state).await;
 
     loop {
         let next = state.next_interval(&cfg);
@@ -173,7 +182,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
         tokio::select! {
             // ── RA periódico ──────────────────────────────────────────────
             _ = sleep(next) => {
-                do_multicast_ra(&async_fd, &cfg, &handle, &mac, iface_index, &mut state, &bus).await;
+                do_multicast_ra(&ctx, &mut state).await;
             }
 
             // ── Router Solicitation recebido ──────────────────────────────
@@ -199,10 +208,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
                         let rs_src = src_sa.as_socket_ipv6().map(|s| *s.ip());
                         debug!("[RA] RS recebido de {rs_src:?}");
 
-                        handle_rs(
-                            &async_fd, &cfg, &handle,
-                            &mac, iface_index, rs_src, &mut state, &bus,
-                        ).await;
+                        handle_rs(&ctx, rs_src, &mut state).await;
                     }
                     Ok(Ok(_))  => {}
                     Ok(Err(e)) => warn!("[RA] Erro de leitura no socket: {e}"),
@@ -217,16 +223,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
 // Lógica de resposta a RS (RFC 4861 §6.2.6)
 // ---------------------------------------------------------------------------
 
-async fn handle_rs(
-    async_fd: &AsyncFd<Socket>,
-    cfg: &RaConfig,
-    handle: &Handle,
-    mac: &[u8; 6],
-    iface_index: u32,
-    rs_src: Option<Ipv6Addr>,
-    state: &mut RaState,
-    bus: &EventBus,
-) {
+async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut RaState) {
     // Atraso aleatório 0–500ms antes de responder (RFC 4861 §6.2.6).
     // Evita que múltiplos roteadores respondam ao mesmo RS no mesmo instante.
     let delay_ms = rng().random_range(0..MAX_RA_DELAY_TIME_MS);
@@ -237,18 +234,7 @@ async fn handle_rs(
 
     match dst {
         Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
-            match send_ra(
-                async_fd,
-                cfg,
-                handle,
-                mac,
-                iface_index,
-                Some(unicast_dst),
-                state,
-                bus,
-            )
-            .await
-            {
+            match send_ra(ctx, Some(unicast_dst), state).await {
                 Ok(()) => {
                     debug!("[RA] RA unicast -> {unicast_dst}");
                     state.record_unicast(unicast_dst);
@@ -258,7 +244,7 @@ async fn handle_rs(
         }
         None if state.can_multicast_now() => {
             // Solicitante com endereço ::  → resposta multicast
-            do_multicast_ra(async_fd, cfg, handle, mac, iface_index, state, bus).await;
+            do_multicast_ra(ctx, state).await;
         }
         _ => {
             // Rate limit ativo — RFC 4861 §6.2.6 permite descartar silenciosamente
@@ -267,16 +253,8 @@ async fn handle_rs(
     }
 }
 
-async fn do_multicast_ra(
-    async_fd: &AsyncFd<Socket>,
-    cfg: &RaConfig,
-    handle: &Handle,
-    mac: &[u8; 6],
-    iface_index: u32,
-    state: &mut RaState,
-    bus: &EventBus,
-) {
-    match send_ra(async_fd, cfg, handle, mac, iface_index, None, state, bus).await {
+async fn do_multicast_ra(ctx: &RaContext<'_>, state: &mut RaState) {
+    match send_ra(ctx, None, state).await {
         Ok(()) => {
             debug!("[RA] RA multicast -> ff02::1");
             state.record_multicast();
@@ -288,41 +266,36 @@ async fn do_multicast_ra(
 /// Constrói, assina (checksum) e envia um RA.
 /// `unicast_dst = None` → multicast `ff02::1` (all-nodes).
 async fn send_ra(
-    async_fd: &AsyncFd<Socket>,
-    cfg: &RaConfig,
-    handle: &Handle,
-    mac: &[u8; 6],
-    iface_index: u32,
+    ctx: &RaContext<'_>,
     unicast_dst: Option<Ipv6Addr>,
     state: &mut RaState,
-    bus: &EventBus,
 ) -> Result<()> {
     // Endereços são relidos a cada envio: GUA pode mudar quando o ISP renova
     // a delegação de prefixo via DHCPv6-PD, sem necessidade de reiniciar o serviço
-    let src_ll = get_link_local_addr(handle, iface_index)
+    let src_ll = get_link_local_addr(ctx.handle, ctx.iface_index)
         .await
         .context("sem endereço link-local na interface")?;
-    let gua = get_gua_prefix(handle, iface_index).await?;
+    let gua = get_gua_prefix(ctx.handle, ctx.iface_index).await?;
 
     // Publica PrefixChanged no EventBus se o GUA mudou
     if gua != state.last_gua {
         info!("[RA] GUA prefix changed: {:?} -> {:?}", state.last_gua, gua);
         state.last_gua = gua;
-        bus.publish(LanforgeEvent::PrefixChanged { gua });
+        ctx.bus.publish(LanforgeEvent::PrefixChanged { gua });
     }
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());
     // scope_id obrigatório para destinos link-scoped (multicast e link-local)
-    let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, iface_index));
+    let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, ctx.iface_index));
 
-    let mut pkt = build_ra_packet(cfg, mac, gua.as_ref());
+    let mut pkt = build_ra_packet(ctx.cfg, ctx.mac, gua.as_ref());
 
     // Checksum calculado sobre o pseudo-header IPv6 + payload
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
     pkt[2] = (csum >> 8) as u8;
     pkt[3] = (csum & 0xFF) as u8;
 
-    async_fd
+    ctx.async_fd
         .get_ref()
         .send_to(&pkt, &dst_sa)
         .context("ICMPv6 send_to")?;

@@ -131,8 +131,8 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) 
     // Zera os bits de host conforme prefix_len — geralmente /64 = zera 8 bytes finais
     let mut octets = addr.octets();
     let host_bytes = ((128 - cfg.prefix_len) / 8) as usize;
-    for i in (16 - host_bytes)..16 {
-        octets[i] = 0;
+    for i in octets.iter_mut().skip(16 - host_bytes) {
+        *i = 0;
     }
     p.extend_from_slice(&octets);
 }
@@ -241,8 +241,10 @@ mod tests {
 
     #[test]
     fn config_validation_max_interval_bounds() {
-        let mut cfg = RaConfig::default();
-        cfg.max_interval = Duration::from_secs(3); // abaixo de 4s
+        let mut cfg = RaConfig {
+            max_interval: Duration::from_secs(3), // abaixo de 4s
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
         cfg.max_interval = Duration::from_secs(1801); // acima de 1800s
         assert!(cfg.validate().is_err());
