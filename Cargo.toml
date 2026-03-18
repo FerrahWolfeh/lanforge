@@ -34,6 +34,10 @@ libc = "0.2.183"
 # RNG (usa hardware RNG do BCM2711 via getrandom no RPi4)
 rand = "0.10.0"
 
+# DHCPv4 protocol parsing
+dhcproto = "0.14"
+pnet = "0.35.0"
+
 # Observabilidade
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }

@@ -2,22 +2,60 @@
 //!
 //! O modelo central é um Device — um dispositivo físico que pode ter v4, v6
 //! e endereços SLAAC ao mesmo tempo. Indexado pelo MAC.
-//!
-//! **Status: STUB** — será implementado na Fase 2 (DHCPv4).
-
-#![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::path::Path;
 use std::time::SystemTime;
 
+use crate::config::StaticDeviceCfg;
+use tracing::{info, warn};
+
+// ---------------------------------------------------------------------------
+// MacAddr
+// ---------------------------------------------------------------------------
+
 /// Endereço MAC de 6 bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MacAddr(pub [u8; 6]);
 
+impl MacAddr {
+    /// Parse from "aa:bb:cc:dd:ee:ff" (case-insensitive).
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 6 {
+            return None;
+        }
+        let mut bytes = [0u8; 6];
+        for (i, part) in parts.iter().enumerate() {
+            bytes[i] = u8::from_str_radix(part, 16).ok()?;
+        }
+        Some(MacAddr(bytes))
+    }
+}
+
+impl fmt::Display for MacAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
+        )
+    }
+}
+
+impl fmt::Debug for MacAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MacAddr({self})")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Device + Lease types
+// ---------------------------------------------------------------------------
+
 /// DUID opaco (DUID-LLT, DUID-LL ou DUID-EN).
-/// Aprendido no primeiro contato DHCPv6 e associado ao MAC do dispositivo.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Duid(pub Vec<u8>);
 
@@ -27,23 +65,14 @@ pub struct Device {
     pub mac: MacAddr,
     pub hostname: String,
 
-    /// true = veio da config estática; false = aprendido dinamicamente
+    /// true = veio da config estática
     pub is_static: bool,
-
-    /// DUID aprendido na primeira troca DHCPv6.
-    /// None até o dispositivo fazer DHCPv6 pela primeira vez.
     pub duid: Option<Duid>,
-
-    /// Lease IPv4 ativo, se houver.
     pub v4: Option<V4Lease>,
-
-    /// Lease IPv6 stateful ativo, se houver.
     pub v6: Option<V6Lease>,
 
-    /// Endereços SLAAC observados via NDP (pode haver mais de um por dispositivo).
+    /// Endereços SLAAC observados via NDP.
     pub slaac: Vec<Ipv6Addr>,
-
-    /// Última vez que o dispositivo foi visto na rede (qualquer protocolo).
     pub last_seen: SystemTime,
 }
 
@@ -59,26 +88,23 @@ pub struct V6Lease {
     pub expires: SystemTime,
 }
 
-/// Registro de config estática — lido do config.toml no startup.
-/// Define hostname e endereços fixos para um MAC conhecido.
+/// Registro de config estática para um dispositivo.
 #[derive(Debug, Clone)]
 pub struct StaticEntry {
     pub mac: MacAddr,
     pub hostname: String,
     pub v4_ip: Option<Ipv4Addr>,
-    /// Sufixo IPv6 fixo (ex: ::1057:cafe).
-    pub v6_suffix: Option<Ipv6Addr>,
+    pub v6_suffix: Option<String>,
 }
 
-/// Tabela de dispositivos — compartilhada entre todas as tasks via Arc<RwLock<..>>
+// ---------------------------------------------------------------------------
+// DeviceTable
+// ---------------------------------------------------------------------------
+
+/// Tabela de dispositivos — compartilhada via Arc<RwLock<..>>
 pub struct DeviceTable {
-    /// Dispositivos indexados por MAC.
     devices: HashMap<MacAddr, Device>,
-
-    /// Índice secundário: DUID → MAC.
     duid_index: HashMap<Duid, MacAddr>,
-
-    /// Config estática carregada do config.toml. Imutável em runtime.
     static_entries: HashMap<MacAddr, StaticEntry>,
 }
 
@@ -88,6 +114,42 @@ impl DeviceTable {
             devices: HashMap::new(),
             duid_index: HashMap::new(),
             static_entries: HashMap::new(),
+        }
+    }
+
+    /// Load static device entries from the parsed TOML config.
+    pub fn load_static_devices(&mut self, entries: &[StaticDeviceCfg]) {
+        for e in entries {
+            let Some(mac) = MacAddr::parse(&e.mac) else {
+                warn!("Invalid MAC in config: '{}', skipping", e.mac);
+                continue;
+            };
+
+            let v4_ip = e.v4_ip.as_ref().and_then(|s| {
+                s.parse::<Ipv4Addr>().ok().or_else(|| {
+                    warn!("Invalid v4_ip for {}: '{s}'", e.hostname);
+                    None
+                })
+            });
+
+            let static_entry = StaticEntry {
+                mac,
+                hostname: e.hostname.clone(),
+                v4_ip,
+                v6_suffix: e.v6_suffix.clone(),
+            };
+
+            info!(
+                "  Static device: {} → {} (v4={:?})",
+                mac, e.hostname, v4_ip
+            );
+
+            self.static_entries.insert(mac, static_entry);
+
+            // Pre-populate device in the table so hostname resolves immediately
+            let dev = self.get_or_insert(mac);
+            dev.hostname = e.hostname.clone();
+            dev.is_static = true;
         }
     }
 
@@ -110,6 +172,7 @@ impl DeviceTable {
             .and_then(|mac| self.devices.get(mac))
     }
 
+    /// Hostname efetivo: config estática > hostname dinâmico > None
     pub fn hostname_for(&self, mac: &MacAddr) -> Option<&str> {
         self.static_entries
             .get(mac)
@@ -122,19 +185,94 @@ impl DeviceTable {
             })
     }
 
-    pub fn v6_suffix_for(&self, mac: &MacAddr) -> Option<Ipv6Addr> {
-        self.static_entries.get(mac).and_then(|e| e.v6_suffix)
+    pub fn v6_suffix_for(&self, mac: &MacAddr) -> Option<&str> {
+        self.static_entries
+            .get(mac)
+            .and_then(|e| e.v6_suffix.as_deref())
     }
 
-    pub fn expire_stale(&mut self) -> bool {
-        todo!("Implementar expiração de leases e dispositivos inativos")
+    /// Record a SLAAC address for a device (avoids duplicates).
+    pub fn record_slaac(&mut self, mac: MacAddr, addr: Ipv6Addr) {
+        let dev = self.get_or_insert(mac);
+        if !dev.slaac.contains(&addr) {
+            dev.slaac.push(addr);
+        }
+        dev.last_seen = SystemTime::now();
     }
 
-    pub fn save(&self, _path: &Path) -> anyhow::Result<()> {
-        todo!("Implementar persistência SQLite")
+    /// Clear all SLAAC addresses for a device (called before re-scanning).
+    pub fn clear_slaac(&mut self, mac: MacAddr) {
+        if let Some(dev) = self.devices.get_mut(&mac) {
+            dev.slaac.clear();
+        }
     }
 
-    pub fn load(_path: &Path) -> anyhow::Result<Self> {
-        todo!("Implementar carregamento SQLite")
+    /// Iterate over all known devices.
+    pub fn devices(&self) -> impl Iterator<Item = &Device> {
+        self.devices.values()
+    }
+
+    /// Iterate over all static entries.
+    pub fn static_entries(&self) -> impl Iterator<Item = &StaticEntry> {
+        self.static_entries.values()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mac_parse_display_roundtrip() {
+        let input = "e0:d5:5e:e2:d4:89";
+        let mac = MacAddr::parse(input).expect("should parse");
+        assert_eq!(mac.to_string(), input);
+    }
+
+    #[test]
+    fn mac_parse_uppercase() {
+        let mac = MacAddr::parse("E0:D5:5E:E2:D4:89").expect("should parse uppercase");
+        assert_eq!(mac.to_string(), "e0:d5:5e:e2:d4:89");
+    }
+
+    #[test]
+    fn mac_parse_invalid() {
+        assert!(MacAddr::parse("not-a-mac").is_none());
+        assert!(MacAddr::parse("e0:d5:5e:e2:d4").is_none()); // 5 octets
+        assert!(MacAddr::parse("e0:d5:5e:e2:d4:89:ff").is_none()); // 7 octets
+    }
+
+    #[test]
+    fn hostname_static_overrides_dynamic() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+
+        // Dynamic hostname
+        let dev = table.get_or_insert(mac);
+        dev.hostname = "dynamic".into();
+
+        // Static entry overrides
+        table.load_static_devices(&[StaticDeviceCfg {
+            mac: "aa:bb:cc:dd:ee:ff".into(),
+            hostname: "StaticName".into(),
+            v4_ip: None,
+            v6_suffix: None,
+        }]);
+
+        assert_eq!(table.hostname_for(&mac), Some("StaticName"));
+    }
+
+    #[test]
+    fn record_slaac_deduplicates() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+        let addr: Ipv6Addr = "fd97:f00d:cafe:3731::1234".parse().unwrap();
+
+        table.record_slaac(mac, addr);
+        table.record_slaac(mac, addr); // duplicate
+        table.record_slaac(mac, "fd97:f00d:cafe:3731::5678".parse().unwrap());
+
+        let dev = table.devices.get(&mac).unwrap();
+        assert_eq!(dev.slaac.len(), 2);
     }
 }

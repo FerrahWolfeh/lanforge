@@ -1,0 +1,37 @@
+[general]
+iface_lan = "end0"
+iface_wan = "ppp0"
+hosts_file = "/mnt/ram/dnsmasq/ipv6_slaac_hosts"
+leases_db  = "/var/lib/lanforge/leases.db"
+dns_reload_cmd = "pkill -HUP pihole-FTL"
+
+[ra]
+enabled          = true
+managed          = true
+other_config     = true
+max_interval     = 100
+router_lifetime  = 300
+mtu              = 1492       # PPPoE — anuncia MTU correto para clientes
+
+[[ra.prefix]]
+source           = "ula"
+address          = "fd97:f00d:cafe:3731::"
+
+[[ra.prefix]]
+source           = "auto_gua"   # detecta da interface
+
+[[ra.rdnss]]
+servers          = ["fd97:f00d:cafe:3731::1"]
+lifetime         = 600
+
+[dhcp.v4]
+enabled     = true
+range_start = "192.168.0.100"
+range_end   = "192.168.0.254"
+lease_time  = 86400
+router      = "192.168.0.1"
+dns         = ["192.168.0.1"]
+
+[dhcp.v6]
+enabled    = true
+lease_time = 86400

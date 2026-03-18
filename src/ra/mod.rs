@@ -123,7 +123,7 @@ impl RaState {
 ///
 /// Encerra com `Err` apenas em falhas irrecuperáveis (permissão negada, interface
 /// não encontrada etc.). O chamador deve reiniciar com backoff.
-pub async fn ra_service(cfg: RaConfig, handle: Handle, bus: Arc<EventBus>) -> Result<()> {
+pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
     cfg.validate()?;
 
     info!(
@@ -134,6 +134,10 @@ pub async fn ra_service(cfg: RaConfig, handle: Handle, bus: Arc<EventBus>) -> Re
         cfg.max_interval.as_secs(),
         cfg.effective_router_lifetime().as_secs(),
     );
+
+    let (connection, handle, _) =
+        rtnetlink::new_connection().context("Netlink connection para RA")?;
+    tokio::spawn(connection);
 
     let iface_index = get_iface_index(&cfg.iface)?;
     let mac = get_iface_mac(&cfg.iface)?;
@@ -151,7 +155,16 @@ pub async fn ra_service(cfg: RaConfig, handle: Handle, bus: Arc<EventBus>) -> Re
     let mut state = RaState::new();
 
     // RA imediato no startup — clientes já ativos recebem configuração sem esperar
-    do_multicast_ra(&async_fd, &cfg, &handle, &mac, iface_index, &mut state, &bus).await;
+    do_multicast_ra(
+        &async_fd,
+        &cfg,
+        &handle,
+        &mac,
+        iface_index,
+        &mut state,
+        &bus,
+    )
+    .await;
 
     loop {
         let next = state.next_interval(&cfg);
@@ -224,7 +237,18 @@ async fn handle_rs(
 
     match dst {
         Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
-            match send_ra(async_fd, cfg, handle, mac, iface_index, Some(unicast_dst), state, bus).await {
+            match send_ra(
+                async_fd,
+                cfg,
+                handle,
+                mac,
+                iface_index,
+                Some(unicast_dst),
+                state,
+                bus,
+            )
+            .await
+            {
                 Ok(()) => {
                     debug!("[RA] RA unicast -> {unicast_dst}");
                     state.record_unicast(unicast_dst);

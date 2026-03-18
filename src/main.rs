@@ -1,5 +1,6 @@
 mod bus;
 mod config;
+mod dhcp;
 mod hosts;
 mod netlink;
 mod ra;
@@ -9,13 +10,14 @@ mod supervisor;
 
 use anyhow::Result;
 use bus::EventBus;
-use clap::Parser;
 use config::Config;
 use futures::StreamExt;
 use netlink_sys::AsyncSocket;
 use rtnetlink::new_connection;
+use state::DeviceTable;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant, interval, sleep_until};
 use tracing::{debug, error, info, warn};
 
@@ -33,24 +35,27 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let cfg = Config::parse();
+    let cfg = Config::load()?;
 
-    info!("Starting lanforge (event-driven netlink monitor)");
-    info!("  leases_file   = {}", cfg.leases_file);
-    info!("  output_file   = {}", cfg.output_file);
+    info!("Starting lanforge");
+    info!("  hosts_file    = {}", cfg.hosts_file);
     info!("  target_prefix = {}", cfg.target_prefix);
-    info!("  dnsmasq_config= {}", cfg.dnsmasq_config);
     info!("  dns_process   = {}", cfg.dns_process);
     info!("  debounce      = {}s", cfg.debounce_secs);
     info!("  fallback scan = every {}min", cfg.fallback_mins);
     info!("  ra_enabled    = {}", cfg.ra_enabled);
+    info!("  dhcpv4_enabled= {}", cfg.dhcpv4_enabled);
+    info!("  devices       = {} static entries", cfg.devices.len());
 
-    if !std::path::Path::new(&cfg.dnsmasq_config).exists() {
-        error!(
-            "CRITICAL: config file {} not found. Aborting.",
-            cfg.dnsmasq_config
-        );
-        std::process::exit(1);
+    // -----------------------------------------------------------------------
+    // DeviceTable — shared state for all services
+    // -----------------------------------------------------------------------
+    let table = Arc::new(RwLock::new(DeviceTable::new()));
+
+    // Load static devices from TOML config
+    if !cfg.devices.is_empty() {
+        info!("Loading static devices from config:");
+        table.write().await.load_static_devices(&cfg.devices);
     }
 
     // -----------------------------------------------------------------------
@@ -59,13 +64,9 @@ async fn main() -> Result<()> {
     let bus = Arc::new(EventBus::new());
 
     // -----------------------------------------------------------------------
-    // Single netlink connection for the whole daemon lifetime.
-    // Subscribe to RTNLGRP_NEIGH (group 3) for unsolicited neighbour events,
-    // and keep the Handle for periodic on-demand RTM_GETNEIGH queries.
+    // Netlink connection
     // -----------------------------------------------------------------------
     let (mut connection, handle, mut messages) = new_connection()?;
-
-    // RTNLGRP_NEIGH = 3 (Linux kernel constant, stable since 2.6)
     connection.socket_mut().socket_mut().add_membership(3)?;
     tokio::spawn(connection);
 
@@ -74,7 +75,6 @@ async fn main() -> Result<()> {
     // -----------------------------------------------------------------------
     if cfg.ra_enabled {
         let ra_cfg = cfg.to_ra_config();
-        let ra_handle = handle.clone();
         let ra_bus = bus.clone();
 
         info!(
@@ -87,21 +87,48 @@ async fn main() -> Result<()> {
 
         tokio::spawn(supervisor::supervise_task(
             "ra",
-            true, // critical — RA failure should restart
-            0,    // infinite retries
+            true,
+            0,
             Duration::from_secs(5),
             Duration::from_secs(60),
             move || {
                 let cfg = ra_cfg.clone();
-                let handle = ra_handle.clone();
                 let bus = ra_bus.clone();
-                async move { ra::ra_service(cfg, handle, bus).await }
+                async move { ra::ra_service(cfg, bus).await }
             },
         ));
     }
 
     // -----------------------------------------------------------------------
-    // EventBus consumer — log events for now, react to PrefixChanged
+    // Spawn DHCPv4 service (if enabled) via supervisor
+    // -----------------------------------------------------------------------
+    if cfg.dhcpv4_enabled {
+        let dhcp_cfg = cfg.to_dhcpv4_config();
+        let dhcp_bus = bus.clone();
+        let dhcp_table = table.clone();
+
+        info!(
+            "DHCPv4 service enabled: range {}–{}, lease {}s",
+            dhcp_cfg.range_start, dhcp_cfg.range_end, dhcp_cfg.lease_time,
+        );
+
+        tokio::spawn(supervisor::supervise_task(
+            "dhcpv4",
+            true,
+            0,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            move || {
+                let cfg = dhcp_cfg.clone();
+                let bus = dhcp_bus.clone();
+                let table = dhcp_table.clone();
+                async move { dhcp::v4::dhcpv4_service(cfg, bus, table).await }
+            },
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // EventBus consumer
     // -----------------------------------------------------------------------
     let mut bus_rx = bus.subscribe();
 
@@ -110,15 +137,13 @@ async fn main() -> Result<()> {
     let debounce_window = Duration::from_secs(cfg.debounce_secs);
     let mut scan_deadline: Option<Instant> = None;
 
-    // Periodic fallback timer. Consume the first tick so it doesn't fire immediately
-    // (we run an initial scan manually right below).
     let mut fallback = interval(Duration::from_secs(cfg.fallback_mins * 60));
     fallback.tick().await;
 
     // Initial scan on startup
     info!("Running initial scan...");
-    if let Err(e) = run_scan(&cfg, &handle).await {
-        error!("Error in initial scan: {:?}", e);
+    if let Err(e) = run_scan(&cfg, &handle, &table).await {
+        error!("Error in initial scan: {e:?}");
     }
 
     info!("Listening for neighbour events (SIGUSR1 = manual scan)...");
@@ -131,7 +156,6 @@ async fn main() -> Result<()> {
                     if scan_deadline.is_none() {
                         debug!("Neighbour event detected, debouncing {}s...", cfg.debounce_secs);
                     }
-                    // Push the deadline forward on every burst event
                     scan_deadline = Some(Instant::now() + debounce_window);
                 }
             }
@@ -145,16 +169,16 @@ async fn main() -> Result<()> {
             } => {
                 scan_deadline = None;
                 debug!("Debounce window elapsed, running scan...");
-                if let Err(e) = run_scan(&cfg, &handle).await {
-                    error!("Error in event-triggered scan: {:?}", e);
+                if let Err(e) = run_scan(&cfg, &handle, &table).await {
+                    error!("Error in event-triggered scan: {e:?}");
                 }
             }
 
             // ── Periodic fallback scan ───────────────────────────────────
             _ = fallback.tick() => {
                 debug!("Periodic fallback scan...");
-                if let Err(e) = run_scan(&cfg, &handle).await {
-                    error!("Error in fallback scan: {:?}", e);
+                if let Err(e) = run_scan(&cfg, &handle, &table).await {
+                    error!("Error in fallback scan: {e:?}");
                 }
             }
 
@@ -162,8 +186,8 @@ async fn main() -> Result<()> {
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 received, running immediate scan...");
                 scan_deadline = None;
-                if let Err(e) = run_scan(&cfg, &handle).await {
-                    error!("Error in manual scan: {:?}", e);
+                if let Err(e) = run_scan(&cfg, &handle, &table).await {
+                    error!("Error in manual scan: {e:?}");
                 }
             }
 
@@ -171,14 +195,21 @@ async fn main() -> Result<()> {
             event = bus_rx.recv() => {
                 match event {
                     Ok(bus::LanforgeEvent::PrefixChanged { gua }) => {
-                        info!("EventBus: GUA prefix changed to {:?}, triggering scan", gua);
-                        // GUA changed — force an immediate scan to update hosts file
-                        if let Err(e) = run_scan(&cfg, &handle).await {
-                            error!("Error in prefix-change scan: {:?}", e);
+                        info!("EventBus: GUA prefix changed to {gua:?}, triggering scan");
+                        if let Err(e) = run_scan(&cfg, &handle, &table).await {
+                            error!("Error in prefix-change scan: {e:?}");
+                        }
+                    }
+                    Ok(bus::LanforgeEvent::DeviceTableDirty) => {
+                        debug!("EventBus: DeviceTable dirty, regenerating hosts file");
+                        let t = table.read().await;
+                        if let Ok(true) = hosts::write_hosts_from_table(&t, &cfg.hosts_file) {
+                            drop(t);
+                            hosts::reload_dns(&cfg.dns_process).await;
                         }
                     }
                     Ok(event) => {
-                        debug!("EventBus: {:?}", event);
+                        debug!("EventBus: {event:?}");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         warn!("EventBus: consumer lagged, missed {n} events");
@@ -195,15 +226,18 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Wrapper that delegates to slaac::process_cycle with the config fields.
-async fn run_scan(cfg: &Config, handle: &rtnetlink::Handle) -> Result<()> {
-    slaac::process_cycle(
-        &cfg.leases_file,
-        &cfg.dnsmasq_config,
+/// Scan using DeviceTable v2 path.
+async fn run_scan(
+    cfg: &Config,
+    handle: &rtnetlink::Handle,
+    table: &Arc<RwLock<DeviceTable>>,
+) -> Result<()> {
+    slaac::process_cycle_v2(
         &cfg.target_prefix,
-        &cfg.output_file,
+        &cfg.hosts_file,
         &cfg.dns_process,
         handle,
+        table,
     )
     .await
 }

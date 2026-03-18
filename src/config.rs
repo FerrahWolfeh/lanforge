@@ -1,142 +1,375 @@
-//! Configuração do lanforge — CLI + env + arquivo TOML.
+//! Configuração do lanforge — CLI + TOML + env.
 //!
 //! Três camadas em ordem crescente de precedência:
-//! 1. Valores default hardcoded no código
-//! 2. Arquivo TOML (futuro — carregado se --config é passado)
-//! 3. Variáveis de ambiente (via clap `env`)
+//! 1. Valores default hardcoded
+//! 2. Arquivo TOML (`--config` ou LANFORGE_CONFIG, default `/etc/lanforge/lanforge.toml`)
+//! 3. Variáveis de ambiente LANFORGE_* (via clap `env`)
 //!
-//! Campos de RA configuráveis via LANFORGE_RA_* env vars.
+//! O TOML é a fonte primária de configuração. CLI/env overridam valores individuais.
 
 use clap::Parser;
-use std::net::Ipv6Addr;
+use serde::Deserialize;
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::path::Path;
 use std::time::Duration;
+use tracing::{info, warn};
+
+// ---------------------------------------------------------------------------
+// CLI (clap) — entrypoint de parsing
+// ---------------------------------------------------------------------------
 
 /// lanforge — daemon unificado de controle de rede IPv4/IPv6.
-///
-/// All options can also be supplied via the matching environment variable.
 #[derive(Parser, Debug)]
 #[command(name = "lanforge", version, about, long_about = None)]
-pub struct Config {
-    // ── SLAAC tracker (legado, mantido para compatibilidade) ──────────────
-
-    /// dnsmasq leases file
+pub struct CliArgs {
+    /// Path to TOML config file
     #[arg(
         long,
-        env = "LANFORGE_LEASES_FILE",
-        default_value = "/mnt/ram/dnsmasq/dnsmasq.leases"
+        env = "LANFORGE_CONFIG",
+        default_value = "/etc/lanforge/lanforge.toml"
     )]
-    pub leases_file: String,
+    pub config: String,
 
-    /// Output hosts file written for dnsmasq
-    #[arg(
-        long,
-        env = "LANFORGE_OUTPUT_FILE",
-        default_value = "/mnt/ram/dnsmasq/ipv6_slaac_hosts"
-    )]
-    pub output_file: String,
+    // ── Overrides (prevalecem sobre TOML) ─────────────────────────────────
+    /// Override: LAN interface
+    #[arg(long, env = "LANFORGE_IFACE_LAN")]
+    pub iface_lan: Option<String>,
 
-    /// IPv6 prefix to watch (only neighbours matching this prefix are recorded)
-    #[arg(
-        long,
-        env = "LANFORGE_TARGET_PREFIX",
-        default_value = "fd97:f00d:cafe:3731"
-    )]
+    /// Override: output hosts file path
+    #[arg(long, env = "LANFORGE_HOSTS_FILE")]
+    pub hosts_file: Option<String>,
+
+    /// Override: DNS process name for SIGHUP
+    #[arg(long, env = "LANFORGE_DNS_PROCESS")]
+    pub dns_process: Option<String>,
+
+    /// Override: target prefix for SLAAC tracking
+    #[arg(long, env = "LANFORGE_TARGET_PREFIX")]
+    pub target_prefix: Option<String>,
+
+    /// Override: debounce window in seconds
+    #[arg(long, env = "LANFORGE_DEBOUNCE_SECS")]
+    pub debounce_secs: Option<u64>,
+
+    /// Override: fallback scan interval in minutes
+    #[arg(long, env = "LANFORGE_FALLBACK_MINS")]
+    pub fallback_mins: Option<u64>,
+
+    /// Override: enable RA service
+    #[arg(long, env = "LANFORGE_RA_ENABLED")]
+    pub ra_enabled: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// TOML structures (serde)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct TomlConfig {
+    pub general: GeneralCfg,
+    pub ra: RaCfg,
+    pub dhcp: DhcpCfg,
+    #[serde(default)]
+    pub devices: Vec<StaticDeviceCfg>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct DhcpCfg {
+    pub v4: DhcpV4Cfg,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(default)]
+pub struct DhcpV4Cfg {
+    pub enabled: bool,
+    pub range_start: String,
+    pub range_end: String,
+    pub lease_time: u64,
+    pub router: String,
+    pub dns: Vec<String>,
+    pub subnet_mask: Option<String>,
+    pub domain_name: Option<String>,
+}
+
+impl Default for DhcpV4Cfg {
+    fn default() -> Self {
+        DhcpV4Cfg {
+            enabled: false,
+            range_start: "192.168.0.100".into(),
+            range_end: "192.168.0.254".into(),
+            lease_time: 86400,
+            router: "192.168.0.1".into(),
+            dns: vec!["192.168.0.1".into()],
+            subnet_mask: None,
+            domain_name: None,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(default)]
+pub struct GeneralCfg {
+    pub iface_lan: String,
+    pub iface_wan: String,
+    pub hosts_file: String,
+    pub leases_db: String,
+    pub dns_reload_cmd: String,
     pub target_prefix: String,
-
-    /// dnsmasq static-host config file (parsed for dhcp-host entries)
-    #[arg(
-        long,
-        env = "LANFORGE_DNSMASQ_CONFIG",
-        default_value = "/etc/dnsmasq-dhcp.conf"
-    )]
-    pub dnsmasq_config: String,
-
-    /// Name of the DNS process to send SIGHUP to after updating the hosts file
-    #[arg(long, env = "LANFORGE_DNS_PROCESS", default_value = "pihole-FTL")]
-    pub dns_process: String,
-
-    /// Debounce window in seconds: coalesces rapid NDP events into a single scan
-    #[arg(long, env = "LANFORGE_DEBOUNCE_SECS", default_value_t = 2)]
     pub debounce_secs: u64,
+    pub fallback_mins: u64,
+}
 
-    /// Interval in minutes for a periodic fallback full scan (guards against missed events)
-    #[arg(long, env = "LANFORGE_FALLBACK_MINS", default_value_t = 5)]
+impl Default for GeneralCfg {
+    fn default() -> Self {
+        GeneralCfg {
+            iface_lan: "end0".into(),
+            iface_wan: "ppp0".into(),
+            hosts_file: "/mnt/ram/dnsmasq/ipv6_slaac_hosts".into(),
+            leases_db: "/var/lib/lanforge/leases.db".into(),
+            dns_reload_cmd: "pkill -HUP pihole-FTL".into(),
+            target_prefix: "fd97:f00d:cafe:3731".into(),
+            debounce_secs: 2,
+            fallback_mins: 5,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(default)]
+pub struct RaCfg {
+    pub enabled: bool,
+    pub managed: bool,
+    pub other_config: bool,
+    pub max_interval: u64,
+    pub router_lifetime: Option<u64>,
+    pub mtu: Option<u32>,
+    #[serde(default)]
+    pub prefix: Vec<RaPrefixCfg>,
+    #[serde(default)]
+    pub rdnss: Vec<RaRdnssCfg>,
+}
+
+impl Default for RaCfg {
+    fn default() -> Self {
+        RaCfg {
+            enabled: false,
+            managed: true,
+            other_config: true,
+            max_interval: 100,
+            router_lifetime: None,
+            mtu: None,
+            prefix: Vec::new(),
+            rdnss: Vec::new(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct RaPrefixCfg {
+    pub source: String,
+    pub address: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct RaRdnssCfg {
+    pub servers: Vec<Ipv6Addr>,
+    pub lifetime: Option<u64>,
+}
+
+/// Dispositivo estático — lido de `[[devices]]` no TOML.
+#[derive(Deserialize, Debug, Clone)]
+pub struct StaticDeviceCfg {
+    pub mac: String,
+    pub hostname: String,
+    pub v4_ip: Option<String>,
+    pub v6_suffix: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Config unificada (resultado do merge TOML + CLI overrides)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct Config {
+    // general
+    pub iface_lan: String,
+    pub hosts_file: String,
+    pub dns_process: String,
+    pub target_prefix: String,
+    pub debounce_secs: u64,
     pub fallback_mins: u64,
 
-    // ── Router Advertisement service ─────────────────────────────────────
+    // legacy compat (still used by slaac v1 until 2C)
+    pub leases_file: String,
+    pub dnsmasq_config: String,
 
-    /// Enable the RA service (replaces radvd)
-    #[arg(long, env = "LANFORGE_RA_ENABLED", default_value_t = false)]
+    // RA
     pub ra_enabled: bool,
+    pub ra_toml: RaCfg,
 
-    /// LAN interface for RA (ex: "end0")
-    #[arg(long, env = "LANFORGE_RA_IFACE", default_value = "end0")]
-    pub ra_iface: String,
+    // DHCPv4
+    pub dhcpv4_enabled: bool,
+    pub dhcpv4_toml: DhcpV4Cfg,
 
-    /// M flag: clients use DHCPv6 for managed addresses
-    #[arg(long, env = "LANFORGE_RA_MANAGED", default_value_t = true)]
-    pub ra_managed: bool,
-
-    /// O flag: clients use DHCPv6 for other config (DNS, etc.)
-    #[arg(long, env = "LANFORGE_RA_OTHER_CONFIG", default_value_t = true)]
-    pub ra_other_config: bool,
-
-    /// MaxRtrAdvInterval in seconds (RFC 4861 §6.2.1: 4–1800)
-    #[arg(long, env = "LANFORGE_RA_MAX_INTERVAL", default_value_t = 100)]
-    pub ra_max_interval: u64,
-
-    /// Router lifetime in seconds (0 = not default gateway; None → 3 × max_interval)
-    #[arg(long, env = "LANFORGE_RA_ROUTER_LIFETIME")]
-    pub ra_router_lifetime: Option<u64>,
-
-    /// MTU to announce (relevant for PPPoE = 1492)
-    #[arg(long, env = "LANFORGE_RA_MTU")]
-    pub ra_mtu: Option<u32>,
-
-    /// ULA prefix to announce (ex: "fd97:f00d:cafe:3731::")
-    #[arg(long, env = "LANFORGE_RA_ULA_PREFIX")]
-    pub ra_ula_prefix: Option<String>,
-
-    /// Announce auto-detected GUA prefix from the interface
-    #[arg(long, env = "LANFORGE_RA_AUTO_GUA", default_value_t = true)]
-    pub ra_auto_gua: bool,
-
-    /// DNS servers for RDNSS option (comma-separated IPv6 addresses)
-    #[arg(long, env = "LANFORGE_RA_RDNSS", value_delimiter = ',')]
-    pub ra_rdnss: Vec<Ipv6Addr>,
+    // static devices
+    pub devices: Vec<StaticDeviceCfg>,
 }
 
 impl Config {
-    /// Builds an `RaConfig` from the CLI/env configuration.
+    /// Load config: parse CLI args, read TOML, merge with CLI overrides.
+    pub fn load() -> anyhow::Result<Self> {
+        let cli = CliArgs::parse();
+
+        let toml_cfg = load_toml(&cli.config);
+
+        Ok(Config {
+            iface_lan: cli.iface_lan.unwrap_or(toml_cfg.general.iface_lan),
+            hosts_file: cli.hosts_file.unwrap_or(toml_cfg.general.hosts_file),
+            dns_process: cli.dns_process.unwrap_or_else(|| {
+                // Extract process name from dns_reload_cmd e.g. "pkill -HUP pihole-FTL" → "pihole-FTL"
+                toml_cfg
+                    .general
+                    .dns_reload_cmd
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or("pihole-FTL")
+                    .to_string()
+            }),
+            target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),
+            debounce_secs: cli.debounce_secs.unwrap_or(toml_cfg.general.debounce_secs),
+            fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
+
+            // Legacy compat — still needed during transition
+            leases_file: "/mnt/ram/dnsmasq/dnsmasq.leases".into(),
+            dnsmasq_config: "/etc/dnsmasq-dhcp.conf".into(),
+
+            ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
+            ra_toml: toml_cfg.ra,
+
+            dhcpv4_enabled: toml_cfg.dhcp.v4.enabled,
+            dhcpv4_toml: toml_cfg.dhcp.v4,
+
+            devices: toml_cfg.devices,
+        })
+    }
+
+    /// Builds an `RaConfig` from the merged configuration.
     pub fn to_ra_config(&self) -> crate::ra::RaConfig {
         use crate::ra::*;
 
         let mut prefixes = Vec::new();
 
-        if let Some(ref ula) = self.ra_ula_prefix {
-            prefixes.push(PrefixConfig::ula(ula));
+        for p in &self.ra_toml.prefix {
+            match p.source.as_str() {
+                "ula" => {
+                    if let Some(ref addr) = p.address {
+                        prefixes.push(PrefixConfig::ula(addr));
+                    }
+                }
+                "auto_gua" => {
+                    prefixes.push(PrefixConfig::gua_dynamic());
+                }
+                other => {
+                    warn!("[config] Unknown RA prefix source: '{other}', ignoring");
+                }
+            }
         }
 
-        if self.ra_auto_gua {
+        // If no prefixes configured, default to auto_gua
+        if prefixes.is_empty() {
             prefixes.push(PrefixConfig::gua_dynamic());
         }
 
-        let rdnss = if self.ra_rdnss.is_empty() {
-            Vec::new()
-        } else {
-            vec![RdnssConfig::new(self.ra_rdnss.clone())]
-        };
+        let rdnss: Vec<RdnssConfig> = self
+            .ra_toml
+            .rdnss
+            .iter()
+            .filter(|r| !r.servers.is_empty())
+            .map(|r| match r.lifetime {
+                Some(lt) => RdnssConfig::with_lifetime(r.servers.clone(), lt as u32),
+                None => RdnssConfig::new(r.servers.clone()),
+            })
+            .collect();
 
         RaConfig {
-            iface: self.ra_iface.clone(),
-            managed: self.ra_managed,
-            other_config: self.ra_other_config,
-            max_interval: Duration::from_secs(self.ra_max_interval),
-            router_lifetime: self.ra_router_lifetime.map(Duration::from_secs),
-            mtu: self.ra_mtu,
+            iface: self.iface_lan.clone(),
+            managed: self.ra_toml.managed,
+            other_config: self.ra_toml.other_config,
+            max_interval: Duration::from_secs(self.ra_toml.max_interval),
+            router_lifetime: self.ra_toml.router_lifetime.map(Duration::from_secs),
+            mtu: self.ra_toml.mtu,
             prefixes,
             rdnss,
             ..Default::default()
+        }
+    }
+
+    /// Builds a `Dhcpv4Config` from the merged configuration.
+    pub fn to_dhcpv4_config(&self) -> crate::dhcp::v4::config::Dhcpv4Config {
+        use crate::dhcp::v4::config::Dhcpv4Config;
+
+        let parse_ip = |s: &str, default: Ipv4Addr| -> Ipv4Addr {
+            s.parse().unwrap_or_else(|_| {
+                warn!("[config] Invalid IPv4 '{s}', using {default}");
+                default
+            })
+        };
+
+        let server_id = parse_ip(&self.dhcpv4_toml.router, Ipv4Addr::new(192, 168, 0, 1));
+
+        Dhcpv4Config {
+            iface: self.iface_lan.clone(),
+            server_id,
+            range_start: parse_ip(&self.dhcpv4_toml.range_start, Ipv4Addr::new(192, 168, 0, 100)),
+            range_end: parse_ip(&self.dhcpv4_toml.range_end, Ipv4Addr::new(192, 168, 0, 254)),
+            lease_time: self.dhcpv4_toml.lease_time as u32,
+            router: server_id,
+            dns: self.dhcpv4_toml.dns.iter()
+                .map(|s| parse_ip(s, Ipv4Addr::new(192, 168, 0, 1)))
+                .collect(),
+            subnet_mask: self.dhcpv4_toml.subnet_mask.as_deref()
+                .map(|s| parse_ip(s, Ipv4Addr::new(255, 255, 255, 0)))
+                .unwrap_or(Ipv4Addr::new(255, 255, 255, 0)),
+            domain_name: self.dhcpv4_toml.domain_name.clone(),
+        }
+    }
+}
+
+/// Load and parse the TOML config file, or return defaults if missing.
+fn load_toml(path: &str) -> TomlConfig {
+    if !Path::new(path).exists() {
+        if path != "/etc/lanforge/lanforge.toml" {
+            // User explicitly specified a path that doesn't exist
+            warn!("Config file '{path}' not found, using defaults");
+        }
+        return TomlConfig::default();
+    }
+
+    match std::fs::read_to_string(path) {
+        Ok(content) => match toml::from_str::<TomlConfig>(&content) {
+            Ok(cfg) => {
+                info!("Loaded config from '{path}'");
+                info!(
+                    "  {} static device(s), RA {}",
+                    cfg.devices.len(),
+                    if cfg.ra.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+                cfg
+            }
+            Err(e) => {
+                warn!("Failed to parse '{path}': {e} — using defaults");
+                TomlConfig::default()
+            }
+        },
+        Err(e) => {
+            warn!("Failed to read '{path}': {e} — using defaults");
+            TomlConfig::default()
         }
     }
 }
