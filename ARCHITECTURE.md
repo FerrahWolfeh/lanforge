@@ -12,6 +12,8 @@ O programa nasceu como um tracker de SLAAC (`ipv6_namer`) e vai crescer absorven
 serviços que hoje se comunicam via arquivos e sinais — um modelo frágil.
 
 A decisão central é **um processo, múltiplas tasks tokio supervisionadas**.
+O modelo arquitetural segue o padrão **Master Client Manager**, onde uma estrutura central (`DeviceTable`) é a única autoridade de estado e persistência, enquanto os servidores (DHCP, RA, SLAAC) atuam como **propagadores de protocolo**.
+
 Os motivos são concretos:
 
 - Uma única conexão netlink alimenta todos os serviços via canal interno
@@ -621,6 +623,22 @@ Com v4 estável, adiciona o server v6.
 - Entrega de sufixo fixo via DUID (primário) ou MAC (fallback primeiro contato)
 - DUID aprendido gravado na `DeviceTable` via evento `DuidLearned`
 - Leases estáticos ULA (os `[::xxx]` que estão hoje no dnsmasq)
+
+### Fase 4.4 — Abstrações de Zero Custo
+Refatoração de código "raw" para estruturas de dados seguras e expressivas.
+
+- Encapsula construção de pacotes RA e DHCP Raw em Builders/Structs.
+- Transforma eventos Netlink e NDP em objetos com semântica rica.
+- Substitui manipulação direta de offsets por tipos Newtype e traits.
+- Objetivo: Simplificar a lógica antes da grande mudança de estado da 4.5.
+
+### Fase 4.5 — Refatoração Master Client Manager
+Desacopla a lógica de pacotes da gestão de estado.
+
+- `DeviceTable` assume o papel de Master Manager (autoridade única).
+- DHCPv4/v6 retornam `DeviceUpdate` em vez de manipular a tabela diretamente.
+- Centralização da lógica de persistência e eventos no Manager.
+- Base para o futuro resolvedor DNS dinâmico e CLI.
 
 ### Fase 5 — Hardening e observabilidade
 Antes de declarar produção estável.
