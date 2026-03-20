@@ -40,7 +40,7 @@ range_end = "fd97:f00d:cafe:3731::1fff"
 
 [dns]
 enabled = true
-listen = "127.0.0.1:5354"
+listen = "0.0.0.0:5354"
 upstream = "127.0.0.1:5335" # unbound
 search_domain = "lan"
 
