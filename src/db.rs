@@ -74,7 +74,7 @@ impl LeaseDb {
         let db = LeaseDb { conn };
         db.create_tables()?;
 
-        info!("SQLite aberto em {}", path.display());
+        debug!("SQLite aberto em {}", path.display());
         Ok(db)
     }
 
@@ -366,6 +366,34 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
         db_path.display()
     );
 
+    // 1. Cria o canal MPSC para enviar snapshots para a thread síncrona.
+    // Um buffer pequeno (ex: 4) é mais que suficiente graças ao debounce.
+    let (snapshot_tx, mut snapshot_rx) = tokio::sync::mpsc::channel::<DeviceTable>(4);
+
+    // 2. Inicia a thread síncrona dedicada ao SQLite (Abre o banco APENAS UMA VEZ)
+    let db_path_clone = db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = match LeaseDb::open(&db_path_clone) {
+            Ok(db) => db,
+            Err(e) => {
+                warn!("DB thread: falha fatal ao abrir SQLite: {e:#}");
+                return;
+            }
+        };
+
+        // Fica escutando o canal. Quando o sender (snapshot_tx) for dropado no shutdown,
+        // o blocking_recv() retornará None e a thread será encerrada naturalmente.
+        while let Some(snapshot) = snapshot_rx.blocking_recv() {
+            if let Err(e) = db.save_table(&snapshot) {
+                warn!("DB thread: falha ao salvar snapshot: {e:#}");
+            } else {
+                debug!("DB worker: snapshot persistido");
+            }
+        }
+        info!("DB thread: encerrando graciosamente");
+    });
+
+    // 3. Loop principal assíncrono reativo
     loop {
         // Aguarda o próximo evento relevante
         let should_flush = wait_for_dirty_or_shutdown(&mut rx).await;
@@ -386,23 +414,15 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
             t.clone()
         };
 
-        // Persiste em thread blocking (rusqlite não é async)
-        let path = db_path.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let db = LeaseDb::open(&path)?;
-            db.save_table(&snapshot)
-        })
-        .await;
-
-        match result {
-            Ok(Ok(())) => debug!("DB worker: snapshot persistido"),
-            Ok(Err(e)) => warn!("DB worker: falha ao salvar snapshot: {e:#}"),
-            Err(e) => warn!("DB worker: spawn_blocking falhou: {e}"),
+        // Envia o snapshot para a thread do banco sem bloquear o loop do Tokio
+        if snapshot_tx.send(snapshot).await.is_err() {
+            warn!("DB worker: falha ao enviar snapshot - a thread do DB morreu");
+            break;
         }
 
         if shutdown_during_debounce {
             info!("DB worker encerrando após flush de shutdown");
-            return;
+            return; // Retornar aqui dropa o snapshot_tx, o que encerra a thread síncrona
         }
     }
 }
