@@ -1,6 +1,5 @@
 [general]
 iface_lan = "end0"
-iface_wan = "ppp0"
 leases_db = "/var/lib/lanforge/leases.db"
 
 [ra]

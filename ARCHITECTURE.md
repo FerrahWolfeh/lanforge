@@ -397,7 +397,6 @@ Três camadas em ordem crescente de precedência:
 ```toml
 [general]
 iface_lan     = "end0"
-iface_wan     = "ppp0"
 leases_db     = "/var/lib/lanforge/leases.db"
 target_prefix = "fd97:f00d:cafe:3731"   # prefixo para scan SLAAC
 debounce_secs = 2

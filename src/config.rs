@@ -126,7 +126,6 @@ impl Default for DhcpV6Cfg {
 #[serde(default)]
 pub struct GeneralCfg {
     pub iface_lan: String,
-    pub iface_wan: String,
     pub leases_db: String,
     pub target_prefix: String,
     pub debounce_secs: u64,
@@ -137,7 +136,6 @@ impl Default for GeneralCfg {
     fn default() -> Self {
         GeneralCfg {
             iface_lan: "end0".into(),
-            iface_wan: "ppp0".into(),
             leases_db: "/var/lib/lanforge/leases.db".into(),
             target_prefix: "fd97:f00d:cafe:3731".into(),
             debounce_secs: 2,
