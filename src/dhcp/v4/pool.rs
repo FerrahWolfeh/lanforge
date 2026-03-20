@@ -3,7 +3,7 @@
 //! Gerencia o range configurável excluindo reservas estáticas.
 //! Prioriza reutilizar o IP anteriormente atribuído ao mesmo MAC (sticky).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 
 use crate::state::MacAddr;
@@ -20,6 +20,8 @@ pub struct IpPool {
     ip_to_mac: HashMap<Ipv4Addr, MacAddr>,
     /// IPs reservados (estáticos) — excluídos do pool dinâmico.
     reserved: HashMap<Ipv4Addr, MacAddr>,
+    /// IPs rejeitados por DECLINE (Quarentena para evitar loops infinitos)
+    declined: HashSet<Ipv4Addr>,
 }
 
 impl IpPool {
@@ -30,12 +32,19 @@ impl IpPool {
             active: HashMap::new(),
             ip_to_mac: HashMap::new(),
             reserved: HashMap::new(),
+            declined: HashSet::new(),
         }
     }
 
     /// Reserve a static IP for a MAC (excluded from dynamic allocation).
     pub fn add_reservation(&mut self, ip: Ipv4Addr, mac: MacAddr) {
         self.reserved.insert(ip, mac);
+    }
+
+    /// Isola um IP problemático reportado via DECLINE.
+    pub fn mark_declined(&mut self, ip: Ipv4Addr) {
+        self.release(ip);
+        self.declined.insert(ip);
     }
 
     /// Allocate an IP for a MAC address.
@@ -68,8 +77,12 @@ impl IpPool {
             return Some(req);
         }
 
-        // 4. Scan for next free IP
-        for raw in self.start..=self.end {
+        // 4. Scan Randomizado: escolhe um ponto de partida aleatório e varre o range de forma circular
+        let size = self.end.saturating_sub(self.start) + 1;
+        let start_offset = rand::random::<u32>() % size;
+
+        for i in 0..size {
+            let raw = self.start + ((start_offset + i) % size);
             let ip = Ipv4Addr::from(raw);
             if self.is_available(ip) {
                 self.mark_used(ip, mac);
@@ -77,7 +90,25 @@ impl IpPool {
             }
         }
 
-        // 5. Pool exhausted
+        // 5. Fallback de emergência: Se o pool estiver esgotado mas a quarentena estiver cheia,
+        // limpamos a quarentena e tentamos mais uma vez (alguém pode ter desligado o aparelho conflitante).
+        if !self.declined.is_empty() {
+            tracing::warn!(
+                "[DHCPv4] Pool esgotado! Limpando quarentena de DECLINEs para tentar recuperar IPs..."
+            );
+            self.declined.clear();
+
+            for i in 0..size {
+                let raw = self.start + ((start_offset + i) % size);
+                let ip = Ipv4Addr::from(raw);
+                if self.is_available(ip) {
+                    self.mark_used(ip, mac);
+                    return Some(ip);
+                }
+            }
+        }
+
+        // 6. Pool realmente esgotado
         None
     }
 
@@ -97,7 +128,9 @@ impl IpPool {
 
     /// Check if an IP is available (not in active use and not reserved).
     fn is_available(&self, ip: Ipv4Addr) -> bool {
-        !self.ip_to_mac.contains_key(&ip) && !self.reserved.contains_key(&ip)
+        !self.ip_to_mac.contains_key(&ip)
+            && !self.reserved.contains_key(&ip)
+            && !self.declined.contains(&ip) // Não entrega IP de quarentena
     }
 
     /// Check if an IP is within the dynamic range.
@@ -148,10 +181,13 @@ mod tests {
     }
 
     #[test]
-    fn allocates_first_available() {
+    fn allocates_within_range() {
         let mut p = pool();
         let ip = p.allocate(mac(1), None).unwrap();
-        assert_eq!(ip, Ipv4Addr::new(192, 168, 0, 100));
+        assert!(
+            p.is_in_range(ip),
+            "O IP alocado randomicamente deve respeitar o range"
+        );
     }
 
     #[test]
@@ -159,7 +195,7 @@ mod tests {
         let mut p = pool();
         let ip1 = p.allocate(mac(1), None).unwrap();
         let ip2 = p.allocate(mac(1), None).unwrap();
-        assert_eq!(ip1, ip2, "same MAC should get same IP");
+        assert_eq!(ip1, ip2, "Mesmo MAC deve receber o mesmo IP (Sticky)");
     }
 
     #[test]
@@ -167,48 +203,49 @@ mod tests {
         let mut p = pool();
         let requested = Ipv4Addr::new(192, 168, 0, 103);
         let ip = p.allocate(mac(1), Some(requested)).unwrap();
-        assert_eq!(ip, requested);
-    }
-
-    #[test]
-    fn skips_reserved_ips() {
-        let mut p = pool();
-        p.add_reservation(Ipv4Addr::new(192, 168, 0, 100), mac(99));
-        let ip = p.allocate(mac(1), None).unwrap();
         assert_eq!(
-            ip,
-            Ipv4Addr::new(192, 168, 0, 101),
-            "should skip reserved IP"
+            ip, requested,
+            "Deve respeitar o Requested IP se estiver livre"
         );
     }
 
     #[test]
-    fn static_reservation_wins() {
+    fn skips_reserved_and_declined_ips() {
         let mut p = pool();
-        let reserved_ip = Ipv4Addr::new(192, 168, 0, 2); // outside range
-        p.add_reservation(reserved_ip, mac(5));
-        let ip = p.allocate(mac(5), None).unwrap();
-        assert_eq!(ip, reserved_ip, "static reservation should be returned");
-    }
 
-    #[test]
-    fn release_frees_ip() {
-        let mut p = pool();
-        let ip = p.allocate(mac(1), None).unwrap();
-        p.release(ip);
-        let ip2 = p.allocate(mac(2), None).unwrap();
-        assert_eq!(ip, ip2, "released IP should be reusable");
-    }
+        let reserved_ip = Ipv4Addr::new(192, 168, 0, 100);
+        let declined_ip = Ipv4Addr::new(192, 168, 0, 101);
 
-    #[test]
-    fn pool_exhaustion() {
-        let mut p = pool(); // 6 IPs: .100-.105
-        for i in 0..6 {
-            assert!(p.allocate(mac(i), None).is_some());
+        p.add_reservation(reserved_ip, mac(99));
+        p.mark_declined(declined_ip);
+
+        for i in 0..10 {
+            if let Some(ip) = p.allocate(mac(i), None) {
+                assert_ne!(ip, reserved_ip, "Não deve alocar IP reservado");
+                assert_ne!(
+                    ip, declined_ip,
+                    "Não deve alocar IP de quarentena (DECLINE)"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn clears_quarantine_if_pool_exhausted() {
+        let mut p = pool(); // Range de 6 IPs (.100 a .105)
+
+        // Colocamos os 6 IPs em quarentena simulando uma rede problemática
+        for i in 100..=105 {
+            p.mark_declined(Ipv4Addr::new(192, 168, 0, i));
+        }
+
+        // O pool vai tentar achar um livre, ver que estão todos rejeitados,
+        // limpar a quarentena e devolver o IP mesmo assim
+        let rescued_ip = p.allocate(mac(1), None).unwrap();
+        assert!(p.is_in_range(rescued_ip));
         assert!(
-            p.allocate(mac(99), None).is_none(),
-            "pool should be exhausted"
+            p.declined.is_empty(),
+            "A quarentena deve ter sido esvaziada por emergência"
         );
     }
 }

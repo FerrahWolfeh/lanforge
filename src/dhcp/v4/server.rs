@@ -155,10 +155,16 @@ impl DhcpServer {
 
     // ── DECLINE ──────────────────────────────────────────────────────────
 
-    fn handle_decline(&mut self, _msg: &Message, mac: MacAddr) -> HandleResult {
-        // Client detected IP conflict — release and don't reuse
-        info!("DECLINE from {mac}");
-        self.pool.release_mac(&mac);
+    fn handle_decline(&mut self, msg: &Message, mac: MacAddr) -> HandleResult {
+        // O IP que o cliente está rejeitando vem na opção "RequestedIpAddress"
+        if let Some(declined_ip) = self.get_requested_ip(msg) {
+            warn!("DECLINE from {mac} for {declined_ip} — Colocando IP em quarentena!");
+            self.pool.mark_declined(declined_ip);
+        } else {
+            // Fallback caso o cliente envie um pacote malformado sem a opção
+            warn!("DECLINE from {mac} (IP não especificado)");
+            self.pool.release_mac(&mac);
+        }
         HandleResult::Ignore
     }
 
