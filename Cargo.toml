@@ -41,6 +41,9 @@ pnet = "0.35.0"
 # Persistência de leases
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 
+# DNS
+hickory-proto = "0.25.2"
+
 # Observabilidade
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
@@ -49,7 +52,6 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
     "fmt",
     "ansi",
 ] }
-hickory-proto = "0.25.2"
 
 [profile.release]
 opt-level = "z"
