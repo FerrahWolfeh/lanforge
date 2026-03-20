@@ -16,9 +16,11 @@ use futures::StreamExt;
 use netlink_sys::AsyncSocket;
 use rtnetlink::new_connection;
 use state::DeviceTable;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::RwLock;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Duration, Instant, interval, sleep_until};
 use tracing::{debug, error, info, warn};
 
@@ -83,22 +85,21 @@ async fn main() -> Result<()> {
     let db_table = table.clone();
     let db_worker_db = db.clone();
     tokio::spawn(async move {
-        // Debounce window to avoid thrashing SD card on high traffic
-        let mut db_debounce = None;
+        // Envolvendo o Sleep num Pin Box para permitir o .await
+        let mut db_debounce: Option<Pin<Box<tokio::time::Sleep>>> = None;
         loop {
             tokio::select! {
                 res = db_bus_rx.recv() => match res {
                     Ok(bus::LanforgeEvent::DeviceTableDirty) => {
-                        db_debounce = Some(tokio::time::sleep(Duration::from_secs(5)));
+                        db_debounce = Some(Box::pin(tokio::time::sleep(Duration::from_secs(5))));
                     }
                     Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break,
                 },
                 _ = async {
-                    #[allow(path_statements)]
                     if let Some(d) = &mut db_debounce {
-                        d;
+                        d.await;
                     } else {
                         std::future::pending::<()>().await;
                     }
@@ -267,8 +268,10 @@ async fn main() -> Result<()> {
                 // 1. Otimização: Alimentar cache NDP em tempo real na sua tabela
                 if let Some((ip, mac_bytes)) = netlink::extract_neigh_info(&msg) {
                     let mut t = table.write().await;
-                    // Implemente este método no DeviceTable (ou crie um HashMap separado no state.rs)
                     t.update_ndp_cache(ip, state::MacAddr(mac_bytes));
+
+                    drop(t); // Libera a tabela antes de avisar
+                    bus.publish(bus::LanforgeEvent::DeviceTableDirty);
                 }
 
                 // 2. Lógica original para acionar o SLAAC scan
@@ -291,6 +294,8 @@ async fn main() -> Result<()> {
                 debug!("Debounce window elapsed, running scan...");
                 if let Err(e) = run_scan(&cfg, &handle, &table).await {
                     error!("Error in event-triggered scan: {e:?}");
+                } else {
+                bus.publish(bus::LanforgeEvent::DeviceTableDirty);
                 }
             }
 
@@ -299,6 +304,8 @@ async fn main() -> Result<()> {
                 debug!("Periodic fallback scan...");
                 if let Err(e) = run_scan(&cfg, &handle, &table).await {
                     error!("Error in fallback scan: {e:?}");
+                } else {
+                bus.publish(bus::LanforgeEvent::DeviceTableDirty);
                 }
             }
 
@@ -317,6 +324,8 @@ async fn main() -> Result<()> {
                 scan_deadline = None;
                 if let Err(e) = run_scan(&cfg, &handle, &table).await {
                     error!("Error in manual scan: {e:?}");
+                } else {
+                bus.publish(bus::LanforgeEvent::DeviceTableDirty);
                 }
             }
 
@@ -356,10 +365,5 @@ async fn run_scan(
     handle: &rtnetlink::Handle,
     table: &Arc<RwLock<DeviceTable>>,
 ) -> Result<()> {
-    slaac::process_cycle_v2(
-        &cfg.target_prefix,
-        handle,
-        table,
-    )
-    .await
+    slaac::process_cycle_v2(&cfg.target_prefix, handle, table).await
 }

@@ -143,17 +143,17 @@ fn resolve_local(
     cfg: &DnsConfig,
     table: &DeviceTable,
 ) -> Result<Option<Vec<u8>>> {
-    let device = table
-        .devices
-        .values()
-        .find(|d| d.hostname.eq_ignore_ascii_case(hostname));
+    // 1. Busca o dispositivo pelo hostname exato ou pelo fallback gerado via MAC
+    let device = table.devices.values().find(|d| {
+        let has_name = !d.hostname.is_empty() && d.hostname.eq_ignore_ascii_case(hostname);
+        let fallback = format!("host-{}", d.mac.to_string().replace(':', ""));
+        has_name || fallback.eq_ignore_ascii_case(hostname)
+    });
 
     let Some(device) = device else {
         return Ok(None);
     };
 
-    // CORREÇÃO: Usar o Name exato que veio na query para evitar que o client
-    // rejeite a resposta por "mismatched question/answer".
     let question = query
         .queries()
         .first()
@@ -161,24 +161,40 @@ fn resolve_local(
     let name = question.name().clone();
     let mut records: Vec<Record> = Vec::new();
 
-    if matches!(qtype, RecordType::A | RecordType::ANY)
-        && let Some(v4) = &device.v4
-    {
-        let r = RData::A(v4.ip.into());
-        let record = Record::from_rdata(name.clone(), cfg.ttl, r);
-        records.push(record);
+    // 2. Extrai o IP Estático (se existir no TOML) para cobrir o "buraco" do DHCP
+    let static_entry = table.static_entries.get(&device.mac);
+
+    if matches!(qtype, RecordType::A | RecordType::ANY) {
+        // Tenta usar o IP do lease dinâmico. Se for nulo, puxa o IP estático do TOML.
+        let v4_ip = device
+            .v4
+            .as_ref()
+            .map(|l| l.ip)
+            .or_else(|| static_entry.and_then(|e| e.v4_ip));
+
+        if let Some(ip) = v4_ip {
+            records.push(Record::from_rdata(
+                name.clone(),
+                cfg.ttl,
+                RData::A(ip.into()),
+            ));
+        }
     }
 
     if matches!(qtype, RecordType::AAAA | RecordType::ANY) {
         if let Some(v6) = &device.v6 {
-            let r = RData::AAAA(v6.ip.into());
-            let record = Record::from_rdata(name.clone(), cfg.ttl, r);
-            records.push(record);
+            records.push(Record::from_rdata(
+                name.clone(),
+                cfg.ttl,
+                RData::AAAA(v6.ip.into()),
+            ));
         }
         for slaac_ip in &device.slaac {
-            let r = RData::AAAA((*slaac_ip).into());
-            let record = Record::from_rdata(name.clone(), cfg.ttl, r);
-            records.push(record);
+            records.push(Record::from_rdata(
+                name.clone(),
+                cfg.ttl,
+                RData::AAAA((*slaac_ip).into()),
+            ));
         }
     }
 

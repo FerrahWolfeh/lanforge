@@ -99,6 +99,7 @@ pub struct V6Lease {
 }
 
 /// Registro de config estática para um dispositivo.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StaticEntry {
     pub mac: MacAddr,
@@ -116,7 +117,7 @@ pub struct StaticEntry {
 pub struct DeviceTable {
     pub(crate) devices: HashMap<MacAddr, Device>,
     duid_index: HashMap<Duid, MacAddr>,
-    static_entries: HashMap<MacAddr, StaticEntry>,
+    pub(crate) static_entries: HashMap<MacAddr, StaticEntry>,
     ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
 }
 
@@ -188,25 +189,6 @@ impl DeviceTable {
         self.duid_index
             .get(duid)
             .and_then(|mac| self.devices.get(mac))
-    }
-
-    /// Hostname efetivo: config estática > hostname dinâmico > None
-    pub fn hostname_for(&self, mac: &MacAddr) -> Option<&str> {
-        self.static_entries
-            .get(mac)
-            .map(|e| e.hostname.as_str())
-            .or_else(|| {
-                self.devices
-                    .get(mac)
-                    .filter(|d| !d.hostname.is_empty())
-                    .map(|d| d.hostname.as_str())
-            })
-    }
-
-    pub fn v6_suffix_for(&self, mac: &MacAddr) -> Option<&str> {
-        self.static_entries
-            .get(mac)
-            .and_then(|e| e.v6_suffix.as_deref())
     }
 
     /// Record a SLAAC address for a device (avoids duplicates).
@@ -330,24 +312,6 @@ mod tests {
         assert!(MacAddr::parse("not-a-mac").is_none());
         assert!(MacAddr::parse("e0:d5:5e:e2:d4").is_none()); // 5 octetos
         assert!(MacAddr::parse("e0:d5:5e:e2:d4:89:ff").is_none()); // 7 octetos
-    }
-
-    #[test]
-    fn hostname_static_overrides_dynamic() {
-        let mut table = DeviceTable::new();
-        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-
-        table.get_or_insert(mac).hostname = "dynamic".into();
-
-        table.load_static_devices(&[StaticDeviceCfg {
-            mac: "aa:bb:cc:dd:ee:ff".into(),
-            hostname: "StaticName".into(),
-            v4_ip: None,
-            v6_suffix: None,
-        }]);
-
-        // O nome da config estática sempre tem precedência
-        assert_eq!(table.hostname_for(&mac), Some("StaticName"));
     }
 
     #[test]
