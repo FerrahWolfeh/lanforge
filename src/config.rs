@@ -70,6 +70,7 @@ pub struct TomlConfig {
     pub general: GeneralCfg,
     pub ra: RaCfg,
     pub dhcp: DhcpCfg,
+    pub dns: DnsCfg,
     #[serde(default)]
     pub devices: Vec<StaticDeviceCfg>,
 }
@@ -199,6 +200,32 @@ pub struct RaRdnssCfg {
     pub lifetime: Option<u64>,
 }
 
+#[derive(Deserialize, Debug)]
+#[serde(default)]
+pub struct DnsCfg {
+    pub enabled: bool,
+    /// Endereço e porta onde o servidor DNS escuta (ex: "0.0.0.0:5300")
+    pub listen: String,
+    /// Resolver upstream para queries não-LAN, normalmente o Unbound (ex: "127.0.0.1:5335")
+    pub upstream: String,
+    /// Sufixo de domínio local — "lan" faz "archie.lan" resolver para o device "archie"
+    pub search_domain: String,
+    /// TTL das respostas LAN em segundos
+    pub ttl: u32,
+}
+
+impl Default for DnsCfg {
+    fn default() -> Self {
+        DnsCfg {
+            enabled: false,
+            listen: "0.0.0.0:5300".into(),
+            upstream: "127.0.0.1:5335".into(),
+            search_domain: "lan".into(),
+            ttl: 60,
+        }
+    }
+}
+
 /// Dispositivo estático — lido de `[[devices]]` no TOML.
 #[derive(Deserialize, Debug, Clone)]
 pub struct StaticDeviceCfg {
@@ -234,6 +261,10 @@ pub struct Config {
     // DHCPv6
     pub dhcpv6_enabled: bool,
     pub dhcpv6_toml: DhcpV6Cfg,
+
+    // DNS
+    pub dns_enabled: bool,
+    pub dns_toml: DnsCfg,
 
     // static devices
     pub devices: Vec<StaticDeviceCfg>,
@@ -272,6 +303,9 @@ impl Config {
 
             dhcpv6_enabled: toml_cfg.dhcp.v6.enabled,
             dhcpv6_toml: toml_cfg.dhcp.v6,
+
+            dns_enabled: toml_cfg.dns.enabled,
+            dns_toml: toml_cfg.dns,
 
             devices: toml_cfg.devices,
         })
@@ -389,6 +423,24 @@ impl Config {
             // Certifique-se de que sua config interna do v6 suporte esses campos!
             range_start: parse_ipv6(&self.dhcpv6_toml.range_start),
             range_end: parse_ipv6(&self.dhcpv6_toml.range_end),
+        }
+    }
+
+    /// Builds a `DnsConfig` from the merged configuration.
+    pub fn to_dns_config(&self) -> crate::dns::DnsConfig {
+        let parse_addr = |s: &str, default: &str| -> std::net::SocketAddr {
+            s.parse().unwrap_or_else(|_| {
+                warn!("[config] Endereço DNS inválido '{s}', usando {default}");
+                default.parse().unwrap()
+            })
+        };
+
+        crate::dns::DnsConfig {
+            enabled: self.dns_enabled,
+            listen: parse_addr(&self.dns_toml.listen, "0.0.0.0:5300"),
+            upstream: parse_addr(&self.dns_toml.upstream, "127.0.0.1:5335"),
+            search_domain: self.dns_toml.search_domain.clone(),
+            ttl: self.dns_toml.ttl,
         }
     }
 }

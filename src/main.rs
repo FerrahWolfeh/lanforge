@@ -2,6 +2,7 @@ mod bus;
 mod config;
 mod db;
 mod dhcp;
+mod dns;
 mod hosts;
 mod netlink;
 mod ra;
@@ -214,6 +215,26 @@ async fn main() -> Result<()> {
                 let bus = dhcp_bus.clone();
                 let table = dhcp_table.clone();
                 async move { dhcp::v6::dhcpv6_service(cfg, table, bus, &handle).await }
+            },
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Spawn DNS service (if enabled) via supervisor
+    // -----------------------------------------------------------------------
+    if cfg.dns_enabled {
+        let dns_cfg = cfg.to_dns_config();
+        let dns_table = table.clone();
+        tokio::spawn(supervisor::supervise_task(
+            "dns",
+            true,
+            0,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            move || {
+                let cfg = dns_cfg.clone();
+                let table = dns_table.clone();
+                async move { dns::dns_service(cfg, table).await }
             },
         ));
     }

@@ -114,7 +114,7 @@ pub struct StaticEntry {
 /// Tabela de dispositivos — compartilhada via Arc<RwLock<..>>
 #[derive(Debug, Clone)]
 pub struct DeviceTable {
-    devices: HashMap<MacAddr, Device>,
+    pub(crate) devices: HashMap<MacAddr, Device>,
     duid_index: HashMap<Duid, MacAddr>,
     static_entries: HashMap<MacAddr, StaticEntry>,
     ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
