@@ -24,6 +24,7 @@ use std::time::SystemTime;
 
 use crate::config::StaticDeviceCfg;
 use crate::dhcp::v6::duid::Duid;
+use serde::Serialize;
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -31,8 +32,18 @@ use tracing::{debug, info, warn};
 // ---------------------------------------------------------------------------
 
 /// Endereço MAC de 6 bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MacAddr(pub [u8; 6]);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct MacAddr(#[serde(serialize_with = "serialize_mac")] pub [u8; 6]);
+
+fn serialize_mac<S>(mac: &[u8; 6], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    ))
+}
 
 impl MacAddr {
     /// Parse from "aa:bb:cc:dd:ee:ff" (case-insensitive).
@@ -96,7 +107,7 @@ impl fmt::Debug for MacAddr {
 // ---------------------------------------------------------------------------
 
 /// Tudo que se sabe sobre um dispositivo na rede.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Device {
     pub mac: MacAddr,
     pub hostname: String,
@@ -109,18 +120,31 @@ pub struct Device {
 
     /// Endereços SLAAC observados via NDP.
     pub slaac: Vec<Ipv6Addr>,
+    #[serde(serialize_with = "serialize_time")]
     pub last_seen: SystemTime,
 }
 
-#[derive(Debug, Clone)]
+fn serialize_time<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let elapsed = time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    serializer.serialize_u64(elapsed.as_secs())
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct V4Lease {
     pub ip: Ipv4Addr,
+    #[serde(serialize_with = "serialize_time")]
     pub expires: SystemTime,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct V6Lease {
     pub ip: Ipv6Addr,
+    #[serde(serialize_with = "serialize_time")]
     pub expires: SystemTime,
 }
 

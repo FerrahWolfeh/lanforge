@@ -50,6 +50,10 @@ pub struct CliArgs {
     /// Override: enable RA service
     #[arg(long, env = "LANFORGE_RA_ENABLED")]
     pub ra_enabled: Option<bool>,
+
+    /// Override: control socket path
+    #[arg(long, env = "LANFORGE_CONTROL_SOCKET")]
+    pub control_socket: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +134,7 @@ pub struct GeneralCfg {
     pub target_prefix: String,
     pub debounce_secs: u64,
     pub fallback_mins: u64,
+    pub control_socket: String,
 }
 
 impl Default for GeneralCfg {
@@ -140,6 +145,7 @@ impl Default for GeneralCfg {
             target_prefix: "fd97:f00d:cafe:3731".into(),
             debounce_secs: 2,
             fallback_mins: 5,
+            control_socket: "/run/lanforge/control.sock".into(),
         }
     }
 }
@@ -233,6 +239,7 @@ pub struct Config {
     pub leases_db: String,
     pub debounce_secs: u64,
     pub fallback_mins: u64,
+    pub control_socket: String,
 
     // RA
     pub ra_enabled: bool,
@@ -267,6 +274,7 @@ impl Config {
             leases_db: toml_cfg.general.leases_db,
             debounce_secs: cli.debounce_secs.unwrap_or(toml_cfg.general.debounce_secs),
             fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
+            control_socket: cli.control_socket.unwrap_or(toml_cfg.general.control_socket),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: toml_cfg.ra,

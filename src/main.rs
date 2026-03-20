@@ -1,5 +1,6 @@
 mod bus;
 mod config;
+mod control;
 mod db;
 mod dhcp;
 mod dns;
@@ -201,6 +202,31 @@ async fn main() -> Result<()> {
             },
         ));
     }
+
+    // -----------------------------------------------------------------------
+    // Control service (UDS)
+    // -----------------------------------------------------------------------
+    let ctrl_path = cfg.control_socket.clone();
+    let ctrl_table = table.clone();
+    let ctrl_bus = bus.clone();
+    let ctrl_ifaces = control::Interfaces {
+        lan: cfg.iface_lan.clone(),
+    };
+
+    tokio::spawn(supervisor::supervise_task(
+        "control",
+        true,
+        0,
+        Duration::from_secs(2),
+        Duration::from_secs(30),
+        move || {
+            let path = ctrl_path.clone();
+            let table = ctrl_table.clone();
+            let bus = ctrl_bus.clone();
+            let ifaces = ctrl_ifaces.clone();
+            async move { control::control_service(path, ifaces, table, bus).await }
+        },
+    ));
 
     // -----------------------------------------------------------------------
     // Prefixo GUA — aprendido dinamicamente via PrefixChanged do RA.
