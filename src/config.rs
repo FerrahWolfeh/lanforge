@@ -195,7 +195,7 @@ pub struct DnsCfg {
     /// Endereço e porta onde o servidor DNS escuta (ex: "0.0.0.0:5300")
     pub listen: String,
     /// Resolver upstream para queries não-LAN, normalmente o Unbound (ex: "127.0.0.1:5335")
-    pub upstream: String,
+    pub upstream: Option<String>,
     /// Sufixo de domínio local — "lan" faz "archie.lan" resolver para o device "archie"
     pub search_domain: String,
     /// TTL das respostas LAN em segundos
@@ -207,7 +207,7 @@ impl Default for DnsCfg {
         DnsCfg {
             enabled: false,
             listen: "0.0.0.0:5300".into(),
-            upstream: "127.0.0.1:5335".into(),
+            upstream: Some("127.0.0.1:5335".into()),
             search_domain: "lan".into(),
             ttl: 60,
         }
@@ -413,7 +413,11 @@ impl Config {
         crate::dns::DnsConfig {
             enabled: self.dns_enabled,
             listen: parse_addr(&self.dns_toml.listen, "0.0.0.0:5300"),
-            upstream: parse_addr(&self.dns_toml.upstream, "127.0.0.1:5335"),
+            upstream: self
+                .dns_toml
+                .upstream
+                .as_deref()
+                .map(|s| parse_addr(s, "127.0.0.1:5335")),
             search_domain: self.dns_toml.search_domain.clone(),
             ttl: self.dns_toml.ttl,
         }

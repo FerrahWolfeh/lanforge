@@ -34,7 +34,7 @@ use crate::state::DeviceTable;
 pub struct DnsConfig {
     pub enabled: bool,
     pub listen: SocketAddr,
-    pub upstream: SocketAddr,
+    pub upstream: Option<SocketAddr>,
     pub search_domain: String,
     pub ttl: u32,
 }
@@ -44,7 +44,7 @@ impl Default for DnsConfig {
         DnsConfig {
             enabled: true,
             listen: "0.0.0.0:53".parse().unwrap(),
-            upstream: "127.0.0.1:5335".parse().unwrap(),
+            upstream: Some("127.0.0.1:5335".parse().unwrap()),
             search_domain: "lan".into(),
             ttl: 60,
         }
@@ -68,7 +68,7 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<RwLock<DeviceTable>>) -> Res
     );
 
     info!(
-        "Escutando em {} (upstream: {}, domínio: .{})",
+        "Escutando em {} (upstream: {:?}, domínio: .{})",
         cfg.listen, cfg.upstream, cfg.search_domain
     );
 
@@ -140,7 +140,12 @@ async fn handle_query(
 
     drop(t); // Libera o lock de leitura da tabela antes do forward
 
-    forward_to_upstream(data, cfg.upstream).await
+    if let Some(upstream) = cfg.upstream {
+        forward_to_upstream(data, upstream).await
+    } else {
+        debug!("Upstream não configurado e query não é local: {qname}. Retornando REFUSED.");
+        refused_response(&query)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +375,16 @@ fn nxdomain_response(query: &Message) -> Result<Vec<u8>> {
     resp.to_bytes().context("serializar NXDOMAIN")
 }
 
+fn refused_response(query: &Message) -> Result<Vec<u8>> {
+    let mut resp = Message::new();
+    resp.set_id(query.id())
+        .set_message_type(MessageType::Response)
+        .set_op_code(OpCode::Query)
+        .set_response_code(ResponseCode::Refused)
+        .add_queries(query.queries().to_vec());
+    resp.to_bytes().context("serializar REFUSED")
+}
+
 fn empty_noerror_response(query: &Message) -> Result<Vec<u8>> {
     let mut resp = Message::new();
     resp.set_id(query.id())
@@ -577,6 +592,58 @@ mod tests {
             assert_eq!(ptr_name.to_utf8(), "host-112233445566.lan.");
         } else {
             panic!("O RData retornado não é do tipo PTR");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_query_refused_when_no_upstream() {
+        let cfg = DnsConfig {
+            upstream: None,
+            ..Default::default()
+        };
+        let table = Arc::new(RwLock::new(DeviceTable::new()));
+
+        let mut query = Message::new();
+        let name = Name::from_str("google.com.").unwrap();
+        query.add_query(hickory_proto::op::Query::query(name.clone(), RecordType::A));
+        let query_bytes = query.to_bytes().unwrap();
+
+        let src = "127.0.0.1:12345".parse().unwrap();
+        let resp_bytes = handle_query(&query_bytes, src, &cfg, &table).await.unwrap();
+        let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
+
+        assert_eq!(resp_msg.response_code(), ResponseCode::Refused);
+    }
+
+    #[tokio::test]
+    async fn test_handle_query_forwards_when_upstream_present() {
+        let cfg = DnsConfig {
+            upstream: Some("1.2.3.4:53".parse().unwrap()),
+            ..Default::default()
+        };
+        let table = Arc::new(RwLock::new(DeviceTable::new()));
+
+        let mut query = Message::new();
+        let name = Name::from_str("google.com.").unwrap();
+        query.add_query(hickory_proto::op::Query::query(name.clone(), RecordType::A));
+        let query_bytes = query.to_bytes().unwrap();
+
+        let src = "127.0.0.1:12345".parse().unwrap();
+
+        // This should timeout or return an error because 1.2.3.4:53 is not reachable,
+        // but it should NOT return REFUSED (which is our local response).
+        let result = handle_query(&query_bytes, src, &cfg, &table).await;
+
+        match result {
+            Err(e) => {
+                // Expect timeout or connection error from forward_to_upstream
+                let err_str = format!("{:#}", e);
+                assert!(err_str.contains("timeout") || err_str.contains("upstream"));
+            }
+            Ok(resp_bytes) => {
+                let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
+                assert_ne!(resp_msg.response_code(), ResponseCode::Refused);
+            }
         }
     }
 }
