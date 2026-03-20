@@ -168,8 +168,12 @@ impl DhcpServer {
         // Client has static IP, wants config options (DNS, etc.)
         let ip = msg.ciaddr();
         info!("INFORM from {mac} ({ip}) → ACK (config only)");
-        let reply = self.build_reply(msg, MessageType::Ack, ip);
-        HandleResult::Reply(reply, false, ip, self.get_hostname(msg)) // INFORM responses are always unicast
+
+        // RFC 2131 §4.3.5: "The server fills in 'yiaddr' with zero."
+        let reply = self.build_reply(msg, MessageType::Ack, Ipv4Addr::UNSPECIFIED);
+
+        // Mantemos o `ip` como IP de destino (target_ip) para o socket enviar via unicast
+        HandleResult::Reply(reply, false, ip, self.get_hostname(msg))
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
