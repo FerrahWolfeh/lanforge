@@ -1,59 +1,67 @@
 //! Tracker de endereços SLAAC via eventos netlink NDP.
 //!
-//! Resolve hostname imediatamente: config estática → lease v4 → omitido.
+//! Consulta a tabela de vizinhos do kernel para o prefixo alvo e atualiza
+//! o `ManagedTable` com os endereços SLAAC observados.
 //!
-//! Dois modos de operação:
-//! - v1 (legado): lê dnsmasq.leases + dnsmasq-dhcp.conf (será removido na Fase 2C)
-//! - v2: usa DeviceTable diretamente (ativo quando DeviceTable é passada)
+//! ## Integração com o Manager
+//!
+//! ```text
+//! kernel (dump de vizinhos IPv6)
+//!     └─► netlink::get_ipv6_neighbors()  →  Vec<NeighborEvent>
+//!                   │
+//!                   ▼
+//!     NeighborEvent::to_device_update(gua_prefix)
+//!                   │
+//!         ┌─────────┴──────────┐
+//!         ▼                    ▼
+//!   SlaacObserved          NdpSeen
+//!   (dirty → DNS/DB)       (só cache)
+//!                   │
+//!                   ▼
+//!           ManagedTable::update()
+//! ```
+//!
+//! O ciclo limpa os endereços SLAAC de cada MAC antes de repopulá-los,
+//! garantindo que endereços obsoletos não persistam entre scans.
 
 use anyhow::Result;
 use rtnetlink::Handle;
 use std::collections::HashSet;
-use std::net::Ipv6Addr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
+use crate::bus::ManagedTable;
 use crate::netlink;
-use crate::state::{DeviceTable, MacAddr};
+use crate::state::{DeviceUpdate, MacAddr};
 
-// ---------------------------------------------------------------------------
-// v2 — DeviceTable-based (new path)
-// ---------------------------------------------------------------------------
-
-/// Processo de scan v2: consulta vizinhos IPv6 via netlink, atualiza DeviceTable,
-/// e regenera o hosts file a partir da tabela.
+/// Executa um ciclo de scan SLAAC:
+///
+/// 1. Faz dump dos vizinhos IPv6 no `target_prefix` via netlink.
+/// 2. Para cada MAC novo neste ciclo, limpa os endereços SLAAC anteriores.
+/// 3. Aplica cada endereço observado via `ManagedTable::update`.
+///
+/// `gua` é o prefixo GUA atual, aprendido dinamicamente pelo RA via
+/// `PrefixChanged`. Se `None` (RA ainda não anunciou, ou ISP sem IPv6),
+/// todos os eventos viram `NdpSeen` — comportamento conservador correto.
 pub async fn process_cycle_v2(
     target_prefix: &str,
     handle: &Handle,
-    table: &Arc<RwLock<DeviceTable>>,
+    table: &Arc<ManagedTable>,
+    gua: Option<std::net::Ipv6Addr>,
 ) -> Result<()> {
     let neighbors = netlink::get_ipv6_neighbors(handle, target_prefix).await?;
 
-    {
-        let mut t = table.write().await;
+    let mut seen_macs: HashSet<MacAddr> = HashSet::new();
 
-        // Collect all MACs we'll see this cycle to clear stale SLAAC addrs
-        let mut seen_macs: HashSet<MacAddr> = HashSet::new();
-
-        for (ip_str, mac_str) in &neighbors {
-            let Some(mac) = MacAddr::parse(mac_str) else {
-                continue;
-            };
-            let Ok(addr) = ip_str.parse::<Ipv6Addr>() else {
-                continue;
-            };
-
-            if !seen_macs.contains(&mac) {
-                // First time seeing this MAC in this cycle → clear old SLAAC entries
-                t.clear_slaac(mac);
-                seen_macs.insert(mac);
-            }
-
-            t.record_slaac(mac, addr);
+    for event in neighbors {
+        if seen_macs.insert(event.mac) {
+            table
+                .update(DeviceUpdate::SlaacCleared { mac: event.mac })
+                .await;
         }
+
+        let update = event.to_device_update(gua.as_ref());
+        table.update(update).await;
     }
 
     Ok(())
 }
-
-

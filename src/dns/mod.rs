@@ -1,13 +1,39 @@
-//! src/dns/mod.rs — Servidor DNS mínimo da LAN
+//! src/dns/mod.rs — Servidor DNS autoritativo da LAN
 //!
-//! Responde A/AAAA/PTR para dispositivos da DeviceTable e encaminha
+//! Responde A/AAAA/PTR para dispositivos conhecidos pelo Manager e encaminha
 //! todo o resto para o Unbound (ou outro resolver upstream).
 //!
-//! Fluxo por query:
-//!   1. Parse da query
-//!   2. Normaliza o nome (remove sufixo do search_domain se presente)
-//!   3. Busca na DeviceTable — se achar, responde direto
-//!   4. Se não achar, encaminha pro upstream e devolve a resposta intacta
+//! ## Papel no modelo device-first
+//!
+//! O DNS é um **consumidor puro** do `ManagedTable` — nunca escreve estado.
+//! Ele é a voz do Manager para o resto da rede: se o Manager conhece um
+//! device, o DNS sabe resolver o hostname. Se não conhece, encaminha.
+//!
+//! Isso significa que o Pi-hole (ou qualquer outro cliente) que perguntar
+//! "quem é `solarium.lan`?" receberá a resposta imediatamente após o
+//! Manager aprender o device via DHCP ou NDP — sem reload, sem arquivo
+//! de hosts, sem latência de propagação.
+//!
+//! ## Fluxo por query
+//!
+//! ```text
+//! Query UDP recebida
+//!     └─► normalize_name()         remove sufixo do search_domain
+//!               │
+//!               ▼
+//!     ManagedTable::read()         snapshot de leitura do Manager
+//!               │
+//!       ┌───────┴───────┐
+//!       ▼               ▼
+//!   A/AAAA/ANY        PTR
+//!   resolve_local()   resolve_ptr()
+//!       │               │
+//!       └───────┬───────┘
+//!               │ encontrou?
+//!            sim│         não
+//!               ▼         ▼
+//!          responde    forward_to_upstream()
+//! ```
 
 use anyhow::{Context, Result};
 use hickory_proto::{
@@ -20,10 +46,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
+use crate::bus::ManagedTable;
 use crate::state::DeviceTable;
 
 // ---------------------------------------------------------------------------
@@ -34,6 +60,8 @@ use crate::state::DeviceTable;
 pub struct DnsConfig {
     pub enabled: bool,
     pub listen: SocketAddr,
+    /// Upstream resolver (ex: Unbound em 127.0.0.1:5335).
+    /// Se `None`, queries não-locais retornam REFUSED.
     pub upstream: Option<SocketAddr>,
     pub search_domain: String,
     pub ttl: u32,
@@ -55,7 +83,11 @@ impl Default for DnsConfig {
 // Entry point da task
 // ---------------------------------------------------------------------------
 
-pub async fn dns_service(cfg: DnsConfig, table: Arc<RwLock<DeviceTable>>) -> Result<()> {
+/// Inicia o serviço DNS. Invocar via `tokio::spawn` + supervisor.
+///
+/// Recebe `Arc<ManagedTable>` — acesso read-only ao estado do Manager.
+/// Não publica eventos, não escreve estado.
+pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()> {
     if !cfg.enabled {
         info!("Serviço DNS desabilitado na config");
         return std::future::pending().await;
@@ -106,7 +138,7 @@ async fn handle_query(
     data: &[u8],
     src: SocketAddr,
     cfg: &DnsConfig,
-    table: &Arc<RwLock<DeviceTable>>,
+    table: &ManagedTable,
 ) -> Result<Vec<u8>> {
     let query = Message::from_bytes(data).context("falha ao parsear query DNS")?;
 
@@ -121,24 +153,22 @@ async fn handle_query(
 
     let hostname = normalize_name(&qname, &cfg.search_domain);
 
+    // Snapshot de leitura — libera o lock antes de qualquer I/O de rede
     let t = table.read().await;
 
-    // Intercepta A, AAAA ou ANY (Resolução Direta)
     if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
         if let Some(response) = resolve_local(&query, &hostname, qtype, cfg, &t)? {
             debug!("Respondido localmente (A/AAAA): {hostname}");
             return Ok(response);
         }
-    }
-    // Intercepta PTR (Resolução Reversa)
-    else if qtype == RecordType::PTR
+    } else if qtype == RecordType::PTR
         && let Some(response) = resolve_ptr(&query, &qname, cfg, &t)?
     {
         debug!("Respondido localmente (PTR): {qname}");
         return Ok(response);
     }
 
-    drop(t); // Libera o lock de leitura da tabela antes do forward
+    drop(t); // Libera o lock antes do forward
 
     if let Some(upstream) = cfg.upstream {
         forward_to_upstream(data, upstream).await
@@ -149,7 +179,7 @@ async fn handle_query(
 }
 
 // ---------------------------------------------------------------------------
-// Resolução local (Nome -> IP)
+// Resolução local — Forward (Nome → IP)
 // ---------------------------------------------------------------------------
 
 fn resolve_local(
@@ -176,11 +206,10 @@ fn resolve_local(
     let static_entry = table.static_entries.get(&device.mac);
 
     if matches!(qtype, RecordType::A | RecordType::ANY) {
-        let v4_ip = device
-            .v4
-            .as_ref()
-            .map(|l| l.ip)
-            .or_else(|| static_entry.and_then(|e| e.v4_ip));
+        // Estático tem precedência sobre lease dinâmico
+        let v4_ip = static_entry
+            .and_then(|e| e.v4_ip)
+            .or_else(|| device.v4.as_ref().map(|l| l.ip));
 
         if let Some(ip) = v4_ip {
             records.push(Record::from_rdata(
@@ -227,7 +256,7 @@ fn resolve_local(
 }
 
 // ---------------------------------------------------------------------------
-// Resolução local Reversa (IP -> Nome)
+// Resolução local — Reversa (IP → Nome)
 // ---------------------------------------------------------------------------
 
 fn resolve_ptr(
@@ -241,26 +270,22 @@ fn resolve_ptr(
     };
 
     let device = table.devices.values().find(|d| {
-        // Checa lease dinâmico v4
         if let Some(v4) = &d.v4
             && target_ip == v4.ip
         {
             return true;
         }
-        // Checa entrada estática v4
         if let Some(stat) = table.static_entries.get(&d.mac)
             && let Some(stat_v4) = stat.v4_ip
             && target_ip == stat_v4
         {
             return true;
         }
-        // Checa lease dinâmico v6
         if let Some(v6) = &d.v6
             && target_ip == v6.ip
         {
             return true;
         }
-        // Checa SLAAC
         if d.slaac.iter().any(|&ip| IpAddr::V6(ip) == target_ip) {
             return true;
         }
@@ -274,7 +299,6 @@ fn resolve_ptr(
     let question = query.queries().first().expect("Query validada");
     let name = question.name().clone();
 
-    // Constrói o nome que será devolvido (usando a mesma lógica de fallback)
     let host = if !device.hostname.is_empty() {
         device.hostname.clone()
     } else {
@@ -304,39 +328,6 @@ fn resolve_ptr(
         resp.to_bytes()
             .context("falha serializar resposta PTR local")?,
     ))
-}
-
-fn parse_arpa_name(name: &str) -> Option<IpAddr> {
-    let name = name.trim_end_matches('.').to_lowercase();
-
-    if let Some(v4_part) = name.strip_suffix(".in-addr.arpa") {
-        let parts: Vec<&str> = v4_part.split('.').collect();
-        if parts.len() == 4
-            && let (Ok(a), Ok(b), Ok(c), Ok(d)) = (
-                parts[3].parse::<u8>(),
-                parts[2].parse::<u8>(),
-                parts[1].parse::<u8>(),
-                parts[0].parse::<u8>(),
-            )
-        {
-            return Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
-        }
-    } else if let Some(v6_part) = name.strip_suffix(".ip6.arpa") {
-        let parts: Vec<&str> = v6_part.split('.').collect();
-        if parts.len() == 32 {
-            let mut hex = String::with_capacity(39);
-            for (i, p) in parts.into_iter().rev().enumerate() {
-                hex.push_str(p);
-                if i % 4 == 3 && i != 31 {
-                    hex.push(':');
-                }
-            }
-            if let Ok(ipv6) = hex.parse::<Ipv6Addr>() {
-                return Some(IpAddr::V6(ipv6));
-            }
-        }
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +392,39 @@ fn normalize_name(name: &str, search_domain: &str) -> String {
     s.strip_suffix(&suffix).unwrap_or(s).to_lowercase()
 }
 
+fn parse_arpa_name(name: &str) -> Option<IpAddr> {
+    let name = name.trim_end_matches('.').to_lowercase();
+
+    if let Some(v4_part) = name.strip_suffix(".in-addr.arpa") {
+        let parts: Vec<&str> = v4_part.split('.').collect();
+        if parts.len() == 4
+            && let (Ok(a), Ok(b), Ok(c), Ok(d)) = (
+                parts[3].parse::<u8>(),
+                parts[2].parse::<u8>(),
+                parts[1].parse::<u8>(),
+                parts[0].parse::<u8>(),
+            )
+        {
+            return Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
+        }
+    } else if let Some(v6_part) = name.strip_suffix(".ip6.arpa") {
+        let parts: Vec<&str> = v6_part.split('.').collect();
+        if parts.len() == 32 {
+            let mut hex = String::with_capacity(39);
+            for (i, p) in parts.into_iter().rev().enumerate() {
+                hex.push_str(p);
+                if i % 4 == 3 && i != 31 {
+                    hex.push(':');
+                }
+            }
+            if let Ok(ipv6) = hex.parse::<Ipv6Addr>() {
+                return Some(IpAddr::V6(ipv6));
+            }
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Testes
 // ---------------------------------------------------------------------------
@@ -408,8 +432,38 @@ fn normalize_name(name: &str, search_domain: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Device, MacAddr, V4Lease};
+    use crate::bus::EventBus;
+    use crate::state::{Device, DeviceTable, MacAddr, V4Lease};
     use std::{net::Ipv4Addr, time::SystemTime};
+
+    // Helpers para testes que precisam de ManagedTable
+    fn empty_table() -> Arc<ManagedTable> {
+        Arc::new(ManagedTable::new(Arc::new(EventBus::new())))
+    }
+
+    // Helpers para testes que operam diretamente no DeviceTable (sem async)
+    fn table_with_device(hostname: &str, mac: MacAddr, ip: Ipv4Addr) -> DeviceTable {
+        let mut table = DeviceTable::new();
+        table.devices.insert(
+            mac,
+            Device {
+                hostname: hostname.into(),
+                mac,
+                is_static: false,
+                duid: None,
+                v4: Some(V4Lease {
+                    ip,
+                    expires: SystemTime::now() + std::time::Duration::from_secs(3600),
+                }),
+                v6: None,
+                slaac: vec![],
+                last_seen: SystemTime::now(),
+            },
+        );
+        table
+    }
+
+    // --- normalize_name ---
 
     #[test]
     fn normalize_strips_domain_and_dot() {
@@ -435,30 +489,15 @@ mod tests {
         assert_eq!(normalize_name("archie.local.", "lan"), "archie.local");
     }
 
+    // --- resolve_local ---
+
     #[test]
     fn resolve_local_matches_question_name_exactly() {
         use hickory_proto::rr::Name;
-        use std::str::FromStr;
 
         let cfg = DnsConfig::default();
-        let mut table = DeviceTable::new();
         let mac = MacAddr::from_slice(&[0u8; 6]).unwrap();
-        table.devices.insert(
-            mac,
-            Device {
-                hostname: "solarium".into(),
-                mac,
-                is_static: false,
-                duid: None,
-                v4: Some(V4Lease {
-                    ip: Ipv4Addr::new(192, 168, 0, 2),
-                    expires: SystemTime::now(),
-                }),
-                v6: None,
-                slaac: vec![],
-                last_seen: SystemTime::now(),
-            },
-        );
+        let table = table_with_device("solarium", mac, Ipv4Addr::new(192, 168, 0, 2));
 
         let mut query = Message::new();
         let name = Name::from_str("solarium.").unwrap();
@@ -471,6 +510,8 @@ mod tests {
         assert_eq!(resp_msg.answers()[0].name(), &name);
     }
 
+    // --- parse_arpa_name ---
+
     #[test]
     fn parses_ipv4_arpa_correctly() {
         let ip = parse_arpa_name("50.1.168.192.in-addr.arpa.").unwrap();
@@ -479,7 +520,6 @@ mod tests {
 
     #[test]
     fn parses_ipv6_arpa_correctly() {
-        // fd00::1234
         let arpa = "4.3.2.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.f.ip6.arpa";
         let ip = parse_arpa_name(arpa).unwrap();
         assert_eq!(ip, "fd00::1234".parse::<IpAddr>().unwrap());
@@ -491,121 +531,69 @@ mod tests {
         assert_eq!(parse_arpa_name("999.1.1.1.in-addr.arpa"), None);
         assert_eq!(parse_arpa_name("google.com"), None);
     }
+
+    // --- resolve_ptr ---
+
     #[test]
     fn resolve_ptr_returns_correct_hostname() {
         use hickory_proto::rr::Name;
-        use std::str::FromStr;
 
         let cfg = DnsConfig::default();
-        let mut table = DeviceTable::new();
         let mac = MacAddr::from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]).unwrap();
+        let table = table_with_device("solarium", mac, Ipv4Addr::new(192, 168, 0, 50));
 
-        // Cadastra o solarium com IP 192.168.0.50
-        table.devices.insert(
-            mac,
-            Device {
-                hostname: "solarium".into(),
-                mac,
-                is_static: false,
-                duid: None,
-                v4: Some(V4Lease {
-                    ip: Ipv4Addr::new(192, 168, 0, 50),
-                    expires: SystemTime::now(),
-                }),
-                v6: None,
-                slaac: vec![],
-                last_seen: SystemTime::now(),
-            },
-        );
-
-        // Finge que o Pi-hole mandou um "dig -x 192.168.0.50"
         let mut query = Message::new();
-        let arpa_string = "50.0.168.192.in-addr.arpa.";
-        let qname = Name::from_str(arpa_string).unwrap();
-        query.add_query(hickory_proto::op::Query::query(
-            qname.clone(),
-            RecordType::PTR,
-        ));
+        let qname = Name::from_str("50.0.168.192.in-addr.arpa.").unwrap();
+        query.add_query(hickory_proto::op::Query::query(qname, RecordType::PTR));
 
-        // Roda a resolução
         let result = resolve_ptr(&query, "50.0.168.192.in-addr.arpa", &cfg, &table).unwrap();
-
-        let resp_bytes = result.expect("Deveria ter encontrado o dispositivo na tabela");
+        let resp_bytes = result.expect("Deveria ter encontrado o dispositivo");
         let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
 
-        // Valida se a resposta aponta para "solarium.lan."
         assert_eq!(resp_msg.answers().len(), 1);
-
-        let rdata = resp_msg.answers()[0].data();
-
-        if let Some(ptr_name) = rdata.as_ptr() {
-            // O fallback tira os dois pontos do MAC e anexa o search_domain
+        if let Some(ptr_name) = resp_msg.answers()[0].data().as_ptr() {
             assert_eq!(ptr_name.to_utf8(), "solarium.lan.");
         } else {
-            panic!("O RData retornado não é do tipo PTR");
+            panic!("RData não é PTR");
         }
     }
 
     #[test]
     fn resolve_ptr_uses_mac_fallback_if_no_hostname() {
         use hickory_proto::rr::Name;
-        use std::str::FromStr;
 
         let cfg = DnsConfig::default();
-        let mut table = DeviceTable::new();
-        // Um MAC fácil de mapear visualmente
         let mac = MacAddr::from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]).unwrap();
-
-        table.devices.insert(
-            mac,
-            Device {
-                hostname: "".into(), // Hostname vazio para forçar o fallback
-                mac,
-                is_static: false,
-                duid: None,
-                v4: Some(V4Lease {
-                    ip: Ipv4Addr::new(10, 0, 0, 5),
-                    expires: SystemTime::now(),
-                }),
-                v6: None,
-                slaac: vec![],
-                last_seen: SystemTime::now(),
-            },
-        );
+        let table = table_with_device("", mac, Ipv4Addr::new(10, 0, 0, 5));
 
         let mut query = Message::new();
         let qname = Name::from_str("5.0.0.10.in-addr.arpa.").unwrap();
-        query.add_query(hickory_proto::op::Query::query(
-            qname.clone(),
-            RecordType::PTR,
-        ));
+        query.add_query(hickory_proto::op::Query::query(qname, RecordType::PTR));
 
         let result = resolve_ptr(&query, "5.0.0.10.in-addr.arpa", &cfg, &table).unwrap();
-
         let resp_bytes = result.expect("Deveria ter retornado uma resposta");
         let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
 
-        let rdata = resp_msg.answers()[0].data();
-
-        if let Some(ptr_name) = rdata.as_ptr() {
-            // O fallback tira os dois pontos do MAC e anexa o search_domain
+        if let Some(ptr_name) = resp_msg.answers()[0].data().as_ptr() {
             assert_eq!(ptr_name.to_utf8(), "host-112233445566.lan.");
         } else {
-            panic!("O RData retornado não é do tipo PTR");
+            panic!("RData não é PTR");
         }
     }
 
+    // --- handle_query async ---
+
     #[tokio::test]
-    async fn test_handle_query_refused_when_no_upstream() {
+    async fn handle_query_refused_when_no_upstream() {
         let cfg = DnsConfig {
             upstream: None,
             ..Default::default()
         };
-        let table = Arc::new(RwLock::new(DeviceTable::new()));
+        let table = empty_table();
 
         let mut query = Message::new();
         let name = Name::from_str("google.com.").unwrap();
-        query.add_query(hickory_proto::op::Query::query(name.clone(), RecordType::A));
+        query.add_query(hickory_proto::op::Query::query(name, RecordType::A));
         let query_bytes = query.to_bytes().unwrap();
 
         let src = "127.0.0.1:12345".parse().unwrap();
@@ -616,27 +604,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_query_forwards_when_upstream_present() {
+    async fn handle_query_forwards_when_upstream_present() {
         let cfg = DnsConfig {
             upstream: Some("1.2.3.4:53".parse().unwrap()),
             ..Default::default()
         };
-        let table = Arc::new(RwLock::new(DeviceTable::new()));
+        let table = empty_table();
 
         let mut query = Message::new();
         let name = Name::from_str("google.com.").unwrap();
-        query.add_query(hickory_proto::op::Query::query(name.clone(), RecordType::A));
+        query.add_query(hickory_proto::op::Query::query(name, RecordType::A));
         let query_bytes = query.to_bytes().unwrap();
 
         let src = "127.0.0.1:12345".parse().unwrap();
-
-        // This should timeout or return an error because 1.2.3.4:53 is not reachable,
-        // but it should NOT return REFUSED (which is our local response).
         let result = handle_query(&query_bytes, src, &cfg, &table).await;
 
         match result {
             Err(e) => {
-                // Expect timeout or connection error from forward_to_upstream
                 let err_str = format!("{:#}", e);
                 assert!(err_str.contains("timeout") || err_str.contains("upstream"));
             }

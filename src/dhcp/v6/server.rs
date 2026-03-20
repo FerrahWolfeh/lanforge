@@ -8,8 +8,9 @@ use tracing::{debug, info, warn};
 use super::config::Dhcpv6Config;
 use super::duid::Duid;
 use super::pool::Ipv6Pool;
+use crate::bus::ManagedTable;
 use crate::dhcp::identity::DeviceIdentity;
-use crate::state::MacAddr;
+use crate::state::{DeviceUpdate, MacAddr};
 
 /// Result of processing a DHCPv6 message.
 pub enum HandleResult {
@@ -38,7 +39,7 @@ impl Dhcpv6Server {
         &mut self,
         data: &[u8],
         peer: Ipv6Addr,
-        table: &tokio::sync::RwLock<crate::state::DeviceTable>, // <-- Injetando a tabela aqui
+        table: &ManagedTable,
         nl_handle: &rtnetlink::Handle,
     ) -> HandleResult {
         let msg = match Message::decode(&mut Decoder::new(data)) {
@@ -53,7 +54,6 @@ impl Dhcpv6Server {
         let client_duid = match client_id_opt {
             Some(DhcpOption::ClientId(duid_bytes)) => Duid::new(duid_bytes.clone()),
             _ => {
-                // If there's no Client ID, we must drop it unless it's InformationRequest
                 if msg.msg_type() != MessageType::InformationRequest {
                     debug!("No ClientId option, ignoring");
                     return HandleResult::Ignore;
@@ -62,11 +62,15 @@ impl Dhcpv6Server {
             }
         };
 
-        // Try extracting MAC from DUID or Option 79 (Client Link-Layer Address)
+        // Tenta extrair MAC em ordem de custo crescente:
+        // 1. DUID-LL / DUID-LLT (grátis, já temos os bytes)
+        // 2. Opção 79 (Client Link-Layer Address)
+        // 3. EUI-64 matemático do link-local (grátis)
+        // 4. Cache NDP passivo em memória
+        // 5. Dump síncrono ao kernel (caro)
         let mut mac = client_duid
             .extract_mac()
             .or_else(|| {
-                // Opção 79 (Client Link-Layer Address)
                 msg.opts().iter().find_map(|opt| {
                     if let DhcpOption::Unknown(u) = opt
                         && u.code() == 79.into()
@@ -78,41 +82,42 @@ impl Dhcpv6Server {
                 })
             })
             .or_else(|| {
-                // EUI-64 matemático link-local
-                crate::netlink::mac_from_eui64_link_local(&peer).map(MacAddr)
+                // mac_from_eui64_link_local já retorna Option<MacAddr> — sem .map(MacAddr)
+                crate::netlink::mac_from_eui64_link_local(&peer)
             });
 
-        // Fallback 1: Cache passivo ultra-rápido na memória
+        // Fallback 1: cache NDP passivo em memória
         if mac.is_none()
-            && let Some(cached_mac) = table.read().await.get_mac_from_ndp_cache(&peer)
+            && let Some(cached) = table.read().await.get_mac_from_ndp_cache(&peer)
         {
-            debug!("MAC recuperado instantaneamente do cache NDP para {peer}");
-            mac = Some(cached_mac);
+            debug!("MAC recuperado do cache NDP para {peer}");
+            mac = Some(cached);
         }
 
-        // Fallback 2: O dump do Netlink original (síncrono com kernel)
+        // Fallback 2: dump síncrono ao kernel
         if mac.is_none() {
-            debug!("Cache miss. Fazendo lookup síncrono no kernel para {peer}...");
+            debug!("Cache miss. Lookup síncrono no kernel para {peer}...");
             if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
-                mac = Some(MacAddr(ndp_mac));
-                // Opcional: já preenche o cache caso aconteça de novo
-                table.write().await.update_ndp_cache(peer, MacAddr(ndp_mac));
+                // Registra no Manager para não ter de perguntar de novo
+                table
+                    .update(DeviceUpdate::NdpSeen {
+                        mac: ndp_mac,
+                        ip: peer,
+                    })
+                    .await;
+                mac = Some(ndp_mac);
             }
         }
 
         let Some(mac) = mac else {
             warn!(
-                "SOLICIT from {peer}: sem MAC (DUID: {}). Dando um cutucão no Kernel...",
+                "SOLICIT from {peer}: sem MAC (DUID: {}). Cutucando o kernel...",
                 client_duid.duid_type()
             );
 
-            // O HACK SALVADOR (Agora com Scope/Interface):
-            // Usamos a crate 'socket2' para atrelar o socket diretamente à interface (ex: end0).
-            // Isso garante que o pacote nulo saia fisicamente pela placa de rede,
-            // obrigando o Linux a resolver o MAC instantaneamente.
+            // Força o kernel a resolver o MAC enviando um pacote vazio pela interface correta
             let peer_ip = peer;
-            let iface = self.cfg.iface.clone(); // Pega o nome da interface ("end0")
-
+            let iface = self.cfg.iface.clone();
             tokio::spawn(async move {
                 if let Ok(sock) = socket2::Socket::new(
                     socket2::Domain::IPV6,
@@ -158,7 +163,6 @@ impl Dhcpv6Server {
     ) -> HandleResult {
         let mac = identity.mac;
 
-        // NetworkManager adora Rapid Commit. Se ele pedir, pulamos o ADVERTISE e damos REPLY direto.
         let is_rapid_commit = msg.opts().get(OptionCode::RapidCommit).is_some();
         let reply_type = if is_rapid_commit {
             MessageType::Reply
@@ -169,17 +173,13 @@ impl Dhcpv6Server {
         let mut reply = self.base_reply(msg, reply_type, &client_duid);
         let mut learned_duid = None;
 
-        // Preference 255: Diz ao cliente para não esperar por outros servidores na rede.
         reply.opts_mut().insert(DhcpOption::Preference(255));
 
-        // Se o cliente pediu Rapid Commit, a RFC exige que o servidor devolva a opção para confirmar
         if is_rapid_commit {
             reply.opts_mut().insert(DhcpOption::RapidCommit);
         }
 
-        // Ensure we offer IA_NA if requested
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
-            // Allocate an IP
             if let Some(ip) = self.pool.allocate(mac, None) {
                 let action = if is_rapid_commit {
                     "REPLY (Rapid Commit)"
@@ -228,7 +228,6 @@ impl Dhcpv6Server {
         peer: Ipv6Addr,
     ) -> HandleResult {
         let mac = identity.mac;
-        // Must contain Server ID and match ours
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
         }
@@ -236,7 +235,6 @@ impl Dhcpv6Server {
         let mut reply = self.base_reply(msg, MessageType::Reply, &client_duid);
 
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
-            // Look for requested IP inside IAAddr in the IA_NA
             let requested_ip = iana.opts.get(OptionCode::IAAddr).and_then(|opt| {
                 if let DhcpOption::IAAddr(ia_addr) = opt {
                     Some(ia_addr.addr)
@@ -261,7 +259,6 @@ impl Dhcpv6Server {
                     opts: ia_opts,
                 }));
             } else {
-                // Return NoAddrsAvail
                 let mut ia_opts = DhcpOptions::new();
                 ia_opts.insert(DhcpOption::StatusCode(StatusCode {
                     status: Status::NoAddrsAvail,
@@ -300,7 +297,6 @@ impl Dhcpv6Server {
         identity: DeviceIdentity,
         peer: Ipv6Addr,
     ) -> HandleResult {
-        // Rebind is like Renew, but Server ID is omitted
         self.handle_request(msg, client_duid, identity, peer)
     }
 
@@ -338,7 +334,6 @@ impl Dhcpv6Server {
         client_duid: Duid,
         peer: Ipv6Addr,
     ) -> HandleResult {
-        // Send back configuration only, no IA_NA
         let mut reply = self.base_reply(msg, MessageType::Reply, &client_duid);
         self.add_dns_options(&mut reply);
         HandleResult::Reply(encode_msg(&reply), peer, None, None)
@@ -348,7 +343,6 @@ impl Dhcpv6Server {
         let mut reply = Message::new(msg_type);
         reply.set_xid(msg.xid());
 
-        // Echo ClientId if we have one (which we should, except on some InformationRequests)
         if !client_duid.bytes.is_empty() {
             reply
                 .opts_mut()
@@ -387,9 +381,7 @@ impl Dhcpv6Server {
     }
 
     fn add_dns_options(&self, _reply: &mut Message) {
-        // Typically handled by RDNSS in RA, but some clients want it via DHCPv6
-        // If config provided DNS, we would add DomainNameServers(Vec<Ipv6Addr>) here.
-        // For now, keeping it minimal.
+        // Tipicamente via RDNSS no RA. Se config fornecer DNS, adicionar aqui.
     }
 
     pub fn last_assignment_for(&self, mac: &MacAddr) -> Option<Ipv6Addr> {
@@ -399,8 +391,6 @@ impl Dhcpv6Server {
     fn get_vendor_class(&self, msg: &Message) -> Option<String> {
         match msg.opts().get(OptionCode::VendorClass) {
             Some(DhcpOption::VendorClass(v)) => {
-                // DHCPv6 Vendor Class has Enterprise Number and then data
-                // For simplicity, let's just use the data parts as strings
                 let strings: Vec<String> = v
                     .data
                     .iter()
@@ -430,10 +420,6 @@ mod tests {
     use super::*;
     use dhcproto::v6::{DhcpOptions, IANA, OptionCode};
     use std::net::Ipv6Addr;
-
-    // -----------------------------------------------------------------------
-    // Factories & Helpers para os Testes
-    // -----------------------------------------------------------------------
 
     fn dummy_server() -> Dhcpv6Server {
         let cfg = Dhcpv6Config {
@@ -483,20 +469,12 @@ mod tests {
         Message::decode(&mut Decoder::new(bytes)).expect("Should decode valid DHCPv6 reply")
     }
 
-    // -----------------------------------------------------------------------
-    // Suíte de Testes DORA / DHCPv6
-    // -----------------------------------------------------------------------
-
     #[test]
     fn solicit_without_mac_is_ignored() {
         let mut srv = dummy_server();
         let msg = build_solicit(false);
-
-        // O handle_packet agora cuida da resolução de identidade.
-        // Nos testes unitários dos handlers internos, passamos uma identidade manual.
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_solicit(&msg, dummy_client_duid(), identity, peer_ip());
-        // solicit_without_mac_is_ignored agora é testado via handle_packet ou verificando que o MAC é obrigatório na identidade
         assert!(matches!(res, HandleResult::Reply(..)));
     }
 
@@ -504,7 +482,6 @@ mod tests {
     fn solicit_standard_yields_advertise() {
         let mut srv = dummy_server();
         let msg = build_solicit(false);
-
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_solicit(&msg, dummy_client_duid(), identity, peer_ip());
 
@@ -513,11 +490,7 @@ mod tests {
                 let reply = decode_reply(&bytes);
                 assert_eq!(reply.msg_type(), MessageType::Advertise);
                 assert_eq!(target, peer_ip());
-
-                // Verifica se a option Preference foi setada com autoridade máxima (255)
                 assert!(reply.opts().get(OptionCode::Preference).is_some());
-
-                // Verifica se tem a oferta de IP (IA_NA -> IAAddr)
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     assert!(iana.opts.get(OptionCode::IAAddr).is_some());
                 } else {
@@ -531,18 +504,14 @@ mod tests {
     #[test]
     fn solicit_with_rapid_commit_yields_reply() {
         let mut srv = dummy_server();
-        let msg = build_solicit(true); // Habilita Rapid Commit
-
+        let msg = build_solicit(true);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_solicit(&msg, dummy_client_duid(), identity, peer_ip());
 
         match res {
             HandleResult::Reply(bytes, _, _, _) => {
                 let reply = decode_reply(&bytes);
-                // Rapid commit pula a fase ADVERTISE e vai direto para REPLY
                 assert_eq!(reply.msg_type(), MessageType::Reply);
-
-                // O servidor TEM que devolver a flag de Rapid Commit na resposta segundo a RFC
                 assert!(reply.opts().get(OptionCode::RapidCommit).is_some());
             }
             _ => panic!("Expected Reply"),
@@ -552,8 +521,7 @@ mod tests {
     #[test]
     fn request_missing_server_id_is_ignored() {
         let mut srv = dummy_server();
-        let msg = Message::new(MessageType::Request); // Sem Server ID
-
+        let msg = Message::new(MessageType::Request);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_request(&msg, dummy_client_duid(), identity, peer_ip());
         assert!(matches!(res, HandleResult::Ignore));
@@ -563,8 +531,6 @@ mod tests {
     fn request_valid_yields_reply_with_ip() {
         let mut srv = dummy_server();
         let mut msg = Message::new(MessageType::Request);
-
-        // Insere o Server ID legítimo (mock)
         msg.opts_mut()
             .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
         msg.opts_mut().insert(DhcpOption::IANA(IANA {
@@ -581,11 +547,8 @@ mod tests {
             HandleResult::Reply(bytes, _, _, _) => {
                 let reply = decode_reply(&bytes);
                 assert_eq!(reply.msg_type(), MessageType::Reply);
-
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
-                    // Tem que retornar um endereço real do range
-                    let has_ip = iana.opts.get(OptionCode::IAAddr).is_some();
-                    assert!(has_ip, "Server failed to allocate IP in Reply");
+                    assert!(iana.opts.get(OptionCode::IAAddr).is_some());
                 } else {
                     panic!("Missing IA_NA in Reply");
                 }
@@ -600,11 +563,9 @@ mod tests {
         let mac = dummy_mac();
         let requested_ip: Ipv6Addr = "fd97:f00d:cafe:3731::100".parse().unwrap();
 
-        // 1. Forçamos a alocação de um IP para este MAC diretamente na pool
         srv.pool.allocate(mac, Some(requested_ip));
         assert_eq!(srv.last_assignment_for(&mac), Some(requested_ip));
 
-        // 2. Montamos a mensagem de Release
         let mut msg = Message::new(MessageType::Release);
         msg.opts_mut()
             .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
@@ -623,31 +584,23 @@ mod tests {
             opts: ia_opts,
         }));
 
-        // 3. Enviamos o Release para o servidor
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_release(&msg, dummy_client_duid(), identity, peer_ip());
 
-        // 4. Verificamos se o IP foi liberado da pool com sucesso
         assert!(matches!(res, HandleResult::Reply(..)));
-        assert_eq!(
-            srv.last_assignment_for(&mac),
-            None,
-            "IP should have been released from the pool"
-        );
+        assert_eq!(srv.last_assignment_for(&mac), None);
     }
 
     #[test]
     fn information_request_yields_reply_without_ia_na() {
         let srv = dummy_server();
         let msg = Message::new(MessageType::InformationRequest);
-
         let res = srv.handle_information_request(&msg, dummy_client_duid(), peer_ip());
 
         match res {
             HandleResult::Reply(bytes, _, _, _) => {
                 let reply = decode_reply(&bytes);
                 assert_eq!(reply.msg_type(), MessageType::Reply);
-                // Information request pede parâmetros de rede (DNS), NUNCA endereços IPs
                 assert!(reply.opts().get(OptionCode::IANA).is_none());
             }
             _ => panic!("Expected Reply"),

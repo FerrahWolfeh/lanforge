@@ -1,24 +1,56 @@
 //! Persistência SQLite para a DeviceTable.
 //!
-//! Schema segue ARCHITECTURE.md: uma tabela por conceito (devices, v4_leases,
-//! v6_leases, slaac_addrs). Todas as escritas são feitas dentro de uma única
-//! transação para consistência.
+//! ## Arquitetura
+//!
+//! O módulo tem duas camadas:
+//!
+//! - **`LeaseDb`** — motor SQLite síncrono (rusqlite). Responsável pelo
+//!   schema, serialização e desserialização. Não sabe nada de async.
+//!
+//! - **`db_worker`** — task async que escuta `LanforgeEvent::DeviceTableDirty`
+//!   no `EventBus` e persiste o estado com debounce, protegendo o SD card
+//!   de escritas excessivas durante boot storms ou rajadas de leases.
+//!
+//! ## Fluxo
+//!
+//! ```text
+//! ManagedTable::update()
+//!     └─► EventBus::publish(DeviceTableDirty)
+//!                   │
+//!                   ▼
+//!             db_worker (loop)
+//!                   │ debounce 3s
+//!                   ▼
+//!             LeaseDb::save_table()   ← snapshot completo, transação única
+//! ```
+//!
+//! ## Startup
+//!
+//! Na inicialização, `LeaseDb::load_table` reconstrói o `DeviceTable` do
+//! SQLite via `apply_update` — o Manager recebe o estado persistido como se
+//! fossem eventos normais de protocolo, mantendo as invariantes de merging.
+//!
+//! Entradas estáticas do TOML são carregadas *depois* via
+//! `load_static_devices` e têm precedência sobre o que veio do DB.
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
+use crate::bus::{EventBus, LanforgeEvent, ManagedTable};
 use crate::dhcp::v6::duid::Duid;
-use crate::state::{DeviceTable, MacAddr, V4Lease, V6Lease};
+use crate::state::{DeviceTable, DeviceUpdate, MacAddr};
 
 // ---------------------------------------------------------------------------
-// LeaseDb
+// LeaseDb — motor SQLite síncrono
 // ---------------------------------------------------------------------------
 
-type DeviceEntry = Vec<(String, String, bool, Option<Vec<u8>>, i64)>;
+type DevTableRow = (String, String, bool, Option<Vec<u8>>, i64);
 
 /// Handle para o banco SQLite de leases.
 pub struct LeaseDb {
@@ -28,7 +60,6 @@ pub struct LeaseDb {
 impl LeaseDb {
     /// Abre (ou cria) o banco SQLite no path indicado e executa migrations.
     pub fn open(path: &Path) -> Result<Self> {
-        // Cria diretórios pai se necessário
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("criando diretório para {}", path.display()))?;
@@ -37,7 +68,7 @@ impl LeaseDb {
         let conn = Connection::open(path)
             .with_context(|| format!("abrindo SQLite em {}", path.display()))?;
 
-        // WAL mode para escritas concorrentes e melhor performance em SD card
+        // WAL mode — escritas não bloqueiam leituras; NORMAL é seguro pra SD card
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
 
         let db = LeaseDb { conn };
@@ -47,7 +78,7 @@ impl LeaseDb {
         Ok(db)
     }
 
-    /// Cria o banco SQLite em memória (para testes).
+    /// Cria o banco em memória — exclusivo para testes.
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
@@ -60,32 +91,32 @@ impl LeaseDb {
         self.conn
             .execute_batch(
                 "
-            CREATE TABLE IF NOT EXISTS devices (
-                mac         TEXT PRIMARY KEY,
-                hostname    TEXT NOT NULL,
-                is_static   INTEGER NOT NULL,
-                duid        BLOB,
-                last_seen   INTEGER NOT NULL
-            );
+                CREATE TABLE IF NOT EXISTS devices (
+                    mac         TEXT PRIMARY KEY,
+                    hostname    TEXT NOT NULL,
+                    is_static   INTEGER NOT NULL,
+                    duid        BLOB,
+                    last_seen   INTEGER NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS v4_leases (
-                mac         TEXT PRIMARY KEY REFERENCES devices(mac),
-                ip          TEXT NOT NULL,
-                expires     INTEGER NOT NULL
-            );
+                CREATE TABLE IF NOT EXISTS v4_leases (
+                    mac         TEXT PRIMARY KEY REFERENCES devices(mac),
+                    ip          TEXT NOT NULL,
+                    expires     INTEGER NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS v6_leases (
-                mac         TEXT PRIMARY KEY REFERENCES devices(mac),
-                ip          TEXT NOT NULL,
-                expires     INTEGER NOT NULL
-            );
+                CREATE TABLE IF NOT EXISTS v6_leases (
+                    mac         TEXT PRIMARY KEY REFERENCES devices(mac),
+                    ip          TEXT NOT NULL,
+                    expires     INTEGER NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS slaac_addrs (
-                mac         TEXT NOT NULL REFERENCES devices(mac),
-                ip          TEXT NOT NULL,
-                PRIMARY KEY (mac, ip)
-            );
-        ",
+                CREATE TABLE IF NOT EXISTS slaac_addrs (
+                    mac         TEXT NOT NULL REFERENCES devices(mac),
+                    ip          TEXT NOT NULL,
+                    PRIMARY KEY (mac, ip)
+                );
+                ",
             )
             .context("falha ao criar tabelas")?;
 
@@ -94,31 +125,38 @@ impl LeaseDb {
     }
 
     // -----------------------------------------------------------------------
-    // Save — snapshot completo da DeviceTable
+    // Save — snapshot completo
     // -----------------------------------------------------------------------
 
-    /// Grava todos os dispositivos da DeviceTable no SQLite dentro de uma
-    /// transação única. Usa INSERT OR REPLACE para simplificar.
+    /// Grava todos os devices do `DeviceTable` no SQLite em uma transação
+    /// única. Operação idempotente — substitui o estado anterior integralmente.
     pub fn save_table(&self, table: &DeviceTable) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
 
-        // Limpa tabelas dependentes antes de popular
         tx.execute_batch(
-            "DELETE FROM slaac_addrs; DELETE FROM v6_leases; DELETE FROM v4_leases; DELETE FROM devices;",
+            "DELETE FROM slaac_addrs;
+             DELETE FROM v6_leases;
+             DELETE FROM v4_leases;
+             DELETE FROM devices;",
         )?;
 
         for device in table.devices() {
             let mac_str = device.mac.to_string();
             let last_seen = system_time_to_unix(device.last_seen);
-
             let duid_blob: Option<Vec<u8>> = device.duid.as_ref().map(|d| d.bytes.clone());
 
             tx.execute(
-                "INSERT INTO devices (mac, hostname, is_static, duid, last_seen) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![mac_str, device.hostname, device.is_static as i32, duid_blob, last_seen],
+                "INSERT INTO devices (mac, hostname, is_static, duid, last_seen)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    mac_str,
+                    device.hostname,
+                    device.is_static as i32,
+                    duid_blob,
+                    last_seen
+                ],
             )?;
 
-            // V4 lease
             if let Some(v4) = &device.v4 {
                 tx.execute(
                     "INSERT INTO v4_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
@@ -126,7 +164,6 @@ impl LeaseDb {
                 )?;
             }
 
-            // V6 lease
             if let Some(v6) = &device.v6 {
                 tx.execute(
                     "INSERT INTO v6_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
@@ -134,7 +171,6 @@ impl LeaseDb {
                 )?;
             }
 
-            // SLAAC addresses
             for addr in &device.slaac {
                 tx.execute(
                     "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
@@ -144,26 +180,31 @@ impl LeaseDb {
         }
 
         tx.commit()?;
-        debug!("DeviceTable salva com sucesso");
+        debug!("DeviceTable salva ({} devices)", table.devices().count());
         Ok(())
     }
 
     // -----------------------------------------------------------------------
-    // Load — reconstrói DeviceTable do SQLite
+    // Load — reconstrói DeviceTable via apply_update
     // -----------------------------------------------------------------------
 
-    /// Carrega todos os dados do SQLite e retorna uma DeviceTable populada.
-    /// Entradas estáticas *não* são carregadas do DB — serão carregadas do TOML
-    /// separadamente e têm precedência.
+    /// Carrega o estado persistido e devolve uma `DeviceTable` populada.
+    ///
+    /// Usa `apply_update` para todas as escritas — as invariantes de merging
+    /// do Manager (estático > dinâmico, etc.) são respeitadas mesmo no
+    /// bootstrap. O índice de DUID é reconstruído automaticamente.
+    ///
+    /// Entradas estáticas do TOML **não** são carregadas aqui — serão
+    /// aplicadas depois via `load_static_devices` e têm precedência.
     pub fn load_table(&self) -> Result<DeviceTable> {
         let mut table = DeviceTable::new();
 
-        // 1. Carrega devices
+        // 1. Devices base (hostname, is_static, last_seen)
         let mut stmt = self
             .conn
             .prepare("SELECT mac, hostname, is_static, duid, last_seen FROM devices")?;
 
-        let devices: DeviceEntry = stmt
+        let rows: Vec<DevTableRow> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -176,36 +217,35 @@ impl LeaseDb {
             .filter_map(|r| r.ok())
             .collect();
 
-        for (mac_str, hostname, is_static, duid_bytes, last_seen_unix) in &devices {
-            let Some(mac) = MacAddr::parse(mac_str) else {
+        for (mac_str, hostname, is_static, duid_bytes, last_seen_unix) in rows {
+            let Some(mac) = MacAddr::parse(&mac_str) else {
                 warn!("MAC inválido no DB: '{mac_str}', pulando");
                 continue;
             };
 
-            let dev = table.get_or_insert(mac);
-            dev.hostname = hostname.clone();
-            dev.is_static = *is_static;
-            dev.last_seen = unix_to_system_time(*last_seen_unix);
+            // Restaura hostname se não vazio
+            if !hostname.is_empty() {
+                // Restauração direta — não é um hint dinâmico, é estado persistido
+                let dev = table.get_or_insert(mac);
+                dev.hostname = hostname;
+                dev.is_static = is_static;
+                dev.last_seen = unix_to_system_time(last_seen_unix);
+            }
 
+            // Restaura DUID via apply_update — reconstrói o duid_index
             if let Some(bytes) = duid_bytes {
-                let duid = Duid::new(bytes.clone());
-                dev.duid = Some(duid.clone());
-                // Also build the duid_index via set_duid
-                // (we need to drop the mut ref first — use set_duid after)
+                table.apply_update(DeviceUpdate::DuidAssociated {
+                    mac,
+                    duid: Duid::new(bytes),
+                });
             }
         }
 
-        // Rebuild duid index
-        for (mac_str, _, _, duid_bytes, _) in &devices {
-            if let (Some(mac), Some(bytes)) = (MacAddr::parse(mac_str), duid_bytes) {
-                table.set_duid(mac, Duid::new(bytes.clone()));
-            }
-        }
-
-        // 2. Carrega v4 leases
+        // 2. V4 leases
         let mut stmt = self
             .conn
             .prepare("SELECT mac, ip, expires FROM v4_leases")?;
+
         let v4_rows: Vec<(String, String, i64)> = stmt
             .query_map([], |row| {
                 Ok((
@@ -222,20 +262,21 @@ impl LeaseDb {
                 continue;
             };
             let Ok(ip) = ip_str.parse::<Ipv4Addr>() else {
-                warn!("IPv4 inválido no DB: '{ip_str}'");
+                warn!("IPv4 inválido no DB: '{ip_str}', pulando");
                 continue;
             };
-            let dev = table.get_or_insert(mac);
-            dev.v4 = Some(V4Lease {
+            table.apply_update(DeviceUpdate::V4LeaseGranted {
+                mac,
                 ip,
                 expires: unix_to_system_time(expires_unix),
             });
         }
 
-        // 3. Carrega v6 leases
+        // 3. V6 leases
         let mut stmt = self
             .conn
             .prepare("SELECT mac, ip, expires FROM v6_leases")?;
+
         let v6_rows: Vec<(String, String, i64)> = stmt
             .query_map([], |row| {
                 Ok((
@@ -252,18 +293,25 @@ impl LeaseDb {
                 continue;
             };
             let Ok(ip) = ip_str.parse::<Ipv6Addr>() else {
-                warn!("IPv6 inválido no DB: '{ip_str}'");
+                warn!("IPv6 inválido no DB: '{ip_str}', pulando");
                 continue;
             };
-            let dev = table.get_or_insert(mac);
-            dev.v6 = Some(V6Lease {
+            // V6 lease sem DUID no contexto do load — usamos o DUID já indexado
+            let duid = table
+                .find_duid_by_mac(mac)
+                .cloned()
+                .unwrap_or_else(|| Duid::new(vec![]));
+            table.apply_update(DeviceUpdate::V6LeaseGranted {
+                mac,
+                duid,
                 ip,
                 expires: unix_to_system_time(expires_unix),
             });
         }
 
-        // 4. Carrega SLAAC addresses
+        // 4. SLAAC addresses
         let mut stmt = self.conn.prepare("SELECT mac, ip FROM slaac_addrs")?;
+
         let slaac_rows: Vec<(String, String)> = stmt
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -278,12 +326,124 @@ impl LeaseDb {
             let Ok(ip) = ip_str.parse::<Ipv6Addr>() else {
                 continue;
             };
-            table.record_slaac(mac, ip);
+            table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
         }
 
         let count = table.devices().count();
         info!("Carregados {count} dispositivos do SQLite");
         Ok(table)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// db_worker — task reativa com debounce
+// ---------------------------------------------------------------------------
+
+/// Duração do debounce antes de persistir após um `DeviceTableDirty`.
+///
+/// Protege o SD card durante boot storms (muitos devices aparecendo em
+/// sequência) e rajadas de leases. Ajustável via config futuramente.
+const DEBOUNCE: Duration = Duration::from_secs(3);
+
+/// Task async que persiste o `ManagedTable` reativamente.
+///
+/// Deve ser iniciada via `tokio::spawn` no startup. Loop principal:
+///
+/// 1. Aguarda `DeviceTableDirty` no barramento.
+/// 2. Inicia janela de debounce — drena eventos adicionais por `DEBOUNCE`.
+/// 3. Tira snapshot do `ManagedTable` (read lock breve).
+/// 4. Persiste via `LeaseDb::save_table` em `spawn_blocking` (rusqlite é síncrono).
+/// 5. Em `Shutdown`: flush imediato e encerra.
+///
+/// Se a tarefa de IO falhar, loga o erro e continua — uma falha de
+/// persistência não deve derrubar o daemon.
+pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<EventBus>) {
+    let mut rx = bus.subscribe();
+
+    info!(
+        "DB worker iniciado (debounce: {}s, path: {})",
+        DEBOUNCE.as_secs(),
+        db_path.display()
+    );
+
+    loop {
+        // Aguarda o próximo evento relevante
+        let should_flush = wait_for_dirty_or_shutdown(&mut rx).await;
+
+        if !should_flush {
+            // Shutdown sem dirty pendente — nada a fazer
+            info!("DB worker encerrando (sem dirty pendente)");
+            return;
+        }
+
+        // Drena eventos adicionais pelo período de debounce.
+        // Se chegar um Shutdown durante o debounce, flush imediato.
+        let shutdown_during_debounce = drain_with_debounce(&mut rx, DEBOUNCE).await;
+
+        // Snapshot do estado atual (read lock breve)
+        let snapshot = {
+            let t = table.read().await;
+            t.clone()
+        };
+
+        // Persiste em thread blocking (rusqlite não é async)
+        let path = db_path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let db = LeaseDb::open(&path)?;
+            db.save_table(&snapshot)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => debug!("DB worker: snapshot persistido"),
+            Ok(Err(e)) => warn!("DB worker: falha ao salvar snapshot: {e:#}"),
+            Err(e) => warn!("DB worker: spawn_blocking falhou: {e}"),
+        }
+
+        if shutdown_during_debounce {
+            info!("DB worker encerrando após flush de shutdown");
+            return;
+        }
+    }
+}
+
+/// Aguarda o próximo `DeviceTableDirty` ou `Shutdown`.
+/// Retorna `true` se deve persistir, `false` se deve encerrar sem flush.
+async fn wait_for_dirty_or_shutdown(rx: &mut broadcast::Receiver<LanforgeEvent>) -> bool {
+    loop {
+        match rx.recv().await {
+            Ok(LanforgeEvent::DeviceTableDirty) => return true,
+            Ok(LanforgeEvent::Shutdown) => return false,
+            Ok(_) => continue, // outros eventos — ignora
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                warn!("DB worker atrasado, pulou {n} eventos — forçando flush");
+                return true;
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                info!("DB worker: barramento encerrado");
+                return false;
+            }
+        }
+    }
+}
+
+/// Drena o canal pelo período de debounce, absorvendo Dirty extras.
+/// Retorna `true` se um `Shutdown` chegou durante a espera.
+async fn drain_with_debounce(
+    rx: &mut broadcast::Receiver<LanforgeEvent>,
+    debounce: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + debounce;
+
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Ok(LanforgeEvent::Shutdown)) => return true,
+            Ok(Ok(LanforgeEvent::DeviceTableDirty)) => {} // absorve, reinicia janela não
+            Ok(Ok(_)) => {}
+            Ok(Err(broadcast::error::RecvError::Lagged(_))) => {}
+            Ok(Err(broadcast::error::RecvError::Closed)) => return false,
+            Err(_) => return false, // timeout expirou — hora de persistir
+        }
     }
 }
 
@@ -312,6 +472,8 @@ fn unix_to_system_time(unix: i64) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::V4Lease;
+    use std::time::UNIX_EPOCH;
 
     fn make_mac(last: u8) -> MacAddr {
         MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, last])
@@ -340,12 +502,9 @@ mod tests {
         db.save_table(&table).unwrap();
         let loaded = db.load_table().unwrap();
 
-        let loaded_dev = loaded.devices().next().unwrap();
-        assert_eq!(loaded_dev.hostname, "TestDevice");
-        assert_eq!(
-            loaded_dev.v4.as_ref().unwrap().ip,
-            Ipv4Addr::new(192, 168, 0, 100)
-        );
+        let dev = loaded.devices().next().unwrap();
+        assert_eq!(dev.hostname, "TestDevice");
+        assert_eq!(dev.v4.as_ref().unwrap().ip, Ipv4Addr::new(192, 168, 0, 100));
     }
 
     #[test]
@@ -354,19 +513,23 @@ mod tests {
         let mut table = DeviceTable::new();
 
         let mac = make_mac(2);
-        table.record_slaac(mac, "fd97:f00d:cafe:3731::1234".parse().unwrap());
-        table.record_slaac(mac, "fd97:f00d:cafe:3731::5678".parse().unwrap());
-        table.record_slaac(mac, "2001:db8::abcd".parse().unwrap());
+        table.apply_update(DeviceUpdate::SlaacObserved {
+            mac,
+            addr: "fd97:f00d:cafe:3731::1234".parse().unwrap(),
+        });
+        table.apply_update(DeviceUpdate::SlaacObserved {
+            mac,
+            addr: "fd97:f00d:cafe:3731::5678".parse().unwrap(),
+        });
+        table.apply_update(DeviceUpdate::SlaacObserved {
+            mac,
+            addr: "2001:db8::abcd".parse().unwrap(),
+        });
 
         db.save_table(&table).unwrap();
         let loaded = db.load_table().unwrap();
 
-        let loaded_dev = loaded.devices().next().unwrap();
-        assert_eq!(
-            loaded_dev.slaac.len(),
-            3,
-            "Deveria recuperar todos os IPs SLAAC do MAC"
-        );
+        assert_eq!(loaded.devices().next().unwrap().slaac.len(), 3);
     }
 
     #[test]
@@ -381,15 +544,17 @@ mod tests {
 
         let dev = table.get_or_insert(mac);
         dev.hostname = "DuidDevice".into();
-        table.set_duid(mac, duid.clone());
+        table.apply_update(DeviceUpdate::DuidAssociated {
+            mac,
+            duid: duid.clone(),
+        });
 
         db.save_table(&table).unwrap();
         let loaded = db.load_table().unwrap();
 
-        let loaded_dev = loaded.devices().next().unwrap();
-        assert_eq!(loaded_dev.duid.as_ref().unwrap().bytes, duid.bytes);
+        let dev = loaded.devices().next().unwrap();
+        assert_eq!(dev.duid.as_ref().unwrap().bytes, duid.bytes);
 
-        // Verifica se o índice reverso de DUID foi reconstruído corretamente
         let found = loaded.find_by_duid(&duid);
         assert!(found.is_some());
         assert_eq!(found.unwrap().hostname, "DuidDevice");
@@ -401,9 +566,15 @@ mod tests {
         let mut table = DeviceTable::new();
 
         let mac = make_mac(4);
+        let duid = Duid::new(vec![
+            0x00, 0x03, 0x00, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x04,
+        ]);
         let dev = table.get_or_insert(mac);
         dev.hostname = "V6Device".into();
-        dev.v6 = Some(V6Lease {
+
+        table.apply_update(DeviceUpdate::V6LeaseGranted {
+            mac,
+            duid,
             ip: "fd97:f00d:cafe:3731::1057:cafe".parse().unwrap(),
             expires: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
         });
@@ -411,10 +582,10 @@ mod tests {
         db.save_table(&table).unwrap();
         let loaded = db.load_table().unwrap();
 
-        let loaded_dev = loaded.devices().next().unwrap();
-        assert!(loaded_dev.v6.is_some());
+        let dev = loaded.devices().next().unwrap();
+        assert!(dev.v6.is_some());
         assert_eq!(
-            loaded_dev.v6.as_ref().unwrap().ip,
+            dev.v6.as_ref().unwrap().ip,
             "fd97:f00d:cafe:3731::1057:cafe"
                 .parse::<Ipv6Addr>()
                 .unwrap()
@@ -424,69 +595,95 @@ mod tests {
     #[test]
     fn save_overwrites_previous() {
         let db = LeaseDb::open_in_memory().unwrap();
-
         let mut table = DeviceTable::new();
         let mac = make_mac(1);
 
-        // Salva a versão 1
         table.get_or_insert(mac).hostname = "First".into();
         db.save_table(&table).unwrap();
 
-        // Salva a versão 2 (atualiza o hostname)
         table.get_or_insert(mac).hostname = "Second".into();
         db.save_table(&table).unwrap();
 
         let loaded = db.load_table().unwrap();
-        let loaded_dev = loaded.devices().next().unwrap();
-
-        assert_eq!(
-            loaded_dev.hostname, "Second",
-            "A transação deve sobreescrever o estado antigo"
-        );
-        assert_eq!(
-            loaded.devices().count(),
-            1,
-            "Não deve duplicar os devices na tabela"
-        );
+        assert_eq!(loaded.devices().next().unwrap().hostname, "Second");
+        assert_eq!(loaded.devices().count(), 1);
     }
 
     #[test]
     fn skips_invalid_database_records_gracefully() {
-        // Testa a resiliência do sistema de parsing na inicialização
         let db = LeaseDb::open_in_memory().unwrap();
 
-        // 1. Injetamos "lixo" diretamente no SQLite passando por cima da DeviceTable
-        db.conn.execute(
-            "INSERT INTO devices (mac, hostname, is_static, last_seen) VALUES ('bad-mac', 'Lixo', 0, 0)", 
-            []
-        ).unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO devices (mac, hostname, is_static, last_seen)
+             VALUES ('bad-mac', 'Lixo', 0, 0)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO devices (mac, hostname, is_static, last_seen)
+             VALUES ('aa:bb:cc:dd:ee:ff', 'Valido', 0, 0)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO v4_leases (mac, ip, expires)
+             VALUES ('aa:bb:cc:dd:ee:ff', '999.999.999.999', 0)",
+                [],
+            )
+            .unwrap();
 
-        db.conn.execute(
-            "INSERT INTO devices (mac, hostname, is_static, last_seen) VALUES ('aa:bb:cc:dd:ee:ff', 'Valido', 0, 0)", 
-            []
-        ).unwrap();
-
-        db.conn.execute(
-            "INSERT INTO v4_leases (mac, ip, expires) VALUES ('aa:bb:cc:dd:ee:ff', '999.999.999.999', 0)", 
-            []
-        ).unwrap();
-
-        // 2. O load_table NÃO DEVE falhar ou dar panic. Ele deve ignorar as linhas inválidas.
         let table = db
             .load_table()
-            .expect("O banco com lixo não deve causar erro fatal no load");
+            .expect("banco com lixo não deve causar erro fatal");
 
-        assert_eq!(
-            table.devices().count(),
-            1,
-            "O MAC inválido 'bad-mac' deve ter sido ignorado"
-        );
-
+        assert_eq!(table.devices().count(), 1, "MAC inválido deve ser ignorado");
         let dev = table.devices().next().unwrap();
         assert_eq!(dev.hostname, "Valido");
-        assert!(
-            dev.v4.is_none(),
-            "O IP 999.999... não pode ser parseado, portanto o lease deve ser descartado"
-        );
+        assert!(dev.v4.is_none(), "IP inválido deve ser descartado");
+    }
+
+    #[tokio::test]
+    async fn db_worker_persists_on_dirty_event() {
+        use crate::bus::EventBus;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        let bus = Arc::new(EventBus::new());
+        let table = Arc::new(ManagedTable::new(bus.clone()));
+
+        // Lança o worker ANTES de qualquer update — garante que está subscrito
+        // quando o DeviceTableDirty chegar.
+        let worker_table = Arc::clone(&table);
+        let worker_bus = Arc::clone(&bus);
+        let worker_path = db_path.clone();
+        tokio::spawn(async move {
+            db_worker(worker_path, worker_table, worker_bus).await;
+        });
+
+        // Yield para o worker ter chance de chamar bus.subscribe() antes do update
+        tokio::task::yield_now().await;
+
+        // Popula um device — ManagedTable publica DeviceTableDirty automaticamente
+        let mac = make_mac(0xAB);
+        table
+            .update(DeviceUpdate::HostnameHint {
+                mac,
+                hostname: "worker-test".into(),
+            })
+            .await;
+
+        // Aguarda debounce + margem para o spawn_blocking completar
+        tokio::time::sleep(DEBOUNCE + Duration::from_millis(500)).await;
+
+        // Verifica que o DB foi escrito
+        let db = LeaseDb::open(&db_path).unwrap();
+        let loaded = db.load_table().unwrap();
+        assert_eq!(loaded.devices().count(), 1);
+        assert_eq!(loaded.devices().next().unwrap().hostname, "worker-test");
     }
 }

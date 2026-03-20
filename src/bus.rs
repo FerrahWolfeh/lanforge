@@ -1,62 +1,122 @@
 //! EventBus — barramento de eventos interno do lanforge.
 //!
 //! Usa `tokio::sync::broadcast` para comunicação entre tasks.
-//! Cada serviço recebe um Receiver no startup e publica no Sender compartilhado.
 //!
-//! **Status: STUB** — será implementado na Fase 1.
+//! ## Modelo de eventos
+//!
+//! O barramento é **device-centric**: os eventos descrevem mudanças na
+//! identidade e estado dos devices, não ações de protocolo. Os serviços
+//! (DHCPv4, DHCPv6, Netlink) não publicam eventos diretamente — eles emitem
+//! `DeviceUpdate` para o `DeviceTable`, e o Manager publica no barramento
+//! caso o estado tenha efetivamente mudado.
+//!
+//! ```text
+//! Protocolos ──► DeviceUpdate ──► DeviceTable (Manager)
+//!                                       │
+//!                                       │ se mudou
+//!                                       ▼
+//!                                   EventBus
+//!                                       │
+//!                         ┌────────────┼────────────┐
+//!                         ▼            ▼             ▼
+//!                        DNS          DB           CLI
+//! ```
+//!
+//! ## Grupos de eventos
+//!
+//! - **Device**: ciclo de vida de identidades na rede.
+//! - **Infra**: mudanças na infraestrutura de rede (prefixo GUA, etc.).
+//! - **Control**: sinais internos de operação do daemon.
 
-#![allow(dead_code)]
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use tokio::sync::broadcast;
 
-/// Todos os eventos que circulam pelo barramento interno.
+use crate::state::MacAddr;
+
+// ---------------------------------------------------------------------------
+// DeviceChange — o que mudou num device
+// ---------------------------------------------------------------------------
+
+/// Detalha qual aspecto de um `Device` foi alterado.
+/// Publicado dentro de `LanforgeEvent::DeviceUpdated`.
+#[derive(Clone, Debug)]
+pub enum DeviceChange {
+    /// Um endereço IPv4 foi atribuído ou renovado.
+    V4Assigned { ip: Ipv4Addr },
+
+    /// O lease IPv4 expirou e foi removido.
+    V4Expired,
+
+    /// Um endereço IPv6 (DHCPv6) foi atribuído ou renovado.
+    V6Assigned { ip: Ipv6Addr },
+
+    /// O lease IPv6 expirou e foi removido.
+    V6Expired,
+
+    /// Um endereço SLAAC foi observado via NDP.
+    SlaacObserved { addr: Ipv6Addr },
+
+    /// O hostname do device foi atualizado.
+    HostnameChanged { hostname: String },
+
+    /// Um DUID foi associado ao device.
+    DuidAssociated,
+}
+
+// ---------------------------------------------------------------------------
+// LanforgeEvent
+// ---------------------------------------------------------------------------
+
+/// Eventos que circulam pelo barramento.
+///
+/// Todos os consumers (DNS, DB, CLI) devem reagir apenas a esses eventos —
+/// nunca a detalhes internos de protocolo.
 #[derive(Clone, Debug)]
 pub enum LanforgeEvent {
-    // -- Gerados pelo tracker netlink --
-    NeighbourUp {
-        mac: [u8; 6],
-        ip: std::net::IpAddr,
-        iface: u32,
-    },
-    NeighbourDown {
-        mac: [u8; 6],
-        ip: std::net::IpAddr,
-    },
-    SlaacSeen {
-        mac: [u8; 6],
-        ip: std::net::Ipv6Addr,
-    },
-    PrefixChanged {
-        gua: Option<std::net::Ipv6Addr>,
-    },
+    // -- Device lifecycle --
+    /// Um device desconhecido foi visto pela primeira vez.
+    /// O Manager já criou a entrada — consumers devem inicializar recursos
+    /// para esta identidade (ex: DB insert, DNS pre-load).
+    DeviceDiscovered { mac: MacAddr },
 
-    // -- Gerados pelos servers DHCP --
-    LeaseGranted {
-        mac: [u8; 6],
-        ip: std::net::IpAddr,
-        hostname: String,
-    },
-    LeaseReleased {
-        mac: [u8; 6],
-        ip: std::net::IpAddr,
-    },
-    LeaseExpired {
-        mac: [u8; 6],
-        ip: std::net::IpAddr,
-    },
-    DuidLearned {
-        mac: [u8; 6],
-        duid: Vec<u8>,
-    },
+    /// Um device conhecido teve seu estado atualizado.
+    DeviceUpdated { mac: MacAddr, change: DeviceChange },
 
-    // -- Controle interno --
-    ReloadConfig,
+    /// Um device dinâmico ficou inativo e foi removido da tabela.
+    /// Consumers devem liberar recursos associados (ex: remover entrada DNS).
+    DeviceExpired { mac: MacAddr },
+
+    // -- Infra --
+    /// O prefixo GUA do uplink mudou (ex: reboot do modem, nova delegação).
+    /// Consumers como o RA e o DNS devem recalcular endereços derivados.
+    PrefixChanged { gua: Option<Ipv6Addr> },
+
+    // -- Control --
+    /// Sinaliza que o `DeviceTable` foi modificado e deve ser persistido.
+    /// Publicado pelo Manager; consumido pelo worker do DB com debounce.
     DeviceTableDirty,
+
+    /// Solicita recarga do arquivo de configuração TOML.
+    ReloadConfig,
+
+    /// O daemon está encerrando — consumers devem finalizar graciosamente.
+    Shutdown,
 }
+
+// ---------------------------------------------------------------------------
+// EventBus
+// ---------------------------------------------------------------------------
 
 const BUS_CAPACITY: usize = 256;
 
 /// Barramento de eventos compartilhado entre todas as tasks.
+///
+/// Distribuído via `Arc<EventBus>` no startup. Cada task chama
+/// `bus.subscribe()` para receber eventos e `bus.publish()` para emitir.
+///
+/// Apenas o `DeviceTable` (Manager) deve publicar eventos de device.
+/// Tasks de protocolo só publicam eventos de infra e controle.
 pub struct EventBus {
     tx: broadcast::Sender<LanforgeEvent>,
 }
@@ -67,12 +127,250 @@ impl EventBus {
         EventBus { tx }
     }
 
+    /// Cria um novo receiver. Chame no startup de cada task consumidora.
     pub fn subscribe(&self) -> broadcast::Receiver<LanforgeEvent> {
         self.tx.subscribe()
     }
 
-    pub fn publish(&self, event: LanforgeEvent) {
-        // Ignora erro se não há receivers (normal durante startup)
-        let _ = self.tx.send(event);
+    /// Publica um evento no barramento.
+    /// Retorna o número de receivers que receberam o evento.
+    /// Silencia o erro se não há receivers (normal durante startup).
+    pub fn publish(&self, event: LanforgeEvent) -> usize {
+        self.tx.send(event).unwrap_or(0)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ManagedTable — wrapper que conecta DeviceTable ao EventBus
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use crate::state::{DeviceTable, DeviceUpdate};
+
+/// Wrapper em torno do `DeviceTable` que automaticamente publica eventos
+/// no `EventBus` após cada `apply_update`.
+///
+/// É este tipo que deve ser distribuído via `Arc<ManagedTable>` para as tasks
+/// de protocolo — não o `DeviceTable` diretamente.
+///
+/// ## Uso
+///
+/// ```ignore
+/// let table = Arc::new(ManagedTable::new(bus.clone()));
+///
+/// // Em qualquer task de protocolo:
+/// table.update(DeviceUpdate::V4LeaseGranted { mac, ip, expires }).await;
+/// ```
+pub struct ManagedTable {
+    inner: RwLock<DeviceTable>,
+    bus: Arc<EventBus>,
+}
+
+impl ManagedTable {
+    pub fn new(bus: Arc<EventBus>) -> Self {
+        ManagedTable {
+            inner: RwLock::new(DeviceTable::new()),
+            bus,
+        }
+    }
+
+    /// Aplica um update ao `DeviceTable` e publica os eventos correspondentes.
+    ///
+    /// Internamente:
+    /// 1. Verifica se o device já existe antes do update.
+    /// 2. Chama `apply_update` — autoridade de merging.
+    /// 3. Se houve mudança:
+    ///    - Publica `DeviceDiscovered` se o device é novo.
+    ///    - Publica `DeviceUpdated` com o `DeviceChange` correspondente.
+    ///    - Publica `DeviceTableDirty` para o worker de DB.
+    pub async fn update(&self, update: DeviceUpdate) {
+        let mut table = self.inner.write().await;
+
+        let mac = mac_of(&update);
+        let is_new = !table.devices.contains_key(&mac);
+
+        let change = device_change_of(&update);
+        let changed = table.apply_update(update);
+
+        if !changed {
+            return;
+        }
+
+        if is_new {
+            self.bus.publish(LanforgeEvent::DeviceDiscovered { mac });
+        }
+
+        if let Some(change) = change {
+            self.bus
+                .publish(LanforgeEvent::DeviceUpdated { mac, change });
+        }
+
+        self.bus.publish(LanforgeEvent::DeviceTableDirty);
+    }
+
+    /// Leitura do estado interno. Usar para DNS, CLI, DB snapshot.
+    pub async fn read(&self) -> tokio::sync::RwLockReadGuard<'_, DeviceTable> {
+        self.inner.read().await
+    }
+
+    /// Acesso de escrita direto — usar apenas para operações de manutenção
+    /// como `expire_stale` e `load_static_devices`.
+    pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, DeviceTable> {
+        self.inner.write().await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers internos
+// ---------------------------------------------------------------------------
+
+/// Extrai o MAC de qualquer variante de `DeviceUpdate`.
+fn mac_of(update: &DeviceUpdate) -> MacAddr {
+    match update {
+        DeviceUpdate::V4LeaseGranted { mac, .. } => *mac,
+        DeviceUpdate::V6LeaseGranted { mac, .. } => *mac,
+        DeviceUpdate::SlaacObserved { mac, .. } => *mac,
+        DeviceUpdate::NdpSeen { mac, .. } => *mac,
+        DeviceUpdate::HostnameHint { mac, .. } => *mac,
+        DeviceUpdate::DuidAssociated { mac, .. } => *mac,
+        DeviceUpdate::SlaacCleared { mac } => *mac,
+    }
+}
+
+/// Converte um `DeviceUpdate` no `DeviceChange` correspondente para o bus.
+/// Retorna `None` para updates que não geram evento de mudança (ex: NdpSeen).
+fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
+    match update {
+        DeviceUpdate::V4LeaseGranted { ip, .. } => Some(DeviceChange::V4Assigned { ip: *ip }),
+        DeviceUpdate::V6LeaseGranted { ip, .. } => Some(DeviceChange::V6Assigned { ip: *ip }),
+        DeviceUpdate::SlaacObserved { addr, .. } => {
+            Some(DeviceChange::SlaacObserved { addr: *addr })
+        }
+        DeviceUpdate::HostnameHint { hostname, .. } => Some(DeviceChange::HostnameChanged {
+            hostname: hostname.clone(),
+        }),
+        DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),
+        // NdpSeen e SlaacCleared não geram DeviceChange no barramento
+        DeviceUpdate::NdpSeen { .. } => None,
+        DeviceUpdate::SlaacCleared { .. } => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+    use std::time::SystemTime;
+
+    fn make_bus() -> Arc<EventBus> {
+        Arc::new(EventBus::new())
+    }
+
+    #[tokio::test]
+    async fn new_device_publishes_discovered_and_updated() {
+        let bus = make_bus();
+        let mut rx = bus.subscribe();
+        let table = ManagedTable::new(bus.clone());
+
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+        let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
+        let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+
+        table
+            .update(DeviceUpdate::V4LeaseGranted { mac, ip, expires })
+            .await;
+
+        // Deve receber DeviceDiscovered, DeviceUpdated, DeviceTableDirty
+        let mut events = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LanforgeEvent::DeviceDiscovered { .. })),
+            "Deve publicar DeviceDiscovered para device novo"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LanforgeEvent::DeviceUpdated { .. })),
+            "Deve publicar DeviceUpdated"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LanforgeEvent::DeviceTableDirty)),
+            "Deve publicar DeviceTableDirty"
+        );
+    }
+
+    #[tokio::test]
+    async fn known_device_does_not_publish_discovered() {
+        let bus = make_bus();
+        let table = ManagedTable::new(bus.clone());
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+        let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+
+        // Primeiro update — descobre o device
+        table
+            .update(DeviceUpdate::V4LeaseGranted {
+                mac,
+                ip: "192.168.0.10".parse().unwrap(),
+                expires,
+            })
+            .await;
+
+        let mut rx = bus.subscribe();
+
+        // Segundo update com IP diferente — não deve ser Discovered
+        table
+            .update(DeviceUpdate::V4LeaseGranted {
+                mac,
+                ip: "192.168.0.11".parse().unwrap(),
+                expires,
+            })
+            .await;
+
+        let mut events = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LanforgeEvent::DeviceDiscovered { .. })),
+            "Device já conhecido não deve gerar DeviceDiscovered"
+        );
+    }
+
+    #[tokio::test]
+    async fn ndp_seen_publishes_nothing() {
+        let bus = make_bus();
+        let table = ManagedTable::new(bus.clone());
+        let mut rx = bus.subscribe();
+
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+        let ip: std::net::Ipv6Addr = "fe80::1".parse().unwrap();
+
+        table.update(DeviceUpdate::NdpSeen { mac, ip }).await;
+
+        // NdpSeen não gera eventos no barramento (só bump de last_seen)
+        let count = {
+            let mut n = 0;
+            while rx.try_recv().is_ok() {
+                n += 1;
+            }
+            n
+        };
+        assert_eq!(count, 0, "NdpSeen não deve publicar eventos");
     }
 }

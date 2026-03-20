@@ -10,17 +10,13 @@ mod state;
 mod supervisor;
 
 use anyhow::Result;
-use bus::EventBus;
+use bus::{EventBus, LanforgeEvent, ManagedTable};
 use config::Config;
 use futures::StreamExt;
 use netlink_sys::AsyncSocket;
 use rtnetlink::new_connection;
-use state::DeviceTable;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::RwLock;
-use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Duration, Instant, interval, sleep_until};
 use tracing::{debug, error, info, warn};
 
@@ -50,83 +46,54 @@ async fn main() -> Result<()> {
     );
 
     // -----------------------------------------------------------------------
-    // DeviceTable — shared state for all services
-    // -----------------------------------------------------------------------
-    let leases_db_path = std::path::PathBuf::from(&cfg.leases_db);
-    let db = match db::LeaseDb::open(&leases_db_path) {
-        Ok(d) => {
-            info!("📦 Database: {} initialized", cfg.leases_db);
-            Arc::new(Mutex::new(d))
-        }
-        Err(e) => {
-            error!("❌ Fatal error opening leases DB: {e:?}");
-            return Err(e);
-        }
-    };
-
-    let mut initial_table = db.lock().unwrap().load_table().unwrap_or_else(|e| {
-        warn!("Failed to load previous leases from DB ({e:?}), starting fresh");
-        DeviceTable::new()
-    });
-
-    // Load static devices from TOML config
-    if !cfg.devices.is_empty() {
-        let count = cfg.devices.len();
-        initial_table.load_static_devices(&cfg.devices);
-        info!("👥 Clients: {count} static reservations loaded");
-    }
-
-    let table = Arc::new(RwLock::new(initial_table));
-
-    // -----------------------------------------------------------------------
-    // EventBus — shared between all services
+    // EventBus — instanciado antes de tudo para que o ManagedTable possa
+    // publicar durante o bootstrap
     // -----------------------------------------------------------------------
     let bus = Arc::new(EventBus::new());
 
     // -----------------------------------------------------------------------
-    // DB Writer Task
+    // ManagedTable — autoridade central de estado
+    //
+    // Sequência de bootstrap:
+    //   1. Cria ManagedTable vazia
+    //   2. Carrega estado persistido do SQLite (apply_update, respeita invariantes)
+    //   3. Aplica entradas estáticas do TOML (têm precedência sobre o DB)
     // -----------------------------------------------------------------------
-    let mut db_bus_rx = bus.subscribe();
-    let db_table = table.clone();
-    let db_worker_db = db.clone();
-    tokio::spawn(async move {
-        // Envolvendo o Sleep num Pin Box para permitir o .await
-        let mut db_debounce: Option<Pin<Box<tokio::time::Sleep>>> = None;
-        loop {
-            tokio::select! {
-                res = db_bus_rx.recv() => match res {
-                    Ok(bus::LanforgeEvent::DeviceTableDirty) => {
-                        db_debounce = Some(Box::pin(tokio::time::sleep(Duration::from_secs(5))));
-                    }
-                    Ok(_) => {}
-                    Err(RecvError::Lagged(_)) => {}
-                    Err(RecvError::Closed) => break,
-                },
-                _ = async {
-                    if let Some(d) = &mut db_debounce {
-                        d.await;
-                    } else {
-                        std::future::pending::<()>().await;
-                    }
-                }, if db_debounce.is_some() => {
-                    db_debounce = None;
-                    let snapshot = db_table.read().await.clone();
-                    let db_cl = db_worker_db.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        if let Ok(guard) = db_cl.lock() {
-                            guard.save_table(&snapshot)
-                        } else {
-                            Err(anyhow::anyhow!("Mutex poisoned"))
-                        }
-                    }).await {
-                        Ok(Err(e)) => error!("Failure saving leases: {e:?}"),
-                        Err(e) => error!("SQLite worker panicked: {e:?}"),
-                        _ => {}
-                    }
+    let table = Arc::new(ManagedTable::new(bus.clone()));
+
+    let leases_db_path = std::path::PathBuf::from(&cfg.leases_db);
+
+    match db::LeaseDb::open(&leases_db_path) {
+        Ok(db) => {
+            match db.load_table() {
+                Ok(persisted) => {
+                    // Importa o estado persistido diretamente na tabela interna.
+                    // Fazemos isso via write() direto pois é bootstrap síncrono
+                    // — os serviços ainda não estão rodando.
+                    *table.write().await = persisted;
+                    info!("📦 Estado persistido carregado de {}", cfg.leases_db);
+                }
+                Err(e) => {
+                    warn!("Falha ao carregar DB ({e:#}), iniciando do zero");
                 }
             }
         }
-    });
+        Err(e) => {
+            error!("❌ Erro fatal abrindo leases DB: {e:#}");
+            return Err(e);
+        }
+    }
+
+    if !cfg.devices.is_empty() {
+        let count = cfg.devices.len();
+        table.write().await.load_static_devices(&cfg.devices);
+        info!("👥 {count} reservas estáticas carregadas");
+    }
+
+    // -----------------------------------------------------------------------
+    // DB worker — persiste reativamente via EventBus
+    // -----------------------------------------------------------------------
+    tokio::spawn(db::db_worker(leases_db_path, table.clone(), bus.clone()));
 
     // -----------------------------------------------------------------------
     // Netlink connection
@@ -136,14 +103,14 @@ async fn main() -> Result<()> {
     tokio::spawn(connection);
 
     // -----------------------------------------------------------------------
-    // Spawn RA service (if enabled) via supervisor
+    // RA service
     // -----------------------------------------------------------------------
     if cfg.ra_enabled {
         let ra_cfg = cfg.to_ra_config();
         let ra_bus = bus.clone();
 
         info!(
-            "⚡ Starting service: RA (iface={}, M={}, O={})",
+            "⚡ Iniciando: RA (iface={}, M={}, O={})",
             ra_cfg.iface, ra_cfg.managed as u8, ra_cfg.other_config as u8
         );
 
@@ -162,15 +129,14 @@ async fn main() -> Result<()> {
     }
 
     // -----------------------------------------------------------------------
-    // Spawn DHCPv4 service (if enabled) via supervisor
+    // DHCPv4 service
     // -----------------------------------------------------------------------
     if cfg.dhcpv4_enabled {
         let dhcp_cfg = cfg.to_dhcpv4_config();
-        let dhcp_bus = bus.clone();
         let dhcp_table = table.clone();
 
         info!(
-            "⚡ Starting service: DHCPv4 ({}–{}, mask={})",
+            "⚡ Iniciando: DHCPv4 ({}–{}, mask={})",
             dhcp_cfg.range_start, dhcp_cfg.range_end, dhcp_cfg.subnet_mask
         );
 
@@ -182,23 +148,21 @@ async fn main() -> Result<()> {
             Duration::from_secs(60),
             move || {
                 let cfg = dhcp_cfg.clone();
-                let bus = dhcp_bus.clone();
                 let table = dhcp_table.clone();
-                async move { dhcp::v4::dhcpv4_service(cfg, bus, table).await }
+                async move { dhcp::v4::dhcpv4_service(cfg, table).await }
             },
         ));
     }
 
     // -----------------------------------------------------------------------
-    // Spawn DHCPv6 service (if enabled) via supervisor
+    // DHCPv6 service
     // -----------------------------------------------------------------------
     if cfg.dhcpv6_enabled {
         let dhcp_cfg = cfg.to_dhcpv6_config();
-        let dhcp_bus = bus.clone();
         let dhcp_table = table.clone();
         let dhcp_handle = handle.clone();
 
-        info!("⚡ Starting service: DHCPv6 ({})", dhcp_cfg.iface);
+        info!("⚡ Iniciando: DHCPv6 ({})", dhcp_cfg.iface);
 
         tokio::spawn(supervisor::supervise_task(
             "dhcpv6",
@@ -209,21 +173,20 @@ async fn main() -> Result<()> {
             move || {
                 let handle = dhcp_handle.clone();
                 let cfg = dhcp_cfg.clone();
-                let bus = dhcp_bus.clone();
                 let table = dhcp_table.clone();
-                async move { dhcp::v6::dhcpv6_service(cfg, table, bus, &handle).await }
+                async move { dhcp::v6::dhcpv6_service(cfg, table, &handle).await }
             },
         ));
     }
 
     // -----------------------------------------------------------------------
-    // Spawn DNS service (if enabled) via supervisor
+    // DNS service
     // -----------------------------------------------------------------------
     if cfg.dns_enabled {
         let dns_cfg = cfg.to_dns_config();
         let dns_table = table.clone();
 
-        info!("⚡ Starting service: DNS");
+        info!("⚡ Iniciando: DNS");
 
         tokio::spawn(supervisor::supervise_task(
             "dns",
@@ -240,11 +203,18 @@ async fn main() -> Result<()> {
     }
 
     // -----------------------------------------------------------------------
-    // EventBus consumer
+    // Prefixo GUA — aprendido dinamicamente via PrefixChanged do RA.
+    // Começa como None; é atualizado no handler do EventBus abaixo.
+    // Passado para o scan SLAAC para distinguir SlaacObserved de NdpSeen.
+    // -----------------------------------------------------------------------
+    let mut current_gua: Option<std::net::Ipv6Addr> = None;
+
+    // -----------------------------------------------------------------------
+    // Loop principal — eventos Netlink, timers, sinais
     // -----------------------------------------------------------------------
     let mut bus_rx = bus.subscribe();
-
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
 
     let debounce_window = Duration::from_secs(cfg.debounce_secs);
     let mut scan_deadline: Option<Instant> = None;
@@ -252,39 +222,36 @@ async fn main() -> Result<()> {
     let mut fallback = interval(Duration::from_secs(cfg.fallback_mins * 60));
     fallback.tick().await;
 
-    let mut stale_timer = interval(Duration::from_secs(600)); // 10 minutes
+    let mut stale_timer = interval(Duration::from_secs(600));
     stale_timer.tick().await;
 
-    // Initial scan on startup
-    if let Err(e) = run_scan(&cfg, &handle, &table).await {
-        error!("❌ Error in initial scan: {e:?}");
+    // Scan inicial (sem GUA ainda — RA ainda não anunciou)
+    if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+        error!("❌ Erro no scan inicial: {e:#}");
     }
 
-    info!("✅ System is ready. Listening for network events.");
+    info!("✅ Sistema pronto. Escutando eventos de rede.");
 
     loop {
         tokio::select! {
-            // ── Netlink neighbour event ──────────────────────────────────
+            // ── Netlink — eventos de vizinhos ────────────────────────────
             Some((msg, _)) = messages.next() => {
-                // 1. Otimização: Alimentar cache NDP em tempo real na sua tabela
-                if let Some((ip, mac_bytes)) = netlink::extract_neigh_info(&msg) {
-                    let mut t = table.write().await;
-                    t.update_ndp_cache(ip, state::MacAddr(mac_bytes));
-
-                    drop(t); // Libera a tabela antes de avisar
-                    bus.publish(bus::LanforgeEvent::DeviceTableDirty);
+                // Alimenta o Manager com o que o kernel aprendeu
+                if let Some(event) = netlink::extract_neigh_info(&msg) {
+                    let update = event.to_device_update(current_gua.as_ref());
+                    table.update(update).await;
                 }
 
-                // 2. Lógica original para acionar o SLAAC scan
+                // Aciona o scan de SLAAC se o evento for relevante para o prefixo
                 if netlink::is_relevant_neigh_event(&msg, &cfg.target_prefix) {
                     if scan_deadline.is_none() {
-                        debug!("Neighbour event detected, debouncing {}s...", cfg.debounce_secs);
+                        debug!("Evento de vizinho detectado, debouncing {}s...", cfg.debounce_secs);
                     }
                     scan_deadline = Some(Instant::now() + debounce_window);
                 }
             }
 
-            // ── Debounce timer fires ─────────────────────────────────────
+            // ── Debounce — scan pós-evento ───────────────────────────────
             _ = async {
                 match scan_deadline {
                     Some(dl) => sleep_until(dl).await,
@@ -292,64 +259,71 @@ async fn main() -> Result<()> {
                 }
             } => {
                 scan_deadline = None;
-                debug!("Debounce window elapsed, running scan...");
-                if let Err(e) = run_scan(&cfg, &handle, &table).await {
-                    error!("Error in event-triggered scan: {e:?}");
-                } else {
-                bus.publish(bus::LanforgeEvent::DeviceTableDirty);
+                debug!("Janela de debounce encerrada, executando scan...");
+                if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                    error!("Erro no scan pós-evento: {e:#}");
                 }
             }
 
-            // ── Periodic fallback scan ───────────────────────────────────
+            // ── Fallback — scan periódico ────────────────────────────────
             _ = fallback.tick() => {
-                debug!("Periodic fallback scan...");
-                if let Err(e) = run_scan(&cfg, &handle, &table).await {
-                    error!("Error in fallback scan: {e:?}");
-                } else {
-                bus.publish(bus::LanforgeEvent::DeviceTableDirty);
+                debug!("Scan periódico de fallback...");
+                if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                    error!("Erro no scan periódico: {e:#}");
                 }
             }
 
-            // ── Periodic stale lease expiration ──────────────────────────
+            // ── Stale — expiração de leases ──────────────────────────────
             _ = stale_timer.tick() => {
-                let mut t = table.write().await;
-                if t.expire_stale() {
-                    drop(t); // avoid holding lock during publish
-                    bus.publish(bus::LanforgeEvent::DeviceTableDirty);
+                let changed = table.write().await.expire_stale();
+                if changed {
+                    bus.publish(LanforgeEvent::DeviceTableDirty);
                 }
             }
 
-            // ── Manual SIGUSR1 ───────────────────────────────────────────
+            // ── SIGUSR1 — scan manual ────────────────────────────────────
             _ = sigusr1.recv() => {
-                info!("SIGUSR1 received, running immediate scan...");
+                info!("SIGUSR1 recebido, executando scan imediato...");
                 scan_deadline = None;
-                if let Err(e) = run_scan(&cfg, &handle, &table).await {
-                    error!("Error in manual scan: {e:?}");
-                } else {
-                bus.publish(bus::LanforgeEvent::DeviceTableDirty);
+                if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                    error!("Erro no scan manual: {e:#}");
                 }
             }
 
-            // ── EventBus events ──────────────────────────────────────────
+            // ── SIGTERM — shutdown gracioso ──────────────────────────────
+            _ = sigterm.recv() => {
+                info!("SIGTERM recebido — encerrando...");
+                bus.publish(LanforgeEvent::Shutdown);
+                // Dá tempo ao db_worker de fazer flush
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                break;
+            }
+
+            // ── EventBus — eventos internos ──────────────────────────────
             event = bus_rx.recv() => {
                 match event {
-                    Ok(bus::LanforgeEvent::PrefixChanged { gua }) => {
-                        info!("EventBus: GUA prefix changed to {gua:?}, triggering scan");
-                        if let Err(e) = run_scan(&cfg, &handle, &table).await {
-                            error!("Error in prefix-change scan: {e:?}");
+                    Ok(LanforgeEvent::PrefixChanged { gua }) => {
+                        // Atualiza o GUA local — usado nos próximos scans
+                        if current_gua != gua {
+                            info!("Prefixo GUA alterado: {:?} → {:?}", current_gua, gua);
+                            current_gua = gua;
+                        }
+                        if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                            error!("Erro no scan por mudança de prefixo: {e:#}");
                         }
                     }
-                    Ok(bus::LanforgeEvent::DeviceTableDirty) => {
-                        debug!("EventBus: DeviceTable dirty");
+                    Ok(LanforgeEvent::DeviceDiscovered { mac }) => {
+                        debug!("Novo device descoberto: {mac}");
                     }
-                    Ok(event) => {
-                        debug!("EventBus: {event:?}");
+                    Ok(LanforgeEvent::DeviceExpired { mac }) => {
+                        debug!("Device expirado: {mac}");
                     }
+                    Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("EventBus: consumer lagged, missed {n} events");
+                        warn!("EventBus: consumer atrasado, perdeu {n} eventos");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        error!("EventBus: channel closed unexpectedly");
+                        error!("EventBus: canal fechado inesperadamente");
                         break;
                     }
                 }
@@ -357,14 +331,16 @@ async fn main() -> Result<()> {
         }
     }
 
+    info!("👋 Lanforge encerrado.");
     Ok(())
 }
 
-/// Scan using DeviceTable v2 path.
+/// Executa um ciclo de scan SLAAC via netlink.
 async fn run_scan(
     cfg: &Config,
     handle: &rtnetlink::Handle,
-    table: &Arc<RwLock<DeviceTable>>,
+    table: &Arc<ManagedTable>,
+    gua: Option<std::net::Ipv6Addr>,
 ) -> Result<()> {
-    slaac::process_cycle_v2(&cfg.target_prefix, handle, table).await
+    slaac::process_cycle_v2(&cfg.target_prefix, handle, table, gua).await
 }
