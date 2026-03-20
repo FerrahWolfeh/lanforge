@@ -1,9 +1,7 @@
 [general]
 iface_lan = "end0"
 iface_wan = "ppp0"
-hosts_file = "/mnt/ram/dnsmasq/ipv6_slaac_hosts"
 leases_db = "/var/lib/lanforge/leases.db"
-dns_reload_cmd = "pkill -HUP pihole-FTL"
 
 [ra]
 enabled = true

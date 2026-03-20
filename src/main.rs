@@ -3,7 +3,6 @@ mod config;
 mod db;
 mod dhcp;
 mod dns;
-mod hosts;
 mod netlink;
 mod ra;
 mod slaac;
@@ -40,9 +39,7 @@ async fn main() -> Result<()> {
     let cfg = Config::load()?;
 
     info!("Starting lanforge");
-    info!("  hosts_file    = {}", cfg.hosts_file);
     info!("  target_prefix = {}", cfg.target_prefix);
-    info!("  dns_process   = {}", cfg.dns_process);
     info!("  debounce      = {}s", cfg.debounce_secs);
     info!("  fallback scan = every {}min", cfg.fallback_mins);
     info!("  ra_enabled    = {}", cfg.ra_enabled);
@@ -333,12 +330,7 @@ async fn main() -> Result<()> {
                         }
                     }
                     Ok(bus::LanforgeEvent::DeviceTableDirty) => {
-                        debug!("EventBus: DeviceTable dirty, regenerating hosts file");
-                        let t = table.read().await;
-                        if let Ok(true) = hosts::write_hosts_from_table(&t, &cfg.hosts_file) {
-                            drop(t);
-                            hosts::reload_dns(&cfg.dns_process).await;
-                        }
+                        debug!("EventBus: DeviceTable dirty");
                     }
                     Ok(event) => {
                         debug!("EventBus: {event:?}");
@@ -366,8 +358,6 @@ async fn run_scan(
 ) -> Result<()> {
     slaac::process_cycle_v2(
         &cfg.target_prefix,
-        &cfg.hosts_file,
-        &cfg.dns_process,
         handle,
         table,
     )

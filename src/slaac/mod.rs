@@ -13,7 +13,6 @@ use std::net::Ipv6Addr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::hosts;
 use crate::netlink;
 use crate::state::{DeviceTable, MacAddr};
 
@@ -25,8 +24,6 @@ use crate::state::{DeviceTable, MacAddr};
 /// e regenera o hosts file a partir da tabela.
 pub async fn process_cycle_v2(
     target_prefix: &str,
-    output_file: &str,
-    dns_process: &str,
     handle: &Handle,
     table: &Arc<RwLock<DeviceTable>>,
 ) -> Result<()> {
@@ -53,13 +50,6 @@ pub async fn process_cycle_v2(
             }
 
             t.record_slaac(mac, addr);
-        }
-
-        // Write hosts file from table state
-        let changed = hosts::write_hosts_from_table(&t, output_file)?;
-        if changed {
-            drop(t); // release lock before async DNS reload
-            hosts::reload_dns(dns_process).await;
         }
     }
 

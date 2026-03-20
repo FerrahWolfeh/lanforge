@@ -35,14 +35,6 @@ pub struct CliArgs {
     #[arg(long, env = "LANFORGE_IFACE_LAN")]
     pub iface_lan: Option<String>,
 
-    /// Override: output hosts file path
-    #[arg(long, env = "LANFORGE_HOSTS_FILE")]
-    pub hosts_file: Option<String>,
-
-    /// Override: DNS process name for SIGHUP
-    #[arg(long, env = "LANFORGE_DNS_PROCESS")]
-    pub dns_process: Option<String>,
-
     /// Override: target prefix for SLAAC tracking
     #[arg(long, env = "LANFORGE_TARGET_PREFIX")]
     pub target_prefix: Option<String>,
@@ -135,9 +127,7 @@ impl Default for DhcpV6Cfg {
 pub struct GeneralCfg {
     pub iface_lan: String,
     pub iface_wan: String,
-    pub hosts_file: String,
     pub leases_db: String,
-    pub dns_reload_cmd: String,
     pub target_prefix: String,
     pub debounce_secs: u64,
     pub fallback_mins: u64,
@@ -148,9 +138,7 @@ impl Default for GeneralCfg {
         GeneralCfg {
             iface_lan: "end0".into(),
             iface_wan: "ppp0".into(),
-            hosts_file: "/mnt/ram/dnsmasq/ipv6_slaac_hosts".into(),
             leases_db: "/var/lib/lanforge/leases.db".into(),
-            dns_reload_cmd: "pkill -HUP pihole-FTL".into(),
             target_prefix: "fd97:f00d:cafe:3731".into(),
             debounce_secs: 2,
             fallback_mins: 5,
@@ -243,8 +231,6 @@ pub struct StaticDeviceCfg {
 pub struct Config {
     // general
     pub iface_lan: String,
-    pub hosts_file: String,
-    pub dns_process: String,
     pub target_prefix: String,
     pub leases_db: String,
     pub debounce_secs: u64,
@@ -279,17 +265,6 @@ impl Config {
 
         Ok(Config {
             iface_lan: cli.iface_lan.unwrap_or(toml_cfg.general.iface_lan),
-            hosts_file: cli.hosts_file.unwrap_or(toml_cfg.general.hosts_file),
-            dns_process: cli.dns_process.unwrap_or_else(|| {
-                // Extract process name from dns_reload_cmd e.g. "pkill -HUP pihole-FTL" → "pihole-FTL"
-                toml_cfg
-                    .general
-                    .dns_reload_cmd
-                    .split_whitespace()
-                    .last()
-                    .unwrap_or("pihole-FTL")
-                    .to_string()
-            }),
             target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),
             leases_db: toml_cfg.general.leases_db,
             debounce_secs: cli.debounce_secs.unwrap_or(toml_cfg.general.debounce_secs),
