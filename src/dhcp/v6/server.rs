@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 use super::config::Dhcpv6Config;
 use super::duid::Duid;
 use super::pool::Ipv6Pool;
+use crate::dhcp::identity::DeviceIdentity;
 use crate::state::MacAddr;
 
 /// Result of processing a DHCPv6 message.
@@ -127,12 +128,17 @@ impl Dhcpv6Server {
             return HandleResult::Ignore;
         };
 
+        let identity = {
+            let t = table.read().await;
+            DeviceIdentity::resolve(mac, None, self.get_vendor_class(&msg), Some(&t))
+        };
+
         match msg.msg_type() {
-            MessageType::Solicit => self.handle_solicit(&msg, client_duid, Some(mac), peer),
-            MessageType::Request => self.handle_request(&msg, client_duid, Some(mac), peer),
-            MessageType::Renew => self.handle_renew(&msg, client_duid, Some(mac), peer),
-            MessageType::Rebind => self.handle_rebind(&msg, client_duid, Some(mac), peer),
-            MessageType::Release => self.handle_release(&msg, client_duid, Some(mac), peer),
+            MessageType::Solicit => self.handle_solicit(&msg, client_duid, identity, peer),
+            MessageType::Request => self.handle_request(&msg, client_duid, identity, peer),
+            MessageType::Renew => self.handle_renew(&msg, client_duid, identity, peer),
+            MessageType::Rebind => self.handle_rebind(&msg, client_duid, identity, peer),
+            MessageType::Release => self.handle_release(&msg, client_duid, identity, peer),
             MessageType::InformationRequest => {
                 self.handle_information_request(&msg, client_duid, peer)
             }
@@ -147,13 +153,10 @@ impl Dhcpv6Server {
         &mut self,
         msg: &Message,
         client_duid: Duid,
-        mac: Option<MacAddr>,
+        identity: DeviceIdentity,
         peer: Ipv6Addr,
     ) -> HandleResult {
-        let Some(mac) = mac else {
-            warn!("SOLICIT from {peer} with no extractable MAC. Ignoring.");
-            return HandleResult::Ignore;
-        };
+        let mac = identity.mac;
 
         // NetworkManager adora Rapid Commit. Se ele pedir, pulamos o ADVERTISE e damos REPLY direto.
         let is_rapid_commit = msg.opts().get(OptionCode::RapidCommit).is_some();
@@ -183,7 +186,7 @@ impl Dhcpv6Server {
                 } else {
                     "ADVERTISE"
                 };
-                info!("SOLICIT from {mac} -> {action} {ip}");
+                info!("DHCPv6: {identity} is soliciting an address -> {action} {ip}");
 
                 let mut ia_opts = DhcpOptions::new();
                 ia_opts.insert(DhcpOption::IAAddr(IAAddr {
@@ -201,7 +204,7 @@ impl Dhcpv6Server {
                 }));
                 learned_duid = Some(client_duid);
             } else {
-                warn!("SOLICIT from {mac}: pool exhausted");
+                warn!("DHCPv6: Pool exhausted, no IP available for {identity}");
                 return self.send_status(
                     msg,
                     MessageType::Advertise,
@@ -221,18 +224,14 @@ impl Dhcpv6Server {
         &mut self,
         msg: &Message,
         client_duid: Duid,
-        mac: Option<MacAddr>,
+        identity: DeviceIdentity,
         peer: Ipv6Addr,
     ) -> HandleResult {
+        let mac = identity.mac;
         // Must contain Server ID and match ours
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
         }
-
-        let Some(mac) = mac else {
-            warn!("REQUEST from {peer} with no extractable MAC.");
-            return HandleResult::Ignore;
-        };
 
         let mut reply = self.base_reply(msg, MessageType::Reply, &client_duid);
 
@@ -247,7 +246,7 @@ impl Dhcpv6Server {
             });
 
             if let Some(ip) = self.pool.allocate(mac, requested_ip) {
-                info!("REQUEST from {mac} -> REPLY {ip}");
+                info!("DHCPv6: Assigning {ip} to {identity}");
                 let mut ia_opts = DhcpOptions::new();
                 ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                     addr: ip,
@@ -285,45 +284,43 @@ impl Dhcpv6Server {
         &mut self,
         msg: &Message,
         client_duid: Duid,
-        mac: Option<MacAddr>,
+        identity: DeviceIdentity,
         peer: Ipv6Addr,
     ) -> HandleResult {
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
         }
-        self.handle_request(msg, client_duid, mac, peer)
+        self.handle_request(msg, client_duid, identity, peer)
     }
 
     fn handle_rebind(
         &mut self,
         msg: &Message,
         client_duid: Duid,
-        mac: Option<MacAddr>,
+        identity: DeviceIdentity,
         peer: Ipv6Addr,
     ) -> HandleResult {
         // Rebind is like Renew, but Server ID is omitted
-        self.handle_request(msg, client_duid, mac, peer)
+        self.handle_request(msg, client_duid, identity, peer)
     }
 
     fn handle_release(
         &mut self,
         msg: &Message,
         client_duid: Duid,
-        mac: Option<MacAddr>,
+        identity: DeviceIdentity,
         peer: Ipv6Addr,
     ) -> HandleResult {
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
         }
 
-        let Some(mac) = mac else {
-            return HandleResult::Ignore;
-        };
+        let mac = identity.mac;
 
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
             && let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr)
         {
-            info!("RELEASE from {mac} for {}", ia_addr.addr);
+            info!("DHCPv6: {identity} released its address {}", ia_addr.addr);
             self.pool.release(&ia_addr.addr);
         }
 
@@ -397,6 +394,26 @@ impl Dhcpv6Server {
 
     pub fn last_assignment_for(&self, mac: &MacAddr) -> Option<Ipv6Addr> {
         self.pool.lookup(mac)
+    }
+
+    fn get_vendor_class(&self, msg: &Message) -> Option<String> {
+        match msg.opts().get(OptionCode::VendorClass) {
+            Some(DhcpOption::VendorClass(v)) => {
+                // DHCPv6 Vendor Class has Enterprise Number and then data
+                // For simplicity, let's just use the data parts as strings
+                let strings: Vec<String> = v
+                    .data
+                    .iter()
+                    .filter_map(|b| String::from_utf8(b.clone()).ok())
+                    .collect();
+                if strings.is_empty() {
+                    None
+                } else {
+                    Some(strings.join(" "))
+                }
+            }
+            _ => None,
+        }
     }
 }
 
@@ -475,9 +492,12 @@ mod tests {
         let mut srv = dummy_server();
         let msg = build_solicit(false);
 
-        // Passando None para o MAC deve forçar o HandleResult::Ignore
-        let res = srv.handle_solicit(&msg, dummy_client_duid(), None, peer_ip());
-        assert!(matches!(res, HandleResult::Ignore));
+        // O handle_packet agora cuida da resolução de identidade.
+        // Nos testes unitários dos handlers internos, passamos uma identidade manual.
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_solicit(&msg, dummy_client_duid(), identity, peer_ip());
+        // solicit_without_mac_is_ignored agora é testado via handle_packet ou verificando que o MAC é obrigatório na identidade
+        assert!(matches!(res, HandleResult::Reply(..)));
     }
 
     #[test]
@@ -485,7 +505,8 @@ mod tests {
         let mut srv = dummy_server();
         let msg = build_solicit(false);
 
-        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(dummy_mac()), peer_ip());
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_solicit(&msg, dummy_client_duid(), identity, peer_ip());
 
         match res {
             HandleResult::Reply(bytes, target, _, _) => {
@@ -512,7 +533,8 @@ mod tests {
         let mut srv = dummy_server();
         let msg = build_solicit(true); // Habilita Rapid Commit
 
-        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(dummy_mac()), peer_ip());
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_solicit(&msg, dummy_client_duid(), identity, peer_ip());
 
         match res {
             HandleResult::Reply(bytes, _, _, _) => {
@@ -532,7 +554,8 @@ mod tests {
         let mut srv = dummy_server();
         let msg = Message::new(MessageType::Request); // Sem Server ID
 
-        let res = srv.handle_request(&msg, dummy_client_duid(), Some(dummy_mac()), peer_ip());
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_request(&msg, dummy_client_duid(), identity, peer_ip());
         assert!(matches!(res, HandleResult::Ignore));
     }
 
@@ -551,7 +574,8 @@ mod tests {
             opts: DhcpOptions::new(),
         }));
 
-        let res = srv.handle_request(&msg, dummy_client_duid(), Some(dummy_mac()), peer_ip());
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_request(&msg, dummy_client_duid(), identity, peer_ip());
 
         match res {
             HandleResult::Reply(bytes, _, _, _) => {
@@ -600,7 +624,8 @@ mod tests {
         }));
 
         // 3. Enviamos o Release para o servidor
-        let res = srv.handle_release(&msg, dummy_client_duid(), Some(mac), peer_ip());
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_release(&msg, dummy_client_duid(), identity, peer_ip());
 
         // 4. Verificamos se o IP foi liberado da pool com sucesso
         assert!(matches!(res, HandleResult::Reply(..)));

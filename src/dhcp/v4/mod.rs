@@ -73,7 +73,12 @@ pub async fn dhcpv4_service(
             None
         };
 
-        match server.handle_packet(data) {
+        let res = {
+            let t = table.read().await;
+            server.handle_packet(data, Some(&t))
+        };
+
+        match res {
             HandleResult::Reply(reply, broadcast, dst_ip, req_hostname) => {
                 let (final_dst_ip, dst_mac_arr) = if broadcast {
                     (Ipv4Addr::BROADCAST, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff])

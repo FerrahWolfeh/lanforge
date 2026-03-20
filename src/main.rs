@@ -40,22 +40,26 @@ async fn main() -> Result<()> {
 
     let cfg = Config::load()?;
 
-    info!("Starting lanforge");
-    info!("  target_prefix = {}", cfg.target_prefix);
-    info!("  debounce      = {}s", cfg.debounce_secs);
-    info!("  fallback scan = every {}min", cfg.fallback_mins);
-    info!("  ra_enabled    = {}", cfg.ra_enabled);
-    info!("  dhcpv4_enabled= {}", cfg.dhcpv4_enabled);
-    info!("devices       = {} static entries", cfg.devices.len());
+    info!("🚀 Lanforge starting up...");
+    debug!("  target_prefix = {}", cfg.target_prefix);
+    debug!("  debounce      = {}s", cfg.debounce_secs);
+    debug!("  fallback scan = every {}min", cfg.fallback_mins);
+    info!(
+        "🔧 Configuration loaded (RA={}, DHCPv4={}, DHCPv6={}, DNS={})",
+        cfg.ra_enabled, cfg.dhcpv4_enabled, cfg.dhcpv6_enabled, cfg.dns_enabled
+    );
 
     // -----------------------------------------------------------------------
     // DeviceTable — shared state for all services
     // -----------------------------------------------------------------------
     let leases_db_path = std::path::PathBuf::from(&cfg.leases_db);
     let db = match db::LeaseDb::open(&leases_db_path) {
-        Ok(d) => Arc::new(Mutex::new(d)),
+        Ok(d) => {
+            info!("📦 Database: {} initialized", cfg.leases_db);
+            Arc::new(Mutex::new(d))
+        }
         Err(e) => {
-            error!("[main] Fatal error opening leases DB: {e:?}");
+            error!("❌ Fatal error opening leases DB: {e:?}");
             return Err(e);
         }
     };
@@ -67,8 +71,9 @@ async fn main() -> Result<()> {
 
     // Load static devices from TOML config
     if !cfg.devices.is_empty() {
-        info!("Loading static devices from config:");
+        let count = cfg.devices.len();
         initial_table.load_static_devices(&cfg.devices);
+        info!("👥 Clients: {count} static reservations loaded");
     }
 
     let table = Arc::new(RwLock::new(initial_table));
@@ -138,11 +143,8 @@ async fn main() -> Result<()> {
         let ra_bus = bus.clone();
 
         info!(
-            "RA service enabled: iface={}, M={}, O={}, MaxInterval={}s",
-            ra_cfg.iface,
-            ra_cfg.managed as u8,
-            ra_cfg.other_config as u8,
-            ra_cfg.max_interval.as_secs(),
+            "⚡ Starting service: RA (iface={}, M={}, O={})",
+            ra_cfg.iface, ra_cfg.managed as u8, ra_cfg.other_config as u8
         );
 
         tokio::spawn(supervisor::supervise_task(
@@ -168,8 +170,8 @@ async fn main() -> Result<()> {
         let dhcp_table = table.clone();
 
         info!(
-            "DHCPv4 service enabled: range {}–{}, lease {}s",
-            dhcp_cfg.range_start, dhcp_cfg.range_end, dhcp_cfg.lease_time,
+            "⚡ Starting service: DHCPv4 ({}–{}, mask={})",
+            dhcp_cfg.range_start, dhcp_cfg.range_end, dhcp_cfg.subnet_mask
         );
 
         tokio::spawn(supervisor::supervise_task(
@@ -196,10 +198,7 @@ async fn main() -> Result<()> {
         let dhcp_table = table.clone();
         let dhcp_handle = handle.clone();
 
-        info!(
-            "DHCPv6 service enabled on {}, lease {}s",
-            dhcp_cfg.iface, dhcp_cfg.lease_time,
-        );
+        info!("⚡ Starting service: DHCPv6 ({})", dhcp_cfg.iface);
 
         tokio::spawn(supervisor::supervise_task(
             "dhcpv6",
@@ -223,6 +222,9 @@ async fn main() -> Result<()> {
     if cfg.dns_enabled {
         let dns_cfg = cfg.to_dns_config();
         let dns_table = table.clone();
+
+        info!("⚡ Starting service: DNS");
+
         tokio::spawn(supervisor::supervise_task(
             "dns",
             true,
@@ -254,12 +256,11 @@ async fn main() -> Result<()> {
     stale_timer.tick().await;
 
     // Initial scan on startup
-    info!("Running initial scan...");
     if let Err(e) = run_scan(&cfg, &handle, &table).await {
-        error!("Error in initial scan: {e:?}");
+        error!("❌ Error in initial scan: {e:?}");
     }
 
-    info!("Listening for neighbour events (SIGUSR1 = manual scan)...");
+    info!("✅ System is ready. Listening for network events.");
 
     loop {
         tokio::select! {
