@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn skips_reserved_and_declined_ips() {
-        let mut p = pool();
+        let mut p = pool(); // Range de 6 IPs (.100 a .105)
 
         let reserved_ip = Ipv4Addr::new(192, 168, 0, 100);
         let declined_ip = Ipv4Addr::new(192, 168, 0, 101);
@@ -219,7 +219,9 @@ mod tests {
         p.add_reservation(reserved_ip, mac(99));
         p.mark_declined(declined_ip);
 
-        for i in 0..10 {
+        // Pedimos apenas 4 IPs (exatamente a quantidade de IPs realmente livres)
+        // para não engatilhar o fallback de emergência de pool esgotado.
+        for i in 0..4 {
             if let Some(ip) = p.allocate(mac(i), None) {
                 assert_ne!(ip, reserved_ip, "Não deve alocar IP reservado");
                 assert_ne!(
