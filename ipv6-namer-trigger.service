@@ -1,8 +1,0 @@
-[Unit]
-Description=Send SIGUSR1 to ipv6-namer to trigger a scan cycle
-Requires=ipv6-namer.service
-After=ipv6-namer.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/systemctl kill -s USR1 ipv6-namer.service
