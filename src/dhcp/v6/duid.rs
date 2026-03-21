@@ -1,9 +1,9 @@
 use crate::state::MacAddr;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Representa um DHCP Unique Identifier (DUID)
-#[derive(Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Duid {
     #[serde(serialize_with = "serialize_duid")]
     pub bytes: Vec<u8>,
@@ -25,6 +25,11 @@ where
 impl Duid {
     pub fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
+    }
+
+    /// Retorna os bytes puros do DUID
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
     /// Retorna o tipo do DUID como string legível — útil para logs de diagnóstico.

@@ -1,12 +1,9 @@
-//! DHCPv4 service — task supervisionada que escuta na porta 67.
+//! DHCPv4 service — Gerenciamento de endereços IPv4 dinâmicos (RFC 2131).
 //!
-//! Usa socket UDP com SO_BROADCAST para receber/enviar DHCP.
+//! Este serviço escuta solicitações na porta 67/UDP e gerencia um pool de
+//! endereços, suportando reservas estáticas baseadas em MAC.
 //!
-//! ## Integração com o Manager
-//!
-//! Este módulo não escreve diretamente no `DeviceTable` nem publica eventos
-//! no `EventBus`. Todo o estado flui via `ManagedTable::update`, que centraliza
-//! o merging e dispara os eventos corretos automaticamente:
+//! ## Ciclo DORA (Discovery, Offer, Request, Ack)
 //!
 //! ```text
 //! Pacote DHCP recebido
@@ -23,6 +20,12 @@
 //!     ▼                    ▼
 //! DeviceDiscovered    DeviceUpdated   (publicados no EventBus automaticamente)
 //! ```
+//!
+//! ## Integração com o Manager
+//!
+//! O `dhcpv4_service` utiliza o `ManagedTable` para persistir leases e sugerir
+//! hostnames aprendidos via Option 12. O merging de estado e a emissão de
+//! eventos no `EventBus` são feitos automaticamente pelo `ManagedTable`.
 
 pub mod config;
 pub mod pool;

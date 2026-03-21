@@ -1,3 +1,19 @@
+//! SARR state machine — Lógica central do servidor DHCPv6.
+//!
+//! Este módulo implementa a alocação de endereços e processamento de mensagens
+//! conforme a RFC 8415. Ele foca na identificação por DUID e alocação de
+//! endereços no prefixo ULA configurado.
+//!
+//! ## Tabela de Decisão
+//!
+//! | Mensagem    | Ação                      | Resposta    |
+//! |-------------|---------------------------|-------------|
+//! | Solicit     | Ofert/Aloca IA_NA         | Advertise/Reply |
+//! | Request     | Confirma lease            | Reply       |
+//! | Renew       | Estende lease             | Reply       |
+//! | Release     | Libera IA_NA              | Reply       |
+//! | Info-Req    | Provedor de opções (DNS)  | Reply       |
+
 use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, Message, MessageType, OptionCode, Status, StatusCode,
 };
@@ -12,17 +28,23 @@ use crate::bus::ManagedTable;
 use crate::dhcp::identity::DeviceIdentity;
 use crate::state::{DeviceUpdate, MacAddr};
 
-/// Result of processing a DHCPv6 message.
+/// Resultado de processar uma mensagem DHCPv6.
 pub enum HandleResult {
-    /// Reply bytes, destination IP (usually peer's link-local), optional learned DUID, optional MAC
+    /// Resposta a organizar (bytes encodados, IP de destino, DUID aprendido, MAC extraído).
     Reply(Vec<u8>, Ipv6Addr, Option<Duid>, Option<MacAddr>),
-    /// No reply
+    /// Nenhuma resposta necessária (ex: mensagem malformada ou para outro servidor).
     Ignore,
 }
 
+/// Servidor DHCPv6 stateful.
+///
+/// Mantém as configurações, o pool de endereços ULA e a identidade (DUID) do servidor.
 pub struct Dhcpv6Server {
+    /// Configurações do servidor (iface, lease time, etc.)
     pub cfg: Dhcpv6Config,
+    /// Pool de endereços ULA /64
     pub pool: Ipv6Pool,
+    /// DUID (DHCP Unique Identifier) deste servidor
     pub server_duid: Duid,
 }
 

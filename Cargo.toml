@@ -52,7 +52,16 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
     "fmt",
     "ansi",
 ] }
+
+# Control
 serde_json = "1.0.149"
+hex = { version = "0.4.3", features = ["serde"] }
+
+# CLI
+iocraft = "0.7.18"
+tabled = "0.20.0"
+chrono = { version = "0.4.44", features = ["serde"] }
+inquire = "0.9.4"
 
 [profile.release]
 opt-level = "z"

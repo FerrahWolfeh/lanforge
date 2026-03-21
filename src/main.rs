@@ -1,4 +1,39 @@
+//! `lanforge` — Gerenciador central de identidades de rede (IPv6/IPv4).
+//!
+//! Este daemon coordena o estado dos dispositivos na rede local integrando
+//! múltiplos protocolos (DHCPv4, DHCPv6, RA, SLAAC, DNS).
+//!
+//! ## Ciclo de Vida e Bootstrap
+//!
+//! ```text
+//!    [ Bootstrap ]             [ Event Loop ]             [ Shutdown ]
+//!          │                         │                         │
+//!  1. Load Config (TOML)             │                         │
+//!          │           ┌─────────────┼─────────────┐           │
+//!  2. Init EventBus    │             ▼             │           │
+//!          │           │     Eventos Netlink       │      1. SIGTERM
+//!  3. Load State (DB)  │             │             │           │
+//!          │           │             ▼             │      2. Publish
+//!  4. Load Statics     │      Update ManagedTable  │         Shutdown
+//!          │           │             │             │           │
+//!  5. Spawn Workers ───┼──────────►  │ ────────────┼───►  3. DB Flush
+//!     (DHCP, DNS, RA,  │             ▼             │           │
+//!      DB, Control)    │      Publish EventBus     │      4. Exit
+//!          │           │             │             │
+//!          │           │      Consumers React      │
+//!          ▼           └─────────────┬─────────────┘
+//!    Ready State                     │
+//! ```
+//!
+//! ## Componentes Principais
+//!
+//! - **ManagedTable**: Autoridade central de estado (Thread-safe).
+//! - **EventBus**: Barramento de eventos reativo asincrono.
+//! - **Supervisores**: Garantem que tasks de protocolo continuem rodando após erros.
+
+#[warn(clippy::all, clippy::pedantic, clippy::nursery)]
 mod bus;
+mod cli;
 mod config;
 mod control;
 mod db;
@@ -25,8 +60,39 @@ use tracing::{debug, error, info, warn};
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// Ponto de entrada principal do daemon.
+///
+/// Configura o logging, carrega a configuração TOML, inicia o banco de dados
+/// SQLite e dispara os serviços de rede (RA, DHCP, DNS, Control) como tasks do Tokio.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    let mut cfg = Config::load()?;
+
+    // Se for comando cliente (Devices, Status, Reload), executa e sai sem subir o daemon (nem env filter/logging)
+    match &cfg.command {
+        config::Command::Devices { .. }
+        | config::Command::Status
+        | config::Command::Reload
+        | config::Command::Watch
+        | config::Command::Log { .. }
+        | config::Command::Lease { .. }
+        | config::Command::Scan
+        | config::Command::Host { .. }
+        | config::Command::Db { .. }
+        | config::Command::Shutdown => {
+            return cli::run_client(cfg.command.clone(), &cfg.control_socket).await;
+        }
+        config::Command::Run { only: Some(s) } => {
+            cfg.ra_enabled = s == "ra";
+            cfg.dhcpv4_enabled = s == "dhcpv4" || s == "dhcp";
+            cfg.dhcpv6_enabled = s == "dhcpv6" || s == "dhcp";
+            cfg.dns_enabled = s == "dns";
+        }
+        config::Command::Run { only: None } => {}
+    }
+
+    let cfg = Arc::new(cfg);
+
     tracing_subscriber::fmt()
         .without_time()
         .with_env_filter(
@@ -34,8 +100,6 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-
-    let cfg = Config::load()?;
 
     info!("🚀 Lanforge starting up...");
     debug!("  target_prefix = {}", cfg.target_prefix);
@@ -212,6 +276,7 @@ async fn main() -> Result<()> {
     let ctrl_ifaces = control::Interfaces {
         lan: cfg.iface_lan.clone(),
     };
+    let ctrl_cfg = cfg.clone();
 
     tokio::spawn(supervisor::supervise_task(
         "control",
@@ -224,7 +289,8 @@ async fn main() -> Result<()> {
             let table = ctrl_table.clone();
             let bus = ctrl_bus.clone();
             let ifaces = ctrl_ifaces.clone();
-            async move { control::control_service(path, ifaces, table, bus).await }
+            let cfg_srv = ctrl_cfg.clone();
+            async move { control::control_service(path, ifaces, table, bus, cfg_srv).await }
         },
     ));
 
@@ -344,6 +410,13 @@ async fn main() -> Result<()> {
                     Ok(LanforgeEvent::DeviceExpired { mac }) => {
                         debug!("Device expirado: {mac}");
                     }
+                    Ok(LanforgeEvent::ReloadConfig) => {
+                        info!("Recarregando config / Forçando scan via sinalizador manual!");
+                        scan_deadline = None;
+                        if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                            error!("Erro no scan por reload: {e:#}");
+                        }
+                    }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         warn!("EventBus: consumer atrasado, perdeu {n} eventos");
@@ -362,6 +435,9 @@ async fn main() -> Result<()> {
 }
 
 /// Executa um ciclo de scan SLAAC via netlink.
+///
+/// Este helper centraliza a chamada ao módulo `slaac` para descobrir
+/// endereços IPv6 ativos (GUA e link-local) no segmento de rede.
 async fn run_scan(
     cfg: &Config,
     handle: &rtnetlink::Handle,

@@ -1,28 +1,125 @@
-//! Configuração do lanforge — CLI + TOML + env.
+//! Configuração do lanforge — Gerenciamento unificado de CLI, TOML e Environment.
 //!
-//! Três camadas em ordem crescente de precedência:
-//! 1. Valores default hardcoded
-//! 2. Arquivo TOML (`--config` ou LANFORGE_CONFIG, default `/etc/lanforge/lanforge.toml`)
-//! 3. Variáveis de ambiente LANFORGE_* (via clap `env`)
+//! O sistema de configuração utiliza três camadas em ordem de precedência:
+//! 1. **Default**: Valores fixos no código (fail-safe).
+//! 2. **TOML**: Fonte principal localizada em `/etc/lanforge/lanforge.toml`.
+//! 3. **CLI/Env**: Overrides manuais passados via linha de comando ou variáveis `LANFORGE_*`.
 //!
-//! O TOML é a fonte primária de configuração. CLI/env overridam valores individuais.
+//! ## Fluxo de Configuração
+//!
+//! ```text
+//!    [ CliArgs ]       [ TomlConfig ]      [ Default ]
+//!         │                  │                  │
+//!         ▼                  ▼                  ▼
+//!    ┌──────────────────────────────────────────────┐
+//!    │            Merge (Config::load())            │
+//!    └──────────────────┬───────────────────────────┘
+//!                       │
+//!         ┌─────────────┼─────────────┐
+//!         │             │             │
+//!         ▼             ▼             ▼
+//!    [ RaConfig ] [ DhcpConfig ] [ DnsConfig ] ...
+//!         │             │             │
+//!    (Serviços iniciados com config especializada)
+//! ```
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::time::Duration;
 use tracing::{info, warn};
 
-// ---------------------------------------------------------------------------
-// CLI (clap) — entrypoint de parsing
-// ---------------------------------------------------------------------------
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    /// Start all enabled services (default behavior)
+    Run {
+        /// Run only a specific subsystem (e.g. ra, dhcpv4, dhcpv6, dns, slaac)
+        #[arg(long)]
+        only: Option<String>,
+    },
+    /// List known devices
+    Devices {
+        #[arg(short, long)]
+        verbose: bool,
+        #[arg(long)]
+        filter: Option<String>,
+        #[arg(long)]
+        format: Option<String>,
+    },
+    /// Live view reativo via socket (sem polling)
+    Watch,
+    /// Service health and general status
+    Status,
+    /// EventBus interno em tempo real
+    Log {
+        #[arg(long)]
+        follow: bool,
+    },
+    /// Gerenciamento de leases (renew/release)
+    Lease {
+        #[command(subcommand)]
+        action: LeaseCommand,
+    },
+    /// Dispara ciclo NDP imediato com feedback
+    Scan,
+    /// Gerenciamento de devices customizados
+    Host {
+        #[command(subcommand)]
+        action: HostCommand,
+    },
+    /// Send reload signal to running daemon (recarrega config estática do TOML)
+    Reload,
+    /// Gerenciamento de persistência
+    Db {
+        #[command(subcommand)]
+        action: DbCommand,
+    },
+    /// Encerramento gracioso com flush imediato
+    Shutdown,
+}
 
-/// lanforge — daemon unificado de controle de rede IPv4/IPv6.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum LeaseCommand {
+    Renew { mac: String },
+    Release { mac: String },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum HostCommand {
+    Add {
+        /// Prefix MAC with this argument, or run interactively
+        mac: Option<String>,
+        #[arg(long)]
+        hostname: Option<String>,
+        #[arg(long)]
+        v4: Option<String>,
+        #[arg(long)]
+        v6_suffix: Option<String>,
+    },
+    Set {
+        mac: String,
+        field: String,
+        value: String,
+    },
+    List,
+    Remove {
+        mac: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DbCommand {
+    Vacuum,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "lanforge", version, about, long_about = None)]
 pub struct CliArgs {
-    /// Path to TOML config file
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
+    /// Caminho para o arquivo de configuração TOML.
     #[arg(
         long,
         env = "LANFORGE_CONFIG",
@@ -31,35 +128,32 @@ pub struct CliArgs {
     pub config: String,
 
     // ── Overrides (prevalecem sobre TOML) ─────────────────────────────────
-    /// Override: LAN interface
+    /// Interface LAN principal (ex: end0, eth0).
     #[arg(long, env = "LANFORGE_IFACE_LAN")]
     pub iface_lan: Option<String>,
 
-    /// Override: target prefix for SLAAC tracking
+    /// Prefixo IPv6 local para rastreamento SLAAC.
     #[arg(long, env = "LANFORGE_TARGET_PREFIX")]
     pub target_prefix: Option<String>,
 
-    /// Override: debounce window in seconds
+    /// Janela de debounce em segundos para scans após eventos de rede.
     #[arg(long, env = "LANFORGE_DEBOUNCE_SECS")]
     pub debounce_secs: Option<u64>,
 
-    /// Override: fallback scan interval in minutes
+    /// Intervalo de scan periódico (fallback) em minutos.
     #[arg(long, env = "LANFORGE_FALLBACK_MINS")]
     pub fallback_mins: Option<u64>,
 
-    /// Override: enable RA service
+    /// Habilita ou desabilita o serviço de Router Advertisements.
     #[arg(long, env = "LANFORGE_RA_ENABLED")]
     pub ra_enabled: Option<bool>,
 
-    /// Override: control socket path
+    /// Caminho para o socket de controle UDS.
     #[arg(long, env = "LANFORGE_CONTROL_SOCKET")]
     pub control_socket: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// TOML structures (serde)
-// ---------------------------------------------------------------------------
-
+/// Estrutura raiz do arquivo TOML.
 #[derive(Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct TomlConfig {
@@ -126,14 +220,21 @@ impl Default for DhcpV6Cfg {
     }
 }
 
+/// Configurações gerais do sistema.
 #[derive(Deserialize, Debug)]
 #[serde(default)]
 pub struct GeneralCfg {
+    /// Interface LAN onde o daemon escuta.
     pub iface_lan: String,
+    /// Caminho para o arquivo de banco de dados SQLite.
     pub leases_db: String,
+    /// Prefixo IPv6 "alvo" para identificar dispositivos locais (SLAAC).
     pub target_prefix: String,
+    /// Tempo de espera antes de processar eventos de rede.
     pub debounce_secs: u64,
+    /// Intervalo do scan de fallback.
     pub fallback_mins: u64,
+    /// Caminho do socket para a CLI.
     pub control_socket: String,
 }
 
@@ -231,9 +332,14 @@ pub struct StaticDeviceCfg {
 // Config unificada (resultado do merge TOML + CLI overrides)
 // ---------------------------------------------------------------------------
 
+/// Configuração consolidada e final do sistema.
+///
+/// Criada através de `Config::load()`, esta struct contém todos os parâmetros
+/// necessários para inicializar os subsistemas do lanforge.
 #[derive(Debug)]
 pub struct Config {
     // general
+    pub command: Command,
     pub iface_lan: String,
     pub target_prefix: String,
     pub leases_db: String,
@@ -269,12 +375,15 @@ impl Config {
         let toml_cfg = load_toml(&cli.config);
 
         Ok(Config {
+            command: cli.command.unwrap_or(Command::Run { only: None }),
             iface_lan: cli.iface_lan.unwrap_or(toml_cfg.general.iface_lan),
             target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),
             leases_db: toml_cfg.general.leases_db,
             debounce_secs: cli.debounce_secs.unwrap_or(toml_cfg.general.debounce_secs),
             fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
-            control_socket: cli.control_socket.unwrap_or(toml_cfg.general.control_socket),
+            control_socket: cli
+                .control_socket
+                .unwrap_or(toml_cfg.general.control_socket),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: toml_cfg.ra,

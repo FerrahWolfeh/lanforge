@@ -1,7 +1,21 @@
-//! Supervisor de tasks — loop de reinício com backoff exponencial.
+//! Supervisor de tasks — Monitoramento e resiliência com backoff exponencial.
 //!
-//! Provê uma função `supervise_task` que executa uma async task e a reinicia
-//! automaticamente com backoff exponencial em caso de falha.
+//! Este módulo provê a infraestrutura para garantir que as tasks de protocolo
+//! (DHCP, DNS, RA) continuem rodando mesmo após falhas críticas, aplicando
+//! uma estratégia de reinício com espera progressiva.
+//!
+//! ## Fluxo de Supervisão
+//!
+//! ```text
+//!    [ Factory ] ──► [ Future ] ──► [ Execução ]
+//!          ▲                            │
+//!          │                            ▼
+//!          │                    ┌───────────────┐
+//!          │                    │  Sucesso?     │──► Ok(())
+//!          │                    └──────┬────────┘
+//!          │       [ Backoff ]         │ Não
+//!          └───────────────────────────┘
+//! ```
 
 use std::time::Duration;
 use tokio::time::sleep;

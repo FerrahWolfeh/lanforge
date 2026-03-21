@@ -1,7 +1,17 @@
-//! DORA state machine — lógica do servidor DHCPv4.
+//! DORA state machine — Lógica central do servidor DHCPv4.
 //!
-//! Processa mensagens recebidas e gera respostas conforme RFC 2131.
-//! Usa `dhcproto` para encode/decode de mensagens.
+//! Este módulo implementa a lógica de alocação de endereços e processamento
+//! de mensagens conforme a RFC 2131. Ele utiliza o `IpPool` para gerenciar
+//! o estado dos leases e o `DeviceIdentity` para resolver MACs e nomes.
+//!
+//! ## Tabela de Decisão
+//!
+//! | Mensagem    | Ação                      | Resposta |
+//! |-------------|---------------------------|----------|
+//! | Discover    | Aloca IP (ofertado)       | Offer    |
+//! | Request     | Confirma/Estende lease    | Ack/Nak  |
+//! | Release     | Libera IP no pool         | (nenhuma)|
+//! | Decline     | Marca IP como em conflito | (nenhuma)|
 
 use dhcproto::v4::{self, DhcpOption, Message, MessageType, Opcode};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder};
@@ -22,8 +32,12 @@ pub enum HandleResult {
 }
 
 /// Servidor DHCPv4 stateful.
+///
+/// Mantém as configurações e o pool de IPs para uma interface específica.
 pub struct DhcpServer {
+    /// Configurações do servidor (range, lease time, etc.)
     pub cfg: Dhcpv4Config,
+    /// Pool de endereços e gerenciamento de reservas
     pub pool: IpPool,
 }
 

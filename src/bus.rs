@@ -1,4 +1,4 @@
-//! EventBus — barramento de eventos interno do lanforge.
+//! `EventBus` — barramento de eventos interno do lanforge.
 //!
 //! Usa `tokio::sync::broadcast` para comunicação entre tasks.
 //!
@@ -6,7 +6,7 @@
 //!
 //! O barramento é **device-centric**: os eventos descrevem mudanças na
 //! identidade e estado dos devices, não ações de protocolo. Os serviços
-//! (DHCPv4, DHCPv6, Netlink) não publicam eventos diretamente — eles emitem
+//! (`DHCPv4`, `DHCPv6`, Netlink) não publicam eventos diretamente — eles emitem
 //! `DeviceUpdate` para o `DeviceTable`, e o Manager publica no barramento
 //! caso o estado tenha efetivamente mudado.
 //!
@@ -17,9 +17,9 @@
 //!                                       ▼
 //!                                   EventBus
 //!                                       │
-//!                         ┌────────────┼────────────┐
-//!                         ▼            ▼             ▼
-//!                        DNS          DB           CLI
+//!                          ┌────────────┼────────────┐
+//!                          ▼            ▼             ▼
+//!                         DNS          DB           CLI
 //! ```
 //!
 //! ## Grupos de eventos
@@ -34,13 +34,15 @@ use tokio::sync::broadcast;
 
 use crate::state::MacAddr;
 
+use serde::{Deserialize, Serialize};
+
 // ---------------------------------------------------------------------------
 // DeviceChange — o que mudou num device
 // ---------------------------------------------------------------------------
 
 /// Detalha qual aspecto de um `Device` foi alterado.
 /// Publicado dentro de `LanforgeEvent::DeviceUpdated`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DeviceChange {
     /// Um endereço IPv4 foi atribuído ou renovado.
     V4Assigned { ip: Ipv4Addr },
@@ -48,7 +50,7 @@ pub enum DeviceChange {
     /// O lease IPv4 expirou e foi removido.
     V4Expired,
 
-    /// Um endereço IPv6 (DHCPv6) foi atribuído ou renovado.
+    /// Um endereço IPv6 (`DHCPv6`) foi atribuído ou renovado.
     V6Assigned { ip: Ipv6Addr },
 
     /// O lease IPv6 expirou e foi removido.
@@ -72,7 +74,7 @@ pub enum DeviceChange {
 ///
 /// Todos os consumers (DNS, DB, CLI) devem reagir apenas a esses eventos —
 /// nunca a detalhes internos de protocolo.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LanforgeEvent {
     // -- Device lifecycle --
     /// Um device desconhecido foi visto pela primeira vez.
@@ -124,7 +126,7 @@ pub struct EventBus {
 impl EventBus {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(BUS_CAPACITY);
-        EventBus { tx }
+        Self { tx }
     }
 
     /// Cria um novo receiver. Chame no startup de cada task consumidora.
@@ -170,7 +172,7 @@ pub struct ManagedTable {
 
 impl ManagedTable {
     pub fn new(bus: Arc<EventBus>) -> Self {
-        ManagedTable {
+        Self {
             inner: RwLock::new(DeviceTable::new()),
             bus,
         }
@@ -193,6 +195,8 @@ impl ManagedTable {
 
         let change = device_change_of(&update);
         let changed = table.apply_update(update);
+
+        drop(table);
 
         if !changed {
             return;
@@ -227,20 +231,20 @@ impl ManagedTable {
 // ---------------------------------------------------------------------------
 
 /// Extrai o MAC de qualquer variante de `DeviceUpdate`.
-fn mac_of(update: &DeviceUpdate) -> MacAddr {
+const fn mac_of(update: &DeviceUpdate) -> MacAddr {
     match update {
-        DeviceUpdate::V4LeaseGranted { mac, .. } => *mac,
-        DeviceUpdate::V6LeaseGranted { mac, .. } => *mac,
-        DeviceUpdate::SlaacObserved { mac, .. } => *mac,
-        DeviceUpdate::NdpSeen { mac, .. } => *mac,
-        DeviceUpdate::HostnameHint { mac, .. } => *mac,
-        DeviceUpdate::DuidAssociated { mac, .. } => *mac,
-        DeviceUpdate::SlaacCleared { mac } => *mac,
+        DeviceUpdate::V4LeaseGranted { mac, .. }
+        | DeviceUpdate::V6LeaseGranted { mac, .. }
+        | DeviceUpdate::SlaacObserved { mac, .. }
+        | DeviceUpdate::NdpSeen { mac, .. }
+        | DeviceUpdate::HostnameHint { mac, .. }
+        | DeviceUpdate::DuidAssociated { mac, .. }
+        | DeviceUpdate::SlaacCleared { mac } => *mac,
     }
 }
 
 /// Converte um `DeviceUpdate` no `DeviceChange` correspondente para o bus.
-/// Retorna `None` para updates que não geram evento de mudança (ex: NdpSeen).
+/// Retorna `None` para updates que não geram evento de mudança (ex: `NdpSeen`).
 fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
     match update {
         DeviceUpdate::V4LeaseGranted { ip, .. } => Some(DeviceChange::V4Assigned { ip: *ip }),
@@ -253,8 +257,7 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         }),
         DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),
         // NdpSeen e SlaacCleared não geram DeviceChange no barramento
-        DeviceUpdate::NdpSeen { .. } => None,
-        DeviceUpdate::SlaacCleared { .. } => None,
+        DeviceUpdate::NdpSeen { .. } | DeviceUpdate::SlaacCleared { .. } => None,
     }
 }
 

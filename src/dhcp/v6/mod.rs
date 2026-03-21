@@ -1,9 +1,9 @@
-//! DHCPv6 service — task supervisionada que escuta na porta UDP 547.
+//! DHCPv6 service — Gerenciamento de endereços IPv6 dinâmicos (RFC 8415).
 //!
-//! ## Integração com o Manager
+//! Este serviço gerencia a atribuição de endereços IPv6 via DHCPv6 (Stateful),
+//! servindo como alternativa ou complemento ao SLAAC.
 //!
-//! Assim como o DHCPv4, este módulo não escreve estado diretamente nem
-//! publica eventos no `EventBus`. Todo o fluxo passa pelo `ManagedTable`:
+//! ## Ciclo SARR (Solicit, Advertise, Request, Reply)
 //!
 //! ```text
 //! Pacote DHCPv6 recebido
@@ -22,6 +22,12 @@
 //!           ManagedTable::update()
 //!           (Manager decide, EventBus notifica)
 //! ```
+//!
+//! ## Integração com o Manager
+//!
+//! O `dhcpv6_service` reporta DUIDs e concessões de IP ao `ManagedTable`.
+//! Diferente do v4, o DHCPv6 depende fortemente do DUID para identificação
+//! persistente do cliente, mesmo que o MAC mude ou não esteja disponível.
 
 pub mod config;
 pub mod duid;

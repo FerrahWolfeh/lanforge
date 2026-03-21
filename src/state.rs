@@ -24,7 +24,7 @@ use std::time::SystemTime;
 
 use crate::config::StaticDeviceCfg;
 use crate::dhcp::v6::duid::Duid;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ use tracing::{debug, info, warn};
 // ---------------------------------------------------------------------------
 
 /// Endereço MAC de 6 bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MacAddr(#[serde(serialize_with = "serialize_mac")] pub [u8; 6]);
 
 fn serialize_mac<S>(mac: &[u8; 6], serializer: S) -> Result<S::Ok, S::Error>
@@ -107,7 +107,7 @@ impl fmt::Debug for MacAddr {
 // ---------------------------------------------------------------------------
 
 /// Tudo que se sabe sobre um dispositivo na rede.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub mac: MacAddr,
     pub hostname: String,
@@ -134,14 +134,14 @@ where
     serializer.serialize_u64(elapsed.as_secs())
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct V4Lease {
     pub ip: Ipv4Addr,
     #[serde(serialize_with = "serialize_time")]
     pub expires: SystemTime,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct V6Lease {
     pub ip: Ipv6Addr,
     #[serde(serialize_with = "serialize_time")]
@@ -378,6 +378,7 @@ impl DeviceTable {
     // Leituras públicas
     // -----------------------------------------------------------------------
 
+    #[cfg(test)]
     pub fn find_by_duid(&self, duid: &Duid) -> Option<&Device> {
         self.duid_index
             .get(duid)

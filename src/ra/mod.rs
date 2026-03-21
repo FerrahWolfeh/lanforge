@@ -3,6 +3,22 @@
 //! Implementação genérica e RFC-compliant do protocolo NDP/RA.
 //! Projetada para rodar em hardware limitado (Raspberry Pi 4B).
 //!
+//! ## Ciclo RA / RS
+//!
+//! ```text
+//!    [ Roteador ]                      [ Cliente ]
+//!          │                                │
+//!          │ (Periódico ou Startup)         │
+//!          ├───────────────────────────────►│ (1. RA Multicast)
+//!          │                                │
+//!          │          (Solicitação)         │
+//!          │◄───────────────────────────────┤ (2. RS Unicast/Multicast)
+//!          │                                │
+//!          │ (Resposta com Delay Aleatório) │
+//!          ├───────────────────────────────►│ (3. RA Unicast/Multicast)
+//!          │                                │
+//! ```
+//!
 //! # RFCs implementadas
 //! - RFC 4861  — Neighbor Discovery for IPv6 (RA/RS completo)
 //! - RFC 8106  — RA Options for DNS Configuration (RDNSS + DNSSL)
@@ -57,6 +73,7 @@ const ICMPV6_TYPE_RS: u8 = 133;
 // Estado de runtime — controla temporização RFC-compliant
 // ---------------------------------------------------------------------------
 
+/// Estado de runtime — controla temporização RFC-compliant.
 pub(crate) struct RaState {
     /// Quantos RAs iniciais já foram enviados (controla fase de startup).
     initial_sent: u8,
@@ -115,6 +132,7 @@ impl RaState {
     }
 }
 
+/// Contexto compartilhado para funções internas do serviço de RA.
 pub(crate) struct RaContext<'a> {
     pub(crate) async_fd: &'a AsyncFd<Socket>,
     pub(crate) cfg: &'a RaConfig,

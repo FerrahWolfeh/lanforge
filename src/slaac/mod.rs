@@ -1,9 +1,9 @@
 //! Tracker de endereços SLAAC via eventos netlink NDP.
 //!
-//! Consulta a tabela de vizinhos do kernel para o prefixo alvo e atualiza
-//! o `ManagedTable` com os endereços SLAAC observados.
+//! Este módulo é responsável por descobrir endereços IPv6 gerados via SLAAC
+//! consultando a tabela de vizinhos (neighbor table) do kernel Linux.
 //!
-//! ## Integração com o Manager
+//! ## Fluxo de Descoberta
 //!
 //! ```text
 //! kernel (dump de vizinhos IPv6)
@@ -21,8 +21,8 @@
 //!           ManagedTable::update()
 //! ```
 //!
-//! O ciclo limpa os endereços SLAAC de cada MAC antes de repopulá-los,
-//! garantindo que endereços obsoletos não persistam entre scans.
+//! O ciclo de scan limpa os endereços SLAAC conhecidos antes de repopulá-los,
+//! garantindo que o estado interno não contenha endereços obsoletos (stale).
 
 use anyhow::Result;
 use rtnetlink::Handle;

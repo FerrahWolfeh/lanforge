@@ -1,4 +1,19 @@
 //! Construção e checksum de pacotes Router Advertisement (RFC 4861 §4.2).
+//!
+//! Este módulo lida com a montagem manual de pacotes ICMPv6 para o serviço RA,
+//! incluindo a inserção de opções como Prefix Information, RDNSS e MTU.
+//!
+//! ## Estrutura do Pacote RA
+//!
+//! ```text
+//! [ ICMPv6 Header ]
+//! [ RA Fixed Fields (Hop Limit, Flags, Lifetime) ]
+//! [ Option: Source Link-Layer Address ]
+//! [ Option: MTU (se configurado) ]
+//! [ Option: Prefix Information (SLAAC) ]
+//! [ Option: RDNSS (DNS) ]
+//! [ Option: DNSSL (Domínios de busca) ]
+//! ```
 
 use super::config::*;
 use std::net::Ipv6Addr;

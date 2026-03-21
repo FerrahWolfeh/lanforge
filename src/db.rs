@@ -53,6 +53,9 @@ use crate::state::{DeviceTable, DeviceUpdate, MacAddr};
 type DevTableRow = (String, String, bool, Option<Vec<u8>>, i64);
 
 /// Handle para o banco SQLite de leases.
+///
+/// Responsável pelas operações síncronas de I/O no banco de dados.
+/// Utiliza o modo WAL para permitir leituras simultâneas a escritas.
 pub struct LeaseDb {
     conn: Connection,
 }
@@ -357,6 +360,11 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 ///
 /// Se a tarefa de IO falhar, loga o erro e continua — uma falha de
 /// persistência não deve derrubar o daemon.
+/// Task assíncrona que persiste o `ManagedTable` reativamente.
+///
+/// Este worker implementa um loop de debounce para evitar micro-escritas no disco.
+/// Ele escuta eventos `DeviceTableDirty` e, após uma janela de calma (`DEBOUNCE`),
+/// dispara uma thread separada para salvar o estado atual no SQLite.
 pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<EventBus>) {
     let mut rx = bus.subscribe();
 
