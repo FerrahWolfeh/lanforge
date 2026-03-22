@@ -10,10 +10,7 @@ use crate::control::{Command as ControlCommand, Response};
 
 pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
     let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
-        format!(
-            "Falha ao conectar no daemon em '{}'. O daemon está rodando?",
-            socket_path
-        )
+        format!("Falha ao conectar no daemon em '{socket_path}'. O daemon está rodando?")
     })?;
 
     let (reader, mut writer) = stream.split();
@@ -85,13 +82,13 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
                     }
 
                     println!("\nConfirmar?");
-                    println!("  MAC       {}", final_mac);
-                    println!("  hostname  {}", final_hostname);
+                    println!("  MAC       {final_mac}");
+                    println!("  hostname  {final_hostname}");
                     if let Some(ref v) = final_v4 {
-                        println!("  V4 fixo   {}", v);
+                        println!("  V4 fixo   {v}");
                     }
                     if let Some(ref v) = final_v6 {
-                        println!("  V6 sufixo {}", v);
+                        println!("  V6 sufixo {v}");
                     }
                     println!();
 
@@ -150,11 +147,11 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
     }
 
     let response: Response = serde_json::from_str(&response_line)
-        .with_context(|| format!("Falha ao analisar a resposta do daemon: {}", response_line))?;
+        .with_context(|| format!("Falha ao analisar a resposta do daemon: {response_line}"))?;
 
     match response {
         Response::Error { error } => {
-            println!("Erro: {}", error);
+            println!("Erro: {error}");
             return Ok(());
         }
         Response::Success(success) => {
@@ -174,7 +171,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             return Ok(());
         }
         Response::Event(e) => {
-            println!("Event: {:?}", e);
+            println!("Event: {e:?}");
             return Ok(());
         }
     }
@@ -190,13 +187,13 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             }
             let resp: Result<Response, _> = serde_json::from_str(&response_line);
             match resp {
-                Ok(Response::Event(e)) => println!("{:?}", e),
+                Ok(Response::Event(e)) => println!("{e:?}"),
                 Ok(Response::Error { error }) => {
-                    println!("Erro no stream: {}", error);
+                    println!("Erro no stream: {error}");
                     break;
                 }
-                Ok(other) => println!("Resposta inesperada: {:?}", other),
-                Err(_) => println!("JSON malformado no stream: {}", response_line),
+                Ok(other) => println!("Resposta inesperada: {other:?}"),
+                Err(_) => println!("JSON malformado no stream: {response_line}"),
             }
         }
     }

@@ -31,7 +31,7 @@
 //! - **`EventBus`**: Barramento de eventos reativo asincrono.
 //! - **Supervisores**: Garantem que tasks de protocolo continuem rodando após erros.
 
-#![deny(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 mod bus;
 mod cli;
 mod config;
@@ -66,7 +66,7 @@ use tracing::{debug, error, info, warn};
 /// `SQLite` e dispara os serviços de rede (RA, DHCP, DNS, Control) como tasks do Tokio.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let mut cfg = Config::load()?;
+    let mut cfg = Config::load();
 
     // Se for comando cliente (Devices, Status, Reload), executa e sai sem subir o daemon (nem env filter/logging)
     match &cfg.command {

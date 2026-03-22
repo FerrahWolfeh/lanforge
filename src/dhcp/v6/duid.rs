@@ -16,14 +16,14 @@ where
     serializer.serialize_str(
         &bytes
             .iter()
-            .map(|b| format!("{:02x}", b))
+            .map(|b| format!("{b:02x}"))
             .collect::<Vec<String>>()
             .join(":"),
     )
 }
 
 impl Duid {
-    pub fn new(bytes: Vec<u8>) -> Self {
+    pub const fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
 
@@ -48,6 +48,7 @@ impl Duid {
 
     /// Tenta extrair um MAC (Link-Layer Address) a partir do DUID, se for do tipo LL ou LLT.
     /// Retorna None se não for possível extrair com segurança.
+    #[allow(clippy::match_same_arms)]
     pub fn extract_mac(&self) -> Option<MacAddr> {
         if self.bytes.len() < 2 {
             return None;
@@ -82,9 +83,9 @@ impl Duid {
 
     /// Gera um DUID-LL (Link-Layer) válido de 10 bytes usando o MAC da interface.
     /// Formato: Type (0x0003) + Hardware Type (0x0001 para Ethernet) + MAC (6 bytes)
-    pub fn generate_ll_from_mac(mac: &[u8; 6]) -> Self {
+    pub fn generate_ll_from_mac(mac: [u8; 6]) -> Self {
         let mut bytes = vec![0x00, 0x03, 0x00, 0x01];
-        bytes.extend_from_slice(mac);
+        bytes.extend_from_slice(&mac);
         Self::new(bytes)
     }
 }
@@ -94,10 +95,10 @@ impl fmt::Debug for Duid {
         let hex: String = self
             .bytes
             .iter()
-            .map(|b| format!("{:02x}", b))
+            .map(|b| format!("{b:02x}"))
             .collect::<Vec<_>>()
             .join(":");
-        write!(f, "Duid({})", hex)
+        write!(f, "Duid({hex})")
     }
 }
 
@@ -106,9 +107,9 @@ impl fmt::Display for Duid {
         let hex: String = self
             .bytes
             .iter()
-            .map(|b| format!("{:02x}", b))
+            .map(|b| format!("{b:02x}"))
             .collect::<Vec<_>>()
             .join(":");
-        write!(f, "{}", hex)
+        write!(f, "{hex}")
     }
 }

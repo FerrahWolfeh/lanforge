@@ -40,7 +40,7 @@ impl Ipv6Pool {
         let ula = self.ula_prefix?;
         let clean_suffix = suffix.strip_prefix("::").unwrap_or(suffix);
         let ula_segs = ula.segments();
-        let suffix_ip: Ipv6Addr = format!("::{}", clean_suffix).parse().ok()?;
+        let suffix_ip: Ipv6Addr = format!("::{clean_suffix}").parse().ok()?;
         let suf_segs = suffix_ip.segments();
 
         let combined = [
@@ -143,25 +143,25 @@ impl Ipv6Pool {
         }
     }
 
-    pub fn release_mac(&mut self, mac: &MacAddr) {
-        if let Some(ip) = self.active.remove(mac) {
+    pub fn release_mac(&mut self, mac: MacAddr) {
+        if let Some(ip) = self.active.remove(&mac) {
             self.ip_to_mac.remove(&ip);
         }
     }
 
     fn mark_used(&mut self, ip: Ipv6Addr, mac: MacAddr) {
-        self.release_mac(&mac);
+        self.release_mac(mac);
         self.active.insert(mac, ip);
         self.ip_to_mac.insert(ip, mac);
     }
 
-    pub fn lookup(&self, mac: &MacAddr) -> Option<Ipv6Addr> {
+    pub fn lookup(&self, mac: MacAddr) -> Option<Ipv6Addr> {
         for (ip, res_mac) in &self.reserved {
-            if res_mac == mac {
+            if *res_mac == mac {
                 return Some(*ip);
             }
         }
-        self.active.get(mac).copied()
+        self.active.get(&mac).copied()
     }
 }
 

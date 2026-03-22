@@ -1,10 +1,10 @@
-//! Persistência SQLite para a DeviceTable.
+//! Persistência `SQLite` para a `DeviceTable`.
 //!
 //! ## Arquitetura
 //!
 //! O módulo tem duas camadas:
 //!
-//! - **`LeaseDb`** — motor SQLite síncrono (rusqlite). Responsável pelo
+//! - **`LeaseDb`** — motor `SQLite` síncrono (rusqlite). Responsável pelo
 //!   schema, serialização e desserialização. Não sabe nada de async.
 //!
 //! - **`db_worker`** — task async que escuta `LanforgeEvent::DeviceTableDirty`
@@ -27,7 +27,7 @@
 //! ## Startup
 //!
 //! Na inicialização, `LeaseDb::load_table` reconstrói o `DeviceTable` do
-//! SQLite via `apply_update` — o Manager recebe o estado persistido como se
+//! `SQLite` via `apply_update` — o Manager recebe o estado persistido como se
 //! fossem eventos normais de protocolo, mantendo as invariantes de merging.
 //!
 //! Entradas estáticas do TOML são carregadas *depois* via
@@ -62,7 +62,7 @@ type DevTableRow = (
     Option<String>,
 );
 
-/// Handle para o banco SQLite de leases.
+/// Handle para o banco `SQLite` de leases.
 ///
 /// Responsável pelas operações síncronas de I/O no banco de dados.
 /// Utiliza o modo WAL para permitir leituras simultâneas a escritas.
@@ -71,7 +71,7 @@ pub struct LeaseDb {
 }
 
 impl LeaseDb {
-    /// Abre (ou cria) o banco SQLite no path indicado e executa migrations.
+    /// Abre (ou cria) o banco `SQLite` no path indicado e executa migrations.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -84,7 +84,7 @@ impl LeaseDb {
         // WAL mode — escritas não bloqueiam leituras; NORMAL é seguro pra SD card
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
 
-        let db = LeaseDb { conn };
+        let db = Self { conn };
         db.create_tables()?;
 
         debug!("SQLite aberto em {}", path.display());
@@ -95,7 +95,7 @@ impl LeaseDb {
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        let db = LeaseDb { conn };
+        let db = Self { conn };
         db.create_tables()?;
         Ok(db)
     }
@@ -160,7 +160,7 @@ impl LeaseDb {
     // Save — snapshot completo
     // -----------------------------------------------------------------------
 
-    /// Grava todos os devices do `DeviceTable` no SQLite em uma transação
+    /// Grava todos os devices do `DeviceTable` no `SQLite` em uma transação
     /// única. Operação idempotente — substitui o estado anterior integralmente.
     pub fn save_table(&self, table: &DeviceTable) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -185,7 +185,7 @@ impl LeaseDb {
                 params![
                     mac_str,
                     device.hostname,
-                    device.is_static as i32,
+                    i32::from(device.is_static),
                     duid_blob,
                     last_seen,
                     device.origin.as_str(),
@@ -257,7 +257,7 @@ impl LeaseDb {
                     row.get::<_, Option<String>>(8).unwrap_or(None),
                 ))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
 
         for (
@@ -316,7 +316,7 @@ impl LeaseDb {
                     row.get::<_, i64>(2)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
 
         for (mac_str, ip_str, expires_unix) in v4_rows {
@@ -378,7 +378,7 @@ impl LeaseDb {
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
 
         for (mac_str, ip_str) in slaac_rows {
@@ -423,7 +423,7 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 ///
 /// Este worker implementa um loop de debounce para evitar micro-escritas no disco.
 /// Ele escuta eventos `DeviceTableDirty` e, após uma janela de calma (`DEBOUNCE`),
-/// dispara uma thread separada para salvar o estado atual no SQLite.
+/// dispara uma thread separada para salvar o estado atual no `SQLite`.
 pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<EventBus>) {
     let mut rx = bus.subscribe();
 
@@ -501,7 +501,7 @@ async fn wait_for_dirty_or_shutdown(rx: &mut broadcast::Receiver<LanforgeEvent>)
         match rx.recv().await {
             Ok(LanforgeEvent::DeviceTableDirty) => return true,
             Ok(LanforgeEvent::Shutdown) => return false,
-            Ok(_) => continue, // outros eventos — ignora
+            Ok(_) => {} // outros eventos — ignora
             Err(broadcast::error::RecvError::Lagged(n)) => {
                 warn!("DB worker atrasado, pulou {n} eventos — forçando flush");
                 return true;
@@ -525,11 +525,12 @@ async fn drain_with_debounce(
     loop {
         match tokio::time::timeout_at(deadline, rx.recv()).await {
             Ok(Ok(LanforgeEvent::Shutdown)) => return true,
-            Ok(Ok(LanforgeEvent::DeviceTableDirty)) => {} // absorve, reinicia janela não
-            Ok(Ok(_)) => {}
-            Ok(Err(broadcast::error::RecvError::Lagged(_))) => {}
-            Ok(Err(broadcast::error::RecvError::Closed)) => return false,
-            Err(_) => return false, // timeout expirou — hora de persistir
+            Ok(
+                Ok(LanforgeEvent::DeviceTableDirty | _)
+                | Err(broadcast::error::RecvError::Lagged(_)),
+            ) => {} // absorve, reinicia janela não
+            Ok(Err(broadcast::error::RecvError::Closed)) | Err(_) => return false,
+            // timeout expirou — hora de persistir
         }
     }
 }
@@ -540,13 +541,13 @@ async fn drain_with_debounce(
 
 fn system_time_to_unix(t: SystemTime) -> i64 {
     t.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .map(|d| d.as_secs().cast_signed())
         .unwrap_or(0)
 }
 
 fn unix_to_system_time(unix: i64) -> SystemTime {
     if unix > 0 {
-        UNIX_EPOCH + Duration::from_secs(unix as u64)
+        UNIX_EPOCH + Duration::from_secs(unix.cast_unsigned())
     } else {
         UNIX_EPOCH
     }

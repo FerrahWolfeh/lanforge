@@ -1,4 +1,4 @@
-//! DeviceTable e tipos centrais do lanforge.
+//! `DeviceTable` e tipos centrais do lanforge.
 //!
 //! O modelo central é um Device — um dispositivo físico que pode ter v4, v6
 //! e endereços SLAAC ao mesmo tempo. Indexado pelo MAC.
@@ -57,15 +57,15 @@ impl MacAddr {
         for (i, part) in parts.iter().enumerate() {
             bytes[i] = u8::from_str_radix(part, 16).ok()?;
         }
-        Some(MacAddr(bytes))
+        Some(Self(bytes))
     }
 
     /// Constrói a partir de um slice de bytes cru.
-    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+    pub const fn from_slice(bytes: &[u8]) -> Option<Self> {
         if bytes.len() == 6 {
             let mut arr = [0u8; 6];
             arr.copy_from_slice(bytes);
-            Some(MacAddr(arr))
+            Some(Self(arr))
         } else {
             None
         }
@@ -75,7 +75,7 @@ impl MacAddr {
 /// Zero-cost conversion de array fixo.
 impl From<[u8; 6]> for MacAddr {
     fn from(arr: [u8; 6]) -> Self {
-        MacAddr(arr)
+        Self(arr)
     }
 }
 
@@ -146,11 +146,11 @@ pub enum Origin {
 }
 
 impl Origin {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            Origin::Toml => "toml",
-            Origin::Cli => "cli",
-            Origin::Dynamic => "dynamic",
+            Self::Toml => "toml",
+            Self::Cli => "cli",
+            Self::Dynamic => "dynamic",
         }
     }
 }
@@ -206,18 +206,18 @@ pub struct StaticEntry {
 // ---------------------------------------------------------------------------
 
 /// Representa uma mudança atômica de estado proposta por um protocolo
-/// (DHCPv4, DHCPv6, SLAAC, Netlink). Não modifica nada sozinho —
+/// (`DHCPv4`, `DHCPv6`, SLAAC, Netlink). Não modifica nada sozinho —
 /// precisa ser passado para `DeviceTable::apply_update`.
 #[derive(Debug, Clone)]
 pub enum DeviceUpdate {
-    /// DHCPv4 concedeu ou renovou um lease.
+    /// `DHCPv4` concedeu ou renovou um lease.
     V4LeaseGranted {
         mac: MacAddr,
         ip: Ipv4Addr,
         expires: SystemTime,
     },
 
-    /// DHCPv6 concedeu ou renovou um lease.
+    /// `DHCPv6` concedeu ou renovou um lease.
     V6LeaseGranted {
         mac: MacAddr,
         duid: Duid,
@@ -236,7 +236,7 @@ pub enum DeviceUpdate {
     /// Ignorado se o device for estático.
     HostnameHint { mac: MacAddr, hostname: String },
 
-    /// Um DUID foi associado ao MAC (geralmente pelo DHCPv6 Solicit).
+    /// Um DUID foi associado ao MAC (geralmente pelo `DHCPv6` Solicit).
     DuidAssociated { mac: MacAddr, duid: Duid },
 
     /// Modificação explícita de campos via CLI (`lanforge host add` / `lanforge host set`).
@@ -255,7 +255,7 @@ pub enum DeviceUpdate {
 // DeviceTable
 // ---------------------------------------------------------------------------
 
-/// Tabela de dispositivos — compartilhada via Arc<RwLock<..>>.
+/// Tabela de dispositivos — compartilhada via Arc<`RwLock`<..>>.
 ///
 /// É a **única autoridade** de estado. Toda escrita passa por `apply_update`.
 #[derive(Debug, Clone)]
@@ -268,7 +268,7 @@ pub struct DeviceTable {
 
 impl DeviceTable {
     pub fn new() -> Self {
-        DeviceTable {
+        Self {
             devices: HashMap::new(),
             duid_index: HashMap::new(),
             static_entries: HashMap::new(),
@@ -477,9 +477,9 @@ impl DeviceTable {
 
             // Pre-popula o device para que hostname resolva imediatamente
             let dev = self.get_or_insert(mac);
-            dev.hostname = e.hostname.clone();
+            dev.hostname.clone_from(&e.hostname);
             dev.v4_static = v4_ip;
-            dev.v6_suffix = e.v6_suffix.clone();
+            dev.v6_suffix.clone_from(&e.v6_suffix);
             dev.is_static = true;
             dev.origin = Origin::Toml;
         }
@@ -498,7 +498,7 @@ impl DeviceTable {
 
     /// Recupera o DUID associado a um MAC, se já tiver sido aprendido.
     ///
-    /// Útil no DHCPv6 para reutilizar o DUID existente num Renew/Rebind
+    /// Útil no `DHCPv6` para reutilizar o DUID existente num Renew/Rebind
     /// sem precisar que o cliente o reenvie explicitamente.
     pub fn find_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
         self.devices.get(&mac)?.duid.as_ref()

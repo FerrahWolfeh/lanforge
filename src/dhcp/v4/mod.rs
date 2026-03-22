@@ -1,4 +1,4 @@
-//! DHCPv4 service — Gerenciamento de endereços IPv4 dinâmicos (RFC 2131).
+//! `DHCPv4` service — Gerenciamento de endereços IPv4 dinâmicos (RFC 2131).
 //!
 //! Este serviço escuta solicitações na porta 67/UDP e gerencia um pool de
 //! endereços, suportando reservas estáticas baseadas em MAC.
@@ -45,7 +45,7 @@ use config::Dhcpv4Config;
 use raw::RawSender;
 use server::{DhcpServer, HandleResult};
 
-/// Entry point do serviço DHCPv4. Invocar via `tokio::spawn` + supervisor.
+/// Entry point do serviço `DHCPv4`. Invocar via `tokio::spawn` + supervisor.
 pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Result<()> {
     info!(
         "Starting DHCPv4: range {}–{}, lease {}s, router {}, server_id {}",
@@ -59,12 +59,15 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
         for entry in t.static_entries() {
             if let Some(ip) = entry.v4_ip {
                 server.pool.add_reservation(ip, entry.mac);
-                info!("Static reservation: {} ({}) → {ip}", entry.mac, entry.hostname);
+                info!(
+                    "Static reservation: {} ({}) → {ip}",
+                    entry.mac, entry.hostname
+                );
             }
         }
     }
 
-    let socket = bind_dhcp_socket(&cfg.iface).await?;
+    let socket = bind_dhcp_socket(&cfg.iface)?;
     info!("Receiving on 0.0.0.0:67 (iface: {})", cfg.iface);
 
     let mut raw_tx = RawSender::new(&cfg.iface)?;
@@ -111,8 +114,9 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                 }
 
                 // Reporta o que foi aprendido ao Manager — sem escrever estado diretamente
-                if let Some(assigned_ip) = server.last_assignment_for(&mac) {
-                    let expires = SystemTime::now() + Duration::from_secs(cfg.lease_time as u64);
+                if let Some(assigned_ip) = server.last_assignment_for(mac) {
+                    let expires =
+                        SystemTime::now() + Duration::from_secs(u64::from(cfg.lease_time));
 
                     table
                         .update(DeviceUpdate::V4LeaseGranted {
@@ -137,8 +141,8 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
     }
 }
 
-/// Bind UDP na porta 67 com SO_BROADCAST e SO_BINDTODEVICE.
-async fn bind_dhcp_socket(iface: &str) -> Result<UdpSocket> {
+/// Bind UDP na porta 67 com `SO_BROADCAST` e `SO_BINDTODEVICE`.
+fn bind_dhcp_socket(iface: &str) -> Result<UdpSocket> {
     let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 67);
 
     let sock = socket2::Socket::new(

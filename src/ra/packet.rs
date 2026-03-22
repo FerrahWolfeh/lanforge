@@ -1,6 +1,6 @@
 //! Construção e checksum de pacotes Router Advertisement (RFC 4861 §4.2).
 //!
-//! Este módulo lida com a montagem manual de pacotes ICMPv6 para o serviço RA,
+//! Este módulo lida com a montagem manual de pacotes `ICMPv6` para o serviço RA,
 //! incluindo a inserção de opções como Prefix Information, RDNSS e MTU.
 //!
 //! ## Estrutura do Pacote RA
@@ -15,7 +15,7 @@
 //! [ Option: DNSSL (Domínios de busca) ]
 //! ```
 
-use super::config::*;
+use super::config::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
 use std::net::Ipv6Addr;
 
 pub const ICMPV6_TYPE_RA: u8 = 134;
@@ -171,7 +171,7 @@ pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
 // Checksum ICMPv6 — RFC 4443 §2.3
 // ---------------------------------------------------------------------------
 
-/// Calcula o checksum ICMPv6 incluindo o pseudo-header IPv6.
+/// Calcula o checksum `ICMPv6` incluindo o pseudo-header IPv6.
 ///
 /// Diferente do ICMP v4, o checksum cobre um pseudo-header que inclui os
 /// endereços IPv6 src/dst, o comprimento do payload e next-header=58.
@@ -180,10 +180,10 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
     let mut acc = 0u32;
 
     for chunk in src.octets().chunks(2) {
-        acc += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+        acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
     }
     for chunk in dst.octets().chunks(2) {
-        acc += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+        acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
     }
 
     let len = payload.len() as u32;
@@ -193,10 +193,10 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
 
     let mut iter = payload.chunks_exact(2);
     for chunk in iter.by_ref() {
-        acc += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+        acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
     }
     if let [tail] = iter.remainder() {
-        acc += (*tail as u32) << 8; // padding de zero à direita
+        acc += u32::from(*tail) << 8; // padding de zero à direita
     }
 
     // Dobramento one's complement

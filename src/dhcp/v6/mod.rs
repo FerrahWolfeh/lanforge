@@ -1,6 +1,6 @@
-//! DHCPv6 service — Gerenciamento de endereços IPv6 dinâmicos (RFC 8415).
+//! `DHCPv6` service — Gerenciamento de endereços IPv6 dinâmicos (RFC 8415).
 //!
-//! Este serviço gerencia a atribuição de endereços IPv6 via DHCPv6 (Stateful),
+//! Este serviço gerencia a atribuição de endereços IPv6 via `DHCPv6` (Stateful),
 //! servindo como alternativa ou complemento ao SLAAC.
 //!
 //! ## Ciclo SARR (Solicit, Advertise, Request, Reply)
@@ -26,7 +26,7 @@
 //! ## Integração com o Manager
 //!
 //! O `dhcpv6_service` reporta DUIDs e concessões de IP ao `ManagedTable`.
-//! Diferente do v4, o DHCPv6 depende fortemente do DUID para identificação
+//! Diferente do v4, o `DHCPv6` depende fortemente do DUID para identificação
 //! persistente do cliente, mesmo que o MAC mude ou não esteja disponível.
 
 pub mod config;
@@ -52,7 +52,7 @@ use server::{Dhcpv6Server, HandleResult};
 
 const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2);
 
-/// Inicia o serviço DHCPv6 (porta UDP 547, multicast ff02::1:2).
+/// Inicia o serviço `DHCPv6` (porta UDP 547, multicast `ff02::1:2`).
 pub async fn dhcpv6_service(
     config: Dhcpv6Config,
     table: Arc<ManagedTable>,
@@ -101,7 +101,7 @@ pub async fn dhcpv6_service(
     let mut server = Dhcpv6Server::new(
         config.clone(),
         Ipv6Pool::new(config.range_start, config.range_end, config.ula_prefix),
-        Duid::generate_ll_from_mac(&server_mac),
+        Duid::generate_ll_from_mac(server_mac),
     );
 
     {
@@ -110,7 +110,10 @@ pub async fn dhcpv6_service(
             if let Some(suffix) = &entry.v6_suffix {
                 if let Some(ip) = server.pool.construct_static_ula(suffix) {
                     server.pool.add_reservation(ip, entry.mac);
-                    info!("Static reservation: {} ({}) → {}", entry.mac, entry.hostname, ip);
+                    info!(
+                        "Static reservation: {} ({}) → {}",
+                        entry.mac, entry.hostname, ip
+                    );
                 } else {
                     warn!("Falha ao construir ULA para sufixo: {}", suffix);
                 }
@@ -128,7 +131,7 @@ pub async fn dhcpv6_service(
 
                 let (peer_ip, scope_id) = match peer {
                     std::net::SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
-                    _ => continue,
+                    std::net::SocketAddr::V4(_) => continue,
                 };
 
                 match server
@@ -168,12 +171,12 @@ async fn apply_learned_state(
 ) {
     let Some(mac) = opt_mac else { return };
 
-    let assigned_ip = server.last_assignment_for(&mac);
+    let assigned_ip = server.last_assignment_for(mac);
 
     match (learned_duid, assigned_ip) {
         (Some(duid), Some(ip)) => {
             // Caso completo: DUID conhecido + IP alocado → lease v6
-            let expires = SystemTime::now() + Duration::from_secs(config.lease_time as u64);
+            let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
             table
                 .update(DeviceUpdate::V6LeaseGranted {
                     mac,
@@ -191,7 +194,7 @@ async fn apply_learned_state(
         }
         (None, Some(ip)) => {
             // IP renovado sem novo DUID (Renew/Rebind de device já conhecido)
-            let expires = SystemTime::now() + Duration::from_secs(config.lease_time as u64);
+            let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
             // Recupera o DUID existente do Manager, se houver
             let existing_duid = table.read().await.find_duid_by_mac(mac).cloned();
             if let Some(duid) = existing_duid {

@@ -1,11 +1,11 @@
-//! Injeção de pacotes DHCP (Layer 2) via AF_PACKET (pnet).
+//! Injeção de pacotes DHCP (Layer 2) via `AF_PACKET` (pnet).
 //!
 //! Exigido pelo RFC para enviar pacotes UDP unicast para endereços IP
 //! não configurados (quando o cliente tem IP mas a tabela ARP do servidor
 //! não tem a entrada). Evita o broadcast em L3 para pacotes unicast.
 
 use anyhow::{Result, anyhow};
-use pnet::datalink::{self, MacAddr as PnetMac};
+use pnet::datalink::{self, Config, MacAddr as PnetMac};
 use pnet::packet::MutablePacket;
 use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
 use pnet::packet::ipv4::{self, Ipv4Flags, MutableIpv4Packet};
@@ -28,7 +28,7 @@ impl RawSender {
             .mac
             .ok_or_else(|| anyhow!("Interface '{iface_name}' has no MAC addr"))?;
 
-        let (tx, _) = match datalink::channel(&interface, Default::default()) {
+        let (tx, _) = match datalink::channel(&interface, Config::default()) {
             Ok(datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
             Ok(_) => return Err(anyhow!("Unsupported AF_PACKET channel type")),
             Err(e) => return Err(anyhow!("Failed to open AF_PACKET channel: {e}")),
@@ -37,7 +37,7 @@ impl RawSender {
         Ok(Self { tx, src_mac })
     }
 
-    /// Embrulha o payload DHCPv4 (BOOTP) em headers UDP, IPv4 e Ethernet,
+    /// Embrulha o payload `DHCPv4` (BOOTP) em headers UDP, IPv4 e Ethernet,
     /// calculando todos os checksums manuais e enviando na interface física.
     pub fn send_dhcp(
         &mut self,

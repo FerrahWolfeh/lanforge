@@ -1,4 +1,4 @@
-//! Alocador de endereços IP para o pool dinâmico DHCPv4.
+//! Alocador de endereços IP para o pool dinâmico `DHCPv4`.
 //!
 //! Gerencia o range configurável excluindo reservas estáticas.
 //! Prioriza reutilizar o IP anteriormente atribuído ao mesmo MAC (sticky).
@@ -26,7 +26,7 @@ pub struct IpPool {
 
 impl IpPool {
     pub fn new(start: Ipv4Addr, end: Ipv4Addr) -> Self {
-        IpPool {
+        Self {
             start: u32::from(start),
             end: u32::from(end),
             active: HashMap::new(),
@@ -120,8 +120,8 @@ impl IpPool {
     }
 
     /// Release all allocations for a MAC.
-    pub fn release_mac(&mut self, mac: &MacAddr) {
-        if let Some(ip) = self.active.remove(mac) {
+    pub fn release_mac(&mut self, mac: MacAddr) {
+        if let Some(ip) = self.active.remove(&mac) {
             self.ip_to_mac.remove(&ip);
         }
     }
@@ -142,20 +142,20 @@ impl IpPool {
     /// Mark an IP as used by a MAC.
     fn mark_used(&mut self, ip: Ipv4Addr, mac: MacAddr) {
         // Release any previous allocation for this MAC
-        self.release_mac(&mac);
+        self.release_mac(mac);
         self.active.insert(mac, ip);
         self.ip_to_mac.insert(ip, mac);
     }
 
     /// Get the IP currently assigned to a MAC (if any — static or dynamic).
-    pub fn lookup(&self, mac: &MacAddr) -> Option<Ipv4Addr> {
+    pub fn lookup(&self, mac: MacAddr) -> Option<Ipv4Addr> {
         // Check static first
         for (ip, res_mac) in &self.reserved {
-            if res_mac == mac {
+            if *res_mac == mac {
                 return Some(*ip);
             }
         }
-        self.active.get(mac).copied()
+        self.active.get(&mac).copied()
     }
 
     /// Total number of active dynamic allocations.

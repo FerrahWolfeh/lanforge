@@ -37,7 +37,7 @@ pub struct DhcpV4Cfg {
 
 impl Default for DhcpV4Cfg {
     fn default() -> Self {
-        DhcpV4Cfg {
+        Self {
             enabled: false,
             range_start: "192.168.0.100".into(),
             range_end: "192.168.0.254".into(),
@@ -61,7 +61,7 @@ pub struct DhcpV6Cfg {
 
 impl Default for DhcpV6Cfg {
     fn default() -> Self {
-        DhcpV6Cfg {
+        Self {
             enabled: false,
             lease_time: 86400,
             range_start: None,
@@ -76,7 +76,7 @@ impl Default for DhcpV6Cfg {
 pub struct GeneralCfg {
     /// Interface LAN onde o daemon escuta.
     pub iface_lan: String,
-    /// Caminho para o arquivo de banco de dados SQLite.
+    /// Caminho para o arquivo de banco de dados `SQLite`.
     pub leases_db: String,
     /// Prefixo IPv6 "alvo" para identificar dispositivos locais (SLAAC).
     pub target_prefix: String,
@@ -90,7 +90,7 @@ pub struct GeneralCfg {
 
 impl Default for GeneralCfg {
     fn default() -> Self {
-        GeneralCfg {
+        Self {
             iface_lan: "end0".into(),
             leases_db: "/var/lib/lanforge/leases.db".into(),
             target_prefix: "fd97:f00d:cafe:3731".into(),
@@ -118,7 +118,7 @@ pub struct RaCfg {
 
 impl Default for RaCfg {
     fn default() -> Self {
-        RaCfg {
+        Self {
             enabled: false,
             managed: true,
             other_config: true,
@@ -159,7 +159,7 @@ pub struct DnsCfg {
 
 impl Default for DnsCfg {
     fn default() -> Self {
-        DnsCfg {
+        Self {
             enabled: false,
             listen: "0.0.0.0:5300".into(),
             upstream: None,
@@ -223,7 +223,7 @@ mod tests {
     fn test_default_config() {
         let default_cfg = TomlConfig::default();
         assert_eq!(default_cfg.general.iface_lan, "end0");
-        assert_eq!(default_cfg.ra.enabled, false);
+        assert!(!default_cfg.ra.enabled);
         assert_eq!(default_cfg.dns.listen, "0.0.0.0:5300");
     }
 

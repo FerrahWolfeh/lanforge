@@ -10,7 +10,7 @@ pub struct DeviceIdentity {
 }
 
 impl DeviceIdentity {
-    pub fn new(mac: MacAddr, hostname: Option<String>, vendor_class: Option<String>) -> Self {
+    pub const fn new(mac: MacAddr, hostname: Option<String>, vendor_class: Option<String>) -> Self {
         Self {
             mac,
             hostname,

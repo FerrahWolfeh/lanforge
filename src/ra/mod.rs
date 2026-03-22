@@ -23,7 +23,7 @@
 //! - RFC 4861  — Neighbor Discovery for IPv6 (RA/RS completo)
 //! - RFC 8106  — RA Options for DNS Configuration (RDNSS + DNSSL)
 //! - RFC 4191  — Default Router Preferences (flag de prioridade)
-//! - RFC 3775  — AdvRouterAddr flag no Prefix Information
+//! - RFC 3775  — `AdvRouterAddr` flag no Prefix Information
 
 pub mod config;
 pub mod packet;
@@ -54,7 +54,7 @@ use tracing::{debug, info, warn};
 // ---------------------------------------------------------------------------
 
 /// Intervalo máximo entre os primeiros RAs no startup (§6.2.6).
-/// Garante que clientes recém-conectados não esperem MaxRtrAdvInterval inteiro.
+/// Garante que clientes recém-conectados não esperem `MaxRtrAdvInterval` inteiro.
 const MAX_INITIAL_RTR_ADVERT_INTERVAL: Duration = Duration::from_secs(16);
 
 /// Quantidade de RAs iniciais enviados com intervalo reduzido (§6.2.6).
@@ -69,19 +69,22 @@ const MAX_RA_DELAY_TIME_MS: u64 = 500;
 
 const ICMPV6_TYPE_RS: u8 = 133;
 
+// ICMP6_FILTER = 1 (linux/icmpv6.h — not exposed by libc crate)
+const ICMP6_FILTER: libc::c_int = 1;
+
 // ---------------------------------------------------------------------------
 // Estado de runtime — controla temporização RFC-compliant
 // ---------------------------------------------------------------------------
 
 /// Estado de runtime — controla temporização RFC-compliant.
-pub(crate) struct RaState {
+pub struct RaState {
     /// Quantos RAs iniciais já foram enviados (controla fase de startup).
     initial_sent: u8,
-    /// Instante do último RA multicast enviado (aplica MIN_DELAY_BETWEEN_RAS).
+    /// Instante do último RA multicast enviado (aplica `MIN_DELAY_BETWEEN_RAS`).
     last_multicast_ra: Option<Instant>,
     /// Rate limiting por destino unicast: instante do último RA enviado para cada IP.
     unicast_rl: HashMap<Ipv6Addr, Instant>,
-    /// Último GUA detectado — para publicar PrefixChanged apenas quando muda.
+    /// Último GUA detectado — para publicar `PrefixChanged` apenas quando muda.
     last_gua: Option<Ipv6Addr>,
 }
 
@@ -97,7 +100,7 @@ impl RaState {
 
     /// Sorteia o intervalo para o próximo RA periódico (RFC 4861 §6.2.4).
     ///
-    /// Durante o startup: intervalos curtos (até MAX_INITIAL_RTR_ADVERT_INTERVAL)
+    /// Durante o startup: intervalos curtos (até `MAX_INITIAL_RTR_ADVERT_INTERVAL`)
     /// para convergência rápida. Depois: aleatório uniforme em [Min, Max].
     fn next_interval(&self, cfg: &RaConfig) -> Duration {
         let mut rng = rand::rng();
@@ -133,7 +136,7 @@ impl RaState {
 }
 
 /// Contexto compartilhado para funções internas do serviço de RA.
-pub(crate) struct RaContext<'a> {
+pub struct RaContext<'a> {
     pub(crate) async_fd: &'a AsyncFd<Socket>,
     pub(crate) cfg: &'a RaConfig,
     pub(crate) handle: &'a Handle,
@@ -156,8 +159,8 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
     info!(
         "Iniciando na interface '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
         cfg.iface,
-        cfg.managed as u8,
-        cfg.other_config as u8,
+        u8::from(cfg.managed),
+        u8::from(cfg.other_config),
         cfg.max_interval.as_secs(),
         cfg.effective_router_lifetime().as_secs(),
     );
@@ -228,9 +231,9 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
 
                         handle_rs(&ctx, rs_src, &mut state).await;
                     }
-                    Ok(Ok(_))  => {}
+                    Ok(Ok(_)) | Err(_)  => {}
                     Ok(Err(e)) => warn!("Erro de leitura no socket: {e}"),
-                    Err(_)     => {}  // WouldBlock — AsyncFd reseta automaticamente
+                    // WouldBlock — AsyncFd reseta automaticamente
                 }
             }
         }
@@ -354,10 +357,10 @@ fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket> {
     Ok(sock)
 }
 
-/// Configura ICMP6_FILTER para aceitar apenas RS (tipo 133), bloquear todo o resto.
+/// Configura `ICMP6_FILTER` para aceitar apenas RS (tipo 133), bloquear todo o resto.
 ///
 /// O filtro é um bitmask de 256 bits (32 bytes) processado no kernel antes de
-/// acordar o processo. Fundamental no RPi4 onde cada wakeup desnecessário
+/// acordar o processo. Fundamental no `RPi4` onde cada wakeup desnecessário
 /// custa comparativamente mais que em x86.
 fn set_icmp6_filter_rs_only(sock: &Socket) -> io::Result<()> {
     // Todos bits = 1 → bloqueia tudo (ICMP6_FILTER_SETBLOCKALL)
@@ -365,8 +368,7 @@ fn set_icmp6_filter_rs_only(sock: &Socket) -> io::Result<()> {
     // Limpa o bit do tipo RS → deixa passar (ICMP6_FILTER_SETPASS(133))
     let t = ICMPV6_TYPE_RS as usize;
     filter[t / 8] &= !(1u8 << (t % 8));
-    // ICMP6_FILTER = 1 (linux/icmpv6.h — not exposed by libc crate)
-    const ICMP6_FILTER: libc::c_int = 1;
+
     set_sockopt_raw(sock, libc::IPPROTO_ICMPV6, ICMP6_FILTER, &filter)
 }
 
@@ -448,7 +450,7 @@ fn get_iface_mac(iface: &str) -> Result<[u8; 6]> {
 // Detecção de endereços via rtnetlink (reutiliza Handle existente)
 // ---------------------------------------------------------------------------
 
-/// Retorna o endereço link-local (fe80::/10) da interface.
+/// Retorna o endereço link-local (`fe80::/10`) da interface.
 /// Obrigatório como endereço fonte de todo RA (RFC 4861 §4.2).
 async fn get_link_local_addr(handle: &Handle, iface_index: u32) -> Result<Ipv6Addr> {
     let mut stream = handle.address().get().execute();
@@ -470,7 +472,7 @@ async fn get_link_local_addr(handle: &Handle, iface_index: u32) -> Result<Ipv6Ad
 
 /// Detecta o prefixo GUA /64 da interface e retorna com bits de host zerados.
 ///
-/// GUA (2000::/3): primeiro byte em [0x20, 0x3F].
+/// GUA (`2000::/3)`: primeiro byte em [0x20, 0x3F].
 /// O endereço na interface (ex: `2a01:x:y:z::1`) é mascarado para obter `2a01:x:y:z::`.
 /// Retorna `None` se não houver GUA atribuído (ISP sem IPv6 ou delegação pendente).
 async fn get_gua_prefix(handle: &Handle, iface_index: u32) -> Result<Option<Ipv6Addr>> {
@@ -546,8 +548,7 @@ mod tests {
             let interval = state.next_interval(&cfg);
             assert!(
                 interval <= MAX_INITIAL_RTR_ADVERT_INTERVAL,
-                "Intervalo de startup muito longo: {:?}",
-                interval
+                "Intervalo de startup muito longo: {interval:?}"
             );
             state.record_multicast();
         }
@@ -558,8 +559,7 @@ mod tests {
         assert!(
             normal_interval >= Duration::from_secs(33)
                 && normal_interval <= Duration::from_secs(100),
-            "Intervalo normal fora dos limites: {:?}",
-            normal_interval
+            "Intervalo normal fora dos limites: {normal_interval:?}",
         );
     }
 }

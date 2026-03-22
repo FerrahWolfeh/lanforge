@@ -27,9 +27,7 @@ pub mod args;
 pub mod toml;
 
 pub use args::{CliArgs, Command, DbCommand, HostCommand, LeaseCommand};
-pub use toml::{
-    DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg, load_toml,
-};
+pub use toml::{DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg, load_toml};
 
 use clap::Parser;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -77,13 +75,13 @@ pub struct Config {
 
 impl Config {
     /// Load config: parse CLI args, read TOML, merge with CLI overrides.
-    pub fn load() -> anyhow::Result<Self> {
+    pub fn load() -> Self {
         let cli = CliArgs::parse();
 
         // toml::load_toml instead of local if we were explicit, but we imported `load_toml`
         let toml_cfg = load_toml(&cli.config);
 
-        Ok(Config {
+        Self {
             command: cli.command.unwrap_or(Command::Run { only: None }),
             iface_lan: cli.iface_lan.unwrap_or(toml_cfg.general.iface_lan),
             target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),
@@ -107,12 +105,12 @@ impl Config {
             dns_toml: toml_cfg.dns,
 
             devices: toml_cfg.devices,
-        })
+        }
     }
 
     /// Builds an `RaConfig` from the merged configuration.
     pub fn to_ra_config(&self) -> crate::ra::RaConfig {
-        use crate::ra::*;
+        use crate::ra::{PrefixConfig, RaConfig, RdnssConfig};
 
         let mut prefixes = Vec::new();
 
@@ -142,9 +140,11 @@ impl Config {
             .rdnss
             .iter()
             .filter(|r| !r.servers.is_empty())
-            .map(|r| match r.lifetime {
-                Some(lt) => RdnssConfig::with_lifetime(r.servers.clone(), lt as u32),
-                None => RdnssConfig::new(r.servers.clone()),
+            .map(|r| {
+                r.lifetime.map_or_else(
+                    || RdnssConfig::new(r.servers.clone()),
+                    |lt| RdnssConfig::with_lifetime(r.servers.clone(), lt as u32),
+                )
             })
             .collect();
 
@@ -194,8 +194,9 @@ impl Config {
                 .dhcpv4_toml
                 .subnet_mask
                 .as_deref()
-                .map(|s| parse_ip(s, Ipv4Addr::new(255, 255, 255, 0)))
-                .unwrap_or(Ipv4Addr::new(255, 255, 255, 0)),
+                .map_or(Ipv4Addr::new(255, 255, 255, 0), |s| {
+                    parse_ip(s, Ipv4Addr::new(255, 255, 255, 0))
+                }),
             domain_name: self.dhcpv4_toml.domain_name.clone(),
         }
     }

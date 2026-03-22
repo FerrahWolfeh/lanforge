@@ -21,7 +21,7 @@ pub enum Command {
     Watch,
     /// Service health and general status
     Status,
-    /// EventBus interno em tempo real
+    /// `EventBus` interno em tempo real
     Log {
         #[arg(long)]
         follow: bool,

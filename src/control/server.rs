@@ -10,6 +10,11 @@ use tracing::{debug, error, info};
 use crate::bus::{EventBus, LanforgeEvent, ManagedTable};
 use crate::control::api::{self, Command, Interfaces, Response, SimpleSuccess};
 
+fn format_iso8601(time: std::time::SystemTime) -> String {
+    let dt: chrono::DateTime<chrono::Utc> = time.into();
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 /// Inicia o serviço de controle UDS.
 pub async fn control_service(
     path: String,
@@ -123,11 +128,6 @@ async fn handle_client(
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
 
-    fn format_iso8601(time: std::time::SystemTime) -> String {
-        let dt: chrono::DateTime<chrono::Utc> = time.into();
-        dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-    }
-
     // Loop de REPL JSON
     while reader.read_line(&mut line).await? > 0 {
         let trim_line = line.trim();
@@ -151,8 +151,8 @@ async fn handle_client(
                 };
 
                 // Network
-                status.network.lan_iface = ifaces.lan.clone();
-                status.network.gua = current_gua.clone();
+                status.network.lan_iface.clone_from(&ifaces.lan);
+                status.network.gua.clone_from(&current_gua);
                 status.network.ula = cfg.ra_toml.prefix.iter().find_map(|p| p.address.clone());
 
                 // Services -> RA
@@ -162,8 +162,8 @@ async fn handle_client(
                     "offline".to_string()
                 };
                 status.services.ra.uptime_secs = uptime_secs;
-                status.services.ra.gua = current_gua.clone();
-                status.services.ra.ula = status.network.ula.clone();
+                status.services.ra.gua.clone_from(&current_gua);
+                status.services.ra.ula.clone_from(&status.network.ula);
 
                 // Services -> DHCPv4
                 status.services.dhcp_v4.state = if cfg.dhcpv4_enabled {
@@ -188,7 +188,11 @@ async fn handle_client(
                     "offline".to_string()
                 };
                 status.services.dns.uptime_secs = uptime_secs;
-                status.services.dns.upstream = cfg.dns_toml.upstream.clone();
+                status
+                    .services
+                    .dns
+                    .upstream
+                    .clone_from(&cfg.dns_toml.upstream);
 
                 // Services -> SLAAC
                 status.services.slaac.state = "online".to_string();
@@ -196,7 +200,7 @@ async fn handle_client(
                 status.services.slaac.last_scan_secs_ago = last_scan_secs_ago;
 
                 // Database
-                status.db.path = cfg.leases_db.clone();
+                status.db.path.clone_from(&cfg.leases_db);
                 status.db.size_bytes = std::fs::metadata(&cfg.leases_db)
                     .map(|m| m.len())
                     .unwrap_or(0);
@@ -240,6 +244,9 @@ async fn handle_client(
                     .devices()
                     .filter(|d| d.origin == crate::state::Origin::Cli)
                     .count();
+
+                drop(table_guard);
+
                 status.devices.dynamic = dynamic;
 
                 status.services.dhcp_v4.leases_active = v4_active;
@@ -299,7 +306,11 @@ async fn handle_client(
                             expires: format_iso8601(v.expires),
                             reserved: dev.is_static,
                         }),
-                        slaac: dev.slaac.iter().map(|ip| ip.to_string()).collect(),
+                        slaac: dev
+                            .slaac
+                            .iter()
+                            .map(std::string::ToString::to_string)
+                            .collect(),
                     });
                 }
 
@@ -468,7 +479,11 @@ async fn handle_client(
                             expires: format_iso8601(v.expires),
                             reserved: true,
                         }),
-                        slaac: dev.slaac.iter().map(|ip| ip.to_string()).collect(),
+                        slaac: dev
+                            .slaac
+                            .iter()
+                            .map(std::string::ToString::to_string)
+                            .collect(),
                     });
                 }
 
@@ -488,7 +503,7 @@ async fn handle_client(
                     w.static_entries.remove(&mac_addr);
                     bus.publish(LanforgeEvent::DeviceTableDirty);
                     Response::Success(SimpleSuccess {
-                        message: format!("Host removido (MAC {})", mac),
+                        message: format!("Host removido (MAC {mac})"),
                     })
                 } else {
                     Response::Error {
@@ -497,10 +512,10 @@ async fn handle_client(
                 }
             }
             Ok(Command::LeaseRenew { mac }) => Response::Success(SimpleSuccess {
-                message: format!("Renovando lease para {}", mac),
+                message: format!("Renovando lease para {mac}"),
             }),
             Ok(Command::LeaseRelease { mac }) => Response::Success(SimpleSuccess {
-                message: format!("Liberando lease para {}", mac),
+                message: format!("Liberando lease para {mac}"),
             }),
             Ok(Command::DbVacuum) => Response::Success(SimpleSuccess {
                 message: "Iniciando vacuum do sqlite...".to_string(),

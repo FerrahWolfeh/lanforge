@@ -1,4 +1,4 @@
-//! DORA state machine — Lógica central do servidor DHCPv4.
+//! DORA state machine — Lógica central do servidor `DHCPv4`.
 //!
 //! Este módulo implementa a lógica de alocação de endereços e processamento
 //! de mensagens conforme a RFC 2131. Ele utiliza o `IpPool` para gerenciar
@@ -31,7 +31,7 @@ pub enum HandleResult {
     Ignore,
 }
 
-/// Servidor DHCPv4 stateful.
+/// Servidor `DHCPv4` stateful.
 ///
 /// Mantém as configurações e o pool de IPs para uma interface específica.
 pub struct DhcpServer {
@@ -44,7 +44,7 @@ pub struct DhcpServer {
 impl DhcpServer {
     pub fn new(cfg: Dhcpv4Config) -> Self {
         let pool = IpPool::new(cfg.range_start, cfg.range_end);
-        DhcpServer { cfg, pool }
+        Self { cfg, pool }
     }
 
     /// Processa um pacote DHCP raw e retorna a resposta (se houver).
@@ -62,13 +62,13 @@ impl DhcpServer {
             return HandleResult::Ignore;
         }
 
-        let msg_type = match msg.opts().get(v4::OptionCode::MessageType) {
-            Some(DhcpOption::MessageType(t)) => *t,
-            _ => {
+        let msg_type =
+            if let Some(DhcpOption::MessageType(t)) = msg.opts().get(v4::OptionCode::MessageType) {
+                *t
+            } else {
                 debug!("No MessageType option, ignoring");
                 return HandleResult::Ignore;
-            }
-        };
+            };
 
         let chaddr = msg.chaddr();
         if chaddr.len() < 6 {
@@ -83,17 +83,17 @@ impl DhcpServer {
 
         let identity = DeviceIdentity::resolve(
             mac,
-            self.get_hostname(&msg),
-            self.get_vendor_class(&msg),
+            Self::get_hostname(&msg),
+            Self::get_vendor_class(&msg),
             table,
         );
 
         match msg_type {
-            MessageType::Discover => self.handle_discover(&msg, identity, broadcast),
-            MessageType::Request => self.handle_request(&msg, identity, broadcast),
-            MessageType::Release => self.handle_release(&msg, identity),
-            MessageType::Decline => self.handle_decline(&msg, identity),
-            MessageType::Inform => self.handle_inform(&msg, identity),
+            MessageType::Discover => self.handle_discover(&msg, &identity, broadcast),
+            MessageType::Request => self.handle_request(&msg, &identity, broadcast),
+            MessageType::Release => self.handle_release(&msg, &identity),
+            MessageType::Decline => self.handle_decline(&msg, &identity),
+            MessageType::Inform => self.handle_inform(&msg, &identity),
             other => {
                 debug!("Ignoring message type: {other:?}");
                 HandleResult::Ignore
@@ -106,11 +106,11 @@ impl DhcpServer {
     fn handle_discover(
         &mut self,
         msg: &Message,
-        identity: DeviceIdentity,
+        identity: &DeviceIdentity,
         broadcast: bool,
     ) -> HandleResult {
         let mac = identity.mac;
-        let requested = self.get_requested_ip(msg);
+        let requested = Self::get_requested_ip(msg);
         let Some(offered_ip) = self.pool.allocate(mac, requested) else {
             warn!("DHCPv4: Pool exhausted, no IP available for {identity}");
             return HandleResult::Ignore;
@@ -118,7 +118,7 @@ impl DhcpServer {
 
         info!("DHCPv4: {identity} is looking for an address -> Offering {offered_ip}");
         let reply = self.build_reply(msg, MessageType::Offer, offered_ip);
-        HandleResult::Reply(reply, broadcast, offered_ip, self.get_hostname(msg))
+        HandleResult::Reply(reply, broadcast, offered_ip, Self::get_hostname(msg))
     }
 
     // ── REQUEST → ACK or NAK ─────────────────────────────────────────────
@@ -126,7 +126,7 @@ impl DhcpServer {
     fn handle_request(
         &mut self,
         msg: &Message,
-        identity: DeviceIdentity,
+        identity: &DeviceIdentity,
         broadcast: bool,
     ) -> HandleResult {
         let mac = identity.mac;
@@ -142,17 +142,17 @@ impl DhcpServer {
         {
             // Client selected a different server — release our offer
             debug!("DHCPv4: {identity} selected different server {sid}");
-            self.pool.release_mac(&mac);
+            self.pool.release_mac(mac);
             return HandleResult::Ignore;
         }
 
         // Determine the IP the client wants
-        let wanted_ip = self.get_requested_ip(msg).or_else(|| {
+        let wanted_ip = Self::get_requested_ip(msg).or_else(|| {
             let ci = msg.ciaddr();
-            if ci != Ipv4Addr::UNSPECIFIED {
-                Some(ci)
-            } else {
+            if ci == Ipv4Addr::UNSPECIFIED {
                 None
+            } else {
+                Some(ci)
             }
         });
 
@@ -175,12 +175,12 @@ impl DhcpServer {
 
         info!("DHCPv4: Assigning {assigned_ip} to {identity}");
         let reply = self.build_reply(msg, MessageType::Ack, assigned_ip);
-        HandleResult::Reply(reply, broadcast, assigned_ip, self.get_hostname(msg))
+        HandleResult::Reply(reply, broadcast, assigned_ip, Self::get_hostname(msg))
     }
 
     // ── RELEASE ──────────────────────────────────────────────────────────
 
-    fn handle_release(&mut self, msg: &Message, identity: DeviceIdentity) -> HandleResult {
+    fn handle_release(&mut self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
         let ip = msg.ciaddr();
         info!("DHCPv4: {identity} released its address {ip}");
         self.pool.release(ip);
@@ -189,22 +189,22 @@ impl DhcpServer {
 
     // ── DECLINE ──────────────────────────────────────────────────────────
 
-    fn handle_decline(&mut self, msg: &Message, identity: DeviceIdentity) -> HandleResult {
+    fn handle_decline(&mut self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
         // O IP que o cliente está rejeitando vem na opção "RequestedIpAddress"
-        if let Some(declined_ip) = self.get_requested_ip(msg) {
+        if let Some(declined_ip) = Self::get_requested_ip(msg) {
             warn!("DHCPv4: {identity} declined {declined_ip} (address conflict)! Quarantining IP.");
             self.pool.mark_declined(declined_ip);
         } else {
             // Fallback caso o cliente envie um pacote malformado sem a opção
             warn!("DHCPv4: {identity} declined an unspecified IP");
-            self.pool.release_mac(&identity.mac);
+            self.pool.release_mac(identity.mac);
         }
         HandleResult::Ignore
     }
 
     // ── INFORM ───────────────────────────────────────────────────────────
 
-    fn handle_inform(&mut self, msg: &Message, identity: DeviceIdentity) -> HandleResult {
+    fn handle_inform(&self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
         // Client has static IP, wants config options (DNS, etc.)
         let ip = msg.ciaddr();
         info!("DHCPv4: {identity} ({ip}) requested configuration options");
@@ -213,26 +213,26 @@ impl DhcpServer {
         let reply = self.build_reply(msg, MessageType::Ack, Ipv4Addr::UNSPECIFIED);
 
         // Mantemos o `ip` como IP de destino (target_ip) para o socket enviar via unicast
-        HandleResult::Reply(reply, false, ip, self.get_hostname(msg))
+        HandleResult::Reply(reply, false, ip, Self::get_hostname(msg))
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    fn get_requested_ip(&self, msg: &Message) -> Option<Ipv4Addr> {
+    fn get_requested_ip(msg: &Message) -> Option<Ipv4Addr> {
         match msg.opts().get(v4::OptionCode::RequestedIpAddress) {
             Some(DhcpOption::RequestedIpAddress(ip)) => Some(*ip),
             _ => None,
         }
     }
 
-    fn get_hostname(&self, msg: &Message) -> Option<String> {
+    fn get_hostname(msg: &Message) -> Option<String> {
         match msg.opts().get(v4::OptionCode::Hostname) {
             Some(DhcpOption::Hostname(h)) => Some(h.clone()),
             _ => None,
         }
     }
 
-    fn get_vendor_class(&self, msg: &Message) -> Option<String> {
+    fn get_vendor_class(msg: &Message) -> Option<String> {
         match msg.opts().get(v4::OptionCode::ClassIdentifier) {
             Some(DhcpOption::Unknown(u)) => String::from_utf8(u.data().to_vec()).ok(),
             Some(DhcpOption::ClassIdentifier(v)) => String::from_utf8(v.clone()).ok(),
@@ -308,7 +308,7 @@ impl DhcpServer {
 
     /// Returns the MAC and assigned IP from the last successful allocation.
     /// Used by the service loop to publish events.
-    pub fn last_assignment_for(&self, mac: &MacAddr) -> Option<Ipv4Addr> {
+    pub fn last_assignment_for(&self, mac: MacAddr) -> Option<Ipv4Addr> {
         self.pool.lookup(mac)
     }
 }
@@ -413,7 +413,7 @@ mod tests {
                 assert_eq!(reply.yiaddr(), target_ip);
                 assert!(target_ip >= Ipv4Addr::new(192, 168, 1, 100));
             }
-            _ => panic!("Expected Reply for DISCOVER"),
+            HandleResult::Ignore => panic!("Expected Reply for DISCOVER"),
         }
     }
 
@@ -437,9 +437,9 @@ mod tests {
                 assert_eq!(reply.yiaddr(), requested_ip);
 
                 // O lease deve ter sido gravado internamente no servidor
-                assert_eq!(srv.last_assignment_for(&mac), Some(requested_ip));
+                assert_eq!(srv.last_assignment_for(mac), Some(requested_ip));
             }
-            _ => panic!("Expected ACK Reply for valid REQUEST"),
+            HandleResult::Ignore => panic!("Expected ACK Reply for valid REQUEST"),
         }
     }
 
@@ -489,7 +489,7 @@ mod tests {
                     "NAKs no IPv4 devem ser enviados via Broadcast L2 (segundo a RFC)"
                 );
             }
-            _ => panic!("Expected NAK for contested IP"),
+            HandleResult::Ignore => panic!("Expected NAK for contested IP"),
         }
     }
 
@@ -500,7 +500,7 @@ mod tests {
         let ip = Ipv4Addr::new(192, 168, 1, 100);
 
         srv.pool.allocate(mac, Some(ip));
-        assert_eq!(srv.last_assignment_for(&mac), Some(ip));
+        assert_eq!(srv.last_assignment_for(mac), Some(ip));
 
         // Envia o Release informando o IP no ciaddr (Client IP Address)
         let raw_msg = build_raw_msg(MessageType::Release, mac, None, Some(ip), None);
@@ -511,7 +511,7 @@ mod tests {
             "RELEASE não deve gerar resposta"
         );
         assert_eq!(
-            srv.last_assignment_for(&mac),
+            srv.last_assignment_for(mac),
             None,
             "IP deve ter sido liberado no pool interno"
         );
@@ -531,7 +531,7 @@ mod tests {
 
         assert!(matches!(res, HandleResult::Ignore));
         assert_eq!(
-            srv.last_assignment_for(&mac),
+            srv.last_assignment_for(mac),
             None,
             "DECLINE deve revogar a associação do MAC"
         );
@@ -560,7 +560,7 @@ mod tests {
                 // Mas a resposta é direcionada para o ciaddr (o IP que o cliente disse já possuir)
                 assert_eq!(target_ip, client_static_ip);
             }
-            _ => panic!("Expected ACK for INFORM request"),
+            HandleResult::Ignore => panic!("Expected ACK for INFORM request"),
         }
     }
 }

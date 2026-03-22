@@ -69,7 +69,7 @@ pub struct DnsConfig {
 
 impl Default for DnsConfig {
     fn default() -> Self {
-        DnsConfig {
+        Self {
             enabled: true,
             listen: "0.0.0.0:53".parse().unwrap(),
             upstream: None,
@@ -239,7 +239,7 @@ fn resolve_local(
             classify_ip(*ip);
         }
 
-        let best_ips = if !ulas.is_empty() { ulas } else { others };
+        let best_ips = if ulas.is_empty() { others } else { ulas };
 
         for ip in best_ips {
             records.push(Record::from_rdata(
@@ -312,10 +312,10 @@ fn resolve_ptr(
     let question = query.queries().first().expect("Query validada");
     let name = question.name().clone();
 
-    let host = if !device.hostname.is_empty() {
-        device.hostname.clone()
-    } else {
+    let host = if device.hostname.is_empty() {
         format!("host-{}", device.mac.to_string().replace(':', ""))
+    } else {
+        device.hostname.clone()
     };
 
     let fqdn = format!("{}.{}.", host, cfg.search_domain);
@@ -401,7 +401,7 @@ fn empty_noerror_response(query: &Message) -> Result<Vec<u8>> {
 
 fn normalize_name(name: &str, search_domain: &str) -> String {
     let s = name.trim_end_matches('.');
-    let suffix = format!(".{}", search_domain);
+    let suffix = format!(".{search_domain}");
     s.strip_suffix(&suffix).unwrap_or(s).to_lowercase()
 }
 
@@ -638,7 +638,7 @@ mod tests {
 
         match result {
             Err(e) => {
-                let err_str = format!("{:#}", e);
+                let err_str = format!("{e:#}");
                 assert!(err_str.contains("timeout") || err_str.contains("upstream"));
             }
             Ok(resp_bytes) => {

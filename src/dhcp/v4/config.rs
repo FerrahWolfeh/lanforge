@@ -1,13 +1,13 @@
-//! Configuração do servidor DHCPv4.
+//! Configuração do servidor `DHCPv4`.
 
 use std::net::Ipv4Addr;
 
-/// Configuração do servidor DHCPv4 — construída a partir do TOML `[dhcp.v4]`.
+/// Configuração do servidor `DHCPv4` — construída a partir do TOML `[dhcp.v4]`.
 #[derive(Debug, Clone)]
 pub struct Dhcpv4Config {
     /// Interface LAN para escutar.
     pub iface: String,
-    /// IP do servidor (nosso endereço na LAN — usado como server_id e siaddr).
+    /// IP do servidor (nosso endereço na LAN — usado como `server_id` e siaddr).
     pub server_id: Ipv4Addr,
     /// Início do range dinâmico.
     pub range_start: Ipv4Addr,
@@ -27,7 +27,7 @@ pub struct Dhcpv4Config {
 
 impl Default for Dhcpv4Config {
     fn default() -> Self {
-        Dhcpv4Config {
+        Self {
             iface: "end0".into(),
             server_id: Ipv4Addr::new(192, 168, 0, 1),
             range_start: Ipv4Addr::new(192, 168, 0, 100),

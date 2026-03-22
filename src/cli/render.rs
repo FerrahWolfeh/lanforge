@@ -191,10 +191,10 @@ pub fn render_devices(resp: DevicesResponse, verbose: bool) {
                 v6_lines.push("V6 / SLAAC —".to_string());
             }
 
-            let duid_str = match &dev.duid {
-                Some(d) => d.clone(),
-                None => "—".to_string(),
-            };
+            let duid_str = dev
+                .duid
+                .as_ref()
+                .map_or_else(|| "—".to_string(), std::clone::Clone::clone);
 
             let v6_join = v6_lines.join("\n");
             let mac_str = dev.mac.clone();
@@ -234,20 +234,19 @@ pub fn render_devices(resp: DevicesResponse, verbose: bool) {
                 }
             }.print();
         } else {
-            host = format!("{} {}", host, symbol);
+            host = format!("{host} {symbol}");
 
-            let v4 = if let Some(v) = &dev.v4 {
-                v.ip.clone()
-            } else {
-                "—".to_string()
-            };
+            let v4 = dev
+                .v4
+                .as_ref()
+                .map_or_else(|| "—".to_string(), |v| v.ip.clone());
 
             let mut v6_lines = Vec::new();
             if let Some(v) = &dev.v6 {
                 v6_lines.push(v.ip.clone());
             }
             for s in &dev.slaac {
-                v6_lines.push(format!("{} ↑", s));
+                v6_lines.push(format!("{s} ↑"));
             }
             if v6_lines.is_empty() {
                 v6_lines.push("—".to_string());
@@ -273,7 +272,7 @@ pub fn render_devices(resp: DevicesResponse, verbose: bool) {
     if !verbose && !rows.is_empty() {
         let mut table = Table::new(rows);
         table.with(Style::rounded());
-        println!("{}", table);
+        println!("{table}");
     }
 
     element! {
@@ -289,13 +288,13 @@ fn format_uptime(secs: u64) -> String {
     let h = (secs % 86400) / 3600;
     let m = (secs % 3600) / 60;
     if d > 0 {
-        format!("{}d {}h {}m", d, h, m)
+        format!("{d}d {h}h {m}m")
     } else if h > 0 {
-        format!("{}h {}m", h, m)
+        format!("{h}h {m}m")
     } else if m > 0 {
-        format!("{}m", m)
+        format!("{m}m")
     } else {
-        format!("{}s", secs)
+        format!("{secs}s")
     }
 }
 
@@ -318,22 +317,21 @@ fn format_relative_iso8601(iso: &str) -> String {
                 return "até amanhã".to_string(); // Simplification for "tomorrow" or "in X days"
             }
             if h > 0 {
-                return format!("expira em {}h", h);
+                return format!("expira em {h}h");
             }
             return format!("expira em {}m", (secs % 3600) / 60);
-        } else {
-            if d > 0 {
-                return format!("há {} dias", d);
-            }
-            if h > 0 {
-                return format!("há {}h", h);
-            }
-            let m = (secs % 3600) / 60;
-            if m > 0 {
-                return format!("há {}m", m);
-            }
-            return format!("há {}s", secs);
         }
+        if d > 0 {
+            return format!("há {d} dias");
+        }
+        if h > 0 {
+            return format!("há {h}h");
+        }
+        let m = (secs % 3600) / 60;
+        if m > 0 {
+            return format!("há {m}m");
+        }
+        return format!("há {secs}s");
     }
     iso.to_string()
 }
