@@ -1,7 +1,7 @@
 //! `lanforge` — Gerenciador central de identidades de rede (IPv6/IPv4).
 //!
 //! Este daemon coordena o estado dos dispositivos na rede local integrando
-//! múltiplos protocolos (DHCPv4, DHCPv6, RA, SLAAC, DNS).
+//! múltiplos protocolos (`DHCPv4`, `DHCPv6`, RA, SLAAC, DNS).
 //!
 //! ## Ciclo de Vida e Bootstrap
 //!
@@ -27,11 +27,11 @@
 //!
 //! ## Componentes Principais
 //!
-//! - **ManagedTable**: Autoridade central de estado (Thread-safe).
-//! - **EventBus**: Barramento de eventos reativo asincrono.
+//! - **`ManagedTable`**: Autoridade central de estado (Thread-safe).
+//! - **`EventBus`**: Barramento de eventos reativo asincrono.
 //! - **Supervisores**: Garantem que tasks de protocolo continuem rodando após erros.
 
-#[warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![deny(clippy::all, clippy::pedantic, clippy::nursery)]
 mod bus;
 mod cli;
 mod config;
@@ -63,7 +63,7 @@ use tracing::{debug, error, info, warn};
 /// Ponto de entrada principal do daemon.
 ///
 /// Configura o logging, carrega a configuração TOML, inicia o banco de dados
-/// SQLite e dispara os serviços de rede (RA, DHCP, DNS, Control) como tasks do Tokio.
+/// `SQLite` e dispara os serviços de rede (RA, DHCP, DNS, Control) como tasks do Tokio.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let mut cfg = Config::load()?;

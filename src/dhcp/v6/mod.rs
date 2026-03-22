@@ -110,7 +110,7 @@ pub async fn dhcpv6_service(
             if let Some(suffix) = &entry.v6_suffix {
                 if let Some(ip) = server.pool.construct_static_ula(suffix) {
                     server.pool.add_reservation(ip, entry.mac);
-                    info!("Static reservation: {} → {}", entry.mac, ip);
+                    info!("Static reservation: {} ({}) → {}", entry.mac, entry.hostname, ip);
                 } else {
                     warn!("Falha ao construir ULA para sufixo: {}", suffix);
                 }

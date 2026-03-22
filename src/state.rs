@@ -496,11 +496,6 @@ impl DeviceTable {
             .and_then(|mac| self.devices.get(mac))
     }
 
-    /// Recupera o `Device` pelo MAC, se existir.
-    pub fn find_device_by_mac(&self, mac: MacAddr) -> Option<&Device> {
-        self.devices.get(&mac)
-    }
-
     /// Recupera o DUID associado a um MAC, se já tiver sido aprendido.
     ///
     /// Útil no DHCPv6 para reutilizar o DUID existente num Renew/Rebind

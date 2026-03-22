@@ -59,7 +59,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
         for entry in t.static_entries() {
             if let Some(ip) = entry.v4_ip {
                 server.pool.add_reservation(ip, entry.mac);
-                info!("Static reservation: {} → {ip}", entry.mac);
+                info!("Static reservation: {} ({}) → {ip}", entry.mac, entry.hostname);
             }
         }
     }

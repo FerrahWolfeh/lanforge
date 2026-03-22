@@ -37,7 +37,7 @@ use crate::state::{DeviceUpdate, MacAddr};
 // NeighborEvent — struct tipada para eventos do kernel
 // ---------------------------------------------------------------------------
 
-/// Um evento de vizinho IPv6 observado pelo kernel (RTM_NEWNEIGH).
+/// Um evento de vizinho IPv6 observado pelo kernel (`RTM_NEWNEIGH`).
 ///
 /// Substitui a tupla crua `(Ipv6Addr, [u8; 6])` anteriormente retornada
 /// por `extract_neigh_info`. Carrega informação suficiente para que o
@@ -64,9 +64,7 @@ impl NeighborEvent {
     ///   atividade — `NdpSeen` registra o par no cache NDP mas não
     ///   marca o device como dirty.
     pub fn to_device_update(&self, gua_prefix: Option<&Ipv6Addr>) -> DeviceUpdate {
-        let is_slaac = gua_prefix
-            .map(|prefix| ip_matches_prefix(&self.ip, prefix))
-            .unwrap_or(false);
+        let is_slaac = gua_prefix.is_some_and(|prefix| ip_matches_prefix(&self.ip, prefix));
 
         if is_slaac {
             DeviceUpdate::SlaacObserved {
@@ -127,7 +125,7 @@ fn neigh_matches_prefix(neigh: &NeighbourMessage, target_prefix: &str) -> bool {
 // Extração de eventos do stream Netlink
 // ---------------------------------------------------------------------------
 
-/// Extrai um `NeighborEvent` de uma mensagem RTM_NEWNEIGH.
+/// Extrai um `NeighborEvent` de uma mensagem `RTM_NEWNEIGH`.
 ///
 /// Retorna `None` se:
 /// - Não for IPv6
@@ -230,7 +228,7 @@ fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
 
 /// Procura o MAC de um vizinho IPv6 específico na tabela NDP do kernel.
 ///
-/// Usado como fallback no DHCPv6 quando o DUID não contém MAC (DUID-EN,
+/// Usado como fallback no `DHCPv6` quando o DUID não contém MAC (DUID-EN,
 /// DUID-UUID) e o endereço link-local do peer não é EUI-64.
 pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAddr> {
     let target = ip.to_string();
@@ -285,7 +283,7 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
 ///        ^^^^^^^^             ^^ ^^ ^^ bytes 11,12 = FF:FE (marcador)
 /// ```
 /// Retorna `None` se o endereço não for link-local ou não usar EUI-64.
-pub fn mac_from_eui64_link_local(ip: &Ipv6Addr) -> Option<MacAddr> {
+pub const fn mac_from_eui64_link_local(ip: &Ipv6Addr) -> Option<MacAddr> {
     let o = ip.octets();
     if o[0] != 0xfe || (o[1] & 0xc0) != 0x80 {
         return None; // não é fe80::/10
