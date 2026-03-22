@@ -131,7 +131,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
         Command::Db { action } => match action {
             crate::config::DbCommand::Vacuum => serde_json::to_string(&ControlCommand::DbVacuum)?,
         },
-        _ => {
+        Command::Run { .. } => {
             println!("Este comando ainda não está implementado na CLI.");
             return Ok(());
         }
@@ -159,7 +159,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             // Continua se for streaming
         }
         Response::Status(status) => {
-            render_status(*status);
+            render_status(&status);
             return Ok(());
         }
         Response::Devices(devices_resp) => {
@@ -167,7 +167,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
                 Command::Devices { verbose, .. } => verbose,
                 _ => false,
             };
-            render_devices(devices_resp, is_verbose);
+            render_devices(&devices_resp, is_verbose);
             return Ok(());
         }
         Response::Event(e) => {

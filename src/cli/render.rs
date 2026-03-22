@@ -5,7 +5,7 @@ use tabled::{Table, Tabled};
 
 use crate::control::api::{DevicesResponse, StatusResponse};
 
-pub fn render_status(st: StatusResponse) {
+pub fn render_status(st: &StatusResponse) {
     let gua = st
         .services
         .ra
@@ -25,6 +25,14 @@ pub fn render_status(st: StatusResponse) {
         .clone()
         .unwrap_or_else(|| "—".to_string());
 
+    print_status_header(st);
+    print_status_services(st, &gua, &ula, &upstream);
+    print_status_devices(st);
+    print_status_persistence(st);
+    print_status_network(st);
+}
+
+fn print_status_header(st: &StatusResponse) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -33,12 +41,16 @@ pub fn render_status(st: StatusResponse) {
                 Text(content: "  ·  v", color: Color::DarkGrey)
                 Text(content: st.version.clone())
             }
-            View(margin_top: 1) {
-                Text(content: "SERVIÇOS")
-            }
-            View {
-                Text(content: "---------------------------------------------------------------------------", color: Color::DarkGrey)
-            }
+        }
+    }
+    .print();
+}
+
+fn print_status_services(st: &StatusResponse, gua: &str, ula: &str, upstream: &str) {
+    element! {
+        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+            View { Text(content: "SERVIÇOS") }
+            View { Text(content: "---------------------------------------------------------------------------", color: Color::DarkGrey) }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "● RA          ", color: Color::Cyan)
                 Text(content: format!("{:<9}", st.services.ra.state))
@@ -94,8 +106,14 @@ pub fn render_status(st: StatusResponse) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("                        último scan há {}s", st.services.slaac.last_scan_secs_ago))
             }
+        }
+    }.print();
+}
 
-            View(margin_top: 1) { Text(content: "DEVICES") }
+fn print_status_devices(st: &StatusResponse) {
+    element! {
+        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+            View { Text(content: "DEVICES") }
             View { Text(content: "---------------------------------------------------------------------------", color: Color::DarkGrey) }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("{} conhecidos  ·  {} online", st.devices.total, st.devices.online))
@@ -103,8 +121,14 @@ pub fn render_status(st: StatusResponse) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("{} do TOML  ·  {} gerenciados via CLI  ·  {} dinâmicos", st.devices.static_toml, st.devices.managed_cli, st.devices.dynamic))
             }
+        }
+    }.print();
+}
 
-            View(margin_top: 1) { Text(content: "PERSISTÊNCIA") }
+fn print_status_persistence(st: &StatusResponse) {
+    element! {
+        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+            View { Text(content: "PERSISTÊNCIA") }
             View { Text(content: "---------------------------------------------------------------------------", color: Color::DarkGrey) }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("SQLite   {}  ·  {} bytes", st.db.path, st.db.size_bytes))
@@ -112,8 +136,14 @@ pub fn render_status(st: StatusResponse) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("         último flush há {}s", st.db.last_flush_secs_ago))
             }
+        }
+    }.print();
+}
 
-            View(margin_top: 1) { Text(content: "REDE") }
+fn print_status_network(st: &StatusResponse) {
+    element! {
+        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+            View { Text(content: "REDE") }
             View { Text(content: "---------------------------------------------------------------------------", color: Color::DarkGrey) }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("LAN      {}", st.network.lan_iface))
@@ -137,7 +167,7 @@ struct DeviceRow {
     status: String,
 }
 
-pub fn render_devices(resp: DevicesResponse, verbose: bool) {
+pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -156,116 +186,10 @@ pub fn render_devices(resp: DevicesResponse, verbose: bool) {
     let mut rows = Vec::new();
 
     for dev in &resp.devices {
-        let mut host = dev.hostname.clone();
-        if host.is_empty() {
-            host = "?".to_string();
-        }
-
-        let symbol = match dev.origin.as_str() {
-            "static" => "★",
-            "managed_cli" => "·",
-            _ => "–",
-        };
-
         if verbose {
-            let host_display = format!(" {} {} ", host, symbol);
-
-            let mut v4_str = "V4         —".to_string();
-            if let Some(ref v) = dev.v4 {
-                v4_str = format!("V4         {:<24}", v.ip.clone());
-            }
-
-            let mut v6_lines = Vec::new();
-            if let Some(v) = &dev.v6 {
-                v6_lines.push(format!("V6         {:<24}", v.ip.clone()));
-            }
-            for (i, s) in dev.slaac.iter().enumerate() {
-                let label = if i == 0 && v6_lines.is_empty() {
-                    "SLAAC      "
-                } else {
-                    "           "
-                };
-                v6_lines.push(format!("{}{} ↑", label, s));
-            }
-            if v6_lines.is_empty() {
-                v6_lines.push("V6 / SLAAC —".to_string());
-            }
-
-            let duid_str = dev
-                .duid
-                .as_ref()
-                .map_or_else(|| "—".to_string(), std::clone::Clone::clone);
-
-            let v6_join = v6_lines.join("\n");
-            let mac_str = dev.mac.clone();
-            let origin_str = dev.origin.clone();
-            let last_seen_str = format_relative_iso8601(&dev.last_seen);
-
-            element! {
-                View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_bottom: 1) {
-                    View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                        View(flex_direction: FlexDirection::Row, padding_bottom: 1, margin_top: -1) {
-                            Text(content: host_display, color: Color::Cyan)
-                        }
-                        View(flex_direction: FlexDirection::Row) {
-                            Text(content: "MAC        ", color: Color::DarkGrey)
-                            Text(content: mac_str)
-                        }
-                        View(flex_direction: FlexDirection::Row) {
-                            Text(content: "DUID       ", color: Color::DarkGrey)
-                            Text(content: duid_str)
-                        }
-                        View(flex_direction: FlexDirection::Row) {
-                            Text(content: "last seen  ", color: Color::DarkGrey)
-                            Text(content: last_seen_str)
-                        }
-                        View(flex_direction: FlexDirection::Row, padding_bottom: 1) {
-                            Text(content: "origem     ", color: Color::DarkGrey)
-                            Text(content: origin_str)
-                        }
-                        View(flex_direction: FlexDirection::Row) {
-                            Text(content: v4_str)
-                        }
-                        View(flex_direction: FlexDirection::Row) {
-                            Text(content: v6_join)
-                        }
-                        View(padding_bottom: 1) { }
-                    }
-                }
-            }.print();
+            render_verbose_device(dev);
         } else {
-            host = format!("{host} {symbol}");
-
-            let v4 = dev
-                .v4
-                .as_ref()
-                .map_or_else(|| "—".to_string(), |v| v.ip.clone());
-
-            let mut v6_lines = Vec::new();
-            if let Some(v) = &dev.v6 {
-                v6_lines.push(v.ip.clone());
-            }
-            for s in &dev.slaac {
-                v6_lines.push(format!("{s} ↑"));
-            }
-            if v6_lines.is_empty() {
-                v6_lines.push("—".to_string());
-            }
-            let v6 = v6_lines.join("\n");
-
-            let status = if dev.online {
-                "Online".to_string()
-            } else {
-                "Offline".to_string()
-            };
-
-            rows.push(DeviceRow {
-                host,
-                mac: dev.mac.clone(),
-                v4,
-                v6,
-                status,
-            });
+            rows.push(build_device_row(dev));
         }
     }
 
@@ -279,6 +203,128 @@ pub fn render_devices(resp: DevicesResponse, verbose: bool) {
         View(flex_direction: FlexDirection::Column, padding_left: 2, padding_top: 1) {
             Text(content: "★ TOML estático   · gerenciado via CLI   – dinâmico   ↑ SLAAC ativo", color: Color::DarkGrey)
             View(padding_bottom: 1) { }
+        }
+    }.print();
+}
+
+fn symbol_for_origin(origin: &str) -> &'static str {
+    match origin {
+        "static" => "★",
+        "managed_cli" => "·",
+        _ => "–",
+    }
+}
+
+fn build_device_row(dev: &crate::control::api::DeviceEntry) -> DeviceRow {
+    let mut host = dev.hostname.clone();
+    if host.is_empty() {
+        host = "?".to_string();
+    }
+    let symbol = symbol_for_origin(&dev.origin);
+
+    host = format!("{host} {symbol}");
+
+    let v4 = dev
+        .v4
+        .as_ref()
+        .map_or_else(|| "—".to_string(), |v| v.ip.clone());
+
+    let mut v6_lines = Vec::new();
+    if let Some(v) = &dev.v6 {
+        v6_lines.push(v.ip.clone());
+    }
+    for s in &dev.slaac {
+        v6_lines.push(format!("{s} ↑"));
+    }
+    if v6_lines.is_empty() {
+        v6_lines.push("—".to_string());
+    }
+    let v6 = v6_lines.join("\n");
+
+    let status = if dev.online {
+        "Online".to_string()
+    } else {
+        "Offline".to_string()
+    };
+
+    DeviceRow {
+        host,
+        mac: dev.mac.clone(),
+        v4,
+        v6,
+        status,
+    }
+}
+
+fn render_verbose_device(dev: &crate::control::api::DeviceEntry) {
+    let mut host = dev.hostname.clone();
+    if host.is_empty() {
+        host = "?".to_string();
+    }
+    let symbol = symbol_for_origin(&dev.origin);
+    let host_display = format!(" {host} {symbol} ");
+
+    let v4_str = dev.v4.as_ref().map_or_else(
+        || "V4         —".to_string(),
+        |v| format!("V4         {:<24}", v.ip.clone()),
+    );
+
+    let mut v6_lines = Vec::new();
+    if let Some(v) = &dev.v6 {
+        v6_lines.push(format!("V6         {:<24}", v.ip.clone()));
+    }
+    for (i, s) in dev.slaac.iter().enumerate() {
+        let label = if i == 0 && v6_lines.is_empty() {
+            "SLAAC      "
+        } else {
+            "           "
+        };
+        v6_lines.push(format!("{label}{s} ↑"));
+    }
+    if v6_lines.is_empty() {
+        v6_lines.push("V6 / SLAAC —".to_string());
+    }
+
+    let duid_str = dev
+        .duid
+        .as_ref()
+        .map_or_else(|| "—".to_string(), std::clone::Clone::clone);
+
+    let v6_join = v6_lines.join("\n");
+    let mac_str = dev.mac.clone();
+    let origin_str = dev.origin.clone();
+    let last_seen_str = format_relative_iso8601(&dev.last_seen);
+
+    element! {
+        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_bottom: 1) {
+            View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                View(flex_direction: FlexDirection::Row, padding_bottom: 1, margin_top: -1) {
+                    Text(content: host_display, color: Color::Cyan)
+                }
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: "MAC        ", color: Color::DarkGrey)
+                    Text(content: mac_str)
+                }
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: "DUID       ", color: Color::DarkGrey)
+                    Text(content: duid_str)
+                }
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: "last seen  ", color: Color::DarkGrey)
+                    Text(content: last_seen_str)
+                }
+                View(flex_direction: FlexDirection::Row, padding_bottom: 1) {
+                    Text(content: "origem     ", color: Color::DarkGrey)
+                    Text(content: origin_str)
+                }
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: v4_str)
+                }
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: v6_join)
+                }
+                View(padding_bottom: 1) { }
+            }
         }
     }.print();
 }

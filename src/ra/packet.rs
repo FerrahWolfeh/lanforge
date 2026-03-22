@@ -24,7 +24,7 @@ pub const ICMPV6_TYPE_RA: u8 = 134;
 // Montagem do pacote RA (RFC 4861 §4.2)
 // ---------------------------------------------------------------------------
 
-pub fn build_ra_packet(cfg: &RaConfig, mac: &[u8; 6], gua_prefix: Option<&Ipv6Addr>) -> Vec<u8> {
+pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Addr>) -> Vec<u8> {
     let mut p = Vec::with_capacity(256);
 
     // ── Cabeçalho ICMPv6 ─────────────────────────────────────────────────
@@ -53,7 +53,7 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: &[u8; 6], gua_prefix: Option<&Ipv6Ad
     // Obrigatório em RAs multicast; permite que clientes atualizem o cache NDP.
     p.push(1u8); // type
     p.push(1u8); // length = 1 × 8 bytes
-    p.extend_from_slice(mac);
+    p.extend_from_slice(&mac);
 
     // ── Opção 5: MTU (RFC 4861 §4.6.4) ───────────────────────────────────
     // Anuncia MTU quando a WAN tem valor menor que 1500 (ex: PPPoE = 1492).
@@ -78,9 +78,12 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: &[u8; 6], gua_prefix: Option<&Ipv6Ad
 
     // ── Opção 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
     let rdnss_lt = |rd: &RdnssConfig| -> u32 {
-        rd.lifetime
-            .unwrap_or_else(|| cfg.max_interval * 2)
-            .as_secs() as u32
+        u32::try_from(
+            rd.lifetime
+                .unwrap_or_else(|| cfg.max_interval * 2)
+                .as_secs(),
+        )
+        .unwrap_or(u32::MAX)
     };
 
     for rdnss in &cfg.rdnss {
@@ -90,7 +93,7 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: &[u8; 6], gua_prefix: Option<&Ipv6Ad
         let n = rdnss.servers.len();
         p.push(25u8);
         // length em unidades de 8B: 1 (cabeçalho de 8B) + 2 por servidor (16B cada)
-        p.push((1 + 2 * n) as u8);
+        p.push(u8::try_from(1 + 2 * n).unwrap_or(u8::MAX));
         p.extend([0u8; 2]); // reserved
         p.extend(rdnss_lt(rdnss).to_be_bytes());
         for srv in &rdnss.servers {
@@ -100,9 +103,12 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: &[u8; 6], gua_prefix: Option<&Ipv6Ad
 
     // ── Opção 31: DNSSL (RFC 8106 §3.2) ─────────────────────────────────
     let dnssl_lt = |ds: &DnsslConfig| -> u32 {
-        ds.lifetime
-            .unwrap_or_else(|| cfg.max_interval * 2)
-            .as_secs() as u32
+        u32::try_from(
+            ds.lifetime
+                .unwrap_or_else(|| cfg.max_interval * 2)
+                .as_secs(),
+        )
+        .unwrap_or(u32::MAX)
     };
 
     for dnssl in &cfg.dnssl {
@@ -114,7 +120,7 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: &[u8; 6], gua_prefix: Option<&Ipv6Ad
         let total = 8 + encoded.len();
         let padded = (total + 7) & !7;
         p.push(31u8);
-        p.push((padded / 8) as u8);
+        p.push(u8::try_from(padded / 8).unwrap_or(u8::MAX));
         p.extend([0u8; 2]); // reserved
         p.extend(dnssl_lt(dnssl).to_be_bytes());
         p.extend_from_slice(&encoded);
@@ -153,13 +159,13 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) 
 }
 
 /// Codifica domínios no formato DNS wire (RFC 1035 §3.1) para uso na opção DNSSL.
-/// Ex: ["home.arpa"] → b"\x04home\x04arpa\x00"
+/// Ex: `["home.arpa"]` → `b"\x04home\x04arpa\x00"`
 pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
     for domain in domains {
         for label in domain.trim_end_matches('.').split('.') {
             let b = label.as_bytes();
-            out.push(b.len() as u8);
+            out.push(u8::try_from(b.len()).unwrap_or(u8::MAX));
             out.extend_from_slice(b);
         }
         out.push(0u8); // terminador de domínio
@@ -186,7 +192,7 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
         acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
     }
 
-    let len = payload.len() as u32;
+    let len = u32::try_from(payload.len()).unwrap_or(u32::MAX);
     acc += len >> 16;
     acc += len & 0xFFFF;
     acc += 58u32; // next-header = ICMPv6
@@ -203,7 +209,7 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
     while acc >> 16 != 0 {
         acc = (acc & 0xFFFF) + (acc >> 16);
     }
-    !(acc as u16)
+    !u16::try_from(acc).unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +329,7 @@ mod tests {
             ..Default::default()
         };
         let mac = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66];
-        let pkt = build_ra_packet(&cfg, &mac, None);
+        let pkt = build_ra_packet(&cfg, mac, None);
 
         assert_eq!(pkt[0], ICMPV6_TYPE_RA, "tipo ICMPv6 deve ser 134");
         assert_eq!(pkt[1], 0, "code deve ser 0");
@@ -342,7 +348,7 @@ mod tests {
 
         // Sem MTU configurado
         let cfg_no_mtu = RaConfig::default();
-        let pkt_no_mtu = build_ra_packet(&cfg_no_mtu, &mac, None);
+        let pkt_no_mtu = build_ra_packet(&cfg_no_mtu, mac, None);
         // Não deve conter o byte de type '5' (MTU option) após o Source Link-Layer (type 1)
         assert!(!pkt_no_mtu.windows(2).any(|w| w[0] == 5 && w[1] == 1));
 
@@ -351,7 +357,7 @@ mod tests {
             mtu: Some(1492),
             ..Default::default()
         };
-        let pkt_with_mtu = build_ra_packet(&cfg_with_mtu, &mac, None);
+        let pkt_with_mtu = build_ra_packet(&cfg_with_mtu, mac, None);
 
         // Deve conter Type 5, Length 1, Reservado (2 bytes), MTU 1492 (0x05D4)
         let expected_mtu_block = [5u8, 1, 0, 0, 0, 0, 0x05, 0xD4];
@@ -370,7 +376,7 @@ mod tests {
             ..Default::default()
         };
         let mac = [0x11; 6];
-        let pkt = build_ra_packet(&cfg, &mac, None);
+        let pkt = build_ra_packet(&cfg, mac, None);
 
         assert!(!pkt.contains(&25u8), "Pacote não deve conter option RDNSS");
         assert!(!pkt.contains(&31u8), "Pacote não deve conter option DNSSL");
@@ -389,7 +395,7 @@ mod tests {
         let mac = [0x11; 6];
         let gua: Ipv6Addr = "2001:db8::".parse().unwrap();
 
-        let pkt = build_ra_packet(&cfg, &mac, Some(&gua));
+        let pkt = build_ra_packet(&cfg, mac, Some(&gua));
 
         // Opção de prefixo (Type 3) deve aparecer exatamente duas vezes
         let prefix_count = pkt.windows(2).filter(|w| w[0] == 3 && w[1] == 4).count();

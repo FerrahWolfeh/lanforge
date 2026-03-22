@@ -347,7 +347,7 @@ impl LeaseDb {
                     row.get::<_, i64>(2)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
 
         for (mac_str, ip_str, expires_unix) in v6_rows {

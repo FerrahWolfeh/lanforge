@@ -143,7 +143,12 @@ impl Config {
             .map(|r| {
                 r.lifetime.map_or_else(
                     || RdnssConfig::new(r.servers.clone()),
-                    |lt| RdnssConfig::with_lifetime(r.servers.clone(), lt as u32),
+                    |lt| {
+                        RdnssConfig::with_lifetime(
+                            r.servers.clone(),
+                            u32::try_from(lt).unwrap_or(u32::MAX),
+                        )
+                    },
                 )
             })
             .collect();
@@ -182,7 +187,7 @@ impl Config {
                 Ipv4Addr::new(192, 168, 0, 100),
             ),
             range_end: parse_ip(&self.dhcpv4_toml.range_end, Ipv4Addr::new(192, 168, 0, 254)),
-            lease_time: self.dhcpv4_toml.lease_time as u32,
+            lease_time: u32::try_from(self.dhcpv4_toml.lease_time).unwrap_or(u32::MAX),
             router: server_id,
             dns: self
                 .dhcpv4_toml

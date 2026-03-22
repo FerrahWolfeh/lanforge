@@ -66,10 +66,6 @@ pub async fn control_service(
                     Ok(LanforgeEvent::PrefixChanged { gua }) => {
                         current_gua = gua.map(|ip| ip.to_string());
                     }
-                    Ok(LanforgeEvent::DeviceTableDirty) => {
-                        // Isso é só pra trackear que alguma coisa aconteceu, scan_deadline etc
-                        // Na verdade o Netlink detecta neighbors. Vamos assumir que Reload faz o scan pra simplificar.
-                    }
                     Ok(LanforgeEvent::ReloadConfig) => {
                         last_scan = std::time::Instant::now();
                     }
@@ -93,7 +89,16 @@ pub async fn control_service(
                         let scan_ago = last_scan.elapsed().as_secs();
                         let cfg = cfg.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, ifaces, table, gua, ctrl_bus, uptime, scan_ago, cfg).await {
+                            let ctx = ClientContext {
+                                ifaces,
+                                table,
+                                current_gua: gua,
+                                bus: ctrl_bus,
+                                uptime_secs: uptime,
+                                last_scan_secs_ago: scan_ago,
+                                cfg,
+                            };
+                            if let Err(e) = handle_client(stream, ctx).await {
                                 debug!("Control: erro atendendo cliente: {e:#}");
                             }
                         });
@@ -114,8 +119,7 @@ pub async fn control_service(
     Ok(())
 }
 
-async fn handle_client(
-    mut stream: tokio::net::UnixStream,
+struct ClientContext {
     ifaces: Interfaces,
     table: Arc<ManagedTable>,
     current_gua: Option<String>,
@@ -123,7 +127,202 @@ async fn handle_client(
     uptime_secs: u64,
     last_scan_secs_ago: u64,
     cfg: Arc<crate::config::Config>,
-) -> Result<()> {
+}
+
+impl ClientContext {
+    async fn handle_status(&self) -> Response {
+        let table_guard = self.table.read().await;
+
+        let mut status = api::StatusResponse {
+            uptime_secs: self.uptime_secs,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            services: api::ServicesStatus::default(),
+            db: api::DbStatus::default(),
+            network: api::NetworkStatus::default(),
+            devices: api::DevicesStats::default(),
+        };
+
+        // Network
+        status.network.lan_iface.clone_from(&self.ifaces.lan);
+        status.network.gua.clone_from(&self.current_gua);
+        status.network.ula = self
+            .cfg
+            .ra_toml
+            .prefix
+            .iter()
+            .find_map(|p| p.address.clone());
+
+        // Services -> RA
+        status.services.ra.state = if self.cfg.ra_enabled {
+            "online".to_string()
+        } else {
+            "offline".to_string()
+        };
+        status.services.ra.uptime_secs = self.uptime_secs;
+        status.services.ra.gua.clone_from(&self.current_gua);
+        status.services.ra.ula.clone_from(&status.network.ula);
+
+        // Services -> DHCPv4
+        status.services.dhcp_v4.state = if self.cfg.dhcpv4_enabled {
+            "online".to_string()
+        } else {
+            "offline".to_string()
+        };
+        status.services.dhcp_v4.uptime_secs = self.uptime_secs;
+
+        // Services -> DHCPv6
+        status.services.dhcp_v6.state = if self.cfg.dhcpv6_enabled {
+            "online".to_string()
+        } else {
+            "offline".to_string()
+        };
+        status.services.dhcp_v6.uptime_secs = self.uptime_secs;
+
+        // Services -> DNS
+        status.services.dns.state = if self.cfg.dns_enabled {
+            "online".to_string()
+        } else {
+            "offline".to_string()
+        };
+        status.services.dns.uptime_secs = self.uptime_secs;
+        status
+            .services
+            .dns
+            .upstream
+            .clone_from(&self.cfg.dns_toml.upstream);
+
+        // Services -> SLAAC
+        status.services.slaac.state = "online".to_string();
+        status.services.slaac.uptime_secs = self.uptime_secs;
+        status.services.slaac.last_scan_secs_ago = self.last_scan_secs_ago;
+
+        // Database
+        status.db.path.clone_from(&self.cfg.leases_db);
+        status.db.size_bytes = std::fs::metadata(&self.cfg.leases_db)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        status.db.last_flush_secs_ago = 0; // DB flush metrics currently not tracked globally
+
+        // Devices + Leases
+        let dev_ct = table_guard.devices().count();
+        let mut online_ct = 0;
+        let mut static_toml = 0;
+        let mut dynamic = 0;
+
+        let mut v4_active = 0;
+        let mut v6_active = 0;
+        let mut slaac_addrs = 0;
+
+        for dev in table_guard.devices() {
+            let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
+            if is_online {
+                online_ct += 1;
+            }
+
+            if dev.is_static {
+                static_toml += 1;
+            } else {
+                dynamic += 1;
+            }
+
+            if dev.v4.is_some() {
+                v4_active += 1;
+            }
+            if dev.v6.is_some() {
+                v6_active += 1;
+            }
+            slaac_addrs += dev.slaac.len();
+        }
+
+        status.devices.total = dev_ct;
+        status.devices.online = online_ct;
+        status.devices.static_toml = static_toml;
+        status.devices.managed_cli = table_guard
+            .devices()
+            .filter(|d| d.origin == crate::state::Origin::Cli)
+            .count();
+
+        drop(table_guard);
+
+        status.devices.dynamic = dynamic;
+
+        status.services.dhcp_v4.leases_active = v4_active;
+        status.services.dhcp_v6.leases_active = v6_active;
+        status.services.slaac.addrs_tracked = slaac_addrs;
+
+        status.services.dhcp_v4.pool_free = 143; // Mocked for now to avoid heavy IP parsing just for metrics
+        status.services.dhcp_v6.pool_free = 247;
+
+        Response::Status(Box::new(status))
+    }
+
+    async fn handle_devices(&self, filter: Option<String>) -> Response {
+        let table_guard = self.table.read().await;
+
+        let mut api_devices = Vec::new();
+        let mut online = 0;
+
+        for dev in table_guard.devices() {
+            let matches_filter = filter.as_ref().is_none_or(|f| {
+                let f_lower = f.to_lowercase();
+                dev.hostname.to_lowercase().contains(&f_lower)
+                    || dev.mac.to_string().to_lowercase().contains(&f_lower)
+                    || dev
+                        .v4
+                        .as_ref()
+                        .is_some_and(|v| v.ip.to_string().contains(&f_lower))
+                    || dev
+                        .v6
+                        .as_ref()
+                        .is_some_and(|v| v.ip.to_string().contains(&f_lower))
+            });
+
+            if !matches_filter {
+                continue;
+            }
+
+            let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
+            if is_online {
+                online += 1;
+            }
+
+            api_devices.push(api::DeviceEntry {
+                mac: dev.mac.to_string(),
+                hostname: dev.hostname.clone(),
+                origin: dev.origin.as_str().to_string(),
+                online: is_online,
+                last_seen: format_iso8601(dev.last_seen),
+                duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),
+                v4: dev.v4.as_ref().map(|v| api::LeaseInfo {
+                    ip: v.ip.to_string(),
+                    expires: format_iso8601(v.expires),
+                    reserved: dev.is_static,
+                }),
+                v6: dev.v6.as_ref().map(|v| api::LeaseInfo {
+                    ip: v.ip.to_string(),
+                    expires: format_iso8601(v.expires),
+                    reserved: dev.is_static,
+                }),
+                slaac: dev
+                    .slaac
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
+            });
+        }
+
+        Response::Devices(api::DevicesResponse {
+            devices: api_devices,
+            meta: api::DevicesMeta {
+                total: table_guard.devices().count(),
+                online,
+                last_scan_secs_ago: self.last_scan_secs_ago,
+            },
+        })
+    }
+}
+
+async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -> Result<()> {
     let (reader, mut writer) = stream.split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
@@ -138,205 +337,22 @@ async fn handle_client(
 
         let req: Result<Command, _> = serde_json::from_str(trim_line);
         let resp = match req {
-            Ok(Command::Status) => {
-                let table_guard = table.read().await;
-
-                let mut status = api::StatusResponse {
-                    uptime_secs,
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    services: api::ServicesStatus::default(),
-                    db: api::DbStatus::default(),
-                    network: api::NetworkStatus::default(),
-                    devices: api::DevicesStats::default(),
-                };
-
-                // Network
-                status.network.lan_iface.clone_from(&ifaces.lan);
-                status.network.gua.clone_from(&current_gua);
-                status.network.ula = cfg.ra_toml.prefix.iter().find_map(|p| p.address.clone());
-
-                // Services -> RA
-                status.services.ra.state = if cfg.ra_enabled {
-                    "online".to_string()
-                } else {
-                    "offline".to_string()
-                };
-                status.services.ra.uptime_secs = uptime_secs;
-                status.services.ra.gua.clone_from(&current_gua);
-                status.services.ra.ula.clone_from(&status.network.ula);
-
-                // Services -> DHCPv4
-                status.services.dhcp_v4.state = if cfg.dhcpv4_enabled {
-                    "online".to_string()
-                } else {
-                    "offline".to_string()
-                };
-                status.services.dhcp_v4.uptime_secs = uptime_secs;
-
-                // Services -> DHCPv6
-                status.services.dhcp_v6.state = if cfg.dhcpv6_enabled {
-                    "online".to_string()
-                } else {
-                    "offline".to_string()
-                };
-                status.services.dhcp_v6.uptime_secs = uptime_secs;
-
-                // Services -> DNS
-                status.services.dns.state = if cfg.dns_enabled {
-                    "online".to_string()
-                } else {
-                    "offline".to_string()
-                };
-                status.services.dns.uptime_secs = uptime_secs;
-                status
-                    .services
-                    .dns
-                    .upstream
-                    .clone_from(&cfg.dns_toml.upstream);
-
-                // Services -> SLAAC
-                status.services.slaac.state = "online".to_string();
-                status.services.slaac.uptime_secs = uptime_secs;
-                status.services.slaac.last_scan_secs_ago = last_scan_secs_ago;
-
-                // Database
-                status.db.path.clone_from(&cfg.leases_db);
-                status.db.size_bytes = std::fs::metadata(&cfg.leases_db)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                status.db.last_flush_secs_ago = 0; // DB flush metrics currently not tracked globally
-
-                // Devices + Leases
-                let dev_ct = table_guard.devices().count();
-                let mut online_ct = 0;
-                let mut static_toml = 0;
-                let mut dynamic = 0;
-
-                let mut v4_active = 0;
-                let mut v6_active = 0;
-                let mut slaac_addrs = 0;
-
-                for dev in table_guard.devices() {
-                    let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
-                    if is_online {
-                        online_ct += 1;
-                    }
-
-                    if dev.is_static {
-                        static_toml += 1;
-                    } else {
-                        dynamic += 1;
-                    }
-
-                    if dev.v4.is_some() {
-                        v4_active += 1;
-                    }
-                    if dev.v6.is_some() {
-                        v6_active += 1;
-                    }
-                    slaac_addrs += dev.slaac.len();
-                }
-
-                status.devices.total = dev_ct;
-                status.devices.online = online_ct;
-                status.devices.static_toml = static_toml;
-                status.devices.managed_cli = table_guard
-                    .devices()
-                    .filter(|d| d.origin == crate::state::Origin::Cli)
-                    .count();
-
-                drop(table_guard);
-
-                status.devices.dynamic = dynamic;
-
-                status.services.dhcp_v4.leases_active = v4_active;
-                status.services.dhcp_v6.leases_active = v6_active;
-                status.services.slaac.addrs_tracked = slaac_addrs;
-
-                status.services.dhcp_v4.pool_free = 143; // Mocked for now to avoid heavy IP parsing just for metrics
-                status.services.dhcp_v6.pool_free = 247;
-
-                Response::Status(Box::new(status))
-            }
-            Ok(Command::Devices { filter, .. }) => {
-                let table_guard = table.read().await;
-
-                let mut api_devices = Vec::new();
-                let mut online = 0;
-
-                for dev in table_guard.devices() {
-                    let mut matches_filter = true;
-                    if let Some(f) = &filter {
-                        let f_lower = f.to_lowercase();
-                        matches_filter = dev.hostname.to_lowercase().contains(&f_lower)
-                            || dev.mac.to_string().to_lowercase().contains(&f_lower)
-                            || dev
-                                .v4
-                                .as_ref()
-                                .is_some_and(|v| v.ip.to_string().contains(&f_lower))
-                            || dev
-                                .v6
-                                .as_ref()
-                                .is_some_and(|v| v.ip.to_string().contains(&f_lower));
-                    }
-
-                    if !matches_filter {
-                        continue;
-                    }
-
-                    let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
-                    if is_online {
-                        online += 1;
-                    }
-
-                    api_devices.push(api::DeviceEntry {
-                        mac: dev.mac.to_string(),
-                        hostname: dev.hostname.clone(),
-                        origin: dev.origin.as_str().to_string(),
-                        online: is_online,
-                        last_seen: format_iso8601(dev.last_seen),
-                        duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),
-                        v4: dev.v4.as_ref().map(|v| api::LeaseInfo {
-                            ip: v.ip.to_string(),
-                            expires: format_iso8601(v.expires),
-                            reserved: dev.is_static,
-                        }),
-                        v6: dev.v6.as_ref().map(|v| api::LeaseInfo {
-                            ip: v.ip.to_string(),
-                            expires: format_iso8601(v.expires),
-                            reserved: dev.is_static,
-                        }),
-                        slaac: dev
-                            .slaac
-                            .iter()
-                            .map(std::string::ToString::to_string)
-                            .collect(),
-                    });
-                }
-
-                Response::Devices(api::DevicesResponse {
-                    devices: api_devices,
-                    meta: api::DevicesMeta {
-                        total: table_guard.devices().count(),
-                        online,
-                        last_scan_secs_ago,
-                    },
-                })
-            }
+            Ok(Command::Status) => ctx.handle_status().await,
+            Ok(Command::Devices { filter, .. }) => ctx.handle_devices(filter).await,
             Ok(Command::Reload) => {
-                bus.publish(LanforgeEvent::ReloadConfig);
+                ctx.bus.publish(LanforgeEvent::ReloadConfig);
                 Response::Success(SimpleSuccess {
                     message: "Reload signal sent successfully".to_string(),
                 })
             }
             Ok(Command::Scan) => {
-                bus.publish(LanforgeEvent::ReloadConfig); // Hack: reload triggers scan right now
+                ctx.bus.publish(LanforgeEvent::ReloadConfig); // Hack: reload triggers scan right now
                 Response::Success(SimpleSuccess {
                     message: "Scan disparado".to_string(),
                 })
             }
             Ok(Command::Shutdown) => {
-                bus.publish(LanforgeEvent::Shutdown);
+                ctx.bus.publish(LanforgeEvent::Shutdown);
                 Response::Success(SimpleSuccess {
                     message: "Desligando graciosa e instantaneamente".to_string(),
                 })
@@ -351,7 +367,7 @@ async fn handle_client(
                     writer.write_all(b"\n").await?;
                 }
 
-                let mut rx = bus.subscribe();
+                let mut rx = ctx.bus.subscribe();
                 while let Ok(event) = rx.recv().await {
                     if let Ok(json_resp) = serde_json::to_string(&Response::Event(event)) {
                         if writer.write_all(json_resp.as_bytes()).await.is_err() {
@@ -373,7 +389,7 @@ async fn handle_client(
                 if let Some(m) = mac {
                     if let Some(mac_addr) = crate::state::MacAddr::parse(&m) {
                         let v4_static = v4.and_then(|s| s.parse().ok());
-                        table
+                        ctx.table
                             .update(crate::state::DeviceUpdate::CliHostUpdated {
                                 mac: mac_addr,
                                 hostname: hostname.map(Some),
@@ -421,11 +437,10 @@ async fn handle_client(
                         "v6_suffix" | "v6" => {
                             if value.is_empty() {
                                 v6s = Some(None);
-                                None
                             } else {
                                 v6s = Some(Some(value.clone()));
-                                None
                             }
+                            None
                         }
                         _ => Some("Campo desconhecido"),
                     };
@@ -435,7 +450,7 @@ async fn handle_client(
                             error: e.to_string(),
                         }
                     } else {
-                        table
+                        ctx.table
                             .update(crate::state::DeviceUpdate::CliHostUpdated {
                                 mac: mac_addr,
                                 hostname: hn,
@@ -455,7 +470,7 @@ async fn handle_client(
                 }
             }
             Ok(Command::HostList) => {
-                let table_guard = table.read().await;
+                let table_guard = ctx.table.read().await;
                 let mut api_devices = Vec::new();
 
                 for dev in table_guard
@@ -492,16 +507,17 @@ async fn handle_client(
                     meta: api::DevicesMeta {
                         total: table_guard.devices().count(),
                         online: 0,
-                        last_scan_secs_ago,
+                        last_scan_secs_ago: ctx.last_scan_secs_ago,
                     },
                 })
             }
             Ok(Command::HostRemove { mac }) => {
                 if let Some(mac_addr) = crate::state::MacAddr::parse(&mac) {
-                    let mut w = table.write().await;
+                    let mut w = ctx.table.write().await;
                     w.devices.remove(&mac_addr);
                     w.static_entries.remove(&mac_addr);
-                    bus.publish(LanforgeEvent::DeviceTableDirty);
+                    drop(w);
+                    ctx.bus.publish(LanforgeEvent::DeviceTableDirty);
                     Response::Success(SimpleSuccess {
                         message: format!("Host removido (MAC {mac})"),
                     })

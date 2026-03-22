@@ -71,7 +71,7 @@ impl RawSender {
         let mut ip = MutableIpv4Packet::new(eth.payload_mut()).unwrap();
         ip.set_version(4);
         ip.set_header_length(5);
-        ip.set_total_length(ipv4_len as u16);
+        ip.set_total_length(u16::try_from(ipv4_len).unwrap_or(u16::MAX));
         ip.set_ttl(64);
         ip.set_next_level_protocol(pnet::packet::ip::IpNextHeaderProtocols::Udp);
         ip.set_source(src_ip);
@@ -85,7 +85,7 @@ impl RawSender {
         let mut udp = MutableUdpPacket::new(ip.payload_mut()).unwrap();
         udp.set_source(67);
         udp.set_destination(68);
-        udp.set_length(udp_len as u16);
+        udp.set_length(u16::try_from(udp_len).unwrap_or(u16::MAX));
         udp.set_payload(payload);
 
         let udp_checksum = udp::ipv4_checksum(&udp.to_immutable(), &src_ip, &dst_ip);

@@ -176,7 +176,9 @@ async fn main() -> Result<()> {
 
         info!(
             "⚡ Iniciando: RA (iface={}, M={}, O={})",
-            ra_cfg.iface, ra_cfg.managed as u8, ra_cfg.other_config as u8
+            ra_cfg.iface,
+            u8::from(ra_cfg.managed),
+            u8::from(ra_cfg.other_config)
         );
 
         tokio::spawn(supervisor::supervise_task(
@@ -344,7 +346,7 @@ async fn main() -> Result<()> {
             }
 
             // ── Debounce — scan pós-evento ───────────────────────────────
-            _ = async {
+            () = async {
                 match scan_deadline {
                     Some(dl) => sleep_until(dl).await,
                     None => std::future::pending::<()>().await,

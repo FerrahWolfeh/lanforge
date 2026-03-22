@@ -90,7 +90,7 @@ pub struct RaState {
 
 impl RaState {
     pub(crate) fn new() -> Self {
-        RaState {
+        Self {
             initial_sent: 0,
             last_multicast_ra: None,
             unicast_rl: HashMap::new(),
@@ -105,11 +105,14 @@ impl RaState {
     fn next_interval(&self, cfg: &RaConfig) -> Duration {
         let mut rng = rand::rng();
         if self.initial_sent < MAX_INITIAL_RTR_ADVERTISEMENTS {
-            let ms = rng.random_range(0..MAX_INITIAL_RTR_ADVERT_INTERVAL.as_millis() as u64);
+            let ms = rng.random_range(
+                0..u64::try_from(MAX_INITIAL_RTR_ADVERT_INTERVAL.as_millis()).unwrap_or(u64::MAX),
+            );
             Duration::from_millis(ms)
         } else {
-            let min_ms = cfg.effective_min_interval().as_millis() as u64;
-            let max_ms = cfg.max_interval.as_millis() as u64;
+            let min_ms =
+                u64::try_from(cfg.effective_min_interval().as_millis()).unwrap_or(u64::MAX);
+            let max_ms = u64::try_from(cfg.max_interval.as_millis()).unwrap_or(u64::MAX);
             Duration::from_millis(rng.random_range(min_ms..=max_ms))
         }
     }
@@ -202,7 +205,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
 
         tokio::select! {
             // ── RA periódico ──────────────────────────────────────────────
-            _ = sleep(next) => {
+            () = sleep(next) => {
                 do_multicast_ra(&ctx, &mut state).await;
             }
 
@@ -309,7 +312,7 @@ async fn send_ra(
     // scope_id obrigatório para destinos link-scoped (multicast e link-local)
     let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, ctx.iface_index));
 
-    let mut pkt = build_ra_packet(ctx.cfg, ctx.mac, gua.as_ref());
+    let mut pkt = build_ra_packet(ctx.cfg, *ctx.mac, gua.as_ref());
 
     // Checksum calculado sobre o pseudo-header IPv6 + payload
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
@@ -388,8 +391,8 @@ fn set_sockopt_int(
             sock.as_raw_fd(),
             level,
             opt,
-            &v as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            std::ptr::from_ref(&v).cast::<libc::c_void>(),
+            libc::socklen_t::try_from(std::mem::size_of::<libc::c_int>()).unwrap_or_default(),
         )
     };
     if ret == 0 {
@@ -410,8 +413,8 @@ fn set_sockopt_raw(
             sock.as_raw_fd(),
             level,
             opt,
-            data.as_ptr() as *const libc::c_void,
-            data.len() as libc::socklen_t,
+            data.as_ptr().cast::<libc::c_void>(),
+            libc::socklen_t::try_from(data.len()).unwrap_or_default(),
         )
     };
     if ret == 0 {

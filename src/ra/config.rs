@@ -218,7 +218,7 @@ pub struct RaConfig {
 
 impl Default for RaConfig {
     fn default() -> Self {
-        RaConfig {
+        Self {
             iface: "end0".into(),
             managed: false,
             other_config: false,
