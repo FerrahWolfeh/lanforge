@@ -239,6 +239,7 @@ const fn mac_of(update: &DeviceUpdate) -> MacAddr {
         | DeviceUpdate::NdpSeen { mac, .. }
         | DeviceUpdate::HostnameHint { mac, .. }
         | DeviceUpdate::DuidAssociated { mac, .. }
+        | DeviceUpdate::CliHostUpdated { mac, .. }
         | DeviceUpdate::SlaacCleared { mac } => *mac,
     }
 }
@@ -257,7 +258,9 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         }),
         DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),
         // NdpSeen e SlaacCleared não geram DeviceChange no barramento
-        DeviceUpdate::NdpSeen { .. } | DeviceUpdate::SlaacCleared { .. } => None,
+        DeviceUpdate::NdpSeen { .. }
+        | DeviceUpdate::SlaacCleared { .. }
+        | DeviceUpdate::CliHostUpdated { .. } => None,
     }
 }
 

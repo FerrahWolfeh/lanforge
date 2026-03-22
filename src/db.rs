@@ -50,7 +50,17 @@ use crate::state::{DeviceTable, DeviceUpdate, MacAddr};
 // LeaseDb — motor SQLite síncrono
 // ---------------------------------------------------------------------------
 
-type DevTableRow = (String, String, bool, Option<Vec<u8>>, i64);
+type DevTableRow = (
+    String,
+    String,
+    bool,
+    Option<Vec<u8>>,
+    i64,
+    String,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+);
 
 /// Handle para o banco SQLite de leases.
 ///
@@ -99,7 +109,11 @@ impl LeaseDb {
                     hostname    TEXT NOT NULL,
                     is_static   INTEGER NOT NULL,
                     duid        BLOB,
-                    last_seen   INTEGER NOT NULL
+                    last_seen   INTEGER NOT NULL,
+                    origin      TEXT NOT NULL DEFAULT 'dynamic',
+                    managed_at  INTEGER,
+                    v4_static   TEXT,
+                    v6_suffix   TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS v4_leases (
@@ -122,6 +136,21 @@ impl LeaseDb {
                 ",
             )
             .context("falha ao criar tabelas")?;
+
+        // Simple migrations without schema tracking
+        let _ = self.conn.execute(
+            "ALTER TABLE devices ADD COLUMN origin TEXT NOT NULL DEFAULT 'dynamic'",
+            [],
+        );
+        let _ = self
+            .conn
+            .execute("ALTER TABLE devices ADD COLUMN managed_at INTEGER", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE devices ADD COLUMN v4_static TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE devices ADD COLUMN v6_suffix TEXT", []);
 
         debug!("Schema verificado/criado");
         Ok(())
@@ -147,16 +176,22 @@ impl LeaseDb {
             let mac_str = device.mac.to_string();
             let last_seen = system_time_to_unix(device.last_seen);
             let duid_blob: Option<Vec<u8>> = device.duid.as_ref().map(|d| d.bytes.clone());
+            let managed_at_unix: Option<i64> = device.managed_at.map(system_time_to_unix);
+            let v4_static_str: Option<String> = device.v4_static.map(|ip| ip.to_string());
 
             tx.execute(
-                "INSERT INTO devices (mac, hostname, is_static, duid, last_seen)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO devices (mac, hostname, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     mac_str,
                     device.hostname,
                     device.is_static as i32,
                     duid_blob,
-                    last_seen
+                    last_seen,
+                    device.origin.as_str(),
+                    managed_at_unix,
+                    v4_static_str,
+                    device.v6_suffix.clone()
                 ],
             )?;
 
@@ -205,7 +240,7 @@ impl LeaseDb {
         // 1. Devices base (hostname, is_static, last_seen)
         let mut stmt = self
             .conn
-            .prepare("SELECT mac, hostname, is_static, duid, last_seen FROM devices")?;
+            .prepare("SELECT mac, hostname, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix FROM devices")?;
 
         let rows: Vec<DevTableRow> = stmt
             .query_map([], |row| {
@@ -215,25 +250,49 @@ impl LeaseDb {
                     row.get::<_, i32>(2)? != 0,
                     row.get::<_, Option<Vec<u8>>>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)
+                        .unwrap_or_else(|_| "dynamic".to_string()),
+                    row.get::<_, Option<i64>>(6).unwrap_or(None),
+                    row.get::<_, Option<String>>(7).unwrap_or(None),
+                    row.get::<_, Option<String>>(8).unwrap_or(None),
                 ))
             })?
             .filter_map(|r| r.ok())
             .collect();
 
-        for (mac_str, hostname, is_static, duid_bytes, last_seen_unix) in rows {
+        for (
+            mac_str,
+            hostname,
+            is_static,
+            duid_bytes,
+            last_seen_unix,
+            origin_str,
+            managed_at,
+            v4_static_str,
+            v6_suffix,
+        ) in rows
+        {
             let Some(mac) = MacAddr::parse(&mac_str) else {
                 warn!("MAC inválido no DB: '{mac_str}', pulando");
                 continue;
             };
 
+            let dev = table.get_or_insert(mac);
             // Restaura hostname se não vazio
             if !hostname.is_empty() {
-                // Restauração direta — não é um hint dinâmico, é estado persistido
-                let dev = table.get_or_insert(mac);
                 dev.hostname = hostname;
-                dev.is_static = is_static;
-                dev.last_seen = unix_to_system_time(last_seen_unix);
             }
+            dev.is_static = is_static;
+            dev.last_seen = unix_to_system_time(last_seen_unix);
+
+            dev.origin = match origin_str.as_str() {
+                "toml" => crate::state::Origin::Toml,
+                "cli" => crate::state::Origin::Cli,
+                _ => crate::state::Origin::Dynamic,
+            };
+            dev.managed_at = managed_at.map(unix_to_system_time);
+            dev.v4_static = v4_static_str.and_then(|s| s.parse().ok());
+            dev.v6_suffix = v6_suffix;
 
             // Restaura DUID via apply_update — reconstrói o duid_index
             if let Some(bytes) = duid_bytes {

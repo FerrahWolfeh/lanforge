@@ -436,7 +436,10 @@ async fn handle_client(
                 status.devices.total = dev_ct;
                 status.devices.online = online_ct;
                 status.devices.static_toml = static_toml;
-                status.devices.managed_cli = 0; // To be implemented with Managed column
+                status.devices.managed_cli = table_guard
+                    .devices()
+                    .filter(|d| d.origin == crate::state::Origin::Cli)
+                    .count();
                 status.devices.dynamic = dynamic;
 
                 status.services.dhcp_v4.leases_active = v4_active;
@@ -479,12 +482,10 @@ async fn handle_client(
                         online += 1;
                     }
 
-                    let origin = if dev.is_static { "static" } else { "dynamic" };
-
                     api_devices.push(api::DeviceEntry {
                         mac: dev.mac.to_string(),
                         hostname: dev.hostname.clone(),
-                        origin: origin.to_string(),
+                        origin: dev.origin.as_str().to_string(),
                         online: is_online,
                         last_seen: format_iso8601(dev.last_seen),
                         duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),
@@ -554,19 +555,26 @@ async fn handle_client(
                 }
                 break; // Break the command loop after streaming ends
             }
-            Ok(Command::HostAdd { mac, hostname, .. }) => {
+            Ok(Command::HostAdd {
+                mac,
+                hostname,
+                v4,
+                v6_suffix,
+            }) => {
                 if let Some(m) = mac {
                     if let Some(mac_addr) = crate::state::MacAddr::parse(&m) {
-                        let mut w = table.write().await;
-                        let dev = w.get_or_insert(mac_addr);
-                        if let Some(h) = hostname {
-                            dev.hostname = h;
-                        }
-                        dev.is_static = true;
+                        let v4_static = v4.and_then(|s| s.parse().ok());
+                        table
+                            .update(crate::state::DeviceUpdate::CliHostUpdated {
+                                mac: mac_addr,
+                                hostname: hostname.map(Some),
+                                v4_static: Some(v4_static),
+                                v6_suffix: Some(v6_suffix),
+                            })
+                            .await;
 
-                        bus.publish(LanforgeEvent::DeviceTableDirty);
                         Response::Success(SimpleSuccess {
-                            message: "Host virtual adicionado à tabela.".to_string(),
+                            message: "Host adicionado e persistido.".to_string(),
                         })
                     } else {
                         Response::Error {
@@ -579,18 +587,76 @@ async fn handle_client(
                     }
                 }
             }
-            Ok(Command::HostSet { mac, field, value }) => Response::Success(SimpleSuccess {
-                message: format!("Setando {}={} para {}", field, value, mac),
-            }),
+            Ok(Command::HostSet { mac, field, value }) => {
+                if let Some(mac_addr) = crate::state::MacAddr::parse(&mac) {
+                    let mut hn = None;
+                    let mut v4s = None;
+                    let mut v6s = None;
+
+                    let err_msg = match field.as_str() {
+                        "hostname" => {
+                            hn = Some(Some(value.clone()));
+                            None
+                        }
+                        "v4" | "ipv4" => {
+                            if value.is_empty() {
+                                v4s = Some(None);
+                                None
+                            } else if let Ok(ip) = value.parse() {
+                                v4s = Some(Some(ip));
+                                None
+                            } else {
+                                Some("IPv4 inválido")
+                            }
+                        }
+                        "v6_suffix" | "v6" => {
+                            if value.is_empty() {
+                                v6s = Some(None);
+                                None
+                            } else {
+                                v6s = Some(Some(value.clone()));
+                                None
+                            }
+                        }
+                        _ => Some("Campo desconhecido"),
+                    };
+
+                    if let Some(e) = err_msg {
+                        Response::Error {
+                            error: e.to_string(),
+                        }
+                    } else {
+                        table
+                            .update(crate::state::DeviceUpdate::CliHostUpdated {
+                                mac: mac_addr,
+                                hostname: hn,
+                                v4_static: v4s,
+                                v6_suffix: v6s,
+                            })
+                            .await;
+
+                        Response::Success(SimpleSuccess {
+                            message: format!("Host {mac} atualizado: {field}={value}"),
+                        })
+                    }
+                } else {
+                    Response::Error {
+                        error: "MAC inválido".to_string(),
+                    }
+                }
+            }
             Ok(Command::HostList) => {
                 let table_guard = table.read().await;
                 let mut api_devices = Vec::new();
 
-                for dev in table_guard.devices().filter(|d| d.is_static) {
+                for dev in table_guard
+                    .devices()
+                    .filter(|d| d.origin == crate::state::Origin::Cli)
+                {
                     api_devices.push(api::DeviceEntry {
                         mac: dev.mac.to_string(),
                         hostname: dev.hostname.clone(),
-                        origin: "managed_cli".to_string(),
+                        origin: dev.origin.as_str().to_string(),
                         online: dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300,
                         last_seen: format_iso8601(dev.last_seen),
                         duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),

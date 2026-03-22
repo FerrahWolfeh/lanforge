@@ -449,6 +449,10 @@ mod tests {
             Device {
                 hostname: hostname.into(),
                 mac,
+                origin: crate::state::Origin::Dynamic,
+                managed_at: None,
+                v4_static: None,
+                v6_suffix: None,
                 is_static: false,
                 duid: None,
                 v4: Some(V4Lease {

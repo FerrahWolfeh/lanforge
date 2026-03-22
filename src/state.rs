@@ -112,6 +112,19 @@ pub struct Device {
     pub mac: MacAddr,
     pub hostname: String,
 
+    /// Indica a origem das configurações do dispositivo.
+    pub origin: Origin,
+
+    /// Timestamp Unix de quando foi gerenciado via CLI, se aplicável.
+    #[serde(serialize_with = "serialize_time_opt")]
+    pub managed_at: Option<SystemTime>,
+
+    /// Configuração estática IPv4 via CLI/TOML (opcional).
+    pub v4_static: Option<Ipv4Addr>,
+
+    /// Sufixo estático IPv6 via CLI/TOML (opcional).
+    pub v6_suffix: Option<String>,
+
     /// true = veio da config estática; campos protegidos contra sobrescrita dinâmica.
     pub is_static: bool,
     pub duid: Option<Duid>,
@@ -122,6 +135,37 @@ pub struct Device {
     pub slaac: Vec<Ipv6Addr>,
     #[serde(serialize_with = "serialize_time")]
     pub last_seen: SystemTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Origin {
+    Toml,
+    Cli,
+    #[default]
+    Dynamic,
+}
+
+impl Origin {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Origin::Toml => "toml",
+            Origin::Cli => "cli",
+            Origin::Dynamic => "dynamic",
+        }
+    }
+}
+
+fn serialize_time_opt<S>(time: &Option<SystemTime>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match time {
+        Some(t) => {
+            let elapsed = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+            serializer.serialize_u64(elapsed.as_secs())
+        }
+        None => serializer.serialize_none(),
+    }
 }
 
 fn serialize_time<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
@@ -194,6 +238,14 @@ pub enum DeviceUpdate {
 
     /// Um DUID foi associado ao MAC (geralmente pelo DHCPv6 Solicit).
     DuidAssociated { mac: MacAddr, duid: Duid },
+
+    /// Modificação explícita de campos via CLI (`lanforge host add` / `lanforge host set`).
+    CliHostUpdated {
+        mac: MacAddr,
+        hostname: Option<Option<String>>,
+        v4_static: Option<Option<Ipv4Addr>>,
+        v6_suffix: Option<Option<String>>,
+    },
 
     /// Limpa todos os endereços SLAAC de um device antes de re-scan.
     SlaacCleared { mac: MacAddr },
@@ -324,6 +376,62 @@ impl DeviceTable {
                 true
             }
 
+            DeviceUpdate::CliHostUpdated {
+                mac,
+                hostname,
+                v4_static,
+                v6_suffix,
+            } => {
+                let dev = self.get_or_insert(mac);
+
+                // Se era gerido pelo TOML, não permitimos modificação via CLI
+                if dev.origin == Origin::Toml {
+                    warn!(
+                        "Tentativa de modificar device estático do TOML via CLI: {}",
+                        mac
+                    );
+                    return false;
+                }
+
+                let mut changed = false;
+
+                if let Some(hn_opt) = hostname {
+                    if let Some(hn) = hn_opt {
+                        if dev.hostname != hn {
+                            dev.hostname = hn;
+                            changed = true;
+                        }
+                    } else if !dev.hostname.is_empty() {
+                        dev.hostname.clear();
+                        changed = true;
+                    }
+                }
+
+                if let Some(v4_opt) = v4_static {
+                    if dev.v4_static != v4_opt {
+                        dev.v4_static = v4_opt;
+                        changed = true;
+                    }
+                }
+
+                if let Some(v6_opt) = v6_suffix {
+                    if dev.v6_suffix != v6_opt {
+                        dev.v6_suffix = v6_opt;
+                        changed = true;
+                    }
+                }
+
+                if changed {
+                    dev.origin = Origin::Cli;
+                    dev.managed_at = Some(SystemTime::now());
+                    dev.is_static = true;
+                    dev.last_seen = SystemTime::now();
+                    debug!("[state] CLI Host Updated: {}", mac);
+                }
+
+                changed
+            }
+
             DeviceUpdate::SlaacCleared { mac } => {
                 if let Some(dev) = self.devices.get_mut(&mac) {
                     if dev.slaac.is_empty() {
@@ -370,7 +478,10 @@ impl DeviceTable {
             // Pre-popula o device para que hostname resolva imediatamente
             let dev = self.get_or_insert(mac);
             dev.hostname = e.hostname.clone();
+            dev.v4_static = v4_ip;
+            dev.v6_suffix = e.v6_suffix.clone();
             dev.is_static = true;
+            dev.origin = Origin::Toml;
         }
     }
 
@@ -482,6 +593,10 @@ impl DeviceTable {
             mac,
             hostname: String::new(),
             is_static: false,
+            origin: Origin::Dynamic,
+            managed_at: None,
+            v4_static: None,
+            v6_suffix: None,
             duid: None,
             v4: None,
             v6: None,
