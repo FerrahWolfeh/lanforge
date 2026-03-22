@@ -1,4 +1,4 @@
 pub mod client;
-pub mod render;
+pub mod commands;
 
 pub use client::run_client;
