@@ -31,7 +31,6 @@
 //! - **`EventBus`**: Barramento de eventos reativo asincrono.
 //! - **Supervisores**: Garantem que tasks de protocolo continuem rodando após erros.
 
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 mod bus;
 mod cli;
 mod config;
