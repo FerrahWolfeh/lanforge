@@ -312,7 +312,7 @@ impl Default for DnsCfg {
         DnsCfg {
             enabled: false,
             listen: "0.0.0.0:5300".into(),
-            upstream: Some("127.0.0.1:5335".into()),
+            upstream: None,
             search_domain: "lan".into(),
             ttl: 60,
         }

@@ -407,18 +407,18 @@ impl DeviceTable {
                     }
                 }
 
-                if let Some(v4_opt) = v4_static {
-                    if dev.v4_static != v4_opt {
-                        dev.v4_static = v4_opt;
-                        changed = true;
-                    }
+                if let Some(v4_opt) = v4_static
+                    && dev.v4_static != v4_opt
+                {
+                    dev.v4_static = v4_opt;
+                    changed = true;
                 }
 
-                if let Some(v6_opt) = v6_suffix {
-                    if dev.v6_suffix != v6_opt {
-                        dev.v6_suffix = v6_opt;
-                        changed = true;
-                    }
+                if let Some(v6_opt) = v6_suffix
+                    && dev.v6_suffix != v6_opt
+                {
+                    dev.v6_suffix = v6_opt;
+                    changed = true;
                 }
 
                 if changed {

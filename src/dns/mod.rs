@@ -72,7 +72,7 @@ impl Default for DnsConfig {
         DnsConfig {
             enabled: true,
             listen: "0.0.0.0:53".parse().unwrap(),
-            upstream: Some("127.0.0.1:5335".parse().unwrap()),
+            upstream: None,
             search_domain: "lan".into(),
             ttl: 60,
         }
@@ -221,18 +221,31 @@ fn resolve_local(
     }
 
     if matches!(qtype, RecordType::AAAA | RecordType::ANY) {
+        let mut ulas = Vec::new();
+        let mut others = Vec::new();
+
+        let mut classify_ip = |ip: Ipv6Addr| {
+            if (ip.segments()[0] & 0xfe00) == 0xfc00 {
+                ulas.push(ip);
+            } else {
+                others.push(ip);
+            }
+        };
+
         if let Some(v6) = &device.v6 {
-            records.push(Record::from_rdata(
-                name.clone(),
-                cfg.ttl,
-                RData::AAAA(v6.ip.into()),
-            ));
+            classify_ip(v6.ip);
         }
-        for slaac_ip in &device.slaac {
+        for ip in &device.slaac {
+            classify_ip(*ip);
+        }
+
+        let best_ips = if !ulas.is_empty() { ulas } else { others };
+
+        for ip in best_ips {
             records.push(Record::from_rdata(
                 name.clone(),
                 cfg.ttl,
-                RData::AAAA((*slaac_ip).into()),
+                RData::AAAA(ip.into()),
             ));
         }
     }
