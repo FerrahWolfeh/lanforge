@@ -16,7 +16,7 @@ leases_db = "/var/lib/lanforge/leases.db"
 # Interval (in minutes) for the network fallback scan, ensuring consistency.
 # fallback_mins = 5
 
-# UNIX socket path for communication with the CLI (lanforge-cli).
+# UNIX socket path for communication with the CLI (lanforge %command%).
 # control_socket = "/run/lanforge/control.sock"
 
 
@@ -106,6 +106,7 @@ enabled = true
 listen = "0.0.0.0:5354"
 
 # Upstream server to resolve external names (e.g., Unbound, Cloudflare, Google).
+# Commenting this out turns the DNS resolver into an authoritative DNS server for the local domain only.
 upstream = "127.0.0.1:5335"
 
 # Local domain suffix for internal hostname resolution.
