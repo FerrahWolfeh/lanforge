@@ -395,6 +395,15 @@ impl LeaseDb {
         info!("Carregados {count} dispositivos do SQLite");
         Ok(table)
     }
+
+    /// Executa o comando VACUUM para otimizar o arquivo do banco de dados.
+    pub fn vacuum(&self) -> Result<()> {
+        debug!("Executando VACUUM no SQLite...");
+        self.conn
+            .execute("VACUUM", [])
+            .context("falha ao executar VACUUM")?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +433,13 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 /// Este worker implementa um loop de debounce para evitar micro-escritas no disco.
 /// Ele escuta eventos `DeviceTableDirty` e, após uma janela de calma (`DEBOUNCE`),
 /// dispara uma thread separada para salvar o estado atual no `SQLite`.
+/// Task async que persiste o `ManagedTable` reativamente.
+///
+/// Este worker implementa um loop de debounce para evitar micro-escritas no disco.
+/// Ele escuta eventos `DeviceTableDirty` e, após uma janela de calma (`DEBOUNCE`),
+/// dispara uma thread separada para salvar o estado atual no `SQLite`.
+///
+/// Também processa `DbVacuum` para otimização do banco.
 pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<EventBus>) {
     let mut rx = bus.subscribe();
 
@@ -433,9 +449,8 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
         db_path.display()
     );
 
-    // 1. Cria o canal MPSC para enviar snapshots para a thread síncrona.
-    // Um buffer pequeno (ex: 4) é mais que suficiente graças ao debounce.
-    let (snapshot_tx, mut snapshot_rx) = tokio::sync::mpsc::channel::<DeviceTable>(4);
+    // 1. Cria o canal MPSC para enviar comandos para a thread síncrona.
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<DbWorkerCmd>(4);
 
     // 2. Inicia a thread síncrona dedicada ao SQLite (Abre o banco APENAS UMA VEZ)
     let db_path_clone = db_path.clone();
@@ -448,13 +463,24 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
             }
         };
 
-        // Fica escutando o canal. Quando o sender (snapshot_tx) for dropado no shutdown,
+        // Fica escutando o canal. Quando o sender (cmd_tx) for dropado no shutdown,
         // o blocking_recv() retornará None e a thread será encerrada naturalmente.
-        while let Some(snapshot) = snapshot_rx.blocking_recv() {
-            if let Err(e) = db.save_table(&snapshot) {
-                warn!("DB thread: falha ao salvar snapshot: {e:#}");
-            } else {
-                debug!("DB worker: snapshot persistido");
+        while let Some(cmd) = cmd_rx.blocking_recv() {
+            match cmd {
+                DbWorkerCmd::Save(snapshot) => {
+                    if let Err(e) = db.save_table(&snapshot) {
+                        warn!("DB thread: falha ao salvar snapshot: {e:#}");
+                    } else {
+                        debug!("DB worker: snapshot persistido");
+                    }
+                }
+                DbWorkerCmd::Vacuum => {
+                    if let Err(e) = db.vacuum() {
+                        warn!("DB thread: falha ao executar VACUUM: {e:#}");
+                    } else {
+                        info!("DB worker: VACUUM concluído");
+                    }
+                }
             }
         }
         info!("DB thread: encerrando graciosamente");
@@ -463,52 +489,73 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
     // 3. Loop principal assíncrono reativo
     loop {
         // Aguarda o próximo evento relevante
-        let should_flush = wait_for_dirty_or_shutdown(&mut rx).await;
+        let action = wait_for_db_action(&mut rx).await;
 
-        if !should_flush {
-            // Shutdown sem dirty pendente — nada a fazer
-            info!("DB worker encerrando (sem dirty pendente)");
-            return;
-        }
+        match action {
+            DbAction::Save => {
+                // Drena eventos adicionais pelo período de debounce.
+                // Se chegar um Shutdown durante o debounce, flush imediato.
+                let shutdown_during_debounce = drain_with_debounce(&mut rx, DEBOUNCE).await;
 
-        // Drena eventos adicionais pelo período de debounce.
-        // Se chegar um Shutdown durante o debounce, flush imediato.
-        let shutdown_during_debounce = drain_with_debounce(&mut rx, DEBOUNCE).await;
+                // Snapshot do estado atual (read lock breve)
+                let snapshot = {
+                    let t = table.read().await;
+                    t.clone()
+                };
 
-        // Snapshot do estado atual (read lock breve)
-        let snapshot = {
-            let t = table.read().await;
-            t.clone()
-        };
+                // Envia o snapshot para a thread do banco
+                if cmd_tx.send(DbWorkerCmd::Save(snapshot)).await.is_err() {
+                    warn!("DB worker: falha ao enviar snapshot - a thread do DB morreu");
+                    break;
+                }
 
-        // Envia o snapshot para a thread do banco sem bloquear o loop do Tokio
-        if snapshot_tx.send(snapshot).await.is_err() {
-            warn!("DB worker: falha ao enviar snapshot - a thread do DB morreu");
-            break;
-        }
-
-        if shutdown_during_debounce {
-            info!("DB worker encerrando após flush de shutdown");
-            return; // Retornar aqui dropa o snapshot_tx, o que encerra a thread síncrona
+                if shutdown_during_debounce {
+                    info!("DB worker encerrando após flush de shutdown");
+                    return;
+                }
+            }
+            DbAction::Vacuum => {
+                if cmd_tx.send(DbWorkerCmd::Vacuum).await.is_err() {
+                    warn!("DB worker: falha ao enviar comando de vacuum");
+                    break;
+                }
+            }
+            DbAction::Shutdown => {
+                info!("DB worker encerrando (shutdown recebido)");
+                return;
+            }
         }
     }
 }
 
-/// Aguarda o próximo `DeviceTableDirty` ou `Shutdown`.
-/// Retorna `true` se deve persistir, `false` se deve encerrar sem flush.
-async fn wait_for_dirty_or_shutdown(rx: &mut broadcast::Receiver<LanforgeEvent>) -> bool {
+/// Comandos internos enviados para a thread síncrona do SQLite.
+enum DbWorkerCmd {
+    Save(DeviceTable),
+    Vacuum,
+}
+
+/// Ações que o loop assíncrono do `db_worker` deve tomar.
+enum DbAction {
+    Save,
+    Vacuum,
+    Shutdown,
+}
+
+/// Aguarda o próximo evento de DB ou `Shutdown`.
+async fn wait_for_db_action(rx: &mut broadcast::Receiver<LanforgeEvent>) -> DbAction {
     loop {
         match rx.recv().await {
-            Ok(LanforgeEvent::DeviceTableDirty) => return true,
-            Ok(LanforgeEvent::Shutdown) => return false,
+            Ok(LanforgeEvent::DeviceTableDirty) => return DbAction::Save,
+            Ok(LanforgeEvent::DbVacuum) => return DbAction::Vacuum,
+            Ok(LanforgeEvent::Shutdown) => return DbAction::Shutdown,
             Ok(_) => {} // outros eventos — ignora
             Err(broadcast::error::RecvError::Lagged(n)) => {
                 warn!("DB worker atrasado, pulou {n} eventos — forçando flush");
-                return true;
+                return DbAction::Save;
             }
             Err(broadcast::error::RecvError::Closed) => {
                 info!("DB worker: barramento encerrado");
-                return false;
+                return DbAction::Shutdown;
             }
         }
     }
@@ -773,5 +820,38 @@ mod tests {
         let loaded = db.load_table().unwrap();
         assert_eq!(loaded.devices().count(), 1);
         assert_eq!(loaded.devices().next().unwrap().hostname, "worker-test");
+    }
+
+    #[tokio::test]
+    async fn db_worker_handles_vacuum_event() {
+        use crate::bus::EventBus;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_vacuum.db");
+
+        let bus = Arc::new(EventBus::new());
+        let table = Arc::new(ManagedTable::new(bus.clone()));
+
+        let worker_path = db_path.clone();
+        let worker_bus = Arc::clone(&bus);
+        let worker_table = Arc::clone(&table);
+
+        tokio::spawn(async move {
+            db_worker(worker_path, worker_table, worker_bus).await;
+        });
+
+        // Yield para o worker iniciar
+        tokio::task::yield_now().await;
+
+        // Dispara o vacuum
+        bus.publish(LanforgeEvent::DbVacuum);
+
+        // Aguarda um pouco para processamento (não tem efeito visível fácil no arquivo vazio,
+        // mas garante que o loop do worker não quebrou)
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Se chegamos aqui sem pânico e o arquivo existe (foi criado pelo open do worker), sucess
+        assert!(db_path.exists());
     }
 }

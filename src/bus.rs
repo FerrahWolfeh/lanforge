@@ -102,6 +102,9 @@ pub enum LanforgeEvent {
     /// Solicita recarga do arquivo de configuração TOML.
     ReloadConfig,
 
+    /// Solicita vacuum do banco de dados SQLite.
+    DbVacuum,
+
     /// O daemon está encerrando — consumers devem finalizar graciosamente.
     Shutdown,
 }

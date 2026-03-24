@@ -533,9 +533,12 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
             Ok(Command::LeaseRelease { mac }) => Response::Success(SimpleSuccess {
                 message: format!("Liberando lease para {mac}"),
             }),
-            Ok(Command::DbVacuum) => Response::Success(SimpleSuccess {
-                message: "Iniciando vacuum do sqlite...".to_string(),
-            }),
+            Ok(Command::DbVacuum) => {
+                ctx.bus.publish(LanforgeEvent::DbVacuum);
+                Response::Success(SimpleSuccess {
+                    message: "Iniciando vacuum do sqlite...".to_string(),
+                })
+            }
             Err(e) => Response::Error {
                 error: format!("Comando inválido ou JSON malformado: {e}"),
             },
