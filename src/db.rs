@@ -163,22 +163,15 @@ impl LeaseDb {
     }
 
     // -----------------------------------------------------------------------
-    // Save — snapshot completo
+    // Save — snapshot com UPSERT (Delta)
     // -----------------------------------------------------------------------
 
-    /// Grava todos os devices do `DeviceTable` no `SQLite` em uma transação
-    /// única. Operação idempotente — substitui o estado anterior integralmente.
+    /// Grava o estado atual minimizando escritas.
+    /// Usa UPSERT para dispositivos e limpa cirurgicamente devices removidos.
     pub fn save_table(&self, table: &DeviceTable) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
 
-        tx.execute_batch(
-            "DELETE FROM slaac_addrs;
-             DELETE FROM seen_v4;
-             DELETE FROM v6_leases;
-             DELETE FROM v4_leases;
-             DELETE FROM devices;",
-        )?;
-
+        // 1. Inserir ou atualizar os dispositivos atuais (UPSERT)
         for device in table.devices() {
             let mac_str = device.mac.to_string();
             let last_seen = system_time_to_unix(device.last_seen);
@@ -186,9 +179,19 @@ impl LeaseDb {
             let managed_at_unix: Option<i64> = device.managed_at.map(system_time_to_unix);
             let v4_static_str: Option<String> = device.v4_static.map(|ip| ip.to_string());
 
+            // Tabela principal: Se o MAC já existir, atualiza apenas os dados.
             tx.execute(
                 "INSERT INTO devices (mac, hostname, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(mac) DO UPDATE SET
+                    hostname = excluded.hostname,
+                    is_static = excluded.is_static,
+                    duid = excluded.duid,
+                    last_seen = excluded.last_seen,
+                    origin = excluded.origin,
+                    managed_at = excluded.managed_at,
+                    v4_static = excluded.v4_static,
+                    v6_suffix = excluded.v6_suffix",
                 params![
                     mac_str,
                     device.hostname,
@@ -202,6 +205,9 @@ impl LeaseDb {
                 ],
             )?;
 
+            // Tabelas filhas: É mais barato deletar as referências DESTE mac e recriar
+            // do que tentar fazer diff SQL de arrays.
+            tx.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&mac_str])?;
             if let Some(v4) = &device.v4 {
                 tx.execute(
                     "INSERT INTO v4_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
@@ -209,6 +215,7 @@ impl LeaseDb {
                 )?;
             }
 
+            tx.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&mac_str])?;
             if let Some(v6) = &device.v6 {
                 tx.execute(
                     "INSERT INTO v6_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
@@ -216,6 +223,7 @@ impl LeaseDb {
                 )?;
             }
 
+            tx.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&mac_str])?;
             for addr in &device.slaac {
                 tx.execute(
                     "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
@@ -223,6 +231,7 @@ impl LeaseDb {
                 )?;
             }
 
+            tx.execute("DELETE FROM seen_v4 WHERE mac = ?1", params![&mac_str])?;
             for addr in &device.seen_v4 {
                 tx.execute(
                     "INSERT INTO seen_v4 (mac, ip) VALUES (?1, ?2)",
@@ -231,8 +240,27 @@ impl LeaseDb {
             }
         }
 
+        // 2. Limpeza cirúrgica (Deletar do DB os devices que expiraram da memória)
+        let mut stmt = tx.prepare("SELECT mac FROM devices")?;
+        let db_macs: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        drop(stmt); // Libera o statement para podermos usar o tx abaixo
+
+        for db_mac in db_macs {
+            // Se o MAC que está no banco não existe mais na memória, apagamos as trilhas dele
+            if !table.devices().any(|d| d.mac.to_string() == db_mac) {
+                tx.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&db_mac])?;
+                tx.execute("DELETE FROM seen_v4 WHERE mac = ?1", params![&db_mac])?;
+                tx.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&db_mac])?;
+                tx.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&db_mac])?;
+                tx.execute("DELETE FROM devices WHERE mac = ?1", params![&db_mac])?;
+            }
+        }
+
         tx.commit()?;
-        debug!("DeviceTable salva ({} devices)", table.devices().count());
+        debug!("DeviceTable persistida com sucesso (Delta Update)");
         Ok(())
     }
 
@@ -430,7 +458,8 @@ impl LeaseDb {
 ///
 /// Protege o SD card durante boot storms (muitos devices aparecendo em
 /// sequência) e rajadas de leases. Ajustável via config futuramente.
-const DEBOUNCE: Duration = Duration::from_secs(3);
+const DEBOUNCE_SILENCE: Duration = Duration::from_secs(5);
+const MAX_DEBOUNCE_WAIT: Duration = Duration::from_secs(60);
 
 /// Task async que persiste o `ManagedTable` reativamente.
 ///
@@ -461,7 +490,7 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
 
     info!(
         "DB worker iniciado (debounce: {}s, path: {})",
-        DEBOUNCE.as_secs(),
+        DEBOUNCE_SILENCE.as_secs(),
         db_path.display()
     );
 
@@ -511,7 +540,7 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
             DbAction::Save => {
                 // Drena eventos adicionais pelo período de debounce.
                 // Se chegar um Shutdown durante o debounce, flush imediato.
-                let shutdown_during_debounce = drain_with_debounce(&mut rx, DEBOUNCE).await;
+                let shutdown_during_debounce = drain_with_debounce(&mut rx).await;
 
                 // Snapshot do estado atual (read lock breve)
                 let snapshot = {
@@ -581,23 +610,32 @@ async fn wait_for_db_action(rx: &mut broadcast::Receiver<LanforgeEvent>) -> DbAc
     }
 }
 
-/// Drena o canal pelo período de debounce, absorvendo Dirty extras.
+/// Drena o canal aplicando um "Trailing Edge Debounce".
+/// Aguarda `DEBOUNCE_SILENCE` sem eventos novos antes de gravar.
+/// Para evitar ficar preso num loop infinito se a rede estiver ruidosa,
+/// força a saída após `MAX_DEBOUNCE_WAIT`.
 /// Retorna `true` se um `Shutdown` chegou durante a espera.
-async fn drain_with_debounce(
-    rx: &mut broadcast::Receiver<LanforgeEvent>,
-    debounce: Duration,
-) -> bool {
-    let deadline = tokio::time::Instant::now() + debounce;
+async fn drain_with_debounce(rx: &mut broadcast::Receiver<LanforgeEvent>) -> bool {
+    let start_time = tokio::time::Instant::now();
+    let max_deadline = start_time + MAX_DEBOUNCE_WAIT;
+    let mut current_deadline = start_time + DEBOUNCE_SILENCE;
 
     loop {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Ok(LanforgeEvent::Shutdown)) => return true,
-            Ok(
-                Ok(LanforgeEvent::DeviceTableDirty | _)
-                | Err(broadcast::error::RecvError::Lagged(_)),
-            ) => {} // absorve, reinicia janela não
-            Ok(Err(broadcast::error::RecvError::Closed)) | Err(_) => return false,
-            // timeout expirou — hora de persistir
+        match tokio::time::timeout_at(current_deadline, rx.recv()).await {
+            Ok(Ok(LanforgeEvent::Shutdown)) => return true, // Prioridade máxima
+
+            // Eventos normais ou atraso do canal (ruído na rede)
+            Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                // Estende o prazo por mais 5s de silêncio, mas trava no limite de 60s
+                let new_deadline = tokio::time::Instant::now() + DEBOUNCE_SILENCE;
+                current_deadline = std::cmp::min(new_deadline, max_deadline);
+            }
+
+            Ok(Err(broadcast::error::RecvError::Closed)) => return false, // Barramento morreu
+
+            // Ocorreu o Timeout!
+            // Ou tivemos 5s de silêncio, ou batemos no teto de 60s de barulho contínuo.
+            Err(_) => return false,
         }
     }
 }
@@ -834,8 +872,8 @@ mod tests {
             })
             .await;
 
-        // Aguarda debounce + margem para o spawn_blocking completar
-        tokio::time::sleep(DEBOUNCE + Duration::from_millis(500)).await;
+        // Aguarda o período de silêncio + margem para o spawn_blocking completar a transação
+        tokio::time::sleep(DEBOUNCE_SILENCE + Duration::from_millis(500)).await;
 
         // Verifica que o DB foi escrito
         let db = LeaseDb::open(&db_path).unwrap();
