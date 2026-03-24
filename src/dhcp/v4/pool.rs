@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::time::SystemTime;
 
@@ -25,8 +25,8 @@ pub struct IpPool {
     reserved: HashMap<Ipv4Addr, MacAddr>,
     /// MAC → IP: índice para lookup O(1) de reservas por MAC.
     mac_to_reserved: HashMap<MacAddr, Ipv4Addr>,
-    /// IPs rejeitados por DECLINE (Quarentena)
-    declined: HashSet<Ipv4Addr>,
+    /// IPs rejeitados por DECLINE (Quarentena com timestamp)
+    declined: HashMap<Ipv4Addr, SystemTime>,
     /// Pool de IPs livres para alocação circular/rápida O(1).
     available_ips: Vec<Ipv4Addr>,
     /// Mapeia o IP para sua posição no vetor available_ips pra remoção O(1).
@@ -37,7 +37,7 @@ impl IpPool {
     pub fn new(start: Ipv4Addr, end: Ipv4Addr) -> Self {
         let s = u32::from(start);
         let e = u32::from(end);
-        let size = (e - s + 1) as usize;
+        let size = (u64::from(e) - u64::from(s) + 1) as usize;
 
         let mut available_ips = Vec::with_capacity(size);
         let mut ip_to_index = HashMap::with_capacity(size);
@@ -55,7 +55,7 @@ impl IpPool {
             ip_to_mac: HashMap::new(),
             reserved: HashMap::new(),
             mac_to_reserved: HashMap::new(),
-            declined: HashSet::new(),
+            declined: HashMap::new(),
             available_ips,
             ip_to_index,
         }
@@ -63,9 +63,13 @@ impl IpPool {
 
     /// Reserve a static IP for a MAC (excluded from dynamic allocation).
     pub fn add_reservation(&mut self, ip: Ipv4Addr, mac: MacAddr) {
+        if let Some(old_mac) = self.ip_to_mac.get(&ip).copied() {
+            self.active.remove(&old_mac);
+        }
+        self.ip_to_mac.insert(ip, mac); // Atualiza índice pro novo dono
+
         self.reserved.insert(ip, mac);
         self.mac_to_reserved.insert(mac, ip);
-        // Se o IP reservado estava no pool dinâmico, removemos
         self.remove_from_available(ip);
     }
 
@@ -83,22 +87,42 @@ impl IpPool {
     /// Isola um IP problemático reportado via DECLINE.
     pub fn mark_declined(&mut self, ip: Ipv4Addr) {
         self.release(ip);
-        self.declined.insert(ip);
+        self.declined.insert(ip, SystemTime::now());
         self.remove_from_available(ip);
     }
 
-    /// Limpa leases que expiraram.
+    /// Limpa leases e quarentenas que expiraram.
     pub fn cleanup_expired_leases(&mut self, now: SystemTime) {
-        let expired: Vec<Ipv4Addr> = self
+        // 1. Cleanup Leases
+        let expired_leases: Vec<Ipv4Addr> = self
             .active
             .values()
             .filter(|l| l.expiry <= now)
             .map(|l| l.ip)
             .collect();
 
-        for ip in expired {
+        for ip in expired_leases {
             tracing::info!("[DHCPv4] Lease for {ip} expired, returning to pool.");
             self.release(ip);
+        }
+
+        // 2. Cleanup Quarantine (DECLINEs) - Recupera IPs após 2 horas
+        let quarantine_timeout = std::time::Duration::from_secs(7200);
+        let recovered_ips: Vec<Ipv4Addr> = self
+            .declined
+            .iter()
+            .filter(|(_, time)| {
+                now.duration_since(**time).unwrap_or_default() >= quarantine_timeout
+            })
+            .map(|(&ip, _)| ip)
+            .collect();
+
+        for ip in recovered_ips {
+            tracing::info!("[DHCPv4] Recovering IP {ip} from DECLINE quarantine.");
+            self.declined.remove(&ip);
+            if self.is_in_range(ip) && !self.reserved.contains_key(&ip) {
+                self.add_to_available(ip);
+            }
         }
     }
 
@@ -145,7 +169,8 @@ impl IpPool {
         // 6. Fallback de emergência: DECLINEs
         if !self.declined.is_empty() {
             tracing::warn!("[DHCPv4] Pool esgotado! Recuperando IPs de quarentena (DECLINEs)...");
-            let declined_list: Vec<Ipv4Addr> = self.declined.drain().collect();
+            let declined_list: Vec<Ipv4Addr> = self.declined.keys().copied().collect();
+            self.declined.clear();
             for ip in declined_list {
                 self.add_to_available(ip);
             }
@@ -348,5 +373,32 @@ mod tests {
 
         p.cleanup_expired_leases(SystemTime::now());
         assert_eq!(p.active_count(), 0);
+    }
+
+    #[test]
+    fn test_cleanup_declined_quarantine() {
+        let mut p = IpPool::new(
+            Ipv4Addr::new(192, 168, 1, 100),
+            Ipv4Addr::new(192, 168, 1, 100),
+        );
+        let ip = Ipv4Addr::new(192, 168, 1, 100);
+
+        // 1. Marca como declined
+        p.mark_declined(ip);
+        assert!(p.available_ips.is_empty());
+        assert_eq!(p.declined.len(), 1);
+
+        // 2. Tenta limpar agora (não deve recuperar pois o timeout é 2h)
+        p.cleanup_expired_leases(SystemTime::now());
+        assert!(p.available_ips.is_empty());
+
+        // 3. Simula 3 horas no futuro
+        let three_hours_later = SystemTime::now() + Duration::from_secs(3 * 3600);
+        p.cleanup_expired_leases(three_hours_later);
+
+        // 4. Deve ter recuperado o IP
+        assert_eq!(p.available_ips.len(), 1);
+        assert_eq!(p.available_ips[0], ip);
+        assert!(p.declined.is_empty());
     }
 }
