@@ -1,8 +1,9 @@
-use anyhow::Result;
-use iocraft::prelude::*;
+use super::{CliCommand, format_uptime};
 use crate::control::api::StatusResponse;
 use crate::control::{Command as ControlCommand, Response};
-use super::{CliCommand, format_uptime};
+use anyhow::Result;
+use bytesize::ByteSize;
+use iocraft::prelude::*;
 
 pub struct StatusHandler;
 
@@ -79,8 +80,6 @@ fn print_status_services(st: &StatusResponse, gua: &str, ula: &str, upstream: &s
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "● RA          ", color: Color::Cyan)
                 Text(content: format!("{:<9}", st.services.ra.state))
-                Text(content: " uptime ", color: Color::DarkGrey)
-                Text(content: format_uptime(st.services.ra.uptime_secs))
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("                        GUA  {gua}"))
@@ -92,8 +91,6 @@ fn print_status_services(st: &StatusResponse, gua: &str, ula: &str, upstream: &s
             View(margin_top: 1, flex_direction: FlexDirection::Row) {
                 Text(content: "● DHCPv4      ", color: Color::Cyan)
                 Text(content: format!("{:<9}", st.services.dhcp_v4.state))
-                Text(content: " uptime ", color: Color::DarkGrey)
-                Text(content: format_uptime(st.services.dhcp_v4.uptime_secs))
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("                        {} leases ativos  ·  {} livres", st.services.dhcp_v4.leases_active, st.services.dhcp_v4.pool_free))
@@ -102,8 +99,6 @@ fn print_status_services(st: &StatusResponse, gua: &str, ula: &str, upstream: &s
             View(margin_top: 1, flex_direction: FlexDirection::Row) {
                 Text(content: "● DHCPv6      ", color: Color::Cyan)
                 Text(content: format!("{:<9}", st.services.dhcp_v6.state))
-                Text(content: " uptime ", color: Color::DarkGrey)
-                Text(content: format_uptime(st.services.dhcp_v6.uptime_secs))
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("                        {} leases ativos  ·  {} livres", st.services.dhcp_v6.leases_active, st.services.dhcp_v6.pool_free))
@@ -112,8 +107,6 @@ fn print_status_services(st: &StatusResponse, gua: &str, ula: &str, upstream: &s
             View(margin_top: 1, flex_direction: FlexDirection::Row) {
                 Text(content: "● DNS         ", color: Color::Cyan)
                 Text(content: format!("{:<9}", st.services.dns.state))
-                Text(content: " uptime ", color: Color::DarkGrey)
-                Text(content: format_uptime(st.services.dns.uptime_secs))
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("                        upstream {upstream}"))
@@ -122,8 +115,6 @@ fn print_status_services(st: &StatusResponse, gua: &str, ula: &str, upstream: &s
             View(margin_top: 1, flex_direction: FlexDirection::Row) {
                 Text(content: "● SLAAC       ", color: Color::Cyan)
                 Text(content: format!("{:<9}", st.services.slaac.state))
-                Text(content: " uptime ", color: Color::DarkGrey)
-                Text(content: format_uptime(st.services.slaac.uptime_secs))
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("                        {} endereços rastreados", st.services.slaac.addrs_tracked))
@@ -151,15 +142,16 @@ fn print_status_devices(st: &StatusResponse) {
 }
 
 fn print_status_persistence(st: &StatusResponse) {
+    let size = ByteSize::b(st.db.size_bytes);
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View { Text(content: "PERSISTÊNCIA") }
             View { Text(content: "---------------------------------------------------------------------------", color: Color::DarkGrey) }
             View(flex_direction: FlexDirection::Row) {
-                Text(content: format!("SQLite   {}  ·  {} bytes", st.db.path, st.db.size_bytes))
+                Text(content: format!("SQLite   {}  ·  {}", st.db.path, size))
             }
             View(flex_direction: FlexDirection::Row) {
-                Text(content: format!("         último flush há {}s", st.db.last_flush_secs_ago))
+                Text(content: format!("         último flush há {}", format_uptime(st.db.last_flush_secs_ago)))
             }
         }
     }.print();
