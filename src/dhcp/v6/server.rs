@@ -818,8 +818,8 @@ mod tests {
         Message::decode(&mut Decoder::new(bytes)).expect("Should decode valid DHCPv6 reply")
     }
 
-    #[test]
-    fn solicit_yields_no_addrs_avail_when_pool_empty() {
+    #[tokio::test]
+    async fn solicit_yields_no_addrs_avail_when_pool_empty() {
         let cfg = Dhcpv6Config {
             enabled: true,
             iface: "lo".to_string(),
@@ -865,8 +865,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn request_not_on_link_yields_status_code() {
+    #[tokio::test]
+    async fn request_not_on_link_yields_status_code() {
         let mut srv = dummy_server();
         let mut msg = Message::new(MessageType::Request);
         msg.opts_mut()
@@ -916,8 +916,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn renew_no_binding_yields_status_code() {
+    #[tokio::test]
+    async fn renew_no_binding_yields_status_code() {
         let mut srv = dummy_server();
         let mut msg = Message::new(MessageType::Renew);
         msg.opts_mut()
@@ -958,8 +958,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn decline_acknowledgment_and_blacklisting() {
+    #[tokio::test]
+    async fn decline_acknowledgment_and_blacklisting() {
         let mut srv = dummy_server();
         let ip: Ipv6Addr = "fd97:f00d:cafe:3731::101".parse().unwrap();
         let duid = dummy_client_duid();
@@ -1011,8 +1011,8 @@ mod tests {
         assert!(ip2.is_none() || ip2.unwrap() != ip);
     }
 
-    #[test]
-    fn lifetime_capping_respects_wan_prefix() {
+    #[tokio::test]
+    async fn lifetime_capping_respects_wan_prefix() {
         let mut srv = dummy_server();
         // Configura vida útil do WAN prefix para 3600 segundos
         srv.prefix_lifetimes = Some((1800, 3600));
@@ -1042,8 +1042,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn information_request_yields_reply_without_ia_na() {
+    #[tokio::test]
+    async fn information_request_yields_reply_without_ia_na() {
         let srv = dummy_server();
         let msg = Message::new(MessageType::InformationRequest);
         let mut resp_vec = Vec::with_capacity(1024);
@@ -1060,8 +1060,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn solicit_with_iapd_yields_prefix_delegation() {
+    #[tokio::test]
+    async fn solicit_with_iapd_yields_prefix_delegation() {
         let cfg = Dhcpv6Config {
             enabled: true,
             iface: "lo".to_string(),
