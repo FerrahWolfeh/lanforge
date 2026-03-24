@@ -470,48 +470,8 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
                     }
                 }
             }
-            Ok(Command::HostList) => {
-                let table_guard = ctx.table.read().await;
-                let mut api_devices = Vec::new();
+            Ok(Command::HostList) => ctx.handle_devices(None).await,
 
-                for dev in table_guard
-                    .devices()
-                    .filter(|d| d.origin == crate::state::Origin::Cli)
-                {
-                    api_devices.push(api::DeviceEntry {
-                        mac: dev.mac.to_string(),
-                        hostname: dev.hostname.clone(),
-                        origin: dev.origin.as_str().to_string(),
-                        online: dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300,
-                        last_seen: format_iso8601(dev.last_seen),
-                        duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),
-                        v4: dev.v4.as_ref().map(|v| api::LeaseInfo {
-                            ip: v.ip.to_string(),
-                            expires: format_iso8601(v.expires),
-                            reserved: true,
-                        }),
-                        v6: dev.v6.as_ref().map(|v| api::LeaseInfo {
-                            ip: v.ip.to_string(),
-                            expires: format_iso8601(v.expires),
-                            reserved: true,
-                        }),
-                        slaac: dev
-                            .slaac
-                            .iter()
-                            .map(std::string::ToString::to_string)
-                            .collect(),
-                    });
-                }
-
-                Response::Devices(api::DevicesResponse {
-                    devices: api_devices,
-                    meta: api::DevicesMeta {
-                        total: table_guard.devices().count(),
-                        online: 0,
-                        last_scan_secs_ago: ctx.last_scan_secs_ago,
-                    },
-                })
-            }
             Ok(Command::HostRemove { mac }) => {
                 if let Some(mac_addr) = crate::state::MacAddr::parse(&mac) {
                     let mut w = ctx.table.write().await;
@@ -576,4 +536,114 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bus::EventBus;
+    use crate::config::{Config, DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg};
+    use crate::control::api::Response;
+    use crate::state::{DeviceUpdate, MacAddr};
+
+    fn make_dummy_config() -> Config {
+        Config {
+            command: crate::config::Command::Run { only: None },
+            iface_lan: "eth0".to_string(),
+            target_prefix: "fd00::/64".to_string(),
+            leases_db: "/tmp/leases.db".to_string(),
+            debounce_secs: 5,
+            fallback_mins: 60,
+            control_socket: "/tmp/lanforge.sock".to_string(),
+            ra_enabled: true,
+            ra_toml: RaCfg::default(),
+            dhcpv4_enabled: true,
+            dhcpv4_toml: DhcpV4Cfg::default(),
+            dhcpv6_enabled: true,
+            dhcpv6_toml: DhcpV6Cfg::default(),
+            dns_enabled: true,
+            dns_toml: DnsCfg::default(),
+            devices: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_host_list_returns_all_types_of_devices() {
+        let bus = Arc::new(EventBus::new());
+        let table = Arc::new(ManagedTable::new(bus.clone()));
+        let cfg = Arc::new(make_dummy_config());
+        let ifaces = Interfaces {
+            lan: "eth0".to_string(),
+        };
+
+        let ctx = ClientContext {
+            ifaces,
+            table: table.clone(),
+            current_gua: None,
+            bus: bus.clone(),
+            uptime_secs: 10,
+            last_scan_secs_ago: 5,
+            cfg,
+        };
+
+        // 1. Add a CLI device
+        let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
+        table
+            .update(DeviceUpdate::CliHostUpdated {
+                mac: mac_cli,
+                hostname: Some(Some("cli-host".to_string())),
+                v4_static: None,
+                v6_suffix: None,
+            })
+            .await;
+
+        // 2. Add a Dynamic device
+        let mac_dyn = MacAddr::parse("00:00:00:00:00:02").unwrap();
+        table
+            .update(DeviceUpdate::V4LeaseGranted {
+                mac: mac_dyn,
+                ip: "192.168.1.10".parse().unwrap(),
+                expires: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
+            })
+            .await;
+
+        // 3. Add a TOML device
+        let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
+        {
+            let mut w = table.write().await;
+            w.load_static_devices(&[StaticDeviceCfg {
+                mac: mac_toml.to_string(),
+                hostname: "toml-host".to_string(),
+                v4_ip: Some("192.168.1.5".to_string()),
+                v6_suffix: None,
+            }]);
+        }
+
+        // 4. handle_devices (called by HostList) should return all 3
+        let resp = ctx.handle_devices(None).await;
+        if let Response::Devices(d) = resp {
+            assert_eq!(
+                d.devices.len(),
+                3,
+                "Should return CLI, dynamic and TOML devices"
+            );
+            assert!(
+                d.devices
+                    .iter()
+                    .any(|dev| dev.mac == mac_cli.to_string() && dev.origin == "cli")
+            );
+            assert!(
+                d.devices
+                    .iter()
+                    .any(|dev| dev.mac == mac_dyn.to_string() && dev.origin == "dynamic")
+            );
+            assert!(
+                d.devices
+                    .iter()
+                    .any(|dev| dev.mac == mac_toml.to_string() && dev.origin == "toml")
+            );
+        } else {
+            panic!("Expected Response::Devices, got {:?}", resp);
+        }
+    }
 }

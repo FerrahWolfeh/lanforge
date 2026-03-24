@@ -101,4 +101,32 @@ impl CliCommand for HostHandler {
             HostCommand::List => Ok(ControlCommand::HostList),
         }
     }
+
+    fn on_response(&self, response: &crate::control::Response) -> Result<()> {
+        match response {
+            crate::control::Response::Devices(resp) => {
+                super::devices::render_devices(resp, false);
+                Ok(())
+            }
+            _ => {
+                // Delegate to default implementation? We can't easily, so we duplicate the basic ones.
+                match response {
+                    crate::control::Response::Error { error } => {
+                        println!("Erro: {error}");
+                    }
+                    crate::control::Response::Success(success) => {
+                        println!("✓ {}", success.message);
+                    }
+                    crate::control::Response::Event(e) => {
+                        println!("Event: {e:?}");
+                    }
+                    _ => {
+                        println!("Resposta inesperada: {response:?}");
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
 }
+
