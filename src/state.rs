@@ -450,6 +450,16 @@ impl DeviceTable {
                     dev.managed_at = Some(SystemTime::now());
                     dev.is_static = true;
                     dev.last_seen = SystemTime::now();
+
+                    // Sincroniza static_entries para que serviços legados/startup vejam a reserva
+                    let entry = StaticEntry {
+                        mac,
+                        hostname: dev.hostname.clone(),
+                        v4_ip: dev.v4_static,
+                        v6_suffix: dev.v6_suffix.clone(),
+                    };
+                    self.static_entries.insert(mac, entry);
+
                     debug!("[state] CLI Host Updated: {}", mac);
                 }
 
@@ -878,5 +888,51 @@ mod tests {
         assert!(table.get_mac_from_ndp_cache(&ip).is_none());
         table.apply_update(DeviceUpdate::NdpSeen { mac, ip });
         assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
+    }
+
+    #[test]
+    fn test_cli_host_updated_sync() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+
+        // 1. Initial discovery (Empty hostname)
+        table.apply_update(DeviceUpdate::NdpSeen {
+            mac,
+            ip: "fe80::1".parse().unwrap(),
+        });
+
+        // 2. Update via CLI (Hostname + Static V4)
+        let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
+            mac,
+            hostname: Some(Some("cli-host".to_string())),
+            v4_static: Some(Some("192.168.1.10".parse().unwrap())),
+            v6_suffix: Some(Some("::10".to_string())),
+        });
+
+        assert!(changed);
+        let dev = table.devices.get(&mac).unwrap();
+        assert_eq!(dev.hostname, "cli-host");
+        assert_eq!(dev.v4_static, Some("192.168.1.10".parse().unwrap()));
+        assert_eq!(dev.v6_suffix, Some("::10".to_string()));
+        assert!(dev.is_static);
+
+        // 3. Verify static_entries sync
+        let entry = table.static_entries.get(&mac).expect("Should have static entry");
+        assert_eq!(entry.hostname, "cli-host");
+        assert_eq!(entry.v4_ip, Some("192.168.1.10".parse().unwrap()));
+        assert_eq!(entry.v6_suffix, Some("::10".to_string()));
+
+        // 4. Partial update (Only hostname)
+        let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
+            mac,
+            hostname: Some(Some("new-name".to_string())),
+            v4_static: None, // No change
+            v6_suffix: None, // No change
+        });
+
+        assert!(changed);
+        let entry = table.static_entries.get(&mac).unwrap();
+        assert_eq!(entry.hostname, "new-name");
+        assert_eq!(entry.v4_ip, Some("192.168.1.10".parse().unwrap())); // Preserved
     }
 }

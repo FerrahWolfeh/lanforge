@@ -162,6 +162,20 @@ pub async fn dhcpv6_service(
                         info!("DHCPv6: Forcing release of {} via CLI", mac);
                         server.pool.release_mac(mac);
                     }
+                    Ok(crate::bus::LanforgeEvent::DeviceUpdated { mac, change: crate::bus::DeviceChange::V6SuffixChanged { suffix } }) => {
+                        match suffix {
+                            Some(s) => {
+                                if let Some(ip) = server.pool.construct_static_ula(&s) {
+                                    info!("DHCPv6: New static reservation via CLI: {mac} -> {ip}");
+                                    server.pool.add_reservation(ip, mac);
+                                }
+                            }
+                            None => {
+                                info!("DHCPv6: Static reservation removed via CLI: {mac}");
+                                server.pool.release_mac(mac);
+                            }
+                        }
+                    }
                     Ok(crate::bus::LanforgeEvent::Shutdown) => break,
                     _ => {}
                 }

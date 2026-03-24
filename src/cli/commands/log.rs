@@ -130,6 +130,14 @@ impl LogHandler {
                 format!("SLAAC observed: {}", addr.to_string().bright_magenta())
             }
             DeviceChange::HostnameChanged { hostname } => format!("Hostname: {}", hostname.bold()),
+            DeviceChange::V4StaticChanged { ip } => match ip {
+                Some(v) => format!("Static IPv4 set: {}", v.to_string().bright_green()),
+                None => "Static IPv4 removed".dimmed().to_string(),
+            },
+            DeviceChange::V6SuffixChanged { suffix } => match suffix {
+                Some(s) => format!("Static IPv6 suffix set: {}", s.bold()),
+                None => "Static IPv6 suffix removed".dimmed().to_string(),
+            },
             DeviceChange::DuidAssociated => "DUID associated".to_string(),
         }
     }

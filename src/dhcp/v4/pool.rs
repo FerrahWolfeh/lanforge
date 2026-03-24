@@ -41,6 +41,11 @@ impl IpPool {
         self.reserved.insert(ip, mac);
     }
 
+    /// Remove a static reservation for a MAC.
+    pub fn remove_reservation(&mut self, mac: MacAddr) {
+        self.reserved.retain(|_, m| *m != mac);
+    }
+
     /// Isola um IP problemático reportado via DECLINE.
     pub fn mark_declined(&mut self, ip: Ipv4Addr) {
         self.release(ip);
@@ -119,11 +124,12 @@ impl IpPool {
         }
     }
 
-    /// Release all allocations for a MAC.
+    /// Release all allocations and reservations for a MAC.
     pub fn release_mac(&mut self, mac: MacAddr) {
         if let Some(ip) = self.active.remove(&mac) {
             self.ip_to_mac.remove(&ip);
         }
+        self.remove_reservation(mac);
     }
 
     /// Check if an IP is available (not in active use and not reserved).
@@ -249,5 +255,18 @@ mod tests {
             p.declined.is_empty(),
             "A quarentena deve ter sido esvaziada por emergência"
         );
+    }
+
+    #[test]
+    fn test_add_remove_reservation() {
+        let mut p = pool();
+        let mac = mac(1);
+        let ip = Ipv4Addr::new(192, 168, 0, 100);
+
+        p.add_reservation(ip, mac);
+        assert_eq!(p.lookup(mac), Some(ip));
+
+        p.remove_reservation(mac);
+        assert_eq!(p.lookup(mac), None);
     }
 }

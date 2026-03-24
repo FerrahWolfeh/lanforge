@@ -34,6 +34,11 @@ impl Ipv6Pool {
         self.reserved.insert(ip, mac);
     }
 
+    /// Remove a static reservation for a MAC.
+    pub fn remove_reservation(&mut self, mac: MacAddr) {
+        self.reserved.retain(|_, m| *m != mac);
+    }
+
     /// Constructs a static IPv6 address given a device's configured suffix and the network's ULA prefix.
     #[allow(dead_code)]
     pub fn construct_static_ula(&self, suffix: &str) -> Option<Ipv6Addr> {
@@ -147,6 +152,7 @@ impl Ipv6Pool {
         if let Some(ip) = self.active.remove(&mac) {
             self.ip_to_mac.remove(&ip);
         }
+        self.remove_reservation(mac);
     }
 
     fn mark_used(&mut self, ip: Ipv6Addr, mac: MacAddr) {
@@ -300,5 +306,19 @@ mod tests {
 
         let ip2 = pool.allocate(mac(2), None).unwrap(); // Liberou, o MAC 2 consegue pegar
         assert_eq!(ip1, ip2);
+    }
+
+    #[test]
+    fn test_add_remove_reservation() {
+        let ula = "fd00::".parse().unwrap();
+        let mut p = Ipv6Pool::new(None, None, Some(ula));
+        let mac = mac(1);
+        let ip = "fd00::cafe".parse().unwrap();
+
+        p.add_reservation(ip, mac);
+        assert_eq!(p.lookup(mac), Some(ip));
+
+        p.remove_reservation(mac);
+        assert_eq!(p.lookup(mac), None);
     }
 }

@@ -239,6 +239,14 @@ impl Config {
             })
         };
 
+        let ula_prefix = self.ra_toml.prefix.iter().find_map(|p| {
+            if p.source == "ula" {
+                p.address.as_deref().and_then(|a| a.parse().ok())
+            } else {
+                None
+            }
+        });
+
         crate::dns::DnsConfig {
             enabled: self.dns_enabled,
             listen: parse_addr(&self.dns_toml.listen, "0.0.0.0:5300"),
@@ -248,6 +256,7 @@ impl Config {
                 .as_deref()
                 .map(|s| parse_addr(s, "127.0.0.1:5335")),
             search_domain: self.dns_toml.search_domain.clone(),
+            ula_prefix,
             ttl: self.dns_toml.ttl,
         }
     }

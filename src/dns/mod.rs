@@ -41,6 +41,7 @@ use hickory_proto::{
     rr::{Name, RData, Record, RecordType},
     serialize::binary::{BinDecodable, BinEncodable},
 };
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -64,6 +65,7 @@ pub struct DnsConfig {
     /// Se `None`, queries não-locais retornam REFUSED.
     pub upstream: Option<SocketAddr>,
     pub search_domain: String,
+    pub ula_prefix: Option<Ipv6Addr>,
     pub ttl: u32,
 }
 
@@ -74,6 +76,7 @@ impl Default for DnsConfig {
             listen: "0.0.0.0:53".parse().unwrap(),
             upstream: None,
             search_domain: "lan".into(),
+            ula_prefix: None,
             ttl: 60,
         }
     }
@@ -209,6 +212,7 @@ fn resolve_local(
         // Estático tem precedência sobre lease dinâmico
         let v4_ip = static_entry
             .and_then(|e| e.v4_ip)
+            .or(device.v4_static)
             .or_else(|| device.v4.as_ref().map(|l| l.ip));
 
         if let Some(ip) = v4_ip {
@@ -235,6 +239,44 @@ fn resolve_local(
         if let Some(v6) = &device.v6 {
             classify_ip(v6.ip);
         }
+
+        // Se houver sufixo estático, ele gera um endereço ULA que tem precedência
+        let v6_suffix = static_entry
+            .and_then(|e| e.v6_suffix.as_ref())
+            .or(device.v6_suffix.as_ref());
+
+        if let Some(suffix) = v6_suffix {
+            // Se o sufixo for um IP completo, usamos ele diretamente
+            if let Ok(ip) = suffix.parse::<Ipv6Addr>() {
+                classify_ip(ip);
+            } else if suffix.starts_with("::") {
+                // Se for um sufixo (ex: ::1234), tentamos combinar com os prefixos conhecidos
+                let mut applied_prefixes = HashSet::<[u16; 4]>::new();
+
+                // 1. Prefixo ULA da configuração (mais estável)
+                if let Some(ula) = cfg.ula_prefix {
+                    let segments = ula.segments();
+                    let ula_prefix = [segments[0], segments[1], segments[2], segments[3]];
+                    if applied_prefixes.insert(ula_prefix)
+                        && let Some(ip) = combine_prefix_suffix(&ula_prefix, suffix)
+                    {
+                        classify_ip(ip);
+                    }
+                }
+
+                // 2. Prefixos GUA/ULA aprendidos via SLAAC (dinâmicos)
+                for slaac_ip in &device.slaac {
+                    let segments = slaac_ip.segments();
+                    let prefix = [segments[0], segments[1], segments[2], segments[3]];
+                    if applied_prefixes.insert(prefix)
+                        && let Some(ip) = combine_prefix_suffix(&prefix, suffix)
+                    {
+                        classify_ip(ip);
+                    }
+                }
+            }
+        }
+
         for ip in &device.slaac {
             classify_ip(*ip);
         }
@@ -291,6 +333,11 @@ fn resolve_ptr(
         if let Some(stat) = table.static_entries.get(&d.mac)
             && let Some(stat_v4) = stat.v4_ip
             && target_ip == stat_v4
+        {
+            return true;
+        }
+        if let Some(v4_static) = d.v4_static
+            && IpAddr::V4(v4_static) == target_ip
         {
             return true;
         }
@@ -436,6 +483,23 @@ fn parse_arpa_name(name: &str) -> Option<IpAddr> {
         }
     }
     None
+}
+
+fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &str) -> Option<Ipv6Addr> {
+    let clean_suffix = suffix.strip_prefix("::").unwrap_or(suffix);
+    let suffix_ip: Ipv6Addr = format!("::{clean_suffix}").parse().ok()?;
+    let suf_segs = suffix_ip.segments();
+
+    Some(Ipv6Addr::new(
+        prefix_segs[0],
+        prefix_segs[1],
+        prefix_segs[2],
+        prefix_segs[3],
+        suf_segs[4],
+        suf_segs[5],
+        suf_segs[6],
+        suf_segs[7],
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -646,5 +710,47 @@ mod tests {
                 assert_ne!(resp_msg.response_code(), ResponseCode::Refused);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_local_v6_suffix_merging() {
+        let ula = "fd00::".parse::<Ipv6Addr>().unwrap();
+        let cfg = DnsConfig {
+            ula_prefix: Some(ula),
+            ..Default::default()
+        };
+        let mut table = DeviceTable::new();
+        let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+        let dev = table.get_or_insert(mac);
+        dev.hostname = "test".to_string();
+        dev.v6_suffix = Some("::beef".to_string());
+        dev.slaac = vec!["2001:db8::1".parse().unwrap()];
+
+        let mut query = Message::new();
+        let name = Name::from_str("test.lan.").unwrap();
+        query.add_query(hickory_proto::op::Query::query(name, RecordType::AAAA));
+
+        let res_bytes = resolve_local(&query, "test", RecordType::AAAA, &cfg, &table)
+            .unwrap()
+            .expect("Should resolve");
+
+        let res = Message::from_bytes(&res_bytes).expect("Should parse message");
+        let answers = res.answers();
+        assert!(answers.len() >= 2);
+
+        let ips: HashSet<Ipv6Addr> = answers
+            .iter()
+            .filter_map(|r: &Record| {
+                let data = r.data();
+                if let RData::AAAA(ip) = data {
+                    Some((*ip).into())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(ips.contains(&"fd00::beef".parse().unwrap()));
+        assert!(ips.contains(&"2001:db8::beef".parse().unwrap()));
     }
 }

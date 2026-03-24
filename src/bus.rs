@@ -62,6 +62,12 @@ pub enum DeviceChange {
     /// O hostname do device foi atualizado.
     HostnameChanged { hostname: String },
 
+    /// Uma reserva IPv4 estática foi definida ou removida via CLI.
+    V4StaticChanged { ip: Option<Ipv4Addr> },
+
+    /// Um sufixo IPv6 estático foi definido ou removido via CLI.
+    V6SuffixChanged { suffix: Option<String> },
+
     /// Um DUID foi associado ao device.
     DuidAssociated,
 }
@@ -272,11 +278,32 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
             hostname: hostname.clone(),
         }),
         DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),
-        // NdpSeen e SlaacCleared não geram DeviceChange no barramento
         DeviceUpdate::NdpSeen { .. }
         | DeviceUpdate::SlaacCleared { .. }
-        | DeviceUpdate::LeaseReleased { .. }
-        | DeviceUpdate::CliHostUpdated { .. } => None,
+        | DeviceUpdate::LeaseReleased { .. } => None,
+
+        DeviceUpdate::CliHostUpdated {
+            hostname,
+            v4_static,
+            v6_suffix,
+            ..
+        } => {
+            // CLI updates can change multiple things. We pick the most "urgent" change
+            // to emit as a DeviceUpdated event. The Manager will also emit DeviceTableDirty
+            // ensuring persistence regardless.
+            if let Some(Some(hn)) = hostname {
+                return Some(DeviceChange::HostnameChanged {
+                    hostname: hn.clone(),
+                });
+            }
+            if let Some(v4) = v4_static {
+                return Some(DeviceChange::V4StaticChanged { ip: *v4 });
+            }
+            if let Some(v6) = v6_suffix {
+                return Some(DeviceChange::V6SuffixChanged { suffix: v6.clone() });
+            }
+            None
+        }
     }
 }
 
@@ -394,5 +421,66 @@ mod tests {
             n
         };
         assert_eq!(count, 0, "NdpSeen não deve publicar eventos");
+    }
+
+    #[tokio::test]
+    async fn cli_host_update_publishes_events() {
+        let bus = make_bus();
+        let table = ManagedTable::new(bus.clone());
+        let mut rx = bus.subscribe();
+
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+
+        // 1. Hostname update
+        table
+            .update(DeviceUpdate::CliHostUpdated {
+                mac,
+                hostname: Some(Some("cli-host".to_string())),
+                v4_static: None,
+                v6_suffix: None,
+            })
+            .await;
+
+        let mut events = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                LanforgeEvent::DeviceUpdated {
+                    mac: _,
+                    change: DeviceChange::HostnameChanged { .. }
+                }
+            )),
+            "Deve publicar HostnameChanged"
+        );
+
+        // 2. Static IPv4 update
+        table
+            .update(DeviceUpdate::CliHostUpdated {
+                mac,
+                hostname: None,
+                v4_static: Some(Some("1.2.3.4".parse().unwrap())),
+                v6_suffix: None,
+            })
+            .await;
+
+        let mut events = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                LanforgeEvent::DeviceUpdated {
+                    mac: _,
+                    change: DeviceChange::V4StaticChanged { .. }
+                }
+            )),
+            "Deve publicar V4StaticChanged"
+        );
     }
 }

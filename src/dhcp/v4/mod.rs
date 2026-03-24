@@ -134,6 +134,21 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                         info!("DHCPv4: Forcing release of {} via CLI", mac);
                         server.pool.release_mac(mac);
                     }
+                    Ok(crate::bus::LanforgeEvent::DeviceUpdated { mac, change: crate::bus::DeviceChange::V4StaticChanged { ip } }) => {
+                        match ip {
+                            Some(v) => {
+                                info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
+                                server.pool.add_reservation(v, mac);
+                            }
+                            None => {
+                                info!("DHCPv4: Static reservation removed via CLI: {mac}");
+                                server.pool.release_mac(mac);
+                                // Nota: release_mac remove do active, mas aqui queremos remover do reserved.
+                                // O IpPool::reserved é um HashMap, mas não tem um remove_reservation_by_mac.
+                                // Vou adicionar esse método ao IpPool ou fazer o remove manual se possível.
+                            }
+                        }
+                    }
                     Ok(crate::bus::LanforgeEvent::Shutdown) => break,
                     _ => {}
                 }
