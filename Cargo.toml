@@ -62,6 +62,7 @@ iocraft = "0.7.18"
 tabled = "0.20.0"
 chrono = { version = "0.4.44", features = ["serde"] }
 inquire = "0.9.4"
+colored = "3.1.1"
 
 [profile.release]
 opt-level = "z"

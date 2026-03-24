@@ -9,6 +9,7 @@ use tracing::{debug, error, info};
 
 use crate::bus::{EventBus, LanforgeEvent, ManagedTable};
 use crate::control::api::{self, Command, Interfaces, Response, SimpleSuccess};
+use crate::state::{DeviceUpdate, MacAddr};
 
 fn format_iso8601(time: std::time::SystemTime) -> String {
     let dt: chrono::DateTime<chrono::Utc> = time.into();
@@ -527,12 +528,34 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
                     }
                 }
             }
-            Ok(Command::LeaseRenew { mac }) => Response::Success(SimpleSuccess {
-                message: format!("Renovando lease para {mac}"),
-            }),
-            Ok(Command::LeaseRelease { mac }) => Response::Success(SimpleSuccess {
-                message: format!("Liberando lease para {mac}"),
-            }),
+            Ok(Command::LeaseRenew { mac }) => {
+                if let Ok(mac_addr) = mac.parse::<MacAddr>() {
+                    ctx.bus.publish(LanforgeEvent::LeaseRenew { mac: mac_addr });
+                    Response::Success(SimpleSuccess {
+                        message: format!("Solicitando renovação (forcerenew) para {mac}"),
+                    })
+                } else {
+                    Response::Error {
+                        error: format!("MAC inválido: {mac}"),
+                    }
+                }
+            }
+            Ok(Command::LeaseRelease { mac }) => {
+                if let Ok(mac_addr) = mac.parse::<MacAddr>() {
+                    ctx.table
+                        .update(DeviceUpdate::LeaseReleased { mac: mac_addr })
+                        .await;
+                    ctx.bus
+                        .publish(LanforgeEvent::LeaseRelease { mac: mac_addr });
+                    Response::Success(SimpleSuccess {
+                        message: format!("Liberando lease para {mac}"),
+                    })
+                } else {
+                    Response::Error {
+                        error: format!("MAC inválido: {mac}"),
+                    }
+                }
+            }
             Ok(Command::DbVacuum) => {
                 ctx.bus.publish(LanforgeEvent::DbVacuum);
                 Response::Success(SimpleSuccess {

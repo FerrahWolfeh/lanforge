@@ -105,6 +105,12 @@ pub enum LanforgeEvent {
     /// Solicita vacuum do banco de dados SQLite.
     DbVacuum,
 
+    /// Solicita a liberação forçada de um lease.
+    LeaseRelease { mac: MacAddr },
+
+    /// Solicita a renovação (forcerenew) de um de um lease.
+    LeaseRenew { mac: MacAddr },
+
     /// O daemon está encerrando — consumers devem finalizar graciosamente.
     Shutdown,
 }
@@ -227,6 +233,11 @@ impl ManagedTable {
     pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, DeviceTable> {
         self.inner.write().await
     }
+
+    /// Retorna uma referência ao barramento de eventos.
+    pub fn bus(&self) -> Arc<EventBus> {
+        self.bus.clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +254,8 @@ const fn mac_of(update: &DeviceUpdate) -> MacAddr {
         | DeviceUpdate::HostnameHint { mac, .. }
         | DeviceUpdate::DuidAssociated { mac, .. }
         | DeviceUpdate::CliHostUpdated { mac, .. }
-        | DeviceUpdate::SlaacCleared { mac } => *mac,
+        | DeviceUpdate::SlaacCleared { mac }
+        | DeviceUpdate::LeaseReleased { mac } => *mac,
     }
 }
 
@@ -263,6 +275,7 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         // NdpSeen e SlaacCleared não geram DeviceChange no barramento
         DeviceUpdate::NdpSeen { .. }
         | DeviceUpdate::SlaacCleared { .. }
+        | DeviceUpdate::LeaseReleased { .. }
         | DeviceUpdate::CliHostUpdated { .. } => None,
     }
 }

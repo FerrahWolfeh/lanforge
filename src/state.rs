@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 use std::time::SystemTime;
 
 use crate::config::StaticDeviceCfg;
@@ -33,7 +34,19 @@ use tracing::{debug, info, warn};
 
 /// Endereço MAC de 6 bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MacAddr(#[serde(serialize_with = "serialize_mac")] pub [u8; 6]);
+pub struct MacAddr(
+    #[serde(serialize_with = "serialize_mac", deserialize_with = "deserialize_mac")] pub [u8; 6],
+);
+
+fn deserialize_mac<'de, D>(deserializer: D) -> Result<[u8; 6], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    MacAddr::parse(&s)
+        .map(|m| m.0)
+        .ok_or_else(|| serde::de::Error::custom(format!("Invalid MAC address: {}", s)))
+}
 
 fn serialize_mac<S>(mac: &[u8; 6], serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -76,6 +89,14 @@ impl MacAddr {
 impl From<[u8; 6]> for MacAddr {
     fn from(arr: [u8; 6]) -> Self {
         Self(arr)
+    }
+}
+
+impl FromStr for MacAddr {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| format!("Invalid MAC address: {}", s))
     }
 }
 
@@ -249,6 +270,9 @@ pub enum DeviceUpdate {
 
     /// Limpa todos os endereços SLAAC de um device antes de re-scan.
     SlaacCleared { mac: MacAddr },
+
+    /// Libera formalmente os leases (v4 e v6) de um device via CLI.
+    LeaseReleased { mac: MacAddr },
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +462,19 @@ impl DeviceTable {
                         return false;
                     }
                     dev.slaac.clear();
+                    return true;
+                }
+                false
+            }
+
+            DeviceUpdate::LeaseReleased { mac } => {
+                if let Some(dev) = self.devices.get_mut(&mac) {
+                    if dev.v4.is_none() && dev.v6.is_none() {
+                        return false;
+                    }
+                    debug!("[state] Lease Release forçado via CLI: {}", mac);
+                    dev.v4 = None;
+                    dev.v6 = None;
                     return true;
                 }
                 false
@@ -721,6 +758,16 @@ mod tests {
     }
 
     #[test]
+    fn test_mac_addr_json_roundtrip() {
+        let mac = MacAddr::parse("01:23:45:67:89:ab").unwrap();
+        let json = serde_json::to_string(&mac).unwrap();
+        assert_eq!(json, "\"01:23:45:67:89:ab\"");
+
+        let decoded: MacAddr = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, mac);
+    }
+
+    #[test]
     fn apply_update_slaac_cleared() {
         let mut table = DeviceTable::new();
         let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
@@ -732,6 +779,37 @@ mod tests {
         assert!(table.devices().next().unwrap().slaac.is_empty());
         // Limpar de novo quando já está vazio — não dirty
         assert!(!table.apply_update(DeviceUpdate::SlaacCleared { mac }));
+    }
+
+    #[test]
+    fn apply_update_lease_released() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+        let now = SystemTime::now();
+
+        table.apply_update(DeviceUpdate::V4LeaseGranted {
+            mac,
+            ip: "192.168.1.10".parse().unwrap(),
+            expires: now,
+        });
+        table.apply_update(DeviceUpdate::V6LeaseGranted {
+            mac,
+            duid: Duid::new(vec![1]),
+            ip: "fd97::1".parse().unwrap(),
+            expires: now,
+        });
+
+        let dev = table.devices.get(&mac).unwrap();
+        assert!(dev.v4.is_some());
+        assert!(dev.v6.is_some());
+
+        assert!(table.apply_update(DeviceUpdate::LeaseReleased { mac }));
+        let dev = table.devices.get(&mac).unwrap();
+        assert!(dev.v4.is_none());
+        assert!(dev.v6.is_none());
+
+        // Repeated release should not be dirty
+        assert!(!table.apply_update(DeviceUpdate::LeaseReleased { mac }));
     }
 
     #[test]

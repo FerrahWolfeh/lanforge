@@ -122,40 +122,53 @@ pub async fn dhcpv6_service(
     }
 
     let mut buf = [0u8; 2048];
+    let mut bus_rx = table.bus().subscribe();
+
     info!("DHCPv6 state machine started");
 
     loop {
-        match udp.recv_from(&mut buf).await {
-            Ok((len, peer)) => {
-                let payload = &buf[..len];
+        tokio::select! {
+            res = udp.recv_from(&mut buf) => {
+                match res {
+                    Ok((len, peer)) => {
+                        let payload = &buf[..len];
 
-                let (peer_ip, scope_id) = match peer {
-                    std::net::SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
-                    std::net::SocketAddr::V4(_) => continue,
-                };
+                        let (peer_ip, scope_id) = match peer {
+                            std::net::SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
+                            std::net::SocketAddr::V4(_) => continue,
+                        };
 
-                match server
-                    .handle_packet(payload, peer_ip, &table, nl_handle)
-                    .await
-                {
-                    HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac) => {
-                        let dest_addr = std::net::SocketAddrV6::new(dest_ip, 546, 0, scope_id);
+                        match server.handle_packet(payload, peer_ip, &table, nl_handle).await {
+                            HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac) => {
+                                let dest_addr = std::net::SocketAddrV6::new(dest_ip, 546, 0, scope_id);
 
-                        if let Err(e) = udp.send_to(&reply_bytes, dest_addr).await {
-                            warn!("send error to {dest_ip}: {e}");
+                                if let Err(e) = udp.send_to(&reply_bytes, dest_addr).await {
+                                    warn!("send error to {dest_ip}: {e}");
+                                }
+
+                                apply_learned_state(&table, opt_mac, learned_duid, &server, &config).await;
+                            }
+                            HandleResult::Ignore => {}
                         }
-
-                        // Reporta ao Manager o que foi aprendido neste ciclo
-                        apply_learned_state(&table, opt_mac, learned_duid, &server, &config).await;
                     }
-                    HandleResult::Ignore => {}
+                    Err(e) => {
+                        warn!("recv error: {e}");
+                    }
                 }
             }
-            Err(e) => {
-                warn!("recv error: {e}");
+            event = bus_rx.recv() => {
+                match event {
+                    Ok(crate::bus::LanforgeEvent::LeaseRelease { mac }) => {
+                        info!("DHCPv6: Forcing release of {} via CLI", mac);
+                        server.pool.release_mac(mac);
+                    }
+                    Ok(crate::bus::LanforgeEvent::Shutdown) => break,
+                    _ => {}
+                }
             }
         }
     }
+    Ok(())
 }
 
 /// Traduz o resultado de um ciclo DHCP em `DeviceUpdate`s para o Manager.
