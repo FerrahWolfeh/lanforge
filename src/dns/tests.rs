@@ -190,12 +190,14 @@ async fn handle_query_refused_when_no_upstream() {
     let query_bytes = query.to_bytes().unwrap();
 
     let src = "127.0.0.1:12345".parse().unwrap();
-    let resp_bytes =
-        if let Some(resp) = handle_query(&query_bytes, src, &cfg, &table).await.unwrap() {
-            resp
-        } else {
-            panic!("Deveria ter retornado uma resposta");
-        };
+    let resp_bytes = if let Some(resp) = handle_query(&query_bytes, src, &cfg, &table, None)
+        .await
+        .unwrap()
+    {
+        resp
+    } else {
+        panic!("Deveria ter retornado uma resposta");
+    };
     let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
 
     assert_eq!(resp_msg.response_code(), ResponseCode::Refused);
@@ -215,7 +217,8 @@ async fn handle_query_forwards_when_upstream_present() {
     let query_bytes = query.to_bytes().unwrap();
 
     let src = "127.0.0.1:12345".parse().unwrap();
-    let result = handle_query(&query_bytes, src, &cfg, &table).await;
+    let mgr = UpstreamManager::new(cfg.upstream.unwrap()).await.unwrap();
+    let result = handle_query(&query_bytes, src, &cfg, &table, Some(&mgr)).await;
 
     match result {
         Err(e) => {
@@ -294,10 +297,16 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     query.add_query(Query::query(name, RecordType::A));
     let data = query.to_bytes().unwrap();
 
-    let resp_bytes = handle_query(&data, "127.0.0.1:12345".parse().unwrap(), &cfg, &table_arc)
-        .await
-        .unwrap()
-        .expect("Deve retornar uma resposta DNS");
+    let resp_bytes = handle_query(
+        &data,
+        "127.0.0.1:12345".parse().unwrap(),
+        &cfg,
+        &table_arc,
+        None,
+    )
+    .await
+    .unwrap()
+    .expect("Deve retornar uma resposta DNS");
 
     let resp = Message::from_bytes(&resp_bytes).unwrap();
 

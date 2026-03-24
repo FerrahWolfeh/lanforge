@@ -41,11 +41,13 @@ use hickory_proto::{
     rr::{Name, RData, Record, RecordType, rdata::SOA},
     serialize::binary::{BinDecodable, BinEncodable},
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::oneshot::{self, Sender};
 use tokio::time::timeout;
 use tokio::{
     io::AsyncReadExt,
@@ -109,9 +111,17 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()>
 
     let cfg_arc = Arc::new(cfg);
 
+    // Gerenciador de upstream (reutiliza socket para economia de recursos)
+    let upstream_mgr = if let Some(upstream) = cfg_arc.upstream {
+        Some(UpstreamManager::new(upstream).await?)
+    } else {
+        None
+    };
+
     // Task UDP
     let udp_cfg = Arc::clone(&cfg_arc);
     let udp_table = Arc::clone(&table);
+    let udp_mgr = upstream_mgr.clone();
     let udp_task = tokio::spawn(async move {
         let mut buf = vec![0u8; 4096];
         loop {
@@ -120,9 +130,11 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()>
                 let sock = Arc::clone(&udp_sock);
                 let t = Arc::clone(&udp_table);
                 let c = Arc::clone(&udp_cfg);
+                let m = udp_mgr.clone();
 
                 tokio::spawn(async move {
-                    if let Ok(Some(response)) = handle_query(&data, src, &c, &t).await {
+                    if let Ok(Some(response)) = handle_query(&data, src, &c, &t, m.as_deref()).await
+                    {
                         let _ = sock.send_to(&response, src).await;
                     }
                 });
@@ -133,11 +145,13 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()>
     // Task TCP (RFC 5966)
     let tcp_cfg = Arc::clone(&cfg_arc);
     let tcp_table = Arc::clone(&table);
+    let tcp_mgr = upstream_mgr.clone();
     let tcp_task = tokio::spawn(async move {
         loop {
             if let Ok((mut stream, src)) = tcp_listener.accept().await {
                 let t = Arc::clone(&tcp_table);
                 let c = Arc::clone(&tcp_cfg);
+                let m = tcp_mgr.clone();
 
                 tokio::spawn(async move {
                     let mut len_buf = [0u8; 2];
@@ -150,7 +164,8 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()>
                         return;
                     }
 
-                    if let Ok(Some(response)) = handle_query(&buf, src, &c, &t).await {
+                    if let Ok(Some(response)) = handle_query(&buf, src, &c, &t, m.as_deref()).await
+                    {
                         let resp_len = (response.len() as u16).to_be_bytes();
                         let _ = stream.write_all(&resp_len).await;
                         let _ = stream.write_all(&response).await;
@@ -173,6 +188,7 @@ async fn handle_query(
     src: SocketAddr,
     cfg: &DnsConfig,
     table: &ManagedTable,
+    upstream_mgr: Option<&UpstreamManager>,
 ) -> Result<Option<Vec<u8>>> {
     let Ok(query) = Message::from_bytes(data) else {
         return Ok(None); // Dropa lixo silently
@@ -216,10 +232,8 @@ async fn handle_query(
     }
 
     // Encaminha se tiver upstream, senão REFUSED
-    if let Some(upstream) = cfg.upstream {
-        forward_to_upstream(data, upstream, query.id())
-            .await
-            .map(Some)
+    if let (Some(upstream), Some(mgr)) = (cfg.upstream, upstream_mgr) {
+        forward_to_upstream(data, upstream, mgr).await.map(Some)
     } else {
         Ok(Some(refused_response(&query, cfg)?))
     }
@@ -451,29 +465,96 @@ fn resolve_ptr(
 }
 
 // ---------------------------------------------------------------------------
-// Forward pro upstream
+// Forward pro upstream (Versão otimizada com socket persistente)
 // ---------------------------------------------------------------------------
 
-async fn forward_to_upstream(data: &[u8], upstream: SocketAddr, orig_id: u16) -> Result<Vec<u8>> {
-    let out = UdpSocket::bind("0.0.0.0:0").await?;
-    out.send_to(data, upstream).await?;
+struct UpstreamManager {
+    socket: Arc<UdpSocket>,
+    pending: Arc<Mutex<HashMap<u16, Sender<Vec<u8>>>>>,
+    next_id: AtomicU16,
+}
 
-    let mut buf = vec![0u8; 4096];
-    let to = Duration::from_secs(3);
-    let start = tokio::time::Instant::now();
+impl UpstreamManager {
+    async fn new(upstream: SocketAddr) -> Result<Arc<Self>> {
+        let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+        let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
 
-    // Validação de segurança: Loop até bater o timeout ignorando pacotes lixo/spoofing
-    while start.elapsed() < to {
-        let left = to - start.elapsed();
-        if let Ok(Ok((len, src))) = timeout(left, out.recv_from(&mut buf)).await
-            && src == upstream
-            && let Ok(resp) = Message::from_bytes(&buf[..len])
-            && resp.id() == orig_id
+        let s = Arc::clone(&socket);
+        let p = Arc::clone(&pending);
+
+        // Task de escuta centralizada para o upstream
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 4096];
+            loop {
+                if let Ok((len, src)) = s.recv_from(&mut buf).await {
+                    if src != upstream {
+                        continue;
+                    }
+                    if let Ok(msg) = Message::from_bytes(&buf[..len]) {
+                        let id = msg.id();
+                        let tx = {
+                            let mut map = p.lock().unwrap();
+                            map.remove(&id)
+                        };
+                        if let Some(tx) = tx {
+                            let _ = tx.send(buf[..len].to_vec());
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Arc::new(Self {
+            socket,
+            pending,
+            next_id: AtomicU16::new(1),
+        }))
+    }
+
+    async fn forward(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>> {
+        let mut query = Message::from_bytes(data)?;
+        let orig_id = query.id();
+
+        // Mapeia para um ID interno único para evitar colisões entre clientes LAN
+        let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        query.set_id(internal_id);
+
+        let data_to_send = query.to_bytes()?;
+        let (tx, rx) = oneshot::channel();
+
         {
-            return Ok(buf[..len].to_vec());
+            let mut map = self.pending.lock().unwrap();
+            map.insert(internal_id, tx);
+        }
+
+        self.socket.send_to(&data_to_send, upstream).await?;
+
+        match timeout(Duration::from_secs(3), rx).await {
+            Ok(Ok(resp_bytes)) => {
+                // Restaura o ID original antes de devolver ao cliente
+                if let Ok(mut resp) = Message::from_bytes(&resp_bytes) {
+                    resp.set_id(orig_id);
+                    return Ok(resp.to_bytes()?);
+                }
+                anyhow::bail!("Resposta corrompida do upstream")
+            }
+            Ok(Err(_)) => anyhow::bail!("Canal de resposta fechado prematuramente"),
+            Err(_) => {
+                // Cleanup em caso de timeout
+                let mut map = self.pending.lock().unwrap();
+                map.remove(&internal_id);
+                anyhow::bail!("Timeout esperando resposta do upstream")
+            }
         }
     }
-    anyhow::bail!("Timeout ou sem resposta válida do upstream")
+}
+
+async fn forward_to_upstream(
+    data: &[u8],
+    upstream: SocketAddr,
+    manager: &UpstreamManager,
+) -> Result<Vec<u8>> {
+    manager.forward(data, upstream).await
 }
 
 // ---------------------------------------------------------------------------
