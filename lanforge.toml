@@ -1,63 +1,133 @@
 [general]
+# LAN interface where the daemon listens for requests (e.g., eth0, end0, br0).
 iface_lan = "end0"
+
+# Absolute path to the SQLite database where leases are stored.
 leases_db = "/var/lib/lanforge/leases.db"
 
+# Target IPv6 prefix to identify local devices via SLAAC.
+# If omitted, the system uses the internal default value.
+# target_prefix = "fd97:f00d:cafe:3731"
+
+# Wait time (in seconds) before processing network event sequences.
+# Useful to avoid multiple reconfigurations during rapid state changes.
+# debounce_secs = 2
+
+# Interval (in minutes) for the network fallback scan, ensuring consistency.
+# fallback_mins = 5
+
+# UNIX socket path for communication with the CLI (lanforge-cli).
+# control_socket = "/run/lanforge/control.sock"
+
+
+# [ra] - Router Advertisement (RFC 4861)
 [ra]
+# Enables sending Router Advertisements for IPv6 autoconfiguration.
 enabled = true
+
+# Defines the "Managed Configuration" (M) flag. If true, clients must use DHCPv6 for addresses.
 managed = true
+
+# Defines the "Other Configuration" (O) flag. If true, clients must use DHCPv6 for options (DNS, etc).
 other_config = true
+
+# Maximum time interval (in seconds) between unsolicited RA transmissions.
 max_interval = 100
+
+# Router lifetime (in seconds). If omitted, the host will not be used as a gateway.
 router_lifetime = 300
-mtu = 1492            # PPPoE — anuncia MTU correto para clientes
+
+# MTU value advertised on the link. E.g., 1492 for PPPoE connections.
+mtu = 1492
 
 [[ra.prefix]]
+# Prefix source: "ula" (static defined below) or "auto_gua" (detected from the interface).
 source = "ula"
-address = "fd97:f00d:cafe:3731::/64" # Use /48 or /56 to enable Prefix Delegation (IA_PD)
-
-# [DHCPv6 ULA Design Example]
-# To enable Prefix Delegation (IA_PD), you should configure a ULA prefix larger than /64.
-# Example for lanforge.toml:
-# [[ra.prefix]]
-# source = "ula"
-# address = "fd97:f00d:cafe::/48"  # Allows up to 65536 /64 subnets
-#
-# [dhcp.v6]
-# enabled = true
-# range_start = "fd97:f00d:cafe:0001::100"
-# range_end = "fd97:f00d:cafe:0001::ffff"
+# IPv6 address/prefix in CIDR format.
+# To enable Prefix Delegation (IA_PD), use a prefix larger than /64 (e.g., /48 or /56).
+address = "fd97:f00d:cafe:3731::/64"
 
 [[ra.prefix]]
-source = "auto_gua" # detecta da interface
+# Automatically detects the Global Unicast Address (GUA) prefix configured on the interface.
+source = "auto_gua"
 
 [[ra.rdnss]]
+# List of IPv6 DNS resolvers to advertise via Router Advertisement (RFC 8106).
 servers = ["fd97:f00d:cafe:3731::1"]
+# Lifetime (in seconds) of the RDNSS record.
 lifetime = 600
 
+
+# [dhcp.v4] - DHCP Server for IPv4
 [dhcp.v4]
+# Enables the DHCPv4 service.
 enabled = true
+
+# Start and end of the address pool for dynamic allocation.
 range_start = "192.168.100.1"
 range_end = "192.168.128.254"
+
+# Default lifetime (in seconds) of DHCP leases.
 lease_time = 86400
+
+# Default gateway (Router) advertised to IPv4 clients.
 router = "192.168.254.1"
+
+# IPv4 DNS servers provided to clients.
 dns = ["192.168.254.1"]
 
+# Optional subnet mask (default: 255.255.255.0).
+# subnet_mask = "255.255.255.0"
+
+# Local domain name advertised via DHCP (Option 15).
+# domain_name = "lan"
+
+
+# [dhcp.v6] - Stateful DHCPv6 Server
 [dhcp.v6]
+# Enables the DHCPv6 service (requires managed = true in [ra]).
 enabled = true
+
+# Lease time (in seconds) for IPv6 addresses.
 lease_time = 86400
+
+# IPv6 address range for dynamic allocation (Stateful).
+# Must be contained within one of the ULA prefixes configured in [ra].
 range_start = "fd97:f00d:cafe:3731::100"
 range_end = "fd97:f00d:cafe:3731::1fff"
 
+
+# [dns] - Internal DNS Proxy/Resolver
 [dns]
+# Enables the built-in DNS resolver for the local network.
 enabled = true
+
+# Address and port where the DNS server will listen (e.g., "0.0.0.0:53").
 listen = "0.0.0.0:5354"
-upstream = "127.0.0.1:5335" # unbound
+
+# Upstream server to resolve external names (e.g., Unbound, Cloudflare, Google).
+upstream = "127.0.0.1:5335"
+
+# Local domain suffix for internal hostname resolution.
+# Host "archie" will be resolved as "archie.lan".
 search_domain = "lan"
 
-# Dispositivos estáticos — um bloco por dispositivo físico, ambas as stacks juntas.
-# v4_ip e v6_suffix são opcionais: omitir significa sem reserva naquela família.
-# v6_suffix é o sufixo host (/128) que compõe o ULA completo com o prefixo configurado.
+# TTL (Time To Live) in seconds for local DNS responses.
+# ttl = 60
+
+
+# Static reservations (Static Leases / Reservations).
+# Add a [[devices]] block for each physical device (identified by MAC).
 [[devices]]
+# Target MAC address for the device.
 mac = "e0:d5:5e:e2:d4:89"
+
+# Friendly name used for the HOSTNAME and local DNS resolution.
 hostname = "Archie"
+
+# Fixed IPv4 reserved for this device (optional).
 v4_ip = "192.168.0.2"
-v6_suffix = "::1057:cafe" # → fd97:f00d:cafe:3731::1057:cafe
+
+# IPv6 suffix (/128) for static reservation within the network's ULA prefix (optional).
+# Format: "::abcd" which will be combined with the configured ULA prefix.
+v6_suffix = "::1057:cafe"
