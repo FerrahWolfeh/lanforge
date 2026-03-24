@@ -1,12 +1,15 @@
-//! Alocador de endereços IP para o pool dinâmico `DHCPv4`.
-//!
-//! Gerencia o range configurável excluindo reservas estáticas.
-//! Prioriza reutilizar o IP anteriormente atribuído ao mesmo MAC (sticky).
-
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
+use std::time::SystemTime;
 
 use crate::state::MacAddr;
+
+/// Representação de uma alocação ativa.
+#[derive(Debug, Clone)]
+pub struct Lease {
+    pub ip: Ipv4Addr,
+    pub expiry: SystemTime,
+}
 
 /// Pool de endereços IPv4 com alocação dinâmica.
 pub struct IpPool {
@@ -14,106 +17,145 @@ pub struct IpPool {
     start: u32,
     /// Range end (inclusive).
     end: u32,
-    /// MAC → IP: alocações ativas (dinâmicas).
-    active: HashMap<MacAddr, Ipv4Addr>,
-    /// IP → MAC: índice reverso para lookup rápido.
+    /// MAC → Lease: alocações ativas (dinâmicas).
+    active: HashMap<MacAddr, Lease>,
+    /// IP → MAC: índice reverso para lookup rápido de alocações dinâmicas.
     ip_to_mac: HashMap<Ipv4Addr, MacAddr>,
     /// IPs reservados (estáticos) — excluídos do pool dinâmico.
     reserved: HashMap<Ipv4Addr, MacAddr>,
-    /// IPs rejeitados por DECLINE (Quarentena para evitar loops infinitos)
+    /// MAC → IP: índice para lookup O(1) de reservas por MAC.
+    mac_to_reserved: HashMap<MacAddr, Ipv4Addr>,
+    /// IPs rejeitados por DECLINE (Quarentena)
     declined: HashSet<Ipv4Addr>,
+    /// Pool de IPs livres para alocação circular/rápida O(1).
+    available_ips: Vec<Ipv4Addr>,
+    /// Mapeia o IP para sua posição no vetor available_ips pra remoção O(1).
+    ip_to_index: HashMap<Ipv4Addr, usize>,
 }
 
 impl IpPool {
     pub fn new(start: Ipv4Addr, end: Ipv4Addr) -> Self {
+        let s = u32::from(start);
+        let e = u32::from(end);
+        let size = (e - s + 1) as usize;
+
+        let mut available_ips = Vec::with_capacity(size);
+        let mut ip_to_index = HashMap::with_capacity(size);
+
+        for i in 0..size {
+            let ip = Ipv4Addr::from(s + i as u32);
+            available_ips.push(ip);
+            ip_to_index.insert(ip, i);
+        }
+
         Self {
-            start: u32::from(start),
-            end: u32::from(end),
+            start: s,
+            end: e,
             active: HashMap::new(),
             ip_to_mac: HashMap::new(),
             reserved: HashMap::new(),
+            mac_to_reserved: HashMap::new(),
             declined: HashSet::new(),
+            available_ips,
+            ip_to_index,
         }
     }
 
     /// Reserve a static IP for a MAC (excluded from dynamic allocation).
     pub fn add_reservation(&mut self, ip: Ipv4Addr, mac: MacAddr) {
         self.reserved.insert(ip, mac);
+        self.mac_to_reserved.insert(mac, ip);
+        // Se o IP reservado estava no pool dinâmico, removemos
+        self.remove_from_available(ip);
     }
 
     /// Remove a static reservation for a MAC.
     pub fn remove_reservation(&mut self, mac: MacAddr) {
-        self.reserved.retain(|_, m| *m != mac);
+        if let Some(ip) = self.mac_to_reserved.remove(&mac) {
+            self.reserved.remove(&ip);
+            // IP agora pode voltar ao pool dinâmico, se for do range
+            if self.is_in_range(ip) {
+                self.add_to_available(ip);
+            }
+        }
     }
 
     /// Isola um IP problemático reportado via DECLINE.
     pub fn mark_declined(&mut self, ip: Ipv4Addr) {
         self.release(ip);
         self.declined.insert(ip);
+        self.remove_from_available(ip);
+    }
+
+    /// Limpa leases que expiraram.
+    pub fn cleanup_expired_leases(&mut self, now: SystemTime) {
+        let expired: Vec<Ipv4Addr> = self
+            .active
+            .values()
+            .filter(|l| l.expiry <= now)
+            .map(|l| l.ip)
+            .collect();
+
+        for ip in expired {
+            tracing::info!("[DHCPv4] Lease for {ip} expired, returning to pool.");
+            self.release(ip);
+        }
     }
 
     /// Allocate an IP for a MAC address.
-    ///
-    /// Priority:
-    /// 1. Static reservation for this MAC → return reserved IP
-    /// 2. Previously-assigned dynamic IP for this MAC (sticky) → return same
-    /// 3. Requested IP (if available and in range) → return requested
-    /// 4. Next free IP in range → return it
-    /// 5. No IPs available → None
-    pub fn allocate(&mut self, mac: MacAddr, requested: Option<Ipv4Addr>) -> Option<Ipv4Addr> {
-        // 1. Check static reservation
-        for (ip, res_mac) in &self.reserved {
-            if *res_mac == mac {
-                return Some(*ip);
-            }
+    pub fn allocate(
+        &mut self,
+        mac: MacAddr,
+        requested: Option<Ipv4Addr>,
+        expiry: SystemTime,
+    ) -> Option<Ipv4Addr> {
+        // 1. Check static reservation (O(1))
+        if let Some(ip) = self.mac_to_reserved.get(&mac) {
+            return Some(*ip);
         }
 
         // 2. Sticky: already has a dynamic allocation
-        if let Some(ip) = self.active.get(&mac) {
-            return Some(*ip);
+        if let Some(lease) = self.active.get_mut(&mac) {
+            lease.expiry = expiry; // Estende o lease
+            return Some(lease.ip);
         }
 
         // 3. Try the requested IP if it's free and in range
         if let Some(req) = requested
             && self.is_in_range(req)
-            && self.is_available(req)
+            && self.is_available_in_pool(req)
         {
-            self.mark_used(req, mac);
+            self.mark_used(req, mac, expiry);
             return Some(req);
         }
 
-        // 4. Scan Randomizado: escolhe um ponto de partida aleatório e varre o range de forma circular
-        let size = self.end.saturating_sub(self.start) + 1;
-        let start_offset = rand::random::<u32>() % size;
+        // 4. Fallback: Pick from available pool (O(1))
+        if let Some(ip) = self.available_ips.last().copied() {
+            self.mark_used(ip, mac, expiry);
+            return Some(ip);
+        }
 
-        for i in 0..size {
-            let raw = self.start + ((start_offset + i) % size);
-            let ip = Ipv4Addr::from(raw);
-            if self.is_available(ip) {
-                self.mark_used(ip, mac);
+        // 5. Pool esgotado: Tentamos limpar expired leases agora mesmo pra ver se libera algo
+        self.cleanup_expired_leases(SystemTime::now());
+        if let Some(ip) = self.available_ips.last().copied() {
+            self.mark_used(ip, mac, expiry);
+            return Some(ip);
+        }
+
+        // 6. Fallback de emergência: DECLINEs
+        if !self.declined.is_empty() {
+            tracing::warn!("[DHCPv4] Pool esgotado! Recuperando IPs de quarentena (DECLINEs)...");
+            let declined_list: Vec<Ipv4Addr> = self.declined.drain().collect();
+            for ip in declined_list {
+                self.add_to_available(ip);
+            }
+
+            if let Some(ip) = self.available_ips.last().copied() {
+                self.mark_used(ip, mac, expiry);
                 return Some(ip);
             }
         }
 
-        // 5. Fallback de emergência: Se o pool estiver esgotado mas a quarentena estiver cheia,
-        // limpamos a quarentena e tentamos mais uma vez (alguém pode ter desligado o aparelho conflitante).
-        if !self.declined.is_empty() {
-            tracing::warn!(
-                "[DHCPv4] Pool esgotado! Limpando quarentena de DECLINEs para tentar recuperar IPs..."
-            );
-            self.declined.clear();
-
-            for i in 0..size {
-                let raw = self.start + ((start_offset + i) % size);
-                let ip = Ipv4Addr::from(raw);
-                if self.is_available(ip) {
-                    self.mark_used(ip, mac);
-                    return Some(ip);
-                }
-            }
-        }
-
-        // 6. Pool realmente esgotado
         None
     }
 
@@ -121,22 +163,26 @@ impl IpPool {
     pub fn release(&mut self, ip: Ipv4Addr) {
         if let Some(mac) = self.ip_to_mac.remove(&ip) {
             self.active.remove(&mac);
+            if self.is_in_range(ip) && !self.reserved.contains_key(&ip) {
+                self.add_to_available(ip);
+            }
         }
     }
 
     /// Release all allocations and reservations for a MAC.
     pub fn release_mac(&mut self, mac: MacAddr) {
-        if let Some(ip) = self.active.remove(&mac) {
-            self.ip_to_mac.remove(&ip);
+        if let Some(lease) = self.active.remove(&mac) {
+            self.ip_to_mac.remove(&lease.ip);
+            if self.is_in_range(lease.ip) && !self.reserved.contains_key(&lease.ip) {
+                self.add_to_available(lease.ip);
+            }
         }
         self.remove_reservation(mac);
     }
 
-    /// Check if an IP is available (not in active use and not reserved).
-    fn is_available(&self, ip: Ipv4Addr) -> bool {
-        !self.ip_to_mac.contains_key(&ip)
-            && !self.reserved.contains_key(&ip)
-            && !self.declined.contains(&ip) // Não entrega IP de quarentena
+    /// Check if an IP is in the dynamic available pool.
+    fn is_available_in_pool(&self, ip: Ipv4Addr) -> bool {
+        self.ip_to_index.contains_key(&ip)
     }
 
     /// Check if an IP is within the dynamic range.
@@ -146,26 +192,43 @@ impl IpPool {
     }
 
     /// Mark an IP as used by a MAC.
-    fn mark_used(&mut self, ip: Ipv4Addr, mac: MacAddr) {
-        // Release any previous allocation for this MAC
-        self.release_mac(mac);
-        self.active.insert(mac, ip);
+    fn mark_used(&mut self, ip: Ipv4Addr, mac: MacAddr, expiry: SystemTime) {
+        self.remove_from_available(ip);
+        self.active.insert(mac, Lease { ip, expiry });
         self.ip_to_mac.insert(ip, mac);
     }
 
     /// Get the IP currently assigned to a MAC (if any — static or dynamic).
     pub fn lookup(&self, mac: MacAddr) -> Option<Ipv4Addr> {
-        // Check static first
-        for (ip, res_mac) in &self.reserved {
-            if *res_mac == mac {
-                return Some(*ip);
-            }
+        self.mac_to_reserved
+            .get(&mac)
+            .copied()
+            .or_else(|| self.active.get(&mac).map(|l| l.ip))
+    }
+
+    fn add_to_available(&mut self, ip: Ipv4Addr) {
+        if !self.ip_to_index.contains_key(&ip) {
+            let idx = self.available_ips.len();
+            self.available_ips.push(ip);
+            self.ip_to_index.insert(ip, idx);
         }
-        self.active.get(&mac).copied()
+    }
+
+    fn remove_from_available(&mut self, ip: Ipv4Addr) {
+        if let Some(idx) = self.ip_to_index.remove(&ip) {
+            // Swap-remove para manter O(1)
+            let last_idx = self.available_ips.len() - 1;
+            if idx != last_idx {
+                let swapped_ip = self.available_ips[last_idx];
+                self.available_ips.swap(idx, last_idx);
+                self.ip_to_index.insert(swapped_ip, idx);
+            }
+            self.available_ips.pop();
+        }
     }
 
     /// Total number of active dynamic allocations.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn active_count(&self) -> usize {
         self.active.len()
     }
@@ -174,6 +237,7 @@ impl IpPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn pool() -> IpPool {
         IpPool::new(
@@ -189,7 +253,8 @@ mod tests {
     #[test]
     fn allocates_within_range() {
         let mut p = pool();
-        let ip = p.allocate(mac(1), None).unwrap();
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        let ip = p.allocate(mac(1), None, expiry).unwrap();
         assert!(
             p.is_in_range(ip),
             "O IP alocado randomicamente deve respeitar o range"
@@ -199,8 +264,9 @@ mod tests {
     #[test]
     fn sticky_returns_same_ip() {
         let mut p = pool();
-        let ip1 = p.allocate(mac(1), None).unwrap();
-        let ip2 = p.allocate(mac(1), None).unwrap();
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        let ip1 = p.allocate(mac(1), None, expiry).unwrap();
+        let ip2 = p.allocate(mac(1), None, expiry).unwrap();
         assert_eq!(ip1, ip2, "Mesmo MAC deve receber o mesmo IP (Sticky)");
     }
 
@@ -208,7 +274,8 @@ mod tests {
     fn respects_requested_ip() {
         let mut p = pool();
         let requested = Ipv4Addr::new(192, 168, 0, 103);
-        let ip = p.allocate(mac(1), Some(requested)).unwrap();
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        let ip = p.allocate(mac(1), Some(requested), expiry).unwrap();
         assert_eq!(
             ip, requested,
             "Deve respeitar o Requested IP se estiver livre"
@@ -227,8 +294,9 @@ mod tests {
 
         // Pedimos apenas 4 IPs (exatamente a quantidade de IPs realmente livres)
         // para não engatilhar o fallback de emergência de pool esgotado.
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
         for i in 0..4 {
-            if let Some(ip) = p.allocate(mac(i), None) {
+            if let Some(ip) = p.allocate(mac(i), None, expiry) {
                 assert_ne!(ip, reserved_ip, "Não deve alocar IP reservado");
                 assert_ne!(
                     ip, declined_ip,
@@ -249,7 +317,8 @@ mod tests {
 
         // O pool vai tentar achar um livre, ver que estão todos rejeitados,
         // limpar a quarentena e devolver o IP mesmo assim
-        let rescued_ip = p.allocate(mac(1), None).unwrap();
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        let rescued_ip = p.allocate(mac(1), None, expiry).unwrap();
         assert!(p.is_in_range(rescued_ip));
         assert!(
             p.declined.is_empty(),
@@ -268,5 +337,16 @@ mod tests {
 
         p.remove_reservation(mac);
         assert_eq!(p.lookup(mac), None);
+    }
+    #[test]
+    fn test_cleanup_expired_leases() {
+        let mut p = pool();
+        let mac = mac(1);
+        let expiry = SystemTime::now() - Duration::from_secs(10); // Já expirado
+        p.allocate(mac, None, expiry).unwrap();
+        assert_eq!(p.active_count(), 1);
+
+        p.cleanup_expired_leases(SystemTime::now());
+        assert_eq!(p.active_count(), 0);
     }
 }

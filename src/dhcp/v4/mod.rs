@@ -39,13 +39,15 @@ use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
 
+use dhcproto::v4::{Message, Opcode};
+use dhcproto::{Decodable, Decoder};
+
 use crate::bus::ManagedTable;
 use crate::state::{DeviceUpdate, MacAddr};
 use config::Dhcpv4Config;
 use raw::RawSender;
 use server::{DhcpServer, HandleResult};
 
-/// Entry point do serviço `DHCPv4`. Invocar via `tokio::spawn` + supervisor.
 pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Result<()> {
     info!(
         "Starting DHCPv4: range {}–{}, lease {}s, router {}, server_id {}",
@@ -76,6 +78,9 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
     let mut buf = vec![0u8; 1500];
     let mut bus_rx = table.bus().subscribe();
 
+    // Timer para cleanup periódico de leases (a cada 1 minuto)
+    let mut cleanup_interval = tokio::time::interval(Duration::from_secs(60));
+
     loop {
         tokio::select! {
             // -- Mensagens DHCP vindas da rede --
@@ -89,31 +94,51 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                 };
 
                 let data = &buf[..len];
-                // chaddr começa no offset 28 do pacote DHCP
-                let mac = if len >= 34 {
-                    MacAddr([data[28], data[29], data[30], data[31], data[32], data[33]])
-                } else {
-                    continue;
+
+                // 1. Decode fora do lock para reduzir contenção
+                let msg = match Message::decode(&mut Decoder::new(data)) {
+                    Ok(m) => m,
+                    Err(_) => continue,
                 };
 
-                let res = {
+                if msg.opcode() != Opcode::BootRequest {
+                    continue;
+                }
+
+                let chaddr = msg.chaddr();
+                if chaddr.len() < 6 { continue; }
+                let mac = MacAddr([chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5]]);
+
+                // 2. Lock curto apenas para processar a lógica e alocar IP
+                let handle_res = {
                     let t = table.read().await;
                     server.handle_packet(data, Some(&t))
                 };
 
-                match res {
-                    HandleResult::Reply(reply, broadcast, dst_ip, req_hostname) => {
-                        let (final_dst_ip, dst_mac_arr) = if broadcast {
-                            (Ipv4Addr::BROADCAST, [0xff; 6])
+                // 3. I/O fora do lock
+                match handle_res {
+                    HandleResult::Reply { packet, broadcast, dest_ip, giaddr, hostname: req_hostname } => {
+                        // RFC 2131: Se giaddr != 0, envie via UDP unicast para o relay
+                        if giaddr != Ipv4Addr::UNSPECIFIED {
+                            let relay_addr = SocketAddrV4::new(giaddr, 67);
+                            if let Err(e) = socket.send_to(&packet, relay_addr).await {
+                                error!("Failed to send to relay {giaddr}: {e}");
+                            }
                         } else {
-                            (dst_ip, *mac.as_ref())
-                        };
+                            // Caso contrário, use Layer 2 para clientes locais sem IP
+                            let (final_dst_ip, dst_mac_arr) = if broadcast {
+                                (Ipv4Addr::BROADCAST, [0xff; 6])
+                            } else {
+                                (dest_ip, *mac.as_ref())
+                            };
 
-                        if let Err(e) = raw_tx.send_dhcp(&reply, cfg.server_id, final_dst_ip, dst_mac_arr) {
-                            error!("AF_PACKET injection error: {e}");
-                            continue;
+                            if let Err(e) = raw_tx.send_dhcp(&packet, cfg.server_id, final_dst_ip, dst_mac_arr) {
+                                error!("AF_PACKET injection error: {e}");
+                                continue;
+                            }
                         }
 
+                        // Atualiza a tabela global (gera eventos no bus)
                         if let Some(assigned_ip) = server.last_assignment_for(mac) {
                             let expires = SystemTime::now() + Duration::from_secs(u64::from(cfg.lease_time));
                             table.update(DeviceUpdate::V4LeaseGranted { mac, ip: assigned_ip, expires }).await;
@@ -125,6 +150,11 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                     }
                     HandleResult::Ignore => {}
                 }
+            }
+
+            // -- Cleanup Periódico --
+            _ = cleanup_interval.tick() => {
+                server.pool.cleanup_expired_leases(SystemTime::now());
             }
 
             // -- Comandos vindos do Admin via CLI/Bus --
@@ -143,9 +173,6 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                             None => {
                                 info!("DHCPv4: Static reservation removed via CLI: {mac}");
                                 server.pool.release_mac(mac);
-                                // Nota: release_mac remove do active, mas aqui queremos remover do reserved.
-                                // O IpPool::reserved é um HashMap, mas não tem um remove_reservation_by_mac.
-                                // Vou adicionar esse método ao IpPool ou fazer o remove manual se possível.
                             }
                         }
                     }
