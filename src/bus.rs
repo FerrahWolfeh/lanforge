@@ -273,6 +273,7 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         DeviceUpdate::V6PrefixAssigned { mac, .. } => *mac,
         DeviceUpdate::SlaacObserved { mac, .. } => Some(*mac),
         DeviceUpdate::NdpSeen { mac, .. } => Some(*mac),
+        DeviceUpdate::ArpSeen { mac, .. } => Some(*mac),
         DeviceUpdate::HostnameHint { mac, .. } => Some(*mac),
         DeviceUpdate::DuidAssociated { mac, .. } => *mac,
         DeviceUpdate::CliHostUpdated { mac, .. } => Some(*mac),
@@ -302,6 +303,7 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         }),
         DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),
         DeviceUpdate::NdpSeen { .. }
+        | DeviceUpdate::ArpSeen { .. }
         | DeviceUpdate::SlaacCleared { .. }
         | DeviceUpdate::LeaseReleased { .. } => None,
 

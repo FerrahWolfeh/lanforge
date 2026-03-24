@@ -27,6 +27,7 @@ fn mock_device(mac_bytes: [u8; 6], host: &str) -> Device {
         v6: None,
         v6_prefix: None,
         slaac: vec![],
+        seen_v4: vec![],
         last_seen: SystemTime::now(),
     }
 }
@@ -52,6 +53,7 @@ fn table_with_device(hostname: &str, mac: MacAddr, ip: Ipv4Addr) -> DeviceTable 
             v6: None,
             v6_prefix: None,
             slaac: vec![],
+            seen_v4: vec![],
             last_seen: SystemTime::now(),
         },
     );

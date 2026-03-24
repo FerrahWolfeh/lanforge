@@ -133,6 +133,12 @@ impl LeaseDb {
                     ip          TEXT NOT NULL,
                     PRIMARY KEY (mac, ip)
                 );
+
+                CREATE TABLE IF NOT EXISTS seen_v4 (
+                    mac         TEXT NOT NULL REFERENCES devices(mac),
+                    ip          TEXT NOT NULL,
+                    PRIMARY KEY (mac, ip)
+                );
                 ",
             )
             .context("falha ao criar tabelas")?;
@@ -167,6 +173,7 @@ impl LeaseDb {
 
         tx.execute_batch(
             "DELETE FROM slaac_addrs;
+             DELETE FROM seen_v4;
              DELETE FROM v6_leases;
              DELETE FROM v4_leases;
              DELETE FROM devices;",
@@ -212,6 +219,13 @@ impl LeaseDb {
             for addr in &device.slaac {
                 tx.execute(
                     "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
+                    params![mac_str, addr.to_string()],
+                )?;
+            }
+
+            for addr in &device.seen_v4 {
+                tx.execute(
+                    "INSERT INTO seen_v4 (mac, ip) VALUES (?1, ?2)",
                     params![mac_str, addr.to_string()],
                 )?;
             }

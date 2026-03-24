@@ -82,8 +82,15 @@ pub struct DeviceEntry {
     pub last_seen: String,
     pub duid: Option<String>,
     pub v4: Option<LeaseInfo>,
+    pub seen_v4: Vec<String>,
     pub v6: Option<LeaseInfo>,
-    pub slaac: Vec<String>,
+    pub ipv6_addrs: Vec<Ipv6Entry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Ipv6Entry {
+    pub addr: String,
+    pub kind: String, // "SLAAC", "ULA", "GUA", "LinkLocal"
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::fs;
+use std::net::Ipv6Addr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -14,6 +15,20 @@ use crate::state::{DeviceUpdate, MacAddr};
 fn format_iso8601(time: std::time::SystemTime) -> String {
     let dt: chrono::DateTime<chrono::Utc> = time.into();
     dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn get_v6_kind(addr: &Ipv6Addr) -> &'static str {
+    if addr.is_loopback() || addr.is_unspecified() {
+        return "Internal";
+    }
+    let segments = addr.segments();
+    if (segments[0] & 0xfe00) == 0xfc00 {
+        return "ULA";
+    }
+    if (segments[0] & 0xffc0) == 0xfe80 {
+        return "LinkLocal";
+    }
+    "GUA"
 }
 
 /// Inicia o serviço de controle UDS.
@@ -304,11 +319,17 @@ impl ClientContext {
                     expires: format_iso8601(v.expires),
                     reserved: dev.is_static,
                 }),
-                slaac: dev
-                    .slaac
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect(),
+                seen_v4: dev.seen_v4.iter().map(|ip| ip.to_string()).collect(),
+                ipv6_addrs: {
+                    let mut list = Vec::new();
+                    for ip in &dev.slaac {
+                        list.push(api::Ipv6Entry {
+                            addr: ip.to_string(),
+                            kind: get_v6_kind(ip).to_string(),
+                        });
+                    }
+                    list
+                },
             });
         }
 

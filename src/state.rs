@@ -155,6 +155,10 @@ pub struct Device {
 
     /// Endereços SLAAC observados via NDP.
     pub slaac: Vec<Ipv6Addr>,
+
+    /// Endereços IPv4 observados via ARP/Netlink (não necessariamente leases).
+    pub seen_v4: Vec<Ipv4Addr>,
+
     #[serde(serialize_with = "serialize_time")]
     pub last_seen: SystemTime,
 }
@@ -269,9 +273,11 @@ pub enum DeviceUpdate {
     /// Netlink/NDP observou um endereço SLAAC ativo.
     SlaacObserved { mac: MacAddr, addr: Ipv6Addr },
 
-    /// Netlink viu o par (IPv6, MAC) no cache NDP do kernel.
-    /// Não implica lease — apenas "este device está ativo".
+    /// Netlink/NDP observou um endereço IPv6 ativo.
     NdpSeen { mac: MacAddr, ip: Ipv6Addr },
+
+    /// Netlink/ARP observou um endereço IPv4 ativo.
+    ArpSeen { mac: MacAddr, ip: Ipv4Addr },
 
     /// Um protocolo aprendeu o hostname do dispositivo (ex: opção DHCP 12).
     /// Ignorado se o device for estático.
@@ -298,8 +304,8 @@ pub enum DeviceUpdate {
     /// Libera formalmente os leases (v4 e v6) de um device via CLI.
     LeaseReleased { mac: MacAddr },
 
-    /// Netlink detectou que um IP foi removido do cache NDP (RTM_DELNEIGH).
-    IpDeleted { ip: Ipv6Addr },
+    /// Netlink detectou que um IP (v4 ou v6) foi removido do cache de vizinhos.
+    IpDeleted { ip: std::net::IpAddr },
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +467,18 @@ impl DeviceTable {
                 false
             }
 
+            DeviceUpdate::ArpSeen { mac, ip } => {
+                let dev = self.get_or_insert(mac);
+                dev.last_seen = SystemTime::now();
+                if dev.seen_v4.contains(&ip) {
+                    false
+                } else {
+                    dev.seen_v4.push(ip);
+                    debug!("[state] ARP seen {} -> {}", mac, ip);
+                    true
+                }
+            }
+
             DeviceUpdate::HostnameHint { mac, hostname } => {
                 let dev = self.get_or_insert(mac);
                 if dev.is_static {
@@ -586,19 +604,35 @@ impl DeviceTable {
                 let mut changed = false;
 
                 // 1. Remove do cache NDP global
-                if self.ndp_cache.remove(&ip).is_some() {
+                if let std::net::IpAddr::V6(ip6) = ip
+                    && self.ndp_cache.remove(&ip6).is_some()
+                {
                     changed = true;
                 }
 
-                // 2. Remove de qualquer device que o tenha na lista de SLAAC
+                // 2. Remove de qualquer device que o tenha na lista de SLAAC ou seen_v4
                 for dev in self.devices.values_mut() {
-                    if let Some(pos) = dev.slaac.iter().position(|&x| x == ip) {
-                        dev.slaac.remove(pos);
-                        changed = true;
-                        debug!(
-                            "[state] IP {} removido do device {} (via Netlink DEL)",
-                            ip, dev.mac
-                        );
+                    match ip {
+                        std::net::IpAddr::V6(ip6) => {
+                            if let Some(pos) = dev.slaac.iter().position(|&x| x == ip6) {
+                                dev.slaac.remove(pos);
+                                changed = true;
+                                debug!(
+                                    "[state] IP {} removido do device {} (via Netlink DEL)",
+                                    ip, dev.mac
+                                );
+                            }
+                        }
+                        std::net::IpAddr::V4(ip4) => {
+                            if let Some(pos) = dev.seen_v4.iter().position(|&x| x == ip4) {
+                                dev.seen_v4.remove(pos);
+                                changed = true;
+                                debug!(
+                                    "[state] IP {} removido do device {} (via Netlink DEL)",
+                                    ip, dev.mac
+                                );
+                            }
+                        }
                     }
                 }
 
@@ -773,6 +807,7 @@ impl DeviceTable {
             v6: None,
             v6_prefix: None,
             slaac: Vec::new(),
+            seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
         })
     }
@@ -1122,7 +1157,7 @@ mod tests {
         assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
 
         // 2. Delete IP
-        let changed = table.apply_update(DeviceUpdate::IpDeleted { ip });
+        let changed = table.apply_update(DeviceUpdate::IpDeleted { ip: ip.into() });
         assert!(changed);
 
         // 3. Verify cleanup

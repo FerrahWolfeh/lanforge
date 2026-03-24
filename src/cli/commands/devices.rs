@@ -1,10 +1,10 @@
+use super::{CliCommand, format_relative_iso8601};
+use crate::control::api::{DeviceEntry, DevicesResponse};
+use crate::control::{Command as ControlCommand, Response};
 use anyhow::Result;
 use iocraft::prelude::*;
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
-use crate::control::api::{DevicesResponse, DeviceEntry};
-use crate::control::{Command as ControlCommand, Response};
-use super::{CliCommand, format_relative_iso8601};
 
 pub struct DevicesHandler {
     pub verbose: bool,
@@ -110,22 +110,38 @@ fn build_device_row(dev: &DeviceEntry) -> DeviceRow {
 
     host = format!("{host} {symbol}");
 
-    let v4 = dev
-        .v4
-        .as_ref()
-        .map_or_else(|| "—".to_string(), |v| v.ip.clone());
+    // V4: prioritize lease, fallback to seen
+    let v4 = if let Some(v) = &dev.v4 {
+        v.ip.clone()
+    } else if let Some(seen) = dev.seen_v4.first() {
+        format!("{seen} ?")
+    } else {
+        "—".to_string()
+    };
 
-    let mut v6_lines = Vec::new();
-    if let Some(v) = &dev.v6 {
-        v6_lines.push(v.ip.clone());
+    // V6: prioritize ULA, then GUA
+    let mut v6 = "—".to_string();
+
+    // Check for ULA in ipv6_addrs or v6 lease
+    let ula_addr = dev
+        .ipv6_addrs
+        .iter()
+        .find(|e| e.kind == "ULA")
+        .map(|e| format!("{} ↑", e.addr));
+
+    let gua_addr = dev
+        .ipv6_addrs
+        .iter()
+        .find(|e| e.kind == "GUA")
+        .map(|e| format!("{} ↑", e.addr));
+
+    if let Some(ula) = ula_addr {
+        v6 = ula;
+    } else if let Some(v) = &dev.v6 {
+        v6 = v.ip.clone();
+    } else if let Some(gua) = gua_addr {
+        v6 = gua;
     }
-    for s in &dev.slaac {
-        v6_lines.push(format!("{s} ↑"));
-    }
-    if v6_lines.is_empty() {
-        v6_lines.push("—".to_string());
-    }
-    let v6 = v6_lines.join("\n");
 
     let status = if dev.online {
         "Online".to_string()
@@ -150,25 +166,39 @@ fn render_verbose_device(dev: &DeviceEntry) {
     let symbol = symbol_for_origin(&dev.origin);
     let host_display = format!(" {host} {symbol} ");
 
-    let v4_str = dev.v4.as_ref().map_or_else(
-        || "V4         —".to_string(),
-        |v| format!("V4         {:<24}", v.ip.clone()),
-    );
-
-    let mut v6_lines = Vec::new();
-    if let Some(v) = &dev.v6 {
-        v6_lines.push(format!("V6         {:<24}", v.ip.clone()));
+    // V4 Section
+    let mut v4_lines = Vec::new();
+    if let Some(v4) = &dev.v4 {
+        v4_lines.push(format!(
+            "V4 (Lease)  {:<24} (expires {})",
+            v4.ip,
+            format_relative_iso8601(&v4.expires)
+        ));
     }
-    for (i, s) in dev.slaac.iter().enumerate() {
-        let label = if i == 0 && v6_lines.is_empty() {
-            "SLAAC      "
-        } else {
-            "           "
-        };
-        v6_lines.push(format!("{label}{s} ↑"));
+    for seen in &dev.seen_v4 {
+        let already_in_v4 = dev.v4.as_ref().is_some_and(|v| &v.ip == seen);
+        if !already_in_v4 {
+            v4_lines.push(format!("V4 (Guessed) {:<24}", seen));
+        }
+    }
+    if v4_lines.is_empty() {
+        v4_lines.push("V4          —".to_string());
+    }
+
+    // V6 Section
+    let mut v6_lines = Vec::new();
+    if let Some(v6) = &dev.v6 {
+        v6_lines.push(format!(
+            "V6 (DHCPv6) {:<24} (expires {})",
+            v6.ip,
+            format_relative_iso8601(&v6.expires)
+        ));
+    }
+    for entry in &dev.ipv6_addrs {
+        v6_lines.push(format!("V6 ({:<7})  {} ↑", entry.kind, entry.addr));
     }
     if v6_lines.is_empty() {
-        v6_lines.push("V6 / SLAAC —".to_string());
+        v6_lines.push("V6 / SLAAC  —".to_string());
     }
 
     let duid_str = dev
@@ -176,6 +206,7 @@ fn render_verbose_device(dev: &DeviceEntry) {
         .as_ref()
         .map_or_else(|| "—".to_string(), std::clone::Clone::clone);
 
+    let v4_join = v4_lines.join("\n");
     let v6_join = v6_lines.join("\n");
     let mac_str = dev.mac.clone();
     let origin_str = dev.origin.clone();
@@ -204,7 +235,7 @@ fn render_verbose_device(dev: &DeviceEntry) {
                     Text(content: origin_str)
                 }
                 View(flex_direction: FlexDirection::Row) {
-                    Text(content: v4_str)
+                    Text(content: v4_join)
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: v6_join)
