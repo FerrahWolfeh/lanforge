@@ -297,6 +297,9 @@ pub enum DeviceUpdate {
 
     /// Libera formalmente os leases (v4 e v6) de um device via CLI.
     LeaseReleased { mac: MacAddr },
+
+    /// Netlink detectou que um IP foi removido do cache NDP (RTM_DELNEIGH).
+    IpDeleted { ip: Ipv6Addr },
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +580,29 @@ impl DeviceTable {
                     return true;
                 }
                 false
+            }
+
+            DeviceUpdate::IpDeleted { ip } => {
+                let mut changed = false;
+
+                // 1. Remove do cache NDP global
+                if self.ndp_cache.remove(&ip).is_some() {
+                    changed = true;
+                }
+
+                // 2. Remove de qualquer device que o tenha na lista de SLAAC
+                for dev in self.devices.values_mut() {
+                    if let Some(pos) = dev.slaac.iter().position(|&x| x == ip) {
+                        dev.slaac.remove(pos);
+                        changed = true;
+                        debug!(
+                            "[state] IP {} removido do device {} (via Netlink DEL)",
+                            ip, dev.mac
+                        );
+                    }
+                }
+
+                changed
             }
         }
     }
@@ -1079,5 +1105,29 @@ mod tests {
         let entry = table.static_entries.get(&mac).unwrap();
         assert_eq!(entry.hostname, "new-name");
         assert_eq!(entry.v4_ip, Some("192.168.1.10".parse().unwrap())); // Preserved
+    }
+
+    #[test]
+    fn test_ip_deleted_cleanup() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+        let ip: Ipv6Addr = "fd00::1".parse().unwrap();
+
+        // 1. Setup: Add IP to NDP cache and SLAAC list
+        table.apply_update(DeviceUpdate::NdpSeen { mac, ip });
+        table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
+
+        let dev = table.devices.get(&mac).unwrap();
+        assert!(dev.slaac.contains(&ip));
+        assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
+
+        // 2. Delete IP
+        let changed = table.apply_update(DeviceUpdate::IpDeleted { ip });
+        assert!(changed);
+
+        // 3. Verify cleanup
+        assert!(table.get_mac_from_ndp_cache(&ip).is_none());
+        let dev = table.devices.get(&mac).unwrap();
+        assert!(!dev.slaac.contains(&ip));
     }
 }

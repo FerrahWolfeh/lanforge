@@ -33,16 +33,14 @@ use crate::bus::ManagedTable;
 use crate::netlink;
 use crate::state::{DeviceUpdate, MacAddr};
 
-/// Executa um ciclo de scan SLAAC:
+/// Executa um dump completo da tabela de vizinhos IPv6 (Sincronização de Estado).
 ///
-/// 1. Faz dump dos vizinhos IPv6 no `target_prefix` via netlink.
-/// 2. Para cada MAC novo neste ciclo, limpa os endereços SLAAC anteriores.
-/// 3. Aplica cada endereço observado via `ManagedTable::update`.
-///
-/// `gua` é o prefixo GUA atual, aprendido dinamicamente pelo RA via
-/// `PrefixChanged`. Se `None` (RA ainda não anunciou, ou ISP sem IPv6),
-/// todos os eventos viram `NdpSeen` — comportamento conservador correto.
-pub async fn process_cycle_v2(
+/// No modelo event-driven, esta função NÃO é mais chamada a cada evento.
+/// Deve ser invocada apenas:
+/// 1. No startup (Bootstrap inicial).
+/// 2. Em trocas dinâmicas de prefixo GUA (RA).
+/// 3. Em timers de fallback longos (garantia de consistência).
+pub async fn bootstrap_table(
     target_prefix: &str,
     handle: &Handle,
     table: &Arc<ManagedTable>,
@@ -53,10 +51,12 @@ pub async fn process_cycle_v2(
     let mut seen_macs: HashSet<MacAddr> = HashSet::new();
 
     for event in neighbors {
-        if seen_macs.insert(event.mac) {
-            table
-                .update(DeviceUpdate::SlaacCleared { mac: event.mac })
-                .await;
+        // Limpa os endereços antigos daquele MAC apenas na primeira vez
+        // que o encontramos durante este dump específico.
+        if let Some(mac) = event.mac()
+            && seen_macs.insert(mac)
+        {
+            table.update(DeviceUpdate::SlaacCleared { mac }).await;
         }
 
         let update = event.to_device_update(gua.as_ref());

@@ -52,7 +52,7 @@ use netlink_sys::AsyncSocket;
 use rtnetlink::new_connection;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::time::{Duration, Instant, interval, sleep_until};
+use tokio::time::{Duration, interval};
 use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -309,9 +309,6 @@ async fn main() -> Result<()> {
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
     let mut sigterm = signal(SignalKind::terminate())?;
 
-    let debounce_window = Duration::from_secs(cfg.debounce_secs);
-    let mut scan_deadline: Option<Instant> = None;
-
     let mut fallback = interval(Duration::from_secs(cfg.fallback_mins * 60));
     fallback.tick().await;
 
@@ -327,46 +324,25 @@ async fn main() -> Result<()> {
 
     loop {
         tokio::select! {
-            // ── Netlink — eventos de vizinhos ────────────────────────────
+            // ── Netlink — Eventos Reativos (Delta) ───────────────────────
             Some((msg, _)) = messages.next() => {
-                // Alimenta o Manager com o que o kernel aprendeu
+                // Alimenta o Manager APENAS com o IP/MAC reportado pelo kernel no momento.
+                // Zero overhead de varredura completa. CPU agradece.
                 if let Some(event) = netlink::extract_neigh_info(&msg) {
                     let update = event.to_device_update(current_gua.as_ref());
                     table.update(update).await;
                 }
-
-                // Aciona o scan de SLAAC se o evento for relevante para o prefixo
-                if netlink::is_relevant_neigh_event(&msg, &cfg.target_prefix) {
-                    if scan_deadline.is_none() {
-                        debug!("Evento de vizinho detectado, debouncing {}s...", cfg.debounce_secs);
-                    }
-                    scan_deadline = Some(Instant::now() + debounce_window);
-                }
             }
 
-            // ── Debounce — scan pós-evento ───────────────────────────────
-            () = async {
-                match scan_deadline {
-                    Some(dl) => sleep_until(dl).await,
-                    None => std::future::pending::<()>().await,
-                }
-            } => {
-                scan_deadline = None;
-                debug!("Janela de debounce encerrada, executando scan...");
-                if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
-                    error!("Erro no scan pós-evento: {e:#}");
-                }
-            }
-
-            // ── Fallback — scan periódico ────────────────────────────────
+            // ── Fallback — Garantia de Consistência ──────────────────────
             _ = fallback.tick() => {
-                debug!("Scan periódico de fallback...");
+                debug!("Sincronização periódica de SLAAC (Fallback)...");
                 if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
-                    error!("Erro no scan periódico: {e:#}");
+                    error!("Erro no fallback: {e:#}");
                 }
             }
 
-            // ── Stale — expiração de leases ──────────────────────────────
+            // ── Stale — Expiração de leases e IPs antigos ────────────────
             _ = stale_timer.tick() => {
                 let changed = table.write().await.expire_stale();
                 if changed {
@@ -374,35 +350,33 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // ── SIGUSR1 — scan manual ────────────────────────────────────
+            // ── SIGUSR1 — Sincronização manual ───────────────────────────
             _ = sigusr1.recv() => {
-                info!("SIGUSR1 recebido, executando scan imediato...");
-                scan_deadline = None;
+                info!("SIGUSR1 recebido, forçando sincronização de estado...");
                 if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
-                    error!("Erro no scan manual: {e:#}");
+                    error!("Erro na sincronização manual: {e:#}");
                 }
             }
 
-            // ── SIGTERM — shutdown gracioso ──────────────────────────────
+            // ── SIGTERM — Shutdown gracioso ──────────────────────────────
             _ = sigterm.recv() => {
                 info!("SIGTERM recebido — encerrando...");
                 bus.publish(LanforgeEvent::Shutdown);
-                // Dá tempo ao db_worker de fazer flush
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 break;
             }
 
-            // ── EventBus — eventos internos ──────────────────────────────
+            // ── EventBus — Eventos internos ──────────────────────────────
             event = bus_rx.recv() => {
                 match event {
                     Ok(LanforgeEvent::PrefixChanged { gua, .. }) => {
-                        // Atualiza o GUA local — usado nos próximos scans
                         if current_gua != gua {
                             info!("Prefixo GUA alterado: {:?} → {:?}", current_gua, gua);
                             current_gua = gua;
                         }
+                        // Novo prefixo exige repopular o estado do zero
                         if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
-                            error!("Erro no scan por mudança de prefixo: {e:#}");
+                            error!("Erro ao atualizar prefixo: {e:#}");
                         }
                     }
                     Ok(LanforgeEvent::DeviceDiscovered { mac }) => {
@@ -412,10 +386,9 @@ async fn main() -> Result<()> {
                         debug!("Device expirado: {mac}");
                     }
                     Ok(LanforgeEvent::ReloadConfig) => {
-                        info!("Recarregando config / Forçando scan via sinalizador manual!");
-                        scan_deadline = None;
+                        info!("ReloadConfig: Forçando sincronização via sinalizador manual!");
                         if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
-                            error!("Erro no scan por reload: {e:#}");
+                            error!("Erro no reload: {e:#}");
                         }
                     }
                     Ok(_) => {}
@@ -445,5 +418,5 @@ async fn run_scan(
     table: &Arc<ManagedTable>,
     gua: Option<std::net::Ipv6Addr>,
 ) -> Result<()> {
-    slaac::process_cycle_v2(&cfg.target_prefix, handle, table, gua).await
+    slaac::bootstrap_table(&cfg.target_prefix, handle, table, gua).await
 }

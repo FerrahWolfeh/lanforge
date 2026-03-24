@@ -278,6 +278,7 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         DeviceUpdate::CliHostUpdated { mac, .. } => Some(*mac),
         DeviceUpdate::SlaacCleared { mac } => Some(*mac),
         DeviceUpdate::LeaseReleased { mac } => Some(*mac),
+        DeviceUpdate::IpDeleted { .. } => None,
     }
 }
 
@@ -326,6 +327,7 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
             }
             None
         }
+        DeviceUpdate::IpDeleted { .. } => None,
     }
 }
 

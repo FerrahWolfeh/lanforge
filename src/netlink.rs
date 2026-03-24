@@ -43,38 +43,52 @@ use crate::state::{DeviceUpdate, MacAddr};
 /// por `extract_neigh_info`. Carrega informação suficiente para que o
 /// caller decida qual `DeviceUpdate` emitir.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NeighborEvent {
-    /// Endereço IPv6 do vizinho (link-local ou GUA).
-    pub ip: Ipv6Addr,
-    /// MAC aprendido pelo kernel para este vizinho.
-    pub mac: MacAddr,
-    /// Índice da interface onde o evento foi visto.
-    pub ifindex: u32,
+pub enum NeighborEvent {
+    Added {
+        ip: Ipv6Addr,
+        mac: MacAddr,
+        ifindex: u32,
+    },
+    Deleted {
+        ip: Ipv6Addr,
+        // MAC é omitido intencionalmente: o kernel muitas vezes
+        // não o inclui no RTM_DELNEIGH pois o cache já foi apagado.
+        ifindex: u32,
+    },
 }
 
 impl NeighborEvent {
-    /// Converte este evento num `DeviceUpdate` para o `ManagedTable`.
-    ///
-    /// A distinção entre `SlaacObserved` e `NdpSeen` depende do prefixo GUA
-    /// delegado — por isso é um método e não um `From` trait:
-    ///
-    /// - Se o IP pertence ao `gua_prefix`, trata-se de um endereço SLAAC
-    ///   atribuído e deve ser rastreado como tal.
-    /// - Caso contrário (link-local, outro prefixo), é apenas prova de
-    ///   atividade — `NdpSeen` registra o par no cache NDP mas não
-    ///   marca o device como dirty.
-    pub fn to_device_update(&self, gua_prefix: Option<&Ipv6Addr>) -> DeviceUpdate {
-        let is_slaac = gua_prefix.is_some_and(|prefix| ip_matches_prefix(&self.ip, prefix));
+    pub fn ip(&self) -> &Ipv6Addr {
+        match self {
+            NeighborEvent::Added { ip, .. } => ip,
+            NeighborEvent::Deleted { ip, .. } => ip,
+        }
+    }
 
-        if is_slaac {
-            DeviceUpdate::SlaacObserved {
-                mac: self.mac,
-                addr: self.ip,
+    pub fn mac(&self) -> Option<MacAddr> {
+        match self {
+            NeighborEvent::Added { mac, .. } => Some(*mac),
+            NeighborEvent::Deleted { .. } => None,
+        }
+    }
+
+    pub fn to_device_update(&self, gua_prefix: Option<&Ipv6Addr>) -> DeviceUpdate {
+        match self {
+            NeighborEvent::Added { ip, mac, .. } => {
+                let is_slaac = gua_prefix.is_some_and(|prefix| ip_matches_prefix(ip, prefix));
+                if is_slaac {
+                    DeviceUpdate::SlaacObserved {
+                        mac: *mac,
+                        addr: *ip,
+                    }
+                } else {
+                    DeviceUpdate::NdpSeen { mac: *mac, ip: *ip }
+                }
             }
-        } else {
-            DeviceUpdate::NdpSeen {
-                mac: self.mac,
-                ip: self.ip,
+            NeighborEvent::Deleted { ip, .. } => {
+                // Justificativa: Removemos a dependência do MAC aqui. O ManagedTable
+                // deve procurar esse IP em todos os leases/devices e expirá-lo imediatamente.
+                DeviceUpdate::IpDeleted { ip: *ip }
             }
         }
     }
@@ -93,6 +107,7 @@ fn ip_matches_prefix(ip: &Ipv6Addr, prefix: &Ipv6Addr) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Retorna true se `msg` é um evento NEW ou DEL relevante para o prefixo alvo.
+#[cfg(test)]
 pub fn is_relevant_neigh_event(
     msg: &NetlinkMessage<RouteNetlinkMessage>,
     target_prefix: &str,
@@ -111,6 +126,7 @@ pub fn is_relevant_neigh_event(
     }
 }
 
+#[cfg(test)]
 fn neigh_matches_prefix(neigh: &NeighbourMessage, target_prefix: &str) -> bool {
     neigh.attributes.iter().any(|attr| {
         matches!(
@@ -132,19 +148,24 @@ fn neigh_matches_prefix(neigh: &NeighbourMessage, target_prefix: &str) -> bool {
 /// - Estado ainda incompleto ou falho (MAC desconhecido)
 /// - Faltar IP ou MAC nos atributos
 pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<NeighborEvent> {
-    let NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(neigh)) = &msg.payload
-    else {
-        return None;
+    let (neigh, is_delete) = match &msg.payload {
+        NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(n)) => (n, false),
+        NetlinkPayload::InnerMessage(RouteNetlinkMessage::DelNeighbour(n)) => (n, true),
+        _ => return None,
     };
 
     if neigh.header.family != AddressFamily::Inet6 {
         return None;
     }
 
-    if matches!(
-        neigh.header.state,
-        NeighbourState::Incomplete | NeighbourState::Failed
-    ) {
+    // Justificativa: Um vizinho em deleção (is_delete = true) pode ter o estado Failed.
+    // Só barramos Incomplete/Failed quando estamos descobrindo um novo host.
+    if !is_delete
+        && matches!(
+            neigh.header.state,
+            NeighbourState::Incomplete | NeighbourState::Failed
+        )
+    {
         return None;
     }
 
@@ -161,11 +182,21 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
         }
     }
 
-    Some(NeighborEvent {
-        ip: ip?,
-        mac: mac?,
-        ifindex: neigh.header.ifindex,
-    })
+    let ip = ip?; // O IP é estritamente necessário em ambos os casos
+
+    if is_delete {
+        Some(NeighborEvent::Deleted {
+            ip,
+            ifindex: neigh.header.ifindex,
+        })
+    } else {
+        // Se for adição, o MAC é estritamente necessário. Retorna None se não existir.
+        Some(NeighborEvent::Added {
+            ip,
+            mac: mac?,
+            ifindex: neigh.header.ifindex,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +219,7 @@ pub async fn get_ipv6_neighbors(
 
     while let Some(msg) = stream.try_next().await? {
         if let Some(event) = parse_neighbor_msg(msg)
-            && event.ip.to_string().starts_with(target_prefix)
+            && event.ip().to_string().starts_with(target_prefix)
         {
             neighbors.push(event);
         }
@@ -219,7 +250,7 @@ fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
         }
     }
 
-    Some(NeighborEvent {
+    Some(NeighborEvent::Added {
         ip: ip?,
         mac: mac?,
         ifindex,
@@ -349,9 +380,13 @@ mod tests {
         let msg = mock_neigh_msg(NeighbourState::Reachable, ip, Some(mac_bytes), false);
         let event = extract_neigh_info(&msg).expect("deve extrair evento");
 
-        assert_eq!(event.ip, ip);
-        assert_eq!(event.mac, MacAddr(mac_bytes));
-        assert_eq!(event.ifindex, 2);
+        assert_eq!(*event.ip(), ip);
+        assert_eq!(event.mac(), Some(MacAddr(mac_bytes)));
+        if let NeighborEvent::Added { ifindex, .. } = event {
+            assert_eq!(ifindex, 2);
+        } else {
+            panic!("esperava NeighborEvent::Added");
+        }
     }
 
     #[test]
@@ -382,7 +417,7 @@ mod tests {
         let slaac_ip: Ipv6Addr = "fd97:f00d:cafe:3731::abcd".parse().unwrap();
         let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-        let event = NeighborEvent {
+        let event = NeighborEvent::Added {
             ip: slaac_ip,
             mac,
             ifindex: 2,
@@ -401,7 +436,7 @@ mod tests {
         let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
         let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-        let event = NeighborEvent {
+        let event = NeighborEvent::Added {
             ip: link_local,
             mac,
             ifindex: 2,
@@ -419,7 +454,7 @@ mod tests {
         let ip: Ipv6Addr = "fd97:f00d:cafe:3731::1".parse().unwrap();
         let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-        let event = NeighborEvent {
+        let event = NeighborEvent::Added {
             ip,
             mac,
             ifindex: 2,
@@ -479,5 +514,42 @@ mod tests {
 
         assert!(ip_matches_prefix(&inside, &prefix));
         assert!(!ip_matches_prefix(&outside, &prefix));
+    }
+
+    #[test]
+    fn parse_neighbor_msg_only_active() {
+        let ip: Ipv6Addr = "fe80::1".parse().unwrap();
+        let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+
+        // 1. Mensagem válida (Reachable)
+        let mut msg = NeighbourMessage::default();
+        msg.header.state = NeighbourState::Reachable;
+        msg.attributes = vec![
+            NeighbourAttribute::Destination(NeighbourAddress::Inet6(ip)),
+            NeighbourAttribute::LinkLocalAddress(mac.to_vec()),
+        ];
+        let event = parse_neighbor_msg(msg).expect("deve parsear");
+        assert!(matches!(event, NeighborEvent::Added { .. }));
+
+        // 2. Mensagem inválida (Failed)
+        let mut msg_fail = NeighbourMessage::default();
+        msg_fail.header.state = NeighbourState::Failed;
+        assert!(parse_neighbor_msg(msg_fail).is_none());
+    }
+
+    #[test]
+    fn extract_neigh_info_handles_delete() {
+        let ip: Ipv6Addr = "fe80::1".parse().unwrap();
+        // No RTM_DELNEIGH o MAC pode estar ausente
+        let msg = mock_neigh_msg(NeighbourState::Failed, ip, None, true);
+        let event = extract_neigh_info(&msg).expect("deve extrair delete");
+
+        assert_eq!(
+            event,
+            NeighborEvent::Deleted {
+                ip,
+                ifindex: 2
+            }
+        );
     }
 }
