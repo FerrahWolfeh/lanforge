@@ -395,7 +395,7 @@ async fn main() -> Result<()> {
             // ── EventBus — eventos internos ──────────────────────────────
             event = bus_rx.recv() => {
                 match event {
-                    Ok(LanforgeEvent::PrefixChanged { gua }) => {
+                    Ok(LanforgeEvent::PrefixChanged { gua, .. }) => {
                         // Atualiza o GUA local — usado nos próximos scans
                         if current_gua != gua {
                             info!("Prefixo GUA alterado: {:?} → {:?}", current_gua, gua);

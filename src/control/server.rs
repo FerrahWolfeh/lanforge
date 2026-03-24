@@ -64,7 +64,7 @@ pub async fn control_service(
             // Monitora mudanças de prefixo GUA para reportar no 'status'
             msg = bus_rx.recv() => {
                 match msg {
-                    Ok(LanforgeEvent::PrefixChanged { gua }) => {
+                    Ok(LanforgeEvent::PrefixChanged {gua, .. }) => {
                         current_gua = gua.map(|ip| ip.to_string());
                     }
                     Ok(LanforgeEvent::ReloadConfig) => {

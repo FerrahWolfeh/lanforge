@@ -1,6 +1,7 @@
 use crate::state::MacAddr;
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
+use std::time::SystemTime;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct LeaseKey {
@@ -13,11 +14,16 @@ pub struct Ipv6Pool {
     pub range_start: Option<Ipv6Addr>,
     pub range_end: Option<Ipv6Addr>,
     ula_prefix: Option<Ipv6Addr>,
+    pub ula_prefix_len: u8,
     /// Alocação real e ativa é rigorosamente DUID + IAID
     active: HashMap<LeaseKey, Ipv6Addr>,
     ip_to_lease: HashMap<Ipv6Addr, LeaseKey>,
     /// Reservas estáticas mapeadas pelo MAC (Device-centric)
     reserved: HashMap<Ipv6Addr, MacAddr>,
+    /// IPs em quarentena (ex: após DECLINE)
+    blacklisted: HashMap<Ipv6Addr, SystemTime>,
+    /// Prefixos delegados (IA_PD)
+    prefix_active: HashMap<LeaseKey, (Ipv6Addr, u8)>,
 }
 
 impl Ipv6Pool {
@@ -25,14 +31,18 @@ impl Ipv6Pool {
         range_start: Option<Ipv6Addr>,
         range_end: Option<Ipv6Addr>,
         ula_prefix: Option<Ipv6Addr>,
+        ula_prefix_len: u8,
     ) -> Self {
         Self {
             range_start,
             range_end,
             ula_prefix,
+            ula_prefix_len,
             active: HashMap::new(),
             ip_to_lease: HashMap::new(),
             reserved: HashMap::new(),
+            blacklisted: HashMap::new(),
+            prefix_active: HashMap::new(),
         }
     }
 
@@ -128,29 +138,22 @@ impl Ipv6Pool {
         }
         // 4. Opaque / Randomized IID (RFC 7943) - Se o range for omitido mas tivermos um ULA
         else if let Some(ula) = self.ula_prefix {
-            let ula_segs = ula.segments();
-
-            // O cliente pediu um IP específico? Se bater com o /64 do nosso ULA e estiver livre, aceitamos.
-            if let Some(req) = requested {
-                let req_segs = req.segments();
-                if req_segs[0..4] == ula_segs[0..4] && self.is_available(&req) {
-                    self.mark_used(req, lease_key);
-                    return Some(req);
-                }
+            // O cliente pediu um IP específico? Se bater com o prefixo do nosso ULA e estiver livre, aceitamos.
+            if let Some(req) = requested
+                && self.is_on_link(&req)
+                && self.is_available(&req)
+            {
+                self.mark_used(req, lease_key);
+                return Some(req);
             }
 
-            // Gera um sufixo IID (Interface Identifier) de 64 bits de forma puramente aleatória.
+            // Gera um sufixo IID (Interface Identifier) de forma aleatória.
+            let ula_int = u128::from_be_bytes(ula.octets());
+            let mask = !0u128 >> self.ula_prefix_len;
+
             for _ in 0..20 {
-                let ip = Ipv6Addr::new(
-                    ula_segs[0],
-                    ula_segs[1],
-                    ula_segs[2],
-                    ula_segs[3], // Mantém a rede
-                    rand::random(),
-                    rand::random(),
-                    rand::random(),
-                    rand::random(), // Sorteia o host
-                );
+                let random_suffix: u128 = rand::random::<u128>() & mask;
+                let ip = Ipv6Addr::from((ula_int | random_suffix).to_be_bytes());
 
                 if self.is_available(&ip) {
                     self.mark_used(ip, lease_key);
@@ -163,9 +166,104 @@ impl Ipv6Pool {
         None
     }
 
+    /// Allocates an IPv6 prefix for the given DUID+IAID (Prefix Delegation).
+    pub fn allocate_prefix(
+        &mut self,
+        duid: &[u8],
+        iaid: u32,
+        _requested: Option<(Ipv6Addr, u8)>,
+    ) -> Option<(Ipv6Addr, u8)> {
+        let lease_key = LeaseKey {
+            duid: duid.to_vec(),
+            iaid,
+        };
+
+        if let Some(res) = self.prefix_active.get(&lease_key) {
+            return Some(*res);
+        }
+
+        // Se o prefixo ULA é /64, não podemos delegar /64s a menos que o próprio ULA seja maior.
+        if self.ula_prefix_len >= 64 {
+            return None;
+        }
+
+        let ula = self.ula_prefix?;
+        let ula_int = u128::from_be_bytes(ula.octets());
+
+        // Procura um /64 livre dentro do prefixo ULA.
+        let step = 1u128 << (128 - 64);
+        let start = ula_int;
+        let end = ula_int | (!0u128 >> self.ula_prefix_len);
+
+        // Pula o primeiro /64 (reservado para a LAN em IA_NA)
+        let mut curr = start + step;
+        while curr < end {
+            let prefix_addr = Ipv6Addr::from(curr.to_be_bytes());
+            if self.is_prefix_available(&prefix_addr, 64) {
+                self.prefix_active.insert(lease_key, (prefix_addr, 64));
+                return Some((prefix_addr, 64));
+            }
+            curr += step;
+        }
+
+        None
+    }
+    pub fn has_binding(&self, duid: &[u8], iaid: u32) -> bool {
+        let lease_key = LeaseKey {
+            duid: duid.to_vec(),
+            iaid,
+        };
+        self.active.contains_key(&lease_key)
+    }
+
+    pub fn has_prefix_binding(&self, duid: &[u8], iaid: u32) -> bool {
+        let lease_key = LeaseKey {
+            duid: duid.to_vec(),
+            iaid,
+        };
+        self.prefix_active.contains_key(&lease_key)
+    }
+
+    pub fn is_on_link(&self, ip: &Ipv6Addr) -> bool {
+        let ula = match self.ula_prefix {
+            Some(u) => u,
+            None => return false,
+        };
+        let ula_int = u128::from_be_bytes(ula.octets());
+        let ip_int = u128::from_be_bytes(ip.octets());
+        let mask = !0u128 << (128 - self.ula_prefix_len);
+        (ip_int & mask) == (ula_int & mask)
+    }
+
+    fn is_prefix_available(&self, addr: &Ipv6Addr, len: u8) -> bool {
+        // Verifica se conflita com algum prefixo delegado
+        for (a, l) in self.prefix_active.values() {
+            if *a == *addr && *l == len {
+                return false;
+            }
+        }
+        // Verifica se conflita com IPs individuais na LAN
+        // (Isso é uma simplificação, idealmente prefixes e IPs não se misturam no mesmo pool)
+        true
+    }
+
+    pub fn decline(&mut self, ip: Ipv6Addr) {
+        self.release(&ip);
+        self.blacklisted.insert(ip, SystemTime::now());
+    }
+
     fn is_available(&self, ip: &Ipv6Addr) -> bool {
-        // Um IP está livre se não estiver concedido a ninguém
-        !self.ip_to_lease.contains_key(ip)
+        // Um IP está livre se não estiver concedido, reservado ou blacklisted
+        if self.ip_to_lease.contains_key(ip) {
+            return false;
+        }
+        if let Some(ts) = self.blacklisted.get(ip) {
+            // Quarantine por 24h
+            if ts.elapsed().unwrap_or_default().as_secs() < 86400 {
+                return false;
+            }
+        }
+        true
     }
 
     pub fn release(&mut self, ip: &Ipv6Addr) {
@@ -198,6 +296,14 @@ impl Ipv6Pool {
         self.active.get(&key).copied()
     }
 
+    pub fn lookup_prefix(&self, duid: &[u8], iaid: u32) -> Option<(Ipv6Addr, u8)> {
+        let key = LeaseKey {
+            duid: duid.to_vec(),
+            iaid,
+        };
+        self.prefix_active.get(&key).copied()
+    }
+
     /// Versão legado para compatibilidade com o Manager que só conhecia MAC
     pub fn lookup_by_mac_legacy(&self, mac: MacAddr) -> Option<Ipv6Addr> {
         for (ip, res_mac) in &self.reserved {
@@ -225,7 +331,7 @@ mod tests {
     #[test]
     fn test_construct_static_ula() {
         let ula = "fd12:3456:7890:abcd::".parse().ok();
-        let pool = Ipv6Pool::new(None, None, ula);
+        let pool = Ipv6Pool::new(None, None, ula, 64);
 
         let res = pool.construct_static_ula("::1111:2222:3333:4444").unwrap();
         assert_eq!(res.to_string(), "fd12:3456:7890:abcd:1111:2222:3333:4444");
@@ -238,7 +344,7 @@ mod tests {
     fn test_dynamic_allocation_sequential() {
         let start = "fd00::100".parse().unwrap();
         let end = "fd00::102".parse().unwrap();
-        let mut pool = Ipv6Pool::new(Some(start), Some(end), None);
+        let mut pool = Ipv6Pool::new(Some(start), Some(end), None, 64);
 
         assert_eq!(
             pool.allocate(&duid(1), 1, Some(mac(1)), None)
@@ -267,7 +373,7 @@ mod tests {
     fn test_dynamic_allocation_opaque_random() {
         let ula: Ipv6Addr = "fd97:f00d:cafe:3731::".parse().unwrap();
         // Sem limites de range definidos, apenas o ULA
-        let mut pool = Ipv6Pool::new(None, None, Some(ula));
+        let mut pool = Ipv6Pool::new(None, None, Some(ula), 64);
 
         let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap();
         let ip2 = pool.allocate(&duid(2), 1, Some(mac(2)), None).unwrap();
@@ -285,7 +391,7 @@ mod tests {
     fn test_requested_ip_sequential() {
         let start = "fd00::100".parse().unwrap();
         let end = "fd00::200".parse().unwrap();
-        let mut pool = Ipv6Pool::new(Some(start), Some(end), None);
+        let mut pool = Ipv6Pool::new(Some(start), Some(end), None, 64);
 
         // Pedido válido dentro do range
         let requested = "fd00::150".parse().unwrap();
@@ -305,7 +411,7 @@ mod tests {
     #[test]
     fn test_requested_ip_opaque() {
         let ula: Ipv6Addr = "fd97:f00d:cafe:3731::".parse().unwrap();
-        let mut pool = Ipv6Pool::new(None, None, Some(ula));
+        let mut pool = Ipv6Pool::new(None, None, Some(ula), 64);
 
         // Cliente envia hint de um IP opaco que ele já usou
         let requested = "fd97:f00d:cafe:3731:1234:5678:9abc:def0".parse().unwrap();
@@ -326,7 +432,7 @@ mod tests {
     #[test]
     fn test_sticky_allocation() {
         let ula = "fd00::".parse().unwrap();
-        let mut pool = Ipv6Pool::new(None, None, Some(ula));
+        let mut pool = Ipv6Pool::new(None, None, Some(ula), 64);
 
         let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap();
         let ip2 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap(); // Mesmo MAC pedindo de novo
@@ -338,7 +444,7 @@ mod tests {
     #[test]
     fn test_static_reservation() {
         let ula = "fd00::".parse().unwrap();
-        let mut pool = Ipv6Pool::new(None, None, Some(ula));
+        let mut pool = Ipv6Pool::new(None, None, Some(ula), 64);
 
         let static_ip = "fd00::cafe".parse().unwrap();
         pool.add_reservation(static_ip, mac(1));
@@ -355,7 +461,7 @@ mod tests {
     fn test_release() {
         let start = "fd00::100".parse().unwrap();
         let end = "fd00::100".parse().unwrap();
-        let mut pool = Ipv6Pool::new(Some(start), Some(end), None);
+        let mut pool = Ipv6Pool::new(Some(start), Some(end), None, 64);
 
         let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap();
         assert!(pool.allocate(&duid(2), 1, Some(mac(2)), None).is_none()); // Esgotado
@@ -369,7 +475,7 @@ mod tests {
     #[test]
     fn test_add_remove_reservation() {
         let ula = "fd00::".parse().unwrap();
-        let mut p = Ipv6Pool::new(None, None, Some(ula));
+        let mut p = Ipv6Pool::new(None, None, Some(ula), 64);
         let mac = mac(1);
         let ip = "fd00::cafe".parse().unwrap();
 

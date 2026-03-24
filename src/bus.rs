@@ -56,6 +56,9 @@ pub enum DeviceChange {
     /// O lease IPv6 expirou e foi removido.
     V6Expired,
 
+    /// Um prefixo IPv6 foi delegado via IA_PD.
+    V6PrefixAssigned { prefix: Ipv6Addr, len: u8 },
+
     /// Um endereço SLAAC foi observado via NDP.
     SlaacObserved { addr: Ipv6Addr },
 
@@ -98,7 +101,11 @@ pub enum LanforgeEvent {
     // -- Infra --
     /// O prefixo GUA do uplink mudou (ex: reboot do modem, nova delegação).
     /// Consumers como o RA e o DNS devem recalcular endereços derivados.
-    PrefixChanged { gua: Option<Ipv6Addr> },
+    PrefixChanged {
+        gua: Option<Ipv6Addr>,
+        preferred: u32,
+        valid: u32,
+    },
 
     // -- Control --
     /// Sinaliza que o `DeviceTable` foi modificado e deve ser persistido.
@@ -263,6 +270,7 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
     match update {
         DeviceUpdate::V4LeaseGranted { mac, .. } => Some(*mac),
         DeviceUpdate::V6LeaseGranted { mac, .. } => *mac,
+        DeviceUpdate::V6PrefixAssigned { mac, .. } => *mac,
         DeviceUpdate::SlaacObserved { mac, .. } => Some(*mac),
         DeviceUpdate::NdpSeen { mac, .. } => Some(*mac),
         DeviceUpdate::HostnameHint { mac, .. } => Some(*mac),
@@ -279,6 +287,12 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
     match update {
         DeviceUpdate::V4LeaseGranted { ip, .. } => Some(DeviceChange::V4Assigned { ip: *ip }),
         DeviceUpdate::V6LeaseGranted { ip, .. } => Some(DeviceChange::V6Assigned { ip: *ip }),
+        DeviceUpdate::V6PrefixAssigned { prefix, len, .. } => {
+            Some(DeviceChange::V6PrefixAssigned {
+                prefix: *prefix,
+                len: *len,
+            })
+        }
         DeviceUpdate::SlaacObserved { addr, .. } => {
             Some(DeviceChange::SlaacObserved { addr: *addr })
         }

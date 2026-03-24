@@ -41,7 +41,7 @@ use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::bus::ManagedTable;
 use crate::state::{DeviceUpdate, MacAddr};
@@ -100,7 +100,12 @@ pub async fn dhcpv6_service(
 
     let mut server = Dhcpv6Server::new(
         config.clone(),
-        Ipv6Pool::new(config.range_start, config.range_end, config.ula_prefix),
+        Ipv6Pool::new(
+            config.range_start,
+            config.range_end,
+            config.ula_prefix,
+            config.ula_prefix_len,
+        ),
         Duid::generate_ll_from_mac(server_mac),
     );
 
@@ -176,6 +181,10 @@ pub async fn dhcpv6_service(
                             }
                         }
                     }
+                    Ok(crate::bus::LanforgeEvent::PrefixChanged { gua: _, preferred, valid }) => {
+                        server.prefix_lifetimes = Some((preferred, valid));
+                        debug!("DHCPv6: Updated prefix lifetimes from bus: pref={}, valid={}", preferred, valid);
+                    }
                     Ok(crate::bus::LanforgeEvent::Shutdown) => break,
                     _ => {}
                 }
@@ -205,13 +214,41 @@ async fn apply_learned_state(
         None
     };
 
-    match (learned_duid, assigned_ip) {
-        (Some(duid), Some(ip)) => {
-            let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
-            // Caso DHCPv6 completo: IP + DUID + IAID + MAC (Opcional)
+    let assigned_prefix = if let Some(duid) = &learned_duid {
+        server.pool.lookup_prefix(&duid.bytes, iaid)
+    } else {
+        None
+    };
+
+    if let (Some(duid), Some(ip)) = (learned_duid.clone(), assigned_ip) {
+        let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+        table
+            .update(DeviceUpdate::V6LeaseGranted {
+                mac: opt_mac,
+                duid,
+                iaid,
+                ip,
+                expires,
+            })
+            .await;
+    } else if let (Some(duid), None) = (learned_duid.clone(), assigned_ip) {
+        // Apenas DUID visto, sem IP concedido (ex: Advertise)
+        table
+            .update(DeviceUpdate::DuidAssociated {
+                mac: opt_mac,
+                duid,
+                iaid,
+            })
+            .await;
+    } else if let (None, Some(ip)) = (learned_duid.clone(), assigned_ip)
+        && let Some(mac) = opt_mac
+    {
+        let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+        let existing_duid = table.read().await.find_duid_by_mac(mac).cloned();
+        if let Some(duid) = existing_duid {
             table
                 .update(DeviceUpdate::V6LeaseGranted {
-                    mac: opt_mac,
+                    mac: Some(mac),
                     duid,
                     iaid,
                     ip,
@@ -219,33 +256,19 @@ async fn apply_learned_state(
                 })
                 .await;
         }
-        (Some(duid), None) => {
-            // Apenas DUID visto, sem IP concedido (ex: Advertise)
-            table
-                .update(DeviceUpdate::DuidAssociated {
-                    mac: opt_mac,
-                    duid,
-                    iaid,
-                })
-                .await;
-        }
-        (None, Some(ip)) => {
-            if let Some(mac) = opt_mac {
-                let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
-                let existing_duid = table.read().await.find_duid_by_mac(mac).cloned();
-                if let Some(duid) = existing_duid {
-                    table
-                        .update(DeviceUpdate::V6LeaseGranted {
-                            mac: Some(mac),
-                            duid,
-                            iaid,
-                            ip,
-                            expires,
-                        })
-                        .await;
-                }
-            }
-        }
-        (None, None) => {}
+    }
+
+    if let (Some(duid), Some((prefix, len))) = (learned_duid, assigned_prefix) {
+        let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+        table
+            .update(DeviceUpdate::V6PrefixAssigned {
+                mac: opt_mac,
+                duid,
+                iaid,
+                prefix,
+                len,
+                expires,
+            })
+            .await;
     }
 }

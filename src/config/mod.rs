@@ -108,6 +108,21 @@ impl Config {
         }
     }
 
+    /// Parses a CIDR string (e.g., "fd00::/48") into an Ipv6Addr and a prefix length.
+    fn parse_cidr(&self, s: &str) -> Option<(Ipv6Addr, u8)> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.is_empty() {
+            return None;
+        }
+        let addr = parts[0].parse().ok()?;
+        let len = if parts.len() > 1 {
+            parts[1].parse().ok()?
+        } else {
+            64
+        };
+        Some((addr, len))
+    }
+
     /// Builds an `RaConfig` from the merged configuration.
     pub fn to_ra_config(&self) -> crate::ra::RaConfig {
         use crate::ra::{PrefixConfig, RaConfig, RdnssConfig};
@@ -117,8 +132,14 @@ impl Config {
         for p in &self.ra_toml.prefix {
             match p.source.as_str() {
                 "ula" => {
-                    if let Some(ref addr) = p.address {
-                        prefixes.push(PrefixConfig::ula(addr));
+                    if let Some(ref addr_str) = p.address
+                        && let Some((addr, len)) = self.parse_cidr(addr_str)
+                    {
+                        prefixes.push(crate::ra::PrefixConfig {
+                            source: crate::ra::PrefixSource::Static(addr),
+                            prefix_len: len,
+                            ..crate::ra::PrefixConfig::ula(&addr.to_string())
+                        });
                     }
                 }
                 "auto_gua" => {
@@ -208,13 +229,16 @@ impl Config {
 
     /// Builds a `Dhcpv6Config` from the merged configuration.
     pub fn to_dhcpv6_config(&self) -> crate::dhcp::v6::config::Dhcpv6Config {
-        let ula_prefix = self.ra_toml.prefix.iter().find_map(|p| {
-            if p.source == "ula" {
-                p.address.as_deref().and_then(|a| a.parse().ok())
-            } else {
-                None
-            }
-        });
+        let mut ula_prefix = None;
+        let mut ula_prefix_len = 64;
+
+        if let Some(p) = self.ra_toml.prefix.iter().find(|p| p.source == "ula")
+            && let Some(addr_str) = &p.address
+            && let Some((addr, len)) = self.parse_cidr(addr_str)
+        {
+            ula_prefix = Some(addr);
+            ula_prefix_len = len;
+        }
 
         let parse_ipv6 = |s: &Option<String>| -> Option<Ipv6Addr> {
             s.as_deref().and_then(|ip_str| ip_str.parse().ok())
@@ -225,6 +249,7 @@ impl Config {
             iface: self.iface_lan.clone(),
             lease_time: self.dhcpv6_toml.lease_time,
             ula_prefix,
+            ula_prefix_len,
             range_start: parse_ipv6(&self.dhcpv6_toml.range_start),
             range_end: parse_ipv6(&self.dhcpv6_toml.range_end),
         }

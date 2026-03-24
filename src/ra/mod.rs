@@ -299,13 +299,25 @@ async fn send_ra(
     let src_ll = get_link_local_addr(ctx.handle, ctx.iface_index)
         .await
         .context("sem endereço link-local na interface")?;
-    let gua = get_gua_prefix(ctx.handle, ctx.iface_index).await?;
+    let gua_info = get_gua_prefix(ctx.handle, ctx.iface_index).await?;
+    let (gua, preferred, valid) = match gua_info {
+        Some((ip, p, v)) => (Some(ip), p, v),
+        None => (None, 0, 0),
+    };
+    let prefix_bits = gua.map(|ip| (ip, preferred, valid));
 
     // Publica PrefixChanged no EventBus se o GUA mudou
-    if gua != state.last_gua {
-        info!("GUA prefix changed: {:?} -> {:?}", state.last_gua, gua);
+    if prefix_bits.as_ref().map(|(ip, _, _)| *ip) != state.last_gua {
+        info!(
+            "GUA prefix changed: {:?} -> {:?} (pref={}, valid={})",
+            state.last_gua, gua, preferred, valid
+        );
         state.last_gua = gua;
-        ctx.bus.publish(LanforgeEvent::PrefixChanged { gua });
+        ctx.bus.publish(LanforgeEvent::PrefixChanged {
+            gua,
+            preferred,
+            valid,
+        });
     }
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());
@@ -478,18 +490,38 @@ async fn get_link_local_addr(handle: &Handle, iface_index: u32) -> Result<Ipv6Ad
 /// GUA (`2000::/3)`: primeiro byte em [0x20, 0x3F].
 /// O endereço na interface (ex: `2a01:x:y:z::1`) é mascarado para obter `2a01:x:y:z::`.
 /// Retorna `None` se não houver GUA atribuído (ISP sem IPv6 ou delegação pendente).
-async fn get_gua_prefix(handle: &Handle, iface_index: u32) -> Result<Option<Ipv6Addr>> {
+/// Detecta o prefixo GUA /64 da interface e retorna com bits de host zerados,
+/// juntamente com os lifetimes preferred e valid.
+async fn get_gua_prefix(handle: &Handle, iface_index: u32) -> Result<Option<(Ipv6Addr, u32, u32)>> {
     let mut stream = handle.address().get().execute();
     while let Some(msg) = stream.try_next().await? {
         if msg.header.index != iface_index {
             continue;
         }
-        if let Some(addr) = extract_ipv6(&msg) {
-            let o = addr.octets();
+
+        let mut addr = None;
+        let mut cache_info = None;
+
+        for attr in &msg.attributes {
+            match attr {
+                AddressAttribute::Address(IpAddr::V6(v6)) => addr = Some(*v6),
+                AddressAttribute::CacheInfo(info) => cache_info = Some(info),
+                _ => {}
+            }
+        }
+
+        if let Some(v6) = addr {
+            let o = v6.octets();
             if (0x20..=0x3F).contains(&o[0]) {
                 let mut masked = o;
                 masked[8..].fill(0);
-                return Ok(Some(Ipv6Addr::from(masked)));
+                let ip = Ipv6Addr::from(masked);
+                let (pref, valid) = if let Some(info) = cache_info {
+                    (info.ifa_preferred, info.ifa_valid)
+                } else {
+                    (3600, 7200) // Fallback se não houver cache_info
+                };
+                return Ok(Some((ip, pref, valid)));
             }
         }
     }

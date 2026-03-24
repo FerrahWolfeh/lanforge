@@ -12,7 +12,19 @@ mtu = 1492            # PPPoE — anuncia MTU correto para clientes
 
 [[ra.prefix]]
 source = "ula"
-address = "fd97:f00d:cafe:3731::"
+address = "fd97:f00d:cafe:3731::/64" # Use /48 or /56 to enable Prefix Delegation (IA_PD)
+
+# [DHCPv6 ULA Design Example]
+# To enable Prefix Delegation (IA_PD), you should configure a ULA prefix larger than /64.
+# Example for lanforge.toml:
+# [[ra.prefix]]
+# source = "ula"
+# address = "fd97:f00d:cafe::/48"  # Allows up to 65536 /64 subnets
+#
+# [dhcp.v6]
+# enabled = true
+# range_start = "fd97:f00d:cafe:0001::100"
+# range_end = "fd97:f00d:cafe:0001::ffff"
 
 [[ra.prefix]]
 source = "auto_gua" # detecta da interface

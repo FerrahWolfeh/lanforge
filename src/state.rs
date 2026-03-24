@@ -151,6 +151,7 @@ pub struct Device {
     pub duid: Option<Duid>,
     pub v4: Option<V4Lease>,
     pub v6: Option<V6Lease>,
+    pub v6_prefix: Option<V6PrefixLease>,
 
     /// Endereços SLAAC observados via NDP.
     pub slaac: Vec<Ipv6Addr>,
@@ -213,6 +214,14 @@ pub struct V6Lease {
     pub expires: SystemTime,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct V6PrefixLease {
+    pub prefix: Ipv6Addr,
+    pub len: u8,
+    #[serde(serialize_with = "serialize_time")]
+    pub expires: SystemTime,
+}
+
 /// Registro de config estática para um dispositivo.
 #[derive(Debug, Clone)]
 pub struct StaticEntry {
@@ -244,6 +253,16 @@ pub enum DeviceUpdate {
         duid: Duid,
         iaid: u32,
         ip: Ipv6Addr,
+        expires: SystemTime,
+    },
+
+    /// `DHCPv6` concedeu ou renovou uma delegação de prefixo (IA_PD).
+    V6PrefixAssigned {
+        mac: Option<MacAddr>,
+        duid: Duid,
+        iaid: u32,
+        prefix: Ipv6Addr,
+        len: u8,
         expires: SystemTime,
     },
 
@@ -348,7 +367,6 @@ impl DeviceTable {
                 expires,
             } => {
                 if let Some(m) = mac {
-                    // Garante que o DUID está indexado
                     self.duid_index.insert(duid.clone(), m);
                     let dev = self.get_or_insert(m);
                     let changed = dev.duid.as_ref() != Some(&duid)
@@ -368,6 +386,40 @@ impl DeviceTable {
                     debug!("[state] V6 lease órfão ({}) → {}", iaid, ip);
                     self.orphaned_v6.insert(ip, (duid, iaid, expires));
                     false // Mudança de estado interna, mas sem mexer em Device físico ainda
+                }
+            }
+
+            DeviceUpdate::V6PrefixAssigned {
+                mac,
+                duid,
+                iaid,
+                prefix,
+                len,
+                expires,
+            } => {
+                if let Some(m) = mac {
+                    self.duid_index.insert(duid.clone(), m);
+                    let dev = self.get_or_insert(m);
+                    let changed = dev.duid.as_ref() != Some(&duid)
+                        || dev.v6_prefix.as_ref().is_none_or(|old| {
+                            old.prefix != prefix || old.len != len || old.expires != expires
+                        });
+                    dev.duid = Some(duid);
+                    dev.v6_prefix = Some(V6PrefixLease {
+                        prefix,
+                        len,
+                        expires,
+                    });
+                    dev.last_seen = SystemTime::now();
+                    if changed {
+                        debug!("[state] V6 prefix {} ({}) → {}/{}", m, iaid, prefix, len);
+                    }
+                    changed
+                } else {
+                    // IA_PD órfão é raro mas possível (SARR sem DAD na rede local)
+                    // Por simplicidade, ignoramos prefixos órfãos por enquanto pois
+                    // não temos onde pendurá-los sem um IP associado para o NDP.
+                    false
                 }
             }
 
@@ -645,9 +697,16 @@ impl DeviceTable {
                     dev.v6 = None;
                     changed = true;
                 }
+                if let Some(v6_prefix) = &dev.v6_prefix
+                    && v6_prefix.expires < now
+                {
+                    dev.v6_prefix = None;
+                    changed = true;
+                }
                 if !dev.is_static
                     && dev.v4.is_none()
                     && dev.v6.is_none()
+                    && dev.v6_prefix.is_none()
                     && dev.slaac.is_empty()
                     && dev.last_seen.elapsed().unwrap_or(std::time::Duration::ZERO) > max_age
                 {
@@ -686,6 +745,7 @@ impl DeviceTable {
             duid: None,
             v4: None,
             v6: None,
+            v6_prefix: None,
             slaac: Vec::new(),
             last_seen: SystemTime::now(),
         })

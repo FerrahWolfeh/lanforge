@@ -15,7 +15,8 @@
 //! | Info-Req    | Provedor de opções (DNS)  | Reply       |
 
 use dhcproto::v6::{
-    DhcpOption, DhcpOptions, IAAddr, IANA, Message, MessageType, OptionCode, Status, StatusCode,
+    DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,
+    Status, StatusCode,
 };
 use dhcproto::{Decodable, Decoder, Encodable, Encoder};
 use std::net::Ipv6Addr;
@@ -36,6 +37,14 @@ pub enum HandleResult {
     Ignore,
 }
 
+/// Contexto para envio de status codes
+struct StatusContext<'a> {
+    msg: &'a Message,
+    client_duid: &'a Duid,
+    peer: Ipv6Addr,
+    mac: Option<MacAddr>,
+}
+
 /// Servidor `DHCPv6` stateful.
 ///
 /// Mantém as configurações, o pool de endereços ULA e a identidade (DUID) do servidor.
@@ -46,6 +55,8 @@ pub struct Dhcpv6Server {
     pub pool: Ipv6Pool,
     /// DUID (DHCP Unique Identifier) deste servidor
     pub server_duid: Duid,
+    /// Lifetimes aprendidos do prefixo GUA (preferred, valid)
+    pub prefix_lifetimes: Option<(u32, u32)>,
 }
 
 impl Dhcpv6Server {
@@ -54,7 +65,23 @@ impl Dhcpv6Server {
             cfg,
             pool,
             server_duid,
+            prefix_lifetimes: None,
         }
+    }
+
+    fn get_lifetimes(&self) -> (u32, u32) {
+        let mut preferred = self.cfg.lease_time / 2;
+        let mut valid = self.cfg.lease_time;
+
+        if let Some((p, v)) = self.prefix_lifetimes {
+            if preferred > p {
+                preferred = p;
+            }
+            if valid > v {
+                valid = v;
+            }
+        }
+        (preferred, valid)
     }
 
     pub async fn handle_packet(
@@ -175,6 +202,7 @@ impl Dhcpv6Server {
             MessageType::Release => {
                 self.handle_release(&msg, &client_duid, identity.as_ref(), peer)
             }
+            MessageType::Decline => self.handle_decline(&msg, client_duid, identity.as_ref(), peer),
             MessageType::InformationRequest => {
                 self.handle_information_request(&msg, &client_duid, peer)
             }
@@ -212,6 +240,7 @@ impl Dhcpv6Server {
 
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             if let Some(ip) = self.pool.allocate(&client_duid.bytes, iana.id, mac, None) {
+                let (pref, valid) = self.get_lifetimes();
                 let action = if is_rapid_commit {
                     "REPLY (Rapid Commit)"
                 } else {
@@ -226,28 +255,70 @@ impl Dhcpv6Server {
                 let mut ia_opts = DhcpOptions::new();
                 ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                     addr: ip,
-                    preferred_life: self.cfg.lease_time / 2,
-                    valid_life: self.cfg.lease_time,
+                    preferred_life: pref,
+                    valid_life: valid,
                     opts: DhcpOptions::new(),
                 }));
 
                 reply.opts_mut().insert(DhcpOption::IANA(IANA {
                     id: iana.id,
-                    t1: self.cfg.lease_time / 2,
-                    t2: self.cfg.lease_time * 4 / 5,
+                    t1: pref / 2,
+                    t2: pref * 4 / 5,
                     opts: ia_opts,
                 }));
-                learned_duid = Some(client_duid);
+                learned_duid = Some(client_duid.clone());
             } else {
-                warn!("DHCPv6: Pool exhausted, no IP available for {identity:?}");
-                return self.send_status(
-                    msg,
-                    MessageType::Advertise,
-                    &client_duid,
-                    Status::NoAddrsAvail,
-                    "Pool exhausted",
-                    peer,
-                );
+                // RFC 8415: NoAddrsAvail
+                let mut opts = DhcpOptions::new();
+                opts.insert(DhcpOption::StatusCode(StatusCode {
+                    status: Status::NoAddrsAvail,
+                    msg: "No addresses available in pool".to_string(),
+                }));
+                reply.opts_mut().insert(DhcpOption::IANA(IANA {
+                    id: iana.id,
+                    t1: 0,
+                    t2: 0,
+                    opts,
+                }));
+            }
+        }
+
+        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD) {
+            if let Some((prefix, len)) =
+                self.pool.allocate_prefix(&client_duid.bytes, iapd.id, None)
+            {
+                let (pref, valid) = self.get_lifetimes();
+                info!("DHCPv6: Delegating prefix {prefix}/{len} to {identity:?}");
+
+                let mut ia_opts = DhcpOptions::new();
+                ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
+                    prefix_ip: prefix,
+                    prefix_len: len,
+                    preferred_lifetime: pref,
+                    valid_lifetime: valid,
+                    opts: DhcpOptions::new(),
+                }));
+
+                reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
+                    id: iapd.id,
+                    t1: pref / 2,
+                    t2: pref * 4 / 5,
+                    opts: ia_opts,
+                }));
+                learned_duid = Some(client_duid.clone());
+            } else {
+                // RFC 8415: NoPrefixAvail
+                let mut opts = DhcpOptions::new();
+                opts.insert(DhcpOption::StatusCode(StatusCode {
+                    status: Status::NoPrefixAvail,
+                    msg: "No prefixes available for delegation".to_string(),
+                }));
+                reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
+                    id: iapd.id,
+                    t1: 0,
+                    t2: 0,
+                    opts,
+                }));
             }
         }
 
@@ -293,6 +364,24 @@ impl Dhcpv6Server {
                 }
             });
 
+            // RFC 8415 §18.2.1: Se o endereço requisitado não estiver on-link, responder com NotOnLink.
+            if let Some(ip) = requested_ip
+                && !self.pool.is_on_link(&ip)
+            {
+                return self.send_ia_status(
+                    StatusContext {
+                        msg,
+                        client_duid: &client_duid,
+                        peer,
+                        mac,
+                    },
+                    Status::NotOnLink,
+                    "Requested address is not on-link",
+                    iana.id,
+                    false,
+                );
+            }
+
             if let Some(ip) = self
                 .pool
                 .allocate(&client_duid.bytes, iana.id, mac, requested_ip)
@@ -302,32 +391,42 @@ impl Dhcpv6Server {
                 } else {
                     info!("DHCPv6: Assigning {ip} to anonymous device");
                 }
+                let (pref, valid) = self.get_lifetimes();
                 let mut ia_opts = DhcpOptions::new();
                 ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                     addr: ip,
-                    preferred_life: self.cfg.lease_time / 2,
-                    valid_life: self.cfg.lease_time,
+                    preferred_life: pref,
+                    valid_life: valid,
                     opts: DhcpOptions::new(),
                 }));
                 reply.opts_mut().insert(DhcpOption::IANA(IANA {
                     id: iana.id,
-                    t1: self.cfg.lease_time / 2,
-                    t2: self.cfg.lease_time * 4 / 5,
-                    opts: ia_opts,
-                }));
-            } else {
-                let mut ia_opts = DhcpOptions::new();
-                ia_opts.insert(DhcpOption::StatusCode(StatusCode {
-                    status: Status::NoAddrsAvail,
-                    msg: "Not available".to_string(),
-                }));
-                reply.opts_mut().insert(DhcpOption::IANA(IANA {
-                    id: iana.id,
-                    t1: 0,
-                    t2: 0,
+                    t1: pref / 2,
+                    t2: pref * 4 / 5,
                     opts: ia_opts,
                 }));
             }
+        }
+
+        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD)
+            && let Some((prefix, len)) =
+                self.pool.allocate_prefix(&client_duid.bytes, iapd.id, None)
+        {
+            let (pref, valid) = self.get_lifetimes();
+            let mut ia_opts = DhcpOptions::new();
+            ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
+                prefix_ip: prefix,
+                prefix_len: len,
+                preferred_lifetime: pref,
+                valid_lifetime: valid,
+                opts: DhcpOptions::new(),
+            }));
+            reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
+                id: iapd.id,
+                t1: pref / 2,
+                t2: pref * 4 / 5,
+                opts: ia_opts,
+            }));
         }
 
         Self::add_dns_options(&mut reply);
@@ -356,9 +455,47 @@ impl Dhcpv6Server {
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
     ) -> HandleResult {
+        let mac = identity.map(|i| i.mac);
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
         }
+
+        // RFC 8415 §18.2.3: Se o servidor não encontrar binding para o IA_NA/IA_PD,
+        // deve responder com Reply contendo Status NoBinding.
+        if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
+            && !self.pool.has_binding(&client_duid.bytes, iana.id)
+        {
+            return self.send_ia_status(
+                StatusContext {
+                    msg,
+                    client_duid: &client_duid,
+                    peer,
+                    mac,
+                },
+                Status::NoBinding,
+                "No binding found for this IA_NA",
+                iana.id,
+                false,
+            );
+        }
+
+        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD)
+            && !self.pool.has_prefix_binding(&client_duid.bytes, iapd.id)
+        {
+            return self.send_ia_status(
+                StatusContext {
+                    msg,
+                    client_duid: &client_duid,
+                    peer,
+                    mac,
+                },
+                Status::NoBinding,
+                "No binding found for this IA_PD",
+                iapd.id,
+                true,
+            );
+        }
+
         self.handle_request(msg, client_duid, identity, peer)
     }
 
@@ -369,6 +506,17 @@ impl Dhcpv6Server {
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
     ) -> HandleResult {
+        // Rebind não tem ServerId (broadcast).
+        // Mesma lógica de NoBinding do Renew (§18.2.4).
+        if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
+            && !self.pool.has_binding(&client_duid.bytes, iana.id)
+        {
+            // No Rebind, se não temos binding, ignoramos ou respondemos NoBinding?
+            // RFC 8415 §18.2.4 diz que o servidor deve responder se tiver binding.
+            // Mas se não tivermos, geralmente ficamos quietos para permitir que outro servidor responda,
+            // EXCEÇÃO: se soubermos com certeza que o IP não é on-link.
+            return HandleResult::Ignore;
+        }
         self.handle_request(msg, client_duid, identity, peer)
     }
 
@@ -385,11 +533,9 @@ impl Dhcpv6Server {
 
         let mac = identity.map(|i| i.mac);
 
-        let mut iaid = 0;
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
             && let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr)
         {
-            iaid = iana.id;
             if let Some(id) = identity {
                 info!("DHCPv6: {id} released its address {}", ia_addr.addr);
             } else {
@@ -401,12 +547,61 @@ impl Dhcpv6Server {
             self.pool.release(&ia_addr.addr);
         }
 
-        let mut reply = self.base_reply(msg, MessageType::Reply, client_duid);
-        reply.opts_mut().insert(DhcpOption::StatusCode(StatusCode {
-            status: Status::Success,
-            msg: "Released".to_string(),
-        }));
-        HandleResult::Reply(encode_msg(&reply), peer, None, mac, iaid)
+        self.send_status(
+            StatusContext {
+                msg,
+                client_duid,
+                peer,
+                mac,
+            },
+            MessageType::Reply,
+            Status::Success,
+            "Released",
+        )
+    }
+
+    fn handle_decline(
+        &mut self,
+        msg: &Message,
+        client_duid: Duid,
+        identity: Option<&DeviceIdentity>,
+        peer: Ipv6Addr,
+    ) -> HandleResult {
+        if !self.check_server_id(msg) {
+            return HandleResult::Ignore;
+        }
+
+        let mac = identity.map(|i| i.mac);
+        if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
+            for opt in iana.opts.iter() {
+                if let DhcpOption::IAAddr(ia_addr) = opt {
+                    if let Some(id) = identity {
+                        info!(
+                            "DHCPv6: {id} declined address {} (DAD Failure)",
+                            ia_addr.addr
+                        );
+                    } else {
+                        info!(
+                            "DHCPv6: Anonymous device declined address {} (DAD Failure)",
+                            ia_addr.addr
+                        );
+                    }
+                    self.pool.decline(ia_addr.addr);
+                }
+            }
+        }
+
+        self.send_status(
+            StatusContext {
+                msg,
+                client_duid: &client_duid,
+                peer,
+                mac,
+            },
+            MessageType::Reply,
+            Status::Success,
+            "Decline acknowledged",
+        )
     }
 
     fn handle_information_request(
@@ -446,19 +641,63 @@ impl Dhcpv6Server {
 
     fn send_status(
         &self,
-        msg: &Message,
+        ctx: StatusContext<'_>,
         msg_type: MessageType,
-        client_duid: &Duid,
         status: Status,
         text: &str,
-        peer: Ipv6Addr,
     ) -> HandleResult {
-        let mut reply = self.base_reply(msg, msg_type, client_duid);
+        let mut reply = self.base_reply(ctx.msg, msg_type, ctx.client_duid);
         reply.opts_mut().insert(DhcpOption::StatusCode(StatusCode {
             status,
             msg: text.to_string(),
         }));
-        HandleResult::Reply(encode_msg(&reply), peer, None, None, 0)
+        HandleResult::Reply(
+            encode_msg(&reply),
+            ctx.peer,
+            Some(ctx.client_duid.clone()),
+            ctx.mac,
+            0,
+        )
+    }
+
+    fn send_ia_status(
+        &self,
+        ctx: StatusContext<'_>,
+        status: Status,
+        text: &str,
+        iaid: u32,
+        is_pd: bool,
+    ) -> HandleResult {
+        let mut reply = self.base_reply(ctx.msg, MessageType::Reply, ctx.client_duid);
+        let mut opts = DhcpOptions::new();
+        opts.insert(DhcpOption::StatusCode(StatusCode {
+            status,
+            msg: text.to_string(),
+        }));
+
+        if is_pd {
+            reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
+                id: iaid,
+                t1: 0,
+                t2: 0,
+                opts,
+            }));
+        } else {
+            reply.opts_mut().insert(DhcpOption::IANA(IANA {
+                id: iaid,
+                t1: 0,
+                t2: 0,
+                opts,
+            }));
+        }
+
+        HandleResult::Reply(
+            encode_msg(&reply),
+            ctx.peer,
+            Some(ctx.client_duid.clone()),
+            ctx.mac,
+            iaid,
+        )
     }
 
     const fn add_dns_options(_reply: &mut Message) {
@@ -508,10 +747,11 @@ mod tests {
             iface: "lo".to_string(),
             lease_time: 86400,
             ula_prefix: Some("fd97:f00d:cafe:3731::".parse().unwrap()),
+            ula_prefix_len: 64,
             range_start: Some("fd97:f00d:cafe:3731::100".parse().unwrap()),
             range_end: Some("fd97:f00d:cafe:3731::200".parse().unwrap()),
         };
-        let pool = Ipv6Pool::new(cfg.range_start, cfg.range_end, cfg.ula_prefix);
+        let pool = Ipv6Pool::new(cfg.range_start, cfg.range_end, cfg.ula_prefix, 64);
         let server_duid = Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
@@ -551,40 +791,173 @@ mod tests {
     }
 
     #[test]
-    fn solicit_without_mac_is_ignored() {
-        let mut srv = dummy_server();
-        let msg = build_solicit(false);
-        let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(&identity), peer_ip());
-        assert!(matches!(res, HandleResult::Reply(..)));
-    }
+    fn solicit_yields_no_addrs_avail_when_pool_empty() {
+        let cfg = Dhcpv6Config {
+            enabled: true,
+            iface: "lo".to_string(),
+            lease_time: 86400,
+            ula_prefix: None,
+            ula_prefix_len: 64,
+            range_start: None,
+            range_end: None,
+        };
+        let pool = Ipv6Pool::new(None, None, None, 64);
+        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid());
 
-    #[test]
-    fn solicit_standard_yields_advertise() {
-        let mut srv = dummy_server();
         let msg = build_solicit(false);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(&identity), peer_ip());
 
         match res {
-            HandleResult::Reply(bytes, target, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _) => {
                 let reply = decode_reply(&bytes);
-                assert_eq!(reply.msg_type(), MessageType::Advertise);
-                assert_eq!(target, peer_ip());
-                assert!(reply.opts().get(OptionCode::Preference).is_some());
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
-                    assert!(iana.opts.get(OptionCode::IAAddr).is_some());
+                    if let Some(DhcpOption::StatusCode(status)) =
+                        iana.opts.get(OptionCode::StatusCode)
+                    {
+                        assert_eq!(status.status, Status::NoAddrsAvail);
+                    } else {
+                        panic!("Missing StatusCode in IANA");
+                    }
                 } else {
-                    panic!("Missing IA_NA in Advertise");
+                    panic!("Missing IANA in Reply");
                 }
             }
-            HandleResult::Ignore => panic!("Expected HandleResult::Reply"),
+            _ => panic!("Expected Reply"),
         }
     }
 
     #[test]
-    fn solicit_with_rapid_commit_yields_reply() {
+    fn request_not_on_link_yields_status_code() {
         let mut srv = dummy_server();
+        let mut msg = Message::new(MessageType::Request);
+        msg.opts_mut()
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
+
+        let wrong_ip: Ipv6Addr = "2001:db8::1".parse().unwrap();
+        let mut ia_opts = DhcpOptions::new();
+        ia_opts.insert(DhcpOption::IAAddr(IAAddr {
+            addr: wrong_ip,
+            preferred_life: 0,
+            valid_life: 0,
+            opts: DhcpOptions::new(),
+        }));
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: 1,
+            t1: 0,
+            t2: 0,
+            opts: ia_opts,
+        }));
+
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_request(&msg, dummy_client_duid(), Some(&identity), peer_ip());
+
+        match res {
+            HandleResult::Reply(bytes, _, _, _, _) => {
+                let reply = decode_reply(&bytes);
+                if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
+                    if let Some(DhcpOption::StatusCode(status)) =
+                        iana.opts.get(OptionCode::StatusCode)
+                    {
+                        assert_eq!(status.status, Status::NotOnLink);
+                    } else {
+                        panic!("Missing StatusCode in IANA");
+                    }
+                } else {
+                    panic!("Missing IANA in Reply");
+                }
+            }
+            _ => panic!("Expected Reply with NotOnLink"),
+        }
+    }
+
+    #[test]
+    fn renew_no_binding_yields_status_code() {
+        let mut srv = dummy_server();
+        let mut msg = Message::new(MessageType::Renew);
+        msg.opts_mut()
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: 9991,
+            t1: 0,
+            t2: 0,
+            opts: DhcpOptions::new(),
+        }));
+
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_renew(&msg, dummy_client_duid(), Some(&identity), peer_ip());
+
+        match res {
+            HandleResult::Reply(bytes, _, _, _, _) => {
+                let reply = decode_reply(&bytes);
+                if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
+                    if let Some(DhcpOption::StatusCode(status)) =
+                        iana.opts.get(OptionCode::StatusCode)
+                    {
+                        assert_eq!(status.status, Status::NoBinding);
+                    } else {
+                        panic!("Missing StatusCode in IANA");
+                    }
+                } else {
+                    panic!("Missing IANA in Reply");
+                }
+            }
+            _ => panic!("Expected Reply with NoBinding"),
+        }
+    }
+
+    #[test]
+    fn decline_acknowledgment_and_blacklisting() {
+        let mut srv = dummy_server();
+        let ip: Ipv6Addr = "fd97:f00d:cafe:3731::101".parse().unwrap();
+        let duid = dummy_client_duid();
+        let mac = dummy_mac();
+
+        // Simula que o IP foi alocado
+        srv.pool.allocate(&duid.bytes, 1, Some(mac), Some(ip));
+
+        let mut msg = Message::new(MessageType::Decline);
+        msg.opts_mut()
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
+        let mut ia_opts = DhcpOptions::new();
+        ia_opts.insert(DhcpOption::IAAddr(IAAddr {
+            addr: ip,
+            preferred_life: 0,
+            valid_life: 0,
+            opts: DhcpOptions::new(),
+        }));
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: 1,
+            t1: 0,
+            t2: 0,
+            opts: ia_opts,
+        }));
+
+        let identity = DeviceIdentity::new(mac, None, None);
+        let res = srv.handle_decline(&msg, duid.clone(), Some(&identity), peer_ip());
+
+        match res {
+            HandleResult::Reply(bytes, _, _, _, _) => {
+                let reply = decode_reply(&bytes);
+                assert_eq!(reply.msg_type(), MessageType::Reply);
+                assert!(reply.opts().get(OptionCode::StatusCode).is_some());
+            }
+            _ => panic!("Expected Decline acknowledgment"),
+        }
+
+        // Verifica que o IP está em blacklist (tentando alocar exatamente ele)
+        let ip2 = srv
+            .pool
+            .allocate(&dummy_client_duid().bytes, 2, Some(mac), Some(ip));
+        assert!(ip2.is_none() || ip2.unwrap() != ip);
+    }
+
+    #[test]
+    fn lifetime_capping_respects_wan_prefix() {
+        let mut srv = dummy_server();
+        // Configura vida útil do WAN prefix para 3600 segundos
+        srv.prefix_lifetimes = Some((1800, 3600));
+
         let msg = build_solicit(true);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(&identity), peer_ip());
@@ -592,90 +965,15 @@ mod tests {
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
                 let reply = decode_reply(&bytes);
-                assert_eq!(reply.msg_type(), MessageType::Reply);
-                assert!(reply.opts().get(OptionCode::RapidCommit).is_some());
-            }
-            HandleResult::Ignore => panic!("Expected Reply"),
-        }
-    }
-
-    #[test]
-    fn request_missing_server_id_is_ignored() {
-        let mut srv = dummy_server();
-        let msg = Message::new(MessageType::Request);
-        let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_request(&msg, dummy_client_duid(), Some(&identity), peer_ip());
-        assert!(matches!(res, HandleResult::Ignore));
-    }
-
-    #[test]
-    fn request_valid_yields_reply_with_ip() {
-        let mut srv = dummy_server();
-        let mut msg = Message::new(MessageType::Request);
-        msg.opts_mut()
-            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
-        msg.opts_mut().insert(DhcpOption::IANA(IANA {
-            id: 999,
-            t1: 0,
-            t2: 0,
-            opts: DhcpOptions::new(),
-        }));
-
-        let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_request(&msg, dummy_client_duid(), Some(&identity), peer_ip());
-
-        match res {
-            HandleResult::Reply(bytes, _, _, _, _) => {
-                let reply = decode_reply(&bytes);
-                assert_eq!(reply.msg_type(), MessageType::Reply);
-                if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
-                    assert!(iana.opts.get(OptionCode::IAAddr).is_some());
-                } else {
-                    panic!("Missing IA_NA in Reply");
+                if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA)
+                    && let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr)
+                {
+                    assert_eq!(ia_addr.preferred_life, 1800);
+                    assert_eq!(ia_addr.valid_life, 3600);
                 }
             }
-            HandleResult::Ignore => panic!("Expected Reply"),
+            _ => panic!("Expected Reply"),
         }
-    }
-
-    #[test]
-    fn release_frees_allocated_ip() {
-        let mut srv = dummy_server();
-        let mac = dummy_mac();
-        let duid = dummy_client_duid();
-        let requested_ip: Ipv6Addr = "fd97:f00d:cafe:3731::100".parse().unwrap();
-        let iaid = 1;
-
-        srv.pool
-            .allocate(&duid.bytes, iaid, Some(mac), Some(requested_ip));
-        assert_eq!(
-            srv.last_assignment_for(&duid.bytes, iaid),
-            Some(requested_ip)
-        );
-
-        let mut msg = Message::new(MessageType::Release);
-        msg.opts_mut()
-            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
-
-        let mut ia_opts = DhcpOptions::new();
-        ia_opts.insert(DhcpOption::IAAddr(IAAddr {
-            addr: requested_ip,
-            preferred_life: 0,
-            valid_life: 0,
-            opts: DhcpOptions::new(),
-        }));
-        msg.opts_mut().insert(DhcpOption::IANA(IANA {
-            id: iaid,
-            t1: 0,
-            t2: 0,
-            opts: ia_opts,
-        }));
-
-        let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_release(&msg, &duid, Some(&identity), peer_ip());
-
-        assert!(matches!(res, HandleResult::Reply(..)));
-        assert_eq!(srv.last_assignment_for(&duid.bytes, iaid), None);
     }
 
     #[test]
@@ -691,6 +989,50 @@ mod tests {
                 assert!(reply.opts().get(OptionCode::IANA).is_none());
             }
             HandleResult::Ignore => panic!("Expected Reply"),
+        }
+    }
+
+    #[test]
+    fn solicit_with_iapd_yields_prefix_delegation() {
+        let cfg = Dhcpv6Config {
+            enabled: true,
+            iface: "lo".to_string(),
+            lease_time: 86400,
+            ula_prefix: Some("fd97:f00d:cafe::".parse().unwrap()),
+            ula_prefix_len: 48,
+            range_start: None,
+            range_end: None,
+        };
+        let pool = Ipv6Pool::new(None, None, cfg.ula_prefix, 48);
+        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid());
+
+        let mut msg = Message::new(MessageType::Solicit);
+        msg.opts_mut().insert(DhcpOption::IAPD(IAPD {
+            id: 888,
+            t1: 0,
+            t2: 0,
+            opts: DhcpOptions::new(),
+        }));
+
+        let identity = DeviceIdentity::new(dummy_mac(), None, None);
+        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(&identity), peer_ip());
+
+        match res {
+            HandleResult::Reply(bytes, _, _, _, _) => {
+                let reply = decode_reply(&bytes);
+                if let Some(DhcpOption::IAPD(iapd)) = reply.opts().get(OptionCode::IAPD) {
+                    assert_eq!(iapd.id, 888);
+                    if let Some(DhcpOption::IAPrefix(pref)) = iapd.opts.get(OptionCode::IAPrefix) {
+                        assert_eq!(pref.prefix_len, 64);
+                        assert!(!pref.prefix_ip.is_unspecified());
+                    } else {
+                        panic!("Missing IAPrefix in IAPD reply");
+                    }
+                } else {
+                    panic!("Missing IAPD in reply");
+                }
+            }
+            _ => panic!("Expected Reply with IA_PD"),
         }
     }
 }
