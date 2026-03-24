@@ -38,7 +38,7 @@
 use anyhow::{Context, Result};
 use hickory_proto::{
     op::{Message, MessageType, OpCode, ResponseCode},
-    rr::{Name, RData, Record, RecordType},
+    rr::{Name, RData, Record, RecordType, rdata::SOA},
     serialize::binary::{BinDecodable, BinEncodable},
 };
 use std::collections::HashSet;
@@ -46,9 +46,13 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::time::timeout;
-use tracing::{debug, info, warn};
+use tokio::{
+    io::AsyncReadExt,
+    io::AsyncWriteExt,
+    net::{TcpListener, UdpSocket},
+};
+use tracing::{debug, info};
 
 use crate::bus::ManagedTable;
 use crate::state::DeviceTable;
@@ -86,51 +90,75 @@ impl Default for DnsConfig {
 // Entry point da task
 // ---------------------------------------------------------------------------
 
-/// Inicia o serviço DNS. Invocar via `tokio::spawn` + supervisor.
-///
-/// Recebe `Arc<ManagedTable>` — acesso read-only ao estado do Manager.
-/// Não publica eventos, não escreve estado.
 pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()> {
     if !cfg.enabled {
         info!("Serviço DNS desabilitado na config");
         return std::future::pending().await;
     }
 
-    let sock = Arc::new(
-        UdpSocket::bind(cfg.listen)
-            .await
-            .with_context(|| format!("falha ao bindar DNS em {}", cfg.listen))?,
-    );
+    let udp_sock = Arc::new(UdpSocket::bind(cfg.listen).await.context("bind UDP")?);
+    let tcp_listener = TcpListener::bind(cfg.listen).await.context("bind TCP")?;
 
     info!(
-        "Escutando em {} (upstream: {:?}, domínio: .{})",
+        "Escutando DNS (UDP/TCP) em {} (upstream: {:?}, domínio: .{})",
         cfg.listen, cfg.upstream, cfg.search_domain
     );
 
-    let mut buf = vec![0u8; 4096];
+    let cfg_arc = Arc::new(cfg);
 
-    loop {
-        match sock.recv_from(&mut buf).await {
-            Ok((len, src)) => {
+    // Task UDP
+    let udp_cfg = Arc::clone(&cfg_arc);
+    let udp_table = Arc::clone(&table);
+    let udp_task = tokio::spawn(async move {
+        let mut buf = vec![0u8; 4096];
+        loop {
+            if let Ok((len, src)) = udp_sock.recv_from(&mut buf).await {
                 let data = buf[..len].to_vec();
-                let sock = Arc::clone(&sock);
-                let table = Arc::clone(&table);
-                let cfg = cfg.clone();
+                let sock = Arc::clone(&udp_sock);
+                let t = Arc::clone(&udp_table);
+                let c = Arc::clone(&udp_cfg);
 
                 tokio::spawn(async move {
-                    match handle_query(&data, src, &cfg, &table).await {
-                        Ok(response) => {
-                            if let Err(e) = sock.send_to(&response, src).await {
-                                warn!("Erro ao enviar resposta para {src}: {e}");
-                            }
-                        }
-                        Err(e) => warn!("Erro ao processar query de {src}: {e:#}"),
+                    if let Ok(Some(response)) = handle_query(&data, src, &c, &t).await {
+                        let _ = sock.send_to(&response, src).await;
                     }
                 });
             }
-            Err(e) => warn!("Erro de recv: {e}"),
         }
-    }
+    });
+
+    // Task TCP (RFC 5966)
+    let tcp_cfg = Arc::clone(&cfg_arc);
+    let tcp_table = Arc::clone(&table);
+    let tcp_task = tokio::spawn(async move {
+        loop {
+            if let Ok((mut stream, src)) = tcp_listener.accept().await {
+                let t = Arc::clone(&tcp_table);
+                let c = Arc::clone(&tcp_cfg);
+
+                tokio::spawn(async move {
+                    let mut len_buf = [0u8; 2];
+                    if stream.read_exact(&mut len_buf).await.is_err() {
+                        return;
+                    }
+                    let len = u16::from_be_bytes(len_buf) as usize;
+                    let mut buf = vec![0u8; len];
+                    if stream.read_exact(&mut buf).await.is_err() {
+                        return;
+                    }
+
+                    if let Ok(Some(response)) = handle_query(&buf, src, &c, &t).await {
+                        let resp_len = (response.len() as u16).to_be_bytes();
+                        let _ = stream.write_all(&resp_len).await;
+                        let _ = stream.write_all(&response).await;
+                    }
+                });
+            }
+        }
+    });
+
+    let _ = tokio::join!(udp_task, tcp_task);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -142,11 +170,19 @@ async fn handle_query(
     src: SocketAddr,
     cfg: &DnsConfig,
     table: &ManagedTable,
-) -> Result<Vec<u8>> {
-    let query = Message::from_bytes(data).context("falha ao parsear query DNS")?;
+) -> Result<Option<Vec<u8>>> {
+    let Ok(query) = Message::from_bytes(data) else {
+        return Ok(None); // Dropa lixo silently
+    };
 
+    // Ignora pacotes que já são respostas (QR = 1)
+    if query.message_type() != MessageType::Query {
+        return Ok(None);
+    }
+
+    // RFC 1035: Query vazia -> FORMERR
     let Some(question) = query.queries().first() else {
-        return nxdomain_response(&query);
+        return Ok(Some(formerr_response(&query, cfg)?));
     };
 
     let qname = question.name().to_string();
@@ -156,28 +192,33 @@ async fn handle_query(
 
     let hostname = normalize_name(&qname, &cfg.search_domain);
 
-    // Snapshot de leitura — libera o lock antes de qualquer I/O de rede
     let t = table.read().await;
 
     if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
         if let Some(response) = resolve_local(&query, &hostname, qtype, cfg, &t)? {
-            debug!("Respondido localmente (A/AAAA): {hostname}");
-            return Ok(response);
+            return Ok(Some(response));
         }
     } else if qtype == RecordType::PTR
         && let Some(response) = resolve_ptr(&query, &qname, cfg, &t)?
     {
-        debug!("Respondido localmente (PTR): {qname}");
-        return Ok(response);
+        return Ok(Some(response));
     }
 
-    drop(t); // Libera o lock antes do forward
+    drop(t);
 
+    // Prevenção de Leak: Se for pro nosso domínio, mas não achou, responde NXDOMAIN.
+    let is_local_domain = qname.trim_end_matches('.').ends_with(&cfg.search_domain);
+    if is_local_domain {
+        return Ok(Some(nxdomain_response(&query, cfg)?));
+    }
+
+    // Encaminha se tiver upstream, senão REFUSED
     if let Some(upstream) = cfg.upstream {
-        forward_to_upstream(data, upstream).await
+        forward_to_upstream(data, upstream, query.id())
+            .await
+            .map(Some)
     } else {
-        debug!("Upstream não configurado e query não é local: {qname}. Retornando REFUSED.");
-        refused_response(&query)
+        Ok(Some(refused_response(&query, cfg)?))
     }
 }
 
@@ -209,7 +250,6 @@ fn resolve_local(
     let static_entry = table.static_entries.get(&device.mac);
 
     if matches!(qtype, RecordType::A | RecordType::ANY) {
-        // Estático tem precedência sobre lease dinâmico
         let v4_ip = static_entry
             .and_then(|e| e.v4_ip)
             .or(device.v4_static)
@@ -240,20 +280,15 @@ fn resolve_local(
             classify_ip(v6.ip);
         }
 
-        // Se houver sufixo estático, ele gera um endereço ULA que tem precedência
         let v6_suffix = static_entry
             .and_then(|e| e.v6_suffix.as_ref())
             .or(device.v6_suffix.as_ref());
 
         if let Some(suffix) = v6_suffix {
-            // Se o sufixo for um IP completo, usamos ele diretamente
-            if let Ok(ip) = suffix.parse::<Ipv6Addr>() {
-                classify_ip(ip);
-            } else if suffix.starts_with("::") {
-                // Se for um sufixo (ex: ::1234), tentamos combinar com os prefixos conhecidos
+            // CORREÇÃO AQUI: Se começa com "::", é sufixo e deve ser combinado.
+            if suffix.starts_with("::") {
                 let mut applied_prefixes = HashSet::<[u16; 4]>::new();
 
-                // 1. Prefixo ULA da configuração (mais estável)
                 if let Some(ula) = cfg.ula_prefix {
                     let segments = ula.segments();
                     let ula_prefix = [segments[0], segments[1], segments[2], segments[3]];
@@ -264,7 +299,6 @@ fn resolve_local(
                     }
                 }
 
-                // 2. Prefixos GUA/ULA aprendidos via SLAAC (dinâmicos)
                 for slaac_ip in &device.slaac {
                     let segments = slaac_ip.segments();
                     let prefix = [segments[0], segments[1], segments[2], segments[3]];
@@ -274,6 +308,9 @@ fn resolve_local(
                         classify_ip(ip);
                     }
                 }
+            } else if let Ok(ip) = suffix.parse::<Ipv6Addr>() {
+                // Se não for sufixo puro, tenta ler como IP completo (ex: v6_suffix = "2001:db8::10")
+                classify_ip(ip);
             }
         }
 
@@ -281,9 +318,8 @@ fn resolve_local(
             classify_ip(*ip);
         }
 
-        let best_ips = if ulas.is_empty() { others } else { ulas };
-
-        for ip in best_ips {
+        // Correção do Bug IPv6: Retorna todos os IPs sintetizados (ULAs e GUAs)
+        for ip in ulas.into_iter().chain(others.into_iter()) {
             records.push(Record::from_rdata(
                 name.clone(),
                 cfg.ttl,
@@ -293,21 +329,14 @@ fn resolve_local(
     }
 
     if records.is_empty() {
-        return Ok(Some(empty_noerror_response(query)?));
+        return Ok(Some(empty_noerror_response(query, cfg)?));
     }
 
-    let mut resp = Message::new();
-    resp.set_id(query.id())
-        .set_message_type(MessageType::Response)
-        .set_op_code(OpCode::Query)
-        .set_authoritative(true)
-        .set_response_code(ResponseCode::NoError)
-        .add_queries(query.queries().to_vec())
+    let mut resp = base_response(query, cfg);
+    resp.set_response_code(ResponseCode::NoError)
         .add_answers(records);
 
-    Ok(Some(
-        resp.to_bytes().context("falha serializar resposta local")?,
-    ))
+    Ok(Some(resp.to_bytes()?))
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +378,43 @@ fn resolve_ptr(
         if d.slaac.iter().any(|&ip| IpAddr::V6(ip) == target_ip) {
             return true;
         }
+
+        // Correção PTR: Checa se o IP reverso corresponde a um sufixo sintetizado
+        if let IpAddr::V6(target_v6) = target_ip {
+            let target_segs = target_v6.segments();
+            let mut prefixes = Vec::new();
+            if let Some(ula) = cfg.ula_prefix {
+                prefixes.push(ula.segments());
+            }
+            for ip in &d.slaac {
+                prefixes.push(ip.segments());
+            }
+
+            let v6_suffix = table
+                .static_entries
+                .get(&d.mac)
+                .and_then(|e| e.v6_suffix.as_ref())
+                .or(d.v6_suffix.as_ref());
+            if let Some(suffix) = v6_suffix
+                && suffix.starts_with("::")
+            {
+                let clean = suffix.strip_prefix("::").unwrap_or(suffix);
+                if let Ok(suf_ip) = format!("::{clean}").parse::<Ipv6Addr>() {
+                    let suf_segs = suf_ip.segments();
+                    if target_segs[4..] == suf_segs[4..] {
+                        let t_pref = [
+                            target_segs[0],
+                            target_segs[1],
+                            target_segs[2],
+                            target_segs[3],
+                        ];
+                        if prefixes.iter().any(|p| p[0..4] == t_pref) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
         false
     });
 
@@ -356,7 +422,7 @@ fn resolve_ptr(
         return Ok(None);
     };
 
-    let question = query.queries().first().expect("Query validada");
+    let question = query.queries().first().unwrap();
     let name = question.name().clone();
 
     let host = if device.hostname.is_empty() {
@@ -366,8 +432,7 @@ fn resolve_ptr(
     };
 
     let fqdn = format!("{}.{}.", host, cfg.search_domain);
-    let ptr_name =
-        Name::from_str(&fqdn).unwrap_or_else(|_| Name::from_str("invalid.lan.").unwrap());
+    let ptr_name = Name::from_str(&fqdn).unwrap_or_else(|_| Name::root());
 
     let record = Record::from_rdata(
         name,
@@ -375,75 +440,97 @@ fn resolve_ptr(
         RData::PTR(hickory_proto::rr::rdata::PTR(ptr_name)),
     );
 
-    let mut resp = Message::new();
-    resp.set_id(query.id())
-        .set_message_type(MessageType::Response)
-        .set_op_code(OpCode::Query)
-        .set_authoritative(true)
-        .set_response_code(ResponseCode::NoError)
-        .add_queries(query.queries().to_vec())
+    let mut resp = base_response(query, cfg);
+    resp.set_response_code(ResponseCode::NoError)
         .add_answers(vec![record]);
 
-    Ok(Some(
-        resp.to_bytes()
-            .context("falha serializar resposta PTR local")?,
-    ))
+    Ok(Some(resp.to_bytes()?))
 }
 
 // ---------------------------------------------------------------------------
 // Forward pro upstream
 // ---------------------------------------------------------------------------
 
-async fn forward_to_upstream(data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>> {
-    let out = UdpSocket::bind("0.0.0.0:0")
-        .await
-        .context("bind socket upstream")?;
-
-    out.send_to(data, upstream)
-        .await
-        .context("send para upstream")?;
+async fn forward_to_upstream(data: &[u8], upstream: SocketAddr, orig_id: u16) -> Result<Vec<u8>> {
+    let out = UdpSocket::bind("0.0.0.0:0").await?;
+    out.send_to(data, upstream).await?;
 
     let mut buf = vec![0u8; 4096];
-    let (len, _) = timeout(Duration::from_secs(3), out.recv_from(&mut buf))
-        .await
-        .context("timeout esperando resposta do upstream")?
-        .context("recv do upstream")?;
+    let to = Duration::from_secs(3);
+    let start = tokio::time::Instant::now();
 
-    Ok(buf[..len].to_vec())
+    // Validação de segurança: Loop até bater o timeout ignorando pacotes lixo/spoofing
+    while start.elapsed() < to {
+        let left = to - start.elapsed();
+        if let Ok(Ok((len, src))) = timeout(left, out.recv_from(&mut buf)).await
+            && src == upstream
+            && let Ok(resp) = Message::from_bytes(&buf[..len])
+            && resp.id() == orig_id
+        {
+            return Ok(buf[..len].to_vec());
+        }
+    }
+    anyhow::bail!("Timeout ou sem resposta válida do upstream")
 }
 
 // ---------------------------------------------------------------------------
-// Helpers de resposta
+// Helpers de resposta (com suporte a SOA e EDNS0)
 // ---------------------------------------------------------------------------
 
-fn nxdomain_response(query: &Message) -> Result<Vec<u8>> {
+fn base_response(query: &Message, cfg: &DnsConfig) -> Message {
     let mut resp = Message::new();
     resp.set_id(query.id())
         .set_message_type(MessageType::Response)
         .set_op_code(OpCode::Query)
-        .set_response_code(ResponseCode::NXDomain)
+        .set_authoritative(true)
+        .set_recursion_available(cfg.upstream.is_some())
         .add_queries(query.queries().to_vec());
-    resp.to_bytes().context("serializar NXDOMAIN")
+
+    if let Some(edns) = query.extensions() {
+        if let Some(ext) = resp.extensions_mut() {
+            *ext = edns.clone(); // Your casual mem copy of death
+        } else {
+            let ext = resp.extensions_mut();
+            *ext = Some(edns.clone()); // and make it double
+        }
+    }
+    resp
 }
 
-fn refused_response(query: &Message) -> Result<Vec<u8>> {
-    let mut resp = Message::new();
-    resp.set_id(query.id())
-        .set_message_type(MessageType::Response)
-        .set_op_code(OpCode::Query)
-        .set_response_code(ResponseCode::Refused)
-        .add_queries(query.queries().to_vec());
-    resp.to_bytes().context("serializar REFUSED")
+fn add_soa(resp: &mut Message, cfg: &DnsConfig) {
+    let name = Name::from_str(&format!("{}.", cfg.search_domain)).unwrap_or_else(|_| Name::root());
+    let mname =
+        Name::from_str(&format!("ns.{}.", cfg.search_domain)).unwrap_or_else(|_| Name::root());
+    let rname = Name::from_str(&format!("hostmaster.{}.", cfg.search_domain))
+        .unwrap_or_else(|_| Name::root());
+    let soa = SOA::new(mname, rname, 1, 7200, 3600, 1209600, 3600);
+    resp.add_name_server(Record::from_rdata(name, 3600, RData::SOA(soa)));
 }
 
-fn empty_noerror_response(query: &Message) -> Result<Vec<u8>> {
-    let mut resp = Message::new();
-    resp.set_id(query.id())
-        .set_message_type(MessageType::Response)
-        .set_op_code(OpCode::Query)
-        .set_response_code(ResponseCode::NoError)
-        .add_queries(query.queries().to_vec());
-    resp.to_bytes().context("serializar NOERROR vazio")
+fn nxdomain_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
+    let mut resp = base_response(query, cfg);
+    resp.set_response_code(ResponseCode::NXDomain);
+    add_soa(&mut resp, cfg);
+    Ok(resp.to_bytes()?)
+}
+
+fn refused_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
+    let mut resp = base_response(query, cfg);
+    resp.set_response_code(ResponseCode::Refused);
+    Ok(resp.to_bytes()?)
+}
+
+fn empty_noerror_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
+    let mut resp = base_response(query, cfg);
+    resp.set_response_code(ResponseCode::NoError);
+    add_soa(&mut resp, cfg);
+    Ok(resp.to_bytes()?)
+}
+
+fn formerr_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
+    let mut resp = base_response(query, cfg);
+    resp.set_response_code(ResponseCode::FormErr);
+    Ok(resp.to_bytes()?)
 }
 
 fn normalize_name(name: &str, search_domain: &str) -> String {
@@ -508,9 +595,12 @@ fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &str) -> Option<Ipv6Addr> 
 
 #[cfg(test)]
 mod tests {
+    use hickory_proto::op::{Edns, Query};
+    use hickory_proto::rr::rdata::opt::EdnsOption;
+
     use super::*;
     use crate::bus::EventBus;
-    use crate::state::{Device, DeviceTable, MacAddr, V4Lease};
+    use crate::state::{Device, DeviceTable, MacAddr, Origin, V4Lease};
     use std::{net::Ipv4Addr, time::SystemTime};
 
     // Helpers para testes que precisam de ManagedTable
@@ -678,7 +768,12 @@ mod tests {
         let query_bytes = query.to_bytes().unwrap();
 
         let src = "127.0.0.1:12345".parse().unwrap();
-        let resp_bytes = handle_query(&query_bytes, src, &cfg, &table).await.unwrap();
+        let resp_bytes =
+            if let Some(resp) = handle_query(&query_bytes, src, &cfg, &table).await.unwrap() {
+                resp
+            } else {
+                panic!("Deveria ter retornado uma resposta");
+            };
         let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
 
         assert_eq!(resp_msg.response_code(), ResponseCode::Refused);
@@ -706,43 +801,70 @@ mod tests {
                 assert!(err_str.contains("timeout") || err_str.contains("upstream"));
             }
             Ok(resp_bytes) => {
-                let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
-                assert_ne!(resp_msg.response_code(), ResponseCode::Refused);
+                if let Some(resp) = resp_bytes {
+                    let resp_msg = Message::from_bytes(&resp).unwrap();
+                    assert_ne!(resp_msg.response_code(), ResponseCode::Refused);
+                } else {
+                    panic!("Deveria ter retornado uma resposta");
+                }
             }
         }
     }
 
-    #[tokio::test]
-    async fn test_resolve_local_v6_suffix_merging() {
+    // Helper para gerar um device mock
+    fn mock_device(mac_bytes: [u8; 6], host: &str) -> Device {
+        let mac = crate::state::MacAddr(mac_bytes);
+        Device {
+            hostname: host.to_string(),
+            mac,
+            origin: Origin::Dynamic,
+            managed_at: None,
+            v4_static: None,
+            v6_suffix: None,
+            is_static: false,
+            duid: None,
+            v4: None,
+            v6: None,
+            slaac: vec![],
+            last_seen: SystemTime::now(),
+        }
+    }
+
+    #[test]
+    fn test_resolve_local_v6_suffix_merging() {
         let ula = "fd00::".parse::<Ipv6Addr>().unwrap();
         let cfg = DnsConfig {
             ula_prefix: Some(ula),
             ..Default::default()
         };
+
         let mut table = DeviceTable::new();
-        let mac = MacAddr([1, 2, 3, 4, 5, 6]);
-        let dev = table.get_or_insert(mac);
-        dev.hostname = "test".to_string();
+        let mut dev = mock_device([1, 2, 3, 4, 5, 6], "test");
         dev.v6_suffix = Some("::beef".to_string());
         dev.slaac = vec!["2001:db8::1".parse().unwrap()];
+        table.devices.insert(dev.mac, dev);
 
         let mut query = Message::new();
         let name = Name::from_str("test.lan.").unwrap();
-        query.add_query(hickory_proto::op::Query::query(name, RecordType::AAAA));
+        query.add_query(Query::query(name, RecordType::AAAA));
 
         let res_bytes = resolve_local(&query, "test", RecordType::AAAA, &cfg, &table)
             .unwrap()
-            .expect("Should resolve");
+            .expect("Should resolve locally");
 
-        let res = Message::from_bytes(&res_bytes).expect("Should parse message");
+        let res = Message::from_bytes(&res_bytes).unwrap();
         let answers = res.answers();
-        assert!(answers.len() >= 2);
+
+        // Agora deve passar, pois o suffix será corretamente misturado e não tratado como um IP estático.
+        assert!(
+            answers.len() >= 2,
+            "Deveria retornar o ULA combinado e o GUA combinado"
+        );
 
         let ips: HashSet<Ipv6Addr> = answers
             .iter()
-            .filter_map(|r: &Record| {
-                let data = r.data();
-                if let RData::AAAA(ip) = data {
+            .filter_map(|r| {
+                if let RData::AAAA(ip) = r.data() {
                     Some((*ip).into())
                 } else {
                     None
@@ -752,5 +874,74 @@ mod tests {
 
         assert!(ips.contains(&"fd00::beef".parse().unwrap()));
         assert!(ips.contains(&"2001:db8::beef".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn test_nxdomain_leak_prevention_and_soa() {
+        // Configuramos um upstream falso para testar se ele vai ignorar o forward e mandar NXDomain
+        let cfg = DnsConfig {
+            upstream: Some("127.0.0.1:9999".parse().unwrap()),
+            search_domain: "lan".into(),
+            ..Default::default()
+        };
+        let table_arc = Arc::new(ManagedTable::new(Arc::new(crate::bus::EventBus::new())));
+
+        let mut query = Message::new();
+        let name = Name::from_str("fantasma.lan.").unwrap();
+        query.add_query(Query::query(name, RecordType::A));
+        let data = query.to_bytes().unwrap();
+
+        let resp_bytes = handle_query(&data, "127.0.0.1:12345".parse().unwrap(), &cfg, &table_arc)
+            .await
+            .unwrap()
+            .expect("Deve retornar uma resposta DNS");
+
+        let resp = Message::from_bytes(&resp_bytes).unwrap();
+
+        // DEVE ser NXDomain e não Forward/Refused
+        assert_eq!(resp.response_code(), ResponseCode::NXDomain);
+
+        // DEVE conter um SOA na seção de Autoridade para o Cache Negativo (RFC 2308)
+        let soa_found = resp
+            .name_servers()
+            .iter()
+            .any(|r| matches!(r.data(), RData::SOA(_)));
+        assert!(soa_found, "Resposta NXDOMAIN precisa conter registro SOA");
+    }
+
+    #[test]
+    fn test_edns0_is_preserved() {
+        let cfg = DnsConfig::default();
+        let mut query = Message::new();
+        query.add_query(Query::query(
+            Name::from_str("localhost.").unwrap(),
+            RecordType::A,
+        ));
+
+        // Adiciona um header EDNS simulado
+        let mut extensions = Edns::new();
+        extensions
+            .options_mut()
+            .insert(EdnsOption::Unknown(123, vec![1, 2, 3]));
+        // Se usar versão nova, o Hickory pode expor: query.set_extensions(extensions);
+        // Assumindo que a gambiarra do mut funciona na build:
+
+        let query_ext = query.extensions_mut();
+
+        if let Some(ext) = query_ext {
+            *ext = extensions;
+        } else {
+            // If for whatever reason query_ext is None, we just put things in there
+            *query_ext = Some(extensions);
+        }
+
+        // Gera a base response pra ver se reflete
+        let resp = base_response(&query, &cfg);
+
+        // O Response TEM que carregar as extensões que vieram na query
+        assert!(
+            resp.extensions().is_some(),
+            "A resposta deve refletir o bloco EDNS0 do cliente"
+        );
     }
 }
