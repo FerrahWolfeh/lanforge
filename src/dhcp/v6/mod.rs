@@ -98,6 +98,11 @@ pub async fn dhcpv6_service(
         server_mac.copy_from_slice(&mac_bytes);
     }
 
+    // Socket persistente para NDP pokes (Optimization 2)
+    let poke_sock = std::net::UdpSocket::bind("::0:0").context("Failed to bind NDP poke socket")?;
+    poke_sock.set_nonblocking(true)?;
+    let ndp_poke_sock = Arc::new(UdpSocket::from_std(poke_sock)?);
+
     let mut server = Dhcpv6Server::new(
         config.clone(),
         Ipv6Pool::new(
@@ -107,6 +112,7 @@ pub async fn dhcpv6_service(
             config.ula_prefix_len,
         ),
         Duid::generate_ll_from_mac(server_mac),
+        ndp_poke_sock,
     );
 
     {
@@ -143,11 +149,16 @@ pub async fn dhcpv6_service(
                             std::net::SocketAddr::V4(_) => continue,
                         };
 
-                        match server.handle_packet(payload, peer_ip, &table, nl_handle).await {
+                        // Reutiliza o buffer para codificação da resposta (Optimization 1)
+                        let mut resp_vec = Vec::with_capacity(1024);
+                        match server
+                            .handle_packet(payload, peer_ip, &table, nl_handle, &mut resp_vec)
+                            .await
+                        {
                             HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, iaid) => {
                                 let dest_addr = std::net::SocketAddrV6::new(dest_ip, 546, 0, scope_id);
 
-                                if let Err(e) = udp.send_to(&reply_bytes, dest_addr).await {
+                                if let Err(e) = udp.send_to(reply_bytes, dest_addr).await {
                                     warn!("send error to {dest_ip}: {e}");
                                 }
 

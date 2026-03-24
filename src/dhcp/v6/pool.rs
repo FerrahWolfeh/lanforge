@@ -24,6 +24,8 @@ pub struct Ipv6Pool {
     blacklisted: HashMap<Ipv6Addr, SystemTime>,
     /// Prefixos delegados (IA_PD)
     prefix_active: HashMap<LeaseKey, (Ipv6Addr, u8)>,
+    /// Cursor para alocação sequencial (O(1) na maioria dos casos)
+    cursor: Option<u128>,
 }
 
 impl Ipv6Pool {
@@ -43,6 +45,7 @@ impl Ipv6Pool {
             reserved: HashMap::new(),
             blacklisted: HashMap::new(),
             prefix_active: HashMap::new(),
+            cursor: None,
         }
     }
 
@@ -127,10 +130,24 @@ impl Ipv6Pool {
                 }
             }
 
-            // Alocação sequencial
-            for raw in start_int..=end_int {
+            // Alocação sequencial com cursor para evitar O(N)
+            let start_search = self.cursor.unwrap_or(start_int);
+
+            // 1ª tentativa: do cursor até o fim
+            for raw in start_search..=end_int {
                 let ip = Ipv6Addr::from(raw.to_be_bytes());
                 if self.is_available(&ip) {
+                    self.cursor = Some(raw + 1);
+                    self.mark_used(ip, lease_key);
+                    return Some(ip);
+                }
+            }
+
+            // 2ª tentativa: wrap-around (do início até o cursor)
+            for raw in start_int..start_search {
+                let ip = Ipv6Addr::from(raw.to_be_bytes());
+                if self.is_available(&ip) {
+                    self.cursor = Some(raw + 1);
                     self.mark_used(ip, lease_key);
                     return Some(ip);
                 }
@@ -484,5 +501,26 @@ mod tests {
 
         p.remove_reservation(mac);
         assert_eq!(p.lookup_by_mac_legacy(mac), None);
+    }
+    #[test]
+    fn test_cursor_allocation() {
+        let start = "fd00::100".parse().unwrap();
+        let end = "fd00::102".parse().unwrap();
+        let mut pool = Ipv6Pool::new(Some(start), Some(end), None, 64);
+
+        // Aloca 1 e 2
+        pool.allocate(&duid(1), 1, None, None).unwrap();
+        pool.allocate(&duid(2), 1, None, None).unwrap();
+
+        // Libera o 100
+        pool.release(&"fd00::100".parse().unwrap());
+
+        // Aloca o 3. Como o cursor está em 102, ele deve pegar o 102 (e não o 100 que foi liberado lá atrás)
+        let ip3 = pool.allocate(&duid(3), 1, None, None).unwrap();
+        assert_eq!(ip3.to_string(), "fd00::102");
+
+        // Agora o 102 era o último IP do range. O próximo deve fazer wrap-around pro 100.
+        let ip4 = pool.allocate(&duid(4), 1, None, None).unwrap();
+        assert_eq!(ip4.to_string(), "fd00::100");
     }
 }

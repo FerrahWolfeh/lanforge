@@ -28,11 +28,12 @@ use super::pool::Ipv6Pool;
 use crate::bus::ManagedTable;
 use crate::dhcp::identity::DeviceIdentity;
 use crate::state::{DeviceUpdate, MacAddr};
+use std::sync::Arc;
 
 /// Resultado de processar uma mensagem `DHCPv6`.
-pub enum HandleResult {
+pub enum HandleResult<'a> {
     /// Resposta a organizar (bytes encodados, IP de destino, DUID aprendido, MAC extraído, IAID).
-    Reply(Vec<u8>, Ipv6Addr, Option<Duid>, Option<MacAddr>, u32),
+    Reply(&'a [u8], Ipv6Addr, Option<Duid>, Option<MacAddr>, u32),
     /// Nenhuma resposta necessária (ex: mensagem malformada ou para outro servidor).
     Ignore,
 }
@@ -57,15 +58,23 @@ pub struct Dhcpv6Server {
     pub server_duid: Duid,
     /// Lifetimes aprendidos do prefixo GUA (preferred, valid)
     pub prefix_lifetimes: Option<(u32, u32)>,
+    /// Socket persistente para NDP pokes (economiza syscall socket())
+    pub ndp_poke_sock: Arc<tokio::net::UdpSocket>,
 }
 
 impl Dhcpv6Server {
-    pub const fn new(cfg: Dhcpv6Config, pool: Ipv6Pool, server_duid: Duid) -> Self {
+    pub const fn new(
+        cfg: Dhcpv6Config,
+        pool: Ipv6Pool,
+        server_duid: Duid,
+        ndp_poke_sock: Arc<tokio::net::UdpSocket>,
+    ) -> Self {
         Self {
             cfg,
             pool,
             server_duid,
             prefix_lifetimes: None,
+            ndp_poke_sock,
         }
     }
 
@@ -84,13 +93,14 @@ impl Dhcpv6Server {
         (preferred, valid)
     }
 
-    pub async fn handle_packet(
+    pub async fn handle_packet<'a>(
         &mut self,
         data: &[u8],
         peer: Ipv6Addr,
         table: &ManagedTable,
         nl_handle: &rtnetlink::Handle,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         let msg = match Message::decode(&mut Decoder::new(data)) {
             Ok(m) => m,
             Err(e) => {
@@ -110,12 +120,7 @@ impl Dhcpv6Server {
             Duid::new(vec![])
         };
 
-        // Tenta extrair MAC em ordem de custo crescente:
-        // 1. DUID-LL / DUID-LLT (grátis, já temos os bytes)
-        // 2. Opção 79 (Client Link-Layer Address)
-        // 3. EUI-64 matemático do link-local (grátis)
-        // 4. Cache NDP passivo em memória
-        // 5. Dump síncrono ao kernel (caro)
+        // Tenta extrair MAC em ordem de custo crescente
         let mut mac = client_duid
             .extract_mac()
             .or_else(|| {
@@ -129,82 +134,87 @@ impl Dhcpv6Server {
                     None
                 })
             })
-            .or_else(|| {
-                // mac_from_eui64_link_local já retorna Option<MacAddr> — sem .map(MacAddr)
-                crate::netlink::mac_from_eui64_link_local(&peer)
-            });
+            .or_else(|| crate::netlink::mac_from_eui64_link_local(&peer));
 
-        // Fallback 1: cache NDP passivo em memória
-        if mac.is_none()
-            && let Some(cached) = table.read().await.get_mac_from_ndp_cache(&peer)
-        {
-            debug!("MAC recuperado do cache NDP para {peer}");
-            mac = Some(cached);
-        }
+        // Pega o lock de leitura da tabela UMA ÚNICA VEZ para:
+        // 1. Cache NDP
+        // 2. Resolução de DeviceIdentity (se o mac for conhecido)
+        let (identity, mac) = {
+            let t = table.read().await;
 
-        // Fallback 2: dump síncrono ao kernel
-        if mac.is_none() {
-            debug!("Cache miss. Lookup síncrono no kernel para {peer}...");
-            if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
-                // Registra no Manager para não ter de perguntar de novo
-                table
-                    .update(DeviceUpdate::NdpSeen {
-                        mac: ndp_mac,
-                        ip: peer,
-                    })
-                    .await;
-                mac = Some(ndp_mac);
+            // Fallback 1: cache NDP em memória
+            if mac.is_none()
+                && let Some(cached) = t.get_mac_from_ndp_cache(&peer)
+            {
+                debug!("MAC recuperado do cache NDP para {peer}");
+                mac = Some(cached);
             }
-        }
 
-        let mac = mac.or_else(|| {
+            // Fallback 2: Lookup síncrono (se ainda sem MAC)
+            if mac.is_none() {
+                drop(t); // Solta o lock para syscall asíncrona ao kernel
+                debug!("Cache miss. Lookup síncrono no kernel para {peer}...");
+                if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
+                    table
+                        .update(DeviceUpdate::NdpSeen {
+                            mac: ndp_mac,
+                            ip: peer,
+                        })
+                        .await;
+                    mac = Some(ndp_mac);
+                }
+                // Como soltamos o lock, pegamos de novo se necessário para a Identity
+                let t_new = table.read().await;
+                let ident = mac.map(|m| {
+                    DeviceIdentity::resolve(m, None, Self::get_vendor_class(&msg), Some(&t_new))
+                });
+                (ident, mac)
+            } else {
+                // Caso rápido: já tínhamos MAC ou cache hit, usamos o mesmo lock
+                let ident = mac.map(|m| {
+                    DeviceIdentity::resolve(m, None, Self::get_vendor_class(&msg), Some(&t))
+                });
+                (ident, mac)
+            }
+        };
+
+        if mac.is_none() {
             warn!(
                 "SOLICIT from {peer}: sem MAC (DUID: {}). Continuando sem MAC...",
                 client_duid.duid_type()
             );
 
-            // Força o kernel a resolver o MAC enviando um pacote vazio pela interface correta
-            // Mas não bloqueia o DHCPv6 — seguimos com mac = None (Lazy Binding)
+            // Força o kernel a resolver o MAC enviando um pacote vazio
+            // Reusando o socket persistente!
+            let poke_sock = self.ndp_poke_sock.clone();
             let peer_ip = peer;
-            let iface = self.cfg.iface.clone();
             tokio::spawn(async move {
-                if let Ok(sock) = socket2::Socket::new(
-                    socket2::Domain::IPV6,
-                    socket2::Type::DGRAM,
-                    Some(socket2::Protocol::UDP),
-                ) {
-                    let _ = sock.bind_device(Some(iface.as_bytes()));
-                    let addr = std::net::SocketAddrV6::new(peer_ip, 546, 0, 0);
-                    let _ = sock.send_to(&[0], &addr.into());
-                }
+                let addr = std::net::SocketAddrV6::new(peer_ip, 546, 0, 0);
+                let _ = poke_sock.send_to(&[0], addr).await;
             });
-
-            None
-        });
-
-        let identity = if let Some(m) = mac {
-            let t = table.read().await;
-            Some(DeviceIdentity::resolve(
-                m,
-                None,
-                Self::get_vendor_class(&msg),
-                Some(&t),
-            ))
-        } else {
-            None
-        };
+        }
 
         match msg.msg_type() {
-            MessageType::Solicit => self.handle_solicit(&msg, client_duid, identity.as_ref(), peer),
-            MessageType::Request => self.handle_request(&msg, client_duid, identity.as_ref(), peer),
-            MessageType::Renew => self.handle_renew(&msg, client_duid, identity.as_ref(), peer),
-            MessageType::Rebind => self.handle_rebind(&msg, client_duid, identity.as_ref(), peer),
-            MessageType::Release => {
-                self.handle_release(&msg, &client_duid, identity.as_ref(), peer)
+            MessageType::Solicit => {
+                self.handle_solicit(&msg, client_duid, identity.as_ref(), peer, buf)
             }
-            MessageType::Decline => self.handle_decline(&msg, client_duid, identity.as_ref(), peer),
+            MessageType::Request => {
+                self.handle_request(&msg, client_duid, identity.as_ref(), peer, buf)
+            }
+            MessageType::Renew => {
+                self.handle_renew(&msg, client_duid, identity.as_ref(), peer, buf)
+            }
+            MessageType::Rebind => {
+                self.handle_rebind(&msg, client_duid, identity.as_ref(), peer, buf)
+            }
+            MessageType::Release => {
+                self.handle_release(&msg, &client_duid, identity.as_ref(), peer, buf)
+            }
+            MessageType::Decline => {
+                self.handle_decline(&msg, client_duid, identity.as_ref(), peer, buf)
+            }
             MessageType::InformationRequest => {
-                self.handle_information_request(&msg, &client_duid, peer)
+                self.handle_information_request(&msg, &client_duid, peer, buf)
             }
             other => {
                 debug!("Ignoring message type: {other:?}");
@@ -213,13 +223,14 @@ impl Dhcpv6Server {
         }
     }
 
-    fn handle_solicit(
+    fn handle_solicit<'a>(
         &mut self,
         msg: &Message,
         client_duid: Duid,
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         let mac = identity.map(|i| i.mac);
 
         let is_rapid_commit = msg.opts().get(OptionCode::RapidCommit).is_some();
@@ -324,7 +335,7 @@ impl Dhcpv6Server {
 
         Self::add_dns_options(&mut reply);
         HandleResult::Reply(
-            encode_msg(&reply),
+            encode_msg(&reply, buf),
             peer,
             learned_duid,
             mac,
@@ -341,13 +352,14 @@ impl Dhcpv6Server {
         )
     }
 
-    fn handle_request(
+    fn handle_request<'a>(
         &mut self,
         msg: &Message,
         client_duid: Duid,
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         let mac = identity.map(|i| i.mac);
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
@@ -379,6 +391,7 @@ impl Dhcpv6Server {
                     "Requested address is not on-link",
                     iana.id,
                     false,
+                    buf,
                 );
             }
 
@@ -431,7 +444,7 @@ impl Dhcpv6Server {
 
         Self::add_dns_options(&mut reply);
         HandleResult::Reply(
-            encode_msg(&reply),
+            encode_msg(&reply, buf),
             peer,
             Some(client_duid),
             mac,
@@ -448,13 +461,14 @@ impl Dhcpv6Server {
         )
     }
 
-    fn handle_renew(
+    fn handle_renew<'a>(
         &mut self,
         msg: &Message,
         client_duid: Duid,
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         let mac = identity.map(|i| i.mac);
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
@@ -476,6 +490,7 @@ impl Dhcpv6Server {
                 "No binding found for this IA_NA",
                 iana.id,
                 false,
+                buf,
             );
         }
 
@@ -493,19 +508,21 @@ impl Dhcpv6Server {
                 "No binding found for this IA_PD",
                 iapd.id,
                 true,
+                buf,
             );
         }
 
-        self.handle_request(msg, client_duid, identity, peer)
+        self.handle_request(msg, client_duid, identity, peer, buf)
     }
 
-    fn handle_rebind(
+    fn handle_rebind<'a>(
         &mut self,
         msg: &Message,
         client_duid: Duid,
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         // Rebind não tem ServerId (broadcast).
         // Mesma lógica de NoBinding do Renew (§18.2.4).
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
@@ -517,16 +534,17 @@ impl Dhcpv6Server {
             // EXCEÇÃO: se soubermos com certeza que o IP não é on-link.
             return HandleResult::Ignore;
         }
-        self.handle_request(msg, client_duid, identity, peer)
+        self.handle_request(msg, client_duid, identity, peer, buf)
     }
 
-    fn handle_release(
+    fn handle_release<'a>(
         &mut self,
         msg: &Message,
         client_duid: &Duid,
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
         }
@@ -557,16 +575,18 @@ impl Dhcpv6Server {
             MessageType::Reply,
             Status::Success,
             "Released",
+            buf,
         )
     }
 
-    fn handle_decline(
+    fn handle_decline<'a>(
         &mut self,
         msg: &Message,
         client_duid: Duid,
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         if !self.check_server_id(msg) {
             return HandleResult::Ignore;
         }
@@ -601,18 +621,20 @@ impl Dhcpv6Server {
             MessageType::Reply,
             Status::Success,
             "Decline acknowledged",
+            buf,
         )
     }
 
-    fn handle_information_request(
+    fn handle_information_request<'a>(
         &self,
         msg: &Message,
         client_duid: &Duid,
         peer: Ipv6Addr,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         let mut reply = self.base_reply(msg, MessageType::Reply, client_duid);
         Self::add_dns_options(&mut reply);
-        HandleResult::Reply(encode_msg(&reply), peer, None, None, 0)
+        HandleResult::Reply(encode_msg(&reply, buf), peer, None, None, 0)
     }
 
     fn base_reply(&self, msg: &Message, msg_type: MessageType, client_duid: &Duid) -> Message {
@@ -639,20 +661,21 @@ impl Dhcpv6Server {
         }
     }
 
-    fn send_status(
+    fn send_status<'a>(
         &self,
         ctx: StatusContext<'_>,
         msg_type: MessageType,
         status: Status,
         text: &str,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         let mut reply = self.base_reply(ctx.msg, msg_type, ctx.client_duid);
         reply.opts_mut().insert(DhcpOption::StatusCode(StatusCode {
             status,
             msg: text.to_string(),
         }));
         HandleResult::Reply(
-            encode_msg(&reply),
+            encode_msg(&reply, buf),
             ctx.peer,
             Some(ctx.client_duid.clone()),
             ctx.mac,
@@ -660,14 +683,15 @@ impl Dhcpv6Server {
         )
     }
 
-    fn send_ia_status(
+    fn send_ia_status<'a>(
         &self,
         ctx: StatusContext<'_>,
         status: Status,
         text: &str,
         iaid: u32,
         is_pd: bool,
-    ) -> HandleResult {
+        buf: &'a mut Vec<u8>,
+    ) -> HandleResult<'a> {
         let mut reply = self.base_reply(ctx.msg, MessageType::Reply, ctx.client_duid);
         let mut opts = DhcpOptions::new();
         opts.insert(DhcpOption::StatusCode(StatusCode {
@@ -692,7 +716,7 @@ impl Dhcpv6Server {
         }
 
         HandleResult::Reply(
-            encode_msg(&reply),
+            encode_msg(&reply, buf),
             ctx.peer,
             Some(ctx.client_duid.clone()),
             ctx.mac,
@@ -727,12 +751,12 @@ impl Dhcpv6Server {
     }
 }
 
-fn encode_msg(msg: &Message) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(512);
-    let mut enc = Encoder::new(&mut buf);
+fn encode_msg<'a>(msg: &Message, buf: &'a mut Vec<u8>) -> &'a [u8] {
+    buf.clear();
+    let mut enc = Encoder::new(buf);
     msg.encode(&mut enc)
         .expect("Encoding DHCPv6 message should not fail");
-    buf
+    buf.as_slice()
 }
 
 #[cfg(test)]
@@ -755,7 +779,11 @@ mod tests {
         let server_duid = Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
-        Dhcpv6Server::new(cfg, pool, server_duid)
+        let sock = std::net::UdpSocket::bind("::0:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let ndp_poke_sock = Arc::new(tokio::net::UdpSocket::from_std(sock).unwrap());
+
+        Dhcpv6Server::new(cfg, pool, server_duid, ndp_poke_sock)
     }
 
     fn dummy_client_duid() -> Duid {
@@ -802,15 +830,25 @@ mod tests {
             range_end: None,
         };
         let pool = Ipv6Pool::new(None, None, None, 64);
-        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid());
+        let sock = std::net::UdpSocket::bind("::0:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let ndp_poke_sock = Arc::new(tokio::net::UdpSocket::from_std(sock).unwrap());
+        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid(), ndp_poke_sock);
 
-        let msg = build_solicit(false);
+        let msg = build_solicit(true);
+        let mut resp_vec = Vec::with_capacity(1024);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(&identity), peer_ip());
+        let res = srv.handle_solicit(
+            &msg,
+            dummy_client_duid(),
+            Some(&identity),
+            peer_ip(),
+            &mut resp_vec,
+        );
 
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
-                let reply = decode_reply(&bytes);
+                let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
                         iana.opts.get(OptionCode::StatusCode)
@@ -849,12 +887,19 @@ mod tests {
             opts: ia_opts,
         }));
 
+        let mut resp_vec = Vec::with_capacity(1024);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_request(&msg, dummy_client_duid(), Some(&identity), peer_ip());
+        let res = srv.handle_request(
+            &msg,
+            dummy_client_duid(),
+            Some(&identity),
+            peer_ip(),
+            &mut resp_vec,
+        );
 
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
-                let reply = decode_reply(&bytes);
+                let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
                         iana.opts.get(OptionCode::StatusCode)
@@ -884,12 +929,19 @@ mod tests {
             opts: DhcpOptions::new(),
         }));
 
+        let mut resp_vec = Vec::with_capacity(1024);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_renew(&msg, dummy_client_duid(), Some(&identity), peer_ip());
+        let res = srv.handle_renew(
+            &msg,
+            dummy_client_duid(),
+            Some(&identity),
+            peer_ip(),
+            &mut resp_vec,
+        );
 
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
-                let reply = decode_reply(&bytes);
+                let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
                         iana.opts.get(OptionCode::StatusCode)
@@ -933,12 +985,19 @@ mod tests {
             opts: ia_opts,
         }));
 
+        let mut resp_vec = Vec::with_capacity(1024);
         let identity = DeviceIdentity::new(mac, None, None);
-        let res = srv.handle_decline(&msg, duid.clone(), Some(&identity), peer_ip());
+        let res = srv.handle_decline(
+            &msg,
+            duid.clone(),
+            Some(&identity),
+            peer_ip(),
+            &mut resp_vec,
+        );
 
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
-                let reply = decode_reply(&bytes);
+                let reply = decode_reply(bytes);
                 assert_eq!(reply.msg_type(), MessageType::Reply);
                 assert!(reply.opts().get(OptionCode::StatusCode).is_some());
             }
@@ -959,12 +1018,19 @@ mod tests {
         srv.prefix_lifetimes = Some((1800, 3600));
 
         let msg = build_solicit(true);
+        let mut resp_vec = Vec::with_capacity(1024);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(&identity), peer_ip());
+        let res = srv.handle_solicit(
+            &msg,
+            dummy_client_duid(),
+            Some(&identity),
+            peer_ip(),
+            &mut resp_vec,
+        );
 
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
-                let reply = decode_reply(&bytes);
+                let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA)
                     && let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr)
                 {
@@ -980,11 +1046,13 @@ mod tests {
     fn information_request_yields_reply_without_ia_na() {
         let srv = dummy_server();
         let msg = Message::new(MessageType::InformationRequest);
-        let res = srv.handle_information_request(&msg, &dummy_client_duid(), peer_ip());
+        let mut resp_vec = Vec::with_capacity(1024);
+        let res =
+            srv.handle_information_request(&msg, &dummy_client_duid(), peer_ip(), &mut resp_vec);
 
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
-                let reply = decode_reply(&bytes);
+                let reply = decode_reply(bytes);
                 assert_eq!(reply.msg_type(), MessageType::Reply);
                 assert!(reply.opts().get(OptionCode::IANA).is_none());
             }
@@ -1004,7 +1072,10 @@ mod tests {
             range_end: None,
         };
         let pool = Ipv6Pool::new(None, None, cfg.ula_prefix, 48);
-        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid());
+        let sock = std::net::UdpSocket::bind("::0:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let ndp_poke_sock = Arc::new(tokio::net::UdpSocket::from_std(sock).unwrap());
+        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid(), ndp_poke_sock);
 
         let mut msg = Message::new(MessageType::Solicit);
         msg.opts_mut().insert(DhcpOption::IAPD(IAPD {
@@ -1014,12 +1085,19 @@ mod tests {
             opts: DhcpOptions::new(),
         }));
 
+        let mut resp_vec = Vec::with_capacity(1024);
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
-        let res = srv.handle_solicit(&msg, dummy_client_duid(), Some(&identity), peer_ip());
+        let res = srv.handle_solicit(
+            &msg,
+            dummy_client_duid(),
+            Some(&identity),
+            peer_ip(),
+            &mut resp_vec,
+        );
 
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
-                let reply = decode_reply(&bytes);
+                let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IAPD(iapd)) = reply.opts().get(OptionCode::IAPD) {
                     assert_eq!(iapd.id, 888);
                     if let Some(DhcpOption::IAPrefix(pref)) = iapd.opts.get(OptionCode::IAPrefix) {
