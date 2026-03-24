@@ -297,8 +297,9 @@ impl LeaseDb {
             // Restaura DUID via apply_update — reconstrói o duid_index
             if let Some(bytes) = duid_bytes {
                 table.apply_update(DeviceUpdate::DuidAssociated {
-                    mac,
+                    mac: Some(mac),
                     duid: Duid::new(bytes),
+                    iaid: 0,
                 });
             }
         }
@@ -364,8 +365,9 @@ impl LeaseDb {
                 .cloned()
                 .unwrap_or_else(|| Duid::new(vec![]));
             table.apply_update(DeviceUpdate::V6LeaseGranted {
-                mac,
+                mac: Some(mac),
                 duid,
+                iaid: 0,
                 ip,
                 expires: unix_to_system_time(expires_unix),
             });
@@ -504,7 +506,11 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
                 };
 
                 // Envia o snapshot para a thread do banco
-                if cmd_tx.send(DbWorkerCmd::Save(snapshot)).await.is_err() {
+                if cmd_tx
+                    .send(DbWorkerCmd::Save(Box::new(snapshot)))
+                    .await
+                    .is_err()
+                {
                     warn!("DB worker: falha ao enviar snapshot - a thread do DB morreu");
                     break;
                 }
@@ -530,7 +536,7 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
 
 /// Comandos internos enviados para a thread síncrona do SQLite.
 enum DbWorkerCmd {
-    Save(DeviceTable),
+    Save(Box<DeviceTable>),
     Vacuum,
 }
 
@@ -680,8 +686,9 @@ mod tests {
         let dev = table.get_or_insert(mac);
         dev.hostname = "DuidDevice".into();
         table.apply_update(DeviceUpdate::DuidAssociated {
-            mac,
+            mac: Some(mac),
             duid: duid.clone(),
+            iaid: 0,
         });
 
         db.save_table(&table).unwrap();
@@ -708,8 +715,9 @@ mod tests {
         dev.hostname = "V6Device".into();
 
         table.apply_update(DeviceUpdate::V6LeaseGranted {
-            mac,
+            mac: Some(mac),
             duid,
+            iaid: 0,
             ip: "fd97:f00d:cafe:3731::1057:cafe".parse().unwrap(),
             expires: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
         });

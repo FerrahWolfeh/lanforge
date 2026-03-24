@@ -240,8 +240,9 @@ pub enum DeviceUpdate {
 
     /// `DHCPv6` concedeu ou renovou um lease.
     V6LeaseGranted {
-        mac: MacAddr,
+        mac: Option<MacAddr>,
         duid: Duid,
+        iaid: u32,
         ip: Ipv6Addr,
         expires: SystemTime,
     },
@@ -258,7 +259,11 @@ pub enum DeviceUpdate {
     HostnameHint { mac: MacAddr, hostname: String },
 
     /// Um DUID foi associado ao MAC (geralmente pelo `DHCPv6` Solicit).
-    DuidAssociated { mac: MacAddr, duid: Duid },
+    DuidAssociated {
+        mac: Option<MacAddr>,
+        duid: Duid,
+        iaid: u32,
+    },
 
     /// Modificação explícita de campos via CLI (`lanforge host add` / `lanforge host set`).
     CliHostUpdated {
@@ -288,6 +293,8 @@ pub struct DeviceTable {
     duid_index: HashMap<Duid, MacAddr>,
     pub(crate) static_entries: HashMap<MacAddr, StaticEntry>,
     ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
+    /// Leases IPv6 aprendidos sem MAC ainda (aguardando NDP).
+    orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
 }
 
 impl DeviceTable {
@@ -297,6 +304,7 @@ impl DeviceTable {
             duid_index: HashMap::new(),
             static_entries: HashMap::new(),
             ndp_cache: HashMap::new(),
+            orphaned_v6: HashMap::new(),
         }
     }
 
@@ -335,24 +343,32 @@ impl DeviceTable {
             DeviceUpdate::V6LeaseGranted {
                 mac,
                 duid,
+                iaid,
                 ip,
                 expires,
             } => {
-                // Garante que o DUID está indexado
-                self.duid_index.insert(duid.clone(), mac);
-                let dev = self.get_or_insert(mac);
-                let changed = dev.duid.as_ref() != Some(&duid)
-                    || dev
-                        .v6
-                        .as_ref()
-                        .is_none_or(|old| old.ip != ip || old.expires != expires);
-                dev.duid = Some(duid);
-                dev.v6 = Some(V6Lease { ip, expires });
-                dev.last_seen = SystemTime::now();
-                if changed {
-                    debug!("[state] V6 lease {} → {}", mac, ip);
+                if let Some(m) = mac {
+                    // Garante que o DUID está indexado
+                    self.duid_index.insert(duid.clone(), m);
+                    let dev = self.get_or_insert(m);
+                    let changed = dev.duid.as_ref() != Some(&duid)
+                        || dev
+                            .v6
+                            .as_ref()
+                            .is_none_or(|old| old.ip != ip || old.expires != expires);
+                    dev.duid = Some(duid);
+                    dev.v6 = Some(V6Lease { ip, expires });
+                    dev.last_seen = SystemTime::now();
+                    if changed {
+                        debug!("[state] V6 lease {} ({}) → {}", m, iaid, ip);
+                    }
+                    changed
+                } else {
+                    // Sem MAC: guarda como órfão
+                    debug!("[state] V6 lease órfão ({}) → {}", iaid, ip);
+                    self.orphaned_v6.insert(ip, (duid, iaid, expires));
+                    false // Mudança de estado interna, mas sem mexer em Device físico ainda
                 }
-                changed
             }
 
             DeviceUpdate::SlaacObserved { mac, addr } => {
@@ -370,8 +386,22 @@ impl DeviceTable {
 
             DeviceUpdate::NdpSeen { mac, ip } => {
                 self.ndp_cache.insert(ip, (mac, SystemTime::now()));
-                let dev = self.get_or_insert(mac);
+
+                // Se tínhamos um lease V6 pendente para este IP, promovemos agora
+                if let Some((duid, _iaid, expires)) = self.orphaned_v6.remove(&ip) {
+                    debug!("[state] Promovendo lease órfão {} → {}", ip, mac);
+                    {
+                        let dev = self.get_or_insert(mac);
+                        dev.duid = Some(duid.clone());
+                        dev.v6 = Some(V6Lease { ip, expires });
+                        dev.last_seen = SystemTime::now();
+                    }
+                    self.duid_index.insert(duid, mac);
+                    return true;
+                }
+
                 // last_seen bump não conta como mudança estrutural para o dirty event
+                let dev = self.get_or_insert(mac);
                 dev.last_seen = SystemTime::now();
                 false
             }
@@ -390,14 +420,21 @@ impl DeviceTable {
                 true
             }
 
-            DeviceUpdate::DuidAssociated { mac, duid } => {
-                self.duid_index.insert(duid.clone(), mac);
-                let dev = self.get_or_insert(mac);
-                if dev.duid.as_ref() == Some(&duid) {
-                    return false;
+            DeviceUpdate::DuidAssociated { mac, duid, iaid } => {
+                if let Some(m) = mac {
+                    self.duid_index.insert(duid.clone(), m);
+                    let dev = self.get_or_insert(m);
+                    if dev.duid.as_ref() == Some(&duid) {
+                        return false;
+                    }
+                    dev.duid = Some(duid);
+                    true
+                } else {
+                    debug!("[state] DUID órfão {} para IAID {}", duid, iaid);
+                    // No Association-only phase without IP, we don't strictly need to orphan it
+                    // since DHCPv6 standard (RFC 8415) usually gives IP in the same transaction or Request.
+                    false
                 }
-                dev.duid = Some(duid);
-                true
             }
 
             DeviceUpdate::CliHostUpdated {
@@ -582,6 +619,13 @@ impl DeviceTable {
         self.ndp_cache
             .retain(|_, (_, ts)| ts.elapsed().unwrap_or(std::time::Duration::ZERO) <= ndp_max_age);
         if self.ndp_cache.len() != initial_ndp_len {
+            changed = true;
+        }
+
+        // Limpa leases órfãos expirados
+        let initial_orphaned_len = self.orphaned_v6.len();
+        self.orphaned_v6.retain(|_, (_, _, expires)| *expires > now);
+        if self.orphaned_v6.len() != initial_orphaned_len {
             changed = true;
         }
 
@@ -803,8 +847,9 @@ mod tests {
             expires: now,
         });
         table.apply_update(DeviceUpdate::V6LeaseGranted {
-            mac,
+            mac: Some(mac),
             duid: Duid::new(vec![1]),
+            iaid: 1,
             ip: "fd97::1".parse().unwrap(),
             expires: now,
         });
@@ -830,15 +875,20 @@ mod tests {
 
         table.get_or_insert(mac).hostname = "DuidHost".to_string();
         assert!(table.apply_update(DeviceUpdate::DuidAssociated {
-            mac,
-            duid: duid.clone()
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid: 1,
         }));
 
         let found = table.find_by_duid(&duid).expect("deve encontrar via DUID");
         assert_eq!(found.hostname, "DuidHost");
 
         // Mesmo DUID novamente — não dirty
-        assert!(!table.apply_update(DeviceUpdate::DuidAssociated { mac, duid }));
+        assert!(!table.apply_update(DeviceUpdate::DuidAssociated {
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid: 1,
+        }));
     }
 
     #[test]
@@ -891,6 +941,38 @@ mod tests {
     }
 
     #[test]
+    fn test_orphaned_v6_promotion() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+        let ip = "fd97::dead:beef".parse().unwrap();
+        let duid = Duid::new(vec![0xaa, 0xbb]);
+        let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+
+        // 1. Lease concedido sem MAC (órfão)
+        table.apply_update(DeviceUpdate::V6LeaseGranted {
+            mac: None,
+            duid: duid.clone(),
+            iaid: 100,
+            ip,
+            expires,
+        });
+
+        // Não deve existir device ainda
+        assert!(!table.devices.contains_key(&mac));
+        assert!(!table.orphaned_v6.is_empty());
+
+        // 2. NDP visto para o mesmo IP -> Promove
+        let changed = table.apply_update(DeviceUpdate::NdpSeen { mac, ip });
+        assert!(changed);
+
+        // Agora deve existir o device com o DUID e IP corretos
+        let dev = table.devices.get(&mac).expect("Device deve existir");
+        assert_eq!(dev.duid.as_ref(), Some(&duid));
+        assert_eq!(dev.v6.as_ref().unwrap().ip, ip);
+        assert!(table.orphaned_v6.is_empty());
+    }
+
+    #[test]
     fn test_cli_host_updated_sync() {
         let mut table = DeviceTable::new();
         let mac = MacAddr([1, 2, 3, 4, 5, 6]);
@@ -917,7 +999,10 @@ mod tests {
         assert!(dev.is_static);
 
         // 3. Verify static_entries sync
-        let entry = table.static_entries.get(&mac).expect("Should have static entry");
+        let entry = table
+            .static_entries
+            .get(&mac)
+            .expect("Should have static entry");
         assert_eq!(entry.hostname, "cli-host");
         assert_eq!(entry.v4_ip, Some("192.168.1.10".parse().unwrap()));
         assert_eq!(entry.v6_suffix, Some("::10".to_string()));

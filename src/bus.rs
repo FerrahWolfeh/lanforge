@@ -205,8 +205,12 @@ impl ManagedTable {
     pub async fn update(&self, update: DeviceUpdate) {
         let mut table = self.inner.write().await;
 
-        let mac = mac_of(&update);
-        let is_new = !table.devices.contains_key(&mac);
+        let opt_mac = mac_of(&update);
+        let is_new = if let Some(mac) = opt_mac {
+            !table.devices.contains_key(&mac)
+        } else {
+            false
+        };
 
         let change = device_change_of(&update);
         let changed = table.apply_update(update);
@@ -217,13 +221,17 @@ impl ManagedTable {
             return;
         }
 
-        if is_new {
-            self.bus.publish(LanforgeEvent::DeviceDiscovered { mac });
-        }
+        // Se não temos MAC (lease órfão), não publicamos eventos no bus que é device-centric.
+        // O IP será "descoberto" depois via NdpSeen, que disparará a promoção e aí sim gera o evento.
+        if let Some(mac) = opt_mac {
+            if is_new {
+                self.bus.publish(LanforgeEvent::DeviceDiscovered { mac });
+            }
 
-        if let Some(change) = change {
-            self.bus
-                .publish(LanforgeEvent::DeviceUpdated { mac, change });
+            if let Some(change) = change {
+                self.bus
+                    .publish(LanforgeEvent::DeviceUpdated { mac, change });
+            }
         }
 
         self.bus.publish(LanforgeEvent::DeviceTableDirty);
@@ -250,18 +258,18 @@ impl ManagedTable {
 // Helpers internos
 // ---------------------------------------------------------------------------
 
-/// Extrai o MAC de qualquer variante de `DeviceUpdate`.
-const fn mac_of(update: &DeviceUpdate) -> MacAddr {
+/// Extrai o MAC de qualquer variante de `DeviceUpdate`, se houver.
+const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
     match update {
-        DeviceUpdate::V4LeaseGranted { mac, .. }
-        | DeviceUpdate::V6LeaseGranted { mac, .. }
-        | DeviceUpdate::SlaacObserved { mac, .. }
-        | DeviceUpdate::NdpSeen { mac, .. }
-        | DeviceUpdate::HostnameHint { mac, .. }
-        | DeviceUpdate::DuidAssociated { mac, .. }
-        | DeviceUpdate::CliHostUpdated { mac, .. }
-        | DeviceUpdate::SlaacCleared { mac }
-        | DeviceUpdate::LeaseReleased { mac } => *mac,
+        DeviceUpdate::V4LeaseGranted { mac, .. } => Some(*mac),
+        DeviceUpdate::V6LeaseGranted { mac, .. } => *mac,
+        DeviceUpdate::SlaacObserved { mac, .. } => Some(*mac),
+        DeviceUpdate::NdpSeen { mac, .. } => Some(*mac),
+        DeviceUpdate::HostnameHint { mac, .. } => Some(*mac),
+        DeviceUpdate::DuidAssociated { mac, .. } => *mac,
+        DeviceUpdate::CliHostUpdated { mac, .. } => Some(*mac),
+        DeviceUpdate::SlaacCleared { mac } => Some(*mac),
+        DeviceUpdate::LeaseReleased { mac } => Some(*mac),
     }
 }
 

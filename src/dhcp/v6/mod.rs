@@ -139,14 +139,14 @@ pub async fn dhcpv6_service(
                         };
 
                         match server.handle_packet(payload, peer_ip, &table, nl_handle).await {
-                            HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac) => {
+                            HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, iaid) => {
                                 let dest_addr = std::net::SocketAddrV6::new(dest_ip, 546, 0, scope_id);
 
                                 if let Err(e) = udp.send_to(&reply_bytes, dest_addr).await {
                                     warn!("send error to {dest_ip}: {e}");
                                 }
 
-                                apply_learned_state(&table, opt_mac, learned_duid, &server, &config).await;
+                                apply_learned_state(&table, opt_mac, learned_duid, iaid, &server, &config).await;
                             }
                             HandleResult::Ignore => {}
                         }
@@ -193,53 +193,59 @@ async fn apply_learned_state(
     table: &ManagedTable,
     opt_mac: Option<MacAddr>,
     learned_duid: Option<Duid>,
+    iaid: u32,
     server: &Dhcpv6Server,
     config: &Dhcpv6Config,
 ) {
-    let Some(mac) = opt_mac else { return };
-
-    let assigned_ip = server.last_assignment_for(mac);
+    let assigned_ip = if let Some(duid) = &learned_duid {
+        server.last_assignment_for(&duid.bytes, iaid)
+    } else if let Some(mac) = opt_mac {
+        server.pool.lookup_by_mac_legacy(mac)
+    } else {
+        None
+    };
 
     match (learned_duid, assigned_ip) {
         (Some(duid), Some(ip)) => {
-            // Caso completo: DUID conhecido + IP alocado → lease v6
             let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+            // Caso DHCPv6 completo: IP + DUID + IAID + MAC (Opcional)
             table
                 .update(DeviceUpdate::V6LeaseGranted {
-                    mac,
+                    mac: opt_mac,
                     duid,
+                    iaid,
                     ip,
                     expires,
                 })
                 .await;
         }
         (Some(duid), None) => {
-            // DUID aprendido mas ainda sem IP (ex: Advertise sem Rapid Commit)
+            // Apenas DUID visto, sem IP concedido (ex: Advertise)
             table
-                .update(DeviceUpdate::DuidAssociated { mac, duid })
+                .update(DeviceUpdate::DuidAssociated {
+                    mac: opt_mac,
+                    duid,
+                    iaid,
+                })
                 .await;
         }
         (None, Some(ip)) => {
-            // IP renovado sem novo DUID (Renew/Rebind de device já conhecido)
-            let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
-            // Recupera o DUID existente do Manager, se houver
-            let existing_duid = table.read().await.find_duid_by_mac(mac).cloned();
-            if let Some(duid) = existing_duid {
-                table
-                    .update(DeviceUpdate::V6LeaseGranted {
-                        mac,
-                        duid,
-                        ip,
-                        expires,
-                    })
-                    .await;
+            if let Some(mac) = opt_mac {
+                let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+                let existing_duid = table.read().await.find_duid_by_mac(mac).cloned();
+                if let Some(duid) = existing_duid {
+                    table
+                        .update(DeviceUpdate::V6LeaseGranted {
+                            mac: Some(mac),
+                            duid,
+                            iaid,
+                            ip,
+                            expires,
+                        })
+                        .await;
+                }
             }
-            // Se não tem DUID nem no Manager, não temos como emitir V6LeaseGranted completo.
-            // O device já existe (foi criado em ciclo anterior), last_seen será atualizado
-            // pelo NdpSeen do netlink naturalmente.
         }
-        (None, None) => {
-            // Release ou InformationRequest — nada a persistir
-        }
+        (None, None) => {}
     }
 }

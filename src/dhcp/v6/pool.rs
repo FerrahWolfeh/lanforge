@@ -2,13 +2,21 @@ use crate::state::MacAddr;
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
 
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub struct LeaseKey {
+    pub duid: Vec<u8>,
+    pub iaid: u32,
+}
+
 #[allow(dead_code)]
 pub struct Ipv6Pool {
     pub range_start: Option<Ipv6Addr>,
     pub range_end: Option<Ipv6Addr>,
     ula_prefix: Option<Ipv6Addr>,
-    active: HashMap<MacAddr, Ipv6Addr>,
-    ip_to_mac: HashMap<Ipv6Addr, MacAddr>,
+    /// Alocação real e ativa é rigorosamente DUID + IAID
+    active: HashMap<LeaseKey, Ipv6Addr>,
+    ip_to_lease: HashMap<Ipv6Addr, LeaseKey>,
+    /// Reservas estáticas mapeadas pelo MAC (Device-centric)
     reserved: HashMap<Ipv6Addr, MacAddr>,
 }
 
@@ -23,7 +31,7 @@ impl Ipv6Pool {
             range_end,
             ula_prefix,
             active: HashMap::new(),
-            ip_to_mac: HashMap::new(),
+            ip_to_lease: HashMap::new(),
             reserved: HashMap::new(),
         }
     }
@@ -62,18 +70,37 @@ impl Ipv6Pool {
         Some(Ipv6Addr::from(combined))
     }
 
-    /// Allocates an IPv6 address for the given MAC.
-    pub fn allocate(&mut self, mac: MacAddr, requested: Option<Ipv6Addr>) -> Option<Ipv6Addr> {
-        // 1. Verificação de reserva estática (Configurada no TOML)
-        for (ip, res_mac) in &self.reserved {
-            if *res_mac == mac {
-                return Some(*ip);
-            }
+    /// Allocates an IPv6 address for the given DUID+IAID.
+    pub fn allocate(
+        &mut self,
+        duid: &[u8],
+        iaid: u32,
+        mac: Option<MacAddr>,
+        requested: Option<Ipv6Addr>,
+    ) -> Option<Ipv6Addr> {
+        let lease_key = LeaseKey {
+            duid: duid.to_vec(),
+            iaid,
+        };
+
+        // 1. O IP "Sticky" deste DUID+IAID já existe? (Prioridade máxima do protocolo)
+        if let Some(ip) = self.active.get(&lease_key) {
+            return Some(*ip);
         }
 
-        // 2. IP "Sticky" (Reutiliza a alocação ativa atual para este MAC)
-        if let Some(ip) = self.active.get(&mac) {
-            return Some(*ip);
+        // 2. Verificação de reserva estática (Configurada no TOML / Device-centric)
+        // Se sabemos o MAC e ele tem uma reserva não em uso, entregamos ela.
+        if let Some(known_mac) = mac {
+            let reserved_ip = self
+                .reserved
+                .iter()
+                .find(|(ip, res_mac)| **res_mac == known_mac && self.is_available(ip))
+                .map(|(ip, _)| *ip);
+
+            if let Some(ip) = reserved_ip {
+                self.mark_used(ip, lease_key);
+                return Some(ip);
+            }
         }
 
         // 3. Pool Dinâmico Restrito (Sequencial) - Se range_start e range_end existirem
@@ -85,7 +112,7 @@ impl Ipv6Pool {
             if let Some(req) = requested {
                 let req_int = u128::from_be_bytes(req.octets());
                 if req_int >= start_int && req_int <= end_int && self.is_available(&req) {
-                    self.mark_used(req, mac);
+                    self.mark_used(req, lease_key);
                     return Some(req);
                 }
             }
@@ -94,7 +121,7 @@ impl Ipv6Pool {
             for raw in start_int..=end_int {
                 let ip = Ipv6Addr::from(raw.to_be_bytes());
                 if self.is_available(&ip) {
-                    self.mark_used(ip, mac);
+                    self.mark_used(ip, lease_key);
                     return Some(ip);
                 }
             }
@@ -107,15 +134,13 @@ impl Ipv6Pool {
             if let Some(req) = requested {
                 let req_segs = req.segments();
                 if req_segs[0..4] == ula_segs[0..4] && self.is_available(&req) {
-                    self.mark_used(req, mac);
+                    self.mark_used(req, lease_key);
                     return Some(req);
                 }
             }
 
             // Gera um sufixo IID (Interface Identifier) de 64 bits de forma puramente aleatória.
-            // Executamos num laço de até 10 tentativas para garantir que, na chance astronomicamente
-            // remota de colisão no cache, o event-loop não trave tentando infinitamente.
-            for _ in 0..10 {
+            for _ in 0..20 {
                 let ip = Ipv6Addr::new(
                     ula_segs[0],
                     ula_segs[1],
@@ -128,7 +153,7 @@ impl Ipv6Pool {
                 );
 
                 if self.is_available(&ip) {
-                    self.mark_used(ip, mac);
+                    self.mark_used(ip, lease_key);
                     return Some(ip);
                 }
             }
@@ -139,35 +164,48 @@ impl Ipv6Pool {
     }
 
     fn is_available(&self, ip: &Ipv6Addr) -> bool {
-        !self.reserved.contains_key(ip) && !self.ip_to_mac.contains_key(ip)
+        // Um IP está livre se não estiver concedido a ninguém
+        !self.ip_to_lease.contains_key(ip)
     }
 
     pub fn release(&mut self, ip: &Ipv6Addr) {
-        if let Some(mac) = self.ip_to_mac.remove(ip) {
-            self.active.remove(&mac);
+        if let Some(key) = self.ip_to_lease.remove(ip) {
+            self.active.remove(&key);
         }
     }
 
     pub fn release_mac(&mut self, mac: MacAddr) {
-        if let Some(ip) = self.active.remove(&mac) {
-            self.ip_to_mac.remove(&ip);
-        }
+        // Encontrar os IPs associados a este MAC através das reservas ou leases ativos
+        // Nota: no v6 interface-centric, um MAC pode ter múltiplos IAIDs.
+        // Se for forçar release por MAC, limpamos as reservas.
         self.remove_reservation(mac);
     }
 
-    fn mark_used(&mut self, ip: Ipv6Addr, mac: MacAddr) {
-        self.release_mac(mac);
-        self.active.insert(mac, ip);
-        self.ip_to_mac.insert(ip, mac);
+    fn mark_used(&mut self, ip: Ipv6Addr, key: LeaseKey) {
+        // Se este IP já estava em uso por outra chave, removemos a antiga
+        if let Some(old_key) = self.ip_to_lease.remove(&ip) {
+            self.active.remove(&old_key);
+        }
+        self.active.insert(key.clone(), ip);
+        self.ip_to_lease.insert(ip, key);
     }
 
-    pub fn lookup(&self, mac: MacAddr) -> Option<Ipv6Addr> {
+    pub fn lookup(&self, duid: &[u8], iaid: u32) -> Option<Ipv6Addr> {
+        let key = LeaseKey {
+            duid: duid.to_vec(),
+            iaid,
+        };
+        self.active.get(&key).copied()
+    }
+
+    /// Versão legado para compatibilidade com o Manager que só conhecia MAC
+    pub fn lookup_by_mac_legacy(&self, mac: MacAddr) -> Option<Ipv6Addr> {
         for (ip, res_mac) in &self.reserved {
             if *res_mac == mac {
                 return Some(*ip);
             }
         }
-        self.active.get(&mac).copied()
+        None
     }
 }
 
@@ -178,6 +216,10 @@ mod tests {
     // Função auxiliar para gerar MACs nos testes
     fn mac(last_byte: u8) -> MacAddr {
         MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, last_byte])
+    }
+
+    fn duid(last_byte: u8) -> Vec<u8> {
+        vec![0, 3, 0, 1, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, last_byte]
     }
 
     #[test]
@@ -199,20 +241,26 @@ mod tests {
         let mut pool = Ipv6Pool::new(Some(start), Some(end), None);
 
         assert_eq!(
-            pool.allocate(mac(1), None).unwrap().to_string(),
+            pool.allocate(&duid(1), 1, Some(mac(1)), None)
+                .unwrap()
+                .to_string(),
             "fd00::100"
         );
         assert_eq!(
-            pool.allocate(mac(2), None).unwrap().to_string(),
+            pool.allocate(&duid(2), 1, Some(mac(2)), None)
+                .unwrap()
+                .to_string(),
             "fd00::101"
         );
         assert_eq!(
-            pool.allocate(mac(3), None).unwrap().to_string(),
+            pool.allocate(&duid(3), 1, Some(mac(3)), None)
+                .unwrap()
+                .to_string(),
             "fd00::102"
         );
 
         // Pool esgotado
-        assert!(pool.allocate(mac(4), None).is_none());
+        assert!(pool.allocate(&duid(4), 1, Some(mac(4)), None).is_none());
     }
 
     #[test]
@@ -221,8 +269,8 @@ mod tests {
         // Sem limites de range definidos, apenas o ULA
         let mut pool = Ipv6Pool::new(None, None, Some(ula));
 
-        let ip1 = pool.allocate(mac(1), None).unwrap();
-        let ip2 = pool.allocate(mac(2), None).unwrap();
+        let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap();
+        let ip2 = pool.allocate(&duid(2), 1, Some(mac(2)), None).unwrap();
 
         // Garante que a rede /64 está correta
         let ula_segs = ula.segments();
@@ -241,12 +289,16 @@ mod tests {
 
         // Pedido válido dentro do range
         let requested = "fd00::150".parse().unwrap();
-        let ip = pool.allocate(mac(1), Some(requested)).unwrap();
+        let ip = pool
+            .allocate(&duid(1), 1, Some(mac(1)), Some(requested))
+            .unwrap();
         assert_eq!(ip, requested);
 
         // Pedido fora do range ignora o request e pega o primeiro livre
         let out_of_bounds = "fd00::250".parse().unwrap();
-        let ip2 = pool.allocate(mac(2), Some(out_of_bounds)).unwrap();
+        let ip2 = pool
+            .allocate(&duid(2), 1, Some(mac(2)), Some(out_of_bounds))
+            .unwrap();
         assert_eq!(ip2.to_string(), "fd00::100");
     }
 
@@ -257,12 +309,16 @@ mod tests {
 
         // Cliente envia hint de um IP opaco que ele já usou
         let requested = "fd97:f00d:cafe:3731:1234:5678:9abc:def0".parse().unwrap();
-        let ip = pool.allocate(mac(1), Some(requested)).unwrap();
+        let ip = pool
+            .allocate(&duid(1), 1, Some(mac(1)), Some(requested))
+            .unwrap();
         assert_eq!(ip, requested);
 
         // Cliente pede um IP de outra rede (ex: GUA antigo) -> ignora e gera um novo random
         let wrong_net: Ipv6Addr = "2001:db8::1234".parse().unwrap();
-        let ip2 = pool.allocate(mac(2), Some(wrong_net)).unwrap();
+        let ip2 = pool
+            .allocate(&duid(2), 1, Some(mac(2)), Some(wrong_net))
+            .unwrap();
         assert_ne!(ip2, wrong_net);
         assert_eq!(ip2.segments()[0..4], ula.segments()[0..4]);
     }
@@ -272,8 +328,8 @@ mod tests {
         let ula = "fd00::".parse().unwrap();
         let mut pool = Ipv6Pool::new(None, None, Some(ula));
 
-        let ip1 = pool.allocate(mac(1), None).unwrap();
-        let ip2 = pool.allocate(mac(1), None).unwrap(); // Mesmo MAC pedindo de novo
+        let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap();
+        let ip2 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap(); // Mesmo MAC pedindo de novo
 
         // Deve retornar exatamente o mesmo IP
         assert_eq!(ip1, ip2);
@@ -289,7 +345,9 @@ mod tests {
 
         // Cliente pode até pedir outra coisa, mas o estático prevalece
         let requested = "fd00::babe".parse().unwrap();
-        let ip = pool.allocate(mac(1), Some(requested)).unwrap();
+        let ip = pool
+            .allocate(&duid(1), 1, Some(mac(1)), Some(requested))
+            .unwrap();
         assert_eq!(ip, static_ip);
     }
 
@@ -299,12 +357,12 @@ mod tests {
         let end = "fd00::100".parse().unwrap();
         let mut pool = Ipv6Pool::new(Some(start), Some(end), None);
 
-        let ip1 = pool.allocate(mac(1), None).unwrap();
-        assert!(pool.allocate(mac(2), None).is_none()); // Esgotado
+        let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap();
+        assert!(pool.allocate(&duid(2), 1, Some(mac(2)), None).is_none()); // Esgotado
 
         pool.release(&ip1);
 
-        let ip2 = pool.allocate(mac(2), None).unwrap(); // Liberou, o MAC 2 consegue pegar
+        let ip2 = pool.allocate(&duid(2), 1, Some(mac(2)), None).unwrap(); // Liberou, o MAC 2 consegue pegar
         assert_eq!(ip1, ip2);
     }
 
@@ -316,9 +374,9 @@ mod tests {
         let ip = "fd00::cafe".parse().unwrap();
 
         p.add_reservation(ip, mac);
-        assert_eq!(p.lookup(mac), Some(ip));
+        assert_eq!(p.lookup_by_mac_legacy(mac), Some(ip));
 
         p.remove_reservation(mac);
-        assert_eq!(p.lookup(mac), None);
+        assert_eq!(p.lookup_by_mac_legacy(mac), None);
     }
 }
