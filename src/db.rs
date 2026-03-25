@@ -124,9 +124,20 @@ impl LeaseDb {
                 );
 
                 CREATE TABLE IF NOT EXISTS v6_leases (
-                    mac         TEXT PRIMARY KEY REFERENCES devices(mac),
+                    mac         TEXT NOT NULL REFERENCES devices(mac),
+                    iaid        INTEGER NOT NULL,
                     ip          TEXT NOT NULL,
-                    expires     INTEGER NOT NULL
+                    expires     INTEGER NOT NULL,
+                    PRIMARY KEY (mac, iaid)
+                );
+
+                CREATE TABLE IF NOT EXISTS v6_prefixes (
+                    mac         TEXT NOT NULL REFERENCES devices(mac),
+                    iaid        INTEGER NOT NULL,
+                    prefix      TEXT NOT NULL,
+                    len         INTEGER NOT NULL,
+                    expires     INTEGER NOT NULL,
+                    PRIMARY KEY (mac, iaid)
                 );
 
                 CREATE TABLE IF NOT EXISTS slaac_addrs (
@@ -158,6 +169,22 @@ impl LeaseDb {
         let _ = self
             .conn
             .execute("ALTER TABLE devices ADD COLUMN v6_suffix TEXT", []);
+        let _ = self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS v6_prefixes (
+                mac TEXT NOT NULL REFERENCES devices(mac),
+                iaid INTEGER NOT NULL,
+                prefix TEXT NOT NULL,
+                len INTEGER NOT NULL,
+                expires INTEGER NOT NULL,
+                PRIMARY KEY (mac, iaid)
+            )",
+            [],
+        );
+        // Migration for v6_leases: if it doesn't have iaid, we might need to recreate it.
+        // For simplicity in this dev environment, we just ensure the column exists.
+        let _ = self
+            .conn
+            .execute("ALTER TABLE v6_leases ADD COLUMN iaid INTEGER DEFAULT 0", []);
 
         debug!("Schema verificado/criado");
         Ok(())
@@ -186,13 +213,13 @@ impl LeaseDb {
             };
 
             let mut v6_static_str = None;
-            let mut v6_lease = None;
+            let mut v6_leases = Vec::new();
             let mut slaac_addrs = Vec::new();
 
             for state in &device.v6 {
                 match state {
                     IPv6State::Static(s) => v6_static_str = Some(s.to_string()),
-                    IPv6State::Dynamic(l) => v6_lease = Some(l.clone()),
+                    IPv6State::Dynamic(l) => v6_leases.push(l.clone()),
                     IPv6State::Slaac(ip) => slaac_addrs.push(ip),
                 }
             }
@@ -234,10 +261,29 @@ impl LeaseDb {
             }
 
             tx.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&mac_str])?;
-            if let Some(v6) = v6_lease {
+            for v6 in v6_leases {
                 tx.execute(
-                    "INSERT INTO v6_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
-                    params![mac_str, v6.ip.to_string(), system_time_to_unix(v6.expires)],
+                    "INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        mac_str,
+                        v6.iaid,
+                        v6.ip.to_string(),
+                        system_time_to_unix(v6.expires)
+                    ],
+                )?;
+            }
+
+            tx.execute("DELETE FROM v6_prefixes WHERE mac = ?1", params![&mac_str])?;
+            for prefix in &device.v6_prefixes {
+                tx.execute(
+                    "INSERT INTO v6_prefixes (mac, iaid, prefix, len, expires) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        mac_str,
+                        prefix.iaid,
+                        prefix.prefix.to_string(),
+                        prefix.len,
+                        system_time_to_unix(prefix.expires)
+                    ],
                 )?;
             }
 
@@ -272,6 +318,7 @@ impl LeaseDb {
                 tx.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&db_mac])?;
                 tx.execute("DELETE FROM seen_v4 WHERE mac = ?1", params![&db_mac])?;
                 tx.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&db_mac])?;
+                tx.execute("DELETE FROM v6_prefixes WHERE mac = ?1", params![&db_mac])?;
                 tx.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&db_mac])?;
                 tx.execute("DELETE FROM devices WHERE mac = ?1", params![&db_mac])?;
             }
@@ -406,20 +453,21 @@ impl LeaseDb {
         // 3. V6 leases
         let mut stmt = self
             .conn
-            .prepare("SELECT mac, ip, expires FROM v6_leases")?;
+            .prepare("SELECT mac, iaid, ip, expires FROM v6_leases")?;
 
-        let v6_rows: Vec<(String, String, i64)> = stmt
+        let v6_rows: Vec<(String, u32, String, i64)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
                 ))
             })?
             .filter_map(std::result::Result::ok)
             .collect();
 
-        for (mac_str, ip_str, expires_unix) in v6_rows {
+        for (mac_str, iaid, ip_str, expires_unix) in v6_rows {
             let Some(mac) = MacAddr::parse(&mac_str) else {
                 continue;
             };
@@ -435,8 +483,48 @@ impl LeaseDb {
             table.apply_update(DeviceUpdate::V6LeaseGranted {
                 mac: Some(mac),
                 duid,
-                iaid: 0,
+                iaid,
                 ip,
+                expires: unix_to_system_time(expires_unix),
+            });
+        }
+
+        // 3.1 V6 prefixes
+        let mut stmt = self
+            .conn
+            .prepare("SELECT mac, iaid, prefix, len, expires FROM v6_prefixes")?;
+
+        let prefix_rows: Vec<(String, u32, String, u8, i64)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u8>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .filter_map(std::result::Result::ok)
+            .collect();
+
+        for (mac_str, iaid, prefix_str, len, expires_unix) in prefix_rows {
+            let Some(mac) = MacAddr::parse(&mac_str) else {
+                continue;
+            };
+            let Ok(prefix) = prefix_str.parse::<Ipv6Addr>() else {
+                warn!("Prefixo inválido no DB: '{prefix_str}', pulando");
+                continue;
+            };
+            let duid = table
+                .find_duid_by_mac(mac)
+                .cloned()
+                .unwrap_or_else(|| Duid::new(vec![]));
+            table.apply_update(DeviceUpdate::V6PrefixAssigned {
+                mac: Some(mac),
+                duid,
+                iaid,
+                prefix,
+                len,
                 expires: unix_to_system_time(expires_unix),
             });
         }

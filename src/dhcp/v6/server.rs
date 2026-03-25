@@ -31,10 +31,23 @@ use crate::dhcp::identity::DeviceIdentity;
 use crate::state::DeviceUpdate;
 use std::sync::Arc;
 
+/// IAIDs atribuídos em uma resposta.
+#[derive(Default, Clone, Debug)]
+pub struct AssignedIAs {
+    pub na: Vec<u32>,
+    pub pd: Vec<u32>,
+}
+
 /// Resultado de processar uma mensagem `DHCPv6`.
 pub enum HandleResult<'a> {
-    /// Resposta a organizar (bytes encodados, IP de destino, DUID aprendido, MAC extraído, IAID).
-    Reply(&'a [u8], Ipv6Addr, Option<Duid>, Option<MacAddr>, u32),
+    /// Resposta a organizar (bytes encodados, IP de destino, DUID aprendido, MAC extraído, IAIDs).
+    Reply(
+        &'a [u8],
+        Ipv6Addr,
+        Option<Duid>,
+        Option<MacAddr>,
+        AssignedIAs,
+    ),
     /// Nenhuma resposta necessária (ex: mensagem malformada ou para outro servidor).
     Ignore,
 }
@@ -325,22 +338,15 @@ impl Dhcpv6Server {
         }
 
         Self::add_dns_options(&mut reply);
-        HandleResult::Reply(
-            encode_msg(&reply, buf),
-            peer,
-            learned_duid,
-            mac,
-            msg.opts()
-                .get(OptionCode::IANA)
-                .and_then(|opt| {
-                    if let DhcpOption::IANA(iana) = opt {
-                        Some(iana.id)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0),
-        )
+        let mut ias = AssignedIAs::default();
+        if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
+            ias.na.push(iana.id);
+        }
+        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD) {
+            ias.pd.push(iapd.id);
+        }
+
+        HandleResult::Reply(encode_msg(&reply, buf), peer, learned_duid, mac, ias)
     }
 
     fn handle_request<'a>(
@@ -434,22 +440,15 @@ impl Dhcpv6Server {
         }
 
         Self::add_dns_options(&mut reply);
-        HandleResult::Reply(
-            encode_msg(&reply, buf),
-            peer,
-            Some(client_duid),
-            mac,
-            msg.opts()
-                .get(OptionCode::IANA)
-                .and_then(|opt| {
-                    if let DhcpOption::IANA(iana) = opt {
-                        Some(iana.id)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0),
-        )
+        let mut ias = AssignedIAs::default();
+        if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
+            ias.na.push(iana.id);
+        }
+        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD) {
+            ias.pd.push(iapd.id);
+        }
+
+        HandleResult::Reply(encode_msg(&reply, buf), peer, Some(client_duid), mac, ias)
     }
 
     fn handle_renew<'a>(
@@ -625,7 +624,13 @@ impl Dhcpv6Server {
     ) -> HandleResult<'a> {
         let mut reply = self.base_reply(msg, MessageType::Reply, client_duid);
         Self::add_dns_options(&mut reply);
-        HandleResult::Reply(encode_msg(&reply, buf), peer, None, None, 0)
+        HandleResult::Reply(
+            encode_msg(&reply, buf),
+            peer,
+            None,
+            None,
+            AssignedIAs::default(),
+        )
     }
 
     fn base_reply(&self, msg: &Message, msg_type: MessageType, client_duid: &Duid) -> Message {
@@ -670,7 +675,7 @@ impl Dhcpv6Server {
             ctx.peer,
             Some(ctx.client_duid.clone()),
             ctx.mac,
-            0,
+            AssignedIAs::default(),
         )
     }
 
@@ -706,12 +711,19 @@ impl Dhcpv6Server {
             }));
         }
 
+        let mut ias = AssignedIAs::default();
+        if is_pd {
+            ias.pd.push(iaid);
+        } else {
+            ias.na.push(iaid);
+        }
+
         HandleResult::Reply(
             encode_msg(&reply, buf),
             ctx.peer,
             Some(ctx.client_duid.clone()),
             ctx.mac,
-            iaid,
+            ias,
         )
     }
 

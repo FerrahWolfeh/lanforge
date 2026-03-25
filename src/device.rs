@@ -169,6 +169,7 @@ pub struct V4Lease {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V6Lease {
     pub ip: Ipv6Addr,
+    pub iaid: u32,
     #[serde(serialize_with = "serialize_time")]
     pub expires: SystemTime,
 }
@@ -177,6 +178,7 @@ pub struct V6Lease {
 pub struct V6PrefixLease {
     pub prefix: Ipv6Addr,
     pub len: u8,
+    pub iaid: u32,
     #[serde(serialize_with = "serialize_time")]
     pub expires: SystemTime,
 }
@@ -302,7 +304,7 @@ pub struct Device {
 
     pub v4: IPv4State,
     pub v6: Vec<IPv6State>,
-    pub v6_prefix: Option<V6PrefixLease>,
+    pub v6_prefixes: Vec<V6PrefixLease>,
 
     /// Endereços IPv4 observados via ARP/Netlink (não necessariamente leases).
     pub seen_v4: Vec<Ipv4Addr>,

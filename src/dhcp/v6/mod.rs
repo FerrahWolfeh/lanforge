@@ -156,14 +156,14 @@ pub async fn dhcpv6_service(
                             .handle_packet(payload, peer_ip, &table, nl_handle, &mut resp_vec)
                             .await
                         {
-                            HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, iaid) => {
+                            HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, ias) => {
                                 let dest_addr = std::net::SocketAddrV6::new(dest_ip, 546, 0, scope_id);
 
                                 if let Err(e) = udp.send_to(reply_bytes, dest_addr).await {
                                     warn!("send error to {dest_ip}: {e}");
                                 }
 
-                                apply_learned_state(&table, opt_mac, learned_duid, iaid, &server, &config).await;
+                                apply_learned_state(&table, opt_mac, learned_duid, ias, &server, &config).await;
                             }
                             HandleResult::Ignore => {}
                         }
@@ -214,72 +214,92 @@ async fn apply_learned_state(
     table: &ManagedTable,
     opt_mac: Option<MacAddr>,
     learned_duid: Option<Duid>,
-    iaid: u32,
+    ias: server::AssignedIAs,
     server: &Dhcpv6Server,
     config: &Dhcpv6Config,
 ) {
-    let assigned_ip = if let Some(duid) = &learned_duid {
-        server.last_assignment_for(&duid.bytes, iaid)
-    } else if let Some(mac) = opt_mac {
-        server.pool.lookup_by_mac_legacy(mac)
-    } else {
-        None
-    };
+    let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
 
-    let assigned_prefix = if let Some(duid) = &learned_duid {
-        server.pool.lookup_prefix(&duid.bytes, iaid)
-    } else {
-        None
-    };
+    // 1. Processa IA_NA (Endereços)
+    for iaid in &ias.na {
+        let iaid = *iaid;
+        let assigned_ip = if let Some(duid) = &learned_duid {
+            server.last_assignment_for(&duid.bytes, iaid)
+        } else if let Some(mac) = opt_mac {
+            server.pool.lookup_by_mac_legacy(mac)
+        } else {
+            None
+        };
 
-    if let (Some(duid), Some(ip)) = (learned_duid.clone(), assigned_ip) {
-        let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
-        table
-            .update(DeviceUpdate::V6LeaseGranted {
-                mac: opt_mac,
-                duid,
-                iaid,
-                ip,
-                expires,
-            })
-            .await;
-    } else if let (Some(duid), None) = (learned_duid.clone(), assigned_ip) {
-        // Apenas DUID visto, sem IP concedido (ex: Advertise)
-        table
-            .update(DeviceUpdate::DuidAssociated {
-                mac: opt_mac,
-                duid,
-                iaid,
-            })
-            .await;
-    } else if let (None, Some(ip)) = (learned_duid.clone(), assigned_ip)
-        && let Some(mac) = opt_mac
-    {
-        let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
-        let existing_duid = table.read().find_duid_by_mac(mac).cloned();
-        if let Some(duid) = existing_duid {
+        if let (Some(duid), Some(ip)) = (learned_duid.clone(), assigned_ip) {
             table
                 .update(DeviceUpdate::V6LeaseGranted {
-                    mac: Some(mac),
+                    mac: opt_mac,
                     duid,
                     iaid,
                     ip,
                     expires,
                 })
                 .await;
+        } else if let (Some(duid), None) = (learned_duid.clone(), assigned_ip) {
+            table
+                .update(DeviceUpdate::DuidAssociated {
+                    mac: opt_mac,
+                    duid,
+                    iaid,
+                })
+                .await;
+        } else if let (None, Some(ip)) = (learned_duid.clone(), assigned_ip)
+            && let Some(mac) = opt_mac
+        {
+            let existing_duid = table.read().find_duid_by_mac(mac).cloned();
+            if let Some(duid) = existing_duid {
+                table
+                    .update(DeviceUpdate::V6LeaseGranted {
+                        mac: Some(mac),
+                        duid,
+                        iaid,
+                        ip,
+                        expires,
+                    })
+                    .await;
+            }
         }
     }
 
-    if let (Some(duid), Some((prefix, len))) = (learned_duid, assigned_prefix) {
-        let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+    // 2. Processa IA_PD (Prefixos)
+    for iaid in &ias.pd {
+        let iaid = *iaid;
+        let assigned_prefix = if let Some(duid) = &learned_duid {
+            server.pool.lookup_prefix(&duid.bytes, iaid)
+        } else {
+            None
+        };
+
+        if let (Some(duid), Some((prefix, len))) = (learned_duid.clone(), assigned_prefix) {
+            table
+                .update(DeviceUpdate::V6PrefixAssigned {
+                    mac: opt_mac,
+                    duid,
+                    iaid,
+                    prefix,
+                    len,
+                    expires,
+                })
+                .await;
+        }
+    }
+
+    // 3. Fallback: DUID associado mesmo sem IAID de endereço se foi aprendido
+    if ias.na.is_empty()
+        && ias.pd.is_empty()
+        && let Some(duid) = learned_duid
+    {
         table
-            .update(DeviceUpdate::V6PrefixAssigned {
+            .update(DeviceUpdate::DuidAssociated {
                 mac: opt_mac,
                 duid,
-                iaid,
-                prefix,
-                len,
-                expires,
+                iaid: 0,
             })
             .await;
     }

@@ -51,13 +51,17 @@ pub enum DeviceChange {
     V4Expired,
 
     /// Um endereço IPv6 (`DHCPv6`) foi atribuído ou renovado.
-    V6Assigned { ip: Ipv6Addr },
+    V6Assigned { ip: Ipv6Addr, iaid: u32 },
 
     /// O lease IPv6 expirou e foi removido.
     V6Expired,
 
     /// Um prefixo IPv6 foi delegado via IA_PD.
-    V6PrefixAssigned { prefix: Ipv6Addr, len: u8 },
+    V6PrefixAssigned {
+        prefix: Ipv6Addr,
+        len: u8,
+        iaid: u32,
+    },
 
     /// Um endereço SLAAC foi observado via NDP.
     SlaacObserved { addr: Ipv6Addr },
@@ -291,13 +295,22 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
 fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
     match update {
         DeviceUpdate::V4LeaseGranted { ip, .. } => Some(DeviceChange::V4Assigned { ip: *ip }),
-        DeviceUpdate::V6LeaseGranted { ip, .. } => Some(DeviceChange::V6Assigned { ip: *ip }),
-        DeviceUpdate::V6PrefixAssigned { prefix, len, .. } => {
-            Some(DeviceChange::V6PrefixAssigned {
-                prefix: *prefix,
-                len: *len,
+        DeviceUpdate::V6LeaseGranted { ip, iaid, .. } => {
+            Some(DeviceChange::V6Assigned {
+                ip: *ip,
+                iaid: *iaid,
             })
         }
+        DeviceUpdate::V6PrefixAssigned {
+            prefix,
+            len,
+            iaid,
+            ..
+        } => Some(DeviceChange::V6PrefixAssigned {
+            prefix: *prefix,
+            len: *len,
+            iaid: *iaid,
+        }),
         DeviceUpdate::SlaacObserved { addr, .. } => {
             Some(DeviceChange::SlaacObserved { addr: *addr })
         }

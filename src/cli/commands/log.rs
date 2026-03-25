@@ -128,7 +128,7 @@ impl LogHandler {
                 format!("IPv4 assigned: {}", ip.to_string().bright_cyan())
             }
             DeviceChange::V4Expired => "IPv4 lease expired".dimmed().to_string(),
-            DeviceChange::V6Assigned { ip } => {
+            DeviceChange::V6Assigned { ip, .. } => {
                 format!("IPv6 assigned: {}", ip.to_string().bright_cyan())
             }
             DeviceChange::V6Expired => "IPv6 lease expired".dimmed().to_string(),
@@ -145,7 +145,7 @@ impl LogHandler {
                 None => "Static IPv6 suffix removed".dimmed().to_string(),
             },
             DeviceChange::DuidAssociated => "DUID associated".to_string(),
-            DeviceChange::V6PrefixAssigned { prefix, len } => {
+            DeviceChange::V6PrefixAssigned { prefix, len, .. } => {
                 format!(
                     "IA_PD assigned: {}/{}",
                     prefix.to_string().bright_cyan(),

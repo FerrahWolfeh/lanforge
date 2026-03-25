@@ -184,21 +184,21 @@ impl DeviceTable {
             DeviceUpdate::V6LeaseGranted {
                 mac,
                 duid,
-                iaid: _iaid,
+                iaid,
                 ip,
                 expires,
             } => {
                 if let Some(m) = mac {
                     self.duid_index.insert(duid.clone(), m);
                     let dev = self.get_or_insert(m);
-                    let new_lease = V6Lease { ip, expires };
+                    let new_lease = V6Lease { ip, iaid, expires };
 
                     let mut found = false;
                     for state in &mut dev.v6 {
                         if let IPv6State::Dynamic(old) = state
-                            && old.ip == ip
+                            && old.iaid == iaid
                         {
-                            if old.expires == expires {
+                            if old.ip == ip && old.expires == expires {
                                 return false;
                             }
                             *old = new_lease.clone();
@@ -215,7 +215,7 @@ impl DeviceTable {
                     true
                 } else {
                     debug!("[state] V6 lease órfão → {}", ip);
-                    self.orphaned_v6.insert(ip, (duid, _iaid, expires));
+                    self.orphaned_v6.insert(ip, (duid, iaid, expires));
                     false
                 }
             }
@@ -223,7 +223,7 @@ impl DeviceTable {
             DeviceUpdate::V6PrefixAssigned {
                 mac,
                 duid,
-                iaid: _,
+                iaid,
                 prefix,
                 len,
                 expires,
@@ -231,18 +231,31 @@ impl DeviceTable {
                 if let Some(m) = mac {
                     self.duid_index.insert(duid.clone(), m);
                     let dev = self.get_or_insert(m);
-                    let changed = dev.duid.as_ref() != Some(&duid)
-                        || dev.v6_prefix.as_ref().is_none_or(|old| {
-                            old.prefix != prefix || old.len != len || old.expires != expires
-                        });
-                    dev.duid = Some(duid);
-                    dev.v6_prefix = Some(V6PrefixLease {
+                    let new_lease = V6PrefixLease {
                         prefix,
                         len,
+                        iaid,
                         expires,
-                    });
+                    };
+
+                    let mut found = false;
+                    for old in &mut dev.v6_prefixes {
+                        if old.iaid == iaid {
+                            if old.prefix == prefix && old.len == len && old.expires == expires {
+                                return false;
+                            }
+                            *old = new_lease.clone();
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if !found {
+                        dev.v6_prefixes.push(new_lease);
+                    }
+                    dev.duid = Some(duid);
                     dev.last_seen = SystemTime::now();
-                    changed
+                    true
                 } else {
                     false
                 }
@@ -267,11 +280,11 @@ impl DeviceTable {
 
             DeviceUpdate::NdpSeen { mac, ip } => {
                 self.ndp_cache.insert(ip, (mac, SystemTime::now()));
-                if let Some((duid, _iaid, expires)) = self.orphaned_v6.remove(&ip) {
+                if let Some((duid, iaid, expires)) = self.orphaned_v6.remove(&ip) {
                     self.apply_update(DeviceUpdate::V6LeaseGranted {
                         mac: Some(mac),
                         duid,
-                        iaid: _iaid,
+                        iaid,
                         ip,
                         expires,
                     });
@@ -305,18 +318,42 @@ impl DeviceTable {
                 true
             }
 
-            DeviceUpdate::DuidAssociated { mac, duid, iaid: _ } => {
+            DeviceUpdate::DuidAssociated { mac, duid, iaid } => {
+                let mut changed = false;
                 if let Some(m) = mac {
                     self.duid_index.insert(duid.clone(), m);
                     let dev = self.get_or_insert(m);
-                    if dev.duid.as_ref() == Some(&duid) {
-                        return false;
+                    if dev.duid.as_ref() != Some(&duid) {
+                        dev.duid = Some(duid.clone());
+                        changed = true;
                     }
-                    dev.duid = Some(duid);
-                    true
-                } else {
-                    false
+
+                    // Resolve órfãos que estavam esperando por este DUID+IAID
+                    let mut resolved = Vec::new();
+                    for (&ip, (o_duid, o_iaid, _)) in &self.orphaned_v6 {
+                        if *o_duid == duid && *o_iaid == iaid {
+                            resolved.push(ip);
+                        }
+                    }
+
+                    for ip in resolved {
+                        if let Some((duid, iaid, expires)) = self.orphaned_v6.remove(&ip) {
+                            debug!(
+                                "[state] Resolvendo órfão via DuidAssociated: {} -> {}",
+                                ip, m
+                            );
+                            self.apply_update(DeviceUpdate::V6LeaseGranted {
+                                mac: Some(m),
+                                duid,
+                                iaid,
+                                ip,
+                                expires,
+                            });
+                            changed = true;
+                        }
+                    }
                 }
+                changed
             }
 
             DeviceUpdate::CliHostUpdated {
@@ -620,17 +657,16 @@ impl DeviceTable {
                     changed = true;
                 }
 
-                if let Some(v6_prefix) = &dev.v6_prefix
-                    && v6_prefix.expires < now
-                {
-                    dev.v6_prefix = None;
+                let initial_prefixes_len = dev.v6_prefixes.len();
+                dev.v6_prefixes.retain(|p| p.expires > now);
+                if dev.v6_prefixes.len() != initial_prefixes_len {
                     changed = true;
                 }
 
                 if !dev.is_static()
                     && matches!(dev.v4, IPv4State::None)
                     && dev.v6.is_empty()
-                    && dev.v6_prefix.is_none()
+                    && dev.v6_prefixes.is_empty()
                     && dev.last_seen.elapsed().unwrap_or(std::time::Duration::ZERO) > max_age
                 {
                     remove_device = true;
@@ -670,7 +706,7 @@ impl DeviceTable {
             duid: None,
             v4: IPv4State::None,
             v6: Vec::new(),
-            v6_prefix: None,
+            v6_prefixes: Vec::new(),
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
         })
@@ -946,6 +982,7 @@ mod tests {
         dev.v6.push(IPv6State::Dynamic(V6Lease {
             ip: "fd00::1".parse().unwrap(),
             expires: future,
+            iaid: 1,
         }));
 
         assert!(table.expire_stale());
@@ -1072,6 +1109,141 @@ mod tests {
             !dev.v6
                 .iter()
                 .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip))
+        );
+    }
+
+    #[test]
+    fn test_multiple_iaids_and_prefixes() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        let duid = Duid::new(vec![1, 2, 3]);
+        let now = SystemTime::now();
+        let future = now + std::time::Duration::from_secs(3600);
+
+        // 1. Atribui primeiro IP (IAID 10)
+        table.apply_update(DeviceUpdate::V6LeaseGranted {
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid: 10,
+            ip: "fd00::10".parse().unwrap(),
+            expires: future,
+        });
+
+        // 2. Atribui segundo IP (IAID 20)
+        table.apply_update(DeviceUpdate::V6LeaseGranted {
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid: 20,
+            ip: "fd00::20".parse().unwrap(),
+            expires: future,
+        });
+
+        // 3. Atribui primeiro prefixo (IAID 100)
+        table.apply_update(DeviceUpdate::V6PrefixAssigned {
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid: 100,
+            prefix: "2001:db8:1::".parse().unwrap(),
+            len: 64,
+            expires: future,
+        });
+
+        // 4. Atribui segundo prefixo (IAID 200)
+        table.apply_update(DeviceUpdate::V6PrefixAssigned {
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid: 200,
+            prefix: "2001:db8:2::".parse().unwrap(),
+            len: 64,
+            expires: future,
+        });
+
+        let dev = table.devices.get(&mac).unwrap();
+        assert_eq!(dev.v6.len(), 2, "Deve ter 2 endereços dinâmicos");
+        assert_eq!(dev.v6_prefixes.len(), 2, "Deve ter 2 prefixos");
+
+        // 5. Atualiza um deles (mesmo IAID, novo IP) -> Deve substituir
+        table.apply_update(DeviceUpdate::V6LeaseGranted {
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid: 10,
+            ip: "fd00::11".parse().unwrap(),
+            expires: future,
+        });
+
+        let dev = table.devices.get(&mac).unwrap();
+        assert_eq!(
+            dev.v6.len(),
+            2,
+            "Ainda deve ter 2 endereços (um foi substituído)"
+        );
+        assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == "fd00::11".parse::<Ipv6Addr>().unwrap())));
+        assert!(!dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == "fd00::10".parse::<Ipv6Addr>().unwrap())));
+
+        // 6. Expiração parcial
+        let past = now - std::time::Duration::from_secs(10);
+        table.apply_update(DeviceUpdate::V6PrefixAssigned {
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid: 100,
+            prefix: "2001:db8:1::".parse().unwrap(),
+            len: 64,
+            expires: past,
+        });
+
+        assert!(table.expire_stale());
+        let dev = table.devices.get(&mac).unwrap();
+        assert_eq!(
+            dev.v6_prefixes.len(),
+            1,
+            "Somente o prefixo IAID 200 deve restar"
+        );
+        assert_eq!(dev.v6_prefixes[0].iaid, 200);
+    }
+
+    #[test]
+    fn apply_update_duid_associated_resolves_orphan() {
+        let mut table = DeviceTable::new();
+        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+        let duid = Duid::generate_ll_from_mac([1, 2, 3, 4, 5, 6]);
+        let iaid = 42;
+        let ip: Ipv6Addr = "fd00::dead:beef".parse().unwrap();
+        let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+
+        // 1. Recebe um lease sem MAC (órfão)
+        table.apply_update(DeviceUpdate::V6LeaseGranted {
+            mac: None,
+            duid: duid.clone(),
+            iaid,
+            ip,
+            expires,
+        });
+
+        assert!(table.orphaned_v6.contains_key(&ip));
+        assert!(!table.devices.contains_key(&mac));
+
+        // 2. Recebe associação DUID+IAID+MAC (ex: via Solicit que precedeu o Request, ou via DB)
+        let changed = table.apply_update(DeviceUpdate::DuidAssociated {
+            mac: Some(mac),
+            duid: duid.clone(),
+            iaid,
+        });
+
+        assert!(changed);
+        assert!(
+            !table.orphaned_v6.contains_key(&ip),
+            "Órfão deveria ter sido resolvido"
+        );
+
+        let dev = table
+            .devices
+            .get(&mac)
+            .expect("Device deve ter sido criado");
+        assert_eq!(dev.duid.as_ref(), Some(&duid));
+        assert!(
+            dev.v6
+                .iter()
+                .any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == ip && l.iaid == iaid))
         );
     }
 }
