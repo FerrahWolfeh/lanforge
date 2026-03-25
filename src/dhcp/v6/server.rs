@@ -148,7 +148,7 @@ impl Dhcpv6Server {
             }
         }
 
-        // 2. Se ainda sem MAC, tenta lookup no kernel (asíncrono — SEM LOCK)
+        // 2. Se ainda sem MAC, tenta lookup no kernel (síncrono — SEM LOCK)
         if mac.is_none() {
             debug!("Cache miss. Lookup síncrono no kernel para {peer}...");
             if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {

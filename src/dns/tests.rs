@@ -1,10 +1,20 @@
-use hickory_proto::op::{Edns, Query};
-use hickory_proto::rr::Name;
+use hickory_proto::op::{Edns, Message, Query, ResponseCode};
 use hickory_proto::rr::rdata::opt::EdnsOption;
+use hickory_proto::rr::{Name, RData, Record, RecordType};
+use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use std::collections::HashSet;
+use std::net::{IpAddr, Ipv6Addr};
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use super::*;
-use crate::bus::EventBus;
+use crate::bus::{EventBus, ManagedTable};
+use crate::dns::resolver::{resolve_local, resolve_ptr};
+use crate::dns::response::base_response;
+use crate::dns::server::handle_query;
+use crate::dns::upstream::UpstreamManager;
+use crate::dns::utils::{extract_local_hostname, parse_arpa};
 use crate::state::{Device, DeviceTable, MacAddr, Origin, V4Lease};
 use std::{net::Ipv4Addr, time::SystemTime};
 
@@ -349,4 +359,96 @@ fn test_edns0_is_preserved() {
         resp.extensions().is_some(),
         "A resposta deve refletir o bloco EDNS0 do cliente"
     );
+}
+
+#[tokio::test]
+async fn test_dns_cache_hit() {
+    let mut cfg = mock_config();
+    cfg.upstream = Some("1.2.3.4:53".parse().unwrap());
+
+    let mut query = Message::new();
+    let name = Name::from_str("example.com.").unwrap();
+    query.add_query(hickory_proto::op::Query::query(name, RecordType::A));
+    let query_bytes = query.to_bytes().unwrap();
+
+    let mgr = UpstreamManager::new(cfg.upstream.unwrap()).await.unwrap();
+
+    // Simular uma resposta no cache
+    let mut resp = Message::new();
+    resp.set_id(query.id());
+    resp.add_answer(Record::from_rdata(
+        query.queries()[0].name().clone(),
+        60,
+        RData::A(Ipv4Addr::new(9, 9, 9, 9).into()),
+    ));
+    let resp_bytes = resp.to_bytes().unwrap();
+
+    mgr.cache.insert(&query, &resp, resp_bytes.clone());
+
+    // A chamada ao forward deve retornar do cache sem tentar o upstream (que daria timeout)
+    let result = mgr
+        .forward(&query_bytes, cfg.upstream.unwrap())
+        .await
+        .unwrap();
+    let resp_msg = Message::from_bytes(&result).unwrap();
+
+    assert_eq!(
+        resp_msg.answers()[0].data().as_a().unwrap(),
+        &Ipv4Addr::new(9, 9, 9, 9).into()
+    );
+}
+
+#[tokio::test]
+async fn test_tcp_fallback_trigger() {
+    let mut cfg = mock_config();
+    let upstream_addr = "127.0.0.1:5353".parse().unwrap();
+    cfg.upstream = Some(upstream_addr);
+
+    let mgr = UpstreamManager::new(upstream_addr).await.unwrap();
+
+    let mut query = Message::new();
+    query.add_query(hickory_proto::op::Query::query(
+        Name::from_str("large.zone.").unwrap(),
+        RecordType::A,
+    ));
+    let query_bytes = query.to_bytes().unwrap();
+
+    // Spawn a task to call forward
+    let mgr_clone = Arc::new(mgr); // Clone Arc for the spawned task
+    let mgr_for_spawn = Arc::clone(&mgr_clone);
+    let handle =
+        tokio::spawn(async move { mgr_for_spawn.forward(&query_bytes, upstream_addr).await });
+
+    // Wait a bit for forward to insert into pending
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Injetar uma resposta truncada no canal de resposta UDP
+    let mut truncated_resp = Message::new();
+    truncated_resp.set_id(1); // O internal_id deve ser 1 na primeira query
+    truncated_resp.set_truncated(true);
+    let tr_bytes = truncated_resp.to_bytes().unwrap();
+
+    let tx = {
+        let mut pending = mgr_clone.pending.lock().unwrap(); // Use mgr_clone here
+        pending
+            .remove(&1)
+            .expect("Deveria haver uma query pendente com ID 1")
+    };
+
+    let _ = tx.send(tr_bytes);
+
+    // O forward deve perceber o TC e tentar o TCP, o que deve falhar com Connect Error
+    let result = handle.await.unwrap();
+
+    match result {
+        Err(e) => {
+            let err_str = format!("{e:#}").to_lowercase();
+            // Deve ter tentado TCP e falhado (porque não há servidor)
+            assert!(
+                err_str.contains("tcp") || err_str.contains("connect"),
+                "Deveria ter tentado TCP: {err_str}"
+            );
+        }
+        Ok(_) => panic!("Deveria ter falhado ao tentar TCP num servidor inexistente"),
+    }
 }
