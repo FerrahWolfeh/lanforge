@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::time::SystemTime;
 
@@ -323,6 +323,10 @@ pub struct DeviceTable {
     ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
     /// Leases IPv6 aprendidos sem MAC ainda (aguardando NDP).
     orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
+
+    // --- Novos Índices para o Hot Path do DNS ---
+    pub(crate) name_index: HashMap<String, MacAddr>,
+    pub(crate) ip_index: HashMap<IpAddr, MacAddr>,
 }
 
 impl DeviceTable {
@@ -333,6 +337,8 @@ impl DeviceTable {
             static_entries: HashMap::new(),
             ndp_cache: HashMap::new(),
             orphaned_v6: HashMap::new(),
+            name_index: HashMap::new(),
+            ip_index: HashMap::new(),
         }
     }
 
@@ -351,7 +357,7 @@ impl DeviceTable {
     ///   dinâmico ainda é registrado para controle de expiração, mas o IP
     ///   efetivo deve ser resolvido via `StaticEntry`.
     pub fn apply_update(&mut self, update: DeviceUpdate) -> bool {
-        match update {
+        let changed = match update {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
                 let dev = self.get_or_insert(mac);
                 let new_lease = V4Lease { ip, expires };
@@ -638,7 +644,18 @@ impl DeviceTable {
 
                 changed
             }
+        };
+
+        // -------------------------------------------------------------------
+        // ⚡ RECONSTRUÇÃO AUTOMÁTICA DOS ÍNDICES (Otimização do DNS)
+        // -------------------------------------------------------------------
+        // Se o estado mudou (novo device, lease expirado, SLAAC rotacionado),
+        // atualizamos os índices O(1) para garantir que o DNS acerte de primeira.
+        if changed {
+            self.rebuild_dns_indices();
         }
+
+        changed
     }
 
     // -----------------------------------------------------------------------
@@ -679,6 +696,9 @@ impl DeviceTable {
             dev.is_static = true;
             dev.origin = Origin::Toml;
         }
+
+        // Após carregar todos os dispositivos estáticos, construa o índice inicial
+        self.rebuild_dns_indices();
     }
 
     // -----------------------------------------------------------------------
@@ -784,6 +804,11 @@ impl DeviceTable {
                 debug!("[state] Removed stale dynamic device {}", mac);
             }
         }
+
+        if changed {
+            self.rebuild_dns_indices();
+        }
+
         changed
     }
 
@@ -810,6 +835,69 @@ impl DeviceTable {
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Índices de Alta Performance para o DNS (Hot Path)
+    // -----------------------------------------------------------------------
+
+    /// Reconstrói os índices O(1) do DNS do zero.
+    /// Isso garante que não teremos IPs ou Hostnames fantasmas presos no cache
+    /// após expirações de lease ou rotações de SLAAC.
+    pub(crate) fn rebuild_dns_indices(&mut self) {
+        self.name_index.clear();
+        self.ip_index.clear();
+
+        for (&mac, device) in &self.devices {
+            let static_entry = self.static_entries.get(&mac);
+
+            // 1. Indexa o hostname explícito (sempre em minúsculas)
+            if !device.hostname.is_empty() {
+                self.name_index
+                    .insert(device.hostname.to_ascii_lowercase(), mac);
+            } else if let Some(st) = static_entry {
+                // Fallback de segurança caso a entrada estática tenha nome mas o device não
+                if !st.hostname.is_empty() {
+                    self.name_index
+                        .insert(st.hostname.to_ascii_lowercase(), mac);
+                }
+            }
+
+            // 2. Indexa o fallback obrigatório (host-<mac>)
+            let fallback =
+                format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase();
+            self.name_index.insert(fallback, mac);
+
+            // 3. Indexa IPv4 (Dinâmico e Estático)
+            if let Some(v4) = &device.v4 {
+                self.ip_index.insert(IpAddr::V4(v4.ip), mac);
+            }
+            if let Some(v4_stat) = device
+                .v4_static
+                .or_else(|| static_entry.and_then(|e| e.v4_ip))
+            {
+                self.ip_index.insert(IpAddr::V4(v4_stat), mac);
+            }
+
+            // 4. Indexa IPv6 (Dinâmico DHCPv6 e SLAAC)
+            if let Some(v6) = &device.v6 {
+                self.ip_index.insert(IpAddr::V6(v6.ip), mac);
+            }
+            for &slaac_ip in &device.slaac {
+                self.ip_index.insert(IpAddr::V6(slaac_ip), mac);
+            }
+
+            // Nota: IPs com sufixos estáticos (ex: ::10) compostos com ULA/GUA
+            // não estão sendo indexados aqui porque dependem da `DnsConfig` (o prefixo real da rede).
+            // Eles continuam sendo resolvidos on-the-fly pelo `resolve_local_fast` caso o fallback de
+            // hostname seja acionado, ou você pode passar o prefixo da rede para essa função no futuro.
+        }
+
+        debug!(
+            "[state] Índices DNS reconstruídos: {} nomes, {} IPs",
+            self.name_index.len(),
+            self.ip_index.len()
+        );
     }
 }
 

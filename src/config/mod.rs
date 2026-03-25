@@ -272,6 +272,12 @@ impl Config {
             }
         });
 
+        let search_domain = self.dns_toml.search_domain.clone();
+        let search_labels: Vec<Vec<u8>> = search_domain
+            .split('.')
+            .map(|s| s.as_bytes().to_vec())
+            .collect();
+
         crate::dns::DnsConfig {
             enabled: self.dns_enabled,
             listen: parse_addr(&self.dns_toml.listen, "0.0.0.0:5300"),
@@ -283,6 +289,7 @@ impl Config {
             search_domain: self.dns_toml.search_domain.clone(),
             ula_prefix,
             ttl: self.dns_toml.ttl,
+            search_labels,
         }
     }
 }

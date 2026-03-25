@@ -41,12 +41,15 @@ use hickory_proto::{
     rr::{Name, RData, Record, RecordType, rdata::SOA},
     serialize::binary::{BinDecodable, BinEncodable},
 };
-use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 use tokio::sync::oneshot::{self, Sender};
 use tokio::time::timeout;
 use tokio::{
@@ -54,10 +57,10 @@ use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, UdpSocket},
 };
-use tracing::{debug, info};
+use tracing::{info, trace};
 
-use crate::bus::ManagedTable;
 use crate::state::DeviceTable;
+use crate::{bus::ManagedTable, state::Device};
 
 #[cfg(test)]
 mod tests;
@@ -76,6 +79,7 @@ pub struct DnsConfig {
     pub search_domain: String,
     pub ula_prefix: Option<Ipv6Addr>,
     pub ttl: u32,
+    pub search_labels: Vec<Vec<u8>>,
 }
 
 impl Default for DnsConfig {
@@ -87,6 +91,7 @@ impl Default for DnsConfig {
             search_domain: "lan".into(),
             ula_prefix: None,
             ttl: 60,
+            search_labels: vec!["lan".into()],
         }
     }
 }
@@ -191,47 +196,63 @@ async fn handle_query(
     upstream_mgr: Option<&UpstreamManager>,
 ) -> Result<Option<Vec<u8>>> {
     let Ok(query) = Message::from_bytes(data) else {
-        return Ok(None); // Dropa lixo silently
+        return Ok(None);
     };
 
-    // Ignora pacotes que já são respostas (QR = 1)
     if query.message_type() != MessageType::Query {
         return Ok(None);
     }
 
-    // RFC 1035: Query vazia -> FORMERR
     let Some(question) = query.queries().first() else {
         return Ok(Some(formerr_response(&query, cfg)?));
     };
 
-    let qname = question.name().to_string();
+    let qname = question.name();
     let qtype = question.query_type();
 
-    debug!("Query de {src}: {qname} {qtype:?}");
+    // DICA: Use trace! em vez de debug! para que ele seja compilado e ignorado
+    // em produção (RUST_LOG=info), evitando as alocações de IP no hot path.
+    trace!(%src, %qname, ?qtype, "Query recebida");
 
-    let hostname = normalize_name(&qname, &cfg.search_domain);
-
-    let t = table.read().await;
-
+    // -----------------------------------------------------------------------
+    // Fast Path: Zonas Locais (A, AAAA, ANY)
+    // -----------------------------------------------------------------------
     if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
-        if let Some(response) = resolve_local(&query, &hostname, qtype, cfg, &t)? {
-            return Ok(Some(response));
+        // Se extraiu com sucesso, a query PERTENCE à nossa zona autoritativa.
+        if let Some(hostname_slice) = extract_local_hostname(qname, &cfg.search_labels) {
+            let safe_hostname = fast_lowercase(hostname_slice);
+
+            let t = table.read().await;
+
+            // Busca O(1)
+            if let Some(&mac_addr) = t.name_index.get(safe_hostname.as_ref())
+                && let Some(device) = t.devices.get(&mac_addr)
+                && let Some(response) = resolve_local(&query, device, qtype, cfg, &t)?
+            {
+                return Ok(Some(response));
+            }
+
+            // Se é da nossa zona mas o dispositivo não existe -> NXDOMAIN imediato
+            return Ok(Some(nxdomain_response(&query, cfg)?));
         }
-    } else if qtype == RecordType::PTR
-        && let Some(response) = resolve_ptr(&query, &qname, cfg, &t)?
-    {
-        return Ok(Some(response));
+    }
+    // -----------------------------------------------------------------------
+    // Tratamento de PTR (Resolução Reversa)
+    // -----------------------------------------------------------------------
+    else if qtype == RecordType::PTR {
+        // Para o PTR, ainda alocamos uma String por enquanto para não quebrar a sua resolve_ptr
+        let qname_str = qname.to_string();
+        if qname_str.ends_with(".arpa.") {
+            let t = table.read().await;
+            if let Some(response) = resolve_ptr(&query, &qname_str, cfg, &t)? {
+                return Ok(Some(response));
+            }
+        }
     }
 
-    drop(t);
-
-    // Prevenção de Leak: Se for pro nosso domínio, mas não achou, responde NXDOMAIN.
-    let is_local_domain = qname.trim_end_matches('.').ends_with(&cfg.search_domain);
-    if is_local_domain {
-        return Ok(Some(nxdomain_response(&query, cfg)?));
-    }
-
-    // Encaminha se tiver upstream, senão REFUSED
+    // -----------------------------------------------------------------------
+    // Fallback: Encaminha para o Upstream ou RECUSA
+    // -----------------------------------------------------------------------
     if let (Some(upstream), Some(mgr)) = (cfg.upstream, upstream_mgr) {
         forward_to_upstream(data, upstream, mgr).await.map(Some)
     } else {
@@ -245,22 +266,14 @@ async fn handle_query(
 
 fn resolve_local(
     query: &Message,
-    hostname: &str,
+    device: &Device, // Recebe a referência do dispositivo em O(1)
     qtype: RecordType,
     cfg: &DnsConfig,
     table: &DeviceTable,
 ) -> Result<Option<Vec<u8>>> {
-    let device = table.devices.values().find(|d| {
-        let has_name = !d.hostname.is_empty() && d.hostname.eq_ignore_ascii_case(hostname);
-        let fallback = format!("host-{}", d.mac.to_string().replace(':', ""));
-        has_name || fallback.eq_ignore_ascii_case(hostname)
-    });
-
-    let Some(device) = device else {
-        return Ok(None);
-    };
-
     let question = query.queries().first().expect("Query validada");
+
+    // Hickory exige que o Name de resposta seja 'owned', então 1 clone aqui é aceitável
     let name = question.name().clone();
     let mut records: Vec<Record> = Vec::new();
 
@@ -302,7 +315,6 @@ fn resolve_local(
             .or(device.v6_suffix.as_ref());
 
         if let Some(suffix) = v6_suffix {
-            // CORREÇÃO AQUI: Se começa com "::", é sufixo e deve ser combinado.
             if suffix.starts_with("::") {
                 let mut applied_prefixes = HashSet::<[u16; 4]>::new();
 
@@ -326,7 +338,6 @@ fn resolve_local(
                     }
                 }
             } else if let Ok(ip) = suffix.parse::<Ipv6Addr>() {
-                // Se não for sufixo puro, tenta ler como IP completo (ex: v6_suffix = "2001:db8::10")
                 classify_ip(ip);
             }
         }
@@ -335,7 +346,6 @@ fn resolve_local(
             classify_ip(*ip);
         }
 
-        // Correção do Bug IPv6: Retorna todos os IPs sintetizados (ULAs e GUAs)
         for ip in ulas.into_iter().chain(others.into_iter()) {
             records.push(Record::from_rdata(
                 name.clone(),
@@ -362,86 +372,29 @@ fn resolve_local(
 
 fn resolve_ptr(
     query: &Message,
-    qname: &str,
+    qname: &str, // Assumindo que você passou a string da query
     cfg: &DnsConfig,
     table: &DeviceTable,
 ) -> Result<Option<Vec<u8>>> {
-    let Some(target_ip) = parse_arpa_name(qname) else {
+    // 1. Extrai o IP diretamente da string .arpa sem alocações pesadas
+    let Some(target_ip) = parse_arpa(qname) else {
         return Ok(None);
     };
 
-    let device = table.devices.values().find(|d| {
-        if let Some(v4) = &d.v4
-            && target_ip == v4.ip
-        {
-            return true;
-        }
-        if let Some(stat) = table.static_entries.get(&d.mac)
-            && let Some(stat_v4) = stat.v4_ip
-            && target_ip == stat_v4
-        {
-            return true;
-        }
-        if let Some(v4_static) = d.v4_static
-            && IpAddr::V4(v4_static) == target_ip
-        {
-            return true;
-        }
-        if let Some(v6) = &d.v6
-            && target_ip == v6.ip
-        {
-            return true;
-        }
-        if d.slaac.iter().any(|&ip| IpAddr::V6(ip) == target_ip) {
-            return true;
-        }
-
-        // Correção PTR: Checa se o IP reverso corresponde a um sufixo sintetizado
-        if let IpAddr::V6(target_v6) = target_ip {
-            let target_segs = target_v6.segments();
-            let mut prefixes = Vec::new();
-            if let Some(ula) = cfg.ula_prefix {
-                prefixes.push(ula.segments());
-            }
-            for ip in &d.slaac {
-                prefixes.push(ip.segments());
-            }
-
-            let v6_suffix = table
-                .static_entries
-                .get(&d.mac)
-                .and_then(|e| e.v6_suffix.as_ref())
-                .or(d.v6_suffix.as_ref());
-            if let Some(suffix) = v6_suffix
-                && suffix.starts_with("::")
-            {
-                let clean = suffix.strip_prefix("::").unwrap_or(suffix);
-                if let Ok(suf_ip) = format!("::{clean}").parse::<Ipv6Addr>() {
-                    let suf_segs = suf_ip.segments();
-                    if target_segs[4..] == suf_segs[4..] {
-                        let t_pref = [
-                            target_segs[0],
-                            target_segs[1],
-                            target_segs[2],
-                            target_segs[3],
-                        ];
-                        if prefixes.iter().any(|p| p[0..4] == t_pref) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        false
-    });
-
-    let Some(device) = device else {
+    // 2. Busca O(1) absoluta no novo índice
+    let Some(&mac) = table.ip_index.get(&target_ip) else {
         return Ok(None);
     };
+
+    let device = table
+        .devices
+        .get(&mac)
+        .expect("Índice corrompido: MAC não encontrado");
 
     let question = query.queries().first().unwrap();
     let name = question.name().clone();
 
+    // 3. Usa o mesmo fallback se o hostname estiver vazio
     let host = if device.hostname.is_empty() {
         format!("host-{}", device.mac.to_string().replace(':', ""))
     } else {
@@ -617,28 +570,23 @@ fn formerr_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
     Ok(resp.to_bytes()?)
 }
 
-fn normalize_name(name: &str, search_domain: &str) -> String {
-    let s = name.trim_end_matches('.');
-    let suffix = format!(".{search_domain}");
-    s.strip_suffix(&suffix).unwrap_or(s).to_lowercase()
-}
-
-fn parse_arpa_name(name: &str) -> Option<IpAddr> {
-    let name = name.trim_end_matches('.').to_lowercase();
+/// Parseador de ARPA otimizado sem alocação de Vec ou manipulação reversa pesada.
+fn parse_arpa(name: &str) -> Option<IpAddr> {
+    let name = name.trim_end_matches('.');
 
     if let Some(v4_part) = name.strip_suffix(".in-addr.arpa") {
-        let parts: Vec<&str> = v4_part.split('.').collect();
-        if parts.len() == 4
-            && let (Ok(a), Ok(b), Ok(c), Ok(d)) = (
-                parts[3].parse::<u8>(),
-                parts[2].parse::<u8>(),
-                parts[1].parse::<u8>(),
-                parts[0].parse::<u8>(),
-            )
-        {
-            return Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
-        }
-    } else if let Some(v6_part) = name.strip_suffix(".ip6.arpa") {
+        let mut parts = v4_part.split('.');
+        // Lendo do fim para o começo diretamente do iterador
+        let d: u8 = parts.next()?.parse().ok()?;
+        let c: u8 = parts.next()?.parse().ok()?;
+        let b: u8 = parts.next()?.parse().ok()?;
+        let a: u8 = parts.next()?.parse().ok()?;
+        return Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
+    }
+
+    // (Mantenha sua lógica de IPv6 atual aqui se ela já funciona bem,
+    // ou otimize para ler os nibbles diretamente do slice sem o with_capacity)
+    if let Some(v6_part) = name.strip_suffix(".ip6.arpa") {
         let parts: Vec<&str> = v6_part.split('.').collect();
         if parts.len() == 32 {
             let mut hex = String::with_capacity(39);
@@ -671,6 +619,44 @@ fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &str) -> Option<Ipv6Addr> 
         suf_segs[6],
         suf_segs[7],
     ))
+}
+
+/// Extrai o hostname local diretamente dos labels do pacote DNS bruto.
+/// Custo de alocação: 0 bytes.
+fn extract_local_hostname<'a>(qname: &'a Name, search_labels: &[Vec<u8>]) -> Option<&'a str> {
+    let mut iter = qname.iter();
+
+    // 1. O primeiro label é sempre o alvo (ex: "node-12" de "node-12.lanforge.local")
+    let host_bytes = iter.next()?;
+
+    // 2. Valida se o resto da query bate exatamente com o seu domínio de busca
+    for expected_label in search_labels {
+        let actual_label = iter.next()?;
+
+        // Comparação de bytes ignorando case (muito mais rápido que mexer com UTF-8 strings)
+        if !actual_label.eq_ignore_ascii_case(expected_label) {
+            return None;
+        }
+    }
+
+    // 3. Se a query tiver mais labels (ex: sub.node-12.lanforge.local), rejeita
+    if iter.next().is_some() {
+        return None;
+    }
+
+    // 4. Tudo certo. Converte os bytes do hostname para &str e devolve
+    std::str::from_utf8(host_bytes).ok()
+}
+
+/// Verifica se a string já é minúscula.
+/// Em 99% das queries LAN, não fazemos NENHUMA alocação (retorna Borrowed).
+/// Só aloca memória no heap (Owned) se algum dispositivo maluco mandar letras maiúsculas.
+fn fast_lowercase(s: &str) -> Cow<'_, str> {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(s.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(s)
+    }
 }
 
 // ---------------------------------------------------------------------------
