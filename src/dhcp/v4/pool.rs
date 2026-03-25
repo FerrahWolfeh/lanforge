@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::time::SystemTime;
 
+use rand::seq::SliceRandom;
+
 use crate::device::MacAddr;
 
 /// Representação de uma alocação ativa.
@@ -40,13 +42,21 @@ impl IpPool {
         let size = (u64::from(e) - u64::from(s) + 1) as usize;
 
         let mut available_ips = Vec::with_capacity(size);
-        let mut ip_to_index = HashMap::with_capacity(size);
 
         for i in 0..size {
             let ip = Ipv4Addr::from(s + i as u32);
             available_ips.push(ip);
-            ip_to_index.insert(ip, i);
         }
+
+        // Shuffle so allocation order is random (Fisher-Yates)
+        available_ips.shuffle(&mut rand::rng());
+
+        // Build index AFTER shuffle so positions match
+        let ip_to_index: HashMap<Ipv4Addr, usize> = available_ips
+            .iter()
+            .enumerate()
+            .map(|(i, &ip)| (ip, i))
+            .collect();
 
         Self {
             start: s,

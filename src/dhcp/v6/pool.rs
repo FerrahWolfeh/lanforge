@@ -25,8 +25,6 @@ pub struct Ipv6Pool {
     blacklisted: HashMap<Ipv6Addr, SystemTime>,
     /// Prefixos delegados (IA_PD)
     prefix_active: HashMap<LeaseKey, (Ipv6Addr, u8)>,
-    /// Cursor para alocação sequencial (O(1) na maioria dos casos)
-    cursor: Option<u128>,
 }
 
 impl Ipv6Pool {
@@ -46,7 +44,6 @@ impl Ipv6Pool {
             reserved: HashMap::new(),
             blacklisted: HashMap::new(),
             prefix_active: HashMap::new(),
-            cursor: None,
         }
     }
 
@@ -134,24 +131,14 @@ impl Ipv6Pool {
                 }
             }
 
-            // Alocação sequencial com cursor para evitar O(N)
-            let start_search = self.cursor.unwrap_or(start_int);
+            // Random-offset allocation with linear probing (wrap-around)
+            let range_size = end_int - start_int + 1;
+            let offset = rand::random::<u128>() % range_size;
 
-            // 1ª tentativa: do cursor até o fim
-            for raw in start_search..=end_int {
+            for i in 0..range_size {
+                let raw = start_int + (offset + i) % range_size;
                 let ip = Ipv6Addr::from(raw.to_be_bytes());
                 if self.is_available(&ip) {
-                    self.cursor = Some(raw + 1);
-                    self.mark_used(ip, lease_key);
-                    return Some(ip);
-                }
-            }
-
-            // 2ª tentativa: wrap-around (do início até o cursor)
-            for raw in start_int..start_search {
-                let ip = Ipv6Addr::from(raw.to_be_bytes());
-                if self.is_available(&ip) {
-                    self.cursor = Some(raw + 1);
                     self.mark_used(ip, lease_key);
                     return Some(ip);
                 }
@@ -365,29 +352,28 @@ mod tests {
     }
 
     #[test]
-    fn test_dynamic_allocation_sequential() {
-        let start = "fd00::100".parse().unwrap();
-        let end = "fd00::102".parse().unwrap();
+    fn test_dynamic_allocation_ranged() {
+        let start: Ipv6Addr = "fd00::100".parse().unwrap();
+        let end: Ipv6Addr = "fd00::102".parse().unwrap();
         let mut pool = Ipv6Pool::new(Some(start), Some(end), None, 64);
 
-        assert_eq!(
-            pool.allocate(&duid(1), 1, Some(mac(1)), None)
-                .unwrap()
-                .to_string(),
-            "fd00::100"
-        );
-        assert_eq!(
-            pool.allocate(&duid(2), 1, Some(mac(2)), None)
-                .unwrap()
-                .to_string(),
-            "fd00::101"
-        );
-        assert_eq!(
-            pool.allocate(&duid(3), 1, Some(mac(3)), None)
-                .unwrap()
-                .to_string(),
-            "fd00::102"
-        );
+        let start_int = u128::from_be_bytes(start.octets());
+        let end_int = u128::from_be_bytes(end.octets());
+
+        let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None).unwrap();
+        let ip2 = pool.allocate(&duid(2), 1, Some(mac(2)), None).unwrap();
+        let ip3 = pool.allocate(&duid(3), 1, Some(mac(3)), None).unwrap();
+
+        // All IPs must be within range
+        for ip in [ip1, ip2, ip3] {
+            let raw = u128::from_be_bytes(ip.octets());
+            assert!(raw >= start_int && raw <= end_int, "IP {ip} out of range");
+        }
+
+        // All IPs must be unique
+        assert_ne!(ip1, ip2);
+        assert_ne!(ip2, ip3);
+        assert_ne!(ip1, ip3);
 
         // Pool esgotado
         assert!(pool.allocate(&duid(4), 1, Some(mac(4)), None).is_none());
@@ -412,10 +398,13 @@ mod tests {
     }
 
     #[test]
-    fn test_requested_ip_sequential() {
-        let start = "fd00::100".parse().unwrap();
-        let end = "fd00::200".parse().unwrap();
+    fn test_requested_ip_ranged() {
+        let start: Ipv6Addr = "fd00::100".parse().unwrap();
+        let end: Ipv6Addr = "fd00::200".parse().unwrap();
         let mut pool = Ipv6Pool::new(Some(start), Some(end), None, 64);
+
+        let start_int = u128::from_be_bytes(start.octets());
+        let end_int = u128::from_be_bytes(end.octets());
 
         // Pedido válido dentro do range
         let requested = "fd00::150".parse().unwrap();
@@ -424,12 +413,14 @@ mod tests {
             .unwrap();
         assert_eq!(ip, requested);
 
-        // Pedido fora do range ignora o request e pega o primeiro livre
+        // Pedido fora do range: ignora o request e aloca qualquer IP livre do range
         let out_of_bounds = "fd00::250".parse().unwrap();
         let ip2 = pool
             .allocate(&duid(2), 1, Some(mac(2)), Some(out_of_bounds))
             .unwrap();
-        assert_eq!(ip2.to_string(), "fd00::100");
+        let raw = u128::from_be_bytes(ip2.octets());
+        assert!(raw >= start_int && raw <= end_int, "Fallback IP {ip2} out of range");
+        assert_ne!(ip2, requested, "Fallback must not collide with already-assigned IP");
     }
 
     #[test]
@@ -510,24 +501,35 @@ mod tests {
         assert_eq!(p.lookup_by_mac_legacy(mac), None);
     }
     #[test]
-    fn test_cursor_allocation() {
-        let start = "fd00::100".parse().unwrap();
-        let end = "fd00::102".parse().unwrap();
+    fn test_random_allocation_fills_and_releases() {
+        let start: Ipv6Addr = "fd00::100".parse().unwrap();
+        let end: Ipv6Addr = "fd00::102".parse().unwrap();
         let mut pool = Ipv6Pool::new(Some(start), Some(end), None, 64);
 
-        // Aloca 1 e 2
-        pool.allocate(&duid(1), 1, None, None).unwrap();
-        pool.allocate(&duid(2), 1, None, None).unwrap();
+        let start_int = u128::from_be_bytes(start.octets());
+        let end_int = u128::from_be_bytes(end.octets());
 
-        // Libera o 100
-        pool.release(&"fd00::100".parse().unwrap());
-
-        // Aloca o 3. Como o cursor está em 102, ele deve pegar o 102 (e não o 100 que foi liberado lá atrás)
+        // Fill the pool (3 IPs)
+        let ip1 = pool.allocate(&duid(1), 1, None, None).unwrap();
+        let ip2 = pool.allocate(&duid(2), 1, None, None).unwrap();
         let ip3 = pool.allocate(&duid(3), 1, None, None).unwrap();
-        assert_eq!(ip3.to_string(), "fd00::102");
 
-        // Agora o 102 era o último IP do range. O próximo deve fazer wrap-around pro 100.
+        // All must be unique and in range
+        let ips = [ip1, ip2, ip3];
+        for ip in &ips {
+            let raw = u128::from_be_bytes(ip.octets());
+            assert!(raw >= start_int && raw <= end_int);
+        }
+        assert_ne!(ip1, ip2);
+        assert_ne!(ip2, ip3);
+        assert_ne!(ip1, ip3);
+
+        // Pool exhausted
+        assert!(pool.allocate(&duid(4), 1, None, None).is_none());
+
+        // Release one and allocate again — the freed IP should be reused
+        pool.release(&ip1);
         let ip4 = pool.allocate(&duid(4), 1, None, None).unwrap();
-        assert_eq!(ip4.to_string(), "fd00::100");
+        assert_eq!(ip4, ip1, "Released IP should be reusable");
     }
 }
