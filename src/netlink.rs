@@ -32,7 +32,7 @@ use rtnetlink::{Handle, IpVersion};
 use std::net::Ipv6Addr;
 
 use crate::device::MacAddr;
-use crate::state::DeviceUpdate;
+use crate::state::update::DeviceUpdate;
 
 // ---------------------------------------------------------------------------
 // NeighborEvent — struct tipada para eventos do kernel

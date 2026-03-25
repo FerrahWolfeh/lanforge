@@ -32,7 +32,7 @@ use std::sync::Arc;
 use crate::bus::ManagedTable;
 use crate::device::MacAddr;
 use crate::netlink;
-use crate::state::DeviceUpdate;
+use crate::state::update::DeviceUpdate;
 
 /// Executa um dump completo da tabela de vizinhos IPv6 (Sincronização de Estado).
 ///

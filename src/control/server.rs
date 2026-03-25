@@ -11,7 +11,7 @@ use tracing::{debug, error, info};
 use crate::bus::{EventBus, LanforgeEvent, ManagedTable};
 use crate::control::api::{self, Command, Interfaces, Response, SimpleSuccess};
 use crate::device::{IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin};
-use crate::state::DeviceUpdate;
+use crate::state::update::DeviceUpdate;
 
 fn format_iso8601(time: std::time::SystemTime) -> String {
     let dt: chrono::DateTime<chrono::Utc> = time.into();
@@ -633,7 +633,7 @@ mod tests {
     use crate::config::{Config, DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg};
     use crate::control::api::Response;
     use crate::device::MacAddr;
-    use crate::state::DeviceUpdate;
+    use crate::state::update::DeviceUpdate;
 
     fn make_dummy_config() -> Config {
         Config {

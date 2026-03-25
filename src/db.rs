@@ -45,7 +45,7 @@ use tracing::{debug, info, warn};
 use crate::bus::{EventBus, LanforgeEvent, ManagedTable};
 use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin};
 use crate::dhcp::v6::duid::Duid;
-use crate::state::{DeviceTable, DeviceUpdate};
+use crate::state::{DeviceTable, update::DeviceUpdate};
 
 // ---------------------------------------------------------------------------
 // LeaseDb — motor SQLite síncrono

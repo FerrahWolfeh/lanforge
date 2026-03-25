@@ -177,7 +177,7 @@ impl EventBus {
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::Arc;
 
-use crate::state::{DeviceTable, DeviceUpdate};
+use crate::state::{DeviceTable, update::DeviceUpdate};
 
 /// Wrapper em torno do `DeviceTable` que automaticamente publica eventos
 /// no `EventBus` após cada `apply_update`.

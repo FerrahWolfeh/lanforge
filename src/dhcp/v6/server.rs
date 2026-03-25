@@ -28,7 +28,7 @@ use super::pool::Ipv6Pool;
 use crate::bus::ManagedTable;
 use crate::device::MacAddr;
 use crate::dhcp::identity::DeviceIdentity;
-use crate::state::DeviceUpdate;
+use crate::state::update::DeviceUpdate;
 use std::sync::Arc;
 
 /// IAIDs atribuídos em uma resposta.

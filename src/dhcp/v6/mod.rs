@@ -45,7 +45,7 @@ use tracing::{debug, info, warn};
 
 use crate::bus::ManagedTable;
 use crate::device::MacAddr;
-use crate::state::DeviceUpdate;
+use crate::state::update::DeviceUpdate;
 use config::Dhcpv6Config;
 use duid::Duid;
 use pool::Ipv6Pool;
