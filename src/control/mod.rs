@@ -4,7 +4,10 @@
 //! o daemon usando JSON sobre um socket Unix local.
 
 pub mod api;
+pub mod handlers;
 pub mod server;
+#[cfg(test)]
+pub mod tests;
 
 pub use api::{Command, Interfaces, Response};
 pub use server::control_service;
