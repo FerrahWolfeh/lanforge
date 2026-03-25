@@ -1,5 +1,5 @@
 use super::{CliCommand, format_relative_iso8601};
-use crate::control::api::{DeviceEntry, DevicesResponse};
+use crate::control::api::{DeviceEntry, DevicesResponse, HostsResponse};
 use crate::control::{Command as ControlCommand, Response};
 use anyhow::Result;
 use iocraft::prelude::*;
@@ -53,6 +53,18 @@ struct DeviceRow {
     status: String,
 }
 
+#[derive(Tabled)]
+struct HostRow {
+    #[tabled(rename = "HOST")]
+    host: String,
+    #[tabled(rename = "MAC")]
+    mac: String,
+    #[tabled(rename = "FIXED IPv4")]
+    v4: String,
+    #[tabled(rename = "V6 SUFFIX")]
+    v6: String,
+}
+
 pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
@@ -91,6 +103,47 @@ pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
             View(padding_bottom: 1) { }
         }
     }.print();
+}
+
+pub fn render_hosts(resp: &HostsResponse) {
+    element! {
+        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "CONFIGURED HOSTS  ·  ", color: Color::DarkGrey)
+                Text(content: format!("{} entries", resp.hosts.len()))
+            }
+            View(margin_top: 1) { }
+        }
+    }
+    .print();
+
+    let rows: Vec<_> = resp
+        .hosts
+        .iter()
+        .map(|h| {
+            let symbol = symbol_for_origin(&h.origin);
+            HostRow {
+                host: format!("{} {}", h.hostname, symbol),
+                mac: h.mac.clone(),
+                v4: h.v4_fixed.clone().unwrap_or_else(|| "—".to_string()),
+                v6: h.v6_suffix.clone().unwrap_or_else(|| "—".to_string()),
+            }
+        })
+        .collect();
+
+    if !rows.is_empty() {
+        let mut table = Table::new(rows);
+        table.with(Style::rounded());
+        println!("{table}");
+    }
+
+    element! {
+        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_top: 1) {
+            Text(content: "★ TOML estático   · gerenciado via CLI", color: Color::DarkGrey)
+            View(padding_bottom: 1) { }
+        }
+    }
+    .print();
 }
 
 fn symbol_for_origin(origin: &str) -> &'static str {

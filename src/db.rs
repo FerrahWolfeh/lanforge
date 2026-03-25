@@ -182,9 +182,10 @@ impl LeaseDb {
         );
         // Migration for v6_leases: if it doesn't have iaid, we might need to recreate it.
         // For simplicity in this dev environment, we just ensure the column exists.
-        let _ = self
-            .conn
-            .execute("ALTER TABLE v6_leases ADD COLUMN iaid INTEGER DEFAULT 0", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE v6_leases ADD COLUMN iaid INTEGER DEFAULT 0",
+            [],
+        );
 
         debug!("Schema verificado/criado");
         Ok(())

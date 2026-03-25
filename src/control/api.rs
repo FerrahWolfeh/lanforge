@@ -52,6 +52,7 @@ pub enum Command {
 pub enum Response {
     Status(Box<StatusResponse>),
     Devices(DevicesResponse),
+    Hosts(HostsResponse),
     Error { error: String },
     Success(SimpleSuccess),
     Event(crate::bus::LanforgeEvent),
@@ -71,6 +72,20 @@ pub struct Interfaces {
 pub struct DevicesResponse {
     pub devices: Vec<DeviceEntry>,
     pub meta: DevicesMeta,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HostsResponse {
+    pub hosts: Vec<HostConfigEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HostConfigEntry {
+    pub mac: String,
+    pub hostname: String,
+    pub v4_fixed: Option<String>,
+    pub v6_suffix: Option<String>,
+    pub origin: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

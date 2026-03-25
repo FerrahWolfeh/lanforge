@@ -1,8 +1,8 @@
-use anyhow::Result;
-use inquire::{Confirm, Select, Text as InquireText};
+use super::CliCommand;
 use crate::config::HostCommand;
 use crate::control::Command as ControlCommand;
-use super::CliCommand;
+use anyhow::Result;
+use inquire::{Confirm, Select, Text as InquireText};
 
 pub struct HostHandler {
     pub action: HostCommand,
@@ -88,24 +88,20 @@ impl CliCommand for HostHandler {
                     v6_suffix: final_v6,
                 })
             }
-            HostCommand::Set { mac, field, value } => {
-                Ok(ControlCommand::HostSet {
-                    mac: mac.clone(),
-                    field: field.clone(),
-                    value: value.clone(),
-                })
-            }
-            HostCommand::Remove { mac } => {
-                Ok(ControlCommand::HostRemove { mac: mac.clone() })
-            }
+            HostCommand::Set { mac, field, value } => Ok(ControlCommand::HostSet {
+                mac: mac.clone(),
+                field: field.clone(),
+                value: value.clone(),
+            }),
+            HostCommand::Remove { mac } => Ok(ControlCommand::HostRemove { mac: mac.clone() }),
             HostCommand::List => Ok(ControlCommand::HostList),
         }
     }
 
     fn on_response(&self, response: &crate::control::Response) -> Result<()> {
         match response {
-            crate::control::Response::Devices(resp) => {
-                super::devices::render_devices(resp, false);
+            crate::control::Response::Hosts(resp) => {
+                super::devices::render_hosts(resp);
                 Ok(())
             }
             _ => {
@@ -129,4 +125,3 @@ impl CliCommand for HostHandler {
         }
     }
 }
-

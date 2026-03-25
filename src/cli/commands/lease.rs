@@ -1,7 +1,7 @@
-use anyhow::Result;
+use super::CliCommand;
 use crate::config::LeaseCommand;
 use crate::control::Command as ControlCommand;
-use super::CliCommand;
+use anyhow::Result;
 
 pub struct LeaseHandler {
     pub action: LeaseCommand,

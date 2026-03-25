@@ -373,6 +373,36 @@ impl ClientContext {
             },
         })
     }
+
+    async fn handle_hosts(&self) -> Response {
+        let table_guard = self.table.read();
+        let mut hosts = Vec::new();
+
+        for dev in table_guard.devices() {
+            if dev.origin == crate::device::Origin::Dynamic {
+                continue;
+            }
+
+            hosts.push(api::HostConfigEntry {
+                mac: dev.mac.to_string(),
+                hostname: dev.hostname.clone(),
+                v4_fixed: match &dev.v4 {
+                    crate::device::IPv4State::Static(ip) => Some(ip.to_string()),
+                    _ => None,
+                },
+                v6_suffix: dev.v6.iter().find_map(|s| {
+                    if let crate::device::IPv6State::Static(suffix) = s {
+                        Some(suffix.to_string())
+                    } else {
+                        None
+                    }
+                }),
+                origin: dev.origin.as_str().to_string(),
+            });
+        }
+
+        Response::Hosts(api::HostsResponse { hosts })
+    }
 }
 
 async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -> Result<()> {
@@ -526,7 +556,7 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
                     }
                 }
             }
-            Ok(Command::HostList) => ctx.handle_devices(None).await,
+            Ok(Command::HostList) => ctx.handle_hosts().await,
 
             Ok(Command::HostRemove { mac }) => {
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
@@ -625,7 +655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_host_list_returns_all_types_of_devices() {
+    async fn test_host_list_returns_static_and_cli_only() {
         let bus = Arc::new(EventBus::new());
         let table = Arc::new(ManagedTable::new(bus.clone()));
         let cfg = Arc::new(make_dummy_config());
@@ -676,31 +706,38 @@ mod tests {
             }]);
         }
 
-        // 4. handle_devices (called by HostList) should return all 3
+        // 4. handle_hosts (called by HostList) should return ONLY CLI and TOML
+        let resp = ctx.handle_hosts().await;
+        if let Response::Hosts(d) = resp {
+            assert_eq!(
+                d.hosts.len(),
+                2,
+                "Should return ONLY CLI and TOML devices, NOT dynamic ones"
+            );
+            assert!(
+                d.hosts
+                    .iter()
+                    .any(|dev| dev.mac == mac_cli.to_string() && dev.origin == "cli")
+            );
+            assert!(
+                d.hosts
+                    .iter()
+                    .any(|dev| dev.mac == mac_toml.to_string() && dev.origin == "toml")
+            );
+            // Dynamic host should not be in d.hosts
+            assert!(!d.hosts.iter().any(|dev| dev.mac == mac_dyn.to_string()));
+        } else {
+            panic!("Expected Response::Hosts, got {:?}", resp);
+        }
+
+        // 5. handle_devices (called by Devices) should still return all 3
         let resp = ctx.handle_devices(None).await;
         if let Response::Devices(d) = resp {
             assert_eq!(
                 d.devices.len(),
                 3,
-                "Should return CLI, dynamic and TOML devices"
+                "Devices list should still show everything"
             );
-            assert!(
-                d.devices
-                    .iter()
-                    .any(|dev| dev.mac == mac_cli.to_string() && dev.origin == "cli")
-            );
-            assert!(
-                d.devices
-                    .iter()
-                    .any(|dev| dev.mac == mac_dyn.to_string() && dev.origin == "dynamic")
-            );
-            assert!(
-                d.devices
-                    .iter()
-                    .any(|dev| dev.mac == mac_toml.to_string() && dev.origin == "toml")
-            );
-        } else {
-            panic!("Expected Response::Devices, got {:?}", resp);
         }
     }
 }

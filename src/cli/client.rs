@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use crate::config::Command;
-use crate::control::Response;
 use crate::cli::commands::CliCommand;
 use crate::cli::commands::GenericHandler;
+use crate::config::Command;
+use crate::control::Response;
 
 pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
     let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
@@ -17,15 +17,35 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
 
     let mut handler: Box<dyn CliCommand> = match command {
         Command::Status => Box::new(crate::cli::commands::status::StatusHandler),
-        Command::Devices { verbose, filter, format } => Box::new(crate::cli::commands::devices::DevicesHandler { verbose, filter, format }),
+        Command::Devices {
+            verbose,
+            filter,
+            format,
+        } => Box::new(crate::cli::commands::devices::DevicesHandler {
+            verbose,
+            filter,
+            format,
+        }),
         Command::Host { action } => Box::new(crate::cli::commands::host::HostHandler { action }),
         Command::Lease { action } => Box::new(crate::cli::commands::lease::LeaseHandler { action }),
         Command::Db { action } => Box::new(crate::cli::commands::db::DbHandler { action }),
         Command::Log { follow } => Box::new(crate::cli::commands::log::LogHandler { follow }),
-        Command::Reload => Box::new(GenericHandler { cmd: crate::control::Command::Reload, streaming: false }),
-        Command::Watch => Box::new(GenericHandler { cmd: crate::control::Command::Watch, streaming: true }),
-        Command::Scan => Box::new(GenericHandler { cmd: crate::control::Command::Scan, streaming: false }),
-        Command::Shutdown => Box::new(GenericHandler { cmd: crate::control::Command::Shutdown, streaming: false }),
+        Command::Reload => Box::new(GenericHandler {
+            cmd: crate::control::Command::Reload,
+            streaming: false,
+        }),
+        Command::Watch => Box::new(GenericHandler {
+            cmd: crate::control::Command::Watch,
+            streaming: true,
+        }),
+        Command::Scan => Box::new(GenericHandler {
+            cmd: crate::control::Command::Scan,
+            streaming: false,
+        }),
+        Command::Shutdown => Box::new(GenericHandler {
+            cmd: crate::control::Command::Shutdown,
+            streaming: false,
+        }),
         Command::Run { .. } => {
             println!("Este comando ainda não está implementado na CLI.");
             return Ok(());
@@ -69,7 +89,9 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             }
             let resp: Result<Response, _> = serde_json::from_str(&response_line);
             match resp {
-                Ok(r) => { handler.on_response(&r)?; }
+                Ok(r) => {
+                    handler.on_response(&r)?;
+                }
                 Err(_) => println!("JSON malformado no stream: {response_line}"),
             }
         }

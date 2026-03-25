@@ -295,17 +295,12 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
 fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
     match update {
         DeviceUpdate::V4LeaseGranted { ip, .. } => Some(DeviceChange::V4Assigned { ip: *ip }),
-        DeviceUpdate::V6LeaseGranted { ip, iaid, .. } => {
-            Some(DeviceChange::V6Assigned {
-                ip: *ip,
-                iaid: *iaid,
-            })
-        }
+        DeviceUpdate::V6LeaseGranted { ip, iaid, .. } => Some(DeviceChange::V6Assigned {
+            ip: *ip,
+            iaid: *iaid,
+        }),
         DeviceUpdate::V6PrefixAssigned {
-            prefix,
-            len,
-            iaid,
-            ..
+            prefix, len, iaid, ..
         } => Some(DeviceChange::V6PrefixAssigned {
             prefix: *prefix,
             len: *len,
