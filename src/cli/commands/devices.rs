@@ -1,6 +1,7 @@
 use super::{CliCommand, format_relative_iso8601};
 use crate::control::api::{DeviceEntry, DevicesResponse, HostsResponse};
 use crate::control::{Command as ControlCommand, Response};
+use crate::device::Origin;
 use anyhow::Result;
 use iocraft::prelude::*;
 use tabled::settings::Style;
@@ -121,7 +122,7 @@ pub fn render_hosts(resp: &HostsResponse) {
         .hosts
         .iter()
         .map(|h| {
-            let symbol = symbol_for_origin(&h.origin);
+            let symbol = h.origin.parse::<Origin>().unwrap_or_default().symbol();
             HostRow {
                 host: format!("{} {}", h.hostname, symbol),
                 mac: h.mac.clone(),
@@ -146,55 +147,9 @@ pub fn render_hosts(resp: &HostsResponse) {
     .print();
 }
 
-fn symbol_for_origin(origin: &str) -> &'static str {
-    match origin {
-        "static" => "★",
-        "managed_cli" => "·",
-        _ => "–",
-    }
-}
-
 fn build_device_row(dev: &DeviceEntry) -> DeviceRow {
-    let mut host = dev.hostname.clone();
-    if host.is_empty() {
-        host = "?".to_string();
-    }
-    let symbol = symbol_for_origin(&dev.origin);
-
-    host = format!("{host} {symbol}");
-
-    // V4: prioritize lease, fallback to seen
-    let v4 = if let Some(v) = &dev.v4 {
-        v.ip.clone()
-    } else if let Some(seen) = dev.seen_v4.first() {
-        format!("{seen} ?")
-    } else {
-        "—".to_string()
-    };
-
-    // V6: prioritize ULA, then GUA
-    let mut v6 = "—".to_string();
-
-    // Check for ULA in ipv6_addrs or v6 lease
-    let ula_addr = dev
-        .ipv6_addrs
-        .iter()
-        .find(|e| e.kind == "ULA")
-        .map(|e| format!("{} ↑", e.addr));
-
-    let gua_addr = dev
-        .ipv6_addrs
-        .iter()
-        .find(|e| e.kind == "GUA")
-        .map(|e| format!("{} ↑", e.addr));
-
-    if let Some(ula) = ula_addr {
-        v6 = ula;
-    } else if let Some(v) = &dev.v6 {
-        v6 = v.ip.clone();
-    } else if let Some(gua) = gua_addr {
-        v6 = gua;
-    }
+    let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
+    let host = format!("{} {}", dev.hostname, symbol);
 
     let status = if dev.online {
         "Online".to_string()
@@ -205,8 +160,8 @@ fn build_device_row(dev: &DeviceEntry) -> DeviceRow {
     DeviceRow {
         host,
         mac: dev.mac.clone(),
-        v4,
-        v6,
+        v4: dev.display_v4.clone(),
+        v6: dev.display_v6.clone(),
         status,
     }
 }
@@ -216,14 +171,14 @@ fn render_verbose_device(dev: &DeviceEntry) {
     if host.is_empty() {
         host = "?".to_string();
     }
-    let symbol = symbol_for_origin(&dev.origin);
+    let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
     let host_display = format!(" {host} {symbol} ");
 
     // V4 Section
     let mut v4_lines = Vec::new();
     if let Some(v4) = &dev.v4 {
         v4_lines.push(format!(
-            "V4 (Lease)  {:<24} (expires {})",
+            "V4 (Lease)  {:<24} ({})",
             v4.ip,
             format_relative_iso8601(&v4.expires)
         ));
@@ -242,13 +197,13 @@ fn render_verbose_device(dev: &DeviceEntry) {
     let mut v6_lines = Vec::new();
     if let Some(v6) = &dev.v6 {
         v6_lines.push(format!(
-            "V6 (DHCPv6) {:<24} (expires {})",
+            "V6 (DHCPv6) {} ({})",
             v6.ip,
             format_relative_iso8601(&v6.expires)
         ));
     }
     for entry in &dev.ipv6_addrs {
-        v6_lines.push(format!("V6 ({:<7})  {} ↑", entry.kind, entry.addr));
+        v6_lines.push(format!("V6 ({})      {} ↑", entry.kind, entry.addr));
     }
     if v6_lines.is_empty() {
         v6_lines.push("V6 / SLAAC  —".to_string());

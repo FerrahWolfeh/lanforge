@@ -96,6 +96,8 @@ pub struct DeviceEntry {
     pub online: bool,
     pub last_seen: String,
     pub duid: Option<String>,
+    pub display_v4: String,
+    pub display_v6: String,
     pub v4: Option<LeaseInfo>,
     pub seen_v4: Vec<String>,
     pub v6: Option<LeaseInfo>,

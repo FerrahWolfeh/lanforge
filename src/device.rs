@@ -153,6 +153,26 @@ impl Origin {
     pub const fn is_static(&self) -> bool {
         !matches!(self, Self::Dynamic)
     }
+
+    pub const fn symbol(&self) -> &'static str {
+        match self {
+            Self::Toml => "★",
+            Self::Cli => "·",
+            Self::Dynamic => "–",
+        }
+    }
+}
+
+impl FromStr for Origin {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "toml" | "static" => Ok(Self::Toml),
+            "cli" | "managed_cli" => Ok(Self::Cli),
+            "dynamic" => Ok(Self::Dynamic),
+            _ => Err(()),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -319,4 +339,80 @@ impl Device {
     pub fn is_static(&self) -> bool {
         self.origin.is_static()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Formatting and Selection Helpers
+// ---------------------------------------------------------------------------
+
+impl Device {
+    pub fn display_hostname(&self) -> &str {
+        if self.hostname.is_empty() {
+            "?"
+        } else {
+            &self.hostname
+        }
+    }
+
+    pub fn is_online(&self) -> bool {
+        self.last_seen
+            .elapsed()
+            .map(|d| d.as_secs() < 300)
+            .unwrap_or(false)
+    }
+
+    pub fn display_v4(&self) -> String {
+        match &self.v4 {
+            IPv4State::Static(ip) => ip.to_string(),
+            IPv4State::Dynamic(lease) => lease.ip.to_string(),
+            IPv4State::None => {
+                if let Some(seen) = self.seen_v4.first() {
+                    format!("{} ?", seen)
+                } else {
+                    "—".to_string()
+                }
+            }
+        }
+    }
+
+    /// Returns the primary IPv6 address based on following priority:
+    /// 1. ULA (Static or Dynamic Lease)
+    /// 2. SLAAC (any)
+    /// 3. GUA (Static or Dynamic Lease)
+    pub fn primary_v6(&self) -> Option<Ipv6Addr> {
+        // 1. Check for ULA in leases/static
+        for state in &self.v6 {
+            if let Some(ip) = state.ip()
+                && is_ula(&ip)
+            {
+                return Some(ip);
+            }
+        }
+
+        // 2. Check for SLAAC
+        for state in &self.v6 {
+            if let IPv6State::Slaac(ip) = state {
+                return Some(*ip);
+            }
+        }
+
+        // 3. Fallback to GUA (leases/static)
+        for state in &self.v6 {
+            if let Some(ip) = state.ip() {
+                return Some(ip);
+            }
+        }
+
+        None
+    }
+
+    pub fn display_v6(&self) -> String {
+        self.primary_v6()
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "—".to_string())
+    }
+}
+
+fn is_ula(addr: &Ipv6Addr) -> bool {
+    (addr.segments()[0] & 0xfe00) == 0xfc00
 }

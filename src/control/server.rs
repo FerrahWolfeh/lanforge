@@ -308,18 +308,20 @@ impl ClientContext {
                 continue;
             }
 
-            let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
+            let is_online = dev.is_online();
             if is_online {
                 online += 1;
             }
 
             api_devices.push(api::DeviceEntry {
                 mac: dev.mac.to_string(),
-                hostname: dev.hostname.clone(),
+                hostname: dev.display_hostname().to_string(),
                 origin: dev.origin.as_str().to_string(),
                 online: is_online,
                 last_seen: format_iso8601(dev.last_seen),
                 duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),
+                display_v4: dev.display_v4(),
+                display_v6: dev.display_v6(),
                 v4: match &dev.v4 {
                     crate::device::IPv4State::Static(ip) => Some(api::LeaseInfo {
                         ip: ip.to_string(),
