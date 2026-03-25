@@ -139,44 +139,34 @@ impl Dhcpv6Server {
         // Pega o lock de leitura da tabela UMA ÚNICA VEZ para:
         // 1. Cache NDP
         // 2. Resolução de DeviceIdentity (se o mac for conhecido)
-        let (identity, mac) = {
-            let t = table.read().await;
-
-            // Fallback 1: cache NDP em memória
-            if mac.is_none()
-                && let Some(cached) = t.get_mac_from_ndp_cache(&peer)
-            {
+        // 1. Tenta recuperar MAC do cache NDP (lock síncrono)
+        if mac.is_none() {
+            let t = table.read();
+            if let Some(cached) = t.get_mac_from_ndp_cache(&peer) {
                 debug!("MAC recuperado do cache NDP para {peer}");
                 mac = Some(cached);
             }
+        }
 
-            // Fallback 2: Lookup síncrono (se ainda sem MAC)
-            if mac.is_none() {
-                drop(t); // Solta o lock para syscall asíncrona ao kernel
-                debug!("Cache miss. Lookup síncrono no kernel para {peer}...");
-                if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
-                    table
-                        .update(DeviceUpdate::NdpSeen {
-                            mac: ndp_mac,
-                            ip: peer,
-                        })
-                        .await;
-                    mac = Some(ndp_mac);
-                }
-                // Como soltamos o lock, pegamos de novo se necessário para a Identity
-                let t_new = table.read().await;
-                let ident = mac.map(|m| {
-                    DeviceIdentity::resolve(m, None, Self::get_vendor_class(&msg), Some(&t_new))
-                });
-                (ident, mac)
-            } else {
-                // Caso rápido: já tínhamos MAC ou cache hit, usamos o mesmo lock
-                let ident = mac.map(|m| {
-                    DeviceIdentity::resolve(m, None, Self::get_vendor_class(&msg), Some(&t))
-                });
-                (ident, mac)
+        // 2. Se ainda sem MAC, tenta lookup no kernel (asíncrono — SEM LOCK)
+        if mac.is_none() {
+            debug!("Cache miss. Lookup síncrono no kernel para {peer}...");
+            if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
+                table
+                    .update(DeviceUpdate::NdpSeen {
+                        mac: ndp_mac,
+                        ip: peer,
+                    })
+                    .await;
+                mac = Some(ndp_mac);
             }
-        };
+        }
+
+        // 3. Resolve identidade (novo lock síncrono)
+        let identity = mac.map(|m| {
+            let t = table.read();
+            DeviceIdentity::resolve(m, None, Self::get_vendor_class(&msg), Some(&t))
+        });
 
         if mac.is_none() {
             warn!(

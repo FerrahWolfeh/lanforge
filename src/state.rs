@@ -893,6 +893,9 @@ impl DeviceTable {
             // hostname seja acionado, ou você pode passar o prefixo da rede para essa função no futuro.
         }
 
+        self.name_index.shrink_to_fit();
+        self.ip_index.shrink_to_fit();
+
         debug!(
             "[state] Índices DNS reconstruídos: {} nomes, {} IPs",
             self.name_index.len(),

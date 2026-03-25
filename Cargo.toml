@@ -19,7 +19,7 @@ futures = { version = "0.3.32", default-features = false, features = ["std"] }
 # CLI e config
 clap = { version = "4.6.0", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.9.8"
+toml = "1.1.0"
 
 # Networking / netlink
 netlink-packet-core = "0.8"
@@ -58,12 +58,13 @@ serde_json = "1.0.149"
 hex = { version = "0.4.3", features = ["serde"] }
 
 # CLI
-iocraft = "0.7.18"
+iocraft = "0.8.0"
 tabled = "0.20.0"
 chrono = { version = "0.4.44", features = ["serde"] }
 inquire = "0.9.4"
 colored = "3.1.1"
 bytesize = "2.3.1"
+parking_lot = "0.12.5"
 
 [profile.release]
 opt-level = "z"
@@ -79,7 +80,6 @@ lto = true
 codegen-units = 1
 debug = true
 strip = false
-force-frame-pointers = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

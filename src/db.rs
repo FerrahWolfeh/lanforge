@@ -544,7 +544,7 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
 
                 // Snapshot do estado atual (read lock breve)
                 let snapshot = {
-                    let t = table.read().await;
+                    let t = table.read();
                     t.clone()
                 };
 

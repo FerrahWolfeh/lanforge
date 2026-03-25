@@ -168,8 +168,8 @@ impl EventBus {
 // ManagedTable — wrapper que conecta DeviceTable ao EventBus
 // ---------------------------------------------------------------------------
 
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::state::{DeviceTable, DeviceUpdate};
 
@@ -187,8 +187,9 @@ use crate::state::{DeviceTable, DeviceUpdate};
 /// // Em qualquer task de protocolo:
 /// table.update(DeviceUpdate::V4LeaseGranted { mac, ip, expires }).await;
 /// ```
+///
 pub struct ManagedTable {
-    inner: RwLock<DeviceTable>,
+    inner: parking_lot::RwLock<DeviceTable>,
     bus: Arc<EventBus>,
 }
 
@@ -210,7 +211,7 @@ impl ManagedTable {
     ///    - Publica `DeviceUpdated` com o `DeviceChange` correspondente.
     ///    - Publica `DeviceTableDirty` para o worker de DB.
     pub async fn update(&self, update: DeviceUpdate) {
-        let mut table = self.inner.write().await;
+        let mut table = self.inner.write();
 
         let opt_mac = mac_of(&update);
         let is_new = if let Some(mac) = opt_mac {
@@ -245,14 +246,14 @@ impl ManagedTable {
     }
 
     /// Leitura do estado interno. Usar para DNS, CLI, DB snapshot.
-    pub async fn read(&self) -> tokio::sync::RwLockReadGuard<'_, DeviceTable> {
-        self.inner.read().await
+    pub fn read(&self) -> RwLockReadGuard<'_, DeviceTable> {
+        self.inner.read()
     }
 
     /// Acesso de escrita direto — usar apenas para operações de manutenção
     /// como `expire_stale` e `load_static_devices`.
-    pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, DeviceTable> {
-        self.inner.write().await
+    pub fn write(&self) -> RwLockWriteGuard<'_, DeviceTable> {
+        self.inner.write()
     }
 
     /// Retorna uma referência ao barramento de eventos.

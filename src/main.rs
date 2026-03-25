@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
                     // Importa o estado persistido diretamente na tabela interna.
                     // Fazemos isso via write() direto pois é bootstrap síncrono
                     // — os serviços ainda não estão rodando.
-                    *table.write().await = persisted;
+                    *table.write() = persisted;
                     info!("📦 Estado persistido carregado de {}", cfg.leases_db);
                 }
                 Err(e) => {
@@ -150,7 +150,7 @@ async fn main() -> Result<()> {
 
     if !cfg.devices.is_empty() {
         let count = cfg.devices.len();
-        table.write().await.load_static_devices(&cfg.devices);
+        table.write().load_static_devices(&cfg.devices);
         info!("👥 {count} reservas estáticas carregadas");
     }
 
@@ -344,7 +344,7 @@ async fn main() -> Result<()> {
 
             // ── Stale — Expiração de leases e IPs antigos ────────────────
             _ = stale_timer.tick() => {
-                let changed = table.write().await.expire_stale();
+                let changed = table.write().expire_stale();
                 if changed {
                     bus.publish(LanforgeEvent::DeviceTableDirty);
                 }

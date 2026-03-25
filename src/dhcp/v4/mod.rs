@@ -57,7 +57,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
     // Carrega reservas estáticas no pool
     let mut server = DhcpServer::new(cfg.clone());
     {
-        let t = table.read().await;
+        let t = table.read();
         for entry in t.static_entries() {
             if let Some(ip) = entry.v4_ip {
                 server.pool.add_reservation(ip, entry.mac);
@@ -111,7 +111,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
 
                 // 2. Lock curto apenas para processar a lógica e alocar IP
                 let handle_res = {
-                    let t = table.read().await;
+                    let t = table.read();
                     server.handle_packet(data, Some(&t))
                 };
 

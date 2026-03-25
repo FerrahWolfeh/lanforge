@@ -147,7 +147,7 @@ struct ClientContext {
 
 impl ClientContext {
     async fn handle_status(&self) -> Response {
-        let table_guard = self.table.read().await;
+        let table_guard = self.table.read();
 
         let mut status = api::StatusResponse {
             uptime_secs: self.uptime_secs,
@@ -273,7 +273,7 @@ impl ClientContext {
     }
 
     async fn handle_devices(&self, filter: Option<String>) -> Response {
-        let table_guard = self.table.read().await;
+        let table_guard = self.table.read();
 
         let mut api_devices = Vec::new();
         let mut online = 0;
@@ -495,7 +495,7 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
 
             Ok(Command::HostRemove { mac }) => {
                 if let Some(mac_addr) = crate::state::MacAddr::parse(&mac) {
-                    let mut w = ctx.table.write().await;
+                    let mut w = ctx.table.write();
                     w.devices.remove(&mac_addr);
                     w.static_entries.remove(&mac_addr);
                     drop(w);
@@ -631,7 +631,7 @@ mod tests {
         // 3. Add a TOML device
         let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
         {
-            let mut w = table.write().await;
+            let mut w = table.write();
             w.load_static_devices(&[StaticDeviceCfg {
                 mac: mac_toml.to_string(),
                 hostname: "toml-host".to_string(),

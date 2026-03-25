@@ -116,7 +116,7 @@ pub async fn dhcpv6_service(
     );
 
     {
-        let t = table.read().await;
+        let t = table.read();
         for entry in t.static_entries() {
             if let Some(suffix) = &entry.v6_suffix {
                 if let Some(ip) = server.pool.construct_static_ula(suffix) {
@@ -255,7 +255,7 @@ async fn apply_learned_state(
         && let Some(mac) = opt_mac
     {
         let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
-        let existing_duid = table.read().await.find_duid_by_mac(mac).cloned();
+        let existing_duid = table.read().find_duid_by_mac(mac).cloned();
         if let Some(duid) = existing_duid {
             table
                 .update(DeviceUpdate::V6LeaseGranted {

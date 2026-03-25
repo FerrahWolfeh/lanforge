@@ -222,7 +222,7 @@ async fn handle_query(
         if let Some(hostname_slice) = extract_local_hostname(qname, &cfg.search_labels) {
             let safe_hostname = fast_lowercase(hostname_slice);
 
-            let t = table.read().await;
+            let t = table.read();
 
             // Busca O(1)
             if let Some(&mac_addr) = t.name_index.get(safe_hostname.as_ref())
@@ -243,7 +243,7 @@ async fn handle_query(
         // Para o PTR, ainda alocamos uma String por enquanto para não quebrar a sua resolve_ptr
         let qname_str = qname.to_string();
         if qname_str.ends_with(".arpa.") {
-            let t = table.read().await;
+            let t = table.read();
             if let Some(response) = resolve_ptr(&query, &qname_str, cfg, &t)? {
                 return Ok(Some(response));
             }
