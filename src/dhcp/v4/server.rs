@@ -21,8 +21,9 @@ use tracing::{debug, info, warn};
 
 use super::config::Dhcpv4Config;
 use super::pool::IpPool;
+use crate::device::MacAddr;
 use crate::dhcp::identity::DeviceIdentity;
-use crate::state::{DeviceTable, MacAddr};
+use crate::state::DeviceTable;
 
 /// Resultado de processar uma mensagem DHCP.
 pub enum HandleResult {

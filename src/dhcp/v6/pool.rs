@@ -1,7 +1,8 @@
-use crate::state::MacAddr;
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
 use std::time::SystemTime;
+
+use crate::device::MacAddr;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct LeaseKey {
@@ -62,25 +63,28 @@ impl Ipv6Pool {
 
     /// Constructs a static IPv6 address given a device's configured suffix and the network's ULA prefix.
     #[allow(dead_code)]
-    pub fn construct_static_ula(&self, suffix: &str) -> Option<Ipv6Addr> {
+    pub fn construct_static_ula(
+        &self,
+        suffix: &crate::device::Ipv6AddrOrSuffix,
+    ) -> Option<Ipv6Addr> {
         let ula = self.ula_prefix?;
-        let clean_suffix = suffix.strip_prefix("::").unwrap_or(suffix);
-        let ula_segs = ula.segments();
-        let suffix_ip: Ipv6Addr = format!("::{clean_suffix}").parse().ok()?;
-        let suf_segs = suffix_ip.segments();
-
-        let combined = [
-            ula_segs[0],
-            ula_segs[1],
-            ula_segs[2],
-            ula_segs[3],
-            suf_segs[4],
-            suf_segs[5],
-            suf_segs[6],
-            suf_segs[7],
-        ];
-
-        Some(Ipv6Addr::from(combined))
+        match suffix {
+            crate::device::Ipv6AddrOrSuffix::Full(ip) => Some(*ip),
+            crate::device::Ipv6AddrOrSuffix::Suffix(s) => {
+                let ula_segs = ula.segments();
+                let combined = [
+                    ula_segs[0],
+                    ula_segs[1],
+                    ula_segs[2],
+                    ula_segs[3],
+                    u16::from_be_bytes([s[0], s[1]]),
+                    u16::from_be_bytes([s[2], s[3]]),
+                    u16::from_be_bytes([s[4], s[5]]),
+                    u16::from_be_bytes([s[6], s[7]]),
+                ];
+                Some(Ipv6Addr::from(combined))
+            }
+        }
     }
 
     /// Allocates an IPv6 address for the given DUID+IAID.
@@ -347,13 +351,16 @@ mod tests {
 
     #[test]
     fn test_construct_static_ula() {
+        use crate::device::Ipv6AddrOrSuffix;
         let ula = "fd12:3456:7890:abcd::".parse().ok();
         let pool = Ipv6Pool::new(None, None, ula, 64);
 
-        let res = pool.construct_static_ula("::1111:2222:3333:4444").unwrap();
+        let suf1 = Ipv6AddrOrSuffix::parse("::1111:2222:3333:4444").unwrap();
+        let res = pool.construct_static_ula(&suf1).unwrap();
         assert_eq!(res.to_string(), "fd12:3456:7890:abcd:1111:2222:3333:4444");
 
-        let res2 = pool.construct_static_ula("::cafe:babe").unwrap();
+        let suf2 = Ipv6AddrOrSuffix::parse("::cafe:babe").unwrap();
+        let res2 = pool.construct_static_ula(&suf2).unwrap();
         assert_eq!(res2.to_string(), "fd12:3456:7890:abcd::cafe:babe");
     }
 

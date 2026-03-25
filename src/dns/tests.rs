@@ -10,12 +10,13 @@ use std::time::Duration;
 
 use super::*;
 use crate::bus::{EventBus, ManagedTable};
+use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin, V4Lease};
 use crate::dns::resolver::{resolve_local, resolve_ptr};
 use crate::dns::response::base_response;
 use crate::dns::server::handle_query;
 use crate::dns::upstream::UpstreamManager;
 use crate::dns::utils::{extract_local_hostname, parse_arpa};
-use crate::state::{Device, DeviceTable, MacAddr, Origin, V4Lease};
+use crate::state::DeviceTable;
 use std::{net::Ipv4Addr, time::SystemTime};
 
 // Helpers para testes que precisam de ManagedTable
@@ -25,21 +26,17 @@ fn empty_table() -> Arc<ManagedTable> {
 
 // Helper para gerar um device mock
 fn mock_device(mac_bytes: [u8; 6], host: &str) -> Device {
-    let mac = crate::state::MacAddr(mac_bytes);
+    let mac = MacAddr(mac_bytes);
     Device {
         hostname: host.to_string(),
         mac,
         origin: Origin::Dynamic,
         managed_at: None,
-        v4_static: None,
-        v6_suffix: None,
-        is_static: false,
         duid: None,
-        v4: None,
-        v6: None,
+        v4: IPv4State::None,
+        v6: Vec::new(),
         v6_prefix: None,
-        slaac: vec![],
-        seen_v4: vec![],
+        seen_v4: Vec::new(),
         last_seen: SystemTime::now(),
     }
 }
@@ -61,20 +58,16 @@ fn table_with_device(hostname: &str, mac: MacAddr, ip: Ipv4Addr) -> DeviceTable 
         Device {
             hostname: hostname.into(),
             mac,
-            origin: crate::state::Origin::Dynamic,
+            origin: Origin::Dynamic,
             managed_at: None,
-            v4_static: None,
-            v6_suffix: None,
-            is_static: false,
             duid: None,
-            v4: Some(V4Lease {
+            v4: IPv4State::Dynamic(V4Lease {
                 ip,
                 expires: SystemTime::now() + std::time::Duration::from_secs(3600),
             }),
-            v6: None,
+            v6: Vec::new(),
             v6_prefix: None,
-            slaac: vec![],
-            seen_v4: vec![],
+            seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
         },
     );
@@ -256,8 +249,11 @@ fn test_resolve_local_v6_suffix_merging() {
 
     let mut table = DeviceTable::new();
     let mut dev = mock_device([1, 2, 3, 4, 5, 6], "test");
-    dev.v6_suffix = Some("::beef".to_string());
-    dev.slaac = vec!["2001:db8::1".parse().unwrap()];
+    dev.v6.push(IPv6State::Static(
+        Ipv6AddrOrSuffix::parse("::beef").unwrap(),
+    ));
+    dev.v6
+        .push(IPv6State::Slaac("2001:db8::1".parse().unwrap()));
     table.devices.insert(dev.mac, dev.clone());
 
     // CRÍTICO: Atualiza os índices do mock

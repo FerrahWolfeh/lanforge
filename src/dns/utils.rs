@@ -34,21 +34,23 @@ pub fn parse_arpa(name: &str) -> Option<IpAddr> {
     None
 }
 
-pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &str) -> Option<Ipv6Addr> {
-    let clean_suffix = suffix.strip_prefix("::").unwrap_or(suffix);
-    let suffix_ip: Ipv6Addr = format!("::{clean_suffix}").parse().ok()?;
-    let suf_segs = suffix_ip.segments();
-
-    Some(Ipv6Addr::new(
-        prefix_segs[0],
-        prefix_segs[1],
-        prefix_segs[2],
-        prefix_segs[3],
-        suf_segs[4],
-        suf_segs[5],
-        suf_segs[6],
-        suf_segs[7],
-    ))
+pub fn combine_prefix_suffix(
+    prefix_segs: &[u16],
+    suffix: &crate::device::Ipv6AddrOrSuffix,
+) -> Option<Ipv6Addr> {
+    match suffix {
+        crate::device::Ipv6AddrOrSuffix::Full(ip) => Some(*ip),
+        crate::device::Ipv6AddrOrSuffix::Suffix(s) => Some(Ipv6Addr::new(
+            prefix_segs[0],
+            prefix_segs[1],
+            prefix_segs[2],
+            prefix_segs[3],
+            u16::from_be_bytes([s[0], s[1]]),
+            u16::from_be_bytes([s[2], s[3]]),
+            u16::from_be_bytes([s[4], s[5]]),
+            u16::from_be_bytes([s[6], s[7]]),
+        )),
+    }
 }
 
 /// Extrai o hostname local diretamente dos labels do pacote DNS bruto.

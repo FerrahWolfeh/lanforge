@@ -67,7 +67,11 @@ impl LogHandler {
                     mac.to_string().red()
                 );
             }
-            LanforgeEvent::PrefixChanged { gua, preferred, valid } => {
+            LanforgeEvent::PrefixChanged {
+                gua,
+                preferred,
+                valid,
+            } => {
                 println!(
                     "[{}] {} {} {:?} (pref={}, valid={})",
                     now,
@@ -137,12 +141,16 @@ impl LogHandler {
                 None => "Static IPv4 removed".dimmed().to_string(),
             },
             DeviceChange::V6SuffixChanged { suffix } => match suffix {
-                Some(s) => format!("Static IPv6 suffix set: {}", s.bold()),
+                Some(s) => format!("Static IPv6 suffix set: {}", s.to_string().bold()),
                 None => "Static IPv6 suffix removed".dimmed().to_string(),
             },
             DeviceChange::DuidAssociated => "DUID associated".to_string(),
             DeviceChange::V6PrefixAssigned { prefix, len } => {
-                format!("IA_PD assigned: {}/{}", prefix.to_string().bright_cyan(), len)
+                format!(
+                    "IA_PD assigned: {}/{}",
+                    prefix.to_string().bright_cyan(),
+                    len
+                )
             }
         }
     }

@@ -1,4 +1,4 @@
-use crate::state::MacAddr;
+use crate::device::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

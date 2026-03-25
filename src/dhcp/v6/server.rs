@@ -26,8 +26,9 @@ use super::config::Dhcpv6Config;
 use super::duid::Duid;
 use super::pool::Ipv6Pool;
 use crate::bus::ManagedTable;
+use crate::device::MacAddr;
 use crate::dhcp::identity::DeviceIdentity;
-use crate::state::{DeviceUpdate, MacAddr};
+use crate::state::DeviceUpdate;
 use std::sync::Arc;
 
 /// Resultado de processar uma mensagem `DHCPv6`.

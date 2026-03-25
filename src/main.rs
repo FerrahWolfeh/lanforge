@@ -36,6 +36,7 @@ mod cli;
 mod config;
 mod control;
 mod db;
+mod device;
 mod dhcp;
 mod dns;
 mod netlink;

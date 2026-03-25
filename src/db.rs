@@ -43,8 +43,9 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::bus::{EventBus, LanforgeEvent, ManagedTable};
+use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin};
 use crate::dhcp::v6::duid::Duid;
-use crate::state::{DeviceTable, DeviceUpdate, MacAddr};
+use crate::state::{DeviceTable, DeviceUpdate};
 
 // ---------------------------------------------------------------------------
 // LeaseDb — motor SQLite síncrono
@@ -177,7 +178,24 @@ impl LeaseDb {
             let last_seen = system_time_to_unix(device.last_seen);
             let duid_blob: Option<Vec<u8>> = device.duid.as_ref().map(|d| d.bytes.clone());
             let managed_at_unix: Option<i64> = device.managed_at.map(system_time_to_unix);
-            let v4_static_str: Option<String> = device.v4_static.map(|ip| ip.to_string());
+
+            let (v4_static_str, v4_lease) = match &device.v4 {
+                IPv4State::Static(ip) => (Some(ip.to_string()), None),
+                IPv4State::Dynamic(l) => (None, Some(l.clone())),
+                IPv4State::None => (None, None),
+            };
+
+            let mut v6_static_str = None;
+            let mut v6_lease = None;
+            let mut slaac_addrs = Vec::new();
+
+            for state in &device.v6 {
+                match state {
+                    IPv6State::Static(s) => v6_static_str = Some(s.to_string()),
+                    IPv6State::Dynamic(l) => v6_lease = Some(l.clone()),
+                    IPv6State::Slaac(ip) => slaac_addrs.push(ip),
+                }
+            }
 
             // Tabela principal: Se o MAC já existir, atualiza apenas os dados.
             tx.execute(
@@ -195,20 +213,20 @@ impl LeaseDb {
                 params![
                     mac_str,
                     device.hostname,
-                    i32::from(device.is_static),
+                    i32::from(device.is_static()),
                     duid_blob,
                     last_seen,
                     device.origin.as_str(),
                     managed_at_unix,
                     v4_static_str,
-                    device.v6_suffix.clone()
+                    v6_static_str
                 ],
             )?;
 
             // Tabelas filhas: É mais barato deletar as referências DESTE mac e recriar
             // do que tentar fazer diff SQL de arrays.
             tx.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&mac_str])?;
-            if let Some(v4) = &device.v4 {
+            if let Some(v4) = v4_lease {
                 tx.execute(
                     "INSERT INTO v4_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
                     params![mac_str, v4.ip.to_string(), system_time_to_unix(v4.expires)],
@@ -216,7 +234,7 @@ impl LeaseDb {
             }
 
             tx.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&mac_str])?;
-            if let Some(v6) = &device.v6 {
+            if let Some(v6) = v6_lease {
                 tx.execute(
                     "INSERT INTO v6_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
                     params![mac_str, v6.ip.to_string(), system_time_to_unix(v6.expires)],
@@ -224,7 +242,7 @@ impl LeaseDb {
             }
 
             tx.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&mac_str])?;
-            for addr in &device.slaac {
+            for addr in slaac_addrs {
                 tx.execute(
                     "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
                     params![mac_str, addr.to_string()],
@@ -243,8 +261,8 @@ impl LeaseDb {
         // 2. Limpeza cirúrgica (Deletar do DB os devices que expiraram da memória)
         let mut stmt = tx.prepare("SELECT mac FROM devices")?;
         let db_macs: Vec<String> = stmt
-            .query_map([], |row| row.get(0))?
-            .filter_map(Result::ok)
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
             .collect();
         drop(stmt); // Libera o statement para podermos usar o tx abaixo
 
@@ -305,13 +323,13 @@ impl LeaseDb {
         for (
             mac_str,
             hostname,
-            is_static,
+            _is_static,
             duid_bytes,
             last_seen_unix,
             origin_str,
             managed_at,
             v4_static_str,
-            v6_suffix,
+            v6_suffix_str,
         ) in rows
         {
             let Some(mac) = MacAddr::parse(&mac_str) else {
@@ -324,17 +342,25 @@ impl LeaseDb {
             if !hostname.is_empty() {
                 dev.hostname = hostname;
             }
-            dev.is_static = is_static;
             dev.last_seen = unix_to_system_time(last_seen_unix);
 
             dev.origin = match origin_str.as_str() {
-                "toml" => crate::state::Origin::Toml,
-                "cli" => crate::state::Origin::Cli,
-                _ => crate::state::Origin::Dynamic,
+                "toml" => Origin::Toml,
+                "cli" => Origin::Cli,
+                _ => Origin::Dynamic,
             };
             dev.managed_at = managed_at.map(unix_to_system_time);
-            dev.v4_static = v4_static_str.and_then(|s| s.parse().ok());
-            dev.v6_suffix = v6_suffix;
+
+            if let Some(v4_str) = v4_static_str
+                && let Ok(ip) = v4_str.parse::<Ipv4Addr>()
+            {
+                dev.v4 = IPv4State::Static(ip);
+            }
+            if let Some(v6_str) = v6_suffix_str
+                && let Some(suf) = Ipv6AddrOrSuffix::parse(&v6_str)
+            {
+                dev.v6.push(IPv6State::Static(suf));
+            }
 
             // Restaura DUID via apply_update — reconstrói o duid_index
             if let Some(bytes) = duid_bytes {
@@ -665,7 +691,7 @@ fn unix_to_system_time(unix: i64) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::V4Lease;
+    use crate::device::{IPv4State, V4Lease};
     use std::time::UNIX_EPOCH;
 
     fn make_mac(last: u8) -> MacAddr {
@@ -687,7 +713,7 @@ mod tests {
         let mac = make_mac(1);
         let dev = table.get_or_insert(mac);
         dev.hostname = "TestDevice".into();
-        dev.v4 = Some(V4Lease {
+        dev.v4 = IPv4State::Dynamic(V4Lease {
             ip: Ipv4Addr::new(192, 168, 0, 100),
             expires: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
         });
@@ -697,7 +723,7 @@ mod tests {
 
         let dev = loaded.devices().next().unwrap();
         assert_eq!(dev.hostname, "TestDevice");
-        assert_eq!(dev.v4.as_ref().unwrap().ip, Ipv4Addr::new(192, 168, 0, 100));
+        assert_eq!(dev.v4.ip().unwrap(), Ipv4Addr::new(192, 168, 0, 100));
     }
 
     #[test]
@@ -722,7 +748,17 @@ mod tests {
         db.save_table(&table).unwrap();
         let loaded = db.load_table().unwrap();
 
-        assert_eq!(loaded.devices().next().unwrap().slaac.len(), 3);
+        assert_eq!(
+            loaded
+                .devices()
+                .next()
+                .unwrap()
+                .v6
+                .iter()
+                .filter(|s| matches!(s, IPv6State::Slaac(_)))
+                .count(),
+            3
+        );
     }
 
     #[test]
@@ -778,9 +814,9 @@ mod tests {
         let loaded = db.load_table().unwrap();
 
         let dev = loaded.devices().next().unwrap();
-        assert!(dev.v6.is_some());
+        assert_eq!(dev.v6.len(), 1);
         assert_eq!(
-            dev.v6.as_ref().unwrap().ip,
+            dev.v6[0].ip().unwrap(),
             "fd97:f00d:cafe:3731::1057:cafe"
                 .parse::<Ipv6Addr>()
                 .unwrap()
@@ -837,7 +873,10 @@ mod tests {
         assert_eq!(table.devices().count(), 1, "MAC inválido deve ser ignorado");
         let dev = table.devices().next().unwrap();
         assert_eq!(dev.hostname, "Valido");
-        assert!(dev.v4.is_none(), "IP inválido deve ser descartado");
+        assert!(
+            matches!(dev.v4, IPv4State::None),
+            "IP inválido deve ser descartado"
+        );
     }
 
     #[tokio::test]

@@ -6,10 +6,11 @@ use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::str::FromStr;
 
+use crate::device::Device;
 use crate::dns::config::DnsConfig;
 use crate::dns::response::{base_response, empty_noerror_response};
 use crate::dns::utils::{combine_prefix_suffix, parse_arpa};
-use crate::state::{Device, DeviceTable};
+use crate::state::DeviceTable;
 
 pub fn resolve_local(
     query: &Message,
@@ -23,28 +24,23 @@ pub fn resolve_local(
     let name = question.name().clone();
     let mut records: Vec<Record> = Vec::new();
 
-    let static_entry = table.static_entries.get(&device.mac);
+    let _static_entry = table.static_entries.get(&device.mac);
 
-    if matches!(qtype, RecordType::A | RecordType::ANY) {
-        let v4_ip = static_entry
-            .and_then(|e| e.v4_ip)
-            .or(device.v4_static)
-            .or_else(|| device.v4.as_ref().map(|l| l.ip));
-
-        if let Some(ip) = v4_ip {
-            records.push(Record::from_rdata(
-                name.clone(),
-                cfg.ttl,
-                RData::A(ip.into()),
-            ));
-        }
+    if matches!(qtype, RecordType::A | RecordType::ANY)
+        && let Some(ip) = device.v4.ip()
+    {
+        records.push(Record::from_rdata(
+            name.clone(),
+            cfg.ttl,
+            RData::A(ip.into()),
+        ));
     }
 
     if matches!(qtype, RecordType::AAAA | RecordType::ANY) {
         let mut ulas = Vec::new();
         let mut others = Vec::new();
 
-        let mut classify_ip = |ip: Ipv6Addr| {
+        let mut classify_and_push = |ip: Ipv6Addr| {
             if (ip.segments()[0] & 0xfe00) == 0xfc00 {
                 ulas.push(ip);
             } else {
@@ -52,52 +48,59 @@ pub fn resolve_local(
             }
         };
 
-        if let Some(v6) = &device.v6 {
-            classify_ip(v6.ip);
+        let mut applied_prefixes = HashSet::<[u16; 4]>::new();
+        let mut ula_prefix = None;
+
+        if let Some(ula) = cfg.ula_prefix {
+            let segs = ula.segments();
+            let p = [segs[0], segs[1], segs[2], segs[3]];
+            ula_prefix = Some(p);
+            applied_prefixes.insert(p);
         }
 
-        let v6_suffix = static_entry
-            .and_then(|e| e.v6_suffix.as_ref())
-            .or(device.v6_suffix.as_ref());
-
-        if let Some(suffix) = v6_suffix {
-            if suffix.starts_with("::") {
-                let mut applied_prefixes = HashSet::<[u16; 4]>::new();
-
-                if let Some(ula) = cfg.ula_prefix {
-                    let segments = ula.segments();
-                    let ula_prefix = [segments[0], segments[1], segments[2], segments[3]];
-                    if applied_prefixes.insert(ula_prefix)
-                        && let Some(ip) = combine_prefix_suffix(&ula_prefix, suffix)
-                    {
-                        classify_ip(ip);
-                    }
-                }
-
-                for slaac_ip in &device.slaac {
-                    let segments = slaac_ip.segments();
-                    let prefix = [segments[0], segments[1], segments[2], segments[3]];
-                    if applied_prefixes.insert(prefix)
-                        && let Some(ip) = combine_prefix_suffix(&prefix, suffix)
-                    {
-                        classify_ip(ip);
-                    }
-                }
-            } else if let Ok(ip) = suffix.parse::<Ipv6Addr>() {
-                classify_ip(ip);
+        // 1. Collect prefixes from SLAAC addresses to apply to suffixes later
+        for state in &device.v6 {
+            if let crate::device::IPv6State::Slaac(ip) = state {
+                let segs = ip.segments();
+                applied_prefixes.insert([segs[0], segs[1], segs[2], segs[3]]);
             }
         }
 
-        for ip in &device.slaac {
-            classify_ip(*ip);
+        // 2. Process all states
+        for state in &device.v6 {
+            match state {
+                crate::device::IPv6State::Dynamic(lease) => classify_and_push(lease.ip),
+                crate::device::IPv6State::Slaac(ip) => classify_and_push(*ip),
+                crate::device::IPv6State::Static(suf) => match suf {
+                    crate::device::Ipv6AddrOrSuffix::Full(ip) => classify_and_push(*ip),
+                    crate::device::Ipv6AddrOrSuffix::Suffix(_) => {
+                        // Apply suffix to all learned prefixes
+                        for prefix in &applied_prefixes {
+                            if let Some(ip) = combine_prefix_suffix(prefix, suf) {
+                                classify_and_push(ip);
+                            }
+                        }
+                        // Also apply to ULA prefix if not already in applied_prefixes (redundant but safe)
+                        if let Some(p) = &ula_prefix
+                            && !applied_prefixes.contains(p)
+                            && let Some(ip) = combine_prefix_suffix(p, suf)
+                        {
+                            classify_and_push(ip);
+                        }
+                    }
+                },
+            }
         }
 
+        let mut unique = HashSet::new();
         for ip in ulas.into_iter().chain(others.into_iter()) {
-            records.push(Record::from_rdata(
-                name.clone(),
-                cfg.ttl,
-                RData::AAAA(ip.into()),
-            ));
+            if unique.insert(ip) {
+                records.push(Record::from_rdata(
+                    name.clone(),
+                    cfg.ttl,
+                    RData::AAAA(ip.into()),
+                ));
+            }
         }
     }
 

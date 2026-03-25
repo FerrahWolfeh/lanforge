@@ -10,7 +10,8 @@ use tracing::{debug, error, info};
 
 use crate::bus::{EventBus, LanforgeEvent, ManagedTable};
 use crate::control::api::{self, Command, Interfaces, Response, SimpleSuccess};
-use crate::state::{DeviceUpdate, MacAddr};
+use crate::device::{IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin};
+use crate::state::DeviceUpdate;
 
 fn format_iso8601(time: std::time::SystemTime) -> String {
     let dt: chrono::DateTime<chrono::Utc> = time.into();
@@ -235,19 +236,27 @@ impl ClientContext {
                 online_ct += 1;
             }
 
-            if dev.is_static {
+            if dev.is_static() {
                 static_toml += 1;
             } else {
                 dynamic += 1;
             }
 
-            if dev.v4.is_some() {
+            if dev.v4.ip().is_some() {
                 v4_active += 1;
             }
-            if dev.v6.is_some() {
+            if dev
+                .v6
+                .iter()
+                .any(|s| matches!(s, IPv6State::Dynamic(_) | IPv6State::Static(_)))
+            {
                 v6_active += 1;
             }
-            slaac_addrs += dev.slaac.len();
+            slaac_addrs += dev
+                .v6
+                .iter()
+                .filter(|s| matches!(s, IPv6State::Slaac(_)))
+                .count();
         }
 
         status.devices.total = dev_ct;
@@ -255,7 +264,7 @@ impl ClientContext {
         status.devices.static_toml = static_toml;
         status.devices.managed_cli = table_guard
             .devices()
-            .filter(|d| d.origin == crate::state::Origin::Cli)
+            .filter(|d| d.origin == Origin::Cli)
             .count();
 
         drop(table_guard);
@@ -285,12 +294,14 @@ impl ClientContext {
                     || dev.mac.to_string().to_lowercase().contains(&f_lower)
                     || dev
                         .v4
-                        .as_ref()
-                        .is_some_and(|v| v.ip.to_string().contains(&f_lower))
-                    || dev
-                        .v6
-                        .as_ref()
-                        .is_some_and(|v| v.ip.to_string().contains(&f_lower))
+                        .ip()
+                        .map(|ip| ip.to_string())
+                        .is_some_and(|s| s.contains(&f_lower))
+                    || dev.v6.iter().any(|s| {
+                        s.ip()
+                            .map(|ip| ip.to_string())
+                            .is_some_and(|s| s.contains(&f_lower))
+                    })
             });
 
             if !matches_filter {
@@ -309,24 +320,44 @@ impl ClientContext {
                 online: is_online,
                 last_seen: format_iso8601(dev.last_seen),
                 duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),
-                v4: dev.v4.as_ref().map(|v| api::LeaseInfo {
-                    ip: v.ip.to_string(),
-                    expires: format_iso8601(v.expires),
-                    reserved: dev.is_static,
-                }),
-                v6: dev.v6.as_ref().map(|v| api::LeaseInfo {
-                    ip: v.ip.to_string(),
-                    expires: format_iso8601(v.expires),
-                    reserved: dev.is_static,
-                }),
+                v4: match &dev.v4 {
+                    crate::device::IPv4State::Static(ip) => Some(api::LeaseInfo {
+                        ip: ip.to_string(),
+                        expires: "Static".to_string(),
+                        reserved: true,
+                    }),
+                    crate::device::IPv4State::Dynamic(v) => Some(api::LeaseInfo {
+                        ip: v.ip.to_string(),
+                        expires: format_iso8601(v.expires),
+                        reserved: dev.is_static(),
+                    }),
+                    crate::device::IPv4State::None => None,
+                },
                 seen_v4: dev.seen_v4.iter().map(|ip| ip.to_string()).collect(),
+                v6: dev.v6.iter().find_map(|s| match s {
+                    crate::device::IPv6State::Dynamic(v) => Some(api::LeaseInfo {
+                        ip: v.ip.to_string(),
+                        expires: format_iso8601(v.expires),
+                        reserved: dev.is_static(),
+                    }),
+                    crate::device::IPv6State::Static(crate::device::Ipv6AddrOrSuffix::Full(ip)) => {
+                        Some(api::LeaseInfo {
+                            ip: ip.to_string(),
+                            expires: "Static".to_string(),
+                            reserved: true,
+                        })
+                    }
+                    _ => None,
+                }),
                 ipv6_addrs: {
                     let mut list = Vec::new();
-                    for ip in &dev.slaac {
-                        list.push(api::Ipv6Entry {
-                            addr: ip.to_string(),
-                            kind: get_v6_kind(ip).to_string(),
-                        });
+                    for state in &dev.v6 {
+                        if let crate::device::IPv6State::Slaac(ip) = state {
+                            list.push(api::Ipv6Entry {
+                                addr: ip.to_string(),
+                                kind: get_v6_kind(ip).to_string(),
+                            });
+                        }
                     }
                     list
                 },
@@ -409,14 +440,15 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
                 v6_suffix,
             }) => {
                 if let Some(m) = mac {
-                    if let Some(mac_addr) = crate::state::MacAddr::parse(&m) {
+                    if let Some(mac_addr) = MacAddr::parse(&m) {
                         let v4_static = v4.and_then(|s| s.parse().ok());
+                        let v6_suffix_parsed = v6_suffix.and_then(|s| Ipv6AddrOrSuffix::parse(&s));
                         ctx.table
-                            .update(crate::state::DeviceUpdate::CliHostUpdated {
+                            .update(DeviceUpdate::CliHostUpdated {
                                 mac: mac_addr,
                                 hostname: hostname.map(Some),
                                 v4_static: Some(v4_static),
-                                v6_suffix: Some(v6_suffix),
+                                v6_suffix: Some(v6_suffix_parsed),
                             })
                             .await;
 
@@ -435,7 +467,7 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
                 }
             }
             Ok(Command::HostSet { mac, field, value }) => {
-                if let Some(mac_addr) = crate::state::MacAddr::parse(&mac) {
+                if let Some(mac_addr) = MacAddr::parse(&mac) {
                     let mut hn = None;
                     let mut v4s = None;
                     let mut v6s = None;
@@ -459,10 +491,13 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
                         "v6_suffix" | "v6" => {
                             if value.is_empty() {
                                 v6s = Some(None);
+                                None
+                            } else if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
+                                v6s = Some(Some(suf));
+                                None
                             } else {
-                                v6s = Some(Some(value.clone()));
+                                Some("Interface ID (sufixo) ou IPv6 inválido")
                             }
-                            None
                         }
                         _ => Some("Campo desconhecido"),
                     };
@@ -473,7 +508,7 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
                         }
                     } else {
                         ctx.table
-                            .update(crate::state::DeviceUpdate::CliHostUpdated {
+                            .update(DeviceUpdate::CliHostUpdated {
                                 mac: mac_addr,
                                 hostname: hn,
                                 v4_static: v4s,
@@ -494,7 +529,7 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
             Ok(Command::HostList) => ctx.handle_devices(None).await,
 
             Ok(Command::HostRemove { mac }) => {
-                if let Some(mac_addr) = crate::state::MacAddr::parse(&mac) {
+                if let Some(mac_addr) = MacAddr::parse(&mac) {
                     let mut w = ctx.table.write();
                     w.devices.remove(&mac_addr);
                     w.static_entries.remove(&mac_addr);
@@ -565,7 +600,8 @@ mod tests {
     use crate::bus::EventBus;
     use crate::config::{Config, DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg};
     use crate::control::api::Response;
-    use crate::state::{DeviceUpdate, MacAddr};
+    use crate::device::MacAddr;
+    use crate::state::DeviceUpdate;
 
     fn make_dummy_config() -> Config {
         Config {

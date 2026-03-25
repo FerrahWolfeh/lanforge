@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::time::SystemTime;
 
-use crate::state::MacAddr;
+use crate::device::MacAddr;
 
 /// Representação de uma alocação ativa.
 #[derive(Debug, Clone)]

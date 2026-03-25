@@ -1,4 +1,4 @@
-use crate::state::{DeviceTable, MacAddr};
+use crate::{device::MacAddr, state::DeviceTable};
 use std::fmt;
 
 /// Identidade " Who TF am I?" (WTFAI) de um dispositivo.

@@ -32,7 +32,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use tokio::sync::broadcast;
 
-use crate::state::MacAddr;
+use crate::device::MacAddr;
 
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +69,9 @@ pub enum DeviceChange {
     V4StaticChanged { ip: Option<Ipv4Addr> },
 
     /// Um sufixo IPv6 estático foi definido ou removido via CLI.
-    V6SuffixChanged { suffix: Option<String> },
+    V6SuffixChanged {
+        suffix: Option<crate::device::Ipv6AddrOrSuffix>,
+    },
 
     /// Um DUID foi associado ao device.
     DuidAssociated,

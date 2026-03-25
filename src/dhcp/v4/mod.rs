@@ -43,7 +43,8 @@ use dhcproto::v4::{Message, Opcode};
 use dhcproto::{Decodable, Decoder};
 
 use crate::bus::ManagedTable;
-use crate::state::{DeviceUpdate, MacAddr};
+use crate::device::MacAddr;
+use crate::state::DeviceUpdate;
 use config::Dhcpv4Config;
 use raw::RawSender;
 use server::{DhcpServer, HandleResult};

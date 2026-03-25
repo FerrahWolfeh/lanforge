@@ -18,213 +18,20 @@
 //! evento `DeviceTableDirty` no `EventBus`.
 
 use std::collections::HashMap;
-use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 use std::time::SystemTime;
 
 use crate::config::StaticDeviceCfg;
+use crate::device::{
+    Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin, V4Lease, V6Lease,
+    V6PrefixLease,
+};
 use crate::dhcp::v6::duid::Duid;
-use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
-
-// ---------------------------------------------------------------------------
-// MacAddr
-// ---------------------------------------------------------------------------
-
-/// Endereço MAC de 6 bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MacAddr(
-    #[serde(serialize_with = "serialize_mac", deserialize_with = "deserialize_mac")] pub [u8; 6],
-);
-
-fn deserialize_mac<'de, D>(deserializer: D) -> Result<[u8; 6], D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    MacAddr::parse(&s)
-        .map(|m| m.0)
-        .ok_or_else(|| serde::de::Error::custom(format!("Invalid MAC address: {}", s)))
-}
-
-fn serialize_mac<S>(mac: &[u8; 6], serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    ))
-}
-
-impl MacAddr {
-    /// Parse from "aa:bb:cc:dd:ee:ff" (case-insensitive).
-    pub fn parse(s: &str) -> Option<Self> {
-        let s = s.trim();
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 6 {
-            return None;
-        }
-        let mut bytes = [0u8; 6];
-        for (i, part) in parts.iter().enumerate() {
-            bytes[i] = u8::from_str_radix(part, 16).ok()?;
-        }
-        Some(Self(bytes))
-    }
-
-    /// Constrói a partir de um slice de bytes cru.
-    pub const fn from_slice(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() == 6 {
-            let mut arr = [0u8; 6];
-            arr.copy_from_slice(bytes);
-            Some(Self(arr))
-        } else {
-            None
-        }
-    }
-}
-
-/// Zero-cost conversion de array fixo.
-impl From<[u8; 6]> for MacAddr {
-    fn from(arr: [u8; 6]) -> Self {
-        Self(arr)
-    }
-}
-
-impl FromStr for MacAddr {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Self::parse(s).ok_or_else(|| format!("Invalid MAC address: {}", s))
-    }
-}
-
-/// Acesso sem cópia ao array interno — útil para FFI / Netlink.
-impl AsRef<[u8; 6]> for MacAddr {
-    fn as_ref(&self) -> &[u8; 6] {
-        &self.0
-    }
-}
-
-impl fmt::Display for MacAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
-        )
-    }
-}
-
-impl fmt::Debug for MacAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "MacAddr({self})")
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Device + Lease types
 // ---------------------------------------------------------------------------
-
-/// Tudo que se sabe sobre um dispositivo na rede.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Device {
-    pub mac: MacAddr,
-    pub hostname: String,
-
-    /// Indica a origem das configurações do dispositivo.
-    pub origin: Origin,
-
-    /// Timestamp Unix de quando foi gerenciado via CLI, se aplicável.
-    #[serde(serialize_with = "serialize_time_opt")]
-    pub managed_at: Option<SystemTime>,
-
-    /// Configuração estática IPv4 via CLI/TOML (opcional).
-    pub v4_static: Option<Ipv4Addr>,
-
-    /// Sufixo estático IPv6 via CLI/TOML (opcional).
-    pub v6_suffix: Option<String>,
-
-    /// true = veio da config estática; campos protegidos contra sobrescrita dinâmica.
-    pub is_static: bool,
-    pub duid: Option<Duid>,
-    pub v4: Option<V4Lease>,
-    pub v6: Option<V6Lease>,
-    pub v6_prefix: Option<V6PrefixLease>,
-
-    /// Endereços SLAAC observados via NDP.
-    pub slaac: Vec<Ipv6Addr>,
-
-    /// Endereços IPv4 observados via ARP/Netlink (não necessariamente leases).
-    pub seen_v4: Vec<Ipv4Addr>,
-
-    #[serde(serialize_with = "serialize_time")]
-    pub last_seen: SystemTime,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum Origin {
-    Toml,
-    Cli,
-    #[default]
-    Dynamic,
-}
-
-impl Origin {
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Toml => "toml",
-            Self::Cli => "cli",
-            Self::Dynamic => "dynamic",
-        }
-    }
-}
-
-fn serialize_time_opt<S>(time: &Option<SystemTime>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    match time {
-        Some(t) => {
-            let elapsed = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
-            serializer.serialize_u64(elapsed.as_secs())
-        }
-        None => serializer.serialize_none(),
-    }
-}
-
-fn serialize_time<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let elapsed = time
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    serializer.serialize_u64(elapsed.as_secs())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct V4Lease {
-    pub ip: Ipv4Addr,
-    #[serde(serialize_with = "serialize_time")]
-    pub expires: SystemTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct V6Lease {
-    pub ip: Ipv6Addr,
-    #[serde(serialize_with = "serialize_time")]
-    pub expires: SystemTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct V6PrefixLease {
-    pub prefix: Ipv6Addr,
-    pub len: u8,
-    #[serde(serialize_with = "serialize_time")]
-    pub expires: SystemTime,
-}
 
 /// Registro de config estática para um dispositivo.
 #[derive(Debug, Clone)]
@@ -232,7 +39,7 @@ pub struct StaticEntry {
     pub mac: MacAddr,
     pub hostname: String,
     pub v4_ip: Option<Ipv4Addr>,
-    pub v6_suffix: Option<String>,
+    pub v6_suffix: Option<Ipv6AddrOrSuffix>,
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +102,7 @@ pub enum DeviceUpdate {
         mac: MacAddr,
         hostname: Option<Option<String>>,
         v4_static: Option<Option<Ipv4Addr>>,
-        v6_suffix: Option<Option<String>>,
+        v6_suffix: Option<Option<Ipv6AddrOrSuffix>>,
     },
 
     /// Limpa todos os endereços SLAAC de um device antes de re-scan.
@@ -361,53 +168,62 @@ impl DeviceTable {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
                 let dev = self.get_or_insert(mac);
                 let new_lease = V4Lease { ip, expires };
-                // Só marca dirty se mudou algo relevante
-                let changed = dev
-                    .v4
-                    .as_ref()
-                    .is_none_or(|old| old.ip != ip || old.expires != expires);
-                dev.v4 = Some(new_lease);
-                dev.last_seen = SystemTime::now();
-                if changed {
-                    debug!("[state] V4 lease {} → {}", mac, ip);
+
+                match &dev.v4 {
+                    IPv4State::Static(s_ip) if *s_ip == ip => false,
+                    IPv4State::Dynamic(old) if old.ip == ip && old.expires == expires => false,
+                    _ => {
+                        debug!("[state] V4 lease {} → {}", mac, ip);
+                        dev.v4 = IPv4State::Dynamic(new_lease);
+                        dev.last_seen = SystemTime::now();
+                        true
+                    }
                 }
-                changed
             }
 
             DeviceUpdate::V6LeaseGranted {
                 mac,
                 duid,
-                iaid,
+                iaid: _iaid,
                 ip,
                 expires,
             } => {
                 if let Some(m) = mac {
                     self.duid_index.insert(duid.clone(), m);
                     let dev = self.get_or_insert(m);
-                    let changed = dev.duid.as_ref() != Some(&duid)
-                        || dev
-                            .v6
-                            .as_ref()
-                            .is_none_or(|old| old.ip != ip || old.expires != expires);
-                    dev.duid = Some(duid);
-                    dev.v6 = Some(V6Lease { ip, expires });
-                    dev.last_seen = SystemTime::now();
-                    if changed {
-                        debug!("[state] V6 lease {} ({}) → {}", m, iaid, ip);
+                    let new_lease = V6Lease { ip, expires };
+
+                    let mut found = false;
+                    for state in &mut dev.v6 {
+                        if let IPv6State::Dynamic(old) = state
+                            && old.ip == ip
+                        {
+                            if old.expires == expires {
+                                return false;
+                            }
+                            *old = new_lease.clone();
+                            found = true;
+                            break;
+                        }
                     }
-                    changed
+
+                    if !found {
+                        dev.v6.push(IPv6State::Dynamic(new_lease));
+                    }
+                    dev.duid = Some(duid);
+                    dev.last_seen = SystemTime::now();
+                    true
                 } else {
-                    // Sem MAC: guarda como órfão
-                    debug!("[state] V6 lease órfão ({}) → {}", iaid, ip);
-                    self.orphaned_v6.insert(ip, (duid, iaid, expires));
-                    false // Mudança de estado interna, mas sem mexer em Device físico ainda
+                    debug!("[state] V6 lease órfão → {}", ip);
+                    self.orphaned_v6.insert(ip, (duid, _iaid, expires));
+                    false
                 }
             }
 
             DeviceUpdate::V6PrefixAssigned {
                 mac,
                 duid,
-                iaid,
+                iaid: _,
                 prefix,
                 len,
                 expires,
@@ -426,25 +242,23 @@ impl DeviceTable {
                         expires,
                     });
                     dev.last_seen = SystemTime::now();
-                    if changed {
-                        debug!("[state] V6 prefix {} ({}) → {}/{}", m, iaid, prefix, len);
-                    }
                     changed
                 } else {
-                    // IA_PD órfão é raro mas possível (SARR sem DAD na rede local)
-                    // Por simplicidade, ignoramos prefixos órfãos por enquanto pois
-                    // não temos onde pendurá-los sem um IP associado para o NDP.
                     false
                 }
             }
 
             DeviceUpdate::SlaacObserved { mac, addr } => {
                 let dev = self.get_or_insert(mac);
-                if dev.slaac.contains(&addr) {
+                if dev
+                    .v6
+                    .iter()
+                    .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr))
+                {
                     dev.last_seen = SystemTime::now();
-                    false // sem mudança estrutural
+                    false
                 } else {
-                    dev.slaac.push(addr);
+                    dev.v6.push(IPv6State::Slaac(addr));
                     dev.last_seen = SystemTime::now();
                     debug!("[state] SLAAC {} → {}", mac, addr);
                     true
@@ -453,21 +267,16 @@ impl DeviceTable {
 
             DeviceUpdate::NdpSeen { mac, ip } => {
                 self.ndp_cache.insert(ip, (mac, SystemTime::now()));
-
-                // Se tínhamos um lease V6 pendente para este IP, promovemos agora
                 if let Some((duid, _iaid, expires)) = self.orphaned_v6.remove(&ip) {
-                    debug!("[state] Promovendo lease órfão {} → {}", ip, mac);
-                    {
-                        let dev = self.get_or_insert(mac);
-                        dev.duid = Some(duid.clone());
-                        dev.v6 = Some(V6Lease { ip, expires });
-                        dev.last_seen = SystemTime::now();
-                    }
-                    self.duid_index.insert(duid, mac);
+                    self.apply_update(DeviceUpdate::V6LeaseGranted {
+                        mac: Some(mac),
+                        duid,
+                        iaid: _iaid,
+                        ip,
+                        expires,
+                    });
                     return true;
                 }
-
-                // last_seen bump não conta como mudança estrutural para o dirty event
                 let dev = self.get_or_insert(mac);
                 dev.last_seen = SystemTime::now();
                 false
@@ -480,26 +289,23 @@ impl DeviceTable {
                     false
                 } else {
                     dev.seen_v4.push(ip);
-                    debug!("[state] ARP seen {} -> {}", mac, ip);
                     true
                 }
             }
 
             DeviceUpdate::HostnameHint { mac, hostname } => {
                 let dev = self.get_or_insert(mac);
-                if dev.is_static {
-                    // Config estática tem precedência — ignora o hint silenciosamente
+                if dev.is_static() {
                     return false;
                 }
                 if dev.hostname == hostname {
                     return false;
                 }
-                debug!("[state] Hostname {} → {:?}", mac, hostname);
                 dev.hostname = hostname;
                 true
             }
 
-            DeviceUpdate::DuidAssociated { mac, duid, iaid } => {
+            DeviceUpdate::DuidAssociated { mac, duid, iaid: _ } => {
                 if let Some(m) = mac {
                     self.duid_index.insert(duid.clone(), m);
                     let dev = self.get_or_insert(m);
@@ -509,9 +315,6 @@ impl DeviceTable {
                     dev.duid = Some(duid);
                     true
                 } else {
-                    debug!("[state] DUID órfão {} para IAID {}", duid, iaid);
-                    // No Association-only phase without IP, we don't strictly need to orphan it
-                    // since DHCPv6 standard (RFC 8415) usually gives IP in the same transaction or Request.
                     false
                 }
             }
@@ -523,18 +326,12 @@ impl DeviceTable {
                 v6_suffix,
             } => {
                 let dev = self.get_or_insert(mac);
-
-                // Se era gerido pelo TOML, não permitimos modificação via CLI
                 if dev.origin == Origin::Toml {
-                    warn!(
-                        "Tentativa de modificar device estático do TOML via CLI: {}",
-                        mac
-                    );
+                    warn!("Tentativa de modificar device estático do TOML: {}", mac);
                     return false;
                 }
 
                 let mut changed = false;
-
                 if let Some(hn_opt) = hostname {
                     if let Some(hn) = hn_opt {
                         if dev.hostname != hn {
@@ -547,101 +344,132 @@ impl DeviceTable {
                     }
                 }
 
-                if let Some(v4_opt) = v4_static
-                    && dev.v4_static != v4_opt
-                {
-                    dev.v4_static = v4_opt;
-                    changed = true;
+                if let Some(v4_opt) = v4_static {
+                    let new_state = match v4_opt {
+                        Some(ip) => IPv4State::Static(ip),
+                        None => IPv4State::None,
+                    };
+                    if dev.v4 != new_state {
+                        dev.v4 = new_state;
+                        changed = true;
+                    }
                 }
 
-                if let Some(v6_opt) = v6_suffix
-                    && dev.v6_suffix != v6_opt
-                {
-                    dev.v6_suffix = v6_opt;
-                    changed = true;
+                if let Some(v6_opt) = v6_suffix {
+                    // Suffix update from CLI. If we have multiple V6 states, we should probably
+                    // replace the static one or add it.
+                    let new_state = v6_opt.map(IPv6State::Static);
+
+                    let mut found = false;
+                    if let Some(ns) = &new_state {
+                        for state in &mut dev.v6 {
+                            if matches!(state, IPv6State::Static(_)) {
+                                if state != ns {
+                                    *state = ns.clone();
+                                    changed = true;
+                                }
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            dev.v6.push(ns.clone());
+                            changed = true;
+                        }
+                    } else {
+                        // Remove static v6
+                        let initial_len = dev.v6.len();
+                        dev.v6.retain(|s| !matches!(s, IPv6State::Static(_)));
+                        if dev.v6.len() != initial_len {
+                            changed = true;
+                        }
+                    }
                 }
 
                 if changed {
                     dev.origin = Origin::Cli;
                     dev.managed_at = Some(SystemTime::now());
-                    dev.is_static = true;
                     dev.last_seen = SystemTime::now();
 
-                    // Sincroniza static_entries para que serviços legados/startup vejam a reserva
-                    let entry = StaticEntry {
-                        mac,
-                        hostname: dev.hostname.clone(),
-                        v4_ip: dev.v4_static,
-                        v6_suffix: dev.v6_suffix.clone(),
+                    // Sync static_entries for legacy components
+                    let hostname = dev.hostname.clone();
+                    let v4_ip = match dev.v4 {
+                        IPv4State::Static(ip) => Some(ip),
+                        _ => None,
                     };
-                    self.static_entries.insert(mac, entry);
+                    let v6_suffix = dev.v6.iter().find_map(|s| {
+                        if let IPv6State::Static(suffix) = s {
+                            Some(suffix.clone())
+                        } else {
+                            None
+                        }
+                    });
 
-                    debug!("[state] CLI Host Updated: {}", mac);
+                    self.static_entries.insert(
+                        mac,
+                        StaticEntry {
+                            mac,
+                            hostname,
+                            v4_ip,
+                            v6_suffix,
+                        },
+                    );
                 }
-
                 changed
             }
 
             DeviceUpdate::SlaacCleared { mac } => {
                 if let Some(dev) = self.devices.get_mut(&mac) {
-                    if dev.slaac.is_empty() {
-                        return false;
-                    }
-                    dev.slaac.clear();
-                    return true;
+                    let initial_len = dev.v6.len();
+                    dev.v6.retain(|s| !matches!(s, IPv6State::Slaac(_)));
+                    return dev.v6.len() != initial_len;
                 }
                 false
             }
 
             DeviceUpdate::LeaseReleased { mac } => {
                 if let Some(dev) = self.devices.get_mut(&mac) {
-                    if dev.v4.is_none() && dev.v6.is_none() {
-                        return false;
+                    let mut changed = false;
+                    if !matches!(dev.v4, IPv4State::None) {
+                        dev.v4 = IPv4State::None;
+                        changed = true;
                     }
-                    debug!("[state] Lease Release forçado via CLI: {}", mac);
-                    dev.v4 = None;
-                    dev.v6 = None;
-                    return true;
+                    let initial_v6_len = dev.v6.len();
+                    dev.v6.retain(|s| !matches!(s, IPv6State::Dynamic(_)));
+                    if dev.v6.len() != initial_v6_len {
+                        changed = true;
+                    }
+                    return changed;
                 }
                 false
             }
 
             DeviceUpdate::IpDeleted { ip } => {
                 let mut changed = false;
-
-                // 1. Remove do cache NDP global
                 if let std::net::IpAddr::V6(ip6) = ip
                     && self.ndp_cache.remove(&ip6).is_some()
                 {
                     changed = true;
                 }
 
-                // 2. Remove de qualquer device que o tenha na lista de SLAAC ou seen_v4
                 for dev in self.devices.values_mut() {
                     match ip {
                         std::net::IpAddr::V6(ip6) => {
-                            if let Some(pos) = dev.slaac.iter().position(|&x| x == ip6) {
-                                dev.slaac.remove(pos);
+                            let initial_len = dev.v6.len();
+                            dev.v6
+                                .retain(|s| !matches!(s, IPv6State::Slaac(a) if *a == ip6));
+                            if dev.v6.len() != initial_len {
                                 changed = true;
-                                debug!(
-                                    "[state] IP {} removido do device {} (via Netlink DEL)",
-                                    ip, dev.mac
-                                );
                             }
                         }
                         std::net::IpAddr::V4(ip4) => {
                             if let Some(pos) = dev.seen_v4.iter().position(|&x| x == ip4) {
                                 dev.seen_v4.remove(pos);
                                 changed = true;
-                                debug!(
-                                    "[state] IP {} removido do device {} (via Netlink DEL)",
-                                    ip, dev.mac
-                                );
                             }
                         }
                     }
                 }
-
                 changed
             }
         };
@@ -678,11 +506,18 @@ impl DeviceTable {
                 })
             });
 
+            let v6_suffix = e.v6_suffix.as_ref().and_then(|s| {
+                Ipv6AddrOrSuffix::parse(s).or_else(|| {
+                    warn!("Invalid v6_suffix for {}: '{s}'", e.hostname);
+                    None
+                })
+            });
+
             let static_entry = StaticEntry {
                 mac,
                 hostname: e.hostname.clone(),
                 v4_ip,
-                v6_suffix: e.v6_suffix.clone(),
+                v6_suffix: v6_suffix.clone(),
             };
 
             info!("  Static device: {} → {} (v4={:?})", mac, e.hostname, v4_ip);
@@ -691,9 +526,12 @@ impl DeviceTable {
             // Pre-popula o device para que hostname resolva imediatamente
             let dev = self.get_or_insert(mac);
             dev.hostname.clone_from(&e.hostname);
-            dev.v4_static = v4_ip;
-            dev.v6_suffix.clone_from(&e.v6_suffix);
-            dev.is_static = true;
+            if let Some(ip) = v4_ip {
+                dev.v4 = IPv4State::Static(ip);
+            }
+            if let Some(suf) = v6_suffix {
+                dev.v6.push(IPv6State::Static(suf));
+            }
             dev.origin = Origin::Toml;
         }
 
@@ -765,29 +603,34 @@ impl DeviceTable {
         for mac in macs {
             let mut remove_device = false;
             if let Some(dev) = self.devices.get_mut(&mac) {
-                if let Some(v4) = &dev.v4
-                    && v4.expires < now
+                // V4 expiration
+                if let IPv4State::Dynamic(lease) = &dev.v4
+                    && lease.expires < now
                 {
-                    dev.v4 = None;
+                    dev.v4 = IPv4State::None;
                     changed = true;
                 }
-                if let Some(v6) = &dev.v6
-                    && v6.expires < now
-                {
-                    dev.v6 = None;
+                // V6 expiration
+                let initial_v6_len = dev.v6.len();
+                dev.v6.retain(|state| match state {
+                    IPv6State::Dynamic(lease) => lease.expires > now,
+                    _ => true,
+                });
+                if dev.v6.len() != initial_v6_len {
                     changed = true;
                 }
+
                 if let Some(v6_prefix) = &dev.v6_prefix
                     && v6_prefix.expires < now
                 {
                     dev.v6_prefix = None;
                     changed = true;
                 }
-                if !dev.is_static
-                    && dev.v4.is_none()
-                    && dev.v6.is_none()
+
+                if !dev.is_static()
+                    && matches!(dev.v4, IPv4State::None)
+                    && dev.v6.is_empty()
                     && dev.v6_prefix.is_none()
-                    && dev.slaac.is_empty()
                     && dev.last_seen.elapsed().unwrap_or(std::time::Duration::ZERO) > max_age
                 {
                     remove_device = true;
@@ -822,16 +665,12 @@ impl DeviceTable {
         self.devices.entry(mac).or_insert_with(|| Device {
             mac,
             hostname: String::new(),
-            is_static: false,
             origin: Origin::Dynamic,
             managed_at: None,
-            v4_static: None,
-            v6_suffix: None,
             duid: None,
-            v4: None,
-            v6: None,
+            v4: IPv4State::None,
+            v6: Vec::new(),
             v6_prefix: None,
-            slaac: Vec::new(),
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
         })
@@ -849,18 +688,12 @@ impl DeviceTable {
         self.ip_index.clear();
 
         for (&mac, device) in &self.devices {
-            let static_entry = self.static_entries.get(&mac);
+            let _static_entry = self.static_entries.get(&mac);
 
             // 1. Indexa o hostname explícito (sempre em minúsculas)
             if !device.hostname.is_empty() {
                 self.name_index
                     .insert(device.hostname.to_ascii_lowercase(), mac);
-            } else if let Some(st) = static_entry {
-                // Fallback de segurança caso a entrada estática tenha nome mas o device não
-                if !st.hostname.is_empty() {
-                    self.name_index
-                        .insert(st.hostname.to_ascii_lowercase(), mac);
-                }
             }
 
             // 2. Indexa o fallback obrigatório (host-<mac>)
@@ -869,28 +702,19 @@ impl DeviceTable {
             self.name_index.insert(fallback, mac);
 
             // 3. Indexa IPv4 (Dinâmico e Estático)
-            if let Some(v4) = &device.v4 {
-                self.ip_index.insert(IpAddr::V4(v4.ip), mac);
-            }
-            if let Some(v4_stat) = device
-                .v4_static
-                .or_else(|| static_entry.and_then(|e| e.v4_ip))
-            {
-                self.ip_index.insert(IpAddr::V4(v4_stat), mac);
+            if let Some(ip) = device.v4.ip() {
+                self.ip_index.insert(IpAddr::V4(ip), mac);
             }
 
-            // 4. Indexa IPv6 (Dinâmico DHCPv6 e SLAAC)
-            if let Some(v6) = &device.v6 {
-                self.ip_index.insert(IpAddr::V6(v6.ip), mac);
-            }
-            for &slaac_ip in &device.slaac {
-                self.ip_index.insert(IpAddr::V6(slaac_ip), mac);
+            // 4. Indexa IPv6 (Dinâmico DHCPv6, SLAAC e Estático Full)
+            for state in &device.v6 {
+                if let Some(ip) = state.ip() {
+                    self.ip_index.insert(IpAddr::V6(ip), mac);
+                }
             }
 
             // Nota: IPs com sufixos estáticos (ex: ::10) compostos com ULA/GUA
             // não estão sendo indexados aqui porque dependem da `DnsConfig` (o prefixo real da rede).
-            // Eles continuam sendo resolvidos on-the-fly pelo `resolve_local_fast` caso o fallback de
-            // hostname seja acionado, ou você pode passar o prefixo da rede para essa função no futuro.
         }
 
         self.name_index.shrink_to_fit();
@@ -955,7 +779,7 @@ mod tests {
         assert!(changed);
 
         let dev = table.devices().next().unwrap();
-        assert_eq!(dev.v4.as_ref().unwrap().ip, ip);
+        assert_eq!(dev.v4.ip().unwrap(), ip);
     }
 
     #[test]
@@ -980,7 +804,7 @@ mod tests {
         {
             let dev = table.get_or_insert(mac);
             dev.hostname = "static-host".to_string();
-            dev.is_static = true;
+            dev.origin = Origin::Toml;
         }
 
         let changed = table.apply_update(DeviceUpdate::HostnameHint {
@@ -1020,17 +844,7 @@ mod tests {
             addr: "fd97::5678".parse().unwrap()
         }));
 
-        assert_eq!(table.devices().next().unwrap().slaac.len(), 2);
-    }
-
-    #[test]
-    fn test_mac_addr_json_roundtrip() {
-        let mac = MacAddr::parse("01:23:45:67:89:ab").unwrap();
-        let json = serde_json::to_string(&mac).unwrap();
-        assert_eq!(json, "\"01:23:45:67:89:ab\"");
-
-        let decoded: MacAddr = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded, mac);
+        assert_eq!(table.devices().next().unwrap().v6.len(), 2);
     }
 
     #[test]
@@ -1042,7 +856,7 @@ mod tests {
             addr: "fd97::1".parse().unwrap(),
         });
         assert!(table.apply_update(DeviceUpdate::SlaacCleared { mac }));
-        assert!(table.devices().next().unwrap().slaac.is_empty());
+        assert!(table.devices().next().unwrap().v6.is_empty());
         // Limpar de novo quando já está vazio — não dirty
         assert!(!table.apply_update(DeviceUpdate::SlaacCleared { mac }));
     }
@@ -1067,13 +881,13 @@ mod tests {
         });
 
         let dev = table.devices.get(&mac).unwrap();
-        assert!(dev.v4.is_some());
-        assert!(dev.v6.is_some());
+        assert!(matches!(dev.v4, IPv4State::Dynamic(_)));
+        assert_eq!(dev.v6.len(), 1);
 
         assert!(table.apply_update(DeviceUpdate::LeaseReleased { mac }));
         let dev = table.devices.get(&mac).unwrap();
-        assert!(dev.v4.is_none());
-        assert!(dev.v6.is_none());
+        assert!(matches!(dev.v4, IPv4State::None));
+        assert!(dev.v6.is_empty());
 
         // Repeated release should not be dirty
         assert!(!table.apply_update(DeviceUpdate::LeaseReleased { mac }));
@@ -1125,31 +939,23 @@ mod tests {
         let future = SystemTime::now() + std::time::Duration::from_secs(100);
 
         let dev = table.get_or_insert(mac);
-        dev.v4 = Some(V4Lease {
+        dev.v4 = IPv4State::Dynamic(V4Lease {
             ip: "192.168.0.2".parse().unwrap(),
             expires: past,
         });
-        dev.v6 = Some(V6Lease {
+        dev.v6.push(IPv6State::Dynamic(V6Lease {
             ip: "fd00::1".parse().unwrap(),
             expires: future,
-        });
+        }));
 
         assert!(table.expire_stale());
 
         let dev_after = table.devices().next().unwrap();
-        assert!(dev_after.v4.is_none(), "V4 expirado deve ser removido");
-        assert!(dev_after.v6.is_some(), "V6 no futuro deve ser mantido");
-    }
-
-    #[test]
-    fn ndp_cache_stores_and_retrieves_mac() {
-        let mut table = DeviceTable::new();
-        let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-        let ip: Ipv6Addr = "fe80::1".parse().unwrap();
-
-        assert!(table.get_mac_from_ndp_cache(&ip).is_none());
-        table.apply_update(DeviceUpdate::NdpSeen { mac, ip });
-        assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
+        assert!(
+            matches!(dev_after.v4, IPv4State::None),
+            "V4 expirado deve ser removido"
+        );
+        assert_eq!(dev_after.v6.len(), 1, "V6 no futuro deve ser mantido");
     }
 
     #[test]
@@ -1180,7 +986,7 @@ mod tests {
         // Agora deve existir o device com o DUID e IP corretos
         let dev = table.devices.get(&mac).expect("Device deve existir");
         assert_eq!(dev.duid.as_ref(), Some(&duid));
-        assert_eq!(dev.v6.as_ref().unwrap().ip, ip);
+        assert_eq!(dev.v6[0].ip().unwrap(), ip);
         assert!(table.orphaned_v6.is_empty());
     }
 
@@ -1200,15 +1006,17 @@ mod tests {
             mac,
             hostname: Some(Some("cli-host".to_string())),
             v4_static: Some(Some("192.168.1.10".parse().unwrap())),
-            v6_suffix: Some(Some("::10".to_string())),
+            v6_suffix: Some(Some(Ipv6AddrOrSuffix::parse("::10").unwrap())),
         });
 
         assert!(changed);
         let dev = table.devices.get(&mac).unwrap();
         assert_eq!(dev.hostname, "cli-host");
-        assert_eq!(dev.v4_static, Some("192.168.1.10".parse().unwrap()));
-        assert_eq!(dev.v6_suffix, Some("::10".to_string()));
-        assert!(dev.is_static);
+        assert!(
+            matches!(dev.v4, IPv4State::Static(ip) if ip == "192.168.1.10".parse::<Ipv4Addr>().unwrap())
+        );
+        assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b)) if *b == [0,0,0,0,0,0,0,0x10])));
+        assert!(dev.is_static());
 
         // 3. Verify static_entries sync
         let entry = table
@@ -1217,7 +1025,9 @@ mod tests {
             .expect("Should have static entry");
         assert_eq!(entry.hostname, "cli-host");
         assert_eq!(entry.v4_ip, Some("192.168.1.10".parse().unwrap()));
-        assert_eq!(entry.v6_suffix, Some("::10".to_string()));
+        assert!(
+            matches!(entry.v6_suffix, Some(Ipv6AddrOrSuffix::Suffix(b)) if b == [0,0,0,0,0,0,0,0x10])
+        );
 
         // 4. Partial update (Only hostname)
         let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
@@ -1244,7 +1054,11 @@ mod tests {
         table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
 
         let dev = table.devices.get(&mac).unwrap();
-        assert!(dev.slaac.contains(&ip));
+        assert!(
+            dev.v6
+                .iter()
+                .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip))
+        );
         assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
 
         // 2. Delete IP
@@ -1254,6 +1068,10 @@ mod tests {
         // 3. Verify cleanup
         assert!(table.get_mac_from_ndp_cache(&ip).is_none());
         let dev = table.devices.get(&mac).unwrap();
-        assert!(!dev.slaac.contains(&ip));
+        assert!(
+            !dev.v6
+                .iter()
+                .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip))
+        );
     }
 }

@@ -44,7 +44,8 @@ use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
 use crate::bus::ManagedTable;
-use crate::state::{DeviceUpdate, MacAddr};
+use crate::device::MacAddr;
+use crate::state::DeviceUpdate;
 use config::Dhcpv6Config;
 use duid::Duid;
 use pool::Ipv6Pool;
@@ -126,7 +127,7 @@ pub async fn dhcpv6_service(
                         entry.mac, entry.hostname, ip
                     );
                 } else {
-                    warn!("Falha ao construir ULA para sufixo: {}", suffix);
+                    warn!("Falha ao construir ULA para sufixo: {:?}", suffix);
                 }
             }
         }
