@@ -159,7 +159,9 @@ impl WireResponseWriter {
         edns: Option<&WireOptScanner>,
         ra: bool,
     ) -> Vec<u8> {
-        let mut resp = Vec::with_capacity(query_data.len().min(512));
+        // max: 12 (header) + question.data + 11 (OPT record)
+        let capacity = 12 + question.data.len() + 11;
+        let mut resp = Vec::with_capacity(capacity); // hint correto evita realloc
 
         // 1. Header (copia ID, altera flags)
         let mut h = [0u8; 12];

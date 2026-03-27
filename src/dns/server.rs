@@ -55,16 +55,13 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()>
     let udp_task = tokio::spawn(async move {
         let mut buf = vec![0u8; 4096];
         loop {
-            if let Ok((len, src)) = udp_sock.recv_from(&mut buf).await {
-                let data = buf[..len].to_vec();
-                let sock = Arc::clone(&udp_sock);
-                let c = Arc::clone(&udp_ctx);
+            let Ok((len, src)) = udp_sock.recv_from(&mut buf).await else {
+                continue;
+            };
 
-                tokio::spawn(async move {
-                    if let Ok(Some(response)) = handle_query(&data, &c).await {
-                        let _ = sock.send_to(&response, src).await;
-                    }
-                });
+            // Processa inline — sem spawn, sem to_vec()
+            if let Ok(Some(response)) = handle_query(&buf[..len], &udp_ctx).await {
+                let _ = udp_sock.send_to(&response, src).await;
             }
         }
     });
