@@ -373,6 +373,36 @@ impl LeaseDb {
                     iaid: 0,
                 });
             }
+
+            // Reconstrói static_entries para devices CLI-managed
+            // Sem isso, DHCP pools perdem reservas CLI após restart.
+            if origin_str == "cli" {
+                use crate::state::update::StaticEntry;
+
+                let dev = table.devices.get(&mac).unwrap();
+                let hostname = dev.hostname.clone();
+                let v4_ip = match dev.v4 {
+                    IPv4State::Static(ip) => Some(ip),
+                    _ => None,
+                };
+                let v6_suffix = dev.v6.iter().find_map(|s| {
+                    if let IPv6State::Static(suffix) = s {
+                        Some(suffix.clone())
+                    } else {
+                        None
+                    }
+                });
+
+                table.static_entries.insert(
+                    mac,
+                    StaticEntry {
+                        mac,
+                        hostname,
+                        v4_ip,
+                        v6_suffix,
+                    },
+                );
+            }
         }
 
         // 2. V4 leases
@@ -502,6 +532,26 @@ impl LeaseDb {
                 continue;
             };
             table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
+        }
+
+        // 5. Seen IPv4 addresses (saved but previously never loaded)
+        let mut stmt = self.conn.prepare("SELECT mac, ip FROM seen_v4")?;
+
+        let seen_rows: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(std::result::Result::ok)
+            .collect();
+
+        for (mac_str, ip_str) in seen_rows {
+            let Some(mac) = MacAddr::parse(&mac_str) else {
+                continue;
+            };
+            let Ok(ip) = ip_str.parse::<Ipv4Addr>() else {
+                continue;
+            };
+            table.apply_update(DeviceUpdate::ArpSeen { mac, ip });
         }
 
         let count = table.devices().count();
