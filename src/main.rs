@@ -49,7 +49,12 @@ use anyhow::Result;
 use bus::{EventBus, LanforgeEvent, ManagedTable};
 use config::Config;
 use futures::StreamExt;
+use lanforge_core::device::Ipv6AddrOrSuffix;
+use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::DeviceTable;
+use lanforge_core::state::update::DeviceUpdate;
 use netlink_sys::AsyncSocket;
+use parking_lot::RwLock;
 use rtnetlink::new_connection;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
@@ -128,32 +133,64 @@ async fn main() -> Result<()> {
 
     let leases_db_path = std::path::PathBuf::from(&cfg.leases_db);
 
-    match db::LeaseDb::open(&leases_db_path) {
-        Ok(db) => {
-            match db.load_table() {
-                Ok(persisted) => {
-                    // Importa o estado persistido diretamente na tabela interna.
-                    // Fazemos isso via write() direto pois é bootstrap síncrono
-                    // — os serviços ainda não estão rodando.
-                    *table.write() = persisted;
-                    info!("📦 Estado persistido carregado de {}", cfg.leases_db);
-                }
-                Err(e) => {
-                    warn!("Falha ao carregar DB ({e:#}), iniciando do zero");
-                }
+    // 1. Criamos a tabela inicial direto na stack da thread principal (Lock-free)
+    let mut initial_table = match lanforge_db::LeaseDb::open(&leases_db_path) {
+        Ok(db) => match db.load_table() {
+            Ok(persisted) => {
+                info!("📦 Estado persistido carregado de {}", cfg.leases_db);
+                persisted
             }
-        }
+            Err(e) => {
+                warn!("Falha ao carregar DB ({e:#}), iniciando do zero");
+                DeviceTable::new() // Cria uma nova do Core se o DB falhar
+            }
+        },
         Err(e) => {
             error!("❌ Erro fatal abrindo leases DB: {e:#}");
             return Err(e);
         }
-    }
+    };
 
+    // 2. Lemos o TOML (StaticDeviceCfg) e populamos a tabela AQUI no main
     if !cfg.devices.is_empty() {
         let count = cfg.devices.len();
-        table.write().load_static_devices(&cfg.devices);
+
+        for e in &cfg.devices {
+            // Parsing das strings sujas do TOML
+            let Some(mac) = MacAddr::parse(&e.mac) else {
+                warn!("Invalid MAC in config: '{}', skipping", e.mac);
+                continue;
+            };
+
+            let v4_ip = e.v4_ip.as_ref().and_then(|s| {
+                s.parse::<std::net::Ipv4Addr>().ok().or_else(|| {
+                    warn!("Invalid v4_ip for {}: '{s}'", e.hostname);
+                    None
+                })
+            });
+
+            let v6_suffix = e.v6_suffix.as_ref().and_then(|s| {
+                Ipv6AddrOrSuffix::parse(s).or_else(|| {
+                    warn!("Invalid v6_suffix for {}: '{s}'", e.hostname);
+                    None
+                })
+            });
+
+            info!("  Static device: {} → {} (v4={:?})", mac, e.hostname, v4_ip);
+
+            // Chamamos a função pura e burra do lanforge-core
+            initial_table.add_static_device(mac, e.hostname.clone(), v4_ip, v6_suffix);
+        }
+
         info!("👥 {count} reservas estáticas carregadas");
     }
+
+    // 3. Montamos os índices O(1) do DNS apenas UMA vez após tudo ser carregado
+    initial_table.apply_update(DeviceUpdate::RebuildDnsIndices);
+
+    // 4. AGORA SIM, embrulhamos a tabela pronta e finalizada na trava de alta performance
+    // para ser distribuída aos motores (DNS, DHCP, EventBus).
+    let shared_table = Arc::new(RwLock::new(initial_table));
 
     // -----------------------------------------------------------------------
     // DB worker — persiste reativamente via EventBus
