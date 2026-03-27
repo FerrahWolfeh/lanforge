@@ -132,7 +132,7 @@ pub(crate) async fn handle_query(
 
             if let Some(&mac_addr) = t.name_index.get(safe_hostname.as_ref())
                 && let Some(device) = t.devices.get(&mac_addr)
-                && let Some(response) = resolve_local(&query, device, qtype, cfg, &t)?
+                && let Some(response) = resolve_local(&query, device, qtype, cfg)?
             {
                 return Ok(Some(response));
             }

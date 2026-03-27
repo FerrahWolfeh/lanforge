@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::time::SystemTime;
 
@@ -310,6 +310,53 @@ impl fmt::Display for Ipv6AddrOrSuffix {
 }
 
 // ---------------------------------------------------------------------------
+// IP Classification and Scoring (ULA > IPv4 > GUA)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum IpClassification {
+    Ula = 0,
+    Ipv4 = 1,
+    Gua = 2,
+    LinkLocal = 3,
+    Loopback = 4,
+    Other = 10,
+}
+
+impl IpClassification {
+    pub fn score(&self) -> u8 {
+        *self as u8
+    }
+}
+
+pub fn classify_ip(addr: &IpAddr) -> IpClassification {
+    match addr {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback() {
+                IpClassification::Loopback
+            } else {
+                IpClassification::Ipv4
+            }
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                IpClassification::Loopback
+            } else if is_ula(v6) {
+                IpClassification::Ula
+            } else if (v6.segments()[0] & 0xe000) == 0x2000 {
+                // GUA: 2000::/3 (RFC 4291)
+                IpClassification::Gua
+            } else if (v6.segments()[0] & 0xffc0) == 0xfe80 {
+                // Link-Local: fe80::/10
+                IpClassification::LinkLocal
+            } else {
+                IpClassification::Other
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Device
 // ---------------------------------------------------------------------------
 
@@ -411,8 +458,98 @@ impl Device {
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "—".to_string())
     }
+
+    /// Returns ALL available IP addresses (v4 and v6) sorted by priority:
+    /// ULA (0) > IPv4 (1) > GUA (2) > others
+    #[cfg(test)]
+    pub fn all_addresses_sorted(&self) -> Vec<IpAddr> {
+        let mut addrs = Vec::new();
+
+        // IPv4
+        if let Some(ip) = self.v4.ip() {
+            addrs.push(IpAddr::V4(ip));
+        }
+        for ip in &self.seen_v4 {
+            addrs.push(IpAddr::V4(*ip));
+        }
+
+        // IPv6
+        for state in &self.v6 {
+            if let Some(ip) = state.ip() {
+                addrs.push(IpAddr::V6(ip));
+            }
+        }
+
+        // De-duplicate while preserving some form of "original" order before sorting
+        // (Actually, HashSet would be faster but we might want to keep it simple first)
+        let mut unique = std::collections::HashSet::new();
+        addrs.retain(|ip| unique.insert(*ip));
+
+        // Sort by classification score
+        addrs.sort_by_cached_key(|ip| classify_ip(ip).score());
+
+        addrs
+    }
 }
 
 fn is_ula(addr: &Ipv6Addr) -> bool {
     (addr.segments()[0] & 0xfe00) == 0xfc00
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_ip() {
+        assert_eq!(
+            classify_ip(&"127.0.0.1".parse().unwrap()),
+            IpClassification::Loopback
+        );
+        assert_eq!(
+            classify_ip(&"1.1.1.1".parse().unwrap()),
+            IpClassification::Ipv4
+        );
+        assert_eq!(
+            classify_ip(&"fd00::1".parse().unwrap()),
+            IpClassification::Ula
+        );
+        assert_eq!(
+            classify_ip(&"2001:db8::1".parse().unwrap()),
+            IpClassification::Gua
+        );
+        assert_eq!(
+            classify_ip(&"fe80::1".parse().unwrap()),
+            IpClassification::LinkLocal
+        );
+        assert_eq!(
+            classify_ip(&"::1".parse().unwrap()),
+            IpClassification::Loopback
+        );
+    }
+
+    #[test]
+    fn test_all_addresses_sorted() {
+        let dev = Device {
+            hostname: "test".to_string(),
+            mac: MacAddr([0, 0, 0, 0, 0, 0]),
+            origin: Origin::Dynamic,
+            managed_at: None,
+            duid: None,
+            v4: IPv4State::Static("192.168.1.1".parse().unwrap()),
+            v6: vec![
+                IPv6State::Slaac("2001:db8::1".parse().unwrap()),
+                IPv6State::Slaac("fd00::1".parse().unwrap()),
+            ],
+            v6_prefixes: Vec::new(),
+            seen_v4: Vec::new(),
+            last_seen: SystemTime::now(),
+        };
+
+        let sorted = dev.all_addresses_sorted();
+        // Priority: ULA (fd00::1) > IPv4 (192.168.1.1) > GUA (2001:db8::1)
+        assert_eq!(sorted[0], "fd00::1".parse::<IpAddr>().unwrap());
+        assert_eq!(sorted[1], "192.168.1.1".parse::<IpAddr>().unwrap());
+        assert_eq!(sorted[2], "2001:db8::1".parse::<IpAddr>().unwrap());
+    }
 }

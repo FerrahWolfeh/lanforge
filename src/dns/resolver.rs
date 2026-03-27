@@ -3,7 +3,7 @@ use hickory_proto::op::{Message, ResponseCode};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use hickory_proto::serialize::binary::BinEncodable;
 use std::collections::HashSet;
-use std::net::Ipv6Addr;
+use std::net::IpAddr;
 use std::str::FromStr;
 
 use crate::device::Device;
@@ -17,44 +17,21 @@ pub fn resolve_local(
     device: &Device,
     qtype: RecordType,
     cfg: &DnsConfig,
-    table: &DeviceTable,
 ) -> Result<Option<Vec<u8>>> {
     let question = query.queries().first().expect("Query validada");
 
     let name = question.name().clone();
     let mut records: Vec<Record> = Vec::new();
 
-    let _static_entry = table.static_entries.get(&device.mac);
-
-    if matches!(qtype, RecordType::A | RecordType::ANY)
-        && let Some(ip) = device.v4.ip()
-    {
-        records.push(Record::from_rdata(
-            name.clone(),
-            cfg.ttl,
-            RData::A(ip.into()),
-        ));
-    }
-
-    if matches!(qtype, RecordType::AAAA | RecordType::ANY) {
-        let mut ulas = Vec::new();
-        let mut others = Vec::new();
-
-        let mut classify_and_push = |ip: Ipv6Addr| {
-            if (ip.segments()[0] & 0xfe00) == 0xfc00 {
-                ulas.push(ip);
-            } else {
-                others.push(ip);
-            }
-        };
-
-        let mut applied_prefixes = HashSet::<[u16; 4]>::new();
-        let mut ula_prefix = None;
-
+    if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
+        let mut ula_prefix_segs = None;
         if let Some(ula) = cfg.ula_prefix {
             let segs = ula.segments();
-            let p = [segs[0], segs[1], segs[2], segs[3]];
-            ula_prefix = Some(p);
+            ula_prefix_segs = Some([segs[0], segs[1], segs[2], segs[3]]);
+        }
+
+        let mut applied_prefixes = HashSet::<[u16; 4]>::new();
+        if let Some(p) = ula_prefix_segs {
             applied_prefixes.insert(p);
         }
 
@@ -66,40 +43,58 @@ pub fn resolve_local(
             }
         }
 
-        // 2. Process all states
+        // 2. Collect all potential addresses (including those with suffixes)
+        let mut all_ips = Vec::new();
+
+        // IPv4
+        if let Some(ip) = device.v4.ip() {
+            all_ips.push(IpAddr::V4(ip));
+        }
+        for ip in &device.seen_v4 {
+            all_ips.push(IpAddr::V4(*ip));
+        }
+
+        // IPv6
         for state in &device.v6 {
             match state {
-                crate::device::IPv6State::Dynamic(lease) => classify_and_push(lease.ip),
-                crate::device::IPv6State::Slaac(ip) => classify_and_push(*ip),
+                crate::device::IPv6State::Dynamic(lease) => all_ips.push(IpAddr::V6(lease.ip)),
+                crate::device::IPv6State::Slaac(ip) => all_ips.push(IpAddr::V6(*ip)),
                 crate::device::IPv6State::Static(suf) => match suf {
-                    crate::device::Ipv6AddrOrSuffix::Full(ip) => classify_and_push(*ip),
+                    crate::device::Ipv6AddrOrSuffix::Full(ip) => all_ips.push(IpAddr::V6(*ip)),
                     crate::device::Ipv6AddrOrSuffix::Suffix(_) => {
-                        // Apply suffix to all learned prefixes
                         for prefix in &applied_prefixes {
                             if let Some(ip) = combine_prefix_suffix(prefix, suf) {
-                                classify_and_push(ip);
+                                all_ips.push(IpAddr::V6(ip));
                             }
-                        }
-                        // Also apply to ULA prefix if not already in applied_prefixes (redundant but safe)
-                        if let Some(p) = &ula_prefix
-                            && !applied_prefixes.contains(p)
-                            && let Some(ip) = combine_prefix_suffix(p, suf)
-                        {
-                            classify_and_push(ip);
                         }
                     }
                 },
             }
         }
 
+        // 3. De-duplicate and Sort by Priority (ULA > IPv4 > GUA)
         let mut unique = HashSet::new();
-        for ip in ulas.into_iter().chain(others.into_iter()) {
-            if unique.insert(ip) {
-                records.push(Record::from_rdata(
-                    name.clone(),
-                    cfg.ttl,
-                    RData::AAAA(ip.into()),
-                ));
+        all_ips.retain(|ip| unique.insert(*ip));
+        all_ips.sort_by_cached_key(|ip| crate::device::classify_ip(ip).score());
+
+        // 4. Filter by qtype and Convert to Records
+        for ip in all_ips {
+            match ip {
+                IpAddr::V4(v4) if matches!(qtype, RecordType::A | RecordType::ANY) => {
+                    records.push(Record::from_rdata(
+                        name.clone(),
+                        cfg.ttl,
+                        RData::A(v4.into()),
+                    ));
+                }
+                IpAddr::V6(v6) if matches!(qtype, RecordType::AAAA | RecordType::ANY) => {
+                    records.push(Record::from_rdata(
+                        name.clone(),
+                        cfg.ttl,
+                        RData::AAAA(v6.into()),
+                    ));
+                }
+                _ => {}
             }
         }
     }

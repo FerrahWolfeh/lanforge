@@ -109,7 +109,7 @@ fn resolve_local_matches_question_name_exactly() {
 
     // Agora passamos a referência do device diretamente (simulando a saída do fast path)
     let device = table.devices.get(&mac).unwrap();
-    let result = resolve_local(&query, device, RecordType::A, &cfg, &table).unwrap();
+    let result = resolve_local(&query, device, RecordType::A, &cfg).unwrap();
     let resp_bytes = result.unwrap();
     let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
 
@@ -264,7 +264,7 @@ fn test_resolve_local_v6_suffix_merging() {
     query.add_query(Query::query(name, RecordType::AAAA));
 
     let device_ref = table.devices.get(&dev.mac).unwrap();
-    let res_bytes = resolve_local(&query, device_ref, RecordType::AAAA, &cfg, &table)
+    let res_bytes = resolve_local(&query, device_ref, RecordType::AAAA, &cfg)
         .unwrap()
         .expect("Should resolve locally");
 
@@ -446,5 +446,73 @@ async fn test_tcp_fallback_trigger() {
             );
         }
         Ok(_) => panic!("Deveria ter falhado ao tentar TCP num servidor inexistente"),
+    }
+}
+
+#[test]
+fn test_resolve_local_priority_ordering() {
+    let mut cfg = mock_config();
+    cfg.ula_prefix = Some("fd00::".parse().unwrap());
+
+    let mut table = DeviceTable::new();
+    let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+    let mut dev = mock_device(mac.0, "priority-test");
+    dev.v4 = IPv4State::Static("192.168.1.1".parse().unwrap());
+    dev.v6 = vec![
+        IPv6State::Slaac("2001:db8::1".parse().unwrap()),
+        IPv6State::Slaac("fd00::1".parse().unwrap()),
+    ];
+    table.devices.insert(mac, dev);
+    table.rebuild_dns_indices();
+
+    let mut query = Message::new();
+    let name = Name::from_str("priority-test.lan.").unwrap();
+    query.add_query(Query::query(name, RecordType::ANY));
+
+    let device_ref = table.devices.get(&mac).unwrap();
+    let res_bytes = resolve_local(&query, device_ref, RecordType::ANY, &cfg)
+        .unwrap()
+        .expect("Should resolve locally");
+
+    let res = Message::from_bytes(&res_bytes).unwrap();
+    let answers = res.answers();
+
+    // Order should be: ULA (AAAA fd00::1) > IPv4 (A 192.168.1.1) > GUA (AAAA 2001:db8::1)
+    assert!(answers.len() >= 3);
+
+    // Check first answer is ULA
+    if let RData::AAAA(ip) = answers[0].data() {
+        assert_eq!(Ipv6Addr::from(*ip), "fd00::1".parse::<Ipv6Addr>().unwrap());
+    } else {
+        panic!(
+            "First answer should be ULA (AAAA), got {:?}",
+            answers[0].data()
+        );
+    }
+
+    // Check second answer is IPv4
+    if let RData::A(ip) = answers[1].data() {
+        assert_eq!(
+            Ipv4Addr::from(*ip),
+            "192.168.1.1".parse::<Ipv4Addr>().unwrap()
+        );
+    } else {
+        panic!(
+            "Second answer should be IPv4 (A), got {:?}",
+            answers[1].data()
+        );
+    }
+
+    // Check third answer is GUA
+    if let RData::AAAA(ip) = answers[2].data() {
+        assert_eq!(
+            Ipv6Addr::from(*ip),
+            "2001:db8::1".parse::<Ipv6Addr>().unwrap()
+        );
+    } else {
+        panic!(
+            "Third answer should be GUA (AAAA), got {:?}",
+            answers[2].data()
+        );
     }
 }
