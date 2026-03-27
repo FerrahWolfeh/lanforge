@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::net::Ipv6Addr;
 use std::time::SystemTime;
 
-use crate::device::MacAddr;
+use lanforge_core::device::Ipv6AddrOrSuffix;
+use lanforge_core::identifiers::MacAddr;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct LeaseKey {
@@ -60,14 +61,11 @@ impl Ipv6Pool {
 
     /// Constructs a static IPv6 address given a device's configured suffix and the network's ULA prefix.
     #[allow(dead_code)]
-    pub fn construct_static_ula(
-        &self,
-        suffix: &crate::device::Ipv6AddrOrSuffix,
-    ) -> Option<Ipv6Addr> {
+    pub fn construct_static_ula(&self, suffix: &Ipv6AddrOrSuffix) -> Option<Ipv6Addr> {
         let ula = self.ula_prefix?;
         match suffix {
-            crate::device::Ipv6AddrOrSuffix::Full(ip) => Some(*ip),
-            crate::device::Ipv6AddrOrSuffix::Suffix(s) => {
+            Ipv6AddrOrSuffix::Full(ip) => Some(*ip),
+            Ipv6AddrOrSuffix::Suffix(s) => {
                 let ula_segs = ula.segments();
                 let combined = [
                     ula_segs[0],
@@ -325,6 +323,8 @@ impl Ipv6Pool {
 
 #[cfg(test)]
 mod tests {
+    use lanforge_core::device::Ipv6AddrOrSuffix;
+
     use super::*;
 
     // Função auxiliar para gerar MACs nos testes
@@ -338,7 +338,6 @@ mod tests {
 
     #[test]
     fn test_construct_static_ula() {
-        use crate::device::Ipv6AddrOrSuffix;
         let ula = "fd12:3456:7890:abcd::".parse().ok();
         let pool = Ipv6Pool::new(None, None, ula, 64);
 
@@ -419,8 +418,14 @@ mod tests {
             .allocate(&duid(2), 1, Some(mac(2)), Some(out_of_bounds))
             .unwrap();
         let raw = u128::from_be_bytes(ip2.octets());
-        assert!(raw >= start_int && raw <= end_int, "Fallback IP {ip2} out of range");
-        assert_ne!(ip2, requested, "Fallback must not collide with already-assigned IP");
+        assert!(
+            raw >= start_int && raw <= end_int,
+            "Fallback IP {ip2} out of range"
+        );
+        assert_ne!(
+            ip2, requested,
+            "Fallback must not collide with already-assigned IP"
+        );
     }
 
     #[test]

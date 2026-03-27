@@ -2,6 +2,11 @@ use hickory_proto::op::{Edns, Message, Query, ResponseCode};
 use hickory_proto::rr::rdata::opt::EdnsOption;
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use lanforge_core::bus::{EventBus, ManagedTable};
+use lanforge_core::device::{Device, IPv6State, Ipv6AddrOrSuffix};
+use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::DeviceTable;
+use lanforge_core::state::update::DeviceUpdate;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
 use std::str::FromStr;
@@ -9,37 +14,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
-use crate::bus::{EventBus, ManagedTable};
-use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin, V4Lease};
 use crate::dns::resolver::LocalResolver;
 use crate::dns::response::ResponseBuilder;
 use crate::dns::server::{DnsContext, handle_query};
 use crate::dns::upstream::UpstreamManager;
 use crate::dns::utils::{extract_local_hostname, parse_arpa};
-use crate::state::DeviceTable;
 use anyhow::Result;
 use std::{net::Ipv4Addr, time::SystemTime};
 
 // Helpers para testes que precisam de ManagedTable
 fn empty_table() -> Arc<ManagedTable> {
     Arc::new(ManagedTable::new(Arc::new(EventBus::new())))
-}
-
-// Helper para gerar um device mock
-fn mock_device(mac_bytes: [u8; 6], host: &str) -> Device {
-    let mac = MacAddr(mac_bytes);
-    Device {
-        hostname: host.to_string(),
-        mac,
-        origin: Origin::Dynamic,
-        managed_at: None,
-        duid: None,
-        v4: IPv4State::None,
-        v6: Vec::new(),
-        v6_prefixes: Vec::new(),
-        seen_v4: Vec::new(),
-        last_seen: SystemTime::now(),
-    }
 }
 
 // Helper para gerar um DnsConfig pronto para os testes do Fast Path
@@ -54,26 +39,17 @@ fn mock_config() -> DnsConfig {
 // Helpers para testes que operam diretamente no DeviceTable (sem async)
 fn table_with_device(hostname: &str, mac: MacAddr, ip: Ipv4Addr) -> DeviceTable {
     let mut table = DeviceTable::new();
-    table.devices.insert(
+    table.apply_update(DeviceUpdate::V4LeaseGranted {
         mac,
-        Device {
-            hostname: hostname.into(),
+        ip,
+        expires: SystemTime::now() + std::time::Duration::from_secs(3600),
+    });
+    if !hostname.is_empty() {
+        table.apply_update(DeviceUpdate::HostnameHint {
             mac,
-            origin: Origin::Dynamic,
-            managed_at: None,
-            duid: None,
-            v4: IPv4State::Dynamic(V4Lease {
-                ip,
-                expires: SystemTime::now() + std::time::Duration::from_secs(3600),
-            }),
-            v6: Vec::new(),
-            v6_prefixes: Vec::new(),
-            seen_v4: Vec::new(),
-            last_seen: SystemTime::now(),
-        },
-    );
-    // CRÍTICO: Constrói os índices O(1) para o mock, senão os testes do resolve_ptr e name_index falham
-    table.rebuild_dns_indices();
+            hostname: hostname.to_string(),
+        });
+    }
     table
 }
 
@@ -137,7 +113,7 @@ fn resolve_local_matches_question_name_exactly() {
     query.add_query(hickory_proto::op::Query::query(name.clone(), RecordType::A));
 
     // Agora passamos a referência do device diretamente (simulando a saída do fast path)
-    let device = table.devices.get(&mac).unwrap();
+    let device = table.get_device(&mac).unwrap();
     let result = resolve_local(&query, device, RecordType::A, &cfg).unwrap();
     let resp_bytes = result.unwrap();
     let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
@@ -290,22 +266,29 @@ fn test_resolve_local_v6_suffix_merging() {
     cfg.ula_prefix = Some(ula);
 
     let mut table = DeviceTable::new();
-    let mut dev = mock_device([1, 2, 3, 4, 5, 6], "test");
+    let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+
+    table.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: "2001:db8::1".parse().unwrap(),
+    });
+    // Simula o sufixo estático
+    let dev = table.get_device_mut(&mac).unwrap();
+    dev.hostname = "test".into();
     dev.v6.push(IPv6State::Static(
         Ipv6AddrOrSuffix::parse("::beef").unwrap(),
     ));
-    dev.v6
-        .push(IPv6State::Slaac("2001:db8::1".parse().unwrap()));
-    table.devices.insert(dev.mac, dev.clone());
 
-    // CRÍTICO: Atualiza os índices do mock
-    table.rebuild_dns_indices();
+    // CRÍTICO: Agora invocamos explicitamente o rebuild via update do bus (através do DeviceUpdate)
+    // No DeviceTable "cru" de um teste unitário, chamamos rebuild_dns_indices internamente via apply_update
+    // Mas aqui como mudamos o dev diretamente, precisamos rodar o rebuild
+    table.apply_update(DeviceUpdate::RebuildDnsIndices);
 
     let mut query = Message::new();
     let name = Name::from_str("test.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::AAAA));
 
-    let device_ref = table.devices.get(&dev.mac).unwrap();
+    let device_ref = table.get_device(&mac).expect("Should resolve locally");
     let res_bytes = resolve_local(&query, device_ref, RecordType::AAAA, &cfg)
         .unwrap()
         .expect("Should resolve locally");
@@ -338,7 +321,7 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     let mut cfg = mock_config();
     cfg.upstream = Some("127.0.0.1:9999".parse().unwrap());
 
-    let table_arc = Arc::new(ManagedTable::new(Arc::new(crate::bus::EventBus::new())));
+    let table_arc = Arc::new(ManagedTable::new(Arc::new(EventBus::new())));
 
     let mut query = Message::new();
     let name = Name::from_str("fantasma.lan.").unwrap();
@@ -498,20 +481,28 @@ fn test_resolve_local_priority_ordering() {
 
     let mut table = DeviceTable::new();
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
-    let mut dev = mock_device(mac.0, "priority-test");
-    dev.v4 = IPv4State::Static("192.168.1.1".parse().unwrap());
-    dev.v6 = vec![
-        IPv6State::Slaac("2001:db8::1".parse().unwrap()),
-        IPv6State::Slaac("fd00::1".parse().unwrap()),
-    ];
-    table.devices.insert(mac, dev);
-    table.rebuild_dns_indices();
+    table.apply_update(DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip: "192.168.1.1".parse().unwrap(),
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+    table.apply_update(DeviceUpdate::HostnameHint {
+        mac,
+        hostname: "priority-test".into(),
+    });
+
+    let dev = table.get_device_mut(&mac).unwrap();
+    dev.v6
+        .push(IPv6State::Slaac("2001:db8::1".parse().unwrap()));
+    dev.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
+
+    table.apply_update(DeviceUpdate::RebuildDnsIndices);
 
     let mut query = Message::new();
     let name = Name::from_str("priority-test.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::ANY));
 
-    let device_ref = table.devices.get(&mac).unwrap();
+    let device_ref = table.get_device(&mac).unwrap();
     let res_bytes = resolve_local(&query, device_ref, RecordType::ANY, &cfg)
         .unwrap()
         .expect("Should resolve locally");

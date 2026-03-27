@@ -40,16 +40,16 @@ use crate::state::update::StaticEntry;
 /// É a **única autoridade** de estado. Toda escrita passa por `apply_update`.
 #[derive(Debug, Clone)]
 pub struct DeviceTable {
-    pub(crate) devices: HashMap<MacAddr, Device>,
-    pub(crate) duid_index: HashMap<Duid, MacAddr>,
-    pub(crate) static_entries: HashMap<MacAddr, StaticEntry>,
-    pub(crate) ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
+    devices: HashMap<MacAddr, Device>,
+    duid_index: HashMap<Duid, MacAddr>,
+    static_entries: HashMap<MacAddr, StaticEntry>,
+    ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
     /// Leases IPv6 aprendidos sem MAC ainda (aguardando NDP).
-    pub(crate) orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
+    orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
 
     // --- Índices para o Hot Path do DNS ---
-    pub(crate) name_index: HashMap<String, MacAddr>,
-    pub(crate) ip_index: HashMap<IpAddr, MacAddr>,
+    name_index: HashMap<String, MacAddr>,
+    ip_index: HashMap<IpAddr, MacAddr>,
 }
 
 impl DeviceTable {
@@ -69,14 +69,37 @@ impl DeviceTable {
     // Leituras públicas
     // -----------------------------------------------------------------------
 
-    pub fn find_by_duid(&self, duid: &Duid) -> Option<&Device> {
+    /// Busca um dispositivo pelo seu MAC.
+    pub fn get_device(&self, mac: &MacAddr) -> Option<&Device> {
+        self.devices.get(mac)
+    }
+
+    /// Busca um dispositivo pelo seu MAC (mutável).
+    pub fn get_device_mut(&mut self, mac: &MacAddr) -> Option<&mut Device> {
+        self.devices.get_mut(mac)
+    }
+
+    /// Busca um dispositivo pelo hostname.
+    pub fn get_by_hostname(&self, hostname: &str) -> Option<&Device> {
+        self.name_index
+            .get(hostname)
+            .and_then(|mac| self.devices.get(mac))
+    }
+
+    /// Busca um dispositivo pelo IP.
+    pub fn get_by_ip(&self, ip: &IpAddr) -> Option<&Device> {
+        self.ip_index.get(ip).and_then(|mac| self.devices.get(mac))
+    }
+
+    /// Busca um dispositivo pelo DUID.
+    pub fn get_by_duid(&self, duid: &Duid) -> Option<&Device> {
         self.duid_index
             .get(duid)
             .and_then(|mac| self.devices.get(mac))
     }
 
     /// Recupera o DUID associado a um MAC, se já tiver sido aprendido.
-    pub fn find_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
+    pub fn get_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
         self.devices.get(&mac)?.duid.as_ref()
     }
 
@@ -93,6 +116,11 @@ impl DeviceTable {
     /// Recupera o MAC associado a um IP via cache NDP.
     pub fn get_mac_from_ndp_cache(&self, ip: &Ipv6Addr) -> Option<MacAddr> {
         self.ndp_cache.get(ip).map(|(mac, _)| *mac)
+    }
+
+    /// Retorna iterador sobre leases órfãos (V6 sem MAC ainda).
+    pub fn iter_orphaned_v6(&self) -> impl Iterator<Item = (&Ipv6Addr, &(Duid, u32, SystemTime))> {
+        self.orphaned_v6.iter()
     }
 
     // -----------------------------------------------------------------------

@@ -33,7 +33,7 @@ impl ManagedTable {
 
         let opt_mac = mac_of(&update);
         let is_new = if let Some(mac) = opt_mac {
-            !table.devices.contains_key(&mac)
+            table.get_device(&mac).is_none()
         } else {
             false
         };
@@ -96,6 +96,7 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         DeviceUpdate::DuidAssociated { mac, .. } => *mac,
         DeviceUpdate::CliHostUpdated { mac, .. } => Some(*mac),
         DeviceUpdate::SlaacCleared { mac } => Some(*mac),
+        DeviceUpdate::HostRemoved { mac } => Some(*mac),
         DeviceUpdate::LeaseReleased { mac } => Some(*mac),
         DeviceUpdate::IpDeleted { .. } => None,
         DeviceUpdate::RebuildDnsIndices => None,
@@ -127,6 +128,7 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         DeviceUpdate::NdpSeen { .. }
         | DeviceUpdate::ArpSeen { .. }
         | DeviceUpdate::SlaacCleared { .. }
+        | DeviceUpdate::HostRemoved { .. }
         | DeviceUpdate::LeaseReleased { .. } => None,
         DeviceUpdate::CliHostUpdated {
             hostname,

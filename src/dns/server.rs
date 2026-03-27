@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
+use lanforge_core::bus::ManagedTable;
 use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -7,7 +8,10 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::dns::{config::DnsConfig, resolver::LocalResolver, utils::extract_local_hostname_wire};
+use crate::dns::{
+    config::DnsConfig, resolver::LocalResolver, utils::extract_local_hostname_wire,
+    wire::qtypes::QType,
+};
 use crate::dns::{
     upstream::{UpstreamManager, forward_to_upstream},
     utils::parse_arpa_wire,
@@ -16,7 +20,6 @@ use crate::dns::{
     utils::{extract_local_hostname, fast_lowercase},
     wire::WireResponseWriter,
 };
-use crate::{bus::ManagedTable, dns::wire::qtypes::QType};
 
 /// Shared, immutable service state for the DNS hot path.
 /// A single Arc<DnsContext> replaces 3 separate Arc clones per query.
@@ -147,7 +150,7 @@ pub(crate) async fn handle_query(data: &[u8], ctx: &DnsContext) -> Result<Option
         QType::PTR => {
             if let Some(target_ip) = parse_arpa_wire(question.labels()) {
                 let t = ctx.table.read();
-                if t.ip_index.contains_key(&target_ip) {
+                if t.get_by_ip(&target_ip).is_some() {
                     let Ok(query) = Message::from_bytes(data) else {
                         return Ok(None);
                     };

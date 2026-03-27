@@ -25,14 +25,14 @@
 //! garantindo que o estado interno não contenha endereços obsoletos (stale).
 
 use anyhow::Result;
+use lanforge_core::state::update::DeviceUpdate;
 use rtnetlink::Handle;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::bus::ManagedTable;
-use crate::device::MacAddr;
 use crate::netlink;
-use crate::state::update::DeviceUpdate;
+use lanforge_core::bus::ManagedTable;
+use lanforge_core::identifiers::MacAddr;
 
 /// Executa um dump completo da tabela de vizinhos IPv6 (Sincronização de Estado).
 ///

@@ -39,13 +39,12 @@ use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
 
+use config::Dhcpv4Config;
 use dhcproto::v4::{Message, Opcode};
 use dhcproto::{Decodable, Decoder};
-
-use crate::bus::ManagedTable;
-use crate::device::MacAddr;
-use crate::state::update::DeviceUpdate;
-use config::Dhcpv4Config;
+use lanforge_core::bus::{DeviceChange, LanforgeEvent, ManagedTable};
+use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::update::DeviceUpdate;
 use raw::RawSender;
 use server::{DhcpServer, HandleResult};
 
@@ -161,11 +160,11 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
             // -- Comandos vindos do Admin via CLI/Bus --
             event = bus_rx.recv() => {
                 match event {
-                    Ok(crate::bus::LanforgeEvent::LeaseRelease { mac }) => {
+                    Ok(LanforgeEvent::LeaseRelease { mac }) => {
                         info!("DHCPv4: Forcing release of {} via CLI", mac);
                         server.pool.release_mac(mac);
                     }
-                    Ok(crate::bus::LanforgeEvent::DeviceUpdated { mac, change: crate::bus::DeviceChange::V4StaticChanged { ip } }) => {
+                    Ok(LanforgeEvent::DeviceUpdated { mac, change: DeviceChange::V4StaticChanged { ip } }) => {
                         match ip {
                             Some(v) => {
                                 info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
@@ -177,7 +176,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                             }
                         }
                     }
-                    Ok(crate::bus::LanforgeEvent::Shutdown) => break,
+                    Ok(LanforgeEvent::Shutdown) => break,
                     _ => {}
                 }
             }

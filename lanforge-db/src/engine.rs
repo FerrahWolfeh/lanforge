@@ -13,7 +13,7 @@ use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::{DeviceUpdate, StaticEntry};
 
-use crate::{Result, LeaseDbError};
+use crate::{LeaseDbError, Result};
 
 // ---------------------------------------------------------------------------
 // LeaseDb
@@ -289,8 +289,7 @@ impl LeaseDb {
             }
         }
 
-        tx.commit()
-            .map_err(LeaseDbError::TransactionFailed)?;
+        tx.commit().map_err(LeaseDbError::TransactionFailed)?;
         debug!("DeviceTable persistida com sucesso (Delta Update)");
         Ok(())
     }
@@ -379,7 +378,7 @@ impl LeaseDb {
             // Reconstrói static_entries para devices CLI-managed
             // Sem isso, DHCP pools perdem reservas CLI após restart.
             if origin_str == "cli" {
-            let dev = table.get_or_insert(mac);
+                let dev = table.get_or_insert(mac);
                 let hostname = dev.hostname.clone();
                 let v4_ip = match dev.v4 {
                     IPv4State::Static(ip) => Some(ip),
@@ -462,7 +461,7 @@ impl LeaseDb {
                 continue;
             };
             let duid = table
-                .find_duid_by_mac(mac)
+                .get_duid_by_mac(mac)
                 .cloned()
                 .unwrap_or_else(|| Duid::new(vec![]));
             table.apply_update(DeviceUpdate::V6LeaseGranted {
@@ -501,7 +500,7 @@ impl LeaseDb {
                 continue;
             };
             let duid = table
-                .find_duid_by_mac(mac)
+                .get_duid_by_mac(mac)
                 .cloned()
                 .unwrap_or_else(|| Duid::new(vec![]));
             table.apply_update(DeviceUpdate::V6PrefixAssigned {

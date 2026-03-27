@@ -1,4 +1,8 @@
 use anyhow::{Context, Result};
+use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
+use lanforge_core::device::Ipv6AddrOrSuffix;
+use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::update::DeviceUpdate;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -7,10 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tracing::{debug, error, info};
 
-use crate::bus::{EventBus, LanforgeEvent, ManagedTable};
 use crate::control::api::{Command, Interfaces, Response, SimpleSuccess};
-use crate::device::{Ipv6AddrOrSuffix, MacAddr};
-use crate::state::update::DeviceUpdate;
 
 /// Inicia o serviço de controle UDS.
 pub async fn control_service(
@@ -289,11 +290,9 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
 
             Ok(Command::HostRemove { mac }) => {
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
-                    let mut w = ctx.table.write();
-                    w.devices.remove(&mac_addr);
-                    w.static_entries.remove(&mac_addr);
-                    drop(w);
-                    ctx.bus.publish(LanforgeEvent::DeviceTableDirty);
+                    ctx.table
+                        .update(DeviceUpdate::HostRemoved { mac: mac_addr })
+                        .await;
                     Response::Success(SimpleSuccess {
                         message: format!("Host removido (MAC {mac})"),
                     })

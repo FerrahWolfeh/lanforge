@@ -1,15 +1,16 @@
 use anyhow::Result;
 use hickory_proto::op::Message;
 use hickory_proto::rr::{Name, RData, Record, RecordType};
+use lanforge_core::device::{IPv6State, Ipv6AddrOrSuffix, classify_ip};
+use lanforge_core::state::DeviceTable;
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
 
-use crate::device::Device;
 use crate::dns::config::DnsConfig;
 use crate::dns::response::ResponseBuilder;
 use crate::dns::utils::{combine_prefix_suffix, parse_arpa};
-use crate::state::DeviceTable;
+use lanforge_core::device::Device;
 
 pub struct LocalResolver<'a> {
     cfg: &'a DnsConfig,
@@ -31,9 +32,7 @@ impl<'a> LocalResolver<'a> {
     ) -> Result<Vec<u8>> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
-        if let Some(&mac) = self.table.name_index.get(hostname)
-            && let Some(device) = self.table.devices.get(&mac)
-        {
+        if let Some(device) = self.table.get_by_hostname(hostname) {
             if let Some(records) = self.resolve_local_with_device(query, device, qtype) {
                 return rb.success(records);
             } else {
@@ -53,15 +52,9 @@ impl<'a> LocalResolver<'a> {
             return Ok(None);
         };
 
-        let Some(&mac) = self.table.ip_index.get(&target_ip) else {
+        let Some(device) = self.table.get_by_ip(&target_ip) else {
             return Ok(None);
         };
-
-        let device = self
-            .table
-            .devices
-            .get(&mac)
-            .expect("Índice corrompido: MAC não encontrado");
 
         let question = query.queries().first().unwrap();
         let name = question.name().clone();
@@ -112,7 +105,7 @@ impl<'a> LocalResolver<'a> {
 
         // 1. Coleta prefixos de endereços SLAAC para aplicar aos sufixos estáticos depois
         for state in &device.v6 {
-            if let crate::device::IPv6State::Slaac(ip) = state {
+            if let IPv6State::Slaac(ip) = state {
                 let segs = ip.segments();
                 applied_prefixes.insert([segs[0], segs[1], segs[2], segs[3]]);
             }
@@ -132,11 +125,11 @@ impl<'a> LocalResolver<'a> {
         // IPv6
         for state in &device.v6 {
             match state {
-                crate::device::IPv6State::Dynamic(lease) => all_ips.push(IpAddr::V6(lease.ip)),
-                crate::device::IPv6State::Slaac(ip) => all_ips.push(IpAddr::V6(*ip)),
-                crate::device::IPv6State::Static(suf) => match suf {
-                    crate::device::Ipv6AddrOrSuffix::Full(ip) => all_ips.push(IpAddr::V6(*ip)),
-                    crate::device::Ipv6AddrOrSuffix::Suffix(_) => {
+                IPv6State::Dynamic(lease) => all_ips.push(IpAddr::V6(lease.ip)),
+                IPv6State::Slaac(ip) => all_ips.push(IpAddr::V6(*ip)),
+                IPv6State::Static(suf) => match suf {
+                    Ipv6AddrOrSuffix::Full(ip) => all_ips.push(IpAddr::V6(*ip)),
+                    Ipv6AddrOrSuffix::Suffix(_) => {
                         for prefix in &applied_prefixes {
                             if let Some(ip) = combine_prefix_suffix(prefix, suf) {
                                 all_ips.push(IpAddr::V6(ip));
@@ -150,7 +143,7 @@ impl<'a> LocalResolver<'a> {
         // 3. De-duplicação e Ordenação por Prioridade (ULA > IPv4 > GUA)
         let mut unique = HashSet::new();
         all_ips.retain(|ip| unique.insert(*ip));
-        all_ips.sort_by_cached_key(|ip| crate::device::classify_ip(ip).score());
+        all_ips.sort_by_cached_key(|ip| classify_ip(ip).score());
 
         // 4. Filtra por qtype e converte em Records
         for ip in all_ips {

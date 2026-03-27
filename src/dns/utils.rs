@@ -1,4 +1,5 @@
 use hickory_proto::rr::Name;
+use lanforge_core::device::Ipv6AddrOrSuffix;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -72,13 +73,10 @@ fn byte_parse_arpa<'a>(mut labels: impl Iterator<Item = &'a [u8]>) -> Option<IpA
     None
 }
 
-pub fn combine_prefix_suffix(
-    prefix_segs: &[u16],
-    suffix: &crate::device::Ipv6AddrOrSuffix,
-) -> Option<Ipv6Addr> {
+pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &Ipv6AddrOrSuffix) -> Option<Ipv6Addr> {
     match suffix {
-        crate::device::Ipv6AddrOrSuffix::Full(ip) => Some(*ip),
-        crate::device::Ipv6AddrOrSuffix::Suffix(s) => Some(Ipv6Addr::new(
+        Ipv6AddrOrSuffix::Full(ip) => Some(*ip),
+        Ipv6AddrOrSuffix::Suffix(s) => Some(Ipv6Addr::new(
             prefix_segs[0],
             prefix_segs[1],
             prefix_segs[2],

@@ -104,7 +104,7 @@ fn handles_duid_persistence() {
     let dev = loaded.devices().next().unwrap();
     assert_eq!(dev.duid.as_ref().unwrap().bytes, duid.bytes);
 
-    let found = loaded.find_by_duid(&duid);
+    let found = loaded.get_by_duid(&duid);
     assert!(found.is_some());
     assert_eq!(found.unwrap().hostname, "DuidDevice");
 }

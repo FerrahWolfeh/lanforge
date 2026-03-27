@@ -4,7 +4,7 @@ use std::time::SystemTime;
 
 use rand::seq::SliceRandom;
 
-use crate::device::MacAddr;
+use lanforge_core::identifiers::MacAddr;
 
 /// Representação de uma alocação ativa.
 #[derive(Debug, Clone)]

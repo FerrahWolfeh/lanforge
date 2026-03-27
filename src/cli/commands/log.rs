@@ -1,8 +1,8 @@
 use super::CliCommand;
-use crate::bus::{DeviceChange, LanforgeEvent};
 use crate::control::{Command as ControlCommand, Response, api::SimpleSuccess};
 use anyhow::Result;
 use colored::*;
+use lanforge_core::bus::{DeviceChange, LanforgeEvent};
 
 pub struct LogHandler {
     pub follow: bool,

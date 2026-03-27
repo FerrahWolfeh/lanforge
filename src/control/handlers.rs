@@ -5,10 +5,11 @@
 
 use std::net::Ipv6Addr;
 
+use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
+
 use crate::control::api;
 use crate::control::api::Response;
 use crate::control::server::ClientContext;
-use crate::device::{IPv6State, Origin};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -214,38 +215,36 @@ impl ClientContext {
                 display_v4: dev.display_v4(),
                 display_v6: dev.display_v6(),
                 v4: match &dev.v4 {
-                    crate::device::IPv4State::Static(ip) => Some(api::LeaseInfo {
+                    IPv4State::Static(ip) => Some(api::LeaseInfo {
                         ip: ip.to_string(),
                         expires: "Static".to_string(),
                         reserved: true,
                     }),
-                    crate::device::IPv4State::Dynamic(v) => Some(api::LeaseInfo {
+                    IPv4State::Dynamic(v) => Some(api::LeaseInfo {
                         ip: v.ip.to_string(),
                         expires: format_iso8601(v.expires),
                         reserved: dev.is_static(),
                     }),
-                    crate::device::IPv4State::None => None,
+                    IPv4State::None => None,
                 },
                 seen_v4: dev.seen_v4.iter().map(|ip| ip.to_string()).collect(),
                 v6: dev.v6.iter().find_map(|s| match s {
-                    crate::device::IPv6State::Dynamic(v) => Some(api::LeaseInfo {
+                    IPv6State::Dynamic(v) => Some(api::LeaseInfo {
                         ip: v.ip.to_string(),
                         expires: format_iso8601(v.expires),
                         reserved: dev.is_static(),
                     }),
-                    crate::device::IPv6State::Static(crate::device::Ipv6AddrOrSuffix::Full(ip)) => {
-                        Some(api::LeaseInfo {
-                            ip: ip.to_string(),
-                            expires: "Static".to_string(),
-                            reserved: true,
-                        })
-                    }
+                    IPv6State::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(api::LeaseInfo {
+                        ip: ip.to_string(),
+                        expires: "Static".to_string(),
+                        reserved: true,
+                    }),
                     _ => None,
                 }),
                 ipv6_addrs: {
                     let mut list = Vec::new();
                     for state in &dev.v6 {
-                        if let crate::device::IPv6State::Slaac(ip) = state {
+                        if let IPv6State::Slaac(ip) = state {
                             list.push(api::Ipv6Entry {
                                 addr: ip.to_string(),
                                 kind: get_v6_kind(ip).to_string(),
@@ -272,7 +271,7 @@ impl ClientContext {
         let mut hosts = Vec::new();
 
         for dev in table_guard.devices() {
-            if dev.origin == crate::device::Origin::Dynamic {
+            if dev.origin == Origin::Dynamic {
                 continue;
             }
 
@@ -280,11 +279,11 @@ impl ClientContext {
                 mac: dev.mac.to_string(),
                 hostname: dev.hostname.clone(),
                 v4_fixed: match &dev.v4 {
-                    crate::device::IPv4State::Static(ip) => Some(ip.to_string()),
+                    IPv4State::Static(ip) => Some(ip.to_string()),
                     _ => None,
                 },
                 v6_suffix: dev.v6.iter().find_map(|s| {
-                    if let crate::device::IPv6State::Static(suffix) = s {
+                    if let IPv6State::Static(suffix) = s {
                         Some(suffix.to_string())
                     } else {
                         None

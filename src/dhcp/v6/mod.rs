@@ -30,11 +30,13 @@
 //! persistente do cliente, mesmo que o MAC mude ou não esteja disponível.
 
 pub mod config;
-pub mod duid;
 pub mod pool;
 pub mod server;
 
 use anyhow::{Context, Result};
+use lanforge_core::bus::{DeviceChange, LanforgeEvent, ManagedTable};
+use lanforge_core::identifiers::{Duid, MacAddr};
+use lanforge_core::state::update::DeviceUpdate;
 use rtnetlink::Handle;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::Ipv6Addr;
@@ -43,11 +45,7 @@ use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
-use crate::bus::ManagedTable;
-use crate::device::MacAddr;
-use crate::state::update::DeviceUpdate;
 use config::Dhcpv6Config;
-use duid::Duid;
 use pool::Ipv6Pool;
 use server::{Dhcpv6Server, HandleResult};
 
@@ -175,11 +173,11 @@ pub async fn dhcpv6_service(
             }
             event = bus_rx.recv() => {
                 match event {
-                    Ok(crate::bus::LanforgeEvent::LeaseRelease { mac }) => {
+                    Ok(LanforgeEvent::LeaseRelease { mac }) => {
                         info!("DHCPv6: Forcing release of {} via CLI", mac);
                         server.pool.release_mac(mac);
                     }
-                    Ok(crate::bus::LanforgeEvent::DeviceUpdated { mac, change: crate::bus::DeviceChange::V6SuffixChanged { suffix } }) => {
+                    Ok(LanforgeEvent::DeviceUpdated { mac, change: DeviceChange::V6SuffixChanged { suffix } }) => {
                         match suffix {
                             Some(s) => {
                                 if let Some(ip) = server.pool.construct_static_ula(&s) {
@@ -193,11 +191,11 @@ pub async fn dhcpv6_service(
                             }
                         }
                     }
-                    Ok(crate::bus::LanforgeEvent::PrefixChanged { gua: _, preferred, valid }) => {
+                    Ok(LanforgeEvent::PrefixChanged { gua: _, preferred, valid }) => {
                         server.prefix_lifetimes = Some((preferred, valid));
                         debug!("DHCPv6: Updated prefix lifetimes from bus: pref={}, valid={}", preferred, valid);
                     }
-                    Ok(crate::bus::LanforgeEvent::Shutdown) => break,
+                    Ok(LanforgeEvent::Shutdown) => break,
                     _ => {}
                 }
             }
@@ -252,7 +250,7 @@ async fn apply_learned_state(
         } else if let (None, Some(ip)) = (learned_duid.clone(), assigned_ip)
             && let Some(mac) = opt_mac
         {
-            let existing_duid = table.read().find_duid_by_mac(mac).cloned();
+            let existing_duid = table.read().get_duid_by_mac(mac).cloned();
             if let Some(duid) = existing_duid {
                 table
                     .update(DeviceUpdate::V6LeaseGranted {

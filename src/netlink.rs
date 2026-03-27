@@ -31,8 +31,7 @@ use netlink_packet_route::{
 use rtnetlink::{Handle, IpVersion};
 use std::net::Ipv6Addr;
 
-use crate::device::MacAddr;
-use crate::state::update::DeviceUpdate;
+use lanforge_core::{identifiers::MacAddr, state::update::DeviceUpdate};
 
 // ---------------------------------------------------------------------------
 // NeighborEvent — struct tipada para eventos do kernel

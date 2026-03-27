@@ -1,9 +1,9 @@
 use super::{CliCommand, format_relative_iso8601};
 use crate::control::api::{DeviceEntry, DevicesResponse, HostsResponse};
 use crate::control::{Command as ControlCommand, Response};
-use crate::device::Origin;
 use anyhow::Result;
 use iocraft::prelude::*;
+use lanforge_core::device::Origin;
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
 

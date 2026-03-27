@@ -1,5 +1,6 @@
-use crate::{device::MacAddr, state::DeviceTable};
 use std::fmt;
+
+use lanforge_core::{identifiers::MacAddr, state::DeviceTable};
 
 /// Identidade " Who TF am I?" (WTFAI) de um dispositivo.
 #[derive(Debug, Clone)]
@@ -28,7 +29,7 @@ impl DeviceIdentity {
         let mut identity = Self::new(mac, packet_hostname, packet_vendor);
 
         if let Some(t) = table
-            && let Some(dev) = t.devices.get(&mac)
+            && let Some(dev) = t.get_device(&mac)
         {
             // Se o pacote não trouxe hostname mas a tabela tem (ex: estático ou aprendido antes), usamos o da tabela
             if identity.hostname.is_none() && !dev.hostname.is_empty() {

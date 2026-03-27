@@ -31,10 +31,9 @@ pub mod packet;
 pub use config::*;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
-use crate::bus::{EventBus, LanforgeEvent};
-
 use anyhow::{Context, Result, anyhow};
 use futures::TryStreamExt;
+use lanforge_core::bus::{EventBus, LanforgeEvent};
 use netlink_packet_route::address::AddressAttribute;
 use rand::{RngExt, rng};
 use rtnetlink::Handle;

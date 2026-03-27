@@ -31,30 +31,27 @@
 //! - **`EventBus`**: Barramento de eventos reativo asincrono.
 //! - **Supervisores**: Garantem que tasks de protocolo continuem rodando após erros.
 
-mod bus;
 mod cli;
 mod config;
 mod control;
-mod db;
-mod device;
 mod dhcp;
 mod dns;
 mod netlink;
 mod ra;
 mod slaac;
-mod state;
 mod supervisor;
 
 use anyhow::Result;
-use bus::{EventBus, LanforgeEvent, ManagedTable};
 use config::Config;
 use futures::StreamExt;
+use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::DeviceUpdate;
+use lanforge_db::engine::LeaseDb;
+use lanforge_db::worker::db_worker;
 use netlink_sys::AsyncSocket;
-use parking_lot::RwLock;
 use rtnetlink::new_connection;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
@@ -134,20 +131,20 @@ async fn main() -> Result<()> {
     let leases_db_path = std::path::PathBuf::from(&cfg.leases_db);
 
     // 1. Criamos a tabela inicial direto na stack da thread principal (Lock-free)
-    let mut initial_table = match lanforge_db::LeaseDb::open(&leases_db_path) {
+    let mut initial_table = match LeaseDb::open(&leases_db_path) {
         Ok(db) => match db.load_table() {
             Ok(persisted) => {
                 info!("📦 Estado persistido carregado de {}", cfg.leases_db);
                 persisted
             }
             Err(e) => {
-                warn!("Falha ao carregar DB ({e:#}), iniciando do zero");
-                DeviceTable::new() // Cria uma nova do Core se o DB falhar
+                warn!("Falha ao carregar DB ({e}), iniciando do zero");
+                DeviceTable::new()
             }
         },
         Err(e) => {
-            error!("❌ Erro fatal abrindo leases DB: {e:#}");
-            return Err(e);
+            error!("❌ Erro fatal abrindo leases DB: {e}");
+            return Err(e.into());
         }
     };
 
@@ -188,14 +185,10 @@ async fn main() -> Result<()> {
     // 3. Montamos os índices O(1) do DNS apenas UMA vez após tudo ser carregado
     initial_table.apply_update(DeviceUpdate::RebuildDnsIndices);
 
-    // 4. AGORA SIM, embrulhamos a tabela pronta e finalizada na trava de alta performance
-    // para ser distribuída aos motores (DNS, DHCP, EventBus).
-    let shared_table = Arc::new(RwLock::new(initial_table));
-
     // -----------------------------------------------------------------------
     // DB worker — persiste reativamente via EventBus
     // -----------------------------------------------------------------------
-    tokio::spawn(db::db_worker(leases_db_path, table.clone(), bus.clone()));
+    tokio::spawn(db_worker(leases_db_path, table.clone(), bus.clone()));
 
     // -----------------------------------------------------------------------
     // Netlink connection

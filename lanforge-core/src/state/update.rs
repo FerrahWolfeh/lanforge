@@ -93,6 +93,9 @@ pub enum DeviceUpdate {
     /// Limpa todos os endereços SLAAC de um device antes de re-scan.
     SlaacCleared { mac: MacAddr },
 
+    /// Remove um host completamente (usado para hosts estáticos/CLI).
+    HostRemoved { mac: MacAddr },
+
     /// Libera formalmente os leases (v4 e v6) de um device via CLI.
     LeaseReleased { mac: MacAddr },
 
@@ -406,6 +409,19 @@ impl DeviceTable {
                     return dev.v6.len() != initial_len;
                 }
                 false
+            }
+            DeviceUpdate::HostRemoved { mac } => {
+                let mut changed = false;
+                if let Some(dev) = self.devices.remove(&mac) {
+                    if let Some(duid) = dev.duid {
+                        self.duid_index.remove(&duid);
+                    }
+                    changed = true;
+                }
+                if self.static_entries.remove(&mac).is_some() {
+                    changed = true;
+                }
+                changed
             }
             DeviceUpdate::LeaseReleased { mac } => {
                 if let Some(dev) = self.devices.get_mut(&mac) {

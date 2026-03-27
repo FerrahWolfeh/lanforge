@@ -19,16 +19,15 @@ use dhcproto::v6::{
     Status, StatusCode,
 };
 use dhcproto::{Decodable, Decoder, Encodable, Encoder};
+use lanforge_core::bus::ManagedTable;
+use lanforge_core::identifiers::{Duid, MacAddr};
+use lanforge_core::state::update::DeviceUpdate;
 use std::net::Ipv6Addr;
 use tracing::{debug, info, warn};
 
 use super::config::Dhcpv6Config;
-use super::duid::Duid;
 use super::pool::Ipv6Pool;
-use crate::bus::ManagedTable;
-use crate::device::MacAddr;
 use crate::dhcp::identity::DeviceIdentity;
-use crate::state::update::DeviceUpdate;
 use std::sync::Arc;
 
 /// IAIDs atribuídos em uma resposta.

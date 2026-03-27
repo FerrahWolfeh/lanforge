@@ -1,3 +1,4 @@
+use lanforge_core::bus::LanforgeEvent;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
@@ -55,7 +56,7 @@ pub enum Response {
     Hosts(HostsResponse),
     Error { error: String },
     Success(SimpleSuccess),
-    Event(crate::bus::LanforgeEvent),
+    Event(LanforgeEvent),
 }
 
 #[derive(Debug, Serialize, Deserialize)]

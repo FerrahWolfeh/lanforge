@@ -177,7 +177,7 @@ fn apply_update_duid_associated() {
         iaid: 1,
     }));
 
-    let found = table.find_by_duid(&duid).expect("deve encontrar via DUID");
+    let found = table.get_by_duid(&duid).expect("deve encontrar via DUID");
     assert_eq!(found.hostname, "DuidHost");
 
     // Mesmo DUID novamente — não dirty

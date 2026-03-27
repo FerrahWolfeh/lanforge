@@ -15,15 +15,15 @@
 
 use dhcproto::v4::{self, DhcpOption, Message, MessageType, Opcode};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder};
+use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::DeviceTable;
 use std::net::Ipv4Addr;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
 use super::config::Dhcpv4Config;
 use super::pool::IpPool;
-use crate::device::MacAddr;
 use crate::dhcp::identity::DeviceIdentity;
-use crate::state::DeviceTable;
 
 /// Resultado de processar uma mensagem DHCP.
 pub enum HandleResult {

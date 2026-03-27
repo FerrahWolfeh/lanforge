@@ -2,11 +2,12 @@
 
 use std::sync::Arc;
 
-use crate::bus::{EventBus, ManagedTable};
-use crate::config::{Config, DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg};
+use lanforge_core::bus::{EventBus, ManagedTable};
+use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::update::DeviceUpdate;
+
+use crate::config::{Config, DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg};
 use crate::control::api::{Interfaces, Response};
-use crate::device::MacAddr;
-use crate::state::update::DeviceUpdate;
 
 use super::server::ClientContext;
 
@@ -75,12 +76,11 @@ async fn test_host_list_returns_static_and_cli_only() {
     let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
     {
         let mut w = table.write();
-        w.load_static_devices(&[StaticDeviceCfg {
-            mac: mac_toml.to_string(),
-            hostname: "toml-host".to_string(),
-            v4_ip: Some("192.168.1.5".to_string()),
-            v6_suffix: None,
-        }]);
+        let mac = mac_toml;
+        let hostname = "toml-host".to_string();
+        let v4_ip = Some("192.168.1.5".parse().unwrap());
+        let v6_suffix = None;
+        w.add_static_device(mac, hostname, v4_ip, v6_suffix);
     }
 
     // 4. handle_hosts (called by HostList) should return ONLY CLI and TOML
