@@ -11,12 +11,13 @@ use std::time::Duration;
 use super::*;
 use crate::bus::{EventBus, ManagedTable};
 use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin, V4Lease};
-use crate::dns::resolver::{resolve_local, resolve_ptr};
-use crate::dns::response::base_response;
+use crate::dns::resolver::LocalResolver;
+use crate::dns::response::ResponseBuilder;
 use crate::dns::server::handle_query;
 use crate::dns::upstream::UpstreamManager;
 use crate::dns::utils::{extract_local_hostname, parse_arpa};
 use crate::state::DeviceTable;
+use anyhow::Result;
 use std::{net::Ipv4Addr, time::SystemTime};
 
 // Helpers para testes que precisam de ManagedTable
@@ -76,7 +77,35 @@ fn table_with_device(hostname: &str, mac: MacAddr, ip: Ipv4Addr) -> DeviceTable 
     table
 }
 
-// --- extração de hostnames (O novo normalize_name sem alocação) ---
+// Legacy functions for tests only
+// Funções legadas mantidas temporariamente para compatibilidade com testes e server.rs pré-migração.
+pub fn resolve_local(
+    query: &Message,
+    device: &Device,
+    qtype: RecordType,
+    cfg: &DnsConfig,
+) -> Result<Option<Vec<u8>>> {
+    // Esta função simulada é ligeiramente diferente pois o resolve_ip agora encapsula o lookup.
+    // Mas para manter a assinatura antiga, criamos uma tabela fake ou apenas usamos a lógica interna.
+    let table = DeviceTable::new(); // Dummy
+    let resolver = LocalResolver::new(cfg, &table);
+    if let Some(records) = resolver.resolve_local_with_device(query, device, qtype) {
+        Ok(Some(ResponseBuilder::new(query, cfg).success(records)?))
+    } else {
+        Ok(Some(ResponseBuilder::new(query, cfg).empty_noerror()?))
+    }
+}
+
+pub fn resolve_ptr(
+    query: &Message,
+    qname_str: &str,
+    cfg: &DnsConfig,
+    table: &DeviceTable,
+) -> Result<Option<Vec<u8>>> {
+    let resolver = LocalResolver::new(cfg, table);
+    let qname = Name::from_str(qname_str).unwrap_or_else(|_| Name::root());
+    resolver.resolve_ptr(query, &qname)
+}
 
 #[test]
 fn test_extract_local_hostname_matches_domain() {
@@ -120,22 +149,30 @@ fn resolve_local_matches_question_name_exactly() {
 
 #[test]
 fn parses_ipv4_arpa_correctly() {
-    let ip = parse_arpa("50.1.168.192.in-addr.arpa.").unwrap();
+    let ip = parse_arpa(&Name::from_str("50.1.168.192.in-addr.arpa.").unwrap()).unwrap();
     assert_eq!(ip, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)));
 }
 
 #[test]
 fn parses_ipv6_arpa_correctly() {
-    let arpa = "4.3.2.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.f.ip6.arpa";
-    let ip = parse_arpa(arpa).unwrap();
+    let arpa =
+        Name::from_str("4.3.2.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.f.ip6.arpa")
+            .unwrap();
+    let ip = parse_arpa(&arpa).unwrap();
     assert_eq!(ip, "fd00::1234".parse::<IpAddr>().unwrap());
 }
 
 #[test]
 fn invalid_arpa_returns_none() {
-    assert_eq!(parse_arpa("invalid.in-addr.arpa"), None);
-    assert_eq!(parse_arpa("999.1.1.1.in-addr.arpa"), None);
-    assert_eq!(parse_arpa("google.com"), None);
+    assert_eq!(
+        parse_arpa(&Name::from_str("invalid.in-addr.arpa").unwrap()),
+        None
+    );
+    assert_eq!(
+        parse_arpa(&Name::from_str("999.1.1.1.in-addr.arpa").unwrap()),
+        None
+    );
+    assert_eq!(parse_arpa(&Name::from_str("google.com").unwrap()), None);
 }
 
 // --- resolve_ptr ---
@@ -349,7 +386,7 @@ fn test_edns0_is_preserved() {
         *query_ext = Some(extensions);
     }
 
-    let resp = base_response(&query, &cfg);
+    let resp = ResponseBuilder::new(&query, &cfg).base();
 
     assert!(
         resp.extensions().is_some(),
@@ -515,4 +552,40 @@ fn test_resolve_local_priority_ordering() {
             answers[2].data()
         );
     }
+}
+
+#[test]
+fn test_local_resolver_direct_api() {
+    let cfg = mock_config();
+    let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+    let table = table_with_device("direct", mac, Ipv4Addr::new(10, 10, 10, 10));
+
+    let resolver = crate::dns::resolver::LocalResolver::new(&cfg, &table);
+
+    let mut query = Message::new();
+    query.add_query(hickory_proto::op::Query::query(
+        Name::from_str("direct.lan.").unwrap(),
+        RecordType::A,
+    ));
+
+    // Test resolve_ip
+    let resp_bytes = resolver
+        .resolve_ip(&query, "direct", RecordType::A)
+        .unwrap();
+    let resp = Message::from_bytes(&resp_bytes).unwrap();
+    assert_eq!(resp.response_code(), ResponseCode::NoError);
+    assert_eq!(resp.answers().len(), 1);
+
+    // Test resolve_ip for NXDOMAIN
+    let resp_bytes = resolver
+        .resolve_ip(&query, "nonexistent", RecordType::A)
+        .unwrap();
+    let resp = Message::from_bytes(&resp_bytes).unwrap();
+    assert_eq!(resp.response_code(), ResponseCode::NXDomain);
+
+    // Test resolve_ptr with Name directly
+    let qname = Name::from_str("10.10.10.10.in-addr.arpa.").unwrap();
+    let resp_bytes = resolver.resolve_ptr(&query, &qname).unwrap().unwrap();
+    let resp = Message::from_bytes(&resp_bytes).unwrap();
+    assert_eq!(resp.response_code(), ResponseCode::NoError);
 }

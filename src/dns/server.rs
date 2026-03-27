@@ -14,8 +14,6 @@ use tracing::{info, trace};
 
 use crate::bus::ManagedTable;
 use crate::dns::config::DnsConfig;
-use crate::dns::resolver::{resolve_local, resolve_ptr};
-use crate::dns::response::{formerr_response, nxdomain_response, refused_response};
 use crate::dns::upstream::{UpstreamManager, forward_to_upstream};
 use crate::dns::utils::{extract_local_hostname, fast_lowercase};
 
@@ -115,8 +113,10 @@ pub(crate) async fn handle_query(
         return Ok(None);
     }
 
+    let rb = crate::dns::response::ResponseBuilder::new(&query, cfg);
+
     let Some(question) = query.queries().first() else {
-        return Ok(Some(formerr_response(&query, cfg)?));
+        return Ok(Some(rb.formerr()?));
     };
 
     let qname = question.name();
@@ -124,34 +124,29 @@ pub(crate) async fn handle_query(
 
     trace!(%src, %qname, ?qtype, "Query recebida");
 
+    // Fast Path para Redução de Latência e Prevenção de Leaks
     if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
         if let Some(hostname_slice) = extract_local_hostname(qname, &cfg.search_labels) {
             let safe_hostname = fast_lowercase(hostname_slice);
 
+            // Somente após confirmar que a query é para o domínio local, bloqueamos a tabela
             let t = table.read();
-
-            if let Some(&mac_addr) = t.name_index.get(safe_hostname.as_ref())
-                && let Some(device) = t.devices.get(&mac_addr)
-                && let Some(response) = resolve_local(&query, device, qtype, cfg)?
-            {
-                return Ok(Some(response));
-            }
-
-            return Ok(Some(nxdomain_response(&query, cfg)?));
+            let resolver = crate::dns::resolver::LocalResolver::new(cfg, &t);
+            return Ok(Some(resolver.resolve_ip(&query, &safe_hostname, qtype)?));
         }
     } else if qtype == RecordType::PTR {
-        let qname_str = qname.to_string();
-        if qname_str.ends_with(".arpa.") {
-            let t = table.read();
-            if let Some(response) = resolve_ptr(&query, &qname_str, cfg, &t)? {
-                return Ok(Some(response));
-            }
+        // PTR Optimization: O resolver agora recebe &Name e faz parse interno via labels
+        let t = table.read();
+        let resolver = crate::dns::resolver::LocalResolver::new(cfg, &t);
+        if let Some(response) = resolver.resolve_ptr(&query, qname)? {
+            return Ok(Some(response));
         }
     }
 
+    // Encaminhamento para Upstream (Internet)
     if let (Some(upstream), Some(mgr)) = (cfg.upstream, upstream_mgr) {
         forward_to_upstream(data, upstream, mgr).await.map(Some)
     } else {
-        Ok(Some(refused_response(&query, cfg)?))
+        Ok(Some(rb.refused()?))
     }
 }

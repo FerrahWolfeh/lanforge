@@ -8,58 +8,77 @@ use std::str::FromStr;
 
 use crate::dns::config::DnsConfig;
 
-pub fn base_response(query: &Message, cfg: &DnsConfig) -> Message {
-    let mut resp = Message::new();
-    resp.set_id(query.id())
-        .set_message_type(MessageType::Response)
-        .set_op_code(OpCode::Query)
-        .set_authoritative(true)
-        .set_recursion_available(cfg.upstream.is_some())
-        .add_queries(query.queries().to_vec());
+pub struct ResponseBuilder<'a> {
+    query: &'a Message,
+    cfg: &'a DnsConfig,
+}
 
-    if let Some(edns) = query.extensions() {
-        if let Some(ext) = resp.extensions_mut() {
-            *ext = edns.clone();
-        } else {
-            let ext = resp.extensions_mut();
-            *ext = Some(edns.clone());
-        }
+impl<'a> ResponseBuilder<'a> {
+    pub fn new(query: &'a Message, cfg: &'a DnsConfig) -> Self {
+        Self { query, cfg }
     }
-    resp
-}
 
-pub fn add_soa(resp: &mut Message, cfg: &DnsConfig) {
-    let name = Name::from_str(&format!("{}.", cfg.search_domain)).unwrap_or_else(|_| Name::root());
-    let mname =
-        Name::from_str(&format!("ns.{}.", cfg.search_domain)).unwrap_or_else(|_| Name::root());
-    let rname = Name::from_str(&format!("hostmaster.{}.", cfg.search_domain))
-        .unwrap_or_else(|_| Name::root());
-    let soa = SOA::new(mname, rname, 1, 7200, 3600, 1209600, 3600);
-    resp.add_name_server(Record::from_rdata(name, 3600, RData::SOA(soa)));
-}
+    pub fn base(&self) -> Message {
+        let mut resp = Message::new();
+        resp.set_id(self.query.id())
+            .set_message_type(MessageType::Response)
+            .set_op_code(OpCode::Query)
+            .set_authoritative(true)
+            .set_recursion_available(self.cfg.upstream.is_some())
+            .add_queries(self.query.queries().to_vec());
 
-pub fn nxdomain_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
-    let mut resp = base_response(query, cfg);
-    resp.set_response_code(ResponseCode::NXDomain);
-    add_soa(&mut resp, cfg);
-    Ok(resp.to_bytes()?)
-}
+        if let Some(edns) = self.query.extensions() {
+            if let Some(ext) = resp.extensions_mut() {
+                *ext = edns.clone();
+            } else {
+                let ext = resp.extensions_mut();
+                *ext = Some(edns.clone());
+            }
+        }
+        resp
+    }
 
-pub fn refused_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
-    let mut resp = base_response(query, cfg);
-    resp.set_response_code(ResponseCode::Refused);
-    Ok(resp.to_bytes()?)
-}
+    pub fn add_soa(&self, resp: &mut Message) {
+        let name = Name::from_str(&format!("{}.", self.cfg.search_domain))
+            .unwrap_or_else(|_| Name::root());
+        let mname = Name::from_str(&format!("ns.{}.", self.cfg.search_domain))
+            .unwrap_or_else(|_| Name::root());
+        let rname = Name::from_str(&format!("hostmaster.{}.", self.cfg.search_domain))
+            .unwrap_or_else(|_| Name::root());
+        let soa = SOA::new(mname, rname, 1, 7200, 3600, 1209600, 3600);
+        resp.add_name_server(Record::from_rdata(name, 3600, RData::SOA(soa)));
+    }
 
-pub fn empty_noerror_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
-    let mut resp = base_response(query, cfg);
-    resp.set_response_code(ResponseCode::NoError);
-    add_soa(&mut resp, cfg);
-    Ok(resp.to_bytes()?)
-}
+    pub fn nxdomain(&self) -> Result<Vec<u8>> {
+        let mut resp = self.base();
+        resp.set_response_code(ResponseCode::NXDomain);
+        self.add_soa(&mut resp);
+        Ok(resp.to_bytes()?)
+    }
 
-pub fn formerr_response(query: &Message, cfg: &DnsConfig) -> Result<Vec<u8>> {
-    let mut resp = base_response(query, cfg);
-    resp.set_response_code(ResponseCode::FormErr);
-    Ok(resp.to_bytes()?)
+    pub fn refused(&self) -> Result<Vec<u8>> {
+        let mut resp = self.base();
+        resp.set_response_code(ResponseCode::Refused);
+        Ok(resp.to_bytes()?)
+    }
+
+    pub fn empty_noerror(&self) -> Result<Vec<u8>> {
+        let mut resp = self.base();
+        resp.set_response_code(ResponseCode::NoError);
+        self.add_soa(&mut resp);
+        Ok(resp.to_bytes()?)
+    }
+
+    pub fn formerr(&self) -> Result<Vec<u8>> {
+        let mut resp = self.base();
+        resp.set_response_code(ResponseCode::FormErr);
+        Ok(resp.to_bytes()?)
+    }
+
+    pub fn success(&self, answers: Vec<Record>) -> Result<Vec<u8>> {
+        let mut resp = self.base();
+        resp.set_response_code(ResponseCode::NoError)
+            .add_answers(answers);
+        Ok(resp.to_bytes()?)
+    }
 }

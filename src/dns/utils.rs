@@ -1,36 +1,43 @@
 use hickory_proto::rr::Name;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::from_utf8;
 
-/// Parseador de ARPA otimizado sem alocação de Vec ou manipulação reversa pesada.
-pub fn parse_arpa(name: &str) -> Option<IpAddr> {
-    let name = name.trim_end_matches('.');
+/// Parseador de ARPA otimizado que opera diretamente sobre os labels de um Name, evitando alocações.
+pub fn parse_arpa(name: &Name) -> Option<IpAddr> {
+    let mut labels = name.iter().rev();
 
-    if let Some(v4_part) = name.strip_suffix(".in-addr.arpa") {
-        let mut parts = v4_part.split('.');
-        // Lendo do fim para o começo diretamente do iterador
-        let d: u8 = parts.next()?.parse().ok()?;
-        let c: u8 = parts.next()?.parse().ok()?;
-        let b: u8 = parts.next()?.parse().ok()?;
-        let a: u8 = parts.next()?.parse().ok()?;
-        return Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
-    }
-
-    if let Some(v6_part) = name.strip_suffix(".ip6.arpa") {
-        let parts: Vec<&str> = v6_part.split('.').collect();
-        if parts.len() == 32 {
-            let mut hex = String::with_capacity(39);
-            for (i, p) in parts.into_iter().rev().enumerate() {
-                hex.push_str(p);
-                if i % 4 == 3 && i != 31 {
-                    hex.push(':');
+    // 1. Verifica sufixo (in-addr.arpa ou ip6.arpa)
+    let first = labels.next()?;
+    if first.eq_ignore_ascii_case(b"arpa") {
+        let second = labels.next()?;
+        if second.eq_ignore_ascii_case(b"in-addr") {
+            // IPv4: d.c.b.a.in-addr.arpa
+            let a_str = from_utf8(labels.next()?).ok()?; // a quick check to see if at least the first block of the ipv4 is a readable number in utf-8
+            let a: u8 = a_str.parse().ok()?;
+            let b: u8 = from_utf8(labels.next()?).ok()?.parse().ok()?;
+            let c: u8 = from_utf8(labels.next()?).ok()?.parse().ok()?;
+            let d: u8 = from_utf8(labels.next()?).ok()?.parse().ok()?;
+            return Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
+        } else if second.eq_ignore_ascii_case(b"ip6") {
+            // IPv6: 32 nibbles reversos
+            let mut segments = [0u16; 8];
+            for i in 0..32 {
+                let label = labels.next()?;
+                if label.len() != 1 {
+                    return None;
                 }
+                let nibble = u8::from_str_radix(from_utf8(label).ok()?, 16).ok()?;
+                let seg_idx = i / 4;
+
+                // O primeiro nibble de um grupo de 4 recebe o maior shift (12)
+                let shift = 12 - ((i % 4) * 4);
+                segments[seg_idx] |= (nibble as u16) << shift;
             }
-            if let Ok(ipv6) = hex.parse::<Ipv6Addr>() {
-                return Some(IpAddr::V6(ipv6));
-            }
+            return Some(IpAddr::V6(Ipv6Addr::from(segments)));
         }
     }
+
     None
 }
 
