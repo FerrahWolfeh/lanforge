@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::DnsError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use tokio::sync::oneshot::{self, Sender};
 use tokio::time::timeout;
 use tracing::trace;
 
-use crate::dns::cache::DnsCache;
+use crate::cache::DnsCache;
 const DNS_CACHE_SIZE: u64 = 5000;
 
 pub struct UpstreamManager {
@@ -23,7 +23,7 @@ pub struct UpstreamManager {
 }
 
 impl UpstreamManager {
-    pub async fn new(upstream: SocketAddr) -> Result<Arc<Self>> {
+    pub async fn new(upstream: SocketAddr) -> Result<Arc<Self>, DnsError> {
         let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
         let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
         let cache = Arc::new(DnsCache::new(DNS_CACHE_SIZE));
@@ -61,7 +61,7 @@ impl UpstreamManager {
         }))
     }
 
-    pub async fn forward(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>> {
+    pub async fn forward(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
         let query = Message::from_bytes(data)?;
 
         // 1. Tentar o Cache primeiro
@@ -98,16 +98,14 @@ impl UpstreamManager {
                         Ok(resp_bytes)
                     }
                 } else {
-                    anyhow::bail!("Resposta UDP corrompida")
+                    return Err(DnsError::UdpDecode("Resposta UDP corrompida".to_string()));
                 }
             }
-            Ok(Err(_)) => anyhow::bail!("Canal de resposta fechado prematuramente"),
+            Ok(Err(_)) => return Err(DnsError::ChannelClosed),
             Err(_) => {
                 let mut map = self.pending.lock().unwrap();
                 map.remove(&internal_id);
-                // Em caso de timeout UDP severo, ainda podemos tentar TCP se for um erro de rede UDP específico,
-                // mas de modo geral DNS reflete timeout.
-                anyhow::bail!("Timeout esperando resposta do upstream")
+                return Err(DnsError::UpstreamTimeout);
             }
         };
 
@@ -135,10 +133,10 @@ impl UpstreamManager {
     }
 
     /// Implementação de Fallback TCP para resoluções grandes (ex: DNSSEC ou muitos records)
-    async fn forward_tcp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>> {
+    async fn forward_tcp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
         let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(upstream))
             .await
-            .context("TCP connect timeout")??;
+            .map_err(|_| DnsError::UpstreamTimeout)??;
 
         // RFC 1035: No TCP, os dados são prefixados por 2 bytes de comprimento (Big Endian)
         let len = (data.len() as u16).to_be_bytes();
@@ -161,6 +159,6 @@ pub async fn forward_to_upstream(
     data: &[u8],
     upstream: SocketAddr,
     manager: &UpstreamManager,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>, DnsError> {
     manager.forward(data, upstream).await
 }

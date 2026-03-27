@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::DnsError;
 use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
 use lanforge_core::bus::ManagedTable;
 use std::sync::Arc;
@@ -8,15 +8,15 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::dns::{
+use crate::{
     config::DnsConfig, resolver::LocalResolver, utils::extract_local_hostname_wire,
     wire::qtypes::QType,
 };
-use crate::dns::{
+use crate::{
     upstream::{UpstreamManager, forward_to_upstream},
     utils::parse_arpa_wire,
 };
-use crate::dns::{
+use crate::{
     utils::{extract_local_hostname, fast_lowercase},
     wire::WireResponseWriter,
 };
@@ -29,14 +29,20 @@ pub(crate) struct DnsContext {
     pub upstream_mgr: Option<Arc<UpstreamManager>>,
 }
 
-pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()> {
+pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<(), DnsError> {
     if !cfg.enabled {
         info!("Serviço DNS desabilitado na config");
         return std::future::pending().await;
     }
 
-    let udp_sock = Arc::new(UdpSocket::bind(cfg.listen).await.context("bind UDP")?);
-    let tcp_listener = TcpListener::bind(cfg.listen).await.context("bind TCP")?;
+    let udp_sock = Arc::new(
+        UdpSocket::bind(cfg.listen)
+            .await
+            .map_err(|e| DnsError::BindError("UDP", e))?,
+    );
+    let tcp_listener = TcpListener::bind(cfg.listen)
+        .await
+        .map_err(|e| DnsError::BindError("TCP", e))?;
 
     info!(
         "Escutando DNS (UDP/TCP) em {} (upstream: {:?}, domínio: .{})",
@@ -101,9 +107,12 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()>
 }
 
 // Extra-hot path
-pub(crate) async fn handle_query(data: &[u8], ctx: &DnsContext) -> Result<Option<Vec<u8>>> {
+pub(crate) async fn handle_query(
+    data: &[u8],
+    ctx: &DnsContext,
+) -> Result<Option<Vec<u8>>, DnsError> {
     // Phase 1: Zero-Alloc Wire Parsing
-    let Some(header) = crate::dns::wire::WireHeader::parse(data) else {
+    let Some(header) = crate::wire::WireHeader::parse(data) else {
         return Ok(None);
     };
 
@@ -111,14 +120,14 @@ pub(crate) async fn handle_query(data: &[u8], ctx: &DnsContext) -> Result<Option
         return Ok(None);
     }
 
-    let Some(question) = crate::dns::wire::WireQuestion::parse(data) else {
+    let Some(question) = crate::wire::WireQuestion::parse(data) else {
         // Fallback para Hickory se o wire-parser falhar (ex: pointers na question)
         return handle_query_fallback(data, ctx).await;
     };
 
     let raw_qtype = question.qtype(); // u16 — antes de converter
     let qtype = QType::from(raw_qtype);
-    let edns = crate::dns::wire::WireOptScanner::scan(data, &header, &question);
+    let edns = crate::wire::WireOptScanner::scan(data, &header, &question);
     let ra = ctx.cfg.upstream.is_some();
 
     // Phase 2: Zero-Alloc Routing Decisions
@@ -187,11 +196,11 @@ pub(crate) async fn handle_query(data: &[u8], ctx: &DnsContext) -> Result<Option
 }
 
 /// Fallback para o comportamento original caso o wire-parser encontre algo complexo.
-async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<Vec<u8>>> {
+async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<Vec<u8>>, DnsError> {
     let Ok(query) = Message::from_bytes(data) else {
         return Ok(None);
     };
-    let rb = crate::dns::response::ResponseBuilder::new(&query, &ctx.cfg);
+    let rb = crate::response::ResponseBuilder::new(&query, &ctx.cfg);
     let Some(question) = query.queries().first() else {
         // Mesmo no fallback, se falhar a question, tentamos um FormErr wire-level se possível,
         // mas aqui já falhamos no wire-parser original, então usamos o rb.
@@ -204,12 +213,12 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
         if let Some(hostname_slice) = extract_local_hostname(qname, &ctx.cfg.search_labels) {
             let safe_hostname = fast_lowercase(hostname_slice);
             let t = ctx.table.read();
-            let resolver = crate::dns::resolver::LocalResolver::new(&ctx.cfg, &t);
+            let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &t);
             return Ok(Some(resolver.resolve_ip(&query, &safe_hostname, qtype)?));
         }
     } else if qtype == RecordType::PTR {
         let t = ctx.table.read();
-        let resolver = crate::dns::resolver::LocalResolver::new(&ctx.cfg, &t);
+        let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &t);
         if let Some(response) = resolver.resolve_ptr(&query, qname)? {
             return Ok(Some(response));
         }

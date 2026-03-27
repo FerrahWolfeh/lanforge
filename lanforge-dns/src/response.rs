@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::DnsError;
 use hickory_proto::{
     op::{Message, MessageType, OpCode, ResponseCode},
     rr::{Name, RData, Record, rdata::SOA},
@@ -6,7 +6,7 @@ use hickory_proto::{
 };
 use std::str::FromStr;
 
-use crate::dns::config::DnsConfig;
+use crate::config::DnsConfig;
 
 pub struct ResponseBuilder<'a> {
     query: &'a Message,
@@ -49,33 +49,33 @@ impl<'a> ResponseBuilder<'a> {
         resp.add_name_server(Record::from_rdata(name, 3600, RData::SOA(soa)));
     }
 
-    pub fn nxdomain(&self) -> Result<Vec<u8>> {
+    pub fn nxdomain(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
         resp.set_response_code(ResponseCode::NXDomain);
         self.add_soa(&mut resp);
         Ok(resp.to_bytes()?)
     }
 
-    pub fn refused(&self) -> Result<Vec<u8>> {
+    pub fn refused(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
         resp.set_response_code(ResponseCode::Refused);
         Ok(resp.to_bytes()?)
     }
 
-    pub fn empty_noerror(&self) -> Result<Vec<u8>> {
+    pub fn empty_noerror(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
         resp.set_response_code(ResponseCode::NoError);
         self.add_soa(&mut resp);
         Ok(resp.to_bytes()?)
     }
 
-    pub fn formerr(&self) -> Result<Vec<u8>> {
+    pub fn formerr(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
         resp.set_response_code(ResponseCode::FormErr);
         Ok(resp.to_bytes()?)
     }
 
-    pub fn success(&self, answers: Vec<Record>) -> Result<Vec<u8>> {
+    pub fn success(&self, answers: Vec<Record>) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
         resp.set_response_code(ResponseCode::NoError)
             .add_answers(answers);

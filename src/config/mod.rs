@@ -27,6 +27,7 @@ pub mod args;
 pub mod toml;
 
 pub use args::{CliArgs, Command, DbCommand, HostCommand, LeaseCommand};
+use lanforge_dns::DnsConfig;
 pub use toml::{DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg, load_toml};
 
 use clap::Parser;
@@ -256,7 +257,7 @@ impl Config {
     }
 
     /// Builds a `DnsConfig` from the merged configuration.
-    pub fn to_dns_config(&self) -> crate::dns::DnsConfig {
+    pub fn to_dns_config(&self) -> DnsConfig {
         let parse_addr = |s: &str, default: &str| -> std::net::SocketAddr {
             s.parse().unwrap_or_else(|_| {
                 warn!("[config] Endereço DNS inválido '{s}', usando {default}");
@@ -278,7 +279,7 @@ impl Config {
             .map(|s| s.as_bytes().to_vec())
             .collect();
 
-        crate::dns::DnsConfig {
+        DnsConfig {
             enabled: self.dns_enabled,
             listen: parse_addr(&self.dns_toml.listen, "0.0.0.0:5300"),
             upstream: self

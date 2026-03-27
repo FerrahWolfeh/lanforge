@@ -1,5 +1,5 @@
 [workspace]
-members = ["lanforge-core", "lanforge-db"]
+members = ["lanforge-core", "lanforge-db", "lanforge-dns"]
 
 [package]
 name = "lanforge"
@@ -9,6 +9,7 @@ edition = "2024"
 [dependencies]
 lanforge-core = { path = "lanforge-core" }
 lanforge-db = { path = "lanforge-db" }
+lanforge-dns = { path = "lanforge-dns" }
 
 # Async & runtime
 tokio = { version = "1", features = [

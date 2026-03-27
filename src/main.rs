@@ -35,7 +35,6 @@ mod cli;
 mod config;
 mod control;
 mod dhcp;
-mod dns;
 mod netlink;
 mod ra;
 mod slaac;
@@ -51,6 +50,7 @@ use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::DeviceUpdate;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::worker::db_worker;
+use lanforge_dns::dns_service;
 use netlink_sys::AsyncSocket;
 use rtnetlink::new_connection;
 use std::sync::Arc;
@@ -294,7 +294,7 @@ async fn main() -> Result<()> {
             move || {
                 let cfg = dns_cfg.clone();
                 let table = dns_table.clone();
-                async move { dns::dns_service(cfg, table).await }
+                async move { dns_service(cfg, table).await.map_err(anyhow::Error::from) }
             },
         ));
     }

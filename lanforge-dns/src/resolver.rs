@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::DnsError;
 use hickory_proto::op::Message;
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use lanforge_core::device::{IPv6State, Ipv6AddrOrSuffix, classify_ip};
@@ -7,9 +7,9 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
 
-use crate::dns::config::DnsConfig;
-use crate::dns::response::ResponseBuilder;
-use crate::dns::utils::{combine_prefix_suffix, parse_arpa};
+use crate::config::DnsConfig;
+use crate::response::ResponseBuilder;
+use crate::utils::{combine_prefix_suffix, parse_arpa};
 use lanforge_core::device::Device;
 
 pub struct LocalResolver<'a> {
@@ -29,7 +29,7 @@ impl<'a> LocalResolver<'a> {
         query: &Message,
         hostname: &str,
         qtype: RecordType,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Vec<u8>, DnsError> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
         if let Some(device) = self.table.get_by_hostname(hostname) {
@@ -45,7 +45,7 @@ impl<'a> LocalResolver<'a> {
     }
 
     /// Resolve queries reversas (PTR).
-    pub fn resolve_ptr(&self, query: &Message, qname: &Name) -> Result<Option<Vec<u8>>> {
+    pub fn resolve_ptr(&self, query: &Message, qname: &Name) -> Result<Option<Vec<u8>>, DnsError> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
         let Some(target_ip) = parse_arpa(qname) else {

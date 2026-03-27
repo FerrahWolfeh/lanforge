@@ -931,6 +931,7 @@ dependencies = [
  "iocraft",
  "lanforge-core",
  "lanforge-db",
+ "lanforge-dns",
  "libc",
  "moka",
  "netlink-packet-core",
@@ -970,6 +971,18 @@ dependencies = [
  "lanforge-core",
  "rusqlite",
  "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "lanforge-dns"
+version = "0.1.0"
+dependencies = [
+ "hickory-proto",
+ "lanforge-core",
+ "moka",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

@@ -3,7 +3,7 @@ use lanforge_core::device::Ipv6AddrOrSuffix;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use crate::dns::wire::WireLabelIter;
+use crate::wire::WireLabelIter;
 
 /// Parseador de ARPA otimizado que opera diretamente sobre os labels de um Name, evitando alocações.
 pub fn parse_arpa(name: &Name) -> Option<IpAddr> {
@@ -91,7 +91,7 @@ pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &Ipv6AddrOrSuffix) -> 
 
 /// Extrai o hostname local diretamente dos labels de um iterador wire, sem alocações.
 pub fn extract_local_hostname_wire<'a>(
-    labels: &mut crate::dns::wire::WireLabelIter<'a>,
+    labels: &mut WireLabelIter<'a>,
     search_labels: &[Vec<u8>],
 ) -> Option<&'a str> {
     // 1. O primeiro label é o alvo

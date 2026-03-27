@@ -14,12 +14,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
-use crate::dns::resolver::LocalResolver;
-use crate::dns::response::ResponseBuilder;
-use crate::dns::server::{DnsContext, handle_query};
-use crate::dns::upstream::UpstreamManager;
-use crate::dns::utils::{extract_local_hostname, parse_arpa};
-use anyhow::Result;
+use crate::error::DnsError;
+use crate::resolver::LocalResolver;
+use crate::response::ResponseBuilder;
+use crate::server::{DnsContext, handle_query};
+use crate::upstream::UpstreamManager;
+use crate::utils::{extract_local_hostname, parse_arpa};
 use std::{net::Ipv4Addr, time::SystemTime};
 
 // Helpers para testes que precisam de ManagedTable
@@ -60,7 +60,7 @@ pub fn resolve_local(
     device: &Device,
     qtype: RecordType,
     cfg: &DnsConfig,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<Option<Vec<u8>>, DnsError> {
     // Esta função simulada é ligeiramente diferente pois o resolve_ip agora encapsula o lookup.
     // Mas para manter a assinatura antiga, criamos uma tabela fake ou apenas usamos a lógica interna.
     let table = DeviceTable::new(); // Dummy
@@ -77,7 +77,7 @@ pub fn resolve_ptr(
     qname_str: &str,
     cfg: &DnsConfig,
     table: &DeviceTable,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<Option<Vec<u8>>, DnsError> {
     let resolver = LocalResolver::new(cfg, table);
     let qname = Name::from_str(qname_str).unwrap_or_else(|_| Name::root());
     resolver.resolve_ptr(query, &qname)
@@ -556,7 +556,7 @@ fn test_local_resolver_direct_api() {
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
     let table = table_with_device("direct", mac, Ipv4Addr::new(10, 10, 10, 10));
 
-    let resolver = crate::dns::resolver::LocalResolver::new(&cfg, &table);
+    let resolver = crate::resolver::LocalResolver::new(&cfg, &table);
 
     let mut query = Message::new();
     query.add_query(hickory_proto::op::Query::query(
