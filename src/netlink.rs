@@ -31,75 +31,7 @@ use netlink_packet_route::{
 use rtnetlink::{Handle, IpVersion};
 use std::net::Ipv6Addr;
 
-use lanforge_core::{identifiers::MacAddr, state::update::DeviceUpdate};
-
-// ---------------------------------------------------------------------------
-// NeighborEvent — struct tipada para eventos do kernel
-// ---------------------------------------------------------------------------
-
-/// Um evento de vizinho (IPv4 ou IPv6) observado pelo kernel (`RTM_NEWNEIGH`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NeighborEvent {
-    Added {
-        ip: std::net::IpAddr,
-        mac: MacAddr,
-        ifindex: u32,
-    },
-    Deleted {
-        ip: std::net::IpAddr,
-        ifindex: u32,
-    },
-}
-
-impl NeighborEvent {
-    pub fn ip(&self) -> &std::net::IpAddr {
-        match self {
-            NeighborEvent::Added { ip, .. } => ip,
-            NeighborEvent::Deleted { ip, .. } => ip,
-        }
-    }
-
-    pub fn mac(&self) -> Option<MacAddr> {
-        match self {
-            NeighborEvent::Added { mac, .. } => Some(*mac),
-            NeighborEvent::Deleted { .. } => None,
-        }
-    }
-
-    pub fn to_device_update(&self, gua_prefix: Option<&Ipv6Addr>) -> DeviceUpdate {
-        match self {
-            NeighborEvent::Added { ip, mac, .. } => match ip {
-                std::net::IpAddr::V6(ip6) => {
-                    let is_slaac = gua_prefix.is_some_and(|prefix| ip_matches_prefix(ip6, prefix));
-                    if is_slaac {
-                        DeviceUpdate::SlaacObserved {
-                            mac: *mac,
-                            addr: *ip6,
-                        }
-                    } else {
-                        DeviceUpdate::NdpSeen {
-                            mac: *mac,
-                            ip: *ip6,
-                        }
-                    }
-                }
-                std::net::IpAddr::V4(ip4) => DeviceUpdate::ArpSeen {
-                    mac: *mac,
-                    ip: *ip4,
-                },
-            },
-            NeighborEvent::Deleted { ip, .. } => DeviceUpdate::IpDeleted { ip: *ip },
-        }
-    }
-}
-
-/// Retorna true se `ip` pertence ao mesmo /64 que `prefix`.
-fn ip_matches_prefix(ip: &Ipv6Addr, prefix: &Ipv6Addr) -> bool {
-    let ip_segs = ip.segments();
-    let prefix_segs = prefix.segments();
-    // Compara os primeiros 4 segmentos (64 bits)
-    ip_segs[..4] == prefix_segs[..4]
-}
+use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 
 // ---------------------------------------------------------------------------
 // Neighbour event filter (eventos do stream Netlink)
@@ -199,57 +131,6 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
     }
 }
 
-// ---------------------------------------------------------------------------
-// Queries ao kernel (usa o Handle compartilhado)
-// ---------------------------------------------------------------------------
-
-/// Devolve todos os vizinhos IPv6 no prefixo alvo como `NeighborEvent`.
-///
-/// Substitui `get_ipv6_neighbors` que retornava `Vec<(String, String)>`.
-pub async fn get_ipv6_neighbors(
-    handle: &Handle,
-    target_prefix: &str,
-) -> Result<Vec<NeighborEvent>> {
-    let mut neighbors = Vec::new();
-    let mut stream = handle
-        .neighbours()
-        .get()
-        .set_family(IpVersion::V6)
-        .execute();
-
-    while let Some(msg) = stream.try_next().await? {
-        if let Some(event) = parse_neighbor_msg(msg) {
-            let matches = match event.ip() {
-                std::net::IpAddr::V6(ip) => ip.to_string().starts_with(target_prefix),
-                _ => false,
-            };
-            if matches {
-                neighbors.push(event);
-            }
-        }
-    }
-
-    Ok(neighbors)
-}
-
-// /// Devolve todos os vizinhos IPv4 na mesma rede como `NeighborEvent`.
-// pub async fn get_ipv4_neighbors(handle: &Handle) -> Result<Vec<NeighborEvent>> {
-//     let mut neighbors = Vec::new();
-//     let mut stream = handle
-//         .neighbours()
-//         .get()
-//         .set_family(IpVersion::V4)
-//         .execute();
-
-//     while let Some(msg) = stream.try_next().await? {
-//         if let Some(event) = parse_neighbor_msg(msg) {
-//             neighbors.push(event);
-//         }
-//     }
-
-//     Ok(neighbors)
-// }
-
 fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
     if matches!(
         msg.header.state,
@@ -281,6 +162,39 @@ fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
     let mac = mac?;
 
     Some(NeighborEvent::Added { ip, mac, ifindex })
+}
+
+// ---------------------------------------------------------------------------
+// Queries ao kernel (usa o Handle compartilhado)
+// ---------------------------------------------------------------------------
+
+/// Devolve todos os vizinhos IPv6 no prefixo alvo como `NeighborEvent`.
+///
+/// Substitui `get_ipv6_neighbors` que retornava `Vec<(String, String)>`.
+pub async fn get_ipv6_neighbors(
+    handle: &Handle,
+    target_prefix: &str,
+) -> Result<Vec<NeighborEvent>> {
+    let mut neighbors = Vec::new();
+    let mut stream = handle
+        .neighbours()
+        .get()
+        .set_family(IpVersion::V6)
+        .execute();
+
+    while let Some(msg) = stream.try_next().await? {
+        if let Some(event) = parse_neighbor_msg(msg) {
+            let matches = match event.ip() {
+                std::net::IpAddr::V6(ip) => ip.to_string().starts_with(target_prefix),
+                _ => false,
+            };
+            if matches {
+                neighbors.push(event);
+            }
+        }
+    }
+
+    Ok(neighbors)
 }
 
 /// Procura o MAC de um vizinho IPv6 específico na tabela NDP do kernel.
@@ -328,37 +242,16 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
 }
 
 // ---------------------------------------------------------------------------
-// EUI-64 helpers
-// ---------------------------------------------------------------------------
-
-/// Tenta recuperar o MAC de um endereço IPv6 link-local EUI-64.
-///
-/// Formato EUI-64:
-/// ```text
-/// MAC:  AA:BB:CC:DD:EE:FF
-/// IID:  (AA^0x02):BB:CC:FF:FE:DD:EE:FF
-///        ^^^^^^^^             ^^ ^^ ^^ bytes 11,12 = FF:FE (marcador)
-/// ```
-/// Retorna `None` se o endereço não for link-local ou não usar EUI-64.
-pub const fn mac_from_eui64_link_local(ip: &Ipv6Addr) -> Option<MacAddr> {
-    let o = ip.octets();
-    if o[0] != 0xfe || (o[1] & 0xc0) != 0x80 {
-        return None; // não é fe80::/10
-    }
-    if o[11] != 0xff || o[12] != 0xfe {
-        return None; // não é EUI-64
-    }
-    // Reverte o bit U/L (bit 6 do primeiro octeto do IID)
-    Some(MacAddr([o[8] ^ 0x02, o[9], o[10], o[13], o[14], o[15]]))
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lanforge_core::{
+        state::update::DeviceUpdate,
+        utils::{ip_matches_prefix, mac_from_eui64_link_local},
+    };
     use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};
     use netlink_packet_route::neighbour::{NeighbourHeader, NeighbourMessage};
 

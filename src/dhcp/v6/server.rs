@@ -22,6 +22,7 @@ use dhcproto::{Decodable, Decoder, Encodable, Encoder};
 use lanforge_core::bus::ManagedTable;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::update::DeviceUpdate;
+use lanforge_core::utils::mac_from_eui64_link_local;
 use std::net::Ipv6Addr;
 use tracing::{debug, info, warn};
 
@@ -147,7 +148,7 @@ impl Dhcpv6Server {
                     None
                 })
             })
-            .or_else(|| crate::netlink::mac_from_eui64_link_local(&peer));
+            .or_else(|| mac_from_eui64_link_local(&peer));
 
         // Pega o lock de leitura da tabela UMA ÚNICA VEZ para:
         // 1. Cache NDP
