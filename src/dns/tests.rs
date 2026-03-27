@@ -13,7 +13,7 @@ use crate::bus::{EventBus, ManagedTable};
 use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, MacAddr, Origin, V4Lease};
 use crate::dns::resolver::LocalResolver;
 use crate::dns::response::ResponseBuilder;
-use crate::dns::server::handle_query;
+use crate::dns::server::{DnsContext, handle_query};
 use crate::dns::upstream::UpstreamManager;
 use crate::dns::utils::{extract_local_hostname, parse_arpa};
 use crate::state::DeviceTable;
@@ -233,11 +233,12 @@ async fn handle_query_refused_when_no_upstream() {
     query.add_query(hickory_proto::op::Query::query(name, RecordType::A));
     let query_bytes = query.to_bytes().unwrap();
 
-    let src = "127.0.0.1:12345".parse().unwrap();
-    let resp_bytes = if let Some(resp) = handle_query(&query_bytes, src, &cfg, &table, None)
-        .await
-        .unwrap()
-    {
+    let ctx = DnsContext {
+        cfg,
+        table,
+        upstream_mgr: None,
+    };
+    let resp_bytes = if let Some(resp) = handle_query(&query_bytes, &ctx).await.unwrap() {
         resp
     } else {
         panic!("Deveria ter retornado uma resposta");
@@ -258,9 +259,13 @@ async fn handle_query_forwards_when_upstream_present() {
     query.add_query(hickory_proto::op::Query::query(name, RecordType::A));
     let query_bytes = query.to_bytes().unwrap();
 
-    let src = "127.0.0.1:12345".parse().unwrap();
     let mgr = UpstreamManager::new(cfg.upstream.unwrap()).await.unwrap();
-    let result = handle_query(&query_bytes, src, &cfg, &table, Some(&mgr)).await;
+    let ctx = DnsContext {
+        cfg,
+        table,
+        upstream_mgr: Some(mgr),
+    };
+    let result = handle_query(&query_bytes, &ctx).await;
 
     match result {
         Err(e) => {
@@ -340,16 +345,16 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     query.add_query(Query::query(name, RecordType::A));
     let data = query.to_bytes().unwrap();
 
-    let resp_bytes = handle_query(
-        &data,
-        "127.0.0.1:12345".parse().unwrap(),
-        &cfg,
-        &table_arc,
-        None,
-    )
-    .await
-    .unwrap()
-    .expect("Deve retornar uma resposta DNS");
+    let ctx = DnsContext {
+        cfg,
+        table: table_arc,
+        upstream_mgr: None,
+    };
+
+    let resp_bytes = handle_query(&data, &ctx)
+        .await
+        .unwrap()
+        .expect("Deve retornar uma resposta DNS");
 
     let resp = Message::from_bytes(&resp_bytes).unwrap();
 

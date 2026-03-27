@@ -10,6 +10,7 @@ pub mod response;
 pub mod server;
 pub mod upstream;
 pub mod utils;
+pub mod wire;
 
 #[cfg(test)]
 mod tests;
