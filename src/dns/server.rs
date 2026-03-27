@@ -98,6 +98,7 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<()>
     Ok(())
 }
 
+// Extra-hot path
 pub(crate) async fn handle_query(
     data: &[u8],
     src: SocketAddr,

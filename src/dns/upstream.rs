@@ -13,6 +13,7 @@ use tokio::time::timeout;
 use tracing::trace;
 
 use crate::dns::cache::DnsCache;
+const DNS_CACHE_SIZE: u64 = 5000;
 
 pub struct UpstreamManager {
     pub(crate) socket: Arc<UdpSocket>,
@@ -25,7 +26,7 @@ impl UpstreamManager {
     pub async fn new(upstream: SocketAddr) -> Result<Arc<Self>> {
         let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
         let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
-        let cache = Arc::new(DnsCache::new(5000)); // Capacidade para 5000 records
+        let cache = Arc::new(DnsCache::new(DNS_CACHE_SIZE));
 
         let s = Arc::clone(&socket);
         let p = Arc::clone(&pending);
