@@ -66,7 +66,7 @@ use tracing::{debug, error, info, warn};
 ///
 /// Configura o logging, carrega a configuração TOML, inicia o banco de dados
 /// `SQLite` e dispara os serviços de rede (RA, DHCP, DNS, Control) como tasks do Tokio.
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() -> Result<()> {
     let mut cfg = Config::load();
 

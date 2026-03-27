@@ -20,10 +20,10 @@ tokio = { version = "1", features = [
     "time",
     "sync",
     "io-util",
+    "rt-multi-thread",
 ] }
 futures = { version = "0.3.32", default-features = false, features = ["std"] }
 parking_lot = "0.12.5"
-moka = { version = "0.12.15", features = ["sync"] }
 
 
 # CLI e config
@@ -47,12 +47,6 @@ rand = "0.10.0"
 # DHCPv4 protocol parsing
 dhcproto = "0.14"
 pnet = "0.35.0"
-
-# Persistência de leases
-rusqlite = { version = "0.39.0", features = ["bundled"] }
-
-# DNS
-hickory-proto = "0.25.2"
 
 # Observabilidade
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
