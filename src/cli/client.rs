@@ -5,7 +5,7 @@ use tokio::net::UnixStream;
 use crate::cli::commands::CliCommand;
 use crate::cli::commands::GenericHandler;
 use crate::config::Command;
-use crate::control::Response;
+use lanforge_api::api::Response;
 
 pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
     let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
@@ -31,19 +31,19 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
         Command::Db { action } => Box::new(crate::cli::commands::db::DbHandler { action }),
         Command::Log { follow } => Box::new(crate::cli::commands::log::LogHandler { follow }),
         Command::Reload => Box::new(GenericHandler {
-            cmd: crate::control::Command::Reload,
+            cmd: lanforge_api::api::Command::Reload,
             streaming: false,
         }),
         Command::Watch => Box::new(GenericHandler {
-            cmd: crate::control::Command::Watch,
+            cmd: lanforge_api::api::Command::Watch,
             streaming: true,
         }),
         Command::Scan => Box::new(GenericHandler {
-            cmd: crate::control::Command::Scan,
+            cmd: lanforge_api::api::Command::Scan,
             streaming: false,
         }),
         Command::Shutdown => Box::new(GenericHandler {
-            cmd: crate::control::Command::Shutdown,
+            cmd: lanforge_api::api::Command::Shutdown,
             streaming: false,
         }),
         Command::Run { .. } => {

@@ -7,9 +7,9 @@ use std::net::Ipv6Addr;
 
 use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 
-use crate::control::api;
-use crate::control::api::Response;
-use crate::control::server::ClientContext;
+use crate::api;
+use crate::api::Response;
+use crate::server::ClientContext;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -52,14 +52,9 @@ impl ClientContext {
         };
 
         // Network
-        status.network.lan_iface.clone_from(&self.ifaces.lan);
+        status.network.lan_iface.clone_from(&self.cfg.lan_iface);
         status.network.gua.clone_from(&self.current_gua);
-        status.network.ula = self
-            .cfg
-            .ra_toml
-            .prefix
-            .iter()
-            .find_map(|p| p.address.clone());
+        status.network.ula.clone_from(&self.cfg.ula_prefix);
 
         // Services -> RA
         status.services.ra.state = if self.cfg.ra_enabled {
@@ -72,7 +67,7 @@ impl ClientContext {
         status.services.ra.ula.clone_from(&status.network.ula);
 
         // Services -> DHCPv4
-        status.services.dhcp_v4.state = if self.cfg.dhcpv4_enabled {
+        status.services.dhcp_v4.state = if self.cfg.dhcp_v4_enabled {
             "online".to_string()
         } else {
             "offline".to_string()
@@ -80,7 +75,7 @@ impl ClientContext {
         status.services.dhcp_v4.uptime_secs = self.uptime_secs;
 
         // Services -> DHCPv6
-        status.services.dhcp_v6.state = if self.cfg.dhcpv6_enabled {
+        status.services.dhcp_v6.state = if self.cfg.dhcp_v6_enabled {
             "online".to_string()
         } else {
             "offline".to_string()
@@ -98,7 +93,7 @@ impl ClientContext {
             .services
             .dns
             .upstream
-            .clone_from(&self.cfg.dns_toml.upstream);
+            .clone_from(&self.cfg.dns_upstream);
 
         // Services -> SLAAC
         status.services.slaac.state = "online".to_string();
@@ -106,8 +101,8 @@ impl ClientContext {
         status.services.slaac.last_scan_secs_ago = self.last_scan_secs_ago;
 
         // Database
-        status.db.path.clone_from(&self.cfg.leases_db);
-        status.db.size_bytes = std::fs::metadata(&self.cfg.leases_db)
+        status.db.path.clone_from(&self.cfg.db_path);
+        status.db.size_bytes = std::fs::metadata(&self.cfg.db_path)
             .map(|m| m.len())
             .unwrap_or(0);
         status.db.last_flush_secs_ago = 0;

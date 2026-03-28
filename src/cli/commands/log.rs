@@ -1,7 +1,9 @@
 use super::CliCommand;
-use crate::control::{Command as ControlCommand, Response, api::SimpleSuccess};
 use anyhow::Result;
 use colored::*;
+use lanforge_api::api::Command as ControlCommand;
+use lanforge_api::api::Response;
+use lanforge_api::api::SimpleSuccess;
 use lanforge_core::bus::{DeviceChange, LanforgeEvent};
 
 pub struct LogHandler {

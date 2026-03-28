@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+use crate::api::{Command, Response, SimpleSuccess};
+use crate::config::ApiConfig;
+use crate::error::{ApiError, Result};
 use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
@@ -11,25 +13,24 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tracing::{debug, error, info};
 
-use crate::control::api::{Command, Interfaces, Response, SimpleSuccess};
-
 /// Inicia o serviço de controle UDS.
 pub async fn control_service(
-    path: String,
-    ifaces: Interfaces,
     table: Arc<ManagedTable>,
     bus: Arc<EventBus>,
-    cfg: Arc<crate::config::Config>,
+    cfg: Arc<ApiConfig>,
 ) -> Result<()> {
     // Retemos a referência do bus para enviar comandos do Control.
     let ctrl_bus = bus.clone();
 
-    let path_ref = Path::new(&path);
+    let path_ref = Path::new(&cfg.socket_path);
 
     // Limpeza prévia do socket
     if path_ref.exists() {
         debug!("Limpando socket antigo: {}", path_ref.display());
-        fs::remove_file(path_ref).context("falha ao remover socket antigo")?;
+        fs::remove_file(path_ref).map_err(|e| ApiError::SocketCleanup {
+            path: cfg.socket_path.clone(),
+            source: e,
+        })?;
     }
 
     // Garante que o diretório pai existe
@@ -37,10 +38,16 @@ pub async fn control_service(
         && !parent.exists()
     {
         debug!("Criando diretório do socket: {}", parent.display());
-        fs::create_dir_all(parent).context("falha ao criar diretório para o socket")?;
+        fs::create_dir_all(parent).map_err(|e| ApiError::DirCreation {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
     }
 
-    let listener = UnixListener::bind(path_ref).context("falha ao bindar socket Unix")?;
+    let listener = UnixListener::bind(path_ref).map_err(|e| ApiError::Bind {
+        path: cfg.socket_path.clone(),
+        source: e,
+    })?;
 
     // Define permissões 0666 para facilitar acesso local durante desenvolvimento.
     // Em produção, o systemd RuntimeDirectory pode gerenciar isso.
@@ -81,14 +88,12 @@ pub async fn control_service(
                     Ok((stream, _)) => {
                         let table = table.clone();
                         let gua = current_gua.clone();
-                        let ifaces = ifaces.clone();
                         let ctrl_bus = ctrl_bus.clone();
                         let uptime = startup_time.elapsed().as_secs();
                         let scan_ago = last_scan.elapsed().as_secs();
                         let cfg = cfg.clone();
                         tokio::spawn(async move {
                             let ctx = ClientContext {
-                                ifaces,
                                 table,
                                 current_gua: gua,
                                 bus: ctrl_bus,
@@ -122,13 +127,12 @@ pub async fn control_service(
 // ---------------------------------------------------------------------------
 
 pub(crate) struct ClientContext {
-    pub(crate) ifaces: Interfaces,
     pub(crate) table: Arc<ManagedTable>,
     pub(crate) current_gua: Option<String>,
     pub(crate) bus: Arc<EventBus>,
     pub(crate) uptime_secs: u64,
     pub(crate) last_scan_secs_ago: u64,
-    pub(crate) cfg: Arc<crate::config::Config>,
+    pub(crate) cfg: Arc<ApiConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +152,7 @@ async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -
             continue;
         }
 
-        let req: Result<Command, _> = serde_json::from_str(trim_line);
+        let req: std::result::Result<Command, _> = serde_json::from_str(trim_line);
         let resp = match req {
             Ok(Command::Status) => ctx.handle_status().await,
             Ok(Command::Devices { filter, .. }) => ctx.handle_devices(filter).await,

@@ -1,8 +1,9 @@
 use super::CliCommand;
 use crate::config::HostCommand;
-use crate::control::Command as ControlCommand;
 use anyhow::Result;
 use inquire::{Confirm, Select, Text as InquireText};
+use lanforge_api::api::Command as ControlCommand;
+use lanforge_api::api::Response;
 
 pub struct HostHandler {
     pub action: HostCommand,
@@ -98,22 +99,22 @@ impl CliCommand for HostHandler {
         }
     }
 
-    fn on_response(&self, response: &crate::control::Response) -> Result<()> {
+    fn on_response(&self, response: &Response) -> Result<()> {
         match response {
-            crate::control::Response::Hosts(resp) => {
+            Response::Hosts(resp) => {
                 super::devices::render_hosts(resp);
                 Ok(())
             }
             _ => {
                 // Delegate to default implementation? We can't easily, so we duplicate the basic ones.
                 match response {
-                    crate::control::Response::Error { error } => {
+                    Response::Error { error } => {
                         println!("Erro: {error}");
                     }
-                    crate::control::Response::Success(success) => {
+                    Response::Success(success) => {
                         println!("✓ {}", success.message);
                     }
-                    crate::control::Response::Event(e) => {
+                    Response::Event(e) => {
                         println!("Event: {e:?}");
                     }
                     _ => {

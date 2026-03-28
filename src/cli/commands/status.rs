@@ -1,9 +1,10 @@
 use super::{CliCommand, format_uptime};
-use crate::control::api::StatusResponse;
-use crate::control::{Command as ControlCommand, Response};
 use anyhow::Result;
 use bytesize::ByteSize;
 use iocraft::prelude::*;
+use lanforge_api::api::Command as ControlCommand;
+use lanforge_api::api::Response;
+use lanforge_api::api::StatusResponse;
 
 pub struct StatusHandler;
 

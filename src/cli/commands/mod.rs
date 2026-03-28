@@ -5,9 +5,10 @@ pub mod lease;
 pub mod log;
 pub mod status;
 
-use crate::control::{Command as ControlCommand, Response};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use lanforge_api::api::Command as ControlCommand;
+use lanforge_api::api::Response;
 
 pub trait CliCommand {
     /// Builds the request to be sent to the daemon.

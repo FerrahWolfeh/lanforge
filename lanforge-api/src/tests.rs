@@ -1,35 +1,16 @@
 #![cfg(test)]
 
 use std::sync::Arc;
-
 use lanforge_core::bus::{EventBus, ManagedTable};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::update::DeviceUpdate;
 
-use crate::config::{Config, DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg};
-use crate::control::api::{Interfaces, Response};
+use crate::api::Response;
+use crate::config::ApiConfig;
+use crate::server::ClientContext;
 
-use super::server::ClientContext;
-
-fn make_dummy_config() -> Config {
-    Config {
-        command: crate::config::Command::Run { only: None },
-        iface_lan: "eth0".to_string(),
-        target_prefix: "fd00::/64".to_string(),
-        leases_db: "/tmp/leases.db".to_string(),
-        debounce_secs: 5,
-        fallback_mins: 60,
-        control_socket: "/tmp/lanforge.sock".to_string(),
-        ra_enabled: true,
-        ra_toml: RaCfg::default(),
-        dhcpv4_enabled: true,
-        dhcpv4_toml: DhcpV4Cfg::default(),
-        dhcpv6_enabled: true,
-        dhcpv6_toml: DhcpV6Cfg::default(),
-        dns_enabled: true,
-        dns_toml: DnsCfg::default(),
-        devices: Vec::new(),
-    }
+fn make_dummy_config() -> ApiConfig {
+    ApiConfig::dummy()
 }
 
 #[tokio::test]
@@ -37,12 +18,8 @@ async fn test_host_list_returns_static_and_cli_only() {
     let bus = Arc::new(EventBus::new());
     let table = Arc::new(ManagedTable::new(bus.clone()));
     let cfg = Arc::new(make_dummy_config());
-    let ifaces = Interfaces {
-        lan: "eth0".to_string(),
-    };
 
     let ctx = ClientContext {
-        ifaces,
         table: table.clone(),
         current_gua: None,
         bus: bus.clone(),

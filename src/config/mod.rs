@@ -27,6 +27,7 @@ pub mod args;
 pub mod toml;
 
 pub use args::{CliArgs, Command, DbCommand, HostCommand, LeaseCommand};
+use lanforge_api::config::ApiConfig;
 use lanforge_dns::DnsConfig;
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
 use lanforge_network::dhcp::v6::config::Dhcpv6Config;
@@ -290,6 +291,27 @@ impl Config {
             ula_prefix,
             ttl: self.dns_toml.ttl,
             search_labels,
+        }
+    }
+
+    /// Builds an `ApiConfig` for the control service.
+    pub fn to_api_config(&self) -> ApiConfig {
+        ApiConfig {
+            socket_path: self.control_socket.clone(),
+            lan_iface: self.iface_lan.clone(),
+            ra_enabled: self.ra_enabled,
+            ula_prefix: self.ra_toml.prefix.iter().find_map(|p| {
+                if p.source == "ula" {
+                    p.address.clone()
+                } else {
+                    None
+                }
+            }),
+            dhcp_v4_enabled: self.dhcpv4_enabled,
+            dhcp_v6_enabled: self.dhcpv6_enabled,
+            dns_enabled: self.dns_enabled,
+            dns_upstream: self.dns_toml.upstream.clone(),
+            db_path: self.leases_db.clone(),
         }
     }
 }

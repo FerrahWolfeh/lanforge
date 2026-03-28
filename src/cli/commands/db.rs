@@ -1,7 +1,7 @@
 use super::CliCommand;
 use crate::config::DbCommand;
-use crate::control::Command as ControlCommand;
 use anyhow::Result;
+use lanforge_api::api::Command as ControlCommand;
 
 pub struct DbHandler {
     pub action: DbCommand,

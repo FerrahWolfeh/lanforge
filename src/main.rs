@@ -33,7 +33,6 @@
 
 mod cli;
 mod config;
-mod control;
 mod supervisor;
 
 use anyhow::Result;
@@ -310,15 +309,11 @@ async fn main() -> Result<()> {
     }
 
     // -----------------------------------------------------------------------
-    // Control service (UDS)
+    // Control service (UDS) — Interface de controle via JSON-RPC
     // -----------------------------------------------------------------------
-    let ctrl_path = cfg.control_socket.clone();
     let ctrl_table = table.clone();
     let ctrl_bus = bus.clone();
-    let ctrl_ifaces = control::Interfaces {
-        lan: cfg.iface_lan.clone(),
-    };
-    let ctrl_cfg = cfg.clone();
+    let api_cfg = Arc::new(cfg.to_api_config());
 
     tokio::spawn(supervisor::supervise_task(
         "control",
@@ -327,12 +322,14 @@ async fn main() -> Result<()> {
         Duration::from_secs(2),
         Duration::from_secs(30),
         move || {
-            let path = ctrl_path.clone();
             let table = ctrl_table.clone();
             let bus = ctrl_bus.clone();
-            let ifaces = ctrl_ifaces.clone();
-            let cfg_srv = ctrl_cfg.clone();
-            async move { control::control_service(path, ifaces, table, bus, cfg_srv).await }
+            let cfg = api_cfg.clone();
+            async move {
+                lanforge_api::server::control_service(table, bus, cfg)
+                    .await
+                    .map_err(anyhow::Error::from)
+            }
         },
     ));
 

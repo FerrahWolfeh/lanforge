@@ -923,9 +923,9 @@ dependencies = [
  "clap",
  "colored",
  "futures",
- "hex",
  "inquire",
  "iocraft",
+ "lanforge-api",
  "lanforge-core",
  "lanforge-db",
  "lanforge-dns",
@@ -939,6 +939,20 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "lanforge-api"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "lanforge-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

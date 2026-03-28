@@ -1,5 +1,11 @@
 [workspace]
-members = ["lanforge-core", "lanforge-db", "lanforge-dns", "lanforge-network"]
+members = [
+    "lanforge-api",
+    "lanforge-core",
+    "lanforge-db",
+    "lanforge-dns",
+    "lanforge-network",
+]
 
 [package]
 name = "lanforge"
@@ -11,6 +17,7 @@ lanforge-core = { path = "lanforge-core" }
 lanforge-db = { path = "lanforge-db" }
 lanforge-dns = { path = "lanforge-dns" }
 lanforge-network = { path = "lanforge-network" }
+lanforge-api = { path = "lanforge-api" }
 
 # Async & runtime
 tokio = { version = "1", features = [
@@ -45,7 +52,6 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 
 # Control
 serde_json = "1.0.149"
-hex = { version = "0.4.3", features = ["serde"] }
 
 # CLI
 iocraft = "0.8.0"
