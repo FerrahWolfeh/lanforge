@@ -1,40 +1,40 @@
-/// Configuração do serviço de controle UDS.
+/// Configuration for the Unix Domain Socket (UDS) control service.
 ///
-/// Definida no crate da API para permitir seu uso em isolamento, sem depender
-/// das estruturas de configuração internas do daemon principal.
+/// This struct is defined within the API crate to allow isolated use,
+/// independent of the main daemon's internal configuration structures.
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
-    /// Caminho para o socket Unix (ex: "/run/lanforge/control.sock").
+    /// Filesystem path to the Unix socket (e.g., "/run/lanforge/control.sock").
     pub socket_path: String,
 
-    /// Nome da interface LAN reportada no status (ex: "eth0").
+    /// Name of the LAN interface reported in status (e.g., "eth0").
     pub lan_iface: String,
 
-    /// Indica se o serviço de RA está habilitado.
+    /// Whether Router Advertisements (RA) are enabled.
     pub ra_enabled: bool,
 
-    /// Prefixo ULA anunciado (ex: "fd00::/64"), se houver.
+    /// The announced ULA prefix (e.g., "fd00::/64"), if any.
     pub ula_prefix: Option<String>,
 
-    /// Indica se o DHCPv4 está habilitado.
+    /// Whether the DHCPv4 service is enabled.
     pub dhcp_v4_enabled: bool,
 
-    /// Indica se o DHCPv6 está habilitado.
+    /// Whether the DHCPv6 service is enabled.
     pub dhcp_v6_enabled: bool,
 
-    /// Indica se o DNS está habilitado.
+    /// Whether the DNS service is enabled.
     pub dns_enabled: bool,
 
-    /// Resolver upstream configurado no DNS.
+    /// The configured upstream DNS resolver.
     pub dns_upstream: Option<String>,
 
-    /// Caminho do banco de dados (usado para calcular estatísticas de tamanho).
+    /// Path to the SQLite database (used for calculating file size stats).
     pub db_path: String,
 }
 
 #[cfg(test)]
 impl ApiConfig {
-    /// Cria uma configuração dummy para testes.
+    /// Creates a dummy configuration for testing purposes.
     pub fn dummy() -> Self {
         Self {
             socket_path: "/tmp/lanforge.sock".to_string(),

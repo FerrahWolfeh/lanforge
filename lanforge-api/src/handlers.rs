@@ -1,7 +1,7 @@
-//! Response handlers para o controle UDS.
+//! Response handlers for the UDS control interface.
 //!
-//! Implementa os métodos de `ClientContext` que constroem as respostas
-//! para os comandos `Status`, `Devices` e `HostList`.
+//! Implementation of `ClientContext` methods that build the detailed
+//! JSON responses for `Status`, `Devices`, and `HostList` commands.
 
 use std::net::Ipv6Addr;
 
@@ -39,6 +39,8 @@ fn get_v6_kind(addr: &Ipv6Addr) -> &'static str {
 // ---------------------------------------------------------------------------
 
 impl ClientContext {
+    /// Generates a full `StatusResponse` by gathering data from the configuration
+    /// and the active device table.
     pub(crate) async fn handle_status(&self) -> Response {
         let table_guard = self.table.read();
 
@@ -168,6 +170,9 @@ impl ClientContext {
         Response::Status(Box::new(status))
     }
 
+    /// Generates a `DevicesResponse`, optionally filtering by a search string.
+    ///
+    /// The filter is matched against hostnames, MAC addresses, and IP addresses.
     pub(crate) async fn handle_devices(&self, filter: Option<String>) -> Response {
         let table_guard = self.table.read();
 
@@ -261,6 +266,9 @@ impl ClientContext {
         })
     }
 
+    /// Generates a `HostsResponse` containing all manually configured host entries.
+    ///
+    /// Devices with `Origin::Dynamic` are excluded from this list.
     pub(crate) async fn handle_hosts(&self) -> Response {
         let table_guard = self.table.read();
         let mut hosts = Vec::new();

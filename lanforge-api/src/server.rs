@@ -13,7 +13,33 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tracing::{debug, error, info};
 
-/// Inicia o serviço de controle UDS.
+/// Starts the Unix Domain Socket (UDS) control service.
+///
+/// This service listens for local connections on the configured socket path,
+/// processes JSON commands, and integrates with the daemon's internal state
+/// and event bus.
+///
+/// # Architecture
+///
+/// The service runs a main loop using `tokio::select!` to multiplex between:
+/// 1. **Internal Events**: Monitoring the `EventBus` for global signals like prefix changes or shutdown.
+/// 2. **Client Connections**: Accepting new UDS connections and spawning a worker task for each.
+///
+/// ```mermaid
+/// flowchart TD
+///     Start([Start Service]) --> Cleanup[Cleanup Old Socket]
+///     Cleanup --> Bind[Bind UDS Listener]
+///     Bind --> Loop{Main Select Loop}
+///
+///     Loop -->|Bus Event| HandleBus[Update Internal State / Break if Shutdown]
+///     HandleBus --> Loop
+///
+///     Loop -->|New Connection| Accept[Accept Client]
+///     Accept --> Spawn[Spawn handle_client Task]
+///     Spawn --> Loop
+///
+///     HandleBus -->|Shutdown| End([Stop Service])
+/// ```
 pub async fn control_service(
     table: Arc<ManagedTable>,
     bus: Arc<EventBus>,
@@ -126,12 +152,21 @@ pub async fn control_service(
 // ClientContext
 // ---------------------------------------------------------------------------
 
+/// Internal context for a specific client connection.
+///
+/// Groups shared state and configuration to facilitate command handling.
 pub(crate) struct ClientContext {
+    /// Reference to the device table.
     pub(crate) table: Arc<ManagedTable>,
+    /// Currently known Global Unicast Address prefix.
     pub(crate) current_gua: Option<String>,
+    /// Reference to the event bus for publishing commands.
     pub(crate) bus: Arc<EventBus>,
+    /// Uptime of the daemon in seconds.
     pub(crate) uptime_secs: u64,
+    /// Seconds since the last network scan.
     pub(crate) last_scan_secs_ago: u64,
+    /// API server configuration.
     pub(crate) cfg: Arc<ApiConfig>,
 }
 
@@ -139,6 +174,10 @@ pub(crate) struct ClientContext {
 // handle_client — command dispatch
 // ---------------------------------------------------------------------------
 
+/// Main worker task for a client connection.
+///
+/// Reads JSON lines from the stream, dispatches them to the appropriate
+/// handler in `ClientContext`, and writes back the JSON response.
 async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -> Result<()> {
     let (reader, mut writer) = stream.split();
     let mut reader = BufReader::new(reader);
