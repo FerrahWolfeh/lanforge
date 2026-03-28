@@ -21,15 +21,16 @@ use crate::{LeaseDbError, Result};
 // ---------------------------------------------------------------------------
 
 type DevTableRow = (
-    String,
-    String,
-    bool,
-    Option<Vec<u8>>,
-    i64,
-    String,
-    Option<i64>,
-    Option<String>,
-    Option<String>,
+    String,          // mac
+    String,          // hostname_name
+    i32,             // hostname_origin
+    bool,            // is_static
+    Option<Vec<u8>>, // duid
+    i64,             // last_seen
+    String,          // origin (toml/cli/dynamic)
+    Option<i64>,     // managed_at
+    Option<String>,  // v4_static
+    Option<String>,  // v6_suffix
 );
 
 /// A handle to the SQLite database for network leases and devices.
@@ -141,6 +142,10 @@ impl LeaseDb {
             .conn
             .execute("ALTER TABLE devices ADD COLUMN v6_suffix TEXT", []);
         let _ = self.conn.execute(
+            "ALTER TABLE devices ADD COLUMN hostname_origin INTEGER DEFAULT 0",
+            [],
+        );
+        let _ = self.conn.execute(
             "CREATE TABLE IF NOT EXISTS v6_prefixes (
                 mac TEXT NOT NULL REFERENCES devices(mac),
                 iaid INTEGER NOT NULL,
@@ -198,10 +203,11 @@ impl LeaseDb {
 
             // Primary device metadata
             tx.execute(
-                "INSERT INTO devices (mac, hostname, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(mac) DO UPDATE SET
                     hostname = excluded.hostname,
+                    hostname_origin = excluded.hostname_origin,
                     is_static = excluded.is_static,
                     duid = excluded.duid,
                     last_seen = excluded.last_seen,
@@ -211,7 +217,8 @@ impl LeaseDb {
                     v6_suffix = excluded.v6_suffix",
                 params![
                     mac_str,
-                    device.hostname,
+                    device.hostname.name,
+                    device.hostname.origin as i32,
                     i32::from(device.is_static()),
                     duid_blob,
                     last_seen,
@@ -310,21 +317,21 @@ impl LeaseDb {
         // 1. Devices base
         let mut stmt = self
             .conn
-            .prepare("SELECT mac, hostname, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix FROM devices")?;
+            .prepare("SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix FROM devices")?;
 
         let rows: Vec<DevTableRow> = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i32>(2)? != 0,
-                    row.get::<_, Option<Vec<u8>>>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, String>(5)
-                        .unwrap_or_else(|_| "dynamic".to_string()),
-                    row.get::<_, Option<i64>>(6).unwrap_or(None),
-                    row.get::<_, Option<String>>(7).unwrap_or(None),
-                    row.get::<_, Option<String>>(8).unwrap_or(None),
+                    row.get::<_, String>(0)?,          // mac
+                    row.get::<_, String>(1)?,          // hostname
+                    row.get::<_, i32>(2)?,             // hostname_origin
+                    row.get::<_, i32>(3)? != 0,        // is_static
+                    row.get::<_, Option<Vec<u8>>>(4)?, // duid
+                    row.get::<_, i64>(5)?,             // last_seen
+                    row.get::<_, String>(6)?,          // origin
+                    row.get::<_, Option<i64>>(7)?,     // managed_at
+                    row.get::<_, Option<String>>(8)?,  // v4_static
+                    row.get::<_, Option<String>>(9)?,  // v6_suffix
                 ))
             })?
             .filter_map(std::result::Result::ok)
@@ -332,7 +339,8 @@ impl LeaseDb {
 
         for (
             mac_str,
-            hostname,
+            hostname_name,
+            hostname_origin_val,
             _is_static,
             duid_bytes,
             last_seen_unix,
@@ -348,9 +356,18 @@ impl LeaseDb {
             };
 
             let dev = table.get_or_insert(mac);
-            if !hostname.is_empty() {
-                dev.hostname = hostname;
-            }
+
+            let origin = match hostname_origin_val {
+                1 => lanforge_core::device::HostnameOrigin::Mdns,
+                2 => lanforge_core::device::HostnameOrigin::Dhcp,
+                3 => lanforge_core::device::HostnameOrigin::Static,
+                _ => lanforge_core::device::HostnameOrigin::None,
+            };
+
+            dev.hostname = lanforge_core::device::Hostname {
+                name: hostname_name,
+                origin,
+            };
             dev.last_seen = unix_to_system_time(last_seen_unix);
 
             dev.origin = match origin_str.as_str() {
@@ -401,7 +418,7 @@ impl LeaseDb {
                     mac,
                     StaticEntry {
                         mac,
-                        hostname,
+                        hostname: hostname.name,
                         v4_ip,
                         v6_suffix,
                     },

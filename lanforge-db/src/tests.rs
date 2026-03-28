@@ -41,7 +41,7 @@ fn save_and_load_roundtrip() {
     let loaded = db.load_table().unwrap();
 
     let dev = loaded.devices().next().unwrap();
-    assert_eq!(dev.hostname, "TestDevice");
+    assert_eq!(dev.hostname.name, "TestDevice");
     assert_eq!(dev.v4.ip().unwrap(), Ipv4Addr::new(192, 168, 0, 100));
 }
 
@@ -106,7 +106,7 @@ fn handles_duid_persistence() {
 
     let found = loaded.get_by_duid(&duid);
     assert!(found.is_some());
-    assert_eq!(found.unwrap().hostname, "DuidDevice");
+    assert_eq!(found.unwrap().hostname.name, "DuidDevice");
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn save_overwrites_previous() {
     db.save_table(&table).unwrap();
 
     let loaded = db.load_table().unwrap();
-    assert_eq!(loaded.devices().next().unwrap().hostname, "Second");
+    assert_eq!(loaded.devices().next().unwrap().hostname.name, "Second");
     assert_eq!(loaded.devices().count(), 1);
 }
 
@@ -165,15 +165,15 @@ fn skips_invalid_database_records_gracefully() {
 
     db.conn
         .execute(
-            "INSERT INTO devices (mac, hostname, is_static, last_seen)
-             VALUES ('bad-mac', 'Lixo', 0, 0)",
+            "INSERT INTO devices (mac, hostname, hostname_origin, is_static, last_seen)
+             VALUES ('bad-mac', 'Lixo', 0, 0, 0)",
             [],
         )
         .unwrap();
     db.conn
         .execute(
-            "INSERT INTO devices (mac, hostname, is_static, last_seen)
-             VALUES ('aa:bb:cc:dd:ee:ff', 'Valido', 0, 0)",
+            "INSERT INTO devices (mac, hostname, hostname_origin, is_static, last_seen)
+             VALUES ('aa:bb:cc:dd:ee:ff', 'Valido', 0, 0, 0)",
             [],
         )
         .unwrap();
@@ -191,7 +191,7 @@ fn skips_invalid_database_records_gracefully() {
 
     assert_eq!(table.devices().count(), 1, "MAC inválido deve ser ignorado");
     let dev = table.devices().next().unwrap();
-    assert_eq!(dev.hostname, "Valido");
+    assert_eq!(dev.hostname.name, "Valido");
     assert!(
         matches!(dev.v4, IPv4State::None),
         "IP inválido deve ser descartado"
@@ -219,7 +219,7 @@ async fn db_worker_persists_on_dirty_event() {
 
     let mac = make_mac(0xAB);
     table
-        .update(DeviceUpdate::HostnameHint {
+        .update(DeviceUpdate::DhcpHostnameHint {
             mac,
             hostname: "worker-test".into(),
         })
@@ -230,7 +230,10 @@ async fn db_worker_persists_on_dirty_event() {
     let db = LeaseDb::open(&db_path).unwrap();
     let loaded = db.load_table().unwrap();
     assert_eq!(loaded.devices().count(), 1);
-    assert_eq!(loaded.devices().next().unwrap().hostname, "worker-test");
+    assert_eq!(
+        loaded.devices().next().unwrap().hostname.name,
+        "worker-test"
+    );
 }
 
 #[tokio::test]

@@ -182,7 +182,7 @@ impl ClientContext {
         for dev in table_guard.devices() {
             let matches_filter = filter.as_ref().is_none_or(|f| {
                 let f_lower = f.to_lowercase();
-                dev.hostname.to_lowercase().contains(&f_lower)
+                dev.hostname.name.to_lowercase().contains(&f_lower)
                     || dev.mac.to_string().to_lowercase().contains(&f_lower)
                     || dev
                         .v4
@@ -280,7 +280,7 @@ impl ClientContext {
 
             hosts.push(api::HostConfigEntry {
                 mac: dev.mac.to_string(),
-                hostname: dev.hostname.clone(),
+                hostname: dev.hostname.name.clone(),
                 v4_fixed: match &dev.v4 {
                     IPv4State::Static(ip) => Some(ip.to_string()),
                     _ => None,

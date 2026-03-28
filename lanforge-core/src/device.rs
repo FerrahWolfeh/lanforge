@@ -81,6 +81,74 @@ impl FromStr for Origin {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Hostname Hierarchy
+// ---------------------------------------------------------------------------
+
+/// The discovery source of a hostname, defining its precedence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+pub enum HostnameOrigin {
+    /// No hostname discovered or assigned.
+    #[default]
+    None = 0,
+    /// Discovered via mDNS (lowest discovery priority).
+    Mdns = 1,
+    /// Learned via DHCP (Option 12 for v4, or v6 client hint).
+    Dhcp = 2,
+    /// Manually configured via Static configuration or CLI.
+    Static = 3,
+}
+
+/// Represents a device's hostname with its origin for priority resolution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Hostname {
+    /// The actual name string.
+    pub name: String,
+    /// The source that provided this name.
+    pub origin: HostnameOrigin,
+}
+
+impl Hostname {
+    /// Returns the name as a string slice, or "?" if empty.
+    pub fn display(&self) -> &str {
+        if self.name.is_empty() {
+            "?"
+        } else {
+            &self.name
+        }
+    }
+}
+
+impl From<String> for Hostname {
+    fn from(name: String) -> Self {
+        Self {
+            name,
+            origin: HostnameOrigin::Static, // Default to Static if coming from raw string (config/CLI)
+        }
+    }
+}
+
+impl From<&str> for Hostname {
+    fn from(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            origin: HostnameOrigin::Static,
+        }
+    }
+}
+
+impl From<Hostname> for String {
+    fn from(val: Hostname) -> Self {
+        val.name
+    }
+}
+
+impl fmt::Display for Hostname {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
 /// Represents an active DHCPv4 lease.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V4Lease {
@@ -318,8 +386,8 @@ pub fn classify_ip(addr: &IpAddr) -> IpClassification {
 pub struct Device {
     /// The primary identifier: MAC address.
     pub mac: MacAddr,
-    /// The device's hostname.
-    pub hostname: String,
+    /// The device's hostname and its discovery origin.
+    pub hostname: Hostname,
     /// Where this device's configuration originated.
     pub origin: Origin,
 
@@ -359,11 +427,7 @@ impl Device {
 impl Device {
     /// Returns the device's hostname, or "?" if not available.
     pub fn display_hostname(&self) -> &str {
-        if self.hostname.is_empty() {
-            "?"
-        } else {
-            &self.hostname
-        }
+        self.hostname.display()
     }
 
     /// Returns true if the device was seen within the last 5 minutes.
@@ -501,7 +565,10 @@ mod tests {
     #[test]
     fn test_all_addresses_sorted() {
         let dev = Device {
-            hostname: "test".to_string(),
+            hostname: Hostname {
+                name: "test".to_string(),
+                origin: HostnameOrigin::Static,
+            },
             mac: MacAddr([1, 2, 3, 4, 5, 6]),
             origin: Origin::Dynamic,
             managed_at: None,

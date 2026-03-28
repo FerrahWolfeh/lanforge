@@ -143,7 +143,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                             table.update(DeviceUpdate::V4LeaseGranted { mac, ip: assigned_ip, expires }).await;
 
                             if let Some(hostname) = req_hostname && !hostname.is_empty() {
-                                table.update(DeviceUpdate::HostnameHint { mac, hostname }).await;
+                                table.update(DeviceUpdate::DhcpHostnameHint { mac, hostname }).await;
                             }
                         }
                     }

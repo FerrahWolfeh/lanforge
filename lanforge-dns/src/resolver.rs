@@ -60,10 +60,10 @@ impl<'a> LocalResolver<'a> {
         let question = query.queries().first().unwrap();
         let name = question.name().clone();
 
-        let host = if device.hostname.is_empty() {
+        let host = if device.hostname.name.is_empty() {
             format!("host-{}", device.mac.to_string().replace(':', ""))
         } else {
-            device.hostname.clone()
+            device.hostname.name.clone()
         };
 
         let fqdn = format!("{}.{}.", host, self.cfg.search_domain);

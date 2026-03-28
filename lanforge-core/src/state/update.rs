@@ -10,7 +10,8 @@ use std::time::SystemTime;
 use tracing::{debug, warn};
 
 use crate::device::{
-    IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V4Lease, V6Lease, V6PrefixLease,
+    Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V4Lease, V6Lease,
+    V6PrefixLease,
 };
 use crate::identifiers::{Duid, MacAddr};
 use crate::state::DeviceTable;
@@ -77,10 +78,10 @@ pub enum DeviceUpdate {
 
     /// An IPv4 neighbor event (ARP) was observed.
     ArpSeen { mac: MacAddr, ip: Ipv4Addr },
-
-    /// A protocol discovered a hostname hint (e.g., DHCP Option 12).
-    /// Typically ignored if a static configuration already exists.
-    HostnameHint { mac: MacAddr, hostname: String },
+    /// A hostname was learned via DHCP (Op12/v6).
+    DhcpHostnameHint { mac: MacAddr, hostname: String },
+    /// A hostname was learned via mDNS.
+    MdnsHostnameHint { mac: MacAddr, hostname: String },
 
     /// A DUID was associated with a MAC address (e.g., during DHCPv6 Solicit).
     DuidAssociated {
@@ -280,16 +281,27 @@ impl DeviceTable {
                     true
                 }
             }
-            DeviceUpdate::HostnameHint { mac, hostname } => {
+            DeviceUpdate::DhcpHostnameHint { mac, hostname } => {
                 let dev = self.get_or_insert(mac);
-                if dev.is_static() {
-                    return false;
+                if HostnameOrigin::Dhcp >= dev.hostname.origin && dev.hostname.name != hostname {
+                    dev.hostname = Hostname {
+                        name: hostname,
+                        origin: HostnameOrigin::Dhcp,
+                    };
+                    return true;
                 }
-                if dev.hostname == hostname {
-                    return false;
+                false
+            }
+            DeviceUpdate::MdnsHostnameHint { mac, hostname } => {
+                let dev = self.get_or_insert(mac);
+                if HostnameOrigin::Mdns >= dev.hostname.origin && dev.hostname.name != hostname {
+                    dev.hostname = Hostname {
+                        name: hostname,
+                        origin: HostnameOrigin::Mdns,
+                    };
+                    return true;
                 }
-                dev.hostname = hostname;
-                true
+                false
             }
             DeviceUpdate::DuidAssociated { mac, duid, iaid } => {
                 let mut changed = false;
@@ -343,12 +355,16 @@ impl DeviceTable {
                 let mut changed = false;
                 if let Some(hn_opt) = hostname {
                     if let Some(hn) = hn_opt {
-                        if dev.hostname != hn {
-                            dev.hostname = hn;
+                        if dev.hostname.name != hn || dev.hostname.origin != HostnameOrigin::Static
+                        {
+                            dev.hostname = Hostname {
+                                name: hn,
+                                origin: HostnameOrigin::Static,
+                            };
                             changed = true;
                         }
-                    } else if !dev.hostname.is_empty() {
-                        dev.hostname.clear();
+                    } else if !dev.hostname.name.is_empty() {
+                        dev.hostname = Hostname::default();
                         changed = true;
                     }
                 }
@@ -399,7 +415,7 @@ impl DeviceTable {
                     dev.last_seen = SystemTime::now();
 
                     // Sync static_entries for legacy components
-                    let hostname = dev.hostname.clone();
+                    let hostname = dev.hostname.name.clone();
                     let v4_ip = match dev.v4 {
                         IPv4State::Static(ip) => Some(ip),
                         _ => None,
@@ -526,7 +542,10 @@ impl DeviceTable {
         self.static_entries.insert(mac, static_entry);
 
         let dev = self.get_or_insert(mac);
-        dev.hostname = hostname;
+        dev.hostname = Hostname {
+            name: hostname,
+            origin: HostnameOrigin::Static,
+        };
 
         if let Some(ip) = v4_ip {
             dev.v4 = IPv4State::Static(ip);

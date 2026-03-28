@@ -105,9 +105,9 @@ impl DeviceTable {
             let _static_entry = self.static_entries.get(&mac);
 
             // 1. Index the explicit hostname (always lowercase)
-            if !device.hostname.is_empty() {
+            if !device.hostname.name.is_empty() {
                 self.name_index
-                    .insert(device.hostname.to_ascii_lowercase(), mac);
+                    .insert(device.hostname.name.to_ascii_lowercase(), mac);
             }
 
             // 2. Index the mandatory fallback (host-<mac_no_colons>)

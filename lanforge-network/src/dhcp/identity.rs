@@ -36,8 +36,8 @@ impl DeviceIdentity {
         {
             // If the packet didn't provide a hostname but the table has one
             // (e.g., static or previously learned), use the table's version.
-            if identity.hostname.is_none() && !dev.hostname.is_empty() {
-                identity.hostname = Some(dev.hostname.clone());
+            if identity.hostname.is_none() && !dev.hostname.name.is_empty() {
+                identity.hostname = Some(dev.hostname.name.clone());
             }
         }
 

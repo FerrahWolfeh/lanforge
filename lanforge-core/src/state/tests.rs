@@ -74,17 +74,17 @@ fn apply_update_hostname_hint_respects_static() {
     // Simula device estático
     {
         let dev = table.get_or_insert(mac);
-        dev.hostname = "static-host".to_string();
+        dev.hostname = "static-host".into();
         dev.origin = Origin::Toml;
     }
 
-    let changed = table.apply_update(DeviceUpdate::HostnameHint {
+    let changed = table.apply_update(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "dynamic-host".to_string(),
     });
 
     assert!(!changed, "Hint não deve sobrescrever device estático");
-    assert_eq!(table.devices().next().unwrap().hostname, "static-host");
+    assert_eq!(table.devices().next().unwrap().hostname.name, "static-host");
 }
 
 #[test]
@@ -92,13 +92,13 @@ fn apply_update_hostname_hint_accepted_for_dynamic() {
     let mut table = DeviceTable::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    let changed = table.apply_update(DeviceUpdate::HostnameHint {
+    let changed = table.apply_update(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "my-laptop".to_string(),
     });
 
     assert!(changed);
-    assert_eq!(table.devices().next().unwrap().hostname, "my-laptop");
+    assert_eq!(table.devices().next().unwrap().hostname.name, "my-laptop");
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn apply_update_duid_associated() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let duid = Duid::new(vec![1, 2, 3, 4]);
 
-    table.get_or_insert(mac).hostname = "DuidHost".to_string();
+    table.get_or_insert(mac).hostname = "DuidHost".into();
     assert!(table.apply_update(DeviceUpdate::DuidAssociated {
         mac: Some(mac),
         duid: duid.clone(),
@@ -178,7 +178,7 @@ fn apply_update_duid_associated() {
     }));
 
     let found = table.get_by_duid(&duid).expect("deve encontrar via DUID");
-    assert_eq!(found.hostname, "DuidHost");
+    assert_eq!(found.hostname.name, "DuidHost");
 
     // Mesmo DUID novamente — não dirty
     assert!(!table.apply_update(DeviceUpdate::DuidAssociated {
@@ -283,7 +283,7 @@ fn test_cli_host_updated_sync() {
 
     assert!(changed);
     let dev = table.devices.get(&mac).unwrap();
-    assert_eq!(dev.hostname, "cli-host");
+    assert_eq!(dev.hostname.name, "cli-host");
     assert!(
         matches!(dev.v4, IPv4State::Static(ip) if ip == "192.168.1.10".parse::<Ipv4Addr>().unwrap())
     );

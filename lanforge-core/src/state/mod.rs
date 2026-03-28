@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::time::SystemTime;
 
-use crate::device::{Device, IPv4State, Origin};
+use crate::device::{Device, Hostname, IPv4State, Origin};
 use crate::identifiers::{Duid, MacAddr};
 use crate::state::update::StaticEntry;
 
@@ -145,7 +145,7 @@ impl DeviceTable {
     pub fn get_or_insert(&mut self, mac: MacAddr) -> &mut Device {
         self.devices.entry(mac).or_insert_with(|| Device {
             mac,
-            hostname: String::new(),
+            hostname: Hostname::default(),
             origin: Origin::Dynamic,
             managed_at: None,
             duid: None,

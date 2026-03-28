@@ -107,7 +107,8 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         DeviceUpdate::SlaacObserved { mac, .. } => Some(*mac),
         DeviceUpdate::NdpSeen { mac, .. } => Some(*mac),
         DeviceUpdate::ArpSeen { mac, .. } => Some(*mac),
-        DeviceUpdate::HostnameHint { mac, .. } => Some(*mac),
+        DeviceUpdate::DhcpHostnameHint { mac, .. } => Some(*mac),
+        DeviceUpdate::MdnsHostnameHint { mac, .. } => Some(*mac),
         DeviceUpdate::DuidAssociated { mac, .. } => *mac,
         DeviceUpdate::CliHostUpdated { mac, .. } => Some(*mac),
         DeviceUpdate::SlaacCleared { mac } => Some(*mac),
@@ -136,7 +137,8 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         DeviceUpdate::SlaacObserved { addr, .. } => {
             Some(DeviceChange::SlaacObserved { addr: *addr })
         }
-        DeviceUpdate::HostnameHint { hostname, .. } => Some(DeviceChange::HostnameChanged {
+        DeviceUpdate::DhcpHostnameHint { hostname, .. }
+        | DeviceUpdate::MdnsHostnameHint { hostname, .. } => Some(DeviceChange::HostnameChanged {
             hostname: hostname.clone(),
         }),
         DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),

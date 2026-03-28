@@ -45,7 +45,7 @@ fn table_with_device(hostname: &str, mac: MacAddr, ip: Ipv4Addr) -> DeviceTable 
         expires: SystemTime::now() + std::time::Duration::from_secs(3600),
     });
     if !hostname.is_empty() {
-        table.apply_update(DeviceUpdate::HostnameHint {
+        table.apply_update(DeviceUpdate::DhcpHostnameHint {
             mac,
             hostname: hostname.to_string(),
         });
@@ -486,7 +486,7 @@ fn test_resolve_local_priority_ordering() {
         ip: "192.168.1.1".parse().unwrap(),
         expires: SystemTime::now() + Duration::from_secs(3600),
     });
-    table.apply_update(DeviceUpdate::HostnameHint {
+    table.apply_update(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "priority-test".into(),
     });

@@ -391,7 +391,7 @@ async fn main() -> Result<()> {
                         DeviceUpdate::NdpSeen { mac, ip } => {
                             let table_read = table.read();
                             if let Some(dev) = table_read.get_device(&mac)
-                                && dev.hostname.is_empty() {
+                                && dev.hostname.name.is_empty() {
                                     let p = prober.clone();
                                     tokio::spawn(async move { p.probe_ip(ip.into()).await });
                                 }
@@ -399,7 +399,7 @@ async fn main() -> Result<()> {
                         DeviceUpdate::ArpSeen { mac, ip } => {
                             let table_read = table.read();
                             if let Some(dev) = table_read.get_device(&mac)
-                                && dev.hostname.is_empty() {
+                                && dev.hostname.name.is_empty() {
                                     let p = prober.clone();
                                     tokio::spawn(async move { p.probe_ip(ip.into()).await });
                                 }
