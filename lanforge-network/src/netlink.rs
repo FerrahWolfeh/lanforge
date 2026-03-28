@@ -21,14 +21,14 @@
 //!                               ManagedTable::update()
 //! ```
 
-use anyhow::Result;
+use crate::error::Result;
 use futures::stream::TryStreamExt;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
-use netlink_packet_route::{
-    AddressFamily, RouteNetlinkMessage,
+use rtnetlink::packet_route::{
+    RouteNetlinkMessage,
     neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState},
 };
-use rtnetlink::{Handle, IpVersion};
+use rtnetlink::{Handle, IpVersion, packet_route::AddressFamily};
 use std::net::Ipv6Addr;
 
 use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
@@ -253,7 +253,7 @@ mod tests {
         utils::{ip_matches_prefix, mac_from_eui64_link_local},
     };
     use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};
-    use netlink_packet_route::neighbour::{NeighbourHeader, NeighbourMessage};
+    use rtnetlink::packet_route::neighbour::NeighbourHeader;
 
     fn mock_neigh_msg(
         state: NeighbourState,

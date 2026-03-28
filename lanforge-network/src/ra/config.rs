@@ -5,7 +5,7 @@
 //! - RFC 4191 §2.1   — prioridade do roteador
 //! - RFC 8106         — RDNSS e DNSSL
 
-use anyhow::{Result, anyhow};
+use crate::error::{NetworkError, Result};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -34,7 +34,6 @@ pub const LIFETIME_INFINITY: u32 = u32::MAX;
 /// Prioridade do roteador padrão (RFC 4191 §2.1).
 /// Influencia qual roteador é preferido quando há múltiplos na rede.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 pub enum RouterPriority {
     Low,
     #[default]
@@ -55,7 +54,6 @@ impl RouterPriority {
 
 /// Lifetime de um prefixo — finito em segundos ou infinito.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub enum PrefixLifetime {
     Secs(u32),
     Infinity,
@@ -123,25 +121,6 @@ impl PrefixConfig {
             preferred_lifetime: PrefixLifetime::Secs(DEFAULT_PREFERRED_LIFETIME_SECS),
         }
     }
-
-    // /// Prefixo estático com controle total dos parâmetros.
-    // pub const fn static_full(
-    //     prefix: std::net::Ipv6Addr,
-    //     on_link: bool,
-    //     autonomous: bool,
-    //     valid: u32,
-    //     preferred: u32,
-    // ) -> Self {
-    //     Self {
-    //         source: PrefixSource::Static(prefix),
-    //         prefix_len: 64,
-    //         on_link,
-    //         autonomous,
-    //         router_addr: true,
-    //         valid_lifetime: PrefixLifetime::Secs(valid),
-    //         preferred_lifetime: PrefixLifetime::Secs(preferred),
-    //     }
-    // }
 }
 
 /// Servidores DNS via RDNSS (RFC 8106 §3.1, opção tipo 25).
@@ -255,32 +234,36 @@ impl RaConfig {
     pub fn validate(&self) -> Result<()> {
         let max = self.max_interval.as_secs();
         if !(4..=1800).contains(&max) {
-            return Err(anyhow!(
+            return Err(NetworkError::Config(format!(
                 "max_interval={max}s fora de [4, 1800] (RFC 4861 §6.2.1)"
-            ));
+            )));
         }
 
         let min = self.effective_min_interval().as_secs();
         if min < 3 {
-            return Err(anyhow!("min_interval={min}s < 3s mínimo (RFC 4861 §6.2.1)"));
+            return Err(NetworkError::Config(format!(
+                "min_interval={min}s < 3s mínimo (RFC 4861 §6.2.1)"
+            )));
         }
         if min > (max as f64 * 0.75) as u64 {
-            return Err(anyhow!(
+            return Err(NetworkError::Config(format!(
                 "min_interval={min}s > 0.75 * max_interval={max}s (RFC 4861 §6.2.1)"
-            ));
+            )));
         }
 
         let rl = self.effective_router_lifetime().as_secs();
         if rl != 0 && (rl < max || rl > 9000) {
-            return Err(anyhow!(
+            return Err(NetworkError::Config(format!(
                 "router_lifetime={rl}s deve ser 0 ou em [max_interval={max}s, 9000s] (RFC 4861 §4.2)"
-            ));
+            )));
         }
 
         if let Some(mtu) = self.mtu
             && mtu < 1280
         {
-            return Err(anyhow!("mtu={mtu} < 1280 (mínimo IPv6, RFC 8200 §5)"));
+            return Err(NetworkError::Config(format!(
+                "mtu={mtu} < 1280 (mínimo IPv6, RFC 8200 §5)"
+            )));
         }
 
         Ok(())

@@ -24,7 +24,7 @@
 //! O ciclo de scan limpa os endereços SLAAC conhecidos antes de repopulá-los,
 //! garantindo que o estado interno não contenha endereços obsoletos (stale).
 
-use anyhow::Result;
+use crate::error::Result;
 use lanforge_core::state::update::DeviceUpdate;
 use rtnetlink::Handle;
 use std::collections::HashSet;

@@ -32,7 +32,7 @@ pub mod pool;
 pub mod raw;
 pub mod server;
 
-use anyhow::{Context, Result};
+use crate::error::{NetworkError, Result};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -194,18 +194,19 @@ fn bind_dhcp_socket(iface: &str) -> Result<UdpSocket> {
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )
-    .context("socket(AF_INET, SOCK_DGRAM)")?;
+    .map_err(|e| NetworkError::Socket(format!("socket(AF_INET, SOCK_DGRAM): {e}")))?;
 
     sock.set_reuse_address(true)?;
     sock.set_broadcast(true)?;
     sock.set_nonblocking(true)?;
 
     sock.bind_device(Some(iface.as_bytes()))
-        .context("SO_BINDTODEVICE")?;
+        .map_err(|e| NetworkError::Socket(format!("SO_BINDTODEVICE({iface}): {e}")))?;
 
     sock.bind(&socket2::SockAddr::from(addr))
-        .context("bind(0.0.0.0:67)")?;
+        .map_err(|e| NetworkError::Socket(format!("bind(0.0.0.0:67): {e}")))?;
 
     let std_socket: std::net::UdpSocket = sock.into();
-    UdpSocket::from_std(std_socket).context("UdpSocket::from_std")
+    UdpSocket::from_std(std_socket)
+        .map_err(|e| NetworkError::Socket(format!("UdpSocket::from_std: {e}")))
 }

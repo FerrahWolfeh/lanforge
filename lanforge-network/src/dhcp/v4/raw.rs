@@ -4,7 +4,7 @@
 //! não configurados (quando o cliente tem IP mas a tabela ARP do servidor
 //! não tem a entrada). Evita o broadcast em L3 para pacotes unicast.
 
-use anyhow::{Result, anyhow};
+use crate::error::{NetworkError, Result};
 use pnet::datalink::{self, Config, MacAddr as PnetMac};
 use pnet::packet::MutablePacket;
 use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
@@ -22,16 +22,24 @@ impl RawSender {
         let interface = datalink::interfaces()
             .into_iter()
             .find(|iface| iface.name == iface_name)
-            .ok_or_else(|| anyhow!("Interface '{iface_name}' not found for AF_PACKET"))?;
+            .ok_or_else(|| NetworkError::InterfaceNotFound(iface_name.to_string()))?;
 
-        let src_mac = interface
-            .mac
-            .ok_or_else(|| anyhow!("Interface '{iface_name}' has no MAC addr"))?;
+        let src_mac = interface.mac.ok_or_else(|| {
+            NetworkError::InvalidMac(format!("Interface '{iface_name}' has no MAC addr"))
+        })?;
 
         let (tx, _) = match datalink::channel(&interface, Config::default()) {
             Ok(datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
-            Ok(_) => return Err(anyhow!("Unsupported AF_PACKET channel type")),
-            Err(e) => return Err(anyhow!("Failed to open AF_PACKET channel: {e}")),
+            Ok(_) => {
+                return Err(NetworkError::RawSocket(
+                    "Unsupported AF_PACKET channel type".to_string(),
+                ));
+            }
+            Err(e) => {
+                return Err(NetworkError::RawSocket(format!(
+                    "Failed to open AF_PACKET channel: {e}"
+                )));
+            }
         };
 
         Ok(Self { tx, src_mac })
@@ -94,8 +102,12 @@ impl RawSender {
         // 4. Injeta pacote (Layer 2)
         match self.tx.send_to(&buf, None) {
             Some(Ok(())) => Ok(()),
-            Some(Err(e)) => Err(anyhow!("AF_PACKET injection failed: {e}")),
-            None => Err(anyhow!("AF_PACKET Tx buffer full/error")),
+            Some(Err(e)) => Err(NetworkError::RawSocket(format!(
+                "AF_PACKET injection failed: {e}"
+            ))),
+            None => Err(NetworkError::RawSocket(
+                "AF_PACKET Tx buffer full/error".to_string(),
+            )),
         }
     }
 }

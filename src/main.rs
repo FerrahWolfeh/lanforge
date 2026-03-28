@@ -34,10 +34,6 @@
 mod cli;
 mod config;
 mod control;
-mod dhcp;
-mod netlink;
-mod ra;
-mod slaac;
 mod supervisor;
 
 use anyhow::Result;
@@ -51,8 +47,14 @@ use lanforge_core::state::update::DeviceUpdate;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::worker::db_worker;
 use lanforge_dns::dns_service;
+use lanforge_network::dhcp::v4::dhcpv4_service;
+use lanforge_network::dhcp::v6::dhcpv6_service;
+use lanforge_network::netlink::extract_neigh_info;
+use lanforge_network::ra::ra_service;
+use lanforge_network::slaac::bootstrap_table;
 use netlink_sys::AsyncSocket;
 use rtnetlink::new_connection;
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, interval};
@@ -220,7 +222,7 @@ async fn main() -> Result<()> {
             move || {
                 let cfg = ra_cfg.clone();
                 let bus = ra_bus.clone();
-                async move { ra::ra_service(cfg, bus).await }
+                async move { ra_service(cfg, bus).await.map_err(anyhow::Error::from) }
             },
         ));
     }
@@ -246,7 +248,11 @@ async fn main() -> Result<()> {
             move || {
                 let cfg = dhcp_cfg.clone();
                 let table = dhcp_table.clone();
-                async move { dhcp::v4::dhcpv4_service(cfg, table).await }
+                async move {
+                    dhcpv4_service(cfg, table)
+                        .await
+                        .map_err(anyhow::Error::from)
+                }
             },
         ));
     }
@@ -271,7 +277,11 @@ async fn main() -> Result<()> {
                 let handle = dhcp_handle.clone();
                 let cfg = dhcp_cfg.clone();
                 let table = dhcp_table.clone();
-                async move { dhcp::v6::dhcpv6_service(cfg, table, &handle).await }
+                async move {
+                    dhcpv6_service(cfg, table, &handle)
+                        .await
+                        .map_err(anyhow::Error::from)
+                }
             },
         ));
     }
@@ -359,7 +369,7 @@ async fn main() -> Result<()> {
             Some((msg, _)) = messages.next() => {
                 // Alimenta o Manager APENAS com o IP/MAC reportado pelo kernel no momento.
                 // Zero overhead de varredura completa. CPU agradece.
-                if let Some(event) = netlink::extract_neigh_info(&msg) {
+                if let Some(event) = extract_neigh_info(&msg) {
                     let update = event.to_device_update(current_gua.as_ref());
                     table.update(update).await;
                 }
@@ -447,7 +457,9 @@ async fn run_scan(
     cfg: &Config,
     handle: &rtnetlink::Handle,
     table: &Arc<ManagedTable>,
-    gua: Option<std::net::Ipv6Addr>,
+    gua: Option<Ipv6Addr>,
 ) -> Result<()> {
-    slaac::bootstrap_table(&cfg.target_prefix, handle, table, gua).await
+    bootstrap_table(&cfg.target_prefix, handle, table, gua)
+        .await
+        .map_err(anyhow::Error::from)
 }

@@ -28,10 +28,13 @@ pub mod toml;
 
 pub use args::{CliArgs, Command, DbCommand, HostCommand, LeaseCommand};
 use lanforge_dns::DnsConfig;
+use lanforge_network::dhcp::v4::config::Dhcpv4Config;
+use lanforge_network::dhcp::v6::config::Dhcpv6Config;
+use lanforge_network::ra::{PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
 pub use toml::{DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg, load_toml};
 
 use clap::Parser;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use tracing::warn;
 
@@ -125,9 +128,7 @@ impl Config {
     }
 
     /// Builds an `RaConfig` from the merged configuration.
-    pub fn to_ra_config(&self) -> crate::ra::RaConfig {
-        use crate::ra::{PrefixConfig, RaConfig, RdnssConfig};
-
+    pub fn to_ra_config(&self) -> RaConfig {
         let mut prefixes = Vec::new();
 
         for p in &self.ra_toml.prefix {
@@ -136,10 +137,10 @@ impl Config {
                     if let Some(ref addr_str) = p.address
                         && let Some((addr, len)) = self.parse_cidr(addr_str)
                     {
-                        prefixes.push(crate::ra::PrefixConfig {
-                            source: crate::ra::PrefixSource::Static(addr),
+                        prefixes.push(PrefixConfig {
+                            source: PrefixSource::Static(addr),
                             prefix_len: len,
-                            ..crate::ra::PrefixConfig::ula(&addr.to_string())
+                            ..PrefixConfig::ula(&addr.to_string())
                         });
                     }
                 }
@@ -189,9 +190,7 @@ impl Config {
     }
 
     /// Builds a `Dhcpv4Config` from the merged configuration.
-    pub fn to_dhcpv4_config(&self) -> crate::dhcp::v4::config::Dhcpv4Config {
-        use crate::dhcp::v4::config::Dhcpv4Config;
-
+    pub fn to_dhcpv4_config(&self) -> Dhcpv4Config {
         let parse_ip = |s: &str, default: Ipv4Addr| -> Ipv4Addr {
             s.parse().unwrap_or_else(|_| {
                 warn!("[config] Invalid IPv4 '{s}', using {default}");
@@ -229,7 +228,7 @@ impl Config {
     }
 
     /// Builds a `Dhcpv6Config` from the merged configuration.
-    pub fn to_dhcpv6_config(&self) -> crate::dhcp::v6::config::Dhcpv6Config {
+    pub fn to_dhcpv6_config(&self) -> Dhcpv6Config {
         let mut ula_prefix = None;
         let mut ula_prefix_len = 64;
 
@@ -245,7 +244,7 @@ impl Config {
             s.as_deref().and_then(|ip_str| ip_str.parse().ok())
         };
 
-        crate::dhcp::v6::config::Dhcpv6Config {
+        Dhcpv6Config {
             enabled: self.dhcpv6_enabled,
             iface: self.iface_lan.clone(),
             lease_time: self.dhcpv6_toml.lease_time,
@@ -258,7 +257,7 @@ impl Config {
 
     /// Builds a `DnsConfig` from the merged configuration.
     pub fn to_dns_config(&self) -> DnsConfig {
-        let parse_addr = |s: &str, default: &str| -> std::net::SocketAddr {
+        let parse_addr = |s: &str, default: &str| -> SocketAddr {
             s.parse().unwrap_or_else(|_| {
                 warn!("[config] Endereço DNS inválido '{s}', usando {default}");
                 default.parse().unwrap()

@@ -1,5 +1,5 @@
 [workspace]
-members = ["lanforge-core", "lanforge-db", "lanforge-dns"]
+members = ["lanforge-core", "lanforge-db", "lanforge-dns", "lanforge-network"]
 
 [package]
 name = "lanforge"
@@ -10,6 +10,7 @@ edition = "2024"
 lanforge-core = { path = "lanforge-core" }
 lanforge-db = { path = "lanforge-db" }
 lanforge-dns = { path = "lanforge-dns" }
+lanforge-network = { path = "lanforge-network" }
 
 # Async & runtime
 tokio = { version = "1", features = [
@@ -23,8 +24,6 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
 ] }
 futures = { version = "0.3.32", default-features = false, features = ["std"] }
-parking_lot = "0.12.5"
-
 
 # CLI e config
 clap = { version = "4.6.0", features = ["derive", "env"] }
@@ -32,21 +31,8 @@ serde = { version = "1", features = ["derive"] }
 toml = "1.1.0"
 
 # Networking / netlink
-netlink-packet-core = "0.8"
-netlink-packet-route = "0.28"
 netlink-sys = "0.8"
 rtnetlink = "0.20"
-
-# Raw sockets (RA)
-socket2 = { version = "0.6.3", features = ["all"] }
-libc = "0.2.183"
-
-# RNG (usa hardware RNG do BCM2711 via getrandom no RPi4)
-rand = "0.10.0"
-
-# DHCPv4 protocol parsing
-dhcproto = "0.14"
-pnet = "0.35.0"
 
 # Observabilidade
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
@@ -83,6 +69,3 @@ lto = true
 codegen-units = 1
 debug = true
 strip = false
-
-[dev-dependencies]
-tempfile = "3.27.0"

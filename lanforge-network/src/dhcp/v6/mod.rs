@@ -33,7 +33,7 @@ pub mod config;
 pub mod pool;
 pub mod server;
 
-use anyhow::{Context, Result};
+use crate::error::{NetworkError, Result};
 use lanforge_core::bus::{DeviceChange, LanforgeEvent, ManagedTable};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::update::DeviceUpdate;
@@ -63,12 +63,16 @@ pub async fn dhcpv6_service(
     }
 
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
-        .context("Failed to create IPv6 UDP socket")?;
+        .map_err(|e| NetworkError::Socket(format!("Failed to create IPv6 UDP socket: {e}")))?;
 
     let addr = std::net::SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::UNSPECIFIED), 547);
 
-    socket.set_only_v6(true).context("IPV6_V6ONLY")?;
-    socket.bind(&addr.into()).context("bind :547")?;
+    socket
+        .set_only_v6(true)
+        .map_err(|e| NetworkError::Socket(format!("IPV6_V6ONLY: {e}")))?;
+    socket
+        .bind(&addr.into())
+        .map_err(|e| NetworkError::Socket(format!("bind :547: {e}")))?;
 
     if let Err(e) = socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
         warn!("Failed to join ff02::1:2: {e}");
@@ -98,9 +102,13 @@ pub async fn dhcpv6_service(
     }
 
     // Socket persistente para NDP pokes (Optimization 2)
-    let poke_sock = std::net::UdpSocket::bind("::0:0").context("Failed to bind NDP poke socket")?;
+    let poke_sock = std::net::UdpSocket::bind("::0:0")
+        .map_err(|e| NetworkError::Socket(format!("Failed to bind NDP poke socket: {e}")))?;
     poke_sock.set_nonblocking(true)?;
-    let ndp_poke_sock = Arc::new(UdpSocket::from_std(poke_sock)?);
+    let ndp_poke_sock = Arc::new(
+        UdpSocket::from_std(poke_sock)
+            .map_err(|e| NetworkError::Socket(format!("UdpSocket::from_std: {e}")))?,
+    );
 
     let mut server = Dhcpv6Server::new(
         config.clone(),

@@ -31,12 +31,12 @@ pub mod packet;
 pub use config::*;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
-use anyhow::{Context, Result, anyhow};
+use crate::error::{NetworkError, Result};
 use futures::TryStreamExt;
 use lanforge_core::bus::{EventBus, LanforgeEvent};
-use netlink_packet_route::address::AddressAttribute;
 use rand::{RngExt, rng};
 use rtnetlink::Handle;
+use rtnetlink::packet_route::address::{AddressAttribute, AddressMessage};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
 use std::io;
@@ -167,8 +167,8 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
         cfg.effective_router_lifetime().as_secs(),
     );
 
-    let (connection, handle, _) =
-        rtnetlink::new_connection().context("Netlink connection para RA")?;
+    let (connection, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| NetworkError::Socket(format!("Netlink connection para RA: {e}")))?;
     tokio::spawn(connection);
 
     let iface_index = get_iface_index(&cfg.iface)?;
@@ -183,7 +183,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
     );
 
     let socket = create_ra_socket(&cfg.iface, iface_index)?;
-    let async_fd = AsyncFd::new(socket)?;
+    let async_fd = AsyncFd::new(socket).map_err(NetworkError::Io)?;
     let mut state = RaState::new();
 
     let ctx = RaContext {
@@ -297,7 +297,7 @@ async fn send_ra(
     // a delegação de prefixo via DHCPv6-PD, sem necessidade de reiniciar o serviço
     let src_ll = get_link_local_addr(ctx.handle, ctx.iface_index)
         .await
-        .context("sem endereço link-local na interface")?;
+        .map_err(|_| NetworkError::NoLinkLocal(ctx.iface_index))?;
     let gua_info = get_gua_prefix(ctx.handle, ctx.iface_index).await?;
     let (gua, preferred, valid) = match gua_info {
         Some((ip, p, v)) => (Some(ip), p, v),
@@ -333,7 +333,7 @@ async fn send_ra(
     ctx.async_fd
         .get_ref()
         .send_to(&pkt, &dst_sa)
-        .context("ICMPv6 send_to")?;
+        .map_err(|e| NetworkError::Socket(format!("ICMPv6 send_to: {e}")))?;
     Ok(())
 }
 
@@ -342,30 +342,35 @@ async fn send_ra(
 // ---------------------------------------------------------------------------
 
 fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket> {
-    let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))
-        .context("Falha ao criar socket ICMPv6 raw — necessário CAP_NET_RAW")?;
+    let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)).map_err(|e| {
+        NetworkError::Socket(format!(
+            "Falha ao criar socket ICMPv6 raw — necessário CAP_NET_RAW: {e}"
+        ))
+    })?;
 
     // Vincula à interface LAN — mesmo em hosts multi-homed, tráfego fica contido
     sock.bind_device(Some(iface.as_bytes()))
-        .with_context(|| format!("SO_BINDTODEVICE({iface})"))?;
+        .map_err(|e| NetworkError::Socket(format!("SO_BINDTODEVICE({iface}): {e}")))?;
 
     // RFC 4861 §6.1.2: receptores DEVEM descartar RAs com hop limit != 255
     sock.set_multicast_hops_v6(255)
-        .context("IPV6_MULTICAST_HOPS=255")?;
+        .map_err(|e| NetworkError::Socket(format!("IPV6_MULTICAST_HOPS=255: {e}")))?;
     set_sockopt_int(&sock, libc::IPPROTO_IPV6, libc::IPV6_UNICAST_HOPS, 255)
-        .context("IPV6_UNICAST_HOPS=255")?;
+        .map_err(|e| NetworkError::Socket(format!("IPV6_UNICAST_HOPS=255: {e}")))?;
 
     // Inscreve em ff02::2 (all-routers) para receber Router Solicitations.
     // O kernel não repassa multicast de um grupo se o socket não estiver inscrito.
     let ff02_2: Ipv6Addr = "ff02::2".parse().unwrap();
     sock.join_multicast_v6(&ff02_2, iface_index)
-        .context("join_multicast_v6(ff02::2)")?;
+        .map_err(|e| NetworkError::Socket(format!("join_multicast_v6(ff02::2): {e}")))?;
 
     // ICMP6_FILTER: rejeita no kernel todos os tipos ICMPv6 exceto RS (133).
     // No RPi4 isso reduz context switches e uso de CPU em redes com muito tráfego NDP.
-    set_icmp6_filter_rs_only(&sock).context("ICMP6_FILTER")?;
+    set_icmp6_filter_rs_only(&sock)
+        .map_err(|e| NetworkError::Socket(format!("ICMP6_FILTER: {e}")))?;
 
-    sock.set_nonblocking(true).context("O_NONBLOCK")?;
+    sock.set_nonblocking(true)
+        .map_err(|e| NetworkError::Socket(format!("O_NONBLOCK: {e}")))?;
 
     info!("Socket ICMPv6 raw OK — filtro ICMP6_FILTER ativo (apenas RS), inscrito em ff02::2");
     Ok(sock)
@@ -441,23 +446,23 @@ fn set_sockopt_raw(
 
 fn get_iface_index(iface: &str) -> Result<u32> {
     std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
-        .with_context(|| format!("ifindex de '{iface}'"))?
+        .map_err(|e| NetworkError::Generic(format!("ifindex de '{iface}': {e}")))?
         .trim()
         .parse::<u32>()
-        .context("parse ifindex")
+        .map_err(|e| NetworkError::Generic(format!("parse ifindex: {e}")))
 }
 
 fn get_iface_mac(iface: &str) -> Result<[u8; 6]> {
     let s = std::fs::read_to_string(format!("/sys/class/net/{iface}/address"))
-        .with_context(|| format!("MAC de '{iface}'"))?;
+        .map_err(|e| NetworkError::Generic(format!("MAC de '{iface}': {e}")))?;
     let bytes: Vec<u8> = s
         .trim()
         .split(':')
-        .map(|x| u8::from_str_radix(x, 16).map_err(|e| anyhow!("{e}")))
-        .collect::<Result<_>>()?;
+        .map(|x| u8::from_str_radix(x, 16).map_err(|e| NetworkError::InvalidMac(e.to_string())))
+        .collect::<Result<Vec<u8>>>()?;
     bytes
         .try_into()
-        .map_err(|_| anyhow!("MAC deve ter 6 bytes"))
+        .map_err(|_| NetworkError::InvalidMac("MAC deve ter 6 bytes".to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -479,9 +484,7 @@ async fn get_link_local_addr(handle: &Handle, iface_index: u32) -> Result<Ipv6Ad
             }
         }
     }
-    Err(anyhow!(
-        "Sem endereço link-local na interface índice {iface_index}"
-    ))
+    Err(NetworkError::NoLinkLocal(iface_index))
 }
 
 /// Detecta o prefixo GUA /64 da interface e retorna com bits de host zerados.
@@ -527,7 +530,7 @@ async fn get_gua_prefix(handle: &Handle, iface_index: u32) -> Result<Option<(Ipv
     Ok(None)
 }
 
-fn extract_ipv6(msg: &netlink_packet_route::address::AddressMessage) -> Option<Ipv6Addr> {
+fn extract_ipv6(msg: &AddressMessage) -> Option<Ipv6Addr> {
     msg.attributes.iter().find_map(|a| {
         if let AddressAttribute::Address(IpAddr::V6(v6)) = a {
             Some(*v6)
