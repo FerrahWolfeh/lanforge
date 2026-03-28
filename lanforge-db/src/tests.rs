@@ -212,8 +212,9 @@ async fn db_worker_persists_on_dirty_event() {
     let worker_table = Arc::clone(&table);
     let worker_bus = Arc::clone(&bus);
     let worker_path = db_path.clone();
+    let worker_log_path = dir.path().join("test_logs.db");
     tokio::spawn(async move {
-        db_worker(worker_path, worker_table, worker_bus).await;
+        db_worker(worker_path, worker_log_path, worker_table, worker_bus).await;
     });
 
     tokio::task::yield_now().await;
@@ -246,11 +247,12 @@ async fn db_worker_handles_vacuum_event() {
     let table = Arc::new(ManagedTable::new(bus.clone()));
 
     let worker_path = db_path.clone();
+    let worker_log_path = dir.path().join("test_vacuum_logs.db");
     let worker_bus = Arc::clone(&bus);
     let worker_table = Arc::clone(&table);
 
     tokio::spawn(async move {
-        db_worker(worker_path, worker_table, worker_bus).await;
+        db_worker(worker_path, worker_log_path, worker_table, worker_bus).await;
     });
 
     tokio::task::yield_now().await;

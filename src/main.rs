@@ -202,7 +202,12 @@ async fn main() -> Result<()> {
     // -----------------------------------------------------------------------
     // DB worker — persiste reativamente via EventBus
     // -----------------------------------------------------------------------
-    tokio::spawn(db_worker(leases_db_path, table.clone(), bus.clone()));
+    tokio::spawn(db_worker(
+        leases_db_path,
+        cfg.log_db.clone().into(),
+        table.clone(),
+        bus.clone(),
+    ));
 
     // -----------------------------------------------------------------------
     // mDNS Prober — descoberta ativa e passiva de hostnames

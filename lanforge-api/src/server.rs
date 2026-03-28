@@ -1,4 +1,6 @@
 use crate::api::{Command, Response, SimpleSuccess};
+use lanforge_db::log_engine::LogDb;
+
 use crate::config::ApiConfig;
 use crate::error::{ApiError, Result};
 use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
@@ -253,13 +255,38 @@ where
                 })
             }
             Ok(Command::Log { .. } | Command::Watch) => {
+                // Fetch history if it's a log command
+                let history = if matches!(req, Ok(Command::Log { .. })) {
+                    let log_db_path = ctx.cfg.log_db_path.clone();
+                    tokio::task::spawn_blocking(move || {
+                        LogDb::open(Path::new(&log_db_path))
+                            .and_then(|db| db.get_history(100))
+                            .unwrap_or_default()
+                    })
+                    .await
+                    .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
                 // Return immediate success first, then stream events
                 let ok_resp = Response::Success(SimpleSuccess {
-                    message: "Iniciando stream de eventos...".to_string(),
+                    message: format!(
+                        "Iniciando stream de eventos ({} históricos)...",
+                        history.len()
+                    ),
                 });
                 if let Ok(json_resp) = serde_json::to_string(&ok_resp) {
                     writer.write_all(json_resp.as_bytes()).await?;
                     writer.write_all(b"\n").await?;
+                }
+
+                // Send history
+                for event in history {
+                    if let Ok(json_resp) = serde_json::to_string(&Response::Event(event)) {
+                        let _ = writer.write_all(json_resp.as_bytes()).await;
+                        let _ = writer.write_all(b"\n").await;
+                    }
                 }
 
                 let mut rx = ctx.bus.subscribe();
@@ -275,6 +302,7 @@ where
                 }
                 break; // Break the command loop after streaming ends
             }
+
             Ok(Command::HostAdd {
                 mac,
                 hostname,

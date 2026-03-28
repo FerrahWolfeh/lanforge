@@ -107,7 +107,16 @@ pub struct CliArgs {
     #[arg(short = 'd', long, env = "LANFORGE_DB_PATH")]
     pub db_path: Option<String>,
 
+    /// Caminho para o banco de dados SQLite de logs (history).
+    #[arg(
+        long,
+        env = "LANFORGE_LOG_DB",
+        default_value = "/tmp/lanforge_logs.db"
+    )]
+    pub log_db: String,
+
     /// Caminho para um arquivo TOML/JSON adicional contendo apenas devices estáticos (debug).
+
     #[arg(long, env = "LANFORGE_DEVICES_FILE")]
     pub devices_file: Option<String>,
 

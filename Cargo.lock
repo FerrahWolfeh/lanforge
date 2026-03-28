@@ -944,11 +944,12 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "hex",
  "lanforge-core",
+ "lanforge-db",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -974,6 +975,7 @@ dependencies = [
  "lanforge-core",
  "rusqlite",
  "rusqlite_migration",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

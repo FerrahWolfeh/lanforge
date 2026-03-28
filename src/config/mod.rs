@@ -59,6 +59,7 @@ pub struct Config {
     pub debounce_secs: u64,
     pub fallback_mins: u64,
     pub control_socket: String,
+    pub log_db: String,
 
     // RA
     pub ra_enabled: bool,
@@ -104,6 +105,7 @@ impl Config {
             control_socket: cli
                 .control_socket
                 .unwrap_or(toml_cfg.general.control_socket),
+            log_db: cli.log_db,
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: RaCfg {
@@ -353,6 +355,7 @@ impl Config {
             dns_enabled: self.dns_enabled,
             dns_upstream: self.dns_toml.upstream.clone(),
             db_path: self.leases_db.clone(),
+            log_db_path: self.log_db.clone(),
             tcp_port: self.api_port,
         }
     }

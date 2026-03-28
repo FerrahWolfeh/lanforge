@@ -14,6 +14,7 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
 use lanforge_core::state::DeviceTable;
 
 use crate::engine::LeaseDb;
+use crate::log_engine::LogDb;
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -48,7 +49,12 @@ const MAX_DEBOUNCE_WAIT: Duration = Duration::from_secs(60);
 ///     Worker->>SQLite: Send Save(Snapshot)
 ///     SQLite-->>Worker: Commit & Return
 /// ```
-pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<EventBus>) {
+pub async fn db_worker(
+    db_path: PathBuf,
+    log_db_path: PathBuf,
+    table: Arc<ManagedTable>,
+    bus: Arc<EventBus>,
+) {
     let mut rx = bus.subscribe();
 
     info!(
@@ -66,7 +72,15 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
         let db = match LeaseDb::open(&db_path_clone) {
             Ok(db) => db,
             Err(e) => {
-                warn!("DB thread: fatal failure opening SQLite: {e}");
+                warn!("DB thread: fatal failure opening leases SQLite: {e}");
+                return;
+            }
+        };
+
+        let log_db = match LogDb::open(&log_db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                warn!("DB thread: fatal failure opening logs SQLite: {e}");
                 return;
             }
         };
@@ -87,8 +101,14 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
                         info!("DB worker: VACUUM concluído");
                     }
                 }
+                DbWorkerCmd::RecordLog(event) => {
+                    if let Err(e) = log_db.record_log(&event) {
+                        warn!("DB thread: falha ao gravar log: {e}");
+                    }
+                }
             }
         }
+
         info!("DB thread: encerrando graciosamente");
     });
 
@@ -125,6 +145,12 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
                     break;
                 }
             }
+            DbAction::RecordLog(event) => {
+                if cmd_tx.send(DbWorkerCmd::RecordLog(event)).await.is_err() {
+                    warn!("DB worker: falha ao enviar evento de log");
+                    break;
+                }
+            }
             DbAction::Shutdown => {
                 info!("DB worker encerrando (shutdown recebido)");
                 return;
@@ -140,12 +166,14 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
 /// Comandos internos enviados para a thread síncrona do SQLite.
 enum DbWorkerCmd {
     Save(Box<DeviceTable>),
+    RecordLog(LanforgeEvent),
     Vacuum,
 }
 
 /// Ações que o loop assíncrono do `db_worker` deve tomar.
 enum DbAction {
     Save,
+    RecordLog(LanforgeEvent),
     Vacuum,
     Shutdown,
 }
@@ -161,7 +189,9 @@ async fn wait_for_db_action(rx: &mut broadcast::Receiver<LanforgeEvent>) -> DbAc
             Ok(LanforgeEvent::DeviceTableDirty) => return DbAction::Save,
             Ok(LanforgeEvent::DbVacuum) => return DbAction::Vacuum,
             Ok(LanforgeEvent::Shutdown) => return DbAction::Shutdown,
+            Ok(event) if event.is_loggable() => return DbAction::RecordLog(event),
             Ok(_) => {} // outros eventos — ignora
+
             Err(broadcast::error::RecvError::Lagged(n)) => {
                 warn!("DB worker atrasado, pulou {n} eventos — forçando flush");
                 return DbAction::Save;

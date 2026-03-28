@@ -128,6 +128,28 @@ pub enum LanforgeEvent {
     Shutdown,
 }
 
+impl LanforgeEvent {
+    /// Returns true if this event represents a user-facing system activity
+    /// that should be recorded in the persistent log history.
+    pub fn is_loggable(&self) -> bool {
+        match self {
+            LanforgeEvent::DeviceDiscovered { .. }
+            | LanforgeEvent::DeviceUpdated { .. }
+            | LanforgeEvent::DeviceExpired { .. }
+            | LanforgeEvent::PrefixChanged { .. }
+            | LanforgeEvent::LeaseRelease { .. }
+            | LanforgeEvent::LeaseRenew { .. }
+            | LanforgeEvent::DbVacuum
+            | LanforgeEvent::ReloadConfig
+            | LanforgeEvent::ScanRequested => true,
+
+            // Internal signals or very high-frequency events
+            LanforgeEvent::DeviceTableDirty | LanforgeEvent::Shutdown => false,
+        }
+    }
+}
+
+
 // ---------------------------------------------------------------------------
 // EventBus
 // ---------------------------------------------------------------------------
