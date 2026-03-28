@@ -26,6 +26,28 @@
                     "--bin=lanforge"
                 ]
             }
+        },
+        {
+            "name": "Debug DNS Isolated",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=lanforge"
+                ]
+            },
+            "args": [
+                "run",
+                "--only",
+                "dns",
+                "--dns-port",
+                "5353",
+                "--devices-file",
+                "${workspaceFolder}/debug_devices.toml",
+                "--config",
+                "/dev/null"
+            ]
         }
     ]
 }
