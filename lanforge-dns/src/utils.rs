@@ -5,15 +5,15 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::wire::WireLabelIter;
 
-/// Parseador de ARPA otimizado que opera diretamente sobre os labels de um Name, evitando alocações.
+/// Optimized ARPA parser that operates directly on Name labels, avoiding allocations.
 pub fn parse_arpa(name: &Name) -> Option<IpAddr> {
     let labels = name.iter().rev();
 
     byte_parse_arpa(labels)
 }
 
-/// Parseia um octeto decimal diretamente de bytes, sem UTF-8.
-/// Rejeita strings vazias, > 3 chars, não-dígitos, e valores > 255.
+/// Parses a decimal octet directly from bytes without UTF-8 validation.
+/// Rejects empty strings, labels > 3 chars, non-digits, and values > 255.
 #[inline(always)]
 fn parse_octet(label: &[u8]) -> Option<u8> {
     if label.is_empty() || label.len() > 3 {
@@ -29,7 +29,7 @@ fn parse_octet(label: &[u8]) -> Option<u8> {
     if val > 255 { None } else { Some(val as u8) }
 }
 
-/// Parseia um único nibble hex (0-9, a-f, A-F) de um label de 1 byte.
+/// Parses a single hex nibble (0-9, a-f, A-F) from a 1-byte label.
 #[inline(always)]
 fn parse_nibble(label: &[u8]) -> Option<u8> {
     match label {
@@ -39,7 +39,7 @@ fn parse_nibble(label: &[u8]) -> Option<u8> {
             b'A'..=b'F' => Some(b - b'A' + 10),
             _ => None,
         },
-        _ => None, // label vazio ou multi-byte: inválido
+        _ => None, // empty or multi-byte label: invalid
     }
 }
 
@@ -89,15 +89,15 @@ pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &Ipv6AddrOrSuffix) -> 
     }
 }
 
-/// Extrai o hostname local diretamente dos labels de um iterador wire, sem alocações.
+/// Extracts the local hostname directly from a wire iterator's labels without allocations.
 pub fn extract_local_hostname_wire<'a>(
     labels: &mut WireLabelIter<'a>,
     search_labels: &[Vec<u8>],
 ) -> Option<&'a str> {
-    // 1. O primeiro label é o alvo
+    // 1. The first label is the target hostname
     let host_bytes = labels.next()?;
 
-    // 2. Valida o resto da query
+    // 2. Validate the rest of the query against search domains
     for expected in search_labels {
         let actual = labels.next()?;
         if !actual.eq_ignore_ascii_case(expected) {
@@ -105,7 +105,7 @@ pub fn extract_local_hostname_wire<'a>(
         }
     }
 
-    // 3. Rejeita subdomínios excedentes
+    // 3. Reject queries with excess subdomains
     if labels.next().is_some() {
         return None;
     }
@@ -113,6 +113,7 @@ pub fn extract_local_hostname_wire<'a>(
     std::str::from_utf8(host_bytes).ok()
 }
 
+/// Parses an ARPA request directly from a wire label iterator.
 pub fn parse_arpa_wire(labels: WireLabelIter<'_>) -> Option<IpAddr> {
     // IPv6: 32 nibbles + "ip6" + "arpa" = 34 labels max
     let mut parts: [&[u8]; 34] = [b""; 34];
@@ -125,40 +126,41 @@ pub fn parse_arpa_wire(labels: WireLabelIter<'_>) -> Option<IpAddr> {
         }
     }
 
-    // Itera só os slots preenchidos, em ordem reversa
+    // Iterate only filled slots in reverse order
     byte_parse_arpa(parts[..count].iter().copied().rev())
 }
 
-/// Extrai o hostname local diretamente dos labels do pacote DNS bruto.
-/// Custo de alocação: 0 bytes.
+/// Extracts the local hostname directly from a Hickory-DNS Name object.
+/// Allocation cost: 0 bytes.
 pub fn extract_local_hostname<'a>(qname: &'a Name, search_labels: &[Vec<u8>]) -> Option<&'a str> {
     let mut iter = qname.iter();
 
-    // 1. O primeiro label é sempre o alvo (ex: "node-12" de "node-12.lanforge.local")
+    // 1. The first label is always the target (e.g., "node-12" in "node-12.lanforge.local")
     let host_bytes = iter.next()?;
 
-    // 2. Valida se o resto da query bate exatamente com o seu domínio de busca
+    // 2. Validate that the rest of the query matches the search domain exactly
     for expected_label in search_labels {
         let actual_label = iter.next()?;
 
-        // Comparação de bytes ignorando case (muito mais rápido que mexer com UTF-8 strings)
+        // Case-insensitive byte comparison (much faster than UTF-8 string conversion)
         if !actual_label.eq_ignore_ascii_case(expected_label) {
             return None;
         }
     }
 
-    // 3. Se a query tiver mais labels (ex: sub.node-12.lanforge.local), rejeita
+    // 3. If the query has more labels (e.g., sub.node-12.lanforge.local), reject it
     if iter.next().is_some() {
         return None;
     }
 
-    // 4. Tudo certo. Converte os bytes do hostname para &str e devolve
+    // 4. Everything matches. Convert hostname bytes to &str and return
     std::str::from_utf8(host_bytes).ok()
 }
 
-/// Verifica se a string já é minúscula.
-/// Em 99% das queries LAN, não fazemos NENHUMA alocação (retorna Borrowed).
-/// Só aloca memória no heap (Owned) se algum dispositivo maluco mandar letras maiúsculas.
+/// Ensures a string is lowercase with minimal allocations.
+///
+/// In 99% of LAN queries, no allocation is performed (returns `Borrowed`).
+/// Only allocates on the heap (`Owned`) if the input contains uppercase ASCII characters.
 pub fn fast_lowercase(s: &str) -> Cow<'_, str> {
     if s.bytes().any(|b| b.is_ascii_uppercase()) {
         Cow::Owned(s.to_ascii_lowercase())

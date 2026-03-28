@@ -1,7 +1,8 @@
-//! lanforge-dns — Servidor DNS autoritativo da LAN
+//! `lanforge-dns` — High-performance authoritative LAN DNS server.
 //!
-//! Responde A/AAAA/PTR para dispositivos conhecidos pelo Manager e encaminha
-//! todo o resto para o Unbound (ou outro resolver upstream).
+//! Features a custom zero-allocation wire parser for internal routing and
+//! local resolution (A/AAAA/PTR), with a full-featured fallback to Hickory-DNS
+//! for complex queries. Forwards all non-local requests to an upstream resolver.
 
 pub mod cache;
 pub mod config;

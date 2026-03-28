@@ -22,13 +22,16 @@ use crate::{
 };
 
 /// Shared, immutable service state for the DNS hot path.
-/// A single Arc<DnsContext> replaces 3 separate Arc clones per query.
+///
+/// A single `Arc<DnsContext>` replaces several individual `Arc` clones per query,
+/// reducing atomic reference counting overhead in the fast path.
 pub(crate) struct DnsContext {
     pub cfg: DnsConfig,
     pub table: Arc<ManagedTable>,
     pub upstream_mgr: Option<Arc<UpstreamManager>>,
 }
 
+/// Starts the DNS service (UDP and TCP listeners).
 pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<(), DnsError> {
     if !cfg.enabled {
         info!("Serviço DNS desabilitado na config");
@@ -68,7 +71,7 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<(),
                 continue;
             };
 
-            // Processa inline — sem spawn, sem to_vec()
+            // Process inline — no spawning, no to_vec() allocations
             if let Ok(Some(response)) = handle_query(&buf[..len], &udp_ctx).await {
                 let _ = udp_sock.send_to(&response, src).await;
             }
@@ -106,7 +109,23 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<(),
     Ok(())
 }
 
-// Extra-hot path
+/// The extra-hot path: Initial query triage and routing.
+///
+/// This function uses the zero-allocation wire parser to decide how to handle
+/// the query before performing a full parse.
+///
+/// ```mermaid
+/// flowchart TD
+///     Start[Inbound Query] --> WireHeader[WireHeader::parse]
+///     WireHeader -->|Valid Query| WireQuestion[WireQuestion::parse]
+///     WireQuestion -->|Simple Name| Local{Local Resolution?}
+///     Local -->|Found| Return[Local Response]
+///     Local -->|Not Found| Upstream[forward_to_upstream]
+///     WireQuestion -->|Complex Name/Pointers| Fallback[handle_query_fallback]
+///     Fallback --> Local2{Local Resolution?}
+///     Local2 -->|Found| Return
+///     Local2 -->|Not Found| Upstream
+/// ```
 pub(crate) async fn handle_query(
     data: &[u8],
     ctx: &DnsContext,
@@ -121,11 +140,11 @@ pub(crate) async fn handle_query(
     }
 
     let Some(question) = crate::wire::WireQuestion::parse(data) else {
-        // Fallback para Hickory se o wire-parser falhar (ex: pointers na question)
+        // Fallback to Hickory-DNS if the wire-parser finds something complex (e.g., pointers in the question)
         return handle_query_fallback(data, ctx).await;
     };
 
-    let raw_qtype = question.qtype(); // u16 — antes de converter
+    let raw_qtype = question.qtype(); // u16 — before conversion
     let qtype = QType::from(raw_qtype);
     let edns = crate::wire::WireOptScanner::scan(data, &header, &question);
     let ra = ctx.cfg.upstream.is_some();
@@ -149,7 +168,7 @@ pub(crate) async fn handle_query(
                         &query,
                         &safe_hostname,
                         RecordType::from(raw_qtype),
-                    )?, // u16 direto pro hickory
+                    )?, // raw u16 passed directly to hickory-dns
                 )
             } else {
                 None
@@ -173,14 +192,14 @@ pub(crate) async fn handle_query(
             }
         }
 
-        _ => None, // qualquer outro tipo vai direto pro upstream
+        _ => None, // Any other type goes directly to upstream
     };
 
     if let Some(response) = local_response {
         return Ok(Some(response));
     }
 
-    // Phase 3: Upstream or Refused — único lugar onde essa decisão é tomada
+    // Phase 3: Upstream or Refused — The single point for this decision
     match (ctx.cfg.upstream, &ctx.upstream_mgr) {
         (Some(upstream), Some(mgr)) => forward_to_upstream(data, upstream, mgr).await.map(Some),
         _ => Ok(Some(WireResponseWriter::write_error_response(
@@ -195,15 +214,15 @@ pub(crate) async fn handle_query(
     // Phase 3: Zero-Copy Upstream Forwarding
 }
 
-/// Fallback para o comportamento original caso o wire-parser encontre algo complexo.
+/// Fallback logic for queries that are too complex for the zero-alloc wire parser.
 async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<Vec<u8>>, DnsError> {
     let Ok(query) = Message::from_bytes(data) else {
         return Ok(None);
     };
     let rb = crate::response::ResponseBuilder::new(&query, &ctx.cfg);
     let Some(question) = query.queries().first() else {
-        // Mesmo no fallback, se falhar a question, tentamos um FormErr wire-level se possível,
-        // mas aqui já falhamos no wire-parser original, então usamos o rb.
+        // Even in fallback, if the question is missing, we try a wire-level FormErr if possible.
+        // However, if we reached here, the wire-parser already failed, so we use the ResponseBuilder.
         return Ok(Some(rb.formerr()?));
     };
     let qname = question.name();

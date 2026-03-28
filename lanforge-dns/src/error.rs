@@ -1,35 +1,45 @@
 use thiserror::Error;
 
-/// Erros específicos do servidor DNS do Lanforge.
+/// Specific error types for the Lanforge DNS server.
 #[derive(Debug, Error)]
 pub enum DnsError {
-    #[error("falha de I/O: {0}")]
+    /// Standard I/O error.
+    #[error("I/O failure: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("falha no protocolo DNS: {0}")]
+    /// Error originating from the DNS protocol logic (Hickory-DNS).
+    #[error("DNS Protocol failure: {0}")]
     Protocol(#[from] hickory_proto::ProtoError),
 
-    #[error("resposta UDP corrompida: {0}")]
+    /// Failed to decode a UDP DNS message.
+    #[error("Corrupt UDP response: {0}")]
     UdpDecode(String),
 
-    #[error("falha ao codificar resposta UDP: {0}")]
+    /// Failed to encode a UDP DNS response.
+    #[error("Failed to encode UDP response: {0}")]
     UdpEncode(String),
 
-    #[error("resposta TCP corrompida: {0}")]
+    /// Failed to decode a TCP DNS message.
+    #[error("Corrupt TCP response: {0}")]
     TcpDecode(String),
 
-    #[error("falha ao codificar resposta TCP: {0}")]
+    /// Failed to encode a TCP DNS response.
+    #[error("Failed to encode TCP response: {0}")]
     TcpEncode(String),
 
-    #[error("timeout esperando resposta do upstream")]
+    /// Timed out while waiting for a response from the upstream resolver.
+    #[error("Timeout waiting for upstream response")]
     UpstreamTimeout,
 
-    #[error("canal de resposta fechado prematuramente")]
+    /// The response channel was closed prematurely.
+    #[error("Response channel closed prematurely")]
     ChannelClosed,
 
-    #[error("falha ao vincular socket {0}: {1}")]
+    /// Failed to bind to the specified UDP or TCP socket.
+    #[error("Failed to bind {0} socket: {1}")]
     BindError(&'static str, #[source] std::io::Error),
 
-    #[error("falha no parser wire (zero-alloc)")]
+    /// Failed to parse the DNS message using the custom zero-allocation wire parser.
+    #[error("Zero-alloc wire parser failure")]
     WireParseError,
 }

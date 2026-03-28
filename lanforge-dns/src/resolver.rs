@@ -22,8 +22,9 @@ impl<'a> LocalResolver<'a> {
         Self { cfg, table }
     }
 
-    /// Resolve queries para nomes locais A/AAAA/ANY.
-    /// Retorna uma resposta completa (NoError com registros ou NXDomain).
+    /// Resolves local A/AAAA/ANY queries.
+    ///
+    /// Returns a full DNS response (either NoError with records or NXDomain).
     pub fn resolve_ip(
         &self,
         query: &Message,
@@ -36,7 +37,7 @@ impl<'a> LocalResolver<'a> {
             if let Some(records) = self.resolve_local_with_device(query, device, qtype) {
                 return rb.success(records);
             } else {
-                // Host existe mas não tem registros do tipo pedido (NODATA)
+                // Host exists but has no records for the requested type (NODATA)
                 return rb.empty_noerror();
             }
         }
@@ -44,7 +45,7 @@ impl<'a> LocalResolver<'a> {
         rb.nxdomain()
     }
 
-    /// Resolve queries reversas (PTR).
+    /// Resolves reverse DNS queries (PTR).
     pub fn resolve_ptr(&self, query: &Message, qname: &Name) -> Result<Option<Vec<u8>>, DnsError> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
@@ -77,7 +78,7 @@ impl<'a> LocalResolver<'a> {
         Ok(Some(rb.success(vec![record])?))
     }
 
-    /// Lógica interna para coletar endereços de um dispositivo e converter em registros DNS.
+    /// Internal logic to collect all addresses from a device and convert them into DNS records.
     pub(crate) fn resolve_local_with_device(
         &self,
         _query: &Message,
@@ -103,7 +104,7 @@ impl<'a> LocalResolver<'a> {
             applied_prefixes.insert(p);
         }
 
-        // 1. Coleta prefixos de endereços SLAAC para aplicar aos sufixos estáticos depois
+        // 1. Collect SLAAC address prefixes to apply to static suffixes later.
         for state in &device.v6 {
             if let IPv6State::Slaac(ip) = state {
                 let segs = ip.segments();
@@ -111,7 +112,7 @@ impl<'a> LocalResolver<'a> {
             }
         }
 
-        // 2. Coleta todos os IPs potenciais
+        // 2. Collect all potential IPs.
         let mut all_ips = Vec::new();
 
         // IPv4
@@ -140,12 +141,12 @@ impl<'a> LocalResolver<'a> {
             }
         }
 
-        // 3. De-duplicação e Ordenação por Prioridade (ULA > IPv4 > GUA)
+        // 3. De-duplicate and Sort by Priority (ULA > IPv4 > GUA).
         let mut unique = HashSet::new();
         all_ips.retain(|ip| unique.insert(*ip));
         all_ips.sort_by_cached_key(|ip| classify_ip(ip).score());
 
-        // 4. Filtra por qtype e converte em Records
+        // 4. Filter by the requested qtype and convert to Record objects.
         for ip in all_ips {
             match ip {
                 IpAddr::V4(v4) if matches!(qtype, RecordType::A | RecordType::ANY) => {

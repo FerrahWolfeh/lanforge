@@ -31,7 +31,7 @@ impl UpstreamManager {
         let s = Arc::clone(&socket);
         let p = Arc::clone(&pending);
 
-        // Task de escuta centralizada para o upstream (UDP)
+        // Centralized listening task for upstream UDP responses.
         tokio::spawn(async move {
             let mut buf = vec![0u8; 4096];
             loop {
@@ -64,16 +64,16 @@ impl UpstreamManager {
     pub async fn forward(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
         let query = Message::from_bytes(data)?;
 
-        // 1. Tentar o Cache primeiro
+        // 1. Try the Cache first.
         if let Some(cached_resp) = self.cache.get(&query) {
             return Ok(cached_resp);
         }
 
-        // 2. Tentar UDP
+        // 2. Try UDP.
         let orig_id = query.id();
         let mut forward_query = query.clone();
 
-        // Mapeia para um ID interno único para evitar colisões entre clientes LAN
+        // Maps to a unique internal ID to avoid collisions between multiple LAN clients.
         let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
         forward_query.set_id(internal_id);
 
@@ -90,15 +90,15 @@ impl UpstreamManager {
         let udp_result = match timeout(Duration::from_secs(3), rx).await {
             Ok(Ok(resp_bytes)) => {
                 if let Ok(resp) = Message::from_bytes(&resp_bytes) {
-                    // RFC 1035: Se a flag TC está ativa, devemos fazer fallback para TCP
+                    // RFC 1035: If the TC (truncated) flag is set, we must fallback to TCP.
                     if resp.truncated() {
-                        trace!("UDP resposta truncada, tentando TCP fallback");
+                        trace!("UDP response truncated, attempting TCP fallback");
                         self.forward_tcp(data, upstream).await
                     } else {
                         Ok(resp_bytes)
                     }
                 } else {
-                    return Err(DnsError::UdpDecode("Resposta UDP corrompida".to_string()));
+                    return Err(DnsError::UdpDecode("Corrupt UDP response".to_string()));
                 }
             }
             Ok(Err(_)) => return Err(DnsError::ChannelClosed),
@@ -111,7 +111,7 @@ impl UpstreamManager {
 
         match udp_result {
             Ok(resp_bytes) => {
-                // Restaura o ID original antes de devolver ao cliente e salvar no cache
+                // Restore the original query ID before returning to the client and caching the response.
                 if let Ok(mut resp) = Message::from_bytes(&resp_bytes) {
                     resp.set_id(orig_id);
                     let final_bytes = resp.to_bytes()?;
@@ -132,18 +132,18 @@ impl UpstreamManager {
         }
     }
 
-    /// Implementação de Fallback TCP para resoluções grandes (ex: DNSSEC ou muitos records)
+    /// TCP fallback implementation for large DNS resolutions (e.g., DNSSEC or many records).
     async fn forward_tcp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
         let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(upstream))
             .await
             .map_err(|_| DnsError::UpstreamTimeout)??;
 
-        // RFC 1035: No TCP, os dados são prefixados por 2 bytes de comprimento (Big Endian)
+        // RFC 1035: In TCP, DNS data is prefixed by its 2-byte length (Big Endian).
         let len = (data.len() as u16).to_be_bytes();
         stream.write_all(&len).await?;
         stream.write_all(data).await?;
 
-        // Lendo resposta
+        // Reading response...
         let mut len_buf = [0u8; 2];
         stream.read_exact(&mut len_buf).await?;
         let resp_len = u16::from_be_bytes(len_buf) as usize;
