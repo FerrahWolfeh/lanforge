@@ -83,7 +83,7 @@ sequenceDiagram
     P->>MT: update(DeviceUpdate)
     MT->>MT: apply_update() (Atomic)
     
-    rect rgb(240, 240, 240)
+    rect rgba(79, 79, 79, 1)
     Note over MT: Se o estado mudou:
     MT->>EB: publish(DeviceUpdated)
     EB-->>DNS: Atualiza índices O(1)
@@ -178,7 +178,7 @@ sequenceDiagram
     W->>W: Inicia Janela de Silêncio (5s)
     Note over W: Aguardando estabilização do estado...
     
-    rect rgb(230, 245, 255)
+    rect rgba(66, 66, 66, 1)
     Note over W: Se novos eventos chegarem, reseta o timer
     end
 
