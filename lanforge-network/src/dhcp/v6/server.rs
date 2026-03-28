@@ -779,6 +779,7 @@ mod tests {
             ula_prefix_len: 64,
             range_start: Some("fd97:f00d:cafe:3731::100".parse().unwrap()),
             range_end: Some("fd97:f00d:cafe:3731::200".parse().unwrap()),
+            port: 547,
         };
         let pool = Ipv6Pool::new(cfg.range_start, cfg.range_end, cfg.ula_prefix, 64);
         let server_duid = Duid::new(vec![
@@ -833,6 +834,7 @@ mod tests {
             ula_prefix_len: 64,
             range_start: None,
             range_end: None,
+            port: 547,
         };
         let pool = Ipv6Pool::new(None, None, None, 64);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
@@ -1075,6 +1077,7 @@ mod tests {
             ula_prefix_len: 48,
             range_start: None,
             range_end: None,
+            port: 547,
         };
         let pool = Ipv6Pool::new(None, None, cfg.ula_prefix, 48);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();

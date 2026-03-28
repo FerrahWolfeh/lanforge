@@ -19,4 +19,21 @@ pub struct Dhcpv6Config {
     pub range_start: Option<Ipv6Addr>,
     /// End of the dynamic range (optional).
     pub range_end: Option<Ipv6Addr>,
+    /// UDP port to listen on (default: 547).
+    pub port: u16,
+}
+
+impl Default for Dhcpv6Config {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            iface: "end0".into(),
+            lease_time: 86400,
+            ula_prefix: None,
+            ula_prefix_len: 64,
+            range_start: None,
+            range_end: None,
+            port: 547,
+        }
+    }
 }

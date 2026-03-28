@@ -367,6 +367,7 @@ mod tests {
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             server_id: Ipv4Addr::new(192, 168, 1, 1),
             domain_name: Some("lanforge.local".to_string()),
+            port: 67,
         }
     }
 

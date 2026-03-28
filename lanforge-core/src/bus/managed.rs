@@ -30,6 +30,14 @@ impl ManagedTable {
         }
     }
 
+    /// Creates a new managed table wrapping an existing device table.
+    pub fn from_table(bus: Arc<EventBus>, table: DeviceTable) -> Self {
+        Self {
+            inner: RwLock::new(table),
+            bus,
+        }
+    }
+
     /// Applies a [`DeviceUpdate`] to the table and publishes corresponding events to the bus.
     pub async fn update(&self, update: DeviceUpdate) {
         let mut table = self.inner.write();

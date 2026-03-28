@@ -9,8 +9,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixListener;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, UnixListener};
 use tracing::{debug, error, info};
 
 /// Starts the Unix Domain Socket (UDS) control service.
@@ -89,6 +89,23 @@ pub async fn control_service(
     let startup_time = std::time::Instant::now();
     let mut last_scan = std::time::Instant::now();
 
+    // TCP Listener opcional para debug
+    let tcp_listener = if let Some(port) = cfg.tcp_port {
+        let addr = format!("0.0.0.0:{port}");
+        match TcpListener::bind(&addr).await {
+            Ok(l) => {
+                info!("🔌 Controle TCP (debug) pronto em {}", addr);
+                Some(l)
+            }
+            Err(e) => {
+                error!("Falha ao subir controle TCP em {addr}: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     loop {
         tokio::select! {
             // Monitora mudanças de prefixo GUA para reportar no 'status'
@@ -108,33 +125,52 @@ pub async fn control_service(
                 }
             }
 
-            // Aceita novas conexões CLI
+            // Aceita novas conexões UDS
             connection = listener.accept() => {
                 match connection {
                     Ok((stream, _)) => {
-                        let table = table.clone();
-                        let gua = current_gua.clone();
-                        let ctrl_bus = ctrl_bus.clone();
-                        let uptime = startup_time.elapsed().as_secs();
-                        let scan_ago = last_scan.elapsed().as_secs();
-                        let cfg = cfg.clone();
+                        let ctx = ClientContext {
+                            table: table.clone(),
+                            current_gua: current_gua.clone(),
+                            bus: ctrl_bus.clone(),
+                            uptime_secs: startup_time.elapsed().as_secs(),
+                            last_scan_secs_ago: last_scan.elapsed().as_secs(),
+                            cfg: cfg.clone(),
+                        };
                         tokio::spawn(async move {
-                            let ctx = ClientContext {
-                                table,
-                                current_gua: gua,
-                                bus: ctrl_bus,
-                                uptime_secs: uptime,
-                                last_scan_secs_ago: scan_ago,
-                                cfg,
-                            };
                             if let Err(e) = handle_client(stream, ctx).await {
-                                debug!("Control: erro atendendo cliente: {e:#}");
+                                debug!("Control (UDS): erro atendendo cliente: {e:#}");
                             }
                         });
                     }
                     Err(e) => {
-                        error!("Control: erro ao aceitar conexão: {e}");
+                        error!("Control: erro ao aceitar conexão UDS: {e}");
                     }
+                }
+            }
+
+            // Aceita novas conexões TCP (se habilitado)
+            tcp_res = async {
+                if let Some(ref l) = tcp_listener {
+                    l.accept().await.ok()
+                } else {
+                    None
+                }
+            }, if tcp_listener.is_some() => {
+                if let Some((stream, _)) = tcp_res {
+                    let ctx = ClientContext {
+                        table: table.clone(),
+                        current_gua: current_gua.clone(),
+                        bus: ctrl_bus.clone(),
+                        uptime_secs: startup_time.elapsed().as_secs(),
+                        last_scan_secs_ago: last_scan.elapsed().as_secs(),
+                        cfg: cfg.clone(),
+                    };
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_client(stream, ctx).await {
+                            debug!("Control (TCP): erro atendendo cliente: {e:#}");
+                        }
+                    });
                 }
             }
         }
@@ -178,8 +214,11 @@ pub(crate) struct ClientContext {
 ///
 /// Reads JSON lines from the stream, dispatches them to the appropriate
 /// handler in `ClientContext`, and writes back the JSON response.
-async fn handle_client(mut stream: tokio::net::UnixStream, ctx: ClientContext) -> Result<()> {
-    let (reader, mut writer) = stream.split();
+async fn handle_client<S>(stream: S, ctx: ClientContext) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (reader, mut writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
 

@@ -68,8 +68,8 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
         }
     }
 
-    let socket = bind_dhcp_socket(&cfg.iface)?;
-    info!("Receiving on 0.0.0.0:67 (iface: {})", cfg.iface);
+    let socket = bind_dhcp_socket(&cfg.iface, cfg.port)?;
+    info!("Receiving on 0.0.0.0:{} (iface: {})", cfg.port, cfg.iface);
 
     let mut raw_tx = RawSender::new(&cfg.iface)?;
     info!("Transmitting via AF_PACKET raw socket (Layer 2 injection)");
@@ -119,7 +119,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                     HandleResult::Reply { packet, broadcast, dest_ip, giaddr, hostname: req_hostname } => {
                         // RFC 2131: If giaddr != 0, send via UDP unicast to the relay agent
                         if giaddr != Ipv4Addr::UNSPECIFIED {
-                            let relay_addr = SocketAddrV4::new(giaddr, 67);
+                            let relay_addr = SocketAddrV4::new(giaddr, cfg.port);
                             if let Err(e) = socket.send_to(&packet, relay_addr).await {
                                 error!("Failed to send to relay {giaddr}: {e}");
                             }
@@ -184,9 +184,9 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
     Ok(())
 }
 
-/// Binds UDP to port 67 with `SO_BROADCAST` and `SO_BINDTODEVICE`.
-fn bind_dhcp_socket(iface: &str) -> Result<UdpSocket> {
-    let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 67);
+/// Binds UDP with `SO_BROADCAST` and `SO_BINDTODEVICE`.
+fn bind_dhcp_socket(iface: &str, port: u16) -> Result<UdpSocket> {
+    let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
 
     let sock = socket2::Socket::new(
         socket2::Domain::IPV4,
@@ -203,7 +203,7 @@ fn bind_dhcp_socket(iface: &str) -> Result<UdpSocket> {
         .map_err(|e| NetworkError::Socket(format!("SO_BINDTODEVICE({iface}): {e}")))?;
 
     sock.bind(&socket2::SockAddr::from(addr))
-        .map_err(|e| NetworkError::Socket(format!("bind(0.0.0.0:67): {e}")))?;
+        .map_err(|e| NetworkError::Socket(format!("bind(0.0.0.0:{port}): {e}")))?;
 
     let std_socket: std::net::UdpSocket = sock.into();
     UdpSocket::from_std(std_socket)

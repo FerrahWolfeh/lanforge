@@ -32,7 +32,9 @@ use lanforge_dns::DnsConfig;
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
 use lanforge_network::dhcp::v6::config::Dhcpv6Config;
 use lanforge_network::ra::{PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
-pub use toml::{DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg, load_toml};
+pub use toml::{
+    DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg, load_devices_only, load_toml,
+};
 
 use clap::Parser;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -76,6 +78,12 @@ pub struct Config {
 
     // static devices
     pub devices: Vec<StaticDeviceCfg>,
+    pub devices_file: Option<String>,
+
+    pub dhcpv4_port: u16,
+    pub dhcpv6_port: u16,
+    pub dns_port: Option<u16>,
+    pub api_port: Option<u16>,
 }
 
 impl Config {
@@ -98,18 +106,43 @@ impl Config {
                 .unwrap_or(toml_cfg.general.control_socket),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
-            ra_toml: toml_cfg.ra,
+            ra_toml: RaCfg {
+                managed: cli.ra_managed.unwrap_or(toml_cfg.ra.managed),
+                other_config: cli.ra_other_config.unwrap_or(toml_cfg.ra.other_config),
+                max_interval: cli.ra_max_interval.unwrap_or(toml_cfg.ra.max_interval),
+                ..toml_cfg.ra
+            },
 
-            dhcpv4_enabled: toml_cfg.dhcp.v4.enabled,
-            dhcpv4_toml: toml_cfg.dhcp.v4,
+            dhcpv4_enabled: cli.dhcpv4_enabled.unwrap_or(toml_cfg.dhcp.v4.enabled),
+            dhcpv4_toml: DhcpV4Cfg {
+                range_start: cli
+                    .dhcpv4_range_start
+                    .unwrap_or(toml_cfg.dhcp.v4.range_start),
+                range_end: cli.dhcpv4_range_end.unwrap_or(toml_cfg.dhcp.v4.range_end),
+                lease_time: cli
+                    .dhcpv4_lease_time
+                    .map(u64::from)
+                    .unwrap_or(toml_cfg.dhcp.v4.lease_time),
+                ..toml_cfg.dhcp.v4
+            },
 
-            dhcpv6_enabled: toml_cfg.dhcp.v6.enabled,
+            dhcpv6_enabled: cli.dhcpv6_enabled.unwrap_or(toml_cfg.dhcp.v6.enabled),
             dhcpv6_toml: toml_cfg.dhcp.v6,
 
-            dns_enabled: toml_cfg.dns.enabled,
-            dns_toml: toml_cfg.dns,
+            dns_enabled: cli.dns_enabled.unwrap_or(toml_cfg.dns.enabled),
+            dns_toml: DnsCfg {
+                listen: cli.dns_listen.unwrap_or(toml_cfg.dns.listen),
+                upstream: cli.dns_upstream.or(toml_cfg.dns.upstream),
+                ..toml_cfg.dns
+            },
 
             devices: toml_cfg.devices,
+            devices_file: cli.devices_file,
+
+            dhcpv4_port: cli.dhcpv4_port.unwrap_or(67),
+            dhcpv6_port: cli.dhcpv6_port.unwrap_or(547),
+            dns_port: cli.dns_port,
+            api_port: cli.control_port,
         }
     }
 
@@ -225,6 +258,7 @@ impl Config {
                     parse_ip(s, Ipv4Addr::new(255, 255, 255, 0))
                 }),
             domain_name: self.dhcpv4_toml.domain_name.clone(),
+            port: self.dhcpv4_port,
         }
     }
 
@@ -253,6 +287,7 @@ impl Config {
             ula_prefix_len,
             range_start: parse_ipv6(&self.dhcpv6_toml.range_start),
             range_end: parse_ipv6(&self.dhcpv6_toml.range_end),
+            port: self.dhcpv6_port,
         }
     }
 
@@ -281,7 +316,13 @@ impl Config {
 
         DnsConfig {
             enabled: self.dns_enabled,
-            listen: parse_addr(&self.dns_toml.listen, "0.0.0.0:5300"),
+            listen: {
+                let mut addr = parse_addr(&self.dns_toml.listen, "0.0.0.0:5300");
+                if let Some(p) = self.dns_port {
+                    addr.set_port(p);
+                }
+                addr
+            },
             upstream: self
                 .dns_toml
                 .upstream
@@ -312,6 +353,7 @@ impl Config {
             dns_enabled: self.dns_enabled,
             dns_upstream: self.dns_toml.upstream.clone(),
             db_path: self.leases_db.clone(),
+            tcp_port: self.api_port,
         }
     }
 }

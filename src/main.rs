@@ -35,6 +35,8 @@ mod cli;
 mod config;
 mod supervisor;
 
+use crate::config::load_devices_only;
+
 use anyhow::Result;
 use config::Config;
 use futures::StreamExt;
@@ -86,10 +88,12 @@ async fn main() -> Result<()> {
             return cli::run_client(cfg.command.clone(), &cfg.control_socket).await;
         }
         config::Command::Run { only: Some(s) } => {
-            cfg.ra_enabled = s == "ra";
-            cfg.dhcpv4_enabled = s == "dhcpv4" || s == "dhcp";
-            cfg.dhcpv6_enabled = s == "dhcpv6" || s == "dhcp";
-            cfg.dns_enabled = s == "dns";
+            let modules: Vec<&str> = s.split(',').collect();
+            cfg.ra_enabled = modules.contains(&"ra");
+            cfg.dhcpv4_enabled = modules.contains(&"dhcpv4") || modules.contains(&"dhcp");
+            cfg.dhcpv6_enabled = modules.contains(&"dhcpv6") || modules.contains(&"dhcp");
+            cfg.dns_enabled = modules.contains(&"dns");
+            info!("🎯 Running ONLY: {:?}", modules);
         }
         config::Command::Run { only: None } => {}
     }
@@ -123,12 +127,10 @@ async fn main() -> Result<()> {
     // ManagedTable — autoridade central de estado
     //
     // Sequência de bootstrap:
-    //   1. Cria ManagedTable vazia
-    //   2. Carrega estado persistido do SQLite (apply_update, respeita invariantes)
-    //   3. Aplica entradas estáticas do TOML (têm precedência sobre o DB)
+    //   1. Carrega estado persistido do SQLite (apply_update, respeita invariantes)
+    //   2. Aplica entradas estáticas do TOML (têm precedência sobre o DB)
+    //   3. Cria ManagedTable encapsulando a tabela inicial completa
     // -----------------------------------------------------------------------
-    let table = Arc::new(ManagedTable::new(bus.clone()));
-
     let leases_db_path = std::path::PathBuf::from(&cfg.leases_db);
 
     // 1. Criamos a tabela inicial direto na stack da thread principal (Lock-free)
@@ -150,11 +152,20 @@ async fn main() -> Result<()> {
     };
 
     // 2. Lemos o TOML (StaticDeviceCfg) e populamos a tabela AQUI no main
-    if !cfg.devices.is_empty() {
-        let count = cfg.devices.len();
+    let mut all_static_devices = cfg.devices.clone();
 
-        for e in &cfg.devices {
-            // Parsing das strings sujas do TOML
+    // 2b. Carrega devices extras de arquivo externo (CLI override)
+    if let Some(ref extra_path) = cfg.devices_file {
+        info!("📂 Carregando devices adicionais de {extra_path}");
+        let mut extra = load_devices_only(extra_path);
+        all_static_devices.append(&mut extra);
+    }
+
+    if !all_static_devices.is_empty() {
+        let count = all_static_devices.len();
+
+        for e in &all_static_devices {
+            // Parsing das strings sujas
             let Some(mac) = MacAddr::parse(&e.mac) else {
                 warn!("Invalid MAC in config: '{}', skipping", e.mac);
                 continue;
@@ -174,17 +185,17 @@ async fn main() -> Result<()> {
                 })
             });
 
-            info!("  Static device: {} → {} (v4={:?})", mac, e.hostname, v4_ip);
-
-            // Chamamos a função pura e burra do lanforge-core
             initial_table.add_static_device(mac, e.hostname.clone(), v4_ip, v6_suffix);
         }
 
-        info!("👥 {count} reservas estáticas carregadas");
+        info!("👥 {count} reservas estáticas carregadas (TOML + Overrides)");
     }
 
     // 3. Montamos os índices O(1) do DNS apenas UMA vez após tudo ser carregado
     initial_table.apply_update(DeviceUpdate::RebuildDnsIndices);
+
+    // 4. Transformamos em ManagedTable reativa (Arc<RwLock<DeviceTable>>)
+    let table = Arc::new(ManagedTable::from_table(bus.clone(), initial_table));
 
     // -----------------------------------------------------------------------
     // DB worker — persiste reativamente via EventBus

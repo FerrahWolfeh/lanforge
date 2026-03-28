@@ -30,6 +30,8 @@ pub struct ApiConfig {
 
     /// Path to the SQLite database (used for calculating file size stats).
     pub db_path: String,
+    /// Optional TCP port for the control API (debug).
+    pub tcp_port: Option<u16>,
 }
 
 #[cfg(test)]
@@ -46,6 +48,7 @@ impl ApiConfig {
             dns_enabled: true,
             dns_upstream: None,
             db_path: "/tmp/leases.db".to_string(),
+            tcp_port: None,
         }
     }
 }

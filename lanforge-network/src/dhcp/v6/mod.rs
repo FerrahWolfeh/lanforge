@@ -62,14 +62,14 @@ pub async fn dhcpv6_service(
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
         .map_err(|e| NetworkError::Socket(format!("Failed to create IPv6 UDP socket: {e}")))?;
 
-    let addr = std::net::SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::UNSPECIFIED), 547);
+    let addr = std::net::SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::UNSPECIFIED), config.port);
 
     socket
         .set_only_v6(true)
         .map_err(|e| NetworkError::Socket(format!("IPV6_V6ONLY: {e}")))?;
     socket
         .bind(&addr.into())
-        .map_err(|e| NetworkError::Socket(format!("bind :547: {e}")))?;
+        .map_err(|e| NetworkError::Socket(format!("bind :{}: {e}", config.port)))?;
 
     if let Err(e) = socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
         warn!("Failed to join ff02::1:2: {e}");
@@ -80,8 +80,8 @@ pub async fn dhcpv6_service(
     let udp = UdpSocket::from_std(udp)?;
 
     info!(
-        "DHCPv6 listening on [ff02::1:2]:547 (iface: {})",
-        config.iface
+        "DHCPv6 listening on [ff02::1:2]:{} (iface: {})",
+        config.port, config.iface
     );
 
     // Read interface MAC to generate a legitimate DUID-LL
@@ -158,9 +158,12 @@ pub async fn dhcpv6_service(
                         match server
                             .handle_packet(payload, peer_ip, &table, nl_handle, &mut resp_vec)
                             .await
-                        {
+                            {
                             HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, ias) => {
-                                let dest_addr = std::net::SocketAddrV6::new(dest_ip, 546, 0, scope_id);
+                                // Default DHCPv6 client port is 546. If server port is overridden,
+                                // we keep the convention of port-1 for client communication in debug modes.
+                                let client_port = if config.port == 547 { 546 } else { config.port - 1 };
+                                let dest_addr = std::net::SocketAddrV6::new(dest_ip, client_port, 0, scope_id);
 
                                 if let Err(e) = udp.send_to(reply_bytes, dest_addr).await {
                                     warn!("send error to {dest_ip}: {e}");

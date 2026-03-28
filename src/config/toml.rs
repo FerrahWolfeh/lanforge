@@ -215,6 +215,39 @@ pub fn load_toml(path: &str) -> TomlConfig {
     }
 }
 
+/// Load only the devices section from a TOML file for debugging.
+pub fn load_devices_only(path: &str) -> Vec<StaticDeviceCfg> {
+    if !Path::new(path).exists() {
+        warn!("[config] Devices file '{path}' not found");
+        return Vec::new();
+    }
+
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            // Tenta como uma lista direta de devices primeiro (mais comum em debug rápido)
+            #[derive(Deserialize)]
+            struct DeviceList {
+                devices: Vec<StaticDeviceCfg>,
+            }
+            if let Ok(list) = toml::from_str::<DeviceList>(&content) {
+                return list.devices;
+            }
+            // Se falhar, tenta como um TomlConfig completo e pega apenas o campo devices
+            match toml::from_str::<TomlConfig>(&content) {
+                Ok(cfg) => cfg.devices,
+                Err(e) => {
+                    warn!("[config] Failed to parse devices from '{path}': {e}");
+                    Vec::new()
+                }
+            }
+        }
+        Err(e) => {
+            warn!("[config] Failed to read devices file '{path}': {e}");
+            Vec::new()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
