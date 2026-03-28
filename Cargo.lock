@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "hex",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-core"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dns"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "hickory-proto",
  "lanforge-core",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-network"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "dhcproto",
  "futures",
