@@ -1,38 +1,38 @@
-//! Tipos de configuração do serviço de Router Advertisement.
+//! Configuration types for the Router Advertisement (RA) service.
 //!
-//! Todos os parâmetros seguem os limites definidos nas RFCs:
-//! - RFC 4861 §6.2.1 — intervalos e lifetimes
-//! - RFC 4191 §2.1   — prioridade do roteador
-//! - RFC 8106         — RDNSS e DNSSL
+//! All parameters follow the limits defined in the following RFCs:
+//! - RFC 4861 §6.2.1 — Intervals and lifetimes
+//! - RFC 4191 §2.1   — Router priority
+//! - RFC 8106         — RDNSS and DNSSL
 
 use crate::error::{NetworkError, Result};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
-// Constantes RFC 4861 §6.2.1
+// RFC 4861 §6.2.1 Constants
 // ---------------------------------------------------------------------------
 
-/// Razão padrão `MinRtrAdvInterval` / `MaxRtrAdvInterval` (§6.2.1).
+/// Default ratio of `MinRtrAdvInterval` / `MaxRtrAdvInterval` (§6.2.1).
 pub const DEFAULT_MIN_MAX_RATIO: f64 = 1.0 / 3.0;
 
-/// `RouterLifetime` padrão = 3 × `MaxRtrAdvInterval`.
+/// Default `RouterLifetime` multiplier = 3 × `MaxRtrAdvInterval`.
 pub const DEFAULT_ROUTER_LIFETIME_MULTIPLIER: u64 = 3;
 
-/// Prefixo default valid lifetime: 30 dias (§6.3.1).
+/// Default prefix valid lifetime: 30 days (§6.3.1).
 pub const DEFAULT_VALID_LIFETIME_SECS: u32 = 30 * 24 * 3600;
 
-/// Prefixo default preferred lifetime: 7 dias (§6.3.1).
+/// Default prefix preferred lifetime: 7 days (§6.3.1).
 pub const DEFAULT_PREFERRED_LIFETIME_SECS: u32 = 7 * 24 * 3600;
 
-/// Valor de lifetime "infinito" nos campos de prefixo (`0xFFFF_FFFF`).
+/// "Infinite" lifetime value for prefix fields (`0xFFFF_FFFF`).
 pub const LIFETIME_INFINITY: u32 = u32::MAX;
 
 // ---------------------------------------------------------------------------
-// Tipos de configuração
+// Configuration Types
 // ---------------------------------------------------------------------------
 
-/// Prioridade do roteador padrão (RFC 4191 §2.1).
-/// Influencia qual roteador é preferido quando há múltiplos na rede.
+/// Default router priority (RFC 4191 §2.1).
+/// Influences which router is preferred when multiple are present on the network.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum RouterPriority {
     Low,
@@ -42,7 +42,7 @@ pub enum RouterPriority {
 }
 
 impl RouterPriority {
-    /// Bits de prioridade no byte de flags do RA (bits 3–4).
+    /// Priority bits in the RA flags byte (bits 3–4).
     pub const fn bits(self) -> u8 {
         match self {
             Self::Low => 0b0001_1000,
@@ -52,7 +52,7 @@ impl RouterPriority {
     }
 }
 
-/// Lifetime de um prefixo — finito em segundos ou infinito.
+/// Lifetime for a prefix — finite in seconds or infinite.
 #[derive(Debug, Clone, Copy)]
 pub enum PrefixLifetime {
     Secs(u32),
@@ -68,38 +68,38 @@ impl PrefixLifetime {
     }
 }
 
-/// Origem do endereço IPv6 para a opção Prefix Information.
+/// Source of the IPv6 address for the Prefix Information option.
 #[derive(Debug, Clone)]
 pub enum PrefixSource {
-    /// Prefixo estático — endereço explícito (ex: ULA fixo).
+    /// Static prefix — explicit address (e.g., a fixed ULA).
     Static(std::net::Ipv6Addr),
-    /// Detecta automaticamente o GUA (`2000::/3`) atribuído à interface.
-    /// Equivalente ao `prefix ::/64` do radvd com resolução dinâmica.
-    /// Se não houver GUA atribuído, a opção é omitida silenciosamente.
+    /// Automatically detects the GUA (`2000::/3`) assigned to the interface.
+    /// Equivalent to `prefix ::/64` in radvd with dynamic resolution.
+    /// If no GUA is assigned, the option is silently omitted.
     AutoGua,
 }
 
-/// Configuração de um prefixo IPv6 a ser anunciado (opção tipo 3, RFC 4861 §4.6.2).
+/// Configuration for an IPv6 prefix to be advertised (Option type 3, RFC 4861 §4.6.2).
 #[derive(Debug, Clone)]
 pub struct PrefixConfig {
     pub source: PrefixSource,
-    /// Comprimento do prefixo em bits. Para SLAAC deve ser 64.
+    /// Prefix length in bits. For SLAAC, this must be 64.
     pub prefix_len: u8,
-    /// L=1 (on-link): clientes podem se comunicar diretamente neste prefixo.
+    /// L=1 (on-link): clients can communicate directly within this prefix.
     pub on_link: bool,
-    /// A=1 (autonomous): habilita SLAAC — clientes formam endereço com EUI-64/privacidade.
+    /// A=1 (autonomous): enables SLAAC — clients form addresses via EUI-64 or privacy extensions.
     pub autonomous: bool,
-    /// R=1 (RFC 3775): endereço do roteador; relevante apenas para Mobile IPv6.
+    /// R=1 (RFC 3775): router address; only relevant for Mobile IPv6.
     pub router_addr: bool,
     pub valid_lifetime: PrefixLifetime,
     pub preferred_lifetime: PrefixLifetime,
 }
 
 impl PrefixConfig {
-    /// Prefixo ULA com defaults recomendados (valid=24h, preferred=4h).
+    /// ULA prefix with recommended defaults (valid=24h, preferred=4h).
     pub fn ula(prefix: &str) -> Self {
         Self {
-            source: PrefixSource::Static(prefix.parse().expect("endereço ULA inválido")),
+            source: PrefixSource::Static(prefix.parse().expect("Invalid ULA address")),
             prefix_len: 64,
             on_link: true,
             autonomous: true,
@@ -109,7 +109,7 @@ impl PrefixConfig {
         }
     }
 
-    /// Prefixo GUA detectado dinamicamente da interface.
+    /// GUA prefix detected dynamically from the interface.
     pub const fn gua_dynamic() -> Self {
         Self {
             source: PrefixSource::AutoGua,
@@ -123,13 +123,13 @@ impl PrefixConfig {
     }
 }
 
-/// Servidores DNS via RDNSS (RFC 8106 §3.1, opção tipo 25).
-/// Essencial para clientes que ignoram `DHCPv6` (Android, muitos `IoT`).
+/// DNS Servers via RDNSS (RFC 8106 §3.1, option type 25).
+/// Essential for clients that ignore `DHCPv6` (e.g., Android, many IoT devices).
 #[derive(Debug, Clone)]
 pub struct RdnssConfig {
     pub servers: Vec<std::net::Ipv6Addr>,
-    /// None → 2 × `MaxRtrAdvInterval` (RFC 8106 §5.1: mínimo recomendado para
-    /// sobreviver a RAs perdidos; na prática usar >= 6 × `MaxRtrAdvInterval`).
+    /// None → 2 × `MaxRtrAdvInterval` (RFC 8106 §5.1: recommended minimum to
+    /// survive lost RAs; in practice, use >= 6 × `MaxRtrAdvInterval`).
     pub lifetime: Option<Duration>,
 }
 
@@ -148,50 +148,50 @@ impl RdnssConfig {
     }
 }
 
-/// Sufixos de busca DNS via DNSSL (RFC 8106 §3.2, opção tipo 31).
+/// DNS Search Lists via DNSSL (RFC 8106 §3.2, option type 31).
 #[derive(Debug, Clone)]
 pub struct DnsslConfig {
     pub domains: Vec<String>,
-    /// None → mesma política do RDNSS (2 × `MaxRtrAdvInterval`).
+    /// None → same policy as RDNSS (2 × `MaxRtrAdvInterval`).
     pub lifetime: Option<Duration>,
 }
 
-/// Configuração completa do serviço de RA para uma interface.
+/// Full RA service configuration for an interface.
 #[derive(Debug, Clone)]
 pub struct RaConfig {
-    /// Interface de rede (ex: "end0").
+    /// Network interface name (e.g., "eth0").
     pub iface: String,
 
-    /// M=1: clientes devem usar `DHCPv6` para endereço gerenciado (RFC 4861 §4.2).
+    /// M=1: Clients should use `DHCPv6` for managed address configuration (RFC 4861 §4.2).
     pub managed: bool,
-    /// O=1: clientes buscam DNS e outras opções via `DHCPv6` (RFC 4861 §4.2).
+    /// O=1: Clients seek DNS and other options via stateless `DHCPv6` (RFC 4861 §4.2).
     pub other_config: bool,
 
-    /// Hop limit sugerido para tráfego unicast dos clientes (0 = não especificado).
+    /// Suggested hop limit for clients' unicast traffic (0 = unspecified).
     pub hop_limit: u8,
-    /// Prioridade do roteador padrão (RFC 4191).
+    /// Default router priority (RFC 4191).
     pub priority: RouterPriority,
 
-    /// `MaxRtrAdvInterval`: RFC 4861 §6.2.1 — entre 4s e 1800s; default: 200s.
+    /// `MaxRtrAdvInterval`: RFC 4861 §6.2.1 — between 4s and 1800s; default: 200s.
     pub max_interval: Duration,
-    /// `MinRtrAdvInterval`: None → 0.33 × `max_interval`, mínimo 3s.
-    /// RFC 4861: entre 3s e 0.75 × `MaxRtrAdvInterval`.
+    /// `MinRtrAdvInterval`: None → 0.33 × `max_interval`, minimum 3s.
+    /// RFC 4861: between 3s and 0.75 × `MaxRtrAdvInterval`.
     pub min_interval: Option<Duration>,
 
     /// `RouterLifetime`: None → 3 × `MaxRtrAdvInterval`.
-    /// 0 → este roteador não é default gateway (clientes não o usam para fora da LAN).
-    /// RFC 4861: deve ser 0 ou em [`MaxRtrAdvInterval`, 9000s].
+    /// 0 → This router is not a default gateway (clients won't use it for external routing).
+    /// RFC 4861: must be 0 or in the range [`MaxRtrAdvInterval`, 9000s].
     pub router_lifetime: Option<Duration>,
 
-    /// MTU a anunciar (opção tipo 5, RFC 4861 §4.6.4).
-    /// Relevante quando a WAN tem MTU < 1500 (ex: `PPPoE` = 1492 bytes).
+    /// MTU to announce (Option type 5, RFC 4861 §4.6.4).
+    /// Relevant when the WAN bandwidth has an MTU < 1500 (e.g., `PPPoE` = 1492 bytes).
     pub mtu: Option<u32>,
 
-    /// Prefixos IPv6 a anunciar (opção tipo 3).
+    /// IPv6 prefixes to advertise (Option type 3).
     pub prefixes: Vec<PrefixConfig>,
-    /// Servidores DNS via RDNSS (opção tipo 25).
+    /// DNS servers via RDNSS (Option type 25).
     pub rdnss: Vec<RdnssConfig>,
-    /// Sufixos de busca DNS via DNSSL (opção tipo 31).
+    /// DNS search lists via DNSSL (Option type 31).
     pub dnssl: Vec<DnsslConfig>,
 }
 
@@ -215,7 +215,7 @@ impl Default for RaConfig {
 }
 
 impl RaConfig {
-    /// Calcula `MinRtrAdvInterval` efetivo respeitando os limites da RFC 4861 §6.2.1.
+    /// Calculates effective `MinRtrAdvInterval` respecting the limits of RFC 4861 §6.2.1.
     pub fn effective_min_interval(&self) -> Duration {
         self.min_interval.unwrap_or_else(|| {
             let secs = (self.max_interval.as_secs_f64() * DEFAULT_MIN_MAX_RATIO).max(3.0) as u64;
@@ -223,26 +223,36 @@ impl RaConfig {
         })
     }
 
-    /// Calcula `RouterLifetime` efetivo.
+    /// Calculates effective `RouterLifetime`.
     pub fn effective_router_lifetime(&self) -> Duration {
         self.router_lifetime.unwrap_or_else(|| {
             Duration::from_secs(self.max_interval.as_secs() * DEFAULT_ROUTER_LIFETIME_MULTIPLIER)
         })
     }
 
-    /// Valida todas as restrições das RFCs antes de iniciar o serviço.
+    /// Validates all RFC constraints before starting the service.
+    ///
+    /// # Example
+    /// ```
+    /// use lanforge_network::ra::RaConfig;
+    /// use std::time::Duration;
+    ///
+    /// let mut cfg = RaConfig::default();
+    /// cfg.max_interval = Duration::from_secs(3); // Too low (RFC minimum is 4s)
+    /// assert!(cfg.validate().is_err());
+    /// ```
     pub fn validate(&self) -> Result<()> {
         let max = self.max_interval.as_secs();
         if !(4..=1800).contains(&max) {
             return Err(NetworkError::Config(format!(
-                "max_interval={max}s fora de [4, 1800] (RFC 4861 §6.2.1)"
+                "max_interval={max}s out of range [4, 1800] (RFC 4861 §6.2.1)"
             )));
         }
 
         let min = self.effective_min_interval().as_secs();
         if min < 3 {
             return Err(NetworkError::Config(format!(
-                "min_interval={min}s < 3s mínimo (RFC 4861 §6.2.1)"
+                "min_interval={min}s < 3s minimum (RFC 4861 §6.2.1)"
             )));
         }
         if min > (max as f64 * 0.75) as u64 {
@@ -254,7 +264,7 @@ impl RaConfig {
         let rl = self.effective_router_lifetime().as_secs();
         if rl != 0 && (rl < max || rl > 9000) {
             return Err(NetworkError::Config(format!(
-                "router_lifetime={rl}s deve ser 0 ou em [max_interval={max}s, 9000s] (RFC 4861 §4.2)"
+                "router_lifetime={rl}s must be 0 or in range [max_interval={max}s, 9000s] (RFC 4861 §4.2)"
             )));
         }
 
@@ -262,7 +272,7 @@ impl RaConfig {
             && mtu < 1280
         {
             return Err(NetworkError::Config(format!(
-                "mtu={mtu} < 1280 (mínimo IPv6, RFC 8200 §5)"
+                "mtu={mtu} < 1280 (IPv6 minimum, RFC 8200 §5)"
             )));
         }
 

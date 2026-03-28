@@ -1,24 +1,20 @@
-//! Wrapper do netlink para queries de vizinhos IPv6 e filtragem de eventos.
+//! Netlink wrapper for IPv6 neighbor queries and event filtering.
 //!
-//! Centraliza toda interação com o subsistema netlink do kernel.
+//! Centralizes all interaction with the Linux kernel's netlink subsystem.
 //!
-//! ## Fluxo de integração com o Manager
+//! ## Integration Flow with Manager
 //!
-//! ```text
-//! kernel (RTM_NEWNEIGH)
-//!     └─► extract_neigh_info()  →  Option<NeighborEvent>
-//!                                          │
-//!                                          ▼
-//!                               NeighborEvent::to_device_update(prefix)
-//!                                          │
-//!                            ┌────────────┴────────────┐
-//!                            ▼                          ▼
-//!                    SlaacObserved              NdpSeen
-//!                    (GUA no prefixo)           (link-local / outro)
-//!                            │                          │
-//!                            └────────────┬─────────────┘
-//!                                         ▼
-//!                               ManagedTable::update()
+//! ```mermaid
+//! sequenceDiagram
+//!     participant K as Kernel (RTM_NEWNEIGH)
+//!     participant N as netlink::extract_neigh_info()
+//!     participant E as NeighborEvent
+//!     participant T as ManagedTable (apply_update)
+//!
+//!     K->>N: Inbound Message
+//!     N->>E: Option<NeighborEvent>
+//!     Note over E: to_device_update(prefix)
+//!     E->>T: SlaacObserved (GUA) / NdpSeen (Other)
 //! ```
 
 use crate::error::Result;
@@ -34,10 +30,10 @@ use std::net::Ipv6Addr;
 use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 
 // ---------------------------------------------------------------------------
-// Neighbour event filter (eventos do stream Netlink)
+// Neighbor event filter (Netlink stream events)
 // ---------------------------------------------------------------------------
 
-/// Retorna true se `msg` é um evento NEW ou DEL relevante para o prefixo alvo.
+/// Returns true if `msg` is a relevant NEW or DEL event for the target prefix.
 #[cfg(test)]
 pub fn is_relevant_neigh_event(
     msg: &NetlinkMessage<RouteNetlinkMessage>,
@@ -69,15 +65,15 @@ fn neigh_matches_prefix(neigh: &NeighbourMessage, target_prefix: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Extração de eventos do stream Netlink
+// Extraction of events from the Netlink stream
 // ---------------------------------------------------------------------------
 
-/// Extrai um `NeighborEvent` de uma mensagem `RTM_NEWNEIGH`.
+/// Extracts a `NeighborEvent` from an `RTM_NEWNEIGH` (or DELNEIGH) message.
 ///
-/// Retorna `None` se:
-/// - Não for IPv6
-/// - Estado ainda incompleto ou falho (MAC desconhecido)
-/// - Faltar IP ou MAC nos atributos
+/// Returns `None` if:
+/// - The protocol is not IPv6/IPv4.
+/// - The state is incomplete or failed (MAC address unknown).
+/// - IP or MAC attributes are missing.
 pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<NeighborEvent> {
     let (neigh, is_delete) = match &msg.payload {
         NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(n)) => (n, false),
@@ -106,7 +102,7 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
         _ => return None,
     };
 
-    // Só barramos Incomplete/Failed quando estamos descobrindo um novo host.
+    // We only block Incomplete/Failed states when discovering a new host.
     if !is_delete
         && matches!(
             neigh.header.state,
@@ -122,7 +118,7 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
             ifindex: neigh.header.ifindex,
         })
     } else {
-        // Se for adição, o MAC é estritamente necessário. Retorna None se não existir.
+        // For additions, the MAC address is strictly required. Returns None if missing.
         Some(NeighborEvent::Added {
             ip,
             mac: mac?,
@@ -165,12 +161,10 @@ fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
 }
 
 // ---------------------------------------------------------------------------
-// Queries ao kernel (usa o Handle compartilhado)
+// Kernel Queries (Uses the shared Handle)
 // ---------------------------------------------------------------------------
 
-/// Devolve todos os vizinhos IPv6 no prefixo alvo como `NeighborEvent`.
-///
-/// Substitui `get_ipv6_neighbors` que retornava `Vec<(String, String)>`.
+/// Retrieves all IPv6 neighbors within the target prefix as `NeighborEvent`s.
 pub async fn get_ipv6_neighbors(
     handle: &Handle,
     target_prefix: &str,
@@ -197,10 +191,10 @@ pub async fn get_ipv6_neighbors(
     Ok(neighbors)
 }
 
-/// Procura o MAC de um vizinho IPv6 específico na tabela NDP do kernel.
+/// Looks up the MAC address for a specific IPv6 neighbor in the kernel's NDP table.
 ///
-/// Usado como fallback no `DHCPv6` quando o DUID não contém MAC (DUID-EN,
-/// DUID-UUID) e o endereço link-local do peer não é EUI-64.
+/// Used as a fallback in `DHCPv6` when the DUID does not contain a MAC (DUID-EN,
+/// DUID-UUID) and the peer's link-local address is not EUI-64.
 pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAddr> {
     let target = ip.to_string();
     let mut stream = handle

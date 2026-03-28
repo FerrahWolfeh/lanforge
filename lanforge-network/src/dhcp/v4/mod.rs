@@ -1,31 +1,30 @@
-//! `DHCPv4` service — Gerenciamento de endereços IPv4 dinâmicos (RFC 2131).
+//! `DHCPv4` service — Dynamic IPv4 address management (RFC 2131).
 //!
-//! Este serviço escuta solicitações na porta 67/UDP e gerencia um pool de
-//! endereços, suportando reservas estáticas baseadas em MAC.
+//! This service listens for requests on port 67/UDP and manages an address pool,
+//! supporting static MAC-based reservations.
 //!
-//! ## Ciclo DORA (Discovery, Offer, Request, Ack)
+//! ## DORA Cycle (Discovery, Offer, Request, Ack)
 //!
-//! ```text
-//! Pacote DHCP recebido
-//!     └─► DhcpServer::handle_packet()
-//!               │
-//!               ▼
-//!     DeviceUpdate::V4LeaseGranted   ← IP + expiração
-//!     DeviceUpdate::HostnameHint     ← opção 12 (se presente)
-//!               │
-//!               ▼
-//!         ManagedTable::update()
-//!               │
-//!     ┌─────────┴──────────┐
-//!     ▼                    ▼
-//! DeviceDiscovered    DeviceUpdated   (publicados no EventBus automaticamente)
+//! ```mermaid
+//! sequenceDiagram
+//!     participant C as Client
+//!     participant S as DhcpServer (Lanforge)
+//!     participant T as ManagedTable
+//!
+//!     C->>S: 1. DHCP Discover (Broadcast)
+//!     S->>C: 2. DHCP Offer (Unicast/Broadcast)
+//!
+//!     C->>S: 3. DHCP Request
+//!     S->>T: 4. update(DeviceUpdate::V4LeaseGranted)
+//!     T-->>S: 5. EventBus Signal
+//!     S->>C: 6. DHCP Ack
 //! ```
 //!
-//! ## Integração com o Manager
+//! ## Manager Integration
 //!
-//! O `dhcpv4_service` utiliza o `ManagedTable` para persistir leases e sugerir
-//! hostnames aprendidos via Option 12. O merging de estado e a emissão de
-//! eventos no `EventBus` são feitos automaticamente pelo `ManagedTable`.
+//! The `dhcpv4_service` uses the `ManagedTable` to persist leases and suggest
+//! hostnames learned via Option 12. State merging and EventBus signaling
+//! are handled automatically by the `ManagedTable`.
 
 pub mod config;
 pub mod pool;
@@ -54,7 +53,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
         cfg.range_start, cfg.range_end, cfg.lease_time, cfg.router, cfg.server_id
     );
 
-    // Carrega reservas estáticas no pool
+    // Load static reservations into the pool
     let mut server = DhcpServer::new(cfg.clone());
     {
         let t = table.read();
@@ -73,17 +72,17 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
     info!("Receiving on 0.0.0.0:67 (iface: {})", cfg.iface);
 
     let mut raw_tx = RawSender::new(&cfg.iface)?;
-    info!("Transmitting via AF_PACKET raw sock (Layer 2)");
+    info!("Transmitting via AF_PACKET raw socket (Layer 2 injection)");
 
     let mut buf = vec![0u8; 1500];
     let mut bus_rx = table.bus().subscribe();
 
-    // Timer para cleanup periódico de leases (a cada 1 minuto)
+    // Timer for periodic lease cleanup (every 1 minute)
     let mut cleanup_interval = tokio::time::interval(Duration::from_secs(60));
 
     loop {
         tokio::select! {
-            // -- Mensagens DHCP vindas da rede --
+            // -- DHCP Messages from the network --
             res = socket.recv_from(&mut buf) => {
                 let (len, _src) = match res {
                     Ok(r) => r,
@@ -95,7 +94,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
 
                 let data = &buf[..len];
 
-                // 1. Decode fora do lock para reduzir contenção
+                // 1. Decode outside the lock to reduce contention
                 let msg = match Message::decode(&mut Decoder::new(data)) {
                     Ok(m) => m,
                     Err(_) => continue,
@@ -109,23 +108,23 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                 if chaddr.len() < 6 { continue; }
                 let mac = MacAddr([chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5]]);
 
-                // 2. Lock curto apenas para processar a lógica e alocar IP
+                // 2. Short lock only for logic processing and IP allocation
                 let handle_res = {
                     let t = table.read();
                     server.handle_packet(data, Some(&t))
                 };
 
-                // 3. I/O fora do lock
+                // 3. I/O outside the lock
                 match handle_res {
                     HandleResult::Reply { packet, broadcast, dest_ip, giaddr, hostname: req_hostname } => {
-                        // RFC 2131: Se giaddr != 0, envie via UDP unicast para o relay
+                        // RFC 2131: If giaddr != 0, send via UDP unicast to the relay agent
                         if giaddr != Ipv4Addr::UNSPECIFIED {
                             let relay_addr = SocketAddrV4::new(giaddr, 67);
                             if let Err(e) = socket.send_to(&packet, relay_addr).await {
                                 error!("Failed to send to relay {giaddr}: {e}");
                             }
                         } else {
-                            // Caso contrário, use Layer 2 para clientes locais sem IP
+                            // Otherwise, use Layer 2 for local clients without an IP
                             let (final_dst_ip, dst_mac_arr) = if broadcast {
                                 (Ipv4Addr::BROADCAST, [0xff; 6])
                             } else {
@@ -138,7 +137,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                             }
                         }
 
-                        // Atualiza a tabela global (gera eventos no bus)
+                        // Update the global table (triggers EventBus events)
                         if let Some(assigned_ip) = server.last_assignment_for(mac) {
                             let expires = SystemTime::now() + Duration::from_secs(u64::from(cfg.lease_time));
                             table.update(DeviceUpdate::V4LeaseGranted { mac, ip: assigned_ip, expires }).await;
@@ -152,12 +151,12 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                 }
             }
 
-            // -- Cleanup Periódico --
+            // -- Periodic Cleanup --
             _ = cleanup_interval.tick() => {
                 server.pool.cleanup_expired_leases(SystemTime::now());
             }
 
-            // -- Comandos vindos do Admin via CLI/Bus --
+            // -- Commands from Admin via CLI/Bus --
             event = bus_rx.recv() => {
                 match event {
                     Ok(LanforgeEvent::LeaseRelease { mac }) => {
@@ -185,7 +184,7 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
     Ok(())
 }
 
-/// Bind UDP na porta 67 com `SO_BROADCAST` e `SO_BINDTODEVICE`.
+/// Binds UDP to port 67 with `SO_BROADCAST` and `SO_BINDTODEVICE`.
 fn bind_dhcp_socket(iface: &str) -> Result<UdpSocket> {
     let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 67);
 

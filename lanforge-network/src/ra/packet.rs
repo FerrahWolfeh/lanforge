@@ -1,18 +1,18 @@
-//! Construção e checksum de pacotes Router Advertisement (RFC 4861 §4.2).
+//! Router Advertisement packet construction and checksum (RFC 4861 §4.2).
 //!
-//! Este módulo lida com a montagem manual de pacotes `ICMPv6` para o serviço RA,
-//! incluindo a inserção de opções como Prefix Information, RDNSS e MTU.
+//! This module handles the manual assembly of `ICMPv6` packets for the RA service,
+//! including options such as Prefix Information, RDNSS, and MTU.
 //!
-//! ## Estrutura do Pacote RA
+//! ## RA Packet Structure
 //!
 //! ```text
 //! [ ICMPv6 Header ]
 //! [ RA Fixed Fields (Hop Limit, Flags, Lifetime) ]
 //! [ Option: Source Link-Layer Address ]
-//! [ Option: MTU (se configurado) ]
+//! [ Option: MTU (if configured) ]
 //! [ Option: Prefix Information (SLAAC) ]
 //! [ Option: RDNSS (DNS) ]
-//! [ Option: DNSSL (Domínios de busca) ]
+//! [ Option: DNSSL (Search Domains) ]
 //! ```
 
 use super::config::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
@@ -21,21 +21,21 @@ use std::net::Ipv6Addr;
 pub const ICMPV6_TYPE_RA: u8 = 134;
 
 // ---------------------------------------------------------------------------
-// Montagem do pacote RA (RFC 4861 §4.2)
+// RA Packet Assembly (RFC 4861 §4.2)
 // ---------------------------------------------------------------------------
 
 pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Addr>) -> Vec<u8> {
     let mut p = Vec::with_capacity(256);
 
-    // ── Cabeçalho ICMPv6 ─────────────────────────────────────────────────
+    // ── ICMPv6 Header ────────────────────────────────────────────────────
     p.push(ICMPV6_TYPE_RA);
     p.push(0u8); // code = 0
     p.extend([0u8; 2]); // checksum placeholder
 
-    // ── Campos fixos do RA ────────────────────────────────────────────────
+    // ── RA Fixed Fields ──────────────────────────────────────────────────
     p.push(cfg.hop_limit);
 
-    // Byte de flags (RFC 4861 §4.2 + RFC 4191 §2.1):
+    // Flags byte (RFC 4861 §4.2 + RFC 4191 §2.1):
     //   bit 7 (0x80): M — Managed Address Configuration
     //   bit 6 (0x40): O — Other Configuration
     //   bits 3–4:     Prf — Default Router Preference
@@ -46,18 +46,18 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
 
     let rl = cfg.effective_router_lifetime().as_secs().min(9000) as u16;
     p.extend(rl.to_be_bytes());
-    p.extend(0u32.to_be_bytes()); // reachable_time  (0 = não especificado)
-    p.extend(0u32.to_be_bytes()); // retrans_timer   (0 = não especificado)
+    p.extend(0u32.to_be_bytes()); // reachable_time  (0 = unspecified)
+    p.extend(0u32.to_be_bytes()); // retrans_timer   (0 = unspecified)
 
-    // ── Opção 1: Source Link-Layer Address (RFC 4861 §4.6.1) ─────────────
-    // Obrigatório em RAs multicast; permite que clientes atualizem o cache NDP.
+    // ── Option 1: Source Link-Layer Address (RFC 4861 §4.6.1) ─────────────
+    // Mandatory in multicast RAs; allows clients to update their NDP cache.
     p.push(1u8); // type
     p.push(1u8); // length = 1 × 8 bytes
     p.extend_from_slice(&mac);
 
-    // ── Opção 5: MTU (RFC 4861 §4.6.4) ───────────────────────────────────
-    // Anuncia MTU quando a WAN tem valor menor que 1500 (ex: PPPoE = 1492).
-    // Sem esta opção, clientes assumem 1500 e podem ter fragmentação silenciosa.
+    // ── Option 5: MTU (RFC 4861 §4.6.4) ───────────────────────────────────
+    // Announces MTU when the WAN bandwidth has a value lower than 1500 (e.g., PPPoE = 1492).
+    // Without this option, clients assume 1500 and may suffer silent fragmentation.
     if let Some(mtu) = cfg.mtu {
         p.push(5u8); // type
         p.push(1u8); // length = 8 bytes
@@ -65,7 +65,7 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
         p.extend(mtu.to_be_bytes());
     }
 
-    // ── Opção 3: Prefix Information (RFC 4861 §4.6.2) ────────────────────
+    // ── Option 3: Prefix Information (RFC 4861 §4.6.2) ────────────────────
     for pc in &cfg.prefixes {
         let addr = match &pc.source {
             PrefixSource::Static(a) => Some(*a),
@@ -76,7 +76,7 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
         }
     }
 
-    // ── Opção 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
+    // ── Option 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
     let rdnss_lt = |rd: &RdnssConfig| -> u32 {
         u32::try_from(
             rd.lifetime
@@ -92,7 +92,7 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
         }
         let n = rdnss.servers.len();
         p.push(25u8);
-        // length em unidades de 8B: 1 (cabeçalho de 8B) + 2 por servidor (16B cada)
+        // length in 8B units: 1 (8B header) + 2 per server (16B each)
         p.push(u8::try_from(1 + 2 * n).unwrap_or(u8::MAX));
         p.extend([0u8; 2]); // reserved
         p.extend(rdnss_lt(rdnss).to_be_bytes());
@@ -101,7 +101,7 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
         }
     }
 
-    // ── Opção 31: DNSSL (RFC 8106 §3.2) ─────────────────────────────────
+    // ── Option 31: DNSSL (RFC 8106 §3.2) ─────────────────────────────────
     let dnssl_lt = |ds: &DnsslConfig| -> u32 {
         u32::try_from(
             ds.lifetime
@@ -116,7 +116,7 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
             continue;
         }
         let encoded = encode_dns_wire(&dnssl.domains);
-        // Tamanho total da opção: 8 bytes de cabeçalho + dados, arredondado para cima (múltiplo de 8)
+        // Total option size: 8 bytes of header + data, rounded up (multiple of 8)
         let total = 8 + encoded.len();
         let padded = (total + 7) & !7;
         p.push(31u8);
@@ -124,13 +124,13 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
         p.extend([0u8; 2]); // reserved
         p.extend(dnssl_lt(dnssl).to_be_bytes());
         p.extend_from_slice(&encoded);
-        p.resize(p.len() + (padded - total), 0u8); // padding de zeros
+        p.resize(p.len() + (padded - total), 0u8); // zero padding
     }
 
     p
 }
 
-/// Serializa a opção Prefix Information (tipo 3, 32 bytes — RFC 4861 §4.6.2).
+/// Serializes the Prefix Information option (Type 3, 32 bytes — RFC 4861 §4.6.2).
 pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) {
     p.push(3u8); // type
     p.push(4u8); // length = 4 × 8 = 32 bytes
@@ -149,7 +149,7 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) 
     p.extend(cfg.preferred_lifetime.as_u32().to_be_bytes());
     p.extend([0u8; 4]); // reserved
 
-    // Zera os bits de host conforme prefix_len — geralmente /64 = zera 8 bytes finais
+    // Zero out host bits based on prefix_len — usually /64 = zero out the last 8 bytes.
     let mut octets = addr.octets();
     let host_bytes = ((128 - cfg.prefix_len) / 8) as usize;
     for i in octets.iter_mut().skip(16 - host_bytes) {
@@ -158,8 +158,10 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) 
     p.extend_from_slice(&octets);
 }
 
-/// Codifica domínios no formato DNS wire (RFC 1035 §3.1) para uso na opção DNSSL.
-/// Ex: `["home.arpa"]` → `b"\x04home\x04arpa\x00"`
+/// Encodes domains in DNS wire format (RFC 1035 §3.1) for the DNSSL option.
+///
+/// # Example
+/// `["home.arpa"]` → `b"\x04home\x04arpa\x00"`
 pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
     for domain in domains {
@@ -168,20 +170,20 @@ pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
             out.push(u8::try_from(b.len()).unwrap_or(u8::MAX));
             out.extend_from_slice(b);
         }
-        out.push(0u8); // terminador de domínio
+        out.push(0u8); // domain terminator
     }
     out
 }
 
 // ---------------------------------------------------------------------------
-// Checksum ICMPv6 — RFC 4443 §2.3
+// ICMPv6 Checksum — RFC 4443 §2.3
 // ---------------------------------------------------------------------------
 
-/// Calcula o checksum `ICMPv6` incluindo o pseudo-header IPv6.
+/// Calculates the `ICMPv6` checksum, including the IPv6 pseudo-header.
 ///
-/// Diferente do ICMP v4, o checksum cobre um pseudo-header que inclui os
-/// endereços IPv6 src/dst, o comprimento do payload e next-header=58.
-/// Receptores que detectam checksum incorreto descartam o pacote silenciosamente.
+/// Unlike ICMPv4, the checksum covers a pseudo-header that includes source/destination
+/// IPv6 addresses, payload length, and next-header=58.
+/// Receivers detecting an incorrect checksum MUST discard the packet silently.
 pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
     let mut acc = 0u32;
 
@@ -202,10 +204,10 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
         acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
     }
     if let [tail] = iter.remainder() {
-        acc += u32::from(*tail) << 8; // padding de zero à direita
+        acc += u32::from(*tail) << 8; // right-aligned zero padding
     }
 
-    // Dobramento one's complement
+    // One's complement folding
     while acc >> 16 != 0 {
         acc = (acc & 0xFFFF) + (acc >> 16);
     }

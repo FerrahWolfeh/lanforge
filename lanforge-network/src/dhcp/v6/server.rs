@@ -1,18 +1,18 @@
-//! SARR state machine — Lógica central do servidor `DHCPv6`.
+//! SARR State Machine — Core `DHCPv6` server logic.
 //!
-//! Este módulo implementa a alocação de endereços e processamento de mensagens
-//! conforme a RFC 8415. Ele foca na identificação por DUID e alocação de
-//! endereços no prefixo ULA configurado.
+//! This module implements address allocation and message processing
+//! as defined in RFC 8415. It focuses on DUID-based identification and
+//! address allocation within the configured ULA prefix.
 //!
-//! ## Tabela de Decisão
+//! ## Decision Table
 //!
-//! | Mensagem    | Ação                      | Resposta    |
-//! |-------------|---------------------------|-------------|
-//! | Solicit     | Ofert/Aloca IA_NA         | Advertise/Reply |
-//! | Request     | Confirma lease            | Reply       |
-//! | Renew       | Estende lease             | Reply       |
-//! | Release     | Libera IA_NA              | Reply       |
-//! | Info-Req    | Provedor de opções (DNS)  | Reply       |
+//! | Message     | Action                      | Response        |
+//! |-------------|-----------------------------|-----------------|
+//! | Solicit     | Offer/Allocate IA_NA        | Advertise/Reply |
+//! | Request     | Confirm lease               | Reply           |
+//! | Renew       | Extend lease                | Reply           |
+//! | Release     | Free IA_NA                  | Reply           |
+//! | Info-Req    | Provide options (DNS)       | Reply           |
 
 use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,
@@ -31,16 +31,16 @@ use super::pool::Ipv6Pool;
 use crate::dhcp::identity::DeviceIdentity;
 use std::sync::Arc;
 
-/// IAIDs atribuídos em uma resposta.
+/// IAIDs assigned in a response.
 #[derive(Default, Clone, Debug)]
 pub struct AssignedIAs {
     pub na: Vec<u32>,
     pub pd: Vec<u32>,
 }
 
-/// Resultado de processar uma mensagem `DHCPv6`.
+/// Result of processing a `DHCPv6` message.
 pub enum HandleResult<'a> {
-    /// Resposta a organizar (bytes encodados, IP de destino, DUID aprendido, MAC extraído, IAIDs).
+    /// A reply to be sent (encoded bytes, destination IP, learned DUID, extracted MAC, IAIDs).
     Reply(
         &'a [u8],
         Ipv6Addr,
@@ -48,11 +48,11 @@ pub enum HandleResult<'a> {
         Option<MacAddr>,
         AssignedIAs,
     ),
-    /// Nenhuma resposta necessária (ex: mensagem malformada ou para outro servidor).
+    /// No response necessary (e.g., malformed message or directed to another server).
     Ignore,
 }
 
-/// Contexto para envio de status codes
+/// Context for sending status codes.
 struct StatusContext<'a> {
     msg: &'a Message,
     client_duid: &'a Duid,
@@ -60,19 +60,19 @@ struct StatusContext<'a> {
     mac: Option<MacAddr>,
 }
 
-/// Servidor `DHCPv6` stateful.
+/// Stateful `DHCPv6` Server.
 ///
-/// Mantém as configurações, o pool de endereços ULA e a identidade (DUID) do servidor.
+/// Maintains configurations, the ULA address pool, and the server's identity (DUID).
 pub struct Dhcpv6Server {
-    /// Configurações do servidor (iface, lease time, etc.)
+    /// Server configuration (iface, lease time, etc.)
     pub cfg: Dhcpv6Config,
-    /// Pool de endereços ULA /64
+    /// ULA /64 address pool.
     pub pool: Ipv6Pool,
-    /// DUID (DHCP Unique Identifier) deste servidor
+    /// DUID (DHCP Unique Identifier) of this server.
     pub server_duid: Duid,
-    /// Lifetimes aprendidos do prefixo GUA (preferred, valid)
+    /// Learned lifetimes from the GUA prefix (preferred, valid).
     pub prefix_lifetimes: Option<(u32, u32)>,
-    /// Socket persistente para NDP pokes (economiza syscall socket())
+    /// Persistent socket for NDP pokes (saves socket() syscalls).
     pub ndp_poke_sock: Arc<tokio::net::UdpSocket>,
 }
 
@@ -107,6 +107,7 @@ impl Dhcpv6Server {
         (preferred, valid)
     }
 
+    /// Processes a raw `DHCPv6` packet and returns a response (if any).
     pub async fn handle_packet<'a>(
         &mut self,
         data: &[u8],
@@ -134,7 +135,7 @@ impl Dhcpv6Server {
             Duid::new(vec![])
         };
 
-        // Tenta extrair MAC em ordem de custo crescente
+        // Try to extract MAC address in increasing order of cost
         let mut mac = client_duid
             .extract_mac()
             .or_else(|| {
@@ -150,21 +151,22 @@ impl Dhcpv6Server {
             })
             .or_else(|| mac_from_eui64_link_local(&peer));
 
-        // Pega o lock de leitura da tabela UMA ÚNICA VEZ para:
-        // 1. Cache NDP
-        // 2. Resolução de DeviceIdentity (se o mac for conhecido)
-        // 1. Tenta recuperar MAC do cache NDP (lock síncrono)
+        // Take a single read lock on the table for:
+        // 1. NDP Cache lookup
+        // 2. DeviceIdentity resolution (if MAC is known)
+
+        // 1. Try to recover MAC from NDP cache (synchronous lock)
         if mac.is_none() {
             let t = table.read();
             if let Some(cached) = t.get_mac_from_ndp_cache(&peer) {
-                debug!("MAC recuperado do cache NDP para {peer}");
+                debug!("MAC recovered from NDP cache for {peer}");
                 mac = Some(cached);
             }
         }
 
-        // 2. Se ainda sem MAC, tenta lookup no kernel (síncrono — SEM LOCK)
+        // 2. If still no MAC, try a kernel lookup (asynchronous — NO LOCK)
         if mac.is_none() {
-            debug!("Cache miss. Lookup síncrono no kernel para {peer}...");
+            debug!("Cache miss. Performing asynchronous kernel lookup for {peer}...");
             if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
                 table
                     .update(DeviceUpdate::NdpSeen {
@@ -176,7 +178,7 @@ impl Dhcpv6Server {
             }
         }
 
-        // 3. Resolve identidade (novo lock síncrono)
+        // 3. Resolve identity (new synchronous lock)
         let identity = mac.map(|m| {
             let t = table.read();
             DeviceIdentity::resolve(m, None, Self::get_vendor_class(&msg), Some(&t))
@@ -184,12 +186,12 @@ impl Dhcpv6Server {
 
         if mac.is_none() {
             warn!(
-                "SOLICIT from {peer}: sem MAC (DUID: {}). Continuando sem MAC...",
+                "SOLICIT from {peer}: no MAC addr found (DUID: {}). Proceeding without MAC...",
                 client_duid.duid_type()
             );
 
-            // Força o kernel a resolver o MAC enviando um pacote vazio
-            // Reusando o socket persistente!
+            // Force the kernel to resolve the MAC by sending an empty packet.
+            // Reusing the persistent poke socket!
             let poke_sock = self.ndp_poke_sock.clone();
             let peer_ip = peer;
             tokio::spawn(async move {
@@ -373,7 +375,7 @@ impl Dhcpv6Server {
                 }
             });
 
-            // RFC 8415 §18.2.1: Se o endereço requisitado não estiver on-link, responder com NotOnLink.
+            // RFC 8415 §18.2.1: If the requested address is not on-link, respond with NotOnLink.
             if let Some(ip) = requested_ip
                 && !self.pool.is_on_link(&ip)
             {
@@ -464,8 +466,8 @@ impl Dhcpv6Server {
             return HandleResult::Ignore;
         }
 
-        // RFC 8415 §18.2.3: Se o servidor não encontrar binding para o IA_NA/IA_PD,
-        // deve responder com Reply contendo Status NoBinding.
+        // RFC 8415 §18.2.3: If the server cannot find a binding for IA_NA/IA_PD,
+        // it must respond with a Reply containing a NoBinding status.
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
             && !self.pool.has_binding(&client_duid.bytes, iana.id)
         {
@@ -513,15 +515,15 @@ impl Dhcpv6Server {
         peer: Ipv6Addr,
         buf: &'a mut Vec<u8>,
     ) -> HandleResult<'a> {
-        // Rebind não tem ServerId (broadcast).
-        // Mesma lógica de NoBinding do Renew (§18.2.4).
+        // Rebind does not have a ServerId (multicast).
+        // Same NoBinding logic as Renew (§18.2.4).
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
             && !self.pool.has_binding(&client_duid.bytes, iana.id)
         {
-            // No Rebind, se não temos binding, ignoramos ou respondemos NoBinding?
-            // RFC 8415 §18.2.4 diz que o servidor deve responder se tiver binding.
-            // Mas se não tivermos, geralmente ficamos quietos para permitir que outro servidor responda,
-            // EXCEÇÃO: se soubermos com certeza que o IP não é on-link.
+            // In Rebind, if we don't have a binding, do we ignore or respond NoBinding?
+            // RFC 8415 §18.2.4 says the server must respond if it has a binding.
+            // If we don't, we usually stay quiet to allow another server to respond.
+            // EXCEPTION: If we know for sure the IP is not on-link.
             return HandleResult::Ignore;
         }
         self.handle_request(msg, client_duid, identity, peer, buf)
@@ -728,7 +730,7 @@ impl Dhcpv6Server {
     }
 
     const fn add_dns_options(_reply: &mut Message) {
-        // Tipicamente via RDNSS no RA. Se config fornecer DNS, adicionar aqui.
+        // Typically handled via RDNSS in RA. If config provides DNS, add it here.
     }
 
     pub fn last_assignment_for(&self, duid: &[u8], iaid: u32) -> Option<Ipv6Addr> {

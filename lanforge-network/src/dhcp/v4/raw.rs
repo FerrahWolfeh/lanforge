@@ -1,8 +1,8 @@
-//! Injeção de pacotes DHCP (Layer 2) via `AF_PACKET` (pnet).
+//! DHCP packet injection (Layer 2) via `AF_PACKET` (using pnet).
 //!
-//! Exigido pelo RFC para enviar pacotes UDP unicast para endereços IP
-//! não configurados (quando o cliente tem IP mas a tabela ARP do servidor
-//! não tem a entrada). Evita o broadcast em L3 para pacotes unicast.
+//! Required by the RFC to send unicast UDP packets to IP addresses that are
+//! not yet configured on the client (when the client has an IP but the
+//! server's ARP table lacks the entry). This avoids L3 broadcast for unicast packets.
 
 use crate::error::{NetworkError, Result};
 use pnet::datalink::{self, Config, MacAddr as PnetMac};
@@ -45,8 +45,8 @@ impl RawSender {
         Ok(Self { tx, src_mac })
     }
 
-    /// Embrulha o payload `DHCPv4` (BOOTP) em headers UDP, IPv4 e Ethernet,
-    /// calculando todos os checksums manuais e enviando na interface física.
+    /// Wraps the `DHCPv4` (BOOTP) payload in UDP, IPv4, and Ethernet headers,
+    /// calculating all checksums manually and sending it over the physical interface.
     pub fn send_dhcp(
         &mut self,
         payload: &[u8],
@@ -69,13 +69,13 @@ impl RawSender {
 
         let mut buf = vec![0u8; eth_len];
 
-        // 1. Monta Ethernet
+        // 1. Assemble Ethernet Header
         let mut eth = MutableEthernetPacket::new(&mut buf).unwrap();
         eth.set_destination(dst_mac);
         eth.set_source(self.src_mac);
         eth.set_ethertype(EtherTypes::Ipv4);
 
-        // 2. Monta IPv4
+        // 2. Assemble IPv4 Header
         let mut ip = MutableIpv4Packet::new(eth.payload_mut()).unwrap();
         ip.set_version(4);
         ip.set_header_length(5);
@@ -89,7 +89,7 @@ impl RawSender {
         let ip_checksum = ipv4::checksum(&ip.to_immutable());
         ip.set_checksum(ip_checksum);
 
-        // 3. Monta UDP
+        // 3. Assemble UDP Header
         let mut udp = MutableUdpPacket::new(ip.payload_mut()).unwrap();
         udp.set_source(67);
         udp.set_destination(68);
@@ -99,7 +99,7 @@ impl RawSender {
         let udp_checksum = udp::ipv4_checksum(&udp.to_immutable(), &src_ip, &dst_ip);
         udp.set_checksum(udp_checksum);
 
-        // 4. Injeta pacote (Layer 2)
+        // 4. Inject Packet (Layer 2)
         match self.tx.send_to(&buf, None) {
             Some(Ok(())) => Ok(()),
             Some(Err(e)) => Err(NetworkError::RawSocket(format!(

@@ -1,4 +1,4 @@
-//! Módulo DHCP — ponto de entrada para os servidores v4 e v6.
+//! DHCP Module — Entry point for the v4 and v6 servers.
 
 pub mod identity;
 pub mod v4;

@@ -1,17 +1,18 @@
-//! DORA state machine — Lógica central do servidor `DHCPv4`.
+//! DORA State Machine — Core `DHCPv4` server logic.
 //!
-//! Este módulo implementa a lógica de alocação de endereços e processamento
-//! de mensagens conforme a RFC 2131. Ele utiliza o `IpPool` para gerenciar
-//! o estado dos leases e o `DeviceIdentity` para resolver MACs e nomes.
+//! This module implements address allocation and message processing logic
+//! as defined in RFC 2131. It uses `IpPool` to manage lease states and
+//! `DeviceIdentity` to resolve MACs and hostnames.
 //!
-//! ## Tabela de Decisão
+//! ## Decision Table
 //!
-//! | Mensagem    | Ação                      | Resposta |
+//! | Message     | Action                    | Response |
 //! |-------------|---------------------------|----------|
-//! | Discover    | Aloca IP (ofertado)       | Offer    |
-//! | Request     | Confirma/Estende lease    | Ack/Nak  |
-//! | Release     | Libera IP no pool         | (nenhuma)|
-//! | Decline     | Marca IP como em conflito | (nenhuma)|
+//! | Discover    | Allocate IP (offered)     | Offer    |
+//! | Request     | Confirm/Extend lease      | Ack/Nak  |
+//! | Release     | Free IP in the pool       | (none)   |
+//! | Decline     | Mark IP as in conflict    | (none)   |
+//! | Inform      | Provide options (no IP)   | Ack      |
 
 use dhcproto::v4::{self, DhcpOption, Message, MessageType, Opcode};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder};
@@ -25,32 +26,32 @@ use super::config::Dhcpv4Config;
 use super::pool::IpPool;
 use crate::dhcp::identity::DeviceIdentity;
 
-/// Resultado de processar uma mensagem DHCP.
+/// Result of processing a DHCP message.
 pub enum HandleResult {
-    /// Resposta a enviar.
+    /// A reply to be sent.
     Reply {
-        /// Bytes encodados da resposta.
+        /// Encoded packet bytes.
         packet: Vec<u8>,
-        /// Se deve ser enviado via broadcast L2.
+        /// Whether it should be sent via L2 broadcast.
         broadcast: bool,
-        /// IP de destino L3 (para o cabeçalho IP/UDP).
+        /// L3 destination IP (for IP/UDP header).
         dest_ip: Ipv4Addr,
-        /// Endereço do Relay Agent (se houver).
+        /// Relay Agent address (if any).
         giaddr: Ipv4Addr,
-        /// Hostname sugerido pelo cliente.
+        /// Hostname suggested by the client.
         hostname: Option<String>,
     },
-    /// Nenhuma resposta necessária.
+    /// No response necessary.
     Ignore,
 }
 
-/// Servidor `DHCPv4` stateful.
+/// Stateful `DHCPv4` Server.
 ///
-/// Mantém as configurações e o pool de IPs para uma interface específica.
+/// Maintains configurations and the IP pool for a specific interface.
 pub struct DhcpServer {
-    /// Configurações do servidor (range, lease time, etc.)
+    /// Server configuration (range, lease time, etc.)
     pub cfg: Dhcpv4Config,
-    /// Pool de endereços e gerenciamento de reservas
+    /// Address pool and reservation management
     pub pool: IpPool,
 }
 
@@ -60,7 +61,7 @@ impl DhcpServer {
         Self { cfg, pool }
     }
 
-    /// Processa um pacote DHCP raw e retorna a resposta (se houver).
+    /// Processes a raw DHCP packet and returns a response (if any).
     pub fn handle_packet(&mut self, data: &[u8], table: Option<&DeviceTable>) -> HandleResult {
         let msg = match Message::decode(&mut Decoder::new(data)) {
             Ok(m) => m,

@@ -1,33 +1,30 @@
-//! `DHCPv6` service — Gerenciamento de endereços IPv6 dinâmicos (RFC 8415).
+//! `DHCPv6` service — Dynamic IPv6 address management (RFC 8415).
 //!
-//! Este serviço gerencia a atribuição de endereços IPv6 via `DHCPv6` (Stateful),
-//! servindo como alternativa ou complemento ao SLAAC.
+//! This service manages IPv6 address assignment via stateful `DHCPv6`,
+//! serving as an alternative or complement to SLAAC.
 //!
-//! ## Ciclo SARR (Solicit, Advertise, Request, Reply)
+//! ## SARR Cycle (Solicit, Advertise, Request, Reply)
 //!
-//! ```text
-//! Pacote DHCPv6 recebido
-//!     └─► Dhcpv6Server::handle_packet()
-//!               │
-//!               ▼
-//!     HandleResult::Reply(bytes, dest, opt_duid, opt_mac)
-//!               │
-//!       ┌───────┴────────────────────┐
-//!       │ tem mac + duid + ip        │ tem mac + duid, sem ip
-//!       ▼                            ▼
-//!   V6LeaseGranted              DuidAssociated
-//!       │                            │
-//!       └───────────┬────────────────┘
-//!                   ▼
-//!           ManagedTable::update()
-//!           (Manager decide, EventBus notifica)
+//! ```mermaid
+//! sequenceDiagram
+//!     participant C as Client
+//!     participant S as Dhcpv6Server (Lanforge)
+//!     participant T as ManagedTable
+//!
+//!     C->>S: 1. Solicit (Multicast ff02::1:2)
+//!     S->>C: 2. Advertise (Unicast)
+//!
+//!     C->>S: 3. Request
+//!     S->>T: 4. update(DeviceUpdate::V6LeaseGranted / V6PrefixAssigned)
+//!     T-->>S: 5. EventBus Signal
+//!     S->>C: 6. Reply
 //! ```
 //!
-//! ## Integração com o Manager
+//! ## Manager Integration
 //!
-//! O `dhcpv6_service` reporta DUIDs e concessões de IP ao `ManagedTable`.
-//! Diferente do v4, o `DHCPv6` depende fortemente do DUID para identificação
-//! persistente do cliente, mesmo que o MAC mude ou não esteja disponível.
+//! The `dhcpv6_service` reports DUIDs and IP leases to the `ManagedTable`.
+//! Unlike v4, `DHCPv6` relies heavily on DUIDs for persistent client
+//! identification, even if the MAC address changes or is unavailable.
 
 pub mod config;
 pub mod pool;
@@ -51,7 +48,7 @@ use server::{Dhcpv6Server, HandleResult};
 
 const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2);
 
-/// Inicia o serviço `DHCPv6` (porta UDP 547, multicast `ff02::1:2`).
+/// Starts the `DHCPv6` service (UDP port 547, multicast `ff02::1:2`).
 pub async fn dhcpv6_service(
     config: Dhcpv6Config,
     table: Arc<ManagedTable>,
@@ -87,7 +84,7 @@ pub async fn dhcpv6_service(
         config.iface
     );
 
-    // Lê o MAC da interface para gerar um DUID legítimo
+    // Read interface MAC to generate a legitimate DUID-LL
     let mac_str = std::fs::read_to_string(format!("/sys/class/net/{}/address", config.iface))
         .unwrap_or_else(|_| "02:04:06:08:0a:0c\n".to_string());
 
@@ -101,7 +98,7 @@ pub async fn dhcpv6_service(
         server_mac.copy_from_slice(&mac_bytes);
     }
 
-    // Socket persistente para NDP pokes (Optimization 2)
+    // Persistent socket for NDP pokes (Optimization 2)
     let poke_sock = std::net::UdpSocket::bind("::0:0")
         .map_err(|e| NetworkError::Socket(format!("Failed to bind NDP poke socket: {e}")))?;
     poke_sock.set_nonblocking(true)?;
@@ -133,7 +130,7 @@ pub async fn dhcpv6_service(
                         entry.mac, entry.hostname, ip
                     );
                 } else {
-                    warn!("Falha ao construir ULA para sufixo: {:?}", suffix);
+                    warn!("Failed to construct ULA for suffix: {:?}", suffix);
                 }
             }
         }
@@ -156,7 +153,7 @@ pub async fn dhcpv6_service(
                             std::net::SocketAddr::V4(_) => continue,
                         };
 
-                        // Reutiliza o buffer para codificação da resposta (Optimization 1)
+                        // Reuses the buffer for response encoding (Optimization 1)
                         let mut resp_vec = Vec::with_capacity(1024);
                         match server
                             .handle_packet(payload, peer_ip, &table, nl_handle, &mut resp_vec)
@@ -212,10 +209,10 @@ pub async fn dhcpv6_service(
     Ok(())
 }
 
-/// Traduz o resultado de um ciclo DHCP em `DeviceUpdate`s para o Manager.
+/// Translates the result of a DHCP cycle into `DeviceUpdate`s for the Manager.
 ///
-/// Separado do loop principal para clareza — toda a lógica de "o que
-/// aprendemos com este pacote" fica aqui, sem misturar com I/O de rede.
+/// Separated from the main loop for clarity — all logic regarding "what we
+/// learned from this packet" lives here, without mixing with network I/O.
 async fn apply_learned_state(
     table: &ManagedTable,
     opt_mac: Option<MacAddr>,
@@ -226,7 +223,7 @@ async fn apply_learned_state(
 ) {
     let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
 
-    // 1. Processa IA_NA (Endereços)
+    // 1. Process IA_NA (Non-temporary Addresses)
     for iaid in &ias.na {
         let iaid = *iaid;
         let assigned_ip = if let Some(duid) = &learned_duid {
@@ -273,7 +270,7 @@ async fn apply_learned_state(
         }
     }
 
-    // 2. Processa IA_PD (Prefixos)
+    // 2. Process IA_PD (Prefix Delegation)
     for iaid in &ias.pd {
         let iaid = *iaid;
         let assigned_prefix = if let Some(duid) = &learned_duid {
@@ -296,7 +293,7 @@ async fn apply_learned_state(
         }
     }
 
-    // 3. Fallback: DUID associado mesmo sem IAID de endereço se foi aprendido
+    // 3. Fallback: Associate DUID even without IAID if it was learned
     if ias.na.is_empty()
         && ias.pd.is_empty()
         && let Some(duid) = learned_duid

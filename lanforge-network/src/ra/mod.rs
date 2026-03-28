@@ -1,29 +1,29 @@
-//! Serviço de Router Advertisement (RFC 4861 + RFC 8106).
+//! Router Advertisement Service (RFC 4861 + RFC 8106).
 //!
-//! Implementação genérica e RFC-compliant do protocolo NDP/RA.
-//! Projetada para rodar em hardware limitado (Raspberry Pi 4B).
+//! A generic, RFC-compliant implementation of the NDP/RA protocol.
+//! Designed to run on resource-constrained hardware like the Raspberry Pi 4B.
 //!
-//! ## Ciclo RA / RS
+//! ## RA / RS Cycle
 //!
-//! ```text
-//!    [ Roteador ]                      [ Cliente ]
-//!          │                                │
-//!          │ (Periódico ou Startup)         │
-//!          ├───────────────────────────────►│ (1. RA Multicast)
-//!          │                                │
-//!          │          (Solicitação)         │
-//!          │◄───────────────────────────────┤ (2. RS Unicast/Multicast)
-//!          │                                │
-//!          │ (Resposta com Delay Aleatório) │
-//!          ├───────────────────────────────►│ (3. RA Unicast/Multicast)
-//!          │                                │
+//! ```mermaid
+//! sequenceDiagram
+//!     participant R as Router (Lanforge)
+//!     participant C as Client
+//!
+//!     Note over R,C: Periodic or Startup Advertisement
+//!     R->>C: 1. RA Multicast (ff02::1)
+//!
+//!     Note over R,C: Solicitation Phase
+//!     C->>R: 2. RS Unicast/Multicast (Solicitation)
+//!     Note right of R: Random Delay (0-500ms)
+//!     R->>C: 3. RA Unicast/Multicast (Response)
 //! ```
 //!
-//! # RFCs implementadas
-//! - RFC 4861  — Neighbor Discovery for IPv6 (RA/RS completo)
-//! - RFC 8106  — RA Options for DNS Configuration (RDNSS + DNSSL)
-//! - RFC 4191  — Default Router Preferences (flag de prioridade)
-//! - RFC 3775  — `AdvRouterAddr` flag no Prefix Information
+//! # Implemented RFCs
+//! - RFC 4861 — Neighbor Discovery for IPv6 (Full RA/RS support)
+//! - RFC 8106 — RA Options for DNS Configuration (RDNSS + DNSSL)
+//! - RFC 4191 — Default Router Preferences (Priority flags)
+//! - RFC 3775 — `AdvRouterAddr` flag in Prefix Information
 
 pub mod config;
 pub mod packet;
@@ -49,21 +49,21 @@ use tokio::time::{Duration, sleep};
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
-// Constantes RFC 4861 §6.2.1 e §10
+// RFC 4861 §6.2.1 and §10 Constants
 // ---------------------------------------------------------------------------
 
-/// Intervalo máximo entre os primeiros RAs no startup (§6.2.6).
-/// Garante que clientes recém-conectados não esperem `MaxRtrAdvInterval` inteiro.
+/// Maximum interval between the initial RAs during startup (§6.2.6).
+/// Ensures newly connected clients don't wait for the full `MaxRtrAdvInterval`.
 const MAX_INITIAL_RTR_ADVERT_INTERVAL: Duration = Duration::from_secs(16);
 
-/// Quantidade de RAs iniciais enviados com intervalo reduzido (§6.2.6).
+/// Number of initial RAs sent with a reduced interval (§6.2.6).
 const MAX_INITIAL_RTR_ADVERTISEMENTS: u8 = 3;
 
-/// Intervalo mínimo entre RAs multicast consecutivos (§6.2.4).
-/// Protege contra tempestade de RAs quando vários clientes solicitam simultaneamente.
+/// Minimum delay between consecutive multicast RAs (§6.2.4).
+/// Protects against RA storms when multiple clients solicit simultaneously.
 const MIN_DELAY_BETWEEN_RAS: Duration = Duration::from_secs(3);
 
-/// Atraso máximo aleatório antes de responder a um RS (§6.2.6), em ms.
+/// Maximum random delay before responding to an RS (§6.2.6), in ms.
 const MAX_RA_DELAY_TIME_MS: u64 = 500;
 
 const ICMPV6_TYPE_RS: u8 = 133;
@@ -72,18 +72,18 @@ const ICMPV6_TYPE_RS: u8 = 133;
 const ICMP6_FILTER: libc::c_int = 1;
 
 // ---------------------------------------------------------------------------
-// Estado de runtime — controla temporização RFC-compliant
+// Runtime State — Handles RFC-compliant timing
 // ---------------------------------------------------------------------------
 
-/// Estado de runtime — controla temporização RFC-compliant.
+/// Runtime state for the RA server.
 pub struct RaState {
-    /// Quantos RAs iniciais já foram enviados (controla fase de startup).
+    /// Count of initial RAs sent (startup phase tracking).
     initial_sent: u8,
-    /// Instante do último RA multicast enviado (aplica `MIN_DELAY_BETWEEN_RAS`).
+    /// Timestamp of the last multicast RA sent (applies `MIN_DELAY_BETWEEN_RAS`).
     last_multicast_ra: Option<Instant>,
-    /// Rate limiting por destino unicast: instante do último RA enviado para cada IP.
+    /// Unicast rate limiting: tracks the last RA sent per destination IP.
     unicast_rl: HashMap<Ipv6Addr, Instant>,
-    /// Último GUA detectado — para publicar `PrefixChanged` apenas quando muda.
+    /// Last detected GUA — used to publish `PrefixChanged` only when a change occurs.
     last_gua: Option<Ipv6Addr>,
 }
 
@@ -97,10 +97,10 @@ impl RaState {
         }
     }
 
-    /// Sorteia o intervalo para o próximo RA periódico (RFC 4861 §6.2.4).
+    /// Determine the interval for the next periodic RA (RFC 4861 §6.2.4).
     ///
-    /// Durante o startup: intervalos curtos (até `MAX_INITIAL_RTR_ADVERT_INTERVAL`)
-    /// para convergência rápida. Depois: aleatório uniforme em [Min, Max].
+    /// During startup phase: uses shorter intervals (up to `MAX_INITIAL_RTR_ADVERT_INTERVAL`)
+    /// for fast convergence. Afterwards: uniform random interval within [Min, Max].
     fn next_interval(&self, cfg: &RaConfig) -> Duration {
         let mut rng = rand::rng();
         if self.initial_sent < MAX_INITIAL_RTR_ADVERTISEMENTS {
@@ -137,7 +137,7 @@ impl RaState {
     }
 }
 
-/// Contexto compartilhado para funções internas do serviço de RA.
+/// Shared context for RA service internal functions.
 pub struct RaContext<'a> {
     pub(crate) async_fd: &'a AsyncFd<Socket>,
     pub(crate) cfg: &'a RaConfig,
@@ -151,10 +151,10 @@ pub struct RaContext<'a> {
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Task principal do serviço de RA. Invocar via `tokio::spawn`.
+/// Main task for the RA service. Should be invoked via `tokio::spawn`.
 ///
-/// Encerra com `Err` apenas em falhas irrecuperáveis (permissão negada, interface
-/// não encontrada etc.). O chamador deve reiniciar com backoff.
+/// Returns `Err` only on unrecoverable failures (permission denied, interface
+/// not found, etc.). The caller is responsible for restarting with backoff.
 pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
     cfg.validate()?;
 
@@ -195,20 +195,20 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
         bus: &bus,
     };
 
-    // RA imediato no startup — clientes já ativos recebem configuração sem esperar
+    // Immediate RA on startup — active clients get configured without waiting
     do_multicast_ra(&ctx, &mut state).await;
 
     loop {
         let next = state.next_interval(&cfg);
-        debug!("Próximo RA periódico em {:.1}s", next.as_secs_f64());
+        debug!("Next periodic RA in {:.1}s", next.as_secs_f64());
 
         tokio::select! {
-            // ── RA periódico ──────────────────────────────────────────────
+            // ── Periodic RA ──────────────────────────────────────────────
             () = sleep(next) => {
                 do_multicast_ra(&ctx, &mut state).await;
             }
 
-            // ── Router Solicitation recebido ──────────────────────────────
+            // ── Router Solicitation Received ──────────────────────────────
             guard = async_fd.readable() => {
                 let mut guard = guard?;
                 let mut buf = [0u8; 1500];
@@ -223,19 +223,20 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
                     Ok(Ok((n, src_sa))) if n > 0 => {
                         let data = &buf[..n];
 
-                        // ICMP6_FILTER já rejeita no kernel; checagem secundária aqui
+                        // ICMP6_FILTER already rejects non-RS packets in the kernel;
+                        // this is a secondary safety check.
                         if data.first() != Some(&ICMPV6_TYPE_RS) {
                             continue;
                         }
 
                         let rs_src = src_sa.as_socket_ipv6().map(|s| *s.ip());
-                        debug!("RS recebido de {rs_src:?}");
+                        debug!("RS received from {rs_src:?}");
 
                         handle_rs(&ctx, rs_src, &mut state).await;
                     }
                     Ok(Ok(_)) | Err(_)  => {}
-                    Ok(Err(e)) => warn!("Erro de leitura no socket: {e}"),
-                    // WouldBlock — AsyncFd reseta automaticamente
+                    Ok(Err(e)) => warn!("Socket read error: {e}"),
+                    // WouldBlock — AsyncFd resets automatically
                 }
             }
         }
@@ -243,16 +244,16 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Lógica de resposta a RS (RFC 4861 §6.2.6)
+// RS Response Logic (RFC 4861 §6.2.6)
 // ---------------------------------------------------------------------------
 
 async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut RaState) {
-    // Atraso aleatório 0–500ms antes de responder (RFC 4861 §6.2.6).
-    // Evita que múltiplos roteadores respondam ao mesmo RS no mesmo instante.
+    // Random delay of 0–500ms before responding (RFC 4861 §6.2.6).
+    // Prevents multiple routers from responding to the same RS simultaneously.
     let delay_ms = rng().random_range(0..MAX_RA_DELAY_TIME_MS);
     sleep(Duration::from_millis(delay_ms)).await;
 
-    // Destino: unicast para o solicitante (se tem endereço válido) ou multicast
+    // Destination: unicast to solicitant (if they have a valid address) or multicast.
     let dst = rs_src.filter(|ip| !ip.is_unspecified());
 
     match dst {
@@ -262,16 +263,16 @@ async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut Ra
                     debug!("RA unicast -> {unicast_dst}");
                     state.record_unicast(unicast_dst);
                 }
-                Err(e) => warn!("Erro RA unicast: {e:?}"),
+                Err(e) => warn!("RA unicast error: {e:?}"),
             }
         }
         None if state.can_multicast_now() => {
-            // Solicitante com endereço ::  → resposta multicast
+            // Solicitant with unspecified address (::) → multicast response.
             do_multicast_ra(ctx, state).await;
         }
         _ => {
-            // Rate limit ativo — RFC 4861 §6.2.6 permite descartar silenciosamente
-            debug!("RS descartado: rate limit MIN_DELAY_BETWEEN_RAS ativo");
+            // Rate limit active — RFC 4861 §6.2.6 allows silent discard.
+            debug!("RS discarded: MIN_DELAY_BETWEEN_RAS rate limit active");
         }
     }
 }
@@ -282,19 +283,19 @@ async fn do_multicast_ra(ctx: &RaContext<'_>, state: &mut RaState) {
             debug!("RA multicast -> ff02::1");
             state.record_multicast();
         }
-        Err(e) => warn!("Erro RA multicast: {e:?}"),
+        Err(e) => warn!("RA multicast error: {e:?}"),
     }
 }
 
-/// Constrói, assina (checksum) e envia um RA.
-/// `unicast_dst = None` → multicast `ff02::1` (all-nodes).
+/// Constructs, signs (checksum), and sends an RA.
+/// `unicast_dst = None` → multicast to `ff02::1` (all-nodes).
 async fn send_ra(
     ctx: &RaContext<'_>,
     unicast_dst: Option<Ipv6Addr>,
     state: &mut RaState,
 ) -> Result<()> {
-    // Endereços são relidos a cada envio: GUA pode mudar quando o ISP renova
-    // a delegação de prefixo via DHCPv6-PD, sem necessidade de reiniciar o serviço
+    // Addresses are re-detected on every send: GUA may change when the ISP
+    // renews prefix delegation via DHCPv6-PD, without requiring a service restart.
     let src_ll = get_link_local_addr(ctx.handle, ctx.iface_index)
         .await
         .map_err(|_| NetworkError::NoLinkLocal(ctx.iface_index))?;
@@ -305,7 +306,7 @@ async fn send_ra(
     };
     let prefix_bits = gua.map(|ip| (ip, preferred, valid));
 
-    // Publica PrefixChanged no EventBus se o GUA mudou
+    // Publish PrefixChanged on the EventBus if the GUA changed.
     if prefix_bits.as_ref().map(|(ip, _, _)| *ip) != state.last_gua {
         info!(
             "GUA prefix changed: {:?} -> {:?} (pref={}, valid={})",
@@ -338,53 +339,52 @@ async fn send_ra(
 }
 
 // ---------------------------------------------------------------------------
-// Configuração do socket ICMPv6 raw
+// Raw ICMPv6 Socket Configuration
 // ---------------------------------------------------------------------------
 
 fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket> {
     let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)).map_err(|e| {
         NetworkError::Socket(format!(
-            "Falha ao criar socket ICMPv6 raw — necessário CAP_NET_RAW: {e}"
+            "Failed to create raw ICMPv6 socket — CAP_NET_RAW required: {e}"
         ))
     })?;
 
-    // Vincula à interface LAN — mesmo em hosts multi-homed, tráfego fica contido
+    // Bind to the LAN interface — keeps traffic contained even on multi-homed hosts.
     sock.bind_device(Some(iface.as_bytes()))
         .map_err(|e| NetworkError::Socket(format!("SO_BINDTODEVICE({iface}): {e}")))?;
 
-    // RFC 4861 §6.1.2: receptores DEVEM descartar RAs com hop limit != 255
+    // RFC 4861 §6.1.2: Receivers MUST discard RAs with hop limit != 255.
     sock.set_multicast_hops_v6(255)
         .map_err(|e| NetworkError::Socket(format!("IPV6_MULTICAST_HOPS=255: {e}")))?;
     set_sockopt_int(&sock, libc::IPPROTO_IPV6, libc::IPV6_UNICAST_HOPS, 255)
         .map_err(|e| NetworkError::Socket(format!("IPV6_UNICAST_HOPS=255: {e}")))?;
 
-    // Inscreve em ff02::2 (all-routers) para receber Router Solicitations.
-    // O kernel não repassa multicast de um grupo se o socket não estiver inscrito.
+    // Joins ff02::2 (all-routers) to receive Router Solicitations.
+    // The kernel doesn't pass multicast traffic if the socket isn't subscribed.
     let ff02_2: Ipv6Addr = "ff02::2".parse().unwrap();
     sock.join_multicast_v6(&ff02_2, iface_index)
         .map_err(|e| NetworkError::Socket(format!("join_multicast_v6(ff02::2): {e}")))?;
 
-    // ICMP6_FILTER: rejeita no kernel todos os tipos ICMPv6 exceto RS (133).
-    // No RPi4 isso reduz context switches e uso de CPU em redes com muito tráfego NDP.
+    // ICMP6_FILTER: tells the kernel to reject all ICMPv6 types except RS (133).
+    // On RPi4, this reduces context switches and CPU usage in high-traffic NDP environments.
     set_icmp6_filter_rs_only(&sock)
         .map_err(|e| NetworkError::Socket(format!("ICMP6_FILTER: {e}")))?;
 
     sock.set_nonblocking(true)
         .map_err(|e| NetworkError::Socket(format!("O_NONBLOCK: {e}")))?;
 
-    info!("Socket ICMPv6 raw OK — filtro ICMP6_FILTER ativo (apenas RS), inscrito em ff02::2");
+    info!("ICMPv6 raw socket OK — ICMP6_FILTER active (RS only), subscribed to ff02::2");
     Ok(sock)
 }
 
-/// Configura `ICMP6_FILTER` para aceitar apenas RS (tipo 133), bloquear todo o resto.
+/// Configures `ICMP6_FILTER` to accept only RS (type 133), blocking everything else.
 ///
-/// O filtro é um bitmask de 256 bits (32 bytes) processado no kernel antes de
-/// acordar o processo. Fundamental no `RPi4` onde cada wakeup desnecessário
-/// custa comparativamente mais que em x86.
+/// The filter is a 256-bit mask (32 bytes) processed in kernel space.
+/// Crucial on RPi4 to avoid unnecessary process wakeups.
 fn set_icmp6_filter_rs_only(sock: &Socket) -> io::Result<()> {
-    // Todos bits = 1 → bloqueia tudo (ICMP6_FILTER_SETBLOCKALL)
+    // All bits = 1 → block all (ICMP6_FILTER_SETBLOCKALL)
     let mut filter = [0xFFu8; 32];
-    // Limpa o bit do tipo RS → deixa passar (ICMP6_FILTER_SETPASS(133))
+    // Clear the bit for RS type → let it pass (ICMP6_FILTER_SETPASS(133))
     let t = ICMPV6_TYPE_RS as usize;
     filter[t / 8] &= !(1u8 << (t % 8));
 
@@ -392,7 +392,7 @@ fn set_icmp6_filter_rs_only(sock: &Socket) -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Wrappers de setsockopt não expostos pelo socket2 0.5
+// setsockopt wrappers not exposed by socket2 0.5
 // ---------------------------------------------------------------------------
 
 fn set_sockopt_int(
@@ -441,7 +441,7 @@ fn set_sockopt_raw(
 }
 
 // ---------------------------------------------------------------------------
-// Helpers de interface (sysfs — leitura direta sem syscall extra)
+// Interface Helpers (sysfs — direct read without extra syscalls)
 // ---------------------------------------------------------------------------
 
 fn get_iface_index(iface: &str) -> Result<u32> {
@@ -466,11 +466,11 @@ fn get_iface_mac(iface: &str) -> Result<[u8; 6]> {
 }
 
 // ---------------------------------------------------------------------------
-// Detecção de endereços via rtnetlink (reutiliza Handle existente)
+// Address Detection via rtnetlink (reused existing Handle)
 // ---------------------------------------------------------------------------
 
-/// Retorna o endereço link-local (`fe80::/10`) da interface.
-/// Obrigatório como endereço fonte de todo RA (RFC 4861 §4.2).
+/// Returns the link-local address (`fe80::/10`) of the interface.
+/// Mandatory as the source address for all RAs (RFC 4861 §4.2).
 async fn get_link_local_addr(handle: &Handle, iface_index: u32) -> Result<Ipv6Addr> {
     let mut stream = handle.address().get().execute();
     while let Some(msg) = stream.try_next().await? {
@@ -487,13 +487,11 @@ async fn get_link_local_addr(handle: &Handle, iface_index: u32) -> Result<Ipv6Ad
     Err(NetworkError::NoLinkLocal(iface_index))
 }
 
-/// Detecta o prefixo GUA /64 da interface e retorna com bits de host zerados.
+/// Detects the GUA /64 prefix on the interface and returns it along with lifetimes.
 ///
-/// GUA (`2000::/3)`: primeiro byte em [0x20, 0x3F].
-/// O endereço na interface (ex: `2a01:x:y:z::1`) é mascarado para obter `2a01:x:y:z::`.
-/// Retorna `None` se não houver GUA atribuído (ISP sem IPv6 ou delegação pendente).
-/// Detecta o prefixo GUA /64 da interface e retorna com bits de host zerados,
-/// juntamente com os lifetimes preferred e valid.
+/// GUA (`2000::/3)`: first byte in range [0x20, 0x3F].
+/// The address on the interface (e.g. `2a01:x:y:z::1`) is masked to obtain `2a01:x:y:z::`.
+/// Returns `None` if no GUA is assigned (ISP without IPv6 or pending delegation).
 async fn get_gua_prefix(handle: &Handle, iface_index: u32) -> Result<Option<(Ipv6Addr, u32, u32)>> {
     let mut stream = handle.address().get().execute();
     while let Some(msg) = stream.try_next().await? {
@@ -521,7 +519,7 @@ async fn get_gua_prefix(handle: &Handle, iface_index: u32) -> Result<Option<(Ipv
                 let (pref, valid) = if let Some(info) = cache_info {
                     (info.ifa_preferred, info.ifa_valid)
                 } else {
-                    (3600, 7200) // Fallback se não houver cache_info
+                    (3600, 7200) // Fallback if no cache_info is present
                 };
                 return Ok(Some((ip, pref, valid)));
             }

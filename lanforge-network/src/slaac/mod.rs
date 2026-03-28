@@ -1,28 +1,25 @@
-//! Tracker de endereços SLAAC via eventos netlink NDP.
+//! SLAAC address tracker via Linux kernel netlink NDP events.
 //!
-//! Este módulo é responsável por descobrir endereços IPv6 gerados via SLAAC
-//! consultando a tabela de vizinhos (neighbor table) do kernel Linux.
+//! This module is responsible for discovering IPv6 addresses generated via SLAAC
+//! by querying the Linux kernel's neighbor table (NDP cache).
 //!
-//! ## Fluxo de Descoberta
+//! ## Discovery Flow
 //!
-//! ```text
-//! kernel (dump de vizinhos IPv6)
-//!     └─► netlink::get_ipv6_neighbors()  →  Vec<NeighborEvent>
-//!                   │
-//!                   ▼
-//!     NeighborEvent::to_device_update(gua_prefix)
-//!                   │
-//!         ┌─────────┴──────────┐
-//!         ▼                    ▼
-//!   SlaacObserved          NdpSeen
-//!   (dirty → DNS/DB)       (só cache)
-//!                   │
-//!                   ▼
-//!           ManagedTable::update()
+//! ```mermaid
+//! graph TD
+//!     K[Kernel: IPv6 Neighbor Table]
+//!     N[netlink::get_ipv6_neighbors]
+//!     E[NeighborEvent]
+//!     T[ManagedTable]
+//!
+//!     K -->|Dump| N
+//!     N -->|Map| E
+//!     E -->|SlaacCleared| T
+//!     E -->|SlaacObserved / NdpSeen| T
 //! ```
 //!
-//! O ciclo de scan limpa os endereços SLAAC conhecidos antes de repopulá-los,
-//! garantindo que o estado interno não contenha endereços obsoletos (stale).
+//! The scan cycle clears known SLAAC addresses for a MAC before repopulating them,
+//! ensuring the internal state does not contain stale addresses.
 
 use crate::error::Result;
 use lanforge_core::state::update::DeviceUpdate;
@@ -34,13 +31,13 @@ use crate::netlink;
 use lanforge_core::bus::ManagedTable;
 use lanforge_core::identifiers::MacAddr;
 
-/// Executa um dump completo da tabela de vizinhos IPv6 (Sincronização de Estado).
+/// Performs a full dump of the IPv6 neighbor table (State Synchronization).
 ///
-/// No modelo event-driven, esta função NÃO é mais chamada a cada evento.
-/// Deve ser invocada apenas:
-/// 1. No startup (Bootstrap inicial).
-/// 2. Em trocas dinâmicas de prefixo GUA (RA).
-/// 3. Em timers de fallback longos (garantia de consistência).
+/// In the event-driven model, this function is NOT called on every event.
+/// It should be invoked only:
+/// 1. During startup (Initial Bootstrap).
+/// 2. During dynamic GUA prefix changes (RA).
+/// 3. In long-interval fallback timers (Consistency guarantee).
 pub async fn bootstrap_table(
     target_prefix: &str,
     handle: &Handle,
@@ -52,8 +49,8 @@ pub async fn bootstrap_table(
     let mut seen_macs: HashSet<MacAddr> = HashSet::new();
 
     for event in neighbors {
-        // Limpa os endereços antigos daquele MAC apenas na primeira vez
-        // que o encontramos durante este dump específico.
+        // Clear old addresses for this MAC only the first time
+        // we encounter it during this specific dump.
         if let Some(mac) = event.mac()
             && seen_macs.insert(mac)
         {

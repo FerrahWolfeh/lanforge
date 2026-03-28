@@ -1,35 +1,45 @@
 use std::io;
 use thiserror::Error;
 
-/// Erros específicos do subsistema de rede do Lanforge.
+/// Specific error types for the Lanforge network subsystem.
 #[derive(Debug, Error)]
 pub enum NetworkError {
-    #[error("falha de I/O: {0}")]
+    /// Standard I/O error.
+    #[error("I/O failure: {0}")]
     Io(#[from] io::Error),
 
-    #[error("falha no netlink: {0}")]
+    /// Error originating from the `rtnetlink` subsystem.
+    #[error("Netlink failure: {0}")]
     Netlink(#[from] rtnetlink::Error),
 
-    #[error("configuração inválida: {0}")]
+    /// Invalid configuration for a networking protocol.
+    #[error("Invalid network configuration: {0}")]
     Config(String),
 
-    #[error("falha ao criar ou configurar socket: {0}")]
+    /// Failed to create or configure a UDP/TCP socket.
+    #[error("Socket creation/config failure: {0}")]
     Socket(String),
 
-    #[error("erro no canal AF_PACKET: {0}")]
+    /// Error related to raw `AF_PACKET` sockets (used for RA/SLAAC).
+    #[error("AF_PACKET raw socket error: {0}")]
     RawSocket(String),
 
-    #[error("erro de rede genérico: {0}")]
+    /// Generic networking error.
+    #[error("Generic network failure: {0}")]
     Generic(String),
 
-    #[error("interface '{0}' não encontrada ou inválida")]
+    /// The specified network interface could not be found or is invalid.
+    #[error("Interface '{0}' not found or invalid")]
     InterfaceNotFound(String),
 
-    #[error("endereco MAC inválido ou ausente: {0}")]
+    /// Invalid or missing MAC address where one was expected.
+    #[error("Invalid or missing MAC address: {0}")]
     InvalidMac(String),
 
-    #[error("sem endereço link-local na interface {0}")]
+    /// No IPv6 Link-Local address (fe80::) found on the interface.
+    #[error("Missing link-local address on interface {0}")]
     NoLinkLocal(u32),
 }
 
+/// A specialized Result type for network operations.
 pub type Result<T> = std::result::Result<T, NetworkError>;

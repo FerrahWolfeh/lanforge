@@ -1,27 +1,27 @@
-//! Configuração do servidor `DHCPv4`.
+//! `DHCPv4` server configuration.
 
 use std::net::Ipv4Addr;
 
-/// Configuração do servidor `DHCPv4` — construída a partir do TOML `[dhcp.v4]`.
+/// `DHCPv4` server configuration — built from the `[dhcp.v4]` TOML section.
 #[derive(Debug, Clone)]
 pub struct Dhcpv4Config {
-    /// Interface LAN para escutar.
+    /// Network interface to listen on.
     pub iface: String,
-    /// IP do servidor (nosso endereço na LAN — usado como `server_id` e siaddr).
+    /// Server IP (our LAN address — used as `server_id` and `siaddr`).
     pub server_id: Ipv4Addr,
-    /// Início do range dinâmico.
+    /// Start of the dynamic IP range.
     pub range_start: Ipv4Addr,
-    /// Fim do range dinâmico (inclusive).
+    /// End of the dynamic IP range (inclusive).
     pub range_end: Ipv4Addr,
-    /// Lease time em segundos.
+    /// Lease time in seconds.
     pub lease_time: u32,
-    /// Default gateway anunciado aos clientes.
+    /// Default gateway announced to clients.
     pub router: Ipv4Addr,
-    /// Servidores DNS anunciados.
+    /// DNS servers announced to clients.
     pub dns: Vec<Ipv4Addr>,
-    /// Máscara de rede (default 255.255.255.0).
+    /// Subnet mask (default: 255.255.255.0).
     pub subnet_mask: Ipv4Addr,
-    /// Nome de domínio (opcional).
+    /// Domain name (optional).
     pub domain_name: Option<String>,
 }
 

@@ -5,6 +5,7 @@ use std::time::SystemTime;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
 
+/// Key for identifying a lease, strictly following RFC 8415 (DUID + IAID).
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct LeaseKey {
     pub duid: Vec<u8>,
@@ -17,14 +18,15 @@ pub struct Ipv6Pool {
     pub range_end: Option<Ipv6Addr>,
     ula_prefix: Option<Ipv6Addr>,
     pub ula_prefix_len: u8,
-    /// Alocação real e ativa é rigorosamente DUID + IAID
+    /// Active leases indexed by DUID + IAID.
     active: HashMap<LeaseKey, Ipv6Addr>,
+    /// Reverse index (IP → LeaseKey) for fast reverse lookups.
     ip_to_lease: HashMap<Ipv6Addr, LeaseKey>,
-    /// Reservas estáticas mapeadas pelo MAC (Device-centric)
+    /// Static reservations mapped by MAC (Device-centric).
     reserved: HashMap<Ipv6Addr, MacAddr>,
-    /// IPs em quarentena (ex: após DECLINE)
+    /// IPs in quarantine (e.g., after declining due to DAD failure).
     blacklisted: HashMap<Ipv6Addr, SystemTime>,
-    /// Prefixos delegados (IA_PD)
+    /// Delegated prefixes (IA_PD).
     prefix_active: HashMap<LeaseKey, (Ipv6Addr, u8)>,
 }
 
@@ -95,13 +97,13 @@ impl Ipv6Pool {
             iaid,
         };
 
-        // 1. O IP "Sticky" deste DUID+IAID já existe? (Prioridade máxima do protocolo)
+        // 1. Sticky IP: Does a lease for this DUID+IAID already exist? (Highest priority)
         if let Some(ip) = self.active.get(&lease_key) {
             return Some(*ip);
         }
 
-        // 2. Verificação de reserva estática (Configurada no TOML / Device-centric)
-        // Se sabemos o MAC e ele tem uma reserva não em uso, entregamos ela.
+        // 2. Static Reservation check (configured in TOML / Device-centric)
+        // If we know the MAC and it has an unused reservation, return it.
         if let Some(known_mac) = mac {
             let reserved_ip = self
                 .reserved
@@ -115,12 +117,12 @@ impl Ipv6Pool {
             }
         }
 
-        // 3. Pool Dinâmico Restrito (Sequencial) - Se range_start e range_end existirem
+        // 3. Restricted Dynamic Pool (Sequential/Ranged) - If range_start and range_end exist
         if let (Some(start), Some(end)) = (self.range_start, self.range_end) {
             let start_int = u128::from_be_bytes(start.octets());
             let end_int = u128::from_be_bytes(end.octets());
 
-            // Tenta o IP requisitado primeiro, respeitando os limites e a disponibilidade
+            // Try the requested IP first, respecting range and availability
             if let Some(req) = requested {
                 let req_int = u128::from_be_bytes(req.octets());
                 if req_int >= start_int && req_int <= end_int && self.is_available(&req) {
@@ -142,9 +144,9 @@ impl Ipv6Pool {
                 }
             }
         }
-        // 4. Opaque / Randomized IID (RFC 7943) - Se o range for omitido mas tivermos um ULA
+        // 4. Opaque / Randomized IID (RFC 7943) - Used if no range is defined but ULA exists
         else if let Some(ula) = self.ula_prefix {
-            // O cliente pediu um IP específico? Se bater com o prefixo do nosso ULA e estiver livre, aceitamos.
+            // Did the client request a specific IP? If it matches our ULA prefix and is free, accept it.
             if let Some(req) = requested
                 && self.is_on_link(&req)
                 && self.is_available(&req)
@@ -153,7 +155,7 @@ impl Ipv6Pool {
                 return Some(req);
             }
 
-            // Gera um sufixo IID (Interface Identifier) de forma aleatória.
+            // Generate a random Interface Identifier (IID) suffix.
             let ula_int = u128::from_be_bytes(ula.octets());
             let mask = !0u128 >> self.ula_prefix_len;
 
@@ -168,7 +170,7 @@ impl Ipv6Pool {
             }
         }
 
-        // Pool esgotado ou prefixo omitido nas configurações
+        // Pool exhausted or prefix omitted in configuration
         None
     }
 
@@ -188,7 +190,7 @@ impl Ipv6Pool {
             return Some(*res);
         }
 
-        // Se o prefixo ULA é /64, não podemos delegar /64s a menos que o próprio ULA seja maior.
+        // If the ULA prefix is /64 or smaller, we cannot delegate /64 sub-prefixes.
         if self.ula_prefix_len >= 64 {
             return None;
         }
@@ -196,12 +198,12 @@ impl Ipv6Pool {
         let ula = self.ula_prefix?;
         let ula_int = u128::from_be_bytes(ula.octets());
 
-        // Procura um /64 livre dentro do prefixo ULA.
+        // Search for a free /64 within the ULA prefix.
         let step = 1u128 << (128 - 64);
         let start = ula_int;
         let end = ula_int | (!0u128 >> self.ula_prefix_len);
 
-        // Pula o primeiro /64 (reservado para a LAN em IA_NA)
+        // Skip the first /64 (reserved for LAN IA_NA usage)
         let mut curr = start + step;
         while curr < end {
             let prefix_addr = Ipv6Addr::from(curr.to_be_bytes());
@@ -242,14 +244,14 @@ impl Ipv6Pool {
     }
 
     fn is_prefix_available(&self, addr: &Ipv6Addr, len: u8) -> bool {
-        // Verifica se conflita com algum prefixo delegado
+        // Check for conflicts with delegated prefixes
         for (a, l) in self.prefix_active.values() {
             if *a == *addr && *l == len {
                 return false;
             }
         }
-        // Verifica se conflita com IPs individuais na LAN
-        // (Isso é uma simplificação, idealmente prefixes e IPs não se misturam no mesmo pool)
+        // Check for conflicts with individual LAN IPs
+        // (Simplification: ideally prefixes and IPs reside in separate pools)
         true
     }
 
@@ -259,12 +261,12 @@ impl Ipv6Pool {
     }
 
     fn is_available(&self, ip: &Ipv6Addr) -> bool {
-        // Um IP está livre se não estiver concedido, reservado ou blacklisted
+        // An IP is free if not granted, reserved, or blacklisted.
         if self.ip_to_lease.contains_key(ip) {
             return false;
         }
         if let Some(ts) = self.blacklisted.get(ip) {
-            // Quarantine por 24h
+            // Quarantine for 24 hours.
             if ts.elapsed().unwrap_or_default().as_secs() < 86400 {
                 return false;
             }
@@ -279,14 +281,14 @@ impl Ipv6Pool {
     }
 
     pub fn release_mac(&mut self, mac: MacAddr) {
-        // Encontrar os IPs associados a este MAC através das reservas ou leases ativos
-        // Nota: no v6 interface-centric, um MAC pode ter múltiplos IAIDs.
-        // Se for forçar release por MAC, limpamos as reservas.
+        // Find IPs associated with this MAC through reservations or active leases.
+        // Note: in interface-centric IPv6, a single MAC can hold multiple IAIDs.
+        // If forcing release by MAC, we clear the reservations.
         self.remove_reservation(mac);
     }
 
     fn mark_used(&mut self, ip: Ipv6Addr, key: LeaseKey) {
-        // Se este IP já estava em uso por outra chave, removemos a antiga
+        // If this IP was already in use by another key, remove the old one
         if let Some(old_key) = self.ip_to_lease.remove(&ip) {
             self.active.remove(&old_key);
         }
@@ -310,7 +312,7 @@ impl Ipv6Pool {
         self.prefix_active.get(&key).copied()
     }
 
-    /// Versão legado para compatibilidade com o Manager que só conhecia MAC
+    /// Legacy version for compatibility with Managers that only identified via MAC.
     pub fn lookup_by_mac_legacy(&self, mac: MacAddr) -> Option<Ipv6Addr> {
         for (ip, res_mac) in &self.reserved {
             if *res_mac == mac {
