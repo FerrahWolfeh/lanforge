@@ -502,7 +502,7 @@ mod tests {
     fn test_all_addresses_sorted() {
         let dev = Device {
             hostname: "test".to_string(),
-            mac: MacAddr([0, 0, 0, 0, 0, 0]),
+            mac: MacAddr([1, 2, 3, 4, 5, 6]),
             origin: Origin::Dynamic,
             managed_at: None,
             duid: None,

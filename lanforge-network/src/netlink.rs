@@ -118,10 +118,15 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
             ifindex: neigh.header.ifindex,
         })
     } else {
+        let mac = mac?;
+        if mac.is_zero() {
+            return None;
+        }
+
         // For additions, the MAC address is strictly required. Returns None if missing.
         Some(NeighborEvent::Added {
             ip,
-            mac: mac?,
+            mac,
             ifindex: neigh.header.ifindex,
         })
     }
@@ -156,6 +161,10 @@ fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
 
     let ip = ip?;
     let mac = mac?;
+
+    if mac.is_zero() {
+        return None;
+    }
 
     Some(NeighborEvent::Added { ip, mac, ifindex })
 }

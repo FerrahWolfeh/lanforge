@@ -200,6 +200,12 @@ impl MacAddr {
             None
         }
     }
+
+    /// Returns true if the MAC address is all zeros (00:00:00:00:00:00).
+    pub const fn is_zero(&self) -> bool {
+        let b = self.0;
+        b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0 && b[4] == 0 && b[5] == 0
+    }
 }
 
 impl From<[u8; 6]> for MacAddr {
