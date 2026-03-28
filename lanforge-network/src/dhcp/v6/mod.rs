@@ -203,10 +203,41 @@ pub async fn dhcpv6_service(
                         server.prefix_lifetimes = Some((preferred, valid));
                         debug!("DHCPv6: Updated prefix lifetimes from bus: pref={}, valid={}", preferred, valid);
                     }
+                    Ok(LanforgeEvent::LeaseRenew { mac }) => {
+                        let (duid, target_ip) = {
+                            let t = table.read();
+                            let device = t.get_device(&mac);
+                            let duid = device.and_then(|d| d.duid.clone());
+
+                            // RECONFIGURE must be sent to the client's link-local address (RFC 3315)
+                            let ll_ip = device.and_then(|d| {
+                                d.v6.iter().find_map(|s| {
+                                    s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
+                                })
+                            });
+
+                            (duid, ll_ip)
+                        };
+
+                        if let (Some(duid), Some(ip)) = (duid, target_ip) {
+                            info!("DHCPv6: Sending manual RECONFIGURE to {} ({})", ip, mac);
+                            let packet = server.build_reconfigure(&duid, dhcproto::v6::MessageType::Renew);
+                            
+                            let client_port = if config.port == 547 { 546 } else { config.port - 1 };
+                            let dest_addr = std::net::SocketAddrV6::new(ip, client_port, 0, 0);
+
+                            if let Err(e) = udp.send_to(&packet, dest_addr).await {
+                                warn!("DHCPv6: Failed to send RECONFIGURE to {ip}: {e}");
+                            }
+                        } else {
+                            warn!("DHCPv6: Cannot send RECONFIGURE to {mac}: DUID or Link-Local IP not found");
+                        }
+                    }
                     Ok(LanforgeEvent::Shutdown) => break,
                     _ => {}
                 }
             }
+
         }
     }
     Ok(())
