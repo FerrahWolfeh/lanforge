@@ -1,21 +1,21 @@
-//! `DeviceTable` e tipos centrais do lanforge.
+//! `DeviceTable` and central Lanforge state types.
 //!
-//! O modelo central é um Device — um dispositivo físico que pode ter v4, v6
-//! e endereços SLAAC ao mesmo tempo. Indexado pelo MAC.
+//! The core model is a [`Device`] — a physical network entity that can possess
+//! IPv4, IPv6, and SLAAC addresses simultaneously. Devices are primarily indexed by MAC.
 //!
-//! ## Fluxo de escrita
+//! ## Writing to the Table
 //!
-//! Nenhum módulo externo deve escrever diretamente nos campos de `Device`.
-//! O caminho correto é:
+//! No external module should ever modify a [`Device`]'s fields directly.
+//! The correct path for all state transitions is:
 //!
 //! ```ignore
 //! let update = DeviceUpdate::V4LeaseGranted { mac, ip, expires };
 //! let changed = table.apply_update(update);
 //! ```
 //!
-//! `apply_update` é a **única** autoridade para merging e precedência
-//! (estático > dinâmico). Se retornar `true`, o caller deve emitir um
-//! evento `DeviceTableDirty` no `EventBus`.
+//! The `apply_update` method is the **sole authority** for merging logic and
+//! precedence (e.g., Static > Dynamic). If it returns `true`, the caller is
+//! responsible for emitting a `DeviceTableDirty` event on the `EventBus`.
 
 pub mod expiry;
 pub mod update;
@@ -35,24 +35,32 @@ use crate::state::update::StaticEntry;
 // DeviceTable
 // ---------------------------------------------------------------------------
 
-/// Tabela de dispositivos — compartilhada via Arc<`RwLock`<..>>.
+/// The central device table — typically shared via `Arc<RwLock<DeviceTable>>`.
 ///
-/// É a **única autoridade** de estado. Toda escrita passa por `apply_update`.
+/// It is the **sole authority** for system state. All state modifications
+/// MUST pass through `apply_update`.
 #[derive(Debug, Clone)]
 pub struct DeviceTable {
+    /// Global map of devices keyed by MAC address.
     devices: HashMap<MacAddr, Device>,
+    /// Index: DUID -> MAC
     duid_index: HashMap<Duid, MacAddr>,
+    /// Static entries from configuration files or database.
     static_entries: HashMap<MacAddr, StaticEntry>,
+    /// Cache for Neighbor Discovery Protocol (NDP) lookups.
     ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
-    /// Leases IPv6 aprendidos sem MAC ainda (aguardando NDP).
+    /// IPv6 leases discovered before a corresponding MAC was known.
     orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
 
-    // --- Índices para o Hot Path do DNS ---
+    // --- DNS Hot Path Indices ---
+    /// Index: Hostname -> MAC
     name_index: HashMap<String, MacAddr>,
+    /// Index: IP Address -> MAC
     ip_index: HashMap<IpAddr, MacAddr>,
 }
 
 impl DeviceTable {
+    /// Creates a new, empty device table.
     pub fn new() -> Self {
         Self {
             devices: HashMap::new(),
@@ -66,59 +74,59 @@ impl DeviceTable {
     }
 
     // -----------------------------------------------------------------------
-    // Leituras públicas
+    // Public Queries
     // -----------------------------------------------------------------------
 
-    /// Busca um dispositivo pelo seu MAC.
+    /// Retrieves a device by its MAC address.
     pub fn get_device(&self, mac: &MacAddr) -> Option<&Device> {
         self.devices.get(mac)
     }
 
-    /// Busca um dispositivo pelo seu MAC (mutável).
+    /// Retrieves a mutable reference to a device by its MAC address.
     pub fn get_device_mut(&mut self, mac: &MacAddr) -> Option<&mut Device> {
         self.devices.get_mut(mac)
     }
 
-    /// Busca um dispositivo pelo hostname.
+    /// Retrieves a device by its configured hostname.
     pub fn get_by_hostname(&self, hostname: &str) -> Option<&Device> {
         self.name_index
             .get(hostname)
             .and_then(|mac| self.devices.get(mac))
     }
 
-    /// Busca um dispositivo pelo IP.
+    /// Retrieves a device by any of its assigned IP addresses.
     pub fn get_by_ip(&self, ip: &IpAddr) -> Option<&Device> {
         self.ip_index.get(ip).and_then(|mac| self.devices.get(mac))
     }
 
-    /// Busca um dispositivo pelo DUID.
+    /// Retrieves a device by its DUID (DHCPv6 Unique Identifier).
     pub fn get_by_duid(&self, duid: &Duid) -> Option<&Device> {
         self.duid_index
             .get(duid)
             .and_then(|mac| self.devices.get(mac))
     }
 
-    /// Recupera o DUID associado a um MAC, se já tiver sido aprendido.
+    /// Retrieves the DUID associated with a MAC address, if already learned.
     pub fn get_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
         self.devices.get(&mac)?.duid.as_ref()
     }
 
-    /// Itera sobre todos os devices conhecidos.
+    /// Returns an iterator over all known devices.
     pub fn devices(&self) -> impl Iterator<Item = &Device> {
         self.devices.values()
     }
 
-    /// Itera sobre todos os entries estáticos.
+    /// Returns an iterator over all static entries (configurations).
     pub fn static_entries(&self) -> impl Iterator<Item = &StaticEntry> {
         self.static_entries.values()
     }
 
-    /// Recupera o MAC associado a um IP via cache NDP.
+    /// Retrieves a MAC address from the NDP cache for a given IPv6 address.
     pub fn get_mac_from_ndp_cache(&self, ip: &Ipv6Addr) -> Option<MacAddr> {
         self.ndp_cache.get(ip).map(|(mac, _)| *mac)
     }
 
-    /// Retorna iterador sobre leases órfãos (V6 sem MAC ainda).
+    /// Returns an iterator over orphaned IPv6 leases (assigned but MAC unknown).
     pub fn iter_orphaned_v6(&self) -> impl Iterator<Item = (&Ipv6Addr, &(Duid, u32, SystemTime))> {
         self.orphaned_v6.iter()
     }

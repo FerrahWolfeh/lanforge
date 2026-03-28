@@ -1,6 +1,7 @@
-//! `ManagedTable` — wrapper que conecta `DeviceTable` ao `EventBus`.
+//! `ManagedTable` — A high-level wrapper connecting `DeviceTable` to the `EventBus`.
 //!
-//! Automatiza a publicação de eventos após cada `apply_update`.
+//! This module automates the publication of events to the bus after every
+//! successful state update.
 
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::Arc;
@@ -9,17 +10,19 @@ use super::{DeviceChange, EventBus, LanforgeEvent};
 use crate::state::DeviceTable;
 use crate::state::update::DeviceUpdate;
 
-/// Wrapper em torno do `DeviceTable` que automaticamente publica eventos
-/// no `EventBus` após cada `apply_update`.
+/// A thread-safe wrapper around `DeviceTable` that automatically publishes events
+/// to the `EventBus` after each successful `update`.
 ///
-/// É este tipo que deve ser distribuído via `Arc<ManagedTable>` para as tasks
-/// de protocolo — não o `DeviceTable` diretamente.
+/// This is the primary type that should be shared via `Arc<ManagedTable>`
+/// among protocol tasks (DHCP, RA, etc.) to ensure state updates are
+/// broadcasted across the system.
 pub struct ManagedTable {
     inner: RwLock<DeviceTable>,
     bus: Arc<EventBus>,
 }
 
 impl ManagedTable {
+    /// Creates a new managed table wrapping an empty device table.
     pub fn new(bus: Arc<EventBus>) -> Self {
         Self {
             inner: RwLock::new(DeviceTable::new()),
@@ -27,7 +30,7 @@ impl ManagedTable {
         }
     }
 
-    /// Aplica um update ao `DeviceTable` e publica os eventos correspondentes.
+    /// Applies a [`DeviceUpdate`] to the table and publishes corresponding events to the bus.
     pub async fn update(&self, update: DeviceUpdate) {
         let mut table = self.inner.write();
 
@@ -61,17 +64,21 @@ impl ManagedTable {
         self.bus.publish(LanforgeEvent::DeviceTableDirty);
     }
 
-    /// Leitura do estado interno.
+    /// Provides a read-only lock to the internal device table.
     pub fn read(&self) -> RwLockReadGuard<'_, DeviceTable> {
         self.inner.read()
     }
 
-    /// Acesso de escrita direto — usar apenas para operações de manutenção.
+    /// Provides a direct write lock to the internal device table.
+    ///
+    /// # Warning
+    /// Use this only for maintenance or background operations where event
+    /// publication needs to be handled manually or skipped.
     pub fn write(&self) -> RwLockWriteGuard<'_, DeviceTable> {
         self.inner.write()
     }
 
-    /// Retorna uma referência ao barramento de eventos.
+    /// Returns a reference to the shared event bus.
     pub fn bus(&self) -> Arc<EventBus> {
         self.bus.clone()
     }
@@ -83,7 +90,7 @@ impl ManagedTable {
 
 use crate::identifiers::MacAddr;
 
-/// Extrai o MAC de qualquer variante de `DeviceUpdate`, se houver.
+/// Extracts the MAC address from any variant of [`DeviceUpdate`], if present.
 const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
     match update {
         DeviceUpdate::V4LeaseGranted { mac, .. } => Some(*mac),
@@ -103,7 +110,7 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
     }
 }
 
-/// Converte um `DeviceUpdate` no `DeviceChange` correspondente para o bus.
+/// Converts a [`DeviceUpdate`] into its corresponding [`DeviceChange`] for the bus.
 fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
     match update {
         DeviceUpdate::V4LeaseGranted { ip, .. } => Some(DeviceChange::V4Assigned { ip: *ip }),

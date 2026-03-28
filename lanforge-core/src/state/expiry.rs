@@ -1,4 +1,4 @@
-//! Manutenção periódica e índices de alta performance para o DNS.
+//! Periodic maintenance and high-performance DNS lookup indexing.
 
 use std::net::IpAddr;
 use std::time::SystemTime;
@@ -10,8 +10,10 @@ use crate::device::{IPv4State, IPv6State};
 use super::DeviceTable;
 
 impl DeviceTable {
-    /// Remove leases expirados e devices dinâmicos inativos.
-    /// Retorna `true` se houve mudança — dispara `DeviceTableDirty`.
+    /// Removes expired leases and inactive dynamic devices from the table.
+    ///
+    /// Returns `true` if any changes were made, signalling that a
+    /// `DeviceTableDirty` event should be dispatched.
     pub fn expire_stale(&mut self) -> bool {
         let now = SystemTime::now();
         let max_age = std::time::Duration::from_secs(7 * 24 * 3600);
@@ -88,12 +90,13 @@ impl DeviceTable {
     }
 
     // -----------------------------------------------------------------------
-    // Índices de Alta Performance para o DNS (Hot Path)
+    // High-Performance DNS Hot-Path Indices
     // -----------------------------------------------------------------------
 
-    /// Reconstrói os índices O(1) do DNS do zero.
-    /// Isso garante que não teremos IPs ou Hostnames fantasmas presos no cache
-    /// após expirações de lease ou rotações de SLAAC.
+    /// Rebuilds the O(1) DNS lookup indices from scratch.
+    ///
+    /// This ensures that no "ghost" Hostnames or IPs remain in the cache after
+    /// leases expire or SLAAC addresses rotate.
     pub(crate) fn rebuild_dns_indices(&mut self) {
         self.name_index.clear();
         self.ip_index.clear();
@@ -101,38 +104,38 @@ impl DeviceTable {
         for (&mac, device) in &self.devices {
             let _static_entry = self.static_entries.get(&mac);
 
-            // 1. Indexa o hostname explícito (sempre em minúsculas)
+            // 1. Index the explicit hostname (always lowercase)
             if !device.hostname.is_empty() {
                 self.name_index
                     .insert(device.hostname.to_ascii_lowercase(), mac);
             }
 
-            // 2. Indexa o fallback obrigatório (host-<mac>)
+            // 2. Index the mandatory fallback (host-<mac_no_colons>)
             let fallback =
                 format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase();
             self.name_index.insert(fallback, mac);
 
-            // 3. Indexa IPv4 (Dinâmico e Estático)
+            // 3. Index IPv4 (Dynamic and Static)
             if let Some(ip) = device.v4.ip() {
                 self.ip_index.insert(IpAddr::V4(ip), mac);
             }
 
-            // 4. Indexa IPv6 (Dinâmico DHCPv6, SLAAC e Estático Full)
+            // 4. Index IPv6 (DHCPv6, SLAAC, and Full Static)
             for state in &device.v6 {
                 if let Some(ip) = state.ip() {
                     self.ip_index.insert(IpAddr::V6(ip), mac);
                 }
             }
 
-            // Nota: IPs com sufixos estáticos (ex: ::10) compostos com ULA/GUA
-            // não estão sendo indexados aqui porque dependem da `DnsConfig` (o prefixo real da rede).
+            // Note: IPs using static suffixes (e.g., ::1) composed with ULA/GUA
+            // are not indexed here yet, as they depend on the runtime prefix.
         }
 
         self.name_index.shrink_to_fit();
         self.ip_index.shrink_to_fit();
 
         debug!(
-            "[state] Índices DNS reconstruídos: {} nomes, {} IPs",
+            "[state] DNS indices rebuilt: {} names, {} IPs",
             self.name_index.len(),
             self.ip_index.len()
         );

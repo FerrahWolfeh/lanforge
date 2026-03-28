@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
-/// Representa um DHCP Unique Identifier (DUID)
+/// Represents a DHCP Unique Identifier (DUID).
+///
+/// Used in DHCPv6 to uniquely identify a client or server.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Duid {
+    /// The raw bytes of the DUID.
     #[serde(serialize_with = "serialize_duid")]
     pub bytes: Vec<u8>,
 }
@@ -22,31 +25,44 @@ where
 }
 
 impl Duid {
+    /// Creates a new DUID from a vector of bytes.
     pub const fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
 
-    /// Retorna os bytes puros do DUID
+    /// Returns the raw bytes of the DUID.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Retorna o tipo do DUID como string legível — útil para logs de diagnóstico.
+    /// Returns a human-readable description of the DUID type.
+    ///
+    /// Based on RFC 3315 / RFC 8415 DUID types.
     pub fn duid_type(&self) -> &'static str {
         if self.bytes.len() < 2 {
             return "unknown (too short)";
         }
         match u16::from_be_bytes([self.bytes[0], self.bytes[1]]) {
-            1 => "DUID-LLT (contains MAC)",
-            2 => "DUID-EN (no MAC — enterprise number)",
-            3 => "DUID-LL (contains MAC)",
-            4 => "DUID-UUID (no MAC)",
+            1 => "DUID-LLT (Link-layer address plus time)",
+            2 => "DUID-EN (Enterprise number)",
+            3 => "DUID-LL (Link-layer address)",
+            4 => "DUID-UUID (Universally Unique Identifier)",
             _ => "DUID-unknown",
         }
     }
 
-    /// Tenta extrair um MAC (Link-Layer Address) a partir do DUID, se for do tipo LL ou LLT.
-    /// Retorna None se não for possível extrair com segurança.
+    /// Attempts to extract a MAC address from the DUID if it is of type LL or LLT.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use lanforge_core::identifiers::{Duid, MacAddr};
+    ///
+    /// // DUID-LL for MAC 00:01:02:03:04:05
+    /// let duid = Duid::new(vec![0, 3, 0, 1, 0, 1, 2, 3, 4, 5]);
+    /// let mac = duid.extract_mac().unwrap();
+    /// assert_eq!(mac.to_string(), "00:01:02:03:04:05");
+    /// ```
     #[allow(clippy::match_same_arms)]
     pub fn extract_mac(&self) -> Option<MacAddr> {
         if self.bytes.len() < 2 {
@@ -80,8 +96,9 @@ impl Duid {
         None
     }
 
-    /// Gera um DUID-LL (Link-Layer) válido de 10 bytes usando o MAC da interface.
-    /// Formato: Type (0x0003) + Hardware Type (0x0001 para Ethernet) + MAC (6 bytes)
+    /// Generates a valid 10-byte DUID-LL (Link-Layer) using a MAC address.
+    ///
+    /// The format is Type (0x0003) + Hardware Type (0x0001 for Ethernet) + MAC (6 bytes).
     pub fn generate_ll_from_mac(mac: [u8; 6]) -> Self {
         let mut bytes = vec![0x00, 0x03, 0x00, 0x01];
         bytes.extend_from_slice(&mac);
@@ -117,7 +134,7 @@ impl fmt::Display for Duid {
 // MacAddr
 // ---------------------------------------------------------------------------
 
-/// Endereço MAC de 6 bytes.
+/// Represents a 6-byte IEEE 802 MAC address.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MacAddr(
     #[serde(serialize_with = "serialize_mac", deserialize_with = "deserialize_mac")] pub [u8; 6],
@@ -144,6 +161,16 @@ where
 }
 
 impl MacAddr {
+    /// Parses a colon-separated MAC address string (e.g., "00:11:22:33:44:55").
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use lanforge_core::identifiers::MacAddr;
+    ///
+    /// let mac = MacAddr::parse("00:de:ad:be:ef:00").unwrap();
+    /// assert_eq!(mac.0, [0x00, 0xde, 0xad, 0xbe, 0xef, 0x00]);
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
@@ -157,6 +184,7 @@ impl MacAddr {
         Some(Self(bytes))
     }
 
+    /// Creates a `MacAddr` from a slice of 6 bytes.
     pub const fn from_slice(bytes: &[u8]) -> Option<Self> {
         if bytes.len() == 6 {
             let mut arr = [0u8; 6];

@@ -1,23 +1,22 @@
 // ---------------------------------------------------------------------------
-// NeighborEvent — struct tipada para eventos do kernel
+// NeighborEvent — Typed structure for kernel neighbor events
 // ---------------------------------------------------------------------------
 
 use std::net::Ipv6Addr;
 
 use crate::{identifiers::MacAddr, state::update::DeviceUpdate, utils::ip_matches_prefix};
 
-/// Um evento de vizinho (IPv4 ou IPv6) observado pelo kernel (`RTM_NEWNEIGH`).
+/// A neighbor event (IPv4 or IPv6) observed via the kernel `RTM_NEWNEIGH` netlink signal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NeighborEvent {
+    /// A neighbor entry was added or updated.
     Added {
         ip: std::net::IpAddr,
         mac: MacAddr,
         ifindex: u32,
     },
-    Deleted {
-        ip: std::net::IpAddr,
-        ifindex: u32,
-    },
+    /// A neighbor entry was deleted from the kernel table.
+    Deleted { ip: std::net::IpAddr, ifindex: u32 },
 }
 
 impl NeighborEvent {
@@ -35,6 +34,7 @@ impl NeighborEvent {
         }
     }
 
+    /// Maps the raw neighbor event into a higher-level [`DeviceUpdate`].
     pub fn to_device_update(&self, gua_prefix: Option<&Ipv6Addr>) -> DeviceUpdate {
         match self {
             NeighborEvent::Added { ip, mac, .. } => match ip {

@@ -33,14 +33,16 @@ where
     serializer.serialize_u64(elapsed.as_secs())
 }
 
-// ---------------------------------------------------------------------------
-// Origin
-// ---------------------------------------------------------------------------
-
+/// The administrative source of a device's configuration.
+///
+/// This determines the priority and persistence of the device's settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Origin {
+    /// Configured manually via the `lanforge.toml` file.
     Toml,
+    /// Configured or overridden via the CLI control interface.
     Cli,
+    /// Discovered dynamically on the network (e.g., via DHCP or ARP).
     #[default]
     Dynamic,
 }
@@ -79,38 +81,50 @@ impl FromStr for Origin {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Address States
-// ---------------------------------------------------------------------------
-
+/// Represents an active DHCPv4 lease.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V4Lease {
+    /// The assigned IPv4 address.
     pub ip: Ipv4Addr,
+    /// The precise moment when this lease will expire.
     #[serde(serialize_with = "serialize_time")]
     pub expires: SystemTime,
 }
 
+/// Represents an active DHCPv6 IA_NA (Address) lease.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V6Lease {
+    /// The assigned IPv6 address.
     pub ip: Ipv6Addr,
+    /// The Identity Association Identifier from the client.
     pub iaid: u32,
+    /// The precise moment when this lease will expire.
     #[serde(serialize_with = "serialize_time")]
     pub expires: SystemTime,
 }
 
+/// Represents an active DHCPv6 IA_PD (Prefix Delegation) lease.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V6PrefixLease {
+    /// The delegated IPv6 prefix.
     pub prefix: Ipv6Addr,
+    /// The prefix length (e.g., 60).
     pub len: u8,
+    /// The Identity Association Identifier from the client.
     pub iaid: u32,
+    /// The precise moment when this lease will expire.
     #[serde(serialize_with = "serialize_time")]
     pub expires: SystemTime,
 }
 
+/// Represents the current IPv4 configuration of a device.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IPv4State {
+    /// A manually configured static IPv4 address.
     Static(Ipv4Addr),
+    /// An address assigned via a dynamic DHCPv4 lease.
     Dynamic(V4Lease),
+    /// No IPv4 address currently assigned or configured.
     None,
 }
 
@@ -124,10 +138,16 @@ impl IPv4State {
     }
 }
 
+/// Represents a specific IPv6 address state for a device.
+///
+/// A single device may have multiple IPv6 states (e.g., a SLAAC address and a DHCPv6 lease).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IPv6State {
+    /// A manually configured static address or suffix.
     Static(Ipv6AddrOrSuffix),
+    /// An address assigned via a dynamic DHCPv6 lease (IA_NA).
     Dynamic(V6Lease),
+    /// An address observed being used via SLAAC (Stateless Address Autoconfiguration).
     Slaac(Ipv6Addr),
 }
 
@@ -142,13 +162,25 @@ impl IPv6State {
     }
 }
 
+/// Represents either a complete IPv6 address or a 64-bit Interface ID (suffix).
+///
+/// Suffixes are useful when the global prefix changes but the device's
+/// identifier remains constant.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Ipv6AddrOrSuffix {
+    /// A complete 128-bit IPv6 address.
     Full(Ipv6Addr),
+    /// A 64-bit Interface ID (suffix), typically combined with a global prefix.
     Suffix([u8; 8]),
 }
 
 impl Ipv6AddrOrSuffix {
+    /// Parses a string into either a Full IPv6 address or a Suffix.
+    ///
+    /// # Rules
+    /// - If the string is a valid `Ipv6Addr` and the first 64 bits are zero, it is treated as a `Suffix`.
+    /// - If it's a valid `Ipv6Addr` with non-zero prefix bits, it is a `Full` address.
+    /// - If it's a short string (e.g., "1", "beef") that can be parsed as the lower bits of an IPv6 address, it's a `Suffix`.
     pub fn parse(s: &str) -> Option<Self> {
         if s.is_empty() {
             return None;
@@ -213,26 +245,44 @@ impl fmt::Display for Ipv6AddrOrSuffix {
     }
 }
 
-// ---------------------------------------------------------------------------
-// IP Classification and Scoring (ULA > IPv4 > GUA)
-// ---------------------------------------------------------------------------
-
+/// Priority classification for IP addresses.
+///
+/// Lower values have higher priority in sorting and display.
+/// ULA (Unique Local Address) has the highest priority for local consistency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum IpClassification {
+    /// IPv6 Unique Local Address (fc00::/7).
     Ula = 0,
+    /// Standard IPv4 address.
     Ipv4 = 1,
+    /// IPv6 Global Unicast Address (2000::/3).
     Gua = 2,
+    /// IPv6 Link-Local address (fe80::/10).
     LinkLocal = 3,
+    /// Local loopback (127.0.0.1 or ::1).
     Loopback = 4,
+    /// Unknown or non-categorized address type.
     Other = 10,
 }
 
 impl IpClassification {
+    /// Returns the sorting score for this classification.
     pub fn score(&self) -> u8 {
         *self as u8
     }
 }
 
+/// Classifies an IP address into its priority category.
+///
+/// # Example
+///
+/// ```rust
+/// use std::net::IpAddr;
+/// use lanforge_core::device::{classify_ip, IpClassification};
+///
+/// let ula = "fd00::1".parse::<IpAddr>().unwrap();
+/// assert_eq!(classify_ip(&ula), IpClassification::Ula);
+/// ```
 pub fn classify_ip(addr: &IpAddr) -> IpClassification {
     match addr {
         IpAddr::V4(v4) => {
@@ -260,33 +310,43 @@ pub fn classify_ip(addr: &IpAddr) -> IpClassification {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Device
-// ---------------------------------------------------------------------------
-
+/// Represents a network device discovered and managed by Lanforge.
+///
+/// This is the central data structure in the `DeviceTable`, containing identity,
+/// addressing, and persistence metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
+    /// The primary identifier: MAC address.
     pub mac: MacAddr,
+    /// The device's hostname.
     pub hostname: String,
+    /// Where this device's configuration originated.
     pub origin: Origin,
 
+    /// Precise moment when the device was first manually managed, if applicable.
     #[serde(serialize_with = "serialize_time_opt")]
     pub managed_at: Option<SystemTime>,
 
+    /// Current IPv4 connectivity state.
     pub v4: IPv4State,
+    /// List of IPv6 connectivity states (SLAAC, DHCPv6, etc.).
     pub v6: Vec<IPv6State>,
+    /// List of delegated IPv6 prefixes assigned to this device.
     pub v6_prefixes: Vec<V6PrefixLease>,
 
-    /// Endereços IPv4 observados via ARP/Netlink (não necessariamente leases).
+    /// IPv4 addresses observed via network traffic (ARP/Netlink).
     pub seen_v4: Vec<Ipv4Addr>,
 
+    /// Precise moment when the device was last seen on the network.
     #[serde(serialize_with = "serialize_time")]
     pub last_seen: SystemTime,
 
+    /// DHCPv6 Unique Identifier (DUID), if tracked.
     pub duid: Option<Duid>,
 }
 
 impl Device {
+    /// Returns true if the device's configuration is persistent (Toml or Cli).
     pub fn is_static(&self) -> bool {
         self.origin.is_static()
     }
@@ -297,6 +357,7 @@ impl Device {
 // ---------------------------------------------------------------------------
 
 impl Device {
+    /// Returns the device's hostname, or "?" if not available.
     pub fn display_hostname(&self) -> &str {
         if self.hostname.is_empty() {
             "?"
@@ -305,6 +366,7 @@ impl Device {
         }
     }
 
+    /// Returns true if the device was seen within the last 5 minutes.
     pub fn is_online(&self) -> bool {
         self.last_seen
             .elapsed()
@@ -312,6 +374,7 @@ impl Device {
             .unwrap_or(false)
     }
 
+    /// Returns a human-readable primary IPv4 address or "—".
     pub fn display_v4(&self) -> String {
         match &self.v4 {
             IPv4State::Static(ip) => ip.to_string(),
@@ -327,9 +390,10 @@ impl Device {
     }
 
     /// Returns the primary IPv6 address based on following priority:
-    /// 1. ULA (Static or Dynamic Lease)
-    /// 2. SLAAC (any)
-    /// 3. GUA (Static or Dynamic Lease)
+    ///
+    /// 1. **ULA** (Unique Local Address): Static or Dynamic Lease. Preferred for local consistency.
+    /// 2. **SLAAC**: Any observed SLAAC address.
+    /// 3. **GUA** (Global Unicast Address): Static or Dynamic Lease.
     pub fn primary_v6(&self) -> Option<Ipv6Addr> {
         // 1. Check for ULA in leases/static
         for state in &self.v6 {
@@ -357,14 +421,15 @@ impl Device {
         None
     }
 
+    /// Returns a human-readable primary IPv6 address or "—".
     pub fn display_v6(&self) -> String {
         self.primary_v6()
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "—".to_string())
     }
 
-    /// Returns ALL available IP addresses (v4 and v6) sorted by priority:
-    /// ULA (0) > IPv4 (1) > GUA (2) > others
+    /// Returns all available IP addresses (v4 and v6) sorted by priority:
+    /// ULA (0) > IPv4 (1) > GUA (2) > others.
     #[cfg(test)]
     pub fn all_addresses_sorted(&self) -> Vec<IpAddr> {
         let mut addrs = Vec::new();
@@ -396,6 +461,7 @@ impl Device {
     }
 }
 
+/// Checks if an IPv6 address is a Unique Local Address (ULA).
 fn is_ula(addr: &Ipv6Addr) -> bool {
     (addr.segments()[0] & 0xfe00) == 0xfc00
 }
