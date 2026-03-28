@@ -60,6 +60,8 @@ use std::net::Ipv6Addr;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, interval};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -199,11 +201,14 @@ async fn main() -> Result<()> {
     // 4. Transformamos em ManagedTable reativa (Arc<RwLock<DeviceTable>>)
     let table = Arc::new(ManagedTable::from_table(bus.clone(), initial_table));
 
+    let tracker = TaskTracker::new();
+    let cancel = CancellationToken::new();
+
     // -----------------------------------------------------------------------
     // DB worker — persiste reativamente via EventBus
     // -----------------------------------------------------------------------
-    tokio::spawn(db_worker(
-        leases_db_path,
+    tracker.spawn(db_worker(
+        leases_db_path.clone(),
         cfg.log_db.clone().into(),
         table.clone(),
         bus.clone(),
@@ -235,12 +240,13 @@ async fn main() -> Result<()> {
             u8::from(ra_cfg.other_config)
         );
 
-        tokio::spawn(supervisor::supervise_task(
+        tracker.spawn(supervisor::supervise_task(
             "ra",
             true,
             0,
             Duration::from_secs(5),
             Duration::from_secs(60),
+            cancel.clone(),
             move || {
                 let cfg = ra_cfg.clone();
                 let bus = ra_bus.clone();
@@ -261,12 +267,13 @@ async fn main() -> Result<()> {
             dhcp_cfg.range_start, dhcp_cfg.range_end, dhcp_cfg.subnet_mask
         );
 
-        tokio::spawn(supervisor::supervise_task(
+        tracker.spawn(supervisor::supervise_task(
             "dhcpv4",
             true,
             0,
             Duration::from_secs(5),
             Duration::from_secs(60),
+            cancel.clone(),
             move || {
                 let cfg = dhcp_cfg.clone();
                 let table = dhcp_table.clone();
@@ -289,12 +296,13 @@ async fn main() -> Result<()> {
 
         info!("⚡ Iniciando: DHCPv6 ({})", dhcp_cfg.iface);
 
-        tokio::spawn(supervisor::supervise_task(
+        tracker.spawn(supervisor::supervise_task(
             "dhcpv6",
             true,
             0,
             Duration::from_secs(5),
             Duration::from_secs(60),
+            cancel.clone(),
             move || {
                 let handle = dhcp_handle.clone();
                 let cfg = dhcp_cfg.clone();
@@ -317,12 +325,13 @@ async fn main() -> Result<()> {
 
         info!("⚡ Iniciando: DNS");
 
-        tokio::spawn(supervisor::supervise_task(
+        tracker.spawn(supervisor::supervise_task(
             "dns",
             true,
             0,
             Duration::from_secs(5),
             Duration::from_secs(60),
+            cancel.clone(),
             move || {
                 let cfg = dns_cfg.clone();
                 let table = dns_table.clone();
@@ -338,12 +347,13 @@ async fn main() -> Result<()> {
     let ctrl_bus = bus.clone();
     let api_cfg = Arc::new(cfg.to_api_config());
 
-    tokio::spawn(supervisor::supervise_task(
+    tracker.spawn(supervisor::supervise_task(
         "control",
         true,
         0,
         Duration::from_secs(2),
         Duration::from_secs(30),
+        cancel.clone(),
         move || {
             let table = ctrl_table.clone();
             let bus = ctrl_bus.clone();
@@ -355,6 +365,8 @@ async fn main() -> Result<()> {
             }
         },
     ));
+
+    tracker.close();
 
     // -----------------------------------------------------------------------
     // Prefixo GUA — aprendido dinamicamente via PrefixChanged do RA.
@@ -369,6 +381,7 @@ async fn main() -> Result<()> {
     let mut bus_rx = bus.subscribe();
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
     let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
 
     let mut fallback = interval(Duration::from_secs(cfg.fallback_mins * 60));
     fallback.tick().await;
@@ -441,11 +454,13 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // ── SIGTERM — Shutdown gracioso ──────────────────────────────
+            // ── SIGINT/SIGTERM — Shutdown gracioso ──────────────────────
             _ = sigterm.recv() => {
-                info!("SIGTERM recebido — encerrando...");
-                bus.publish(LanforgeEvent::Shutdown);
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                info!("SIGTERM recebido — iniciando encerramento gracioso...");
+                break;
+            }
+            _ = sigint.recv() => {
+                info!("SIGINT recebido — iniciando encerramento gracioso...");
                 break;
             }
 
@@ -484,6 +499,20 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+        }
+    }
+
+    info!("🛑 Iniciando sequência de shutdown...");
+    bus.publish(LanforgeEvent::Shutdown);
+    cancel.cancel();
+
+    // Aguarda tasks finalizarem com timeout
+    tokio::select! {
+        _ = tracker.wait() => {
+            info!("✅ Todas as tasks finalizadas graciosamente.");
+        }
+        _ = tokio::time::sleep(Duration::from_secs(5)) => {
+            warn!("⚠️ Shutdown demorou muito, forçando saída...");
         }
     }
 

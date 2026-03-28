@@ -19,6 +19,7 @@
 
 use std::time::Duration;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 /// Executa uma task supervisionada com reinício automático e backoff exponencial.
@@ -38,6 +39,7 @@ pub async fn supervise_task<F, Fut>(
     max_retries: u32,
     base_backoff: Duration,
     max_backoff: Duration,
+    cancel: CancellationToken,
     factory: F,
 ) where
     F: Fn() -> Fut,
@@ -48,46 +50,60 @@ pub async fn supervise_task<F, Fut>(
     loop {
         info!("Starting service '{name}'");
 
-        match factory().await {
-            Ok(()) => {
-                // Task terminou normalmente — reinicia (pode ser um ciclo finito)
-                info!("Service '{name}' exited cleanly, restarting");
-                consecutive_failures = 0;
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                info!("Supervisor '{name}' received shutdown signal, stopping");
+                return;
             }
-            Err(e) => {
-                consecutive_failures += 1;
-                error!("Service '{name}' failed ({consecutive_failures}x): {e:#}");
+            res = factory() => {
+                match res {
+                    Ok(()) => {
+                        // Task terminou normalmente — reinicia (pode ser um ciclo finito)
+                        info!("Service '{name}' exited cleanly, restarting");
+                        consecutive_failures = 0;
+                    }
+                    Err(e) => {
+                        consecutive_failures += 1;
+                        error!("Service '{name}' failed ({consecutive_failures}x): {e:#}");
 
-                if max_retries > 0 && consecutive_failures >= max_retries {
-                    if critical {
-                        error!(
-                            "Critical service '{name}' exhausted {max_retries} retries — aborting process"
-                        );
-                        std::process::exit(1);
-                    } else {
+                        if max_retries > 0 && consecutive_failures >= max_retries {
+                            if critical {
+                                error!(
+                                    "Critical service '{name}' exhausted {max_retries} retries — aborting process"
+                                );
+                                std::process::exit(1);
+                            } else {
+                                warn!(
+                                    "Non-critical service '{name}' exhausted {max_retries} retries — giving up"
+                                );
+                                return;
+                            }
+                        }
+
+                        // Backoff exponencial com jitter: base * 2^(failures-1), capped
+                        let exp = base_backoff.saturating_mul(1 << (consecutive_failures - 1).min(16));
+                        let backoff = exp.min(max_backoff);
+
                         warn!(
-                            "Non-critical service '{name}' exhausted {max_retries} retries — giving up"
+                            "Restarting '{name}' in {:.1}s (attempt {}/{})",
+                            backoff.as_secs_f64(),
+                            consecutive_failures + 1,
+                            if max_retries == 0 {
+                                "∞".to_string()
+                            } else {
+                                max_retries.to_string()
+                            }
                         );
-                        return;
+
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                info!("Supervisor '{name}' received shutdown signal during backoff, stopping");
+                                return;
+                            }
+                            _ = sleep(backoff) => {}
+                        }
                     }
                 }
-
-                // Backoff exponencial com jitter: base * 2^(failures-1), capped
-                let exp = base_backoff.saturating_mul(1 << (consecutive_failures - 1).min(16));
-                let backoff = exp.min(max_backoff);
-
-                warn!(
-                    "Restarting '{name}' in {:.1}s (attempt {}/{})",
-                    backoff.as_secs_f64(),
-                    consecutive_failures + 1,
-                    if max_retries == 0 {
-                        "∞".to_string()
-                    } else {
-                        max_retries.to_string()
-                    }
-                );
-
-                sleep(backoff).await;
             }
         }
     }
@@ -110,6 +126,7 @@ mod tests {
             3,     // max 3 retries
             Duration::from_millis(1),
             Duration::from_millis(10),
+            CancellationToken::new(),
             move || {
                 let a = attempts_clone.clone();
                 async move {
@@ -138,6 +155,7 @@ mod tests {
             3,
             Duration::from_millis(1),
             Duration::from_millis(10),
+            CancellationToken::new(),
             move || {
                 let a = attempts_clone.clone();
                 async move {

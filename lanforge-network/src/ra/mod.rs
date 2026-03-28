@@ -195,6 +195,8 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
         bus: &bus,
     };
 
+    let mut bus_rx = bus.subscribe();
+
     // Immediate RA on startup — active clients get configured without waiting
     do_multicast_ra(&ctx, &mut state).await;
 
@@ -239,8 +241,17 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
                     // WouldBlock — AsyncFd resets automatically
                 }
             }
+
+            // ── EventBus — Shutdown ──────────────────────────────────────
+            event = bus_rx.recv() => {
+                if let Ok(LanforgeEvent::Shutdown) = event {
+                    info!("RA service: shutdown recebido, encerrando...");
+                    break;
+                }
+            }
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

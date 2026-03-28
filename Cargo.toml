@@ -60,6 +60,7 @@ chrono = { version = "0.4.44", features = ["serde"] }
 inquire = "0.9.4"
 colored = "3.1.1"
 bytesize = "2.3.1"
+tokio-util = { version = "0.7.18", features = ["rt"] }
 
 [profile.release]
 opt-level = 3

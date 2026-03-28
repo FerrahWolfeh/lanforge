@@ -20,6 +20,7 @@ use crate::{
     utils::{extract_local_hostname, fast_lowercase},
     wire::WireResponseWriter,
 };
+use lanforge_core::bus::LanforgeEvent;
 
 /// Shared, immutable service state for the DNS hot path.
 ///
@@ -64,43 +65,61 @@ pub async fn dns_service(cfg: DnsConfig, table: Arc<ManagedTable>) -> Result<(),
     });
 
     let udp_ctx = Arc::clone(&ctx);
+    let mut udp_rx = table.bus().subscribe();
     let udp_task = tokio::spawn(async move {
         let mut buf = vec![0u8; 4096];
         loop {
-            let Ok((len, src)) = udp_sock.recv_from(&mut buf).await else {
-                continue;
-            };
+            tokio::select! {
+                res = udp_sock.recv_from(&mut buf) => {
+                    let Ok((len, src)) = res else {
+                        continue;
+                    };
 
-            // Process inline — no spawning, no to_vec() allocations
-            if let Ok(Some(response)) = handle_query(&buf[..len], &udp_ctx).await {
-                let _ = udp_sock.send_to(&response, src).await;
+                    // Process inline — no spawning, no to_vec() allocations
+                    if let Ok(Some(response)) = handle_query(&buf[..len], &udp_ctx).await {
+                        let _ = udp_sock.send_to(&response, src).await;
+                    }
+                }
+                Ok(LanforgeEvent::Shutdown) = udp_rx.recv() => {
+                    info!("DNS UDP service: shutdown recebido");
+                    break;
+                }
             }
         }
     });
 
     let tcp_ctx = Arc::clone(&ctx);
+    let mut tcp_rx = table.bus().subscribe();
     let tcp_task = tokio::spawn(async move {
         loop {
-            if let Ok((mut stream, _)) = tcp_listener.accept().await {
-                let c = Arc::clone(&tcp_ctx);
+            tokio::select! {
+                res = tcp_listener.accept() => {
+                    if let Ok((mut stream, _)) = res {
+                        let c = Arc::clone(&tcp_ctx);
 
-                tokio::spawn(async move {
-                    let mut len_buf = [0u8; 2];
-                    if stream.read_exact(&mut len_buf).await.is_err() {
-                        return;
-                    }
-                    let len = u16::from_be_bytes(len_buf) as usize;
-                    let mut buf = vec![0u8; len];
-                    if stream.read_exact(&mut buf).await.is_err() {
-                        return;
-                    }
+                        tokio::spawn(async move {
+                            let mut len_buf = [0u8; 2];
+                            if stream.read_exact(&mut len_buf).await.is_err() {
+                                return;
+                            }
+                            let len = u16::from_be_bytes(len_buf) as usize;
+                            let mut buf = vec![0u8; len];
+                            if stream.read_exact(&mut buf).await.is_err() {
+                                return;
+                            }
 
-                    if let Ok(Some(response)) = handle_query(&buf, &c).await {
-                        let resp_len = (response.len() as u16).to_be_bytes();
-                        let _ = stream.write_all(&resp_len).await;
-                        let _ = stream.write_all(&response).await;
+                            if let Ok(Some(response)) = handle_query(&buf, &c).await {
+                                let resp_len = (response.len() as u16).to_be_bytes();
+                                let _ = stream.write_all(&resp_len).await;
+                                let _ = stream.write_all(&response).await;
+                            }
+                        });
                     }
-                });
+                }
+                Ok(LanforgeEvent::Shutdown) = tcp_rx.recv() => {
+                    info!("DNS TCP service: shutdown recebido");
+                    break;
+                }
             }
         }
     });
