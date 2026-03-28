@@ -418,6 +418,20 @@ where
                     message: "Iniciando vacuum do sqlite...".to_string(),
                 })
             }
+            Ok(Command::Purge { mac }) => {
+                if let Some(mac_addr) = MacAddr::parse(&mac) {
+                    ctx.table
+                        .update(DeviceUpdate::HostRemoved { mac: mac_addr })
+                        .await;
+                    Response::Success(SimpleSuccess {
+                        message: format!("Dispositivo expurgado da memória: {mac}"),
+                    })
+                } else {
+                    Response::Error {
+                        error: format!("MAC inválido: {mac}"),
+                    }
+                }
+            }
             Err(e) => Response::Error {
                 error: format!("Comando inválido ou JSON malformado: {e}"),
             },

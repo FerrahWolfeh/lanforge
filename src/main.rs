@@ -85,6 +85,7 @@ async fn main() -> Result<()> {
         | config::Command::Scan
         | config::Command::Host { .. }
         | config::Command::Db { .. }
+        | config::Command::Purge { .. }
         | config::Command::Shutdown => {
             return cli::run_client(cfg.command.clone(), &cfg.control_socket).await;
         }

@@ -973,6 +973,7 @@ version = "0.1.0"
 dependencies = [
  "lanforge-core",
  "rusqlite",
+ "rusqlite_migration",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1590,6 +1591,16 @@ dependencies = [
  "libsqlite3-sys",
  "smallvec",
  "sqlite-wasm-rs",
+]
+
+[[package]]
+name = "rusqlite_migration"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "410e4d2d97ff816796ed012b789c7381ae42c09a809822a75d29a01022181184"
+dependencies = [
+ "log",
+ "rusqlite",
 ]
 
 [[package]]

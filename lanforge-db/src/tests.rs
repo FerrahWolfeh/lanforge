@@ -8,6 +8,7 @@ use lanforge_core::device::{IPv4State, IPv6State, V4Lease};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::DeviceUpdate;
+use rusqlite::params;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -259,4 +260,63 @@ async fn db_worker_handles_vacuum_event() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert!(db_path.exists());
+}
+
+#[test]
+fn test_remove_device_cascades() {
+    let db = LeaseDb::open_in_memory().unwrap();
+    let mut table = DeviceTable::new();
+
+    let mac = make_mac(5);
+    let dev = table.get_or_insert(mac);
+    dev.hostname = "CascadeTest".into();
+    dev.v4 = IPv4State::Dynamic(V4Lease {
+        ip: Ipv4Addr::new(10, 0, 0, 5),
+        expires: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
+    });
+
+    db.save_table(&table).unwrap();
+
+    // Verify it's in the DB
+    let count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM devices WHERE mac = ?1",
+            params![mac.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    let lease_count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM v4_leases WHERE mac = ?1",
+            params![mac.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(lease_count, 1);
+
+    // Remove device
+    db.remove_device(mac).unwrap();
+
+    // Verify cascade
+    let count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM devices WHERE mac = ?1",
+            params![mac.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    let lease_count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM v4_leases WHERE mac = ?1",
+            params![mac.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(lease_count, 0);
 }

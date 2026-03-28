@@ -21,11 +21,11 @@ pub enum LeaseDbError {
     Sqlite(#[from] rusqlite::Error),
 
     /// Failed during a schema migration or initial table creation.
-    #[error("Failed to execute migration/statute {0}: {1}")]
-    Migration(String, #[source] rusqlite::Error),
+    #[error("Failed to execute migration '{0}': {1}")]
+    Migration(String, String),
 
     /// A transactional operation failed to commit.
-    #[error("Failed to commit transaction: {0}")]
+    #[error("Failed to commit database transaction: {0}")]
     TransactionFailed(#[source] rusqlite::Error),
 
     /// Database optimization (VACUUM) failed.
@@ -35,4 +35,8 @@ pub enum LeaseDbError {
     /// A requested entity (e.g., a specific lease) was not found in the database.
     #[error("Entity not found: {0}")]
     NotFound(String),
+
+    /// Migration version mismatch or integrity error.
+    #[error("Database migration error: {0}")]
+    MigrationIncompatibility(String),
 }

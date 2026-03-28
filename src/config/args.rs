@@ -47,6 +47,11 @@ pub enum Command {
     },
     /// Encerramento gracioso com flush imediato
     Shutdown,
+    /// Forcefully purge a device from memory and database by its MAC
+    Purge {
+        /// MAC address of the device to purge
+        mac: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

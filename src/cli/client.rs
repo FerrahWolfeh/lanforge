@@ -46,6 +46,10 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             cmd: lanforge_api::api::Command::Shutdown,
             streaming: false,
         }),
+        Command::Purge { mac } => Box::new(GenericHandler {
+            cmd: lanforge_api::api::Command::Purge { mac },
+            streaming: false,
+        }),
         Command::Run { .. } => {
             println!("Este comando ainda não está implementado na CLI.");
             return Ok(());

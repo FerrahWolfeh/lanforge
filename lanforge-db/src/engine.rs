@@ -7,7 +7,7 @@ use rusqlite::{Connection, params};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
@@ -20,18 +20,24 @@ use crate::{LeaseDbError, Result};
 // LeaseDb
 // ---------------------------------------------------------------------------
 
-type DevTableRow = (
-    String,          // mac
-    String,          // hostname_name
-    i32,             // hostname_origin
-    bool,            // is_static
-    Option<Vec<u8>>, // duid
-    i64,             // last_seen
-    String,          // origin (toml/cli/dynamic)
-    Option<i64>,     // managed_at
-    Option<String>,  // v4_static
-    Option<String>,  // v6_suffix
-);
+use rusqlite_migration::{M, Migrations};
+
+// ---------------------------------------------------------------------------
+// Internal DB Row Models
+// ---------------------------------------------------------------------------
+
+struct DeviceRow {
+    mac: String,
+    hostname: String,
+    hostname_origin: i32,
+    is_static: bool,
+    duid: Option<Vec<u8>>,
+    last_seen: i64,
+    origin: String,
+    managed_at: Option<i64>,
+    v4_static: Option<String>,
+    v6_suffix: Option<String>,
+}
 
 /// A handle to the SQLite database for network leases and devices.
 ///
@@ -43,165 +49,153 @@ pub struct LeaseDb {
     pub conn: Connection,
 }
 
+/// Opens (or creates) the SQLite database at the specified path and runs migrations.
 impl LeaseDb {
     /// Opens (or creates) the SQLite database at the specified path and runs migrations.
     pub fn open(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
             std::fs::create_dir_all(parent)
                 .map_err(|e| LeaseDbError::PathAccess(parent.to_path_buf(), e))?;
         }
 
-        let conn = Connection::open(path)
+        let mut conn = Connection::open(path)
             .map_err(|e| LeaseDbError::ConnectionOpen(path.to_path_buf(), e))?;
 
-        // WAL mode — writes don't block reads; NORMAL is safe for SD cards
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        // WAL mode — writes don't block reads; NORMAL is safe for SD cards.
+        // Enable foreign keys for CASCADE support.
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA foreign_keys=ON;",
+        )?;
 
-        let db = Self { conn };
-        db.create_tables()?;
+        let migrations = Self::get_migrations();
+        migrations
+            .to_latest(&mut conn)
+            .map_err(|e| LeaseDbError::Migration("applying migrations".into(), e.to_string()))?;
 
-        debug!("SQLite aberto em {}", path.display());
-        Ok(db)
+        info!("SQLite database opened at {}", path.display());
+        Ok(Self { conn })
     }
 
     /// Creates an in-memory database — exclusively for unit tests.
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory()?;
-        let db = Self { conn };
-        db.create_tables()?;
-        Ok(db)
+        let mut conn = Connection::open_in_memory()?;
+        conn.execute("PRAGMA foreign_keys=ON;", [])?;
+
+        let migrations = Self::get_migrations();
+        migrations
+            .to_latest(&mut conn)
+            .map_err(|e| LeaseDbError::Migration("memory migrations".into(), e.to_string()))?;
+
+        Ok(Self { conn })
     }
 
-    fn create_tables(&self) -> Result<()> {
-        self.conn
-            .execute_batch(
-                "
-                CREATE TABLE IF NOT EXISTS devices (
-                    mac         TEXT PRIMARY KEY,
-                    hostname    TEXT NOT NULL,
-                    is_static   INTEGER NOT NULL,
-                    duid        BLOB,
-                    last_seen   INTEGER NOT NULL,
-                    origin      TEXT NOT NULL DEFAULT 'dynamic',
-                    managed_at  INTEGER,
-                    v4_static   TEXT,
-                    v6_suffix   TEXT
-                );
+    fn get_migrations() -> Migrations<'static> {
+        Migrations::new(vec![M::up(
+            "DROP TABLE IF EXISTS seen_v4;
+             DROP TABLE IF EXISTS slaac_addrs;
+             DROP TABLE IF EXISTS v6_prefixes;
+             DROP TABLE IF EXISTS v6_leases;
+             DROP TABLE IF EXISTS v4_leases;
+             DROP TABLE IF EXISTS devices;
 
-                CREATE TABLE IF NOT EXISTS v4_leases (
-                    mac         TEXT PRIMARY KEY REFERENCES devices(mac),
-                    ip          TEXT NOT NULL,
-                    expires     INTEGER NOT NULL
-                );
+             CREATE TABLE devices (
+                mac             TEXT PRIMARY KEY,
+                hostname        TEXT NOT NULL,
+                hostname_origin INTEGER NOT NULL DEFAULT 0,
+                is_static       INTEGER NOT NULL,
+                duid            BLOB,
+                last_seen       INTEGER NOT NULL,
+                origin          TEXT NOT NULL DEFAULT 'dynamic',
+                managed_at      INTEGER,
+                v4_static       TEXT,
+                v6_suffix       TEXT
+             );
 
-                CREATE TABLE IF NOT EXISTS v6_leases (
-                    mac         TEXT NOT NULL REFERENCES devices(mac),
-                    iaid        INTEGER NOT NULL,
-                    ip          TEXT NOT NULL,
-                    expires     INTEGER NOT NULL,
-                    PRIMARY KEY (mac, iaid)
-                );
+             CREATE TABLE v4_leases (
+                mac     TEXT PRIMARY KEY REFERENCES devices(mac) ON DELETE CASCADE,
+                ip      TEXT NOT NULL,
+                expires INTEGER NOT NULL
+             );
 
-                CREATE TABLE IF NOT EXISTS v6_prefixes (
-                    mac         TEXT NOT NULL REFERENCES devices(mac),
-                    iaid        INTEGER NOT NULL,
-                    prefix      TEXT NOT NULL,
-                    len         INTEGER NOT NULL,
-                    expires     INTEGER NOT NULL,
-                    PRIMARY KEY (mac, iaid)
-                );
-
-                CREATE TABLE IF NOT EXISTS slaac_addrs (
-                    mac         TEXT NOT NULL REFERENCES devices(mac),
-                    ip          TEXT NOT NULL,
-                    PRIMARY KEY (mac, ip)
-                );
-
-                CREATE TABLE IF NOT EXISTS seen_v4 (
-                    mac         TEXT NOT NULL REFERENCES devices(mac),
-                    ip          TEXT NOT NULL,
-                    PRIMARY KEY (mac, ip)
-                );
-                ",
-            )
-            .map_err(|e| LeaseDbError::Migration("setup tables".to_string(), e))?;
-
-        // Simple migrations without schema tracking
-        let _ = self.conn.execute(
-            "ALTER TABLE devices ADD COLUMN origin TEXT NOT NULL DEFAULT 'dynamic'",
-            [],
-        );
-        let _ = self
-            .conn
-            .execute("ALTER TABLE devices ADD COLUMN managed_at INTEGER", []);
-        let _ = self
-            .conn
-            .execute("ALTER TABLE devices ADD COLUMN v4_static TEXT", []);
-        let _ = self
-            .conn
-            .execute("ALTER TABLE devices ADD COLUMN v6_suffix TEXT", []);
-        let _ = self.conn.execute(
-            "ALTER TABLE devices ADD COLUMN hostname_origin INTEGER DEFAULT 0",
-            [],
-        );
-        let _ = self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS v6_prefixes (
-                mac TEXT NOT NULL REFERENCES devices(mac),
-                iaid INTEGER NOT NULL,
-                prefix TEXT NOT NULL,
-                len INTEGER NOT NULL,
+             CREATE TABLE v6_leases (
+                mac     TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
+                iaid    INTEGER NOT NULL,
+                ip      TEXT NOT NULL,
                 expires INTEGER NOT NULL,
                 PRIMARY KEY (mac, iaid)
-            )",
-            [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE v6_leases ADD COLUMN iaid INTEGER DEFAULT 0",
-            [],
-        );
+             );
 
-        debug!("Schema verificado/criado");
-        Ok(())
+             CREATE TABLE v6_prefixes (
+                mac     TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
+                iaid    INTEGER NOT NULL,
+                prefix  TEXT NOT NULL,
+                len     INTEGER NOT NULL,
+                expires INTEGER NOT NULL,
+                PRIMARY KEY (mac, iaid)
+             );
+
+             CREATE TABLE slaac_addrs (
+                mac     TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
+                ip      TEXT NOT NULL,
+                PRIMARY KEY (mac, ip)
+             );
+
+             CREATE TABLE seen_v4 (
+                mac     TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
+                ip      TEXT NOT NULL,
+                PRIMARY KEY (mac, ip)
+             );",
+        )])
     }
 
     // -----------------------------------------------------------------------
-    // Save — Snapshot with UPSERT (Delta)
+    // Save — Snapshot with UPSERT & CASCADE
     // -----------------------------------------------------------------------
 
-    /// Persists the current state of the `DeviceTable` while minimizing disk writes.
+    /// Persists the current state of the `DeviceTable` using structured updates.
     ///
-    /// Uses SQL UPSERT for devices and surgically cleans up removed entries
-    /// to ensure the database stays synchronized with memory.
+    /// Uses SQL UPSERT for devices and relies on `ON DELETE CASCADE` for child tables.
     pub fn save_table(&self, table: &DeviceTable) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
 
-        // 1. Insert or update current devices (UPSERT)
+        // 1. Snapshot all MAC strings to detect removals later
+        let mut stmt = tx.prepare("SELECT mac FROM devices")?;
+        let db_macs: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(std::result::Result::ok)
+            .collect();
+        drop(stmt);
+
+        // 2. Upsert current devices from memory
         for device in table.devices() {
             let mac_str = device.mac.to_string();
-            let last_seen = system_time_to_unix(device.last_seen);
-            let duid_blob: Option<Vec<u8>> = device.duid.as_ref().map(|d| d.bytes.clone());
-            let managed_at_unix: Option<i64> = device.managed_at.map(system_time_to_unix);
-
-            let (v4_static_str, v4_lease) = match &device.v4 {
-                IPv4State::Static(ip) => (Some(ip.to_string()), None),
-                IPv4State::Dynamic(l) => (None, Some(l.clone())),
-                IPv4State::None => (None, None),
+            let row = DeviceRow {
+                mac: mac_str.clone(),
+                hostname: device.hostname.name.clone(),
+                hostname_origin: device.hostname.origin as i32,
+                is_static: device.is_static(),
+                duid: device.duid.as_ref().map(|d| d.bytes.clone()),
+                last_seen: system_time_to_unix(device.last_seen),
+                origin: device.origin.as_str().to_string(),
+                managed_at: device.managed_at.map(system_time_to_unix),
+                v4_static: match &device.v4 {
+                    IPv4State::Static(ip) => Some(ip.to_string()),
+                    _ => None,
+                },
+                v6_suffix: device.v6.iter().find_map(|s| {
+                    if let IPv6State::Static(suf) = s {
+                        Some(suf.to_string())
+                    } else {
+                        None
+                    }
+                }),
             };
 
-            let mut v6_static_str = None;
-            let mut v6_leases = Vec::new();
-            let mut slaac_addrs = Vec::new();
-
-            for state in &device.v6 {
-                match state {
-                    IPv6State::Static(s) => v6_static_str = Some(s.to_string()),
-                    IPv6State::Dynamic(l) => v6_leases.push(l.clone()),
-                    IPv6State::Slaac(ip) => slaac_addrs.push(ip),
-                }
-            }
-
-            // Primary device metadata
             tx.execute(
                 "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -216,39 +210,45 @@ impl LeaseDb {
                     v4_static = excluded.v4_static,
                     v6_suffix = excluded.v6_suffix",
                 params![
-                    mac_str,
-                    device.hostname.name,
-                    device.hostname.origin as i32,
-                    i32::from(device.is_static()),
-                    duid_blob,
-                    last_seen,
-                    device.origin.as_str(),
-                    managed_at_unix,
-                    v4_static_str,
-                    v6_static_str
+                    row.mac,
+                    row.hostname,
+                    row.hostname_origin,
+                    i32::from(row.is_static),
+                    row.duid,
+                    row.last_seen,
+                    row.origin,
+                    row.managed_at,
+                    row.v4_static,
+                    row.v6_suffix
                 ],
             )?;
 
-            // Child tables: delete + reinsert per-MAC (atomic change)
+            // Atomic clear and re-populate child tables for this MAC
             tx.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&mac_str])?;
-            if let Some(v4) = v4_lease {
+            if let IPv4State::Dynamic(lease) = &device.v4 {
                 tx.execute(
                     "INSERT INTO v4_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
-                    params![mac_str, v4.ip.to_string(), system_time_to_unix(v4.expires)],
+                    params![
+                        mac_str,
+                        lease.ip.to_string(),
+                        system_time_to_unix(lease.expires)
+                    ],
                 )?;
             }
 
             tx.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&mac_str])?;
-            for v6 in v6_leases {
-                tx.execute(
-                    "INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        mac_str,
-                        v6.iaid,
-                        v6.ip.to_string(),
-                        system_time_to_unix(v6.expires)
-                    ],
-                )?;
+            for state in &device.v6 {
+                if let IPv6State::Dynamic(lease) = state {
+                    tx.execute(
+                        "INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES (?1, ?2, ?3, ?4)",
+                        params![
+                            mac_str,
+                            lease.iaid,
+                            lease.ip.to_string(),
+                            system_time_to_unix(lease.expires)
+                        ],
+                    )?;
+                }
             }
 
             tx.execute("DELETE FROM v6_prefixes WHERE mac = ?1", params![&mac_str])?;
@@ -266,130 +266,113 @@ impl LeaseDb {
             }
 
             tx.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&mac_str])?;
-            for addr in slaac_addrs {
-                tx.execute(
-                    "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
-                    params![mac_str, addr.to_string()],
-                )?;
+            for state in &device.v6 {
+                if let IPv6State::Slaac(ip) = state {
+                    tx.execute(
+                        "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
+                        params![mac_str, ip.to_string()],
+                    )?;
+                }
             }
 
             tx.execute("DELETE FROM seen_v4 WHERE mac = ?1", params![&mac_str])?;
-            for addr in &device.seen_v4 {
+            for ip in &device.seen_v4 {
                 tx.execute(
                     "INSERT INTO seen_v4 (mac, ip) VALUES (?1, ?2)",
-                    params![mac_str, addr.to_string()],
+                    params![mac_str, ip.to_string()],
                 )?;
             }
         }
 
-        // 2. Surgical Cleanup (Delete devices from DB that no longer exist in memory)
-        let mut stmt = tx.prepare("SELECT mac FROM devices")?;
-        let db_macs: Vec<String> = stmt
-            .query_map([], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(stmt);
-
+        // 3. Remove devices that no longer exist in memory (Cascades automatically)
         for db_mac in db_macs {
             if !table.devices().any(|d| d.mac.to_string() == db_mac) {
-                tx.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&db_mac])?;
-                tx.execute("DELETE FROM seen_v4 WHERE mac = ?1", params![&db_mac])?;
-                tx.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&db_mac])?;
-                tx.execute("DELETE FROM v6_prefixes WHERE mac = ?1", params![&db_mac])?;
-                tx.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&db_mac])?;
                 tx.execute("DELETE FROM devices WHERE mac = ?1", params![&db_mac])?;
             }
         }
 
         tx.commit().map_err(LeaseDbError::TransactionFailed)?;
-        debug!("DeviceTable persistida com sucesso (Delta Update)");
+        debug!("DeviceTable persisted successfully");
+        Ok(())
+    }
+
+    /// Explicitly removes a device from the database by its MAC address.
+    pub fn remove_device(&self, mac: MacAddr) -> Result<()> {
+        let mac_str = mac.to_string();
+        self.conn
+            .execute("DELETE FROM devices WHERE mac = ?1", params![mac_str])?;
         Ok(())
     }
 
     // -----------------------------------------------------------------------
-    // Load — Reconstructs DeviceTable via apply_update
+    // Load — Reconstructs DeviceTable
     // -----------------------------------------------------------------------
 
     /// Loads the persisted state and returns a fully populated `DeviceTable`.
     pub fn load_table(&self) -> Result<DeviceTable> {
         let mut table = DeviceTable::new();
 
-        // 1. Devices base
-        let mut stmt = self
-            .conn
-            .prepare("SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix FROM devices")?;
+        // 1. Load base devices
+        let mut stmt = self.conn.prepare(
+            "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix FROM devices"
+        )?;
 
-        let rows: Vec<DevTableRow> = stmt
+        let rows: Vec<DeviceRow> = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,          // mac
-                    row.get::<_, String>(1)?,          // hostname
-                    row.get::<_, i32>(2)?,             // hostname_origin
-                    row.get::<_, i32>(3)? != 0,        // is_static
-                    row.get::<_, Option<Vec<u8>>>(4)?, // duid
-                    row.get::<_, i64>(5)?,             // last_seen
-                    row.get::<_, String>(6)?,          // origin
-                    row.get::<_, Option<i64>>(7)?,     // managed_at
-                    row.get::<_, Option<String>>(8)?,  // v4_static
-                    row.get::<_, Option<String>>(9)?,  // v6_suffix
-                ))
+                Ok(DeviceRow {
+                    mac: row.get(0)?,
+                    hostname: row.get(1)?,
+                    hostname_origin: row.get(2)?,
+                    is_static: row.get::<_, i32>(3)? != 0,
+                    duid: row.get(4)?,
+                    last_seen: row.get(5)?,
+                    origin: row.get(6)?,
+                    managed_at: row.get(7)?,
+                    v4_static: row.get(8)?,
+                    v6_suffix: row.get(9)?,
+                })
             })?
             .filter_map(std::result::Result::ok)
             .collect();
+        drop(stmt);
 
-        for (
-            mac_str,
-            hostname_name,
-            hostname_origin_val,
-            _is_static,
-            duid_bytes,
-            last_seen_unix,
-            origin_str,
-            managed_at,
-            v4_static_str,
-            v6_suffix_str,
-        ) in rows
-        {
-            let Some(mac) = MacAddr::parse(&mac_str) else {
-                warn!("MAC inválido no DB: '{mac_str}', pulando");
+        for row in rows {
+            let Some(mac) = MacAddr::parse(&row.mac) else {
                 continue;
             };
 
-            let dev = table.get_or_insert(mac);
-
-            let origin = match hostname_origin_val {
-                1 => lanforge_core::device::HostnameOrigin::Mdns,
-                2 => lanforge_core::device::HostnameOrigin::Dhcp,
-                3 => lanforge_core::device::HostnameOrigin::Static,
-                _ => lanforge_core::device::HostnameOrigin::None,
-            };
-
-            dev.hostname = lanforge_core::device::Hostname {
-                name: hostname_name,
-                origin,
-            };
-            dev.last_seen = unix_to_system_time(last_seen_unix);
-
-            dev.origin = match origin_str.as_str() {
-                "toml" => Origin::Toml,
-                "cli" => Origin::Cli,
-                _ => Origin::Dynamic,
-            };
-            dev.managed_at = managed_at.map(unix_to_system_time);
-
-            if let Some(v4_str) = v4_static_str
-                && let Ok(ip) = v4_str.parse::<Ipv4Addr>()
             {
-                dev.v4 = IPv4State::Static(ip);
-            }
-            if let Some(v6_str) = v6_suffix_str
-                && let Some(suf) = Ipv6AddrOrSuffix::parse(&v6_str)
-            {
-                dev.v6.push(IPv6State::Static(suf));
+                let dev = table.get_or_insert(mac);
+                dev.hostname = lanforge_core::device::Hostname {
+                    name: row.hostname.clone(),
+                    origin: match row.hostname_origin {
+                        1 => lanforge_core::device::HostnameOrigin::Mdns,
+                        2 => lanforge_core::device::HostnameOrigin::Dhcp,
+                        3 => lanforge_core::device::HostnameOrigin::Static,
+                        _ => lanforge_core::device::HostnameOrigin::None,
+                    },
+                };
+                dev.last_seen = unix_to_system_time(row.last_seen);
+                dev.origin = match row.origin.as_str() {
+                    "toml" => Origin::Toml,
+                    "cli" => Origin::Cli,
+                    _ => Origin::Dynamic,
+                };
+                dev.managed_at = row.managed_at.map(unix_to_system_time);
+
+                if let Some(v4) = &row.v4_static
+                    && let Ok(ip) = v4.parse::<Ipv4Addr>()
+                {
+                    dev.v4 = IPv4State::Static(ip);
+                }
+                if let Some(v6) = &row.v6_suffix
+                    && let Some(suf) = Ipv6AddrOrSuffix::parse(v6)
+                {
+                    dev.v6.push(IPv6State::Static(suf));
+                }
             }
 
-            // Restore DUID via apply_update — this reconstructs the duid_index
-            if let Some(bytes) = duid_bytes {
+            if let Some(bytes) = row.duid {
                 table.apply_update(DeviceUpdate::DuidAssociated {
                     mac: Some(mac),
                     duid: Duid::new(bytes),
@@ -397,28 +380,29 @@ impl LeaseDb {
                 });
             }
 
-            // Reconstruct static_entries for CLI-managed devices.
-            // Without this, DHCP pools lose reservations after a restart.
-            if origin_str == "cli" {
-                let dev = table.get_or_insert(mac);
-                let hostname = dev.hostname.clone();
-                let v4_ip = match dev.v4 {
-                    IPv4State::Static(ip) => Some(ip),
-                    _ => None,
+            // Restore static entries for CLI-managed devices
+            if row.origin == "cli" {
+                let (hn, v4_ip, v6_suffix) = {
+                    let dev = table.get_or_insert(mac);
+                    let v4_ip = match dev.v4 {
+                        IPv4State::Static(ip) => Some(ip),
+                        _ => None,
+                    };
+                    let v6_suffix = dev.v6.iter().find_map(|s| {
+                        if let IPv6State::Static(suffix) = s {
+                            Some(suffix.clone())
+                        } else {
+                            None
+                        }
+                    });
+                    (dev.hostname.name.clone(), v4_ip, v6_suffix)
                 };
-                let v6_suffix = dev.v6.iter().find_map(|s| {
-                    if let IPv6State::Static(suffix) = s {
-                        Some(suffix.clone())
-                    } else {
-                        None
-                    }
-                });
 
                 table.add_static_entry(
                     mac,
                     StaticEntry {
                         mac,
-                        hostname: hostname.name,
+                        hostname: hn,
                         v4_ip,
                         v6_suffix,
                     },
@@ -430,153 +414,116 @@ impl LeaseDb {
         let mut stmt = self
             .conn
             .prepare("SELECT mac, ip, expires FROM v4_leases")?;
-
         let v4_rows: Vec<(String, String, i64)> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            })?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .filter_map(std::result::Result::ok)
             .collect();
 
         for (mac_str, ip_str, expires_unix) in v4_rows {
-            let Some(mac) = MacAddr::parse(&mac_str) else {
-                continue;
-            };
-            let Ok(ip) = ip_str.parse::<Ipv4Addr>() else {
-                warn!("IPv4 inválido no DB: '{ip_str}', pulando");
-                continue;
-            };
-            table.apply_update(DeviceUpdate::V4LeaseGranted {
-                mac,
-                ip,
-                expires: unix_to_system_time(expires_unix),
-            });
+            if let Some(mac) = MacAddr::parse(&mac_str)
+                && let Ok(ip) = ip_str.parse::<Ipv4Addr>()
+            {
+                table.apply_update(DeviceUpdate::V4LeaseGranted {
+                    mac,
+                    ip,
+                    expires: unix_to_system_time(expires_unix),
+                });
+            }
         }
 
         // 3. V6 leases
         let mut stmt = self
             .conn
             .prepare("SELECT mac, iaid, ip, expires FROM v6_leases")?;
-
         let v6_rows: Vec<(String, u32, String, i64)> = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u32>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })?
             .filter_map(std::result::Result::ok)
             .collect();
 
         for (mac_str, iaid, ip_str, expires_unix) in v6_rows {
-            let Some(mac) = MacAddr::parse(&mac_str) else {
-                continue;
-            };
-            let Ok(ip) = ip_str.parse::<Ipv6Addr>() else {
-                warn!("IPv6 inválido no DB: '{ip_str}', pulando");
-                continue;
-            };
-            let duid = table
-                .get_duid_by_mac(mac)
-                .cloned()
-                .unwrap_or_else(|| Duid::new(vec![]));
-            table.apply_update(DeviceUpdate::V6LeaseGranted {
-                mac: Some(mac),
-                duid,
-                iaid,
-                ip,
-                expires: unix_to_system_time(expires_unix),
-            });
+            if let Some(mac) = MacAddr::parse(&mac_str)
+                && let Ok(ip) = ip_str.parse::<Ipv6Addr>()
+            {
+                let duid = table
+                    .get_duid_by_mac(mac)
+                    .cloned()
+                    .unwrap_or_else(|| Duid::new(vec![]));
+                table.apply_update(DeviceUpdate::V6LeaseGranted {
+                    mac: Some(mac),
+                    duid,
+                    iaid,
+                    ip,
+                    expires: unix_to_system_time(expires_unix),
+                });
+            }
         }
 
-        // 3.1 V6 prefixes
+        // 4. V6 prefixes
         let mut stmt = self
             .conn
             .prepare("SELECT mac, iaid, prefix, len, expires FROM v6_prefixes")?;
-
-        let prefix_rows: Vec<(String, u32, String, u8, i64)> = stmt
+        let px_rows: Vec<(String, u32, String, u8, i64)> = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u32>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, u8>(3)?,
-                    row.get::<_, i64>(4)?,
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
                 ))
             })?
             .filter_map(std::result::Result::ok)
             .collect();
 
-        for (mac_str, iaid, prefix_str, len, expires_unix) in prefix_rows {
-            let Some(mac) = MacAddr::parse(&mac_str) else {
-                continue;
-            };
-            let Ok(prefix) = prefix_str.parse::<Ipv6Addr>() else {
-                warn!("Prefixo inválido no DB: '{prefix_str}', pulando");
-                continue;
-            };
-            let duid = table
-                .get_duid_by_mac(mac)
-                .cloned()
-                .unwrap_or_else(|| Duid::new(vec![]));
-            table.apply_update(DeviceUpdate::V6PrefixAssigned {
-                mac: Some(mac),
-                duid,
-                iaid,
-                prefix,
-                len,
-                expires: unix_to_system_time(expires_unix),
-            });
+        for (mac_str, iaid, prefix_str, len, expires_unix) in px_rows {
+            if let Some(mac) = MacAddr::parse(&mac_str)
+                && let Ok(prefix) = prefix_str.parse::<Ipv6Addr>()
+            {
+                let duid = table
+                    .get_duid_by_mac(mac)
+                    .cloned()
+                    .unwrap_or_else(|| Duid::new(vec![]));
+                table.apply_update(DeviceUpdate::V6PrefixAssigned {
+                    mac: Some(mac),
+                    duid,
+                    iaid,
+                    prefix,
+                    len,
+                    expires: unix_to_system_time(expires_unix),
+                });
+            }
         }
 
-        // 4. SLAAC addresses
+        // 5. SLAAC & Seen V4
         let mut stmt = self.conn.prepare("SELECT mac, ip FROM slaac_addrs")?;
-
-        let slaac_rows: Vec<(String, String)> = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .filter_map(std::result::Result::ok)
             .collect();
-
-        for (mac_str, ip_str) in slaac_rows {
-            let Some(mac) = MacAddr::parse(&mac_str) else {
-                continue;
-            };
-            let Ok(ip) = ip_str.parse::<Ipv6Addr>() else {
-                continue;
-            };
-            table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
+        for (m, i) in rows {
+            if let Some(mac) = MacAddr::parse(&m)
+                && let Ok(ip) = i.parse::<Ipv6Addr>()
+            {
+                table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
+            }
         }
 
-        // 5. Seen IPv4 addresses
         let mut stmt = self.conn.prepare("SELECT mac, ip FROM seen_v4")?;
-
-        let seen_rows: Vec<(String, String)> = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .filter_map(std::result::Result::ok)
             .collect();
-
-        for (mac_str, ip_str) in seen_rows {
-            let Some(mac) = MacAddr::parse(&mac_str) else {
-                continue;
-            };
-            let Ok(ip) = ip_str.parse::<Ipv4Addr>() else {
-                continue;
-            };
-            table.apply_update(DeviceUpdate::ArpSeen { mac, ip });
+        for (m, i) in rows {
+            if let Some(mac) = MacAddr::parse(&m)
+                && let Ok(ip) = i.parse::<Ipv4Addr>()
+            {
+                table.apply_update(DeviceUpdate::ArpSeen { mac, ip });
+            }
         }
 
-        let count = table.devices().count();
-        info!("Carregados {count} dispositivos do SQLite");
+        info!("Loaded devices from SQLite");
         Ok(table)
     }
 

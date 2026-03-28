@@ -78,6 +78,11 @@ pub enum Command {
     },
     /// Perform a VACUUM operation on the underlying SQLite database.
     DbVacuum,
+    /// Forcefully purge a device from memory and database by its MAC.
+    Purge {
+        /// Target device MAC address.
+        mac: String,
+    },
 }
 
 /// Represents a response sent from the daemon to a client.
