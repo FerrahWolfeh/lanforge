@@ -61,29 +61,62 @@ graph TD
 
 ---
 
-## Fluxo de Estado e Eventos
+## Core Engine Deep-Dive (`lanforge-core`)
 
-Nenhum módulo escreve diretamente nos campos de um dispositivo. O caminho único é via `DeviceUpdate`.
+A `lanforge-core` é o coração reativo do sistema. Ela não executa I/O de rede ou disco diretamente, mas orquestra como os dados fluem entre esses módulos usando um modelo de **Barramento de Eventos** e uma **Tabela de Estado Gerenciada**.
+
+### 1. O Modelo de Mutação Baseado em Intenção
+Nenhum módulo escreve diretamente nos campos de um dispositivo. O caminho único para alteração de estado é via o enum `DeviceUpdate`. Isso garante que todas as transações de estado passem pela mesma lógica de validação e precedência.
+
+#### Fluxo de Execução e Orquestração
+Este diagrama ilustra como o `ManagedTable` e o `EventBus` conectam todos os serviços do daemon:
 
 ```mermaid
 sequenceDiagram
-    participant P as Protocolo (DHCP/RA/mDNS)
-    participant MT as ManagedTable (Core)
-    participant EB as EventBus (Core)
-    participant DBW as db_worker (DB)
-    participant DNS as dns_service (DNS)
+    participant P as Protocol Services (DHCP/RA/Netlink)
+    participant MT as ManagedTable (RwLock)
+    participant EB as EventBus (Broadcast)
+    participant DB as db_worker (SQLite)
+    participant DNS as dns_service (Hot-path Indices)
+    participant API as api_service (JSON-RPC)
 
     P->>MT: update(DeviceUpdate)
-    MT->>MT: apply_update() (Precedência)
-    Note over MT: Retorna bool (mudou?)
+    MT->>MT: apply_update() (Atomic)
     
-    alt se mudou
-        MT->>EB: publish(DeviceUpdated)
-        EB-->>DNS: Reflete na próxima query
-        MT->>EB: publish(DeviceTableDirty)
-        EB->>DBW: Persiste no SQLite (Debounce)
+    rect rgb(240, 240, 240)
+    Note over MT: Se o estado mudou:
+    MT->>EB: publish(DeviceUpdated)
+    EB-->>DNS: Atualiza índices O(1)
+    EB-->>API: Notifica clientes UDS ativos
+    MT->>EB: publish(DeviceTableDirty)
+    EB->>DB: Escrita com Debounce (3s)
     end
 ```
+
+### 2. Lógica de Precedência (`apply_update`)
+O sistema resolve conflitos de identidade (ex: dois protocolos sugerindo hostnames diferentes) usando uma hierarquia rígida definida em `lanforge-core/src/state/update.rs`.
+
+```mermaid
+flowchart TD
+    Update[DeviceUpdate Recebido] --> Resolve{Possui MACAddr?}
+    Resolve -- Não --> V6Orphan[Cache de Órfãos V6]
+    Resolve -- Sim --> Lookup[Busca no HashMap Principal]
+    Lookup --> Precedence{Checar Precedência}
+    
+    Precedence -- Static (TOML/CLI) --> Skip[Ignorar Mudança Dinâmica]
+    Precedence -- DHCP > mDNS --> Apply[Aplicar Novo Estado]
+    
+    Apply --> Rebuild[Reconstruir Índices DNS]
+    Rebuild --> Return[Retornar changed=true]
+    
+    V6Orphan --> NDP[Aguardar Evento NDP/Netlink]
+    NDP --> Resolve
+```
+
+### 3. Mecanismo de Órfãos IPv6
+Como o DHCPv6 usa DUIDs em vez de MACs, e o kernel linux nem sempre associa um IP a um MAC imediatamente, o `lanforge` implementa um cache de órfãos.
+- **Processo**: Se um lease DHCPv6 chega sem MAC associado, ele é guardado no `orphaned_v6`.
+- **Resolução**: Quando o monitor `Netlink` detecta um evento de vizinhança (Neighbor Discovery) para aquele IP, ele "casa" o MAC com o lease pendente e integra o dispositivo à tabela principal.
 
 ### Regras de Precedência (Hostname)
 O sistema implementa uma hierarquia rígida de origem para nomes de host:
@@ -96,56 +129,134 @@ O sistema implementa uma hierarquia rígida de origem para nomes de host:
 
 ## Serviços de Rede (`lanforge-network`)
 
-### DHCPv4 & DHCPv6
-- **v4**: Escuta via `AF_PACKET` (raw socket) para gerenciar leases antes da interface ter IP.
-- **v6**: Stateful DHCPv6 (IA_NA) e Prefix Delegation (IA_PD).
-- **Identidade**: Associa DUIDs a endereços MAC dinamicamente via monitoramento de vizinhos.
+Os serviços de rede são os "sensores" e "atuadores" do sistema. Eles alimentam a `ManagedTable` com descobertas e reagem a mudanças globais (como a troca de um prefixo ISP).
 
-### mDNS Prober
-O mDNS atua de duas formas:
-1. **Passivo**: Escuta anúncios mDNS na rede para aprender hostnames.
-2. **Ativo**: Ao descobrir um novo IP via Netlink/ARP que não possui hostname, dispara um probe reativo para tentar resolver o nome.
+### 1. DHCPv4 (RFC 2131)
+Diferente de implementações padrão, o `lanforge` utiliza **Raw Sockets (`AF_PACKET`)** para a injeção de pacotes na Camada 2.
+- **Por que?**: Clientes DHCPv4 em estado `SELECTING/REQUESTING` ainda não possuem IP e não podem responder a ARPs. O `AF_PACKET` permite enviar o `DHCP ACK` mapeado diretamente ao MAC do cliente via interface raw.
+- **Sincronização (RFC 3203)**: No startup, o daemon envia pacotes `FORCERENEW` para todos os leases dinâmicos ativos. Isso força os clientes a re-validarem seu estado imediatamente, garantindo que a tabela de dispositivos reflita a realidade da rede logo após o boot.
 
-### RA (Router Advertisement)
-- Implementa RFC 4861 e 8106.
-- Detecta o prefixo **GUA** dinamicamente a partir da interface WAN e propaga para a LAN via `PrefixChanged`.
+### 2. DHCPv6 e IA_PD (RFC 3315)
+O `lanforge` suporta DHCPv6 Stateful, gerenciando tanto endereços individuais (`IA_NA`) quanto delegação de prefixos (`IA_PD`).
+- **IA_PD**: Essencial para roteadores em cascata na rede local que precisam de seus próprios prefixos `/64`.
+- **DUID-MAC Binding**: Como o DHCPv6 usa Identificadores Únicos de Dispositivo (DUIDs), o sistema correlaciona esses IDs com MACs físicos através do monitoramento passivo de pacotes Solicit e Advertise.
+
+### 3. Router Advertisement e Derivação de Prefixo (RFC 4861, 8106)
+O serviço de RA do `lanforge` é dinâmico e auto-adaptativo.
+- **Monitoramento WAN**: O sistema detecta o prefixo **Global Unicast Address (GUA)** atribuído à interface WAN e o propaga para a LAN.
+- **Anúncio de DNS**: Implementa a opção **RDNSS**, permitindo que dispositivos IPv6-only (como Android) descubram o servidor DNS local sem necessidade de DHCPv6.
+
+### 4. mDNS Prober (RFC 6762)
+O mDNS atua como um sistema de descoberta de hostnames de "melhor esforço".
+- **Passivo**: Escuta continuamente o tráfego multicast na porta 5353 para aprender nomes `.local`.
+- **Ativo**: Quando um novo dispositivo surge via Netlink/ARP e não possui hostname, o prober dispara uma query PTR unicast direcionada para o IP recém-descoberto, tentando extrair o nome do host sem inundar a rede com multicast desnecessário.
+
+### 5. Netlink Monitor
+O sistema escuta o barramento `RTMGRP_NEIGH` do kernel Linux. Isso permite que o `lanforge` saiba instantaneamente quando um dispositivo entra ou sai da rede (mudanças no estado `REACHABLE` / `STALE` / `FAILED` da tabela ARP/Neighbor do kernel).
 
 ---
 
 ## Persistência (`lanforge-db`)
 
-O sistema utiliza SQLite com duas finalidades distintas:
-1. **Lease Database**: Armazena o `DeviceTable` atual para persistência entre reboots.
-2. **Log Engine**: Registra eventos históricos (`DeviceDiscovered`, `PrefixChanged`) para auditoria e interface visual.
+O sistema utiliza SQLite com uma estratégia de escrita otimizada para dispositivos embarcados (Raspberry Pi), visando minimizar o desgaste do cartão SD.
 
-**Otimização de Escrita**: O `db_worker` utiliza um mecanismo de **debounce** (padrão 3s). Durante um "boot storm" (muitos dispositivos conectando ao mesmo tempo), o sistema realiza apenas uma escrita física no final do processo, protegendo a vida útil do cartão SD do Raspberry Pi.
+### 1. Motores de Banco de Dados
+- **`LeaseDb`**: Armazena o `DeviceTable` atual. É o banco de "estado" que permite ao daemon recuperar leases e configurações estáticas após um reboot.
+- **`LogDb`**: Banco de histórico que registra eventos (`DeviceDiscovered`, `PrefixChanged`). Alimenta a auditoria técnica e a futura interface visual.
+
+### 2. Estratégia de Debounce (SD Card Protection)
+Para evitar micro-escritas constantes (ex: durante um "boot storm" de 50 dispositivos), o `db_worker` implementa um mecanismo de **Trailing Edge Debounce**.
+
+```mermaid
+sequenceDiagram
+    participant EB as EventBus
+    participant W as db_worker (Async)
+    participant T as ManagedTable
+    participant S as SQLite (Blocking Thread)
+
+    EB->>W: LanforgeEvent::DeviceTableDirty
+    W->>W: Inicia Janela de Silêncio (5s)
+    Note over W: Aguardando estabilização do estado...
+    
+    rect rgb(230, 245, 255)
+    Note over W: Se novos eventos chegarem, reseta o timer
+    end
+
+    W->>T: t.clone() (Snapshot em memória)
+    W->>S: Comando: Save(Snapshot)
+    S->>S: Escrita Física (Atomic Commit)
+    S-->>W: OK
+```
+- **Silêncio (5s)**: Tempo de espera após a última mudança.
+- **Duração Máxima (60s)**: Se o estado nunca parar de mudar, força uma escrita após 1 minuto para evitar perda massiva de dados.
+
+---
+
+## Servidor DNS (`lanforge-dns`)
+
+O componente de DNS é otimizado para latência ultra-baixa em consultas locais, utilizando uma arquitetura de "Hot-Path" e Forwarding.
+
+### 1. Hot-Path e Zero-Allocation Parser
+O servidor utiliza um parser de rede customizado (`lanforge-dns/src/wire/`) que analisa o pacote DNS sem realizar alocações de memória ou parsing completo (via strings) para decidir a rota:
+- **Consultas Locais**: Se o hostname termina no domínio configurado (ex: `.lan`), a resposta é gerada imediatamente usando os índices da `ManagedTable`.
+- **Forwarding (Recursão)**: Consultas externas são encaminhadas via `UpstreamManager` para resolvers públicos (Google/Cloudflare).
+
+### 2. Índices de Alta Performance (O(1))
+Para garantir que as queries DNS não sofram contenção, a `ManagedTable` reconstrói índices de busca rápida sempre que o estado atômico muda:
+- `dns_v4_index`: Mapa `Hostname -> Ipv4Addr`.
+- `dns_v6_index`: Mapa `Hostname -> Vec<Ipv6Addr>`.
+- `reverse_index`: Mapa `IpAddr -> Hostname`.
+
+Isso permite que o servidor DNS responda em microsegundos, consultando um `HashMap` pré-aquecido em vez de iterar sobre a lista total de dispositivos.
 
 ---
 
 ## Controle e API (`lanforge-api`)
 
-O daemon expõe um socket Unix (`/run/lanforge/lanforge.sock`) que aceita comandos JSON-RPC. A CLI oficial utiliza esta interface para:
-- Listar dispositivos em tempo real.
-- Modificar configurações de host em runtime.
-- Visualizar logs e status de serviços.
+O daemon expõe uma interface de controle baseada em **JSON-RPC** sobre **Unix Domain Sockets (UDS)**, localizada por padrão em `/run/lanforge/lanforge.sock`.
+
+### 1. Modelo de Segurança e Acesso
+Diferente de uma API HTTP, o uso de UDS permite que a segurança seja gerenciada pelas permissões do sistema de arquivos do Linux. O socket é criado com permissões controladas, permitindo que apenas o usuário `root` ou membros de um grupo específico (conforme configurado no systemd) enviem comandos ao daemon.
+
+### 2. Comandos Principais
+A interface suporta operações síncronas e streaming de eventos:
+
+| Comando | Descrição | Impacto no Sistema |
+| :--- | :--- | :--- |
+| `status` | Retorna o uptime, prefixo atual e saúde dos serviços. | Leitura simples. |
+| `devices` | Lista a tabela completa de dispositivos com filtros. | Leitura da `ManagedTable`. |
+| `host-set` | Modifica hostname ou reserva IP de um dispositivo. | Dispara `DeviceUpdate::CliHostUpdated`. |
+| `watch` | Abre um stream persistente de eventos do `EventBus`. | Mantém conexão UDS aberta. |
+| `lease-renew` | Força um `FORCERENEW` (v4) ou `RECONFIGURE` (v6). | Atuação direta na rede. |
+
+### 3. Integração com CLI
+A CLI do `lanforge` funciona como um cliente leve que serializa os argumentos da linha de comando em JSON e os envia pelo socket. Isso garante que a lógica de negócio resida inteiramente no daemon, mantendo o estado centralizado e consistente.
 
 ---
 
-## Estrutura de Arquivos (Workspace)
+## Orquestração e Resiliência (`src/`)
 
-```text
-.
-├── lanforge-api/        # JSON-RPC Server & Handlers
-├── lanforge-core/       # Shared State, Bus & Identifiers
-├── lanforge-db/         # SQLite Engine & db_worker
-├── lanforge-dns/        # Authoritative DNS Server
-├── lanforge-network/    # DHCP, RA, mDNS, Netlink logic
-└── src/
-    ├── main.rs          # Daemon Bootstrap & Orchestration
-    ├── cli/             # CLI Command Implementation
-    ├── config/          # TOML Parsing & Static Overrides
-    └── supervisor.rs    # Task supervisor with backoff
-```
+O `lanforge` é projetado para ser um "serviço de infraestrutura de missão crítica". Se o DHCP ou DNS caírem, a rede inteira para. Por isso, o daemon implementa estratégias rigorosas de bootstrap e supervisão.
+
+### 1. Ciclo de Bootstrap Hierárquico
+O `main.rs` coordena uma sequência de inicialização que garante que as dependências de estado estejam prontas antes dos protocolos começarem a falar na rede:
+1. **Carregamento de Configuração**: TOML + Overrides de CLI.
+2. **Iniciação do EventBus**: O barramento deve existir antes de qualquer worker.
+3. **Hidratação de Estado**: Carrega o último snapshot do SQLite e aplica as regras estáticas do TOML (que têm precedência).
+4. **Aquecimento de Índices**: Reconstrói os mapas DNS O(1).
+5. **Spawn de Workers**: Dispara os serviços de rede e API.
+
+### 2. Supervisores de Tasks (`supervisor.rs`)
+Cada serviço de protocolo (DHCP, RA, DNS) é encapsulado em um **Supervisor**.
+- **Monitoramento**: Se uma task de rede falhar (ex: porta ocupada ou erro de socket temporário), o supervisor detecta a queda.
+- **Backoff Exponencial**: O sistema tenta reiniciar a task com tempos de espera crescentes (ex: 5s, 10s, 20s...) para evitar loops infinitos de erro que consumam toda a CPU.
+- **Criticality**: Serviços marcados como críticos (como o DHCP) podem forçar o encerramento do processo inteiro se esgotarem as tentativas de reinício, permitindo que o `systemd` tente uma recuperação de nível superior.
+
+### 3. Graceful Shutdown
+Ao receber um sinal `SIGTERM` ou `SIGINT`, o daemon:
+1. Publica `LanforgeEvent::Shutdown` no barramento.
+2. Cada worker (DHCP, RA, DNS) capta o sinal e fecha seus sockets de forma limpa.
+3. O `db_worker` realiza um **Flush Final**, garantindo que nenhum lease em memória seja perdido antes do processo terminar.
 
 ---
 
@@ -159,7 +270,7 @@ O daemon expõe um socket Unix (`/run/lanforge/lanforge.sock`) que aceita comand
 - Persistência reativa com debounce.
 - CLI modular e socket de controle JSON-RPC.
 - Graceful shutdown (SIGTERM/SIGINT).
-- **Fase 8 — DHCPv4 Refresh**: Envio de FORCERENEW (RFC 3203) no startup para sincronização de clientes.
+- Envio de FORCERENEW (RFC 3203) no startup para sincronização de clientes.
 
 ### 🔜 Próximas Fases
 - **Fase 6 — Webview**: Interface visual embutida (Next.js/Axum).
