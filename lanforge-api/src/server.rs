@@ -241,9 +241,9 @@ where
                 })
             }
             Ok(Command::Scan) => {
-                ctx.bus.publish(LanforgeEvent::ReloadConfig); // Hack: reload triggers scan right now
+                ctx.bus.publish(LanforgeEvent::ScanRequested);
                 Response::Success(SimpleSuccess {
-                    message: "Scan disparado".to_string(),
+                    message: "mDNS Discovery Scan disparado".to_string(),
                 })
             }
             Ok(Command::Shutdown) => {

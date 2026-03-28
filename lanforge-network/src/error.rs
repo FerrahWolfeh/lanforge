@@ -37,8 +37,13 @@ pub enum NetworkError {
     InvalidMac(String),
 
     /// No IPv6 Link-Local address (fe80::) found on the interface.
+    /// No IPv6 Link-Local address (fe80::) found on the interface.
     #[error("Missing link-local address on interface {0}")]
     NoLinkLocal(u32),
+
+    /// mDNS protocol or packet failure.
+    #[error("mDNS failure: {0}")]
+    Mdns(String),
 }
 
 /// A specialized Result type for network operations.

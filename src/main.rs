@@ -50,6 +50,7 @@ use lanforge_db::worker::db_worker;
 use lanforge_dns::dns_service;
 use lanforge_network::dhcp::v4::dhcpv4_service;
 use lanforge_network::dhcp::v6::dhcpv6_service;
+use lanforge_network::mdns::MdnsProber;
 use lanforge_network::netlink::extract_neigh_info;
 use lanforge_network::ra::ra_service;
 use lanforge_network::slaac::bootstrap_table;
@@ -201,6 +202,11 @@ async fn main() -> Result<()> {
     // DB worker — persiste reativamente via EventBus
     // -----------------------------------------------------------------------
     tokio::spawn(db_worker(leases_db_path, table.clone(), bus.clone()));
+
+    // -----------------------------------------------------------------------
+    // mDNS Prober — descoberta ativa e passiva de hostnames
+    // -----------------------------------------------------------------------
+    let prober = Arc::new(MdnsProber::new(bus.clone(), table.clone()));
 
     // -----------------------------------------------------------------------
     // Netlink connection
@@ -379,6 +385,28 @@ async fn main() -> Result<()> {
                 // Zero overhead de varredura completa. CPU agradece.
                 if let Some(event) = extract_neigh_info(&msg) {
                     let update = event.to_device_update(current_gua.as_ref());
+
+                    // Trigger passive mDNS probe for new/named-less devices
+                    match update {
+                        DeviceUpdate::NdpSeen { mac, ip } => {
+                            let table_read = table.read();
+                            if let Some(dev) = table_read.get_device(&mac)
+                                && dev.hostname.is_empty() {
+                                    let p = prober.clone();
+                                    tokio::spawn(async move { p.probe_ip(ip.into()).await });
+                                }
+                        }
+                        DeviceUpdate::ArpSeen { mac, ip } => {
+                            let table_read = table.read();
+                            if let Some(dev) = table_read.get_device(&mac)
+                                && dev.hostname.is_empty() {
+                                    let p = prober.clone();
+                                    tokio::spawn(async move { p.probe_ip(ip.into()).await });
+                                }
+                        }
+                        _ => {}
+                    }
+
                     table.update(update).await;
                 }
             }

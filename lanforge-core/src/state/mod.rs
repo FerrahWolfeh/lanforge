@@ -99,6 +99,11 @@ impl DeviceTable {
         self.ip_index.get(ip).and_then(|mac| self.devices.get(mac))
     }
 
+    /// Helper to find a MAC address by its IP in the DNS index.
+    pub fn get_mac_by_ip(&self, ip: IpAddr) -> Option<MacAddr> {
+        self.ip_index.get(&ip).copied()
+    }
+
     /// Retrieves a device by its DUID (DHCPv6 Unique Identifier).
     pub fn get_by_duid(&self, duid: &Duid) -> Option<&Device> {
         self.duid_index

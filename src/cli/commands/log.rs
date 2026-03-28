@@ -118,6 +118,14 @@ impl LogHandler {
                     "Config reload requested".dimmed()
                 );
             }
+            LanforgeEvent::ScanRequested => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "mDNS Scan requested".dimmed()
+                );
+            }
             LanforgeEvent::DeviceTableDirty | LanforgeEvent::Shutdown => {
                 // Ignore these or print subtly if needed
             }

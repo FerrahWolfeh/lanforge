@@ -110,6 +110,8 @@ pub enum LanforgeEvent {
         /// Valid lifetime of the prefix.
         valid: u32,
     },
+    /// Request an active mDNS network scan.
+    ScanRequested,
 
     // -- System Control --
     /// Notification that the underlying persistent table has changes that need flushing.
