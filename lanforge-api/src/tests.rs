@@ -1,9 +1,9 @@
 #![cfg(test)]
 
-use std::sync::Arc;
 use lanforge_core::bus::{EventBus, ManagedTable};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::update::DeviceUpdate;
+use std::sync::Arc;
 
 use crate::api::Response;
 use crate::config::ApiConfig;
