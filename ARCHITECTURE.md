@@ -159,9 +159,9 @@ O daemon expõe um socket Unix (`/run/lanforge/lanforge.sock`) que aceita comand
 - Persistência reativa com debounce.
 - CLI modular e socket de controle JSON-RPC.
 - Graceful shutdown (SIGTERM/SIGINT).
+- **Fase 8 — DHCPv4 Refresh**: Envio de FORCERENEW (RFC 3203) no startup para sincronização de clientes.
 
 ### 🔜 Próximas Fases
 - **Fase 6 — Webview**: Interface visual embutida (Next.js/Axum).
-- **Fase 7 — PPPoE monitor**: Melhor integração com status do link WAN.
-- **Fase 8 — DHCPv4 Refresh**: Implementar FORCERENEW (RFC 3203) no startup.
-- **Fase 9 — Observabilidade**: Exportador de métricas Prometheus integradas.
+- **Fase 7 — Observabilidade**: Exportador de métricas Prometheus integradas.
+- **Fase 8 — PPPoE monitor**: (Adiado) Melhor integração com status do link WAN.

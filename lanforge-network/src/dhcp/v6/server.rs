@@ -737,6 +737,26 @@ impl Dhcpv6Server {
         self.pool.lookup(duid, iaid)
     }
 
+    /// Constructs a `RECONFIGURE` (RFC 3315/8415) message.
+    ///
+    /// This tells the client to initiate a `Renew` or `Information-Request`
+    /// to synchronization its state with the server.
+    pub fn build_reconfigure(&self, client_duid: &Duid, reconf_msg_type: MessageType) -> Vec<u8> {
+        let mut msg = Message::new(MessageType::Reconfigure);
+        msg.set_xid(rand::random::<[u8; 3]>());
+
+        let opts = msg.opts_mut();
+        opts.insert(DhcpOption::ClientId(client_duid.bytes.clone()));
+        opts.insert(DhcpOption::ServerId(self.server_duid.bytes.clone()));
+        opts.insert(DhcpOption::ReconfMsg(reconf_msg_type));
+
+        let mut buf = Vec::with_capacity(512);
+        let mut enc = Encoder::new(&mut buf);
+        msg.encode(&mut enc)
+            .expect("RECONFIGURE encoding should not fail");
+        buf
+    }
+
     fn get_vendor_class(msg: &Message) -> Option<String> {
         match msg.opts().get(OptionCode::VendorClass) {
             Some(DhcpOption::VendorClass(v)) => {
@@ -1120,5 +1140,29 @@ mod tests {
             }
             _ => panic!("Expected Reply with IA_PD"),
         }
+    }
+    #[tokio::test]
+    async fn test_build_reconfigure() {
+        let srv = dummy_server();
+        let duid = dummy_client_duid();
+
+        let packet = srv.build_reconfigure(&duid, MessageType::Renew);
+        let msg = Message::decode(&mut Decoder::new(&packet)).expect("Failed to decode packet");
+
+        assert_eq!(msg.msg_type(), MessageType::Reconfigure);
+
+        let opts = msg.opts();
+        assert_eq!(
+            opts.get(OptionCode::ClientId),
+            Some(&DhcpOption::ClientId(duid.bytes))
+        );
+        assert_eq!(
+            opts.get(OptionCode::ServerId),
+            Some(&DhcpOption::ServerId(srv.server_duid.bytes))
+        );
+        assert_eq!(
+            opts.get(OptionCode::ReconfMsg),
+            Some(&DhcpOption::ReconfMsg(MessageType::Renew))
+        );
     }
 }

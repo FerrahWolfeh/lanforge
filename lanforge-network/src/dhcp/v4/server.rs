@@ -14,7 +14,7 @@
 //! | Decline     | Mark IP as in conflict    | (none)   |
 //! | Inform      | Provide options (no IP)   | Ack      |
 
-use dhcproto::v4::{self, DhcpOption, Message, MessageType, Opcode};
+use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::DeviceTable;
@@ -343,6 +343,32 @@ impl DhcpServer {
     pub fn last_assignment_for(&self, mac: MacAddr) -> Option<Ipv4Addr> {
         self.pool.lookup(mac)
     }
+
+    /// Constructs a `FORCERENEW` (RFC 3203) packet for a specific client.
+    ///
+    /// This follows the "best-effort" approach without RFC 3118 authentication,
+    /// which is the standard behavior in environments where secrets aren't
+    /// pre-provisioned to every device.
+    pub fn build_forcerenew(&self, mac: MacAddr, ip: Ipv4Addr) -> Vec<u8> {
+        let mut msg = Message::default();
+
+        msg.set_opcode(Opcode::BootReply)
+            .set_htype(HType::Eth)
+            .set_xid(rand::random::<u32>())
+            .set_ciaddr(ip)
+            .set_chaddr(&mac.0);
+
+        // DHCP options
+        let opts = msg.opts_mut();
+        opts.insert(DhcpOption::MessageType(MessageType::ForceRenew));
+        opts.insert(DhcpOption::ServerIdentifier(self.cfg.server_id));
+
+        let mut buf = Vec::with_capacity(576);
+        let mut enc = Encoder::new(&mut buf);
+        msg.encode(&mut enc)
+            .expect("FORCERENEW encoding should not fail");
+        buf
+    }
 }
 
 #[cfg(test)]
@@ -605,6 +631,35 @@ mod tests {
                 assert_eq!(dest_ip, client_static_ip);
             }
             HandleResult::Ignore => panic!("Expected ACK for INFORM request"),
+        }
+    }
+
+    #[test]
+    fn test_build_forcerenew() {
+        let srv = dummy_server();
+        let mac = dummy_mac();
+        let ip = Ipv4Addr::new(192, 168, 1, 50);
+
+        let packet = srv.build_forcerenew(mac, ip);
+        let msg = Message::decode(&mut Decoder::new(&packet)).expect("Failed to decode packet");
+
+        assert_eq!(msg.opcode(), Opcode::BootReply);
+        assert_eq!(msg.ciaddr(), ip);
+        assert_eq!(msg.chaddr(), &mac.0);
+
+        let opts = msg.opts();
+        let msg_type = opts.get(v4::OptionCode::MessageType).unwrap();
+        if let DhcpOption::MessageType(mt) = msg_type {
+            assert_eq!(*mt, MessageType::ForceRenew);
+        } else {
+            panic!("Missing MessageType option");
+        }
+
+        let sid = opts.get(v4::OptionCode::ServerIdentifier).unwrap();
+        if let DhcpOption::ServerIdentifier(id) = sid {
+            assert_eq!(*id, srv.cfg.server_id);
+        } else {
+            panic!("Missing ServerIdentifier option");
         }
     }
 }

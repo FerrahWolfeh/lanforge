@@ -32,6 +32,7 @@ pub mod raw;
 pub mod server;
 
 use crate::error::{NetworkError, Result};
+use lanforge_core::device::IPv4State;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -74,7 +75,40 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
     let mut raw_tx = RawSender::new(&cfg.iface)?;
     info!("Transmitting via AF_PACKET raw socket (Layer 2 injection)");
 
+    // Startup Sync: Send ForceRenew to active dynamic leases to synchronize client state
+    {
+        let to_renew = {
+            let t = table.read();
+            t.devices()
+                .filter_map(|dev| {
+                    if let IPv4State::Dynamic(lease) = &dev.v4 {
+                        Some((dev.mac, lease.ip))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut count = 0;
+        for (mac, ip) in to_renew {
+            let packet = server.build_forcerenew(mac, ip);
+            if let Err(e) = raw_tx.send_dhcp(&packet, cfg.server_id, ip, *mac.as_ref()) {
+                error!("DHCPv4: Failed to send startup FORCERENEW to {mac}: {e}");
+            } else {
+                count += 1;
+            }
+            // Small delay to prevent network/client storm
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        if count > 0 {
+            info!("DHCPv4: Triggered refresh (FORCERENEW) for {count} devices");
+        }
+    }
+
     let mut buf = vec![0u8; 1500];
+
     let mut bus_rx = table.bus().subscribe();
 
     // Timer for periodic lease cleanup (every 1 minute)
@@ -163,6 +197,22 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                         info!("DHCPv4: Forcing release of {} via CLI", mac);
                         server.pool.release_mac(mac);
                     }
+                    Ok(LanforgeEvent::LeaseRenew { mac }) => {
+                        let ip = {
+                            let t = table.read();
+                            t.get_device(&mac).and_then(|d| d.v4.ip())
+                        };
+                        if let Some(ip) = ip {
+                            info!("DHCPv4: Sending manual FORCERENEW to {} ({})", ip, mac);
+                            let packet = server.build_forcerenew(mac, ip);
+                            if let Err(e) =
+                                raw_tx.send_dhcp(&packet, cfg.server_id, ip, *mac.as_ref())
+                            {
+                                error!("DHCPv4: Failed to send manual FORCERENEW: {e}");
+                            }
+                        }
+                    }
+
                     Ok(LanforgeEvent::DeviceUpdated { mac, change: DeviceChange::V4StaticChanged { ip } }) => {
                         match ip {
                             Some(v) => {
