@@ -1,30 +1,38 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
-/// Erros específicos do motor de banco de dados do Lanforge.
+/// Specific error types for the Lanforge database engine.
 #[derive(Debug, Error)]
 pub enum LeaseDbError {
-    #[error("falha de I/O em {0}: {1}")]
+    /// Failed to access the database file or directory on disk.
+    #[error("I/O failure at {0}: {1}")]
     PathAccess(PathBuf, #[source] std::io::Error),
 
-    #[error("falha de I/O genérica: {0}")]
+    /// Generic I/O error not directly tied to a specific path.
+    #[error("Generic I/O failure: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("falha ao abrir SQLite em {0}: {1}")]
+    /// Failed to open or create the SQLite connection at the specified path.
+    #[error("Failed to open SQLite at {0}: {1}")]
     ConnectionOpen(PathBuf, #[source] rusqlite::Error),
 
-    #[error("falha no banco de dados SQLite: {0}")]
+    /// Low-level SQLite execution error.
+    #[error("SQLite database failure: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
-    #[error("falha ao executar migration/estatuto: {0}: {1}")]
+    /// Failed during a schema migration or initial table creation.
+    #[error("Failed to execute migration/statute {0}: {1}")]
     Migration(String, #[source] rusqlite::Error),
 
-    #[error("falha ao confirmar transação: {0}")]
+    /// A transactional operation failed to commit.
+    #[error("Failed to commit transaction: {0}")]
     TransactionFailed(#[source] rusqlite::Error),
 
-    #[error("falha ao executar VACUUM: {0}")]
+    /// Database optimization (VACUUM) failed.
+    #[error("Failed to execute VACUUM: {0}")]
     VacuumFailed(#[source] rusqlite::Error),
 
-    #[error("entidade não encontrada: {0}")]
+    /// A requested entity (e.g., a specific lease) was not found in the database.
+    #[error("Entity not found: {0}")]
     NotFound(String),
 }

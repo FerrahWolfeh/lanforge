@@ -1,6 +1,7 @@
-//! `LeaseDb` — motor SQLite síncrono para persistência da `DeviceTable`.
+//! `LeaseDb` — Synchronous SQLite engine for `DeviceTable` persistence.
 //!
-//! Responsável pelo schema, migrations, save (UPSERT) e load (reconstrução).
+//! Responsible for schema management, migrations, atomic saves (UPSERT),
+//! and state reconstruction during loading.
 
 use rusqlite::{Connection, params};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -31,16 +32,18 @@ type DevTableRow = (
     Option<String>,
 );
 
-/// Handle para o banco `SQLite` de leases.
+/// A handle to the SQLite database for network leases and devices.
 ///
-/// Responsável pelas operações síncronas de I/O no banco de dados.
-/// Utiliza o modo WAL para permitir leituras simultâneas a escritas.
+/// `LeaseDb` manages synchronous I/O operations for persistent state.
+/// It uses Write-Ahead Logging (WAL) mode to improve concurrency on
+/// embedded systems like the Raspberry Pi.
 pub struct LeaseDb {
+    /// The underlying SQLite connection.
     pub conn: Connection,
 }
 
 impl LeaseDb {
-    /// Abre (ou cria) o banco `SQLite` no path indicado e executa migrations.
+    /// Opens (or creates) the SQLite database at the specified path and runs migrations.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -50,7 +53,7 @@ impl LeaseDb {
         let conn = Connection::open(path)
             .map_err(|e| LeaseDbError::ConnectionOpen(path.to_path_buf(), e))?;
 
-        // WAL mode — escritas não bloqueiam leituras; NORMAL é seguro pra SD card
+        // WAL mode — writes don't block reads; NORMAL is safe for SD cards
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
 
         let db = Self { conn };
@@ -60,7 +63,7 @@ impl LeaseDb {
         Ok(db)
     }
 
-    /// Cria o banco em memória — exclusivo para testes.
+    /// Creates an in-memory database — exclusively for unit tests.
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
@@ -158,15 +161,17 @@ impl LeaseDb {
     }
 
     // -----------------------------------------------------------------------
-    // Save — snapshot com UPSERT (Delta)
+    // Save — Snapshot with UPSERT (Delta)
     // -----------------------------------------------------------------------
 
-    /// Grava o estado atual minimizando escritas.
-    /// Usa UPSERT para dispositivos e limpa cirurgicamente devices removidos.
+    /// Persists the current state of the `DeviceTable` while minimizing disk writes.
+    ///
+    /// Uses SQL UPSERT for devices and surgically cleans up removed entries
+    /// to ensure the database stays synchronized with memory.
     pub fn save_table(&self, table: &DeviceTable) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
 
-        // 1. Inserir ou atualizar os dispositivos atuais (UPSERT)
+        // 1. Insert or update current devices (UPSERT)
         for device in table.devices() {
             let mac_str = device.mac.to_string();
             let last_seen = system_time_to_unix(device.last_seen);
@@ -191,7 +196,7 @@ impl LeaseDb {
                 }
             }
 
-            // Tabela principal
+            // Primary device metadata
             tx.execute(
                 "INSERT INTO devices (mac, hostname, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
@@ -217,7 +222,7 @@ impl LeaseDb {
                 ],
             )?;
 
-            // Tabelas filhas: delete + reinsert per-mac
+            // Child tables: delete + reinsert per-MAC (atomic change)
             tx.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&mac_str])?;
             if let Some(v4) = v4_lease {
                 tx.execute(
@@ -270,7 +275,7 @@ impl LeaseDb {
             }
         }
 
-        // 2. Limpeza cirúrgica (Deletar do DB os devices que expiraram da memória)
+        // 2. Surgical Cleanup (Delete devices from DB that no longer exist in memory)
         let mut stmt = tx.prepare("SELECT mac FROM devices")?;
         let db_macs: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))?
@@ -295,10 +300,10 @@ impl LeaseDb {
     }
 
     // -----------------------------------------------------------------------
-    // Load — reconstrói DeviceTable via apply_update
+    // Load — Reconstructs DeviceTable via apply_update
     // -----------------------------------------------------------------------
 
-    /// Carrega o estado persistido e devolve uma `DeviceTable` populada.
+    /// Loads the persisted state and returns a fully populated `DeviceTable`.
     pub fn load_table(&self) -> Result<DeviceTable> {
         let mut table = DeviceTable::new();
 
@@ -366,7 +371,7 @@ impl LeaseDb {
                 dev.v6.push(IPv6State::Static(suf));
             }
 
-            // Restaura DUID via apply_update — reconstrói o duid_index
+            // Restore DUID via apply_update — this reconstructs the duid_index
             if let Some(bytes) = duid_bytes {
                 table.apply_update(DeviceUpdate::DuidAssociated {
                     mac: Some(mac),
@@ -375,8 +380,8 @@ impl LeaseDb {
                 });
             }
 
-            // Reconstrói static_entries para devices CLI-managed
-            // Sem isso, DHCP pools perdem reservas CLI após restart.
+            // Reconstruct static_entries for CLI-managed devices.
+            // Without this, DHCP pools lose reservations after a restart.
             if origin_str == "cli" {
                 let dev = table.get_or_insert(mac);
                 let hostname = dev.hostname.clone();
@@ -533,7 +538,7 @@ impl LeaseDb {
             table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
         }
 
-        // 5. Seen IPv4 addresses (saved but previously never loaded)
+        // 5. Seen IPv4 addresses
         let mut stmt = self.conn.prepare("SELECT mac, ip FROM seen_v4")?;
 
         let seen_rows: Vec<(String, String)> = stmt
@@ -558,7 +563,7 @@ impl LeaseDb {
         Ok(table)
     }
 
-    /// Executa o comando VACUUM para otimizar o arquivo do banco de dados.
+    /// Executes the VACUUM command to optimize the database file on disk.
     pub fn vacuum(&self) -> Result<()> {
         debug!("Executando VACUUM no SQLite...");
         self.conn

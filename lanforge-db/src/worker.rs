@@ -1,7 +1,7 @@
-//! `db_worker` — task async reativa com debounce para persistência.
+//! `db_worker` — Reactive async task with debounce for persistence.
 //!
-//! Escuta `DeviceTableDirty` no `EventBus` e persiste o estado no SQLite
-//! com debounce, protegendo o SD card de escritas excessivas.
+//! Listens for `DeviceTableDirty` on the `EventBus` and persists state to SQLite
+//! with debounce, protecting the SD card from excessive writes.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,21 +19,35 @@ use crate::engine::LeaseDb;
 // Constantes
 // ---------------------------------------------------------------------------
 
-/// Duração do debounce antes de persistir após um `DeviceTableDirty`.
+/// Debounce duration after a `DeviceTableDirty` event before persisting.
 pub(crate) const DEBOUNCE_SILENCE: Duration = Duration::from_secs(5);
+/// Maximum time to wait for a quiet window before forcing a save.
 const MAX_DEBOUNCE_WAIT: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------
 // db_worker — task reativa com debounce
 // ---------------------------------------------------------------------------
 
-/// Task async que persiste o `ManagedTable` reativamente.
+/// Reactive async task that persists the `ManagedTable` over time.
 ///
-/// Implementa um loop de debounce para evitar micro-escritas no disco.
-/// Escuta eventos `DeviceTableDirty` e, após uma janela de calma,
-/// dispara uma thread separada para salvar o estado atual no `SQLite`.
+/// Implements a trailing-edge debounce loop to avoid micro-writes to disk.
+/// The worker listens for `DeviceTableDirty` events and, after a quiet window,
+/// triggers a dedicated blocking thread to save the snapshot to SQLite.
 ///
-/// Também processa `DbVacuum` para otimização do banco.
+/// Also processes `DbVacuum` events for periodic database optimization.
+///
+/// ```mermaid
+/// sequenceDiagram
+///     participant Bus as EventBus
+///     participant Worker as db_worker (Async)
+///     participant SQLite as LeaseDb (Blocking)
+///
+///     Bus->>Worker: DeviceTableDirty
+///     Worker->>Worker: Debounce Silence Starts (5s)
+///     Note over Worker: Coalescing multiple dirty signals...
+///     Worker->>SQLite: Send Save(Snapshot)
+///     SQLite-->>Worker: Commit & Return
+/// ```
 pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<EventBus>) {
     let mut rx = bus.subscribe();
 
@@ -46,13 +60,13 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
     // 1. Cria o canal MPSC para enviar comandos para a thread síncrona.
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<DbWorkerCmd>(4);
 
-    // 2. Inicia a thread síncrona dedicada ao SQLite (Abre o banco APENAS UMA VEZ)
+    // 2. Start a dedicated blocking thread for SQLite (Open once, keep alive)
     let db_path_clone = db_path.clone();
     tokio::task::spawn_blocking(move || {
         let db = match LeaseDb::open(&db_path_clone) {
             Ok(db) => db,
             Err(e) => {
-                warn!("DB thread: falha fatal ao abrir SQLite: {e}");
+                warn!("DB thread: fatal failure opening SQLite: {e}");
                 return;
             }
         };
@@ -78,7 +92,7 @@ pub async fn db_worker(db_path: PathBuf, table: Arc<ManagedTable>, bus: Arc<Even
         info!("DB thread: encerrando graciosamente");
     });
 
-    // 3. Loop principal assíncrono reativo
+    // 3. Main reactive async loop
     loop {
         let action = wait_for_db_action(&mut rx).await;
 
@@ -140,7 +154,7 @@ enum DbAction {
 // Helpers assíncronos
 // ---------------------------------------------------------------------------
 
-/// Aguarda o próximo evento de DB ou `Shutdown`.
+/// Waits for the next database action or a `Shutdown` signal.
 async fn wait_for_db_action(rx: &mut broadcast::Receiver<LanforgeEvent>) -> DbAction {
     loop {
         match rx.recv().await {
@@ -160,8 +174,8 @@ async fn wait_for_db_action(rx: &mut broadcast::Receiver<LanforgeEvent>) -> DbAc
     }
 }
 
-/// Drena o canal aplicando um "Trailing Edge Debounce".
-/// Retorna `true` se um `Shutdown` chegou durante a espera.
+/// Drains the event channel using a Trailing Edge Debounce strategy.
+/// Returns `true` if a `Shutdown` event was received during the wait.
 async fn drain_with_debounce(rx: &mut broadcast::Receiver<LanforgeEvent>) -> bool {
     let start_time = tokio::time::Instant::now();
     let max_deadline = start_time + MAX_DEBOUNCE_WAIT;

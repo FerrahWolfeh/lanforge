@@ -1,3 +1,9 @@
+//! # Lanforge DB
+//!
+//! This crate provides the persistent storage layer for the Lanforge daemon.
+//! It uses SQLite as a backend to ensure that discovered network devices, leases,
+//! and static configurations survive system restarts.
+
 pub mod engine;
 pub mod error;
 #[cfg(test)]
