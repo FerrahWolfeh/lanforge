@@ -97,20 +97,34 @@ pub fn extract_local_hostname_wire<'a>(
     // 1. The first label is the target hostname
     let host_bytes = labels.next()?;
 
-    // 2. Validate the rest of the query against search domains
-    for expected in search_labels {
-        let actual = labels.next()?;
-        if !actual.eq_ignore_ascii_case(expected) {
-            return None;
+    // 2. Decide if we match a short name or a domain
+    match labels.next() {
+        None => {
+            // Case 1: "node-1" (single label query)
+            std::str::from_utf8(host_bytes).ok()
+        }
+        Some(first_actual) => {
+            // Case 2: "node-1.lan" (domain query)
+            // It MUST match our search_labels perfectly.
+            if search_labels.is_empty() || !first_actual.eq_ignore_ascii_case(&search_labels[0]) {
+                return None;
+            }
+
+            for expected in &search_labels[1..] {
+                let actual = labels.next()?;
+                if !actual.eq_ignore_ascii_case(expected) {
+                    return None;
+                }
+            }
+
+            // Reject queries with excess subdomains
+            if labels.next().is_some() {
+                return None;
+            }
+
+            std::str::from_utf8(host_bytes).ok()
         }
     }
-
-    // 3. Reject queries with excess subdomains
-    if labels.next().is_some() {
-        return None;
-    }
-
-    std::str::from_utf8(host_bytes).ok()
 }
 
 /// Parses an ARPA request directly from a wire label iterator.
@@ -135,26 +149,36 @@ pub fn parse_arpa_wire(labels: WireLabelIter<'_>) -> Option<IpAddr> {
 pub fn extract_local_hostname<'a>(qname: &'a Name, search_labels: &[Vec<u8>]) -> Option<&'a str> {
     let mut iter = qname.iter();
 
-    // 1. The first label is always the target (e.g., "node-12" in "node-12.lanforge.local")
+    // 1. The first label is always the target
     let host_bytes = iter.next()?;
 
-    // 2. Validate that the rest of the query matches the search domain exactly
-    for expected_label in search_labels {
-        let actual_label = iter.next()?;
+    // 2. Check for suffixes
+    match iter.next() {
+        None => {
+            // Short name: "node-1"
+            std::str::from_utf8(host_bytes).ok()
+        }
+        Some(first_actual) => {
+            // Domain name: "node-1.lan"
+            if search_labels.is_empty() || !first_actual.eq_ignore_ascii_case(&search_labels[0]) {
+                return None;
+            }
 
-        // Case-insensitive byte comparison (much faster than UTF-8 string conversion)
-        if !actual_label.eq_ignore_ascii_case(expected_label) {
-            return None;
+            for expected in &search_labels[1..] {
+                let actual = iter.next()?;
+                if !actual.eq_ignore_ascii_case(expected) {
+                    return None;
+                }
+            }
+
+            // Reject excess subdomains
+            if iter.next().is_some() {
+                return None;
+            }
+
+            std::str::from_utf8(host_bytes).ok()
         }
     }
-
-    // 3. If the query has more labels (e.g., sub.node-12.lanforge.local), reject it
-    if iter.next().is_some() {
-        return None;
-    }
-
-    // 4. Everything matches. Convert hostname bytes to &str and return
-    std::str::from_utf8(host_bytes).ok()
 }
 
 /// Ensures a string is lowercase with minimal allocations.
@@ -166,5 +190,39 @@ pub fn fast_lowercase(s: &str) -> Cow<'_, str> {
         Cow::Owned(s.to_ascii_lowercase())
     } else {
         Cow::Borrowed(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_proto::rr::Name;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_extract_local_hostname_flexible() {
+        let search_labels = vec![b"lan".to_vec()];
+
+        // 1. Short name
+        let name_short = Name::from_str("node-1.").unwrap();
+        assert_eq!(
+            extract_local_hostname(&name_short, &search_labels),
+            Some("node-1")
+        );
+
+        // 2. Full name
+        let name_full = Name::from_str("node-1.lan.").unwrap();
+        assert_eq!(
+            extract_local_hostname(&name_full, &search_labels),
+            Some("node-1")
+        );
+
+        // 3. Wrong suffix
+        let name_wrong = Name::from_str("node-1.other.").unwrap();
+        assert_eq!(extract_local_hostname(&name_wrong, &search_labels), None);
+
+        // 4. Excess subdomains
+        let name_excess = Name::from_str("sub.node-1.lan.").unwrap();
+        assert_eq!(extract_local_hostname(&name_excess, &search_labels), None);
     }
 }

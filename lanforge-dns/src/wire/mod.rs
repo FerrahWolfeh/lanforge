@@ -203,9 +203,8 @@ impl WireResponseWriter {
             h[11] = 1; // ARCOUNT = 1 (for OPT)
         }
         resp.extend_from_slice(&h);
-
-        // 2. Question section (exact copy)
-        resp.extend_from_slice(question.data);
+        // 2. Question section (slice after the 12-byte header)
+        resp.extend_from_slice(&question.data[12..]);
 
         // 3. EDNS OPT record if present
         if let Some(opt) = edns {
@@ -217,5 +216,29 @@ impl WireResponseWriter {
         }
 
         resp
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_write_error_response_no_duplication() {
+        // ID=0x1234, Flags=0x0100 (RD=1), QDCOUNT=1, ...
+        // QNAME="\x04host\x03lan\x00", QTYPE=1 (A), QCLASS=1 (IN)
+        let query_data = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04host\x03lan\x00\x00\x01\x00\x01";
+        let question = WireQuestion::parse(query_data).expect("Should parse question");
+        let rcode = 5; // REFUSED
+        let resp = WireResponseWriter::write_error_response(query_data, &question, rcode, None, false);
+
+        // Header (12) + QNAME ("4host3lan0" = 10) + QTYPE (2) + QCLASS (2) = 26 bytes
+        assert_eq!(resp.len(), 26, "Response size should be exactly 26 bytes (no 24-byte header duplication)");
+        assert_eq!(&resp[0..2], b"\x12\x34", "ID should match");
+        assert_eq!(resp[2], 0x81, "Flags byte 1 should have QR=1 and RD=1");
+        assert_eq!(resp[3] & 0x0F, 0x05, "RCODE should be 5 (REFUSED)");
+        
+        // The question part MUST start immediately after the 12-byte header
+        assert_eq!(&resp[12..17], b"\x04host", "Question section should start at index 12");
     }
 }

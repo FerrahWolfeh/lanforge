@@ -98,7 +98,7 @@ impl Config {
             command: cli.command.unwrap_or(Command::Run { only: None }),
             iface_lan: cli.iface_lan.unwrap_or(toml_cfg.general.iface_lan),
             target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),
-            leases_db: toml_cfg.general.leases_db,
+            leases_db: cli.db_path.unwrap_or(toml_cfg.general.leases_db),
             debounce_secs: cli.debounce_secs.unwrap_or(toml_cfg.general.debounce_secs),
             fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
             control_socket: cli

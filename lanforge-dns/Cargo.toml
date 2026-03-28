@@ -12,3 +12,6 @@ lanforge-core = { path = "../lanforge-core" }
 tokio = "1.50.0"
 tracing = "0.1.44"
 thiserror = "2.0.18"
+
+[dev-dependencies]
+tokio = { version = "1.50.0", features = ["io-util", "net", "rt", "time"] }

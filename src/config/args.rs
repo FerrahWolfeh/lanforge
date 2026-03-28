@@ -98,6 +98,10 @@ pub struct CliArgs {
     )]
     pub config: String,
 
+    /// Caminho para o banco de dados SQLite (leases).
+    #[arg(short = 'd', long, env = "LANFORGE_DB_PATH")]
+    pub db_path: Option<String>,
+
     /// Caminho para um arquivo TOML/JSON adicional contendo apenas devices estáticos (debug).
     #[arg(long, env = "LANFORGE_DEVICES_FILE")]
     pub devices_file: Option<String>,

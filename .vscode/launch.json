@@ -38,15 +38,19 @@
                 ]
             },
             "args": [
-                "run",
-                "--only",
-                "dns",
+                "--db-path",
+                "${workspaceFolder}/debug_leases.db",
                 "--dns-port",
-                "5353",
+                "53535",
                 "--devices-file",
                 "${workspaceFolder}/debug_devices.toml",
                 "--config",
-                "/dev/null"
+                "/dev/null",
+                "--control-socket",
+                "/mnt/ram/sock.sock",
+                "run",
+                "--only",
+                "dns"
             ]
         }
     ]
