@@ -90,12 +90,14 @@ pub enum DeviceUpdate {
         iaid: u32,
     },
 
-    /// Explicit field modification via CLI control interface.
+    /// Explicit field modification via CLI or HTTP API.
     CliHostUpdated {
         mac: MacAddr,
         hostname: Option<Option<String>>,
         v4_static: Option<Option<Ipv4Addr>>,
         v6_suffix: Option<Option<Ipv6AddrOrSuffix>>,
+        /// The administrative origin of this update.
+        origin: Origin,
     },
 
     /// Clear all SLAAC addresses for a device (e.g., before partial re-scan).
@@ -345,6 +347,7 @@ impl DeviceTable {
                 hostname,
                 v4_static,
                 v6_suffix,
+                origin,
             } => {
                 let dev = self.get_or_insert(mac);
                 if dev.origin == Origin::Toml {
@@ -410,7 +413,7 @@ impl DeviceTable {
                 }
 
                 if changed {
-                    dev.origin = Origin::Cli;
+                    dev.origin = origin;
                     dev.managed_at = Some(SystemTime::now());
                     dev.last_seen = SystemTime::now();
 

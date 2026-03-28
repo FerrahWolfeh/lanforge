@@ -209,6 +209,9 @@ pub struct CliArgs {
     /// Porta TCP para a API de controle (opcional para debug remoto).
     #[arg(long, env = "LANFORGE_CONTROL_PORT")]
     pub control_port: Option<u16>,
+    /// Endereço de escuta para a API REST HTTP (ex: 0.0.0.0:8080).
+    #[arg(long, env = "LANFORGE_HTTP_LISTEN")]
+    pub http_listen: Option<String>,
 }
 
 #[cfg(test)]

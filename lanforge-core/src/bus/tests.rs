@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use crate::bus::{DeviceChange, EventBus, LanforgeEvent, ManagedTable};
+use crate::device::Origin;
 use crate::identifiers::MacAddr;
 use crate::state::update::DeviceUpdate;
 use std::net::Ipv4Addr;
@@ -123,6 +124,7 @@ async fn cli_host_update_publishes_events() {
             hostname: Some(Some("cli-host".to_string())),
             v4_static: None,
             v6_suffix: None,
+            origin: Origin::Cli,
         })
         .await;
 
@@ -148,6 +150,7 @@ async fn cli_host_update_publishes_events() {
             hostname: None,
             v4_static: Some(Some("1.2.3.4".parse().unwrap())),
             v6_suffix: None,
+            origin: Origin::Cli,
         })
         .await;
 

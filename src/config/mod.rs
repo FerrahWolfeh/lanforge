@@ -85,6 +85,7 @@ pub struct Config {
     pub dhcpv6_port: u16,
     pub dns_port: Option<u16>,
     pub api_port: Option<u16>,
+    pub http_listen: Option<String>,
 }
 
 impl Config {
@@ -145,6 +146,7 @@ impl Config {
             dhcpv6_port: cli.dhcpv6_port.unwrap_or(547),
             dns_port: cli.dns_port,
             api_port: cli.control_port,
+            http_listen: cli.http_listen.or(toml_cfg.general.http_listen),
         }
     }
 
@@ -357,6 +359,7 @@ impl Config {
             db_path: self.leases_db.clone(),
             log_db_path: self.log_db.clone(),
             tcp_port: self.api_port,
+            http_listen: self.http_listen.clone(),
         }
     }
 }

@@ -86,6 +86,8 @@ pub struct GeneralCfg {
     pub fallback_mins: u64,
     /// Caminho do socket para a CLI.
     pub control_socket: String,
+    /// Endereço de escuta para a API REST HTTP (ex: "0.0.0.0:8080").
+    pub http_listen: Option<String>,
 }
 
 impl Default for GeneralCfg {
@@ -97,6 +99,7 @@ impl Default for GeneralCfg {
             debounce_secs: 2,
             fallback_mins: 5,
             control_socket: "/run/lanforge/control.sock".into(),
+            http_listen: None,
         }
     }
 }

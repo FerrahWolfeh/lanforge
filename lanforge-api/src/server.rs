@@ -4,7 +4,7 @@ use lanforge_db::log_engine::LogDb;
 use crate::config::ApiConfig;
 use crate::error::{ApiError, Result};
 use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
-use lanforge_core::device::Ipv6AddrOrSuffix;
+use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::update::DeviceUpdate;
 use std::fs;
@@ -319,6 +319,7 @@ where
                                 hostname: hostname.map(Some),
                                 v4_static: Some(v4_static),
                                 v6_suffix: Some(v6_suffix_parsed),
+                                origin: Origin::Cli,
                             })
                             .await;
 
@@ -383,6 +384,7 @@ where
                                 hostname: hn,
                                 v4_static: v4s,
                                 v6_suffix: v6s,
+                                origin: Origin::Cli,
                             })
                             .await;
 

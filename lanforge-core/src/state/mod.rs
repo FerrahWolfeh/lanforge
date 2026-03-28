@@ -23,6 +23,7 @@ pub mod update;
 #[cfg(test)]
 pub mod tests;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::time::SystemTime;
@@ -161,6 +162,27 @@ impl DeviceTable {
     pub fn add_static_entry(&mut self, mac: MacAddr, entry: StaticEntry) {
         self.static_entries.insert(mac, entry);
     }
+
+    /// Retorna estatísticas resumidas da tabela.
+    pub fn stats(&self) -> DeviceTableStats {
+        let total = self.devices.len();
+        let online = self.devices.values().filter(|d| d.is_online()).count();
+        let statics = self.static_entries.len();
+
+        DeviceTableStats {
+            total_devices: total,
+            online_devices: online,
+            static_entries: statics,
+        }
+    }
+}
+
+/// Estatísticas básicas da tabela de dispositivos.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceTableStats {
+    pub total_devices: usize,
+    pub online_devices: usize,
+    pub static_entries: usize,
 }
 
 impl Default for DeviceTable {

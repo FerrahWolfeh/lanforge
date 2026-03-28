@@ -42,6 +42,8 @@ pub enum Origin {
     Toml,
     /// Configured or overridden via the CLI control interface.
     Cli,
+    /// Configured via the HTTP API (pre-registration).
+    External,
     /// Discovered dynamically on the network (e.g., via DHCP or ARP).
     #[default]
     Dynamic,
@@ -52,6 +54,7 @@ impl Origin {
         match self {
             Self::Toml => "toml",
             Self::Cli => "cli",
+            Self::External => "external",
             Self::Dynamic => "dynamic",
         }
     }
@@ -64,6 +67,7 @@ impl Origin {
         match self {
             Self::Toml => "★",
             Self::Cli => "·",
+            Self::External => "ⓔ",
             Self::Dynamic => "–",
         }
     }
@@ -75,6 +79,7 @@ impl FromStr for Origin {
         match s.to_lowercase().as_str() {
             "toml" | "static" => Ok(Self::Toml),
             "cli" | "managed_cli" => Ok(Self::Cli),
+            "external" | "api" => Ok(Self::External),
             "dynamic" => Ok(Self::Dynamic),
             _ => Err(()),
         }

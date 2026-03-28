@@ -33,14 +33,20 @@ pub enum ApiError {
         source: std::io::Error,
     },
 
-    /// Failed to bind the Unix listener to the specified path.
-    #[error("Failed to bind Unix socket at {path}: {source}")]
+    /// Failed to bind the Unix listener or TCP listener.
+    #[error("Failed to bind socket at {path}: {source}")]
     Bind {
-        /// The path where binding was attempted.
+        /// The path or address where binding was attempted.
         path: String,
         /// Underlying I/O error.
         source: std::io::Error,
     },
+    /// Configuration error (e.g., invalid address).
+    #[error("API Configuration error: {message}")]
+    Config { message: String },
+    /// Generic internal server error.
+    #[error("Internal API error: {message}")]
+    Internal { message: String },
 }
 
 /// A specialized Result type for API operations.

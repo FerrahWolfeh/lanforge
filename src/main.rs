@@ -346,6 +346,8 @@ async fn main() -> Result<()> {
     let ctrl_table = table.clone();
     let ctrl_bus = bus.clone();
     let api_cfg = Arc::new(cfg.to_api_config());
+    let api_cfg_ctrl = api_cfg.clone();
+    let api_cfg_http = api_cfg.clone();
 
     tracker.spawn(supervisor::supervise_task(
         "control",
@@ -357,7 +359,7 @@ async fn main() -> Result<()> {
         move || {
             let table = ctrl_table.clone();
             let bus = ctrl_bus.clone();
-            let cfg = api_cfg.clone();
+            let cfg = api_cfg_ctrl.clone();
             async move {
                 lanforge_api::server::control_service(table, bus, cfg)
                     .await
@@ -365,6 +367,32 @@ async fn main() -> Result<()> {
             }
         },
     ));
+
+    // -----------------------------------------------------------------------
+    // HTTP API responder — Axum service
+    // -----------------------------------------------------------------------
+    if cfg.http_listen.is_some() {
+        let http_table = table.clone();
+        let http_api_cfg = api_cfg_http.clone();
+
+        tracker.spawn(supervisor::supervise_task(
+            "http",
+            true,
+            0,
+            Duration::from_secs(2),
+            Duration::from_secs(30),
+            cancel.clone(),
+            move || {
+                let table = http_table.clone();
+                let cfg = http_api_cfg.clone();
+                async move {
+                    lanforge_api::http::http_service(table, cfg)
+                        .await
+                        .map_err(anyhow::Error::from)
+                }
+            },
+        ));
+    }
 
     tracker.close();
 

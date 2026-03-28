@@ -279,6 +279,7 @@ fn test_cli_host_updated_sync() {
         hostname: Some(Some("cli-host".to_string())),
         v4_static: Some(Some("192.168.1.10".parse().unwrap())),
         v6_suffix: Some(Some(Ipv6AddrOrSuffix::parse("::10").unwrap())),
+        origin: Origin::Cli,
     });
 
     assert!(changed);
@@ -307,6 +308,7 @@ fn test_cli_host_updated_sync() {
         hostname: Some(Some("new-name".to_string())),
         v4_static: None, // No change
         v6_suffix: None, // No change
+        origin: Origin::Cli,
     });
 
     assert!(changed);

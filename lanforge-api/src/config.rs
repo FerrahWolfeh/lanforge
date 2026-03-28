@@ -35,6 +35,8 @@ pub struct ApiConfig {
 
     /// Optional TCP port for the control API (debug).
     pub tcp_port: Option<u16>,
+    /// Optional address to listen for the HTTP REST API (e.g., "0.0.0.0:8080").
+    pub http_listen: Option<String>,
 }
 
 #[cfg(test)]
@@ -53,6 +55,7 @@ impl ApiConfig {
             db_path: "/tmp/leases.db".to_string(),
             log_db_path: "/tmp/lanforge_logs.db".to_string(),
             tcp_port: None,
+            http_listen: None,
         }
     }
 }

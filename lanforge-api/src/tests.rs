@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use lanforge_core::bus::{EventBus, ManagedTable};
+use lanforge_core::device::Origin;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::update::DeviceUpdate;
 use std::sync::Arc;
@@ -36,6 +37,7 @@ async fn test_host_list_returns_static_and_cli_only() {
             hostname: Some(Some("cli-host".to_string())),
             v4_static: None,
             v6_suffix: None,
+            origin: Origin::Cli,
         })
         .await;
 
