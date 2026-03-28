@@ -1,10 +1,7 @@
 [Unit]
 Description=lanforge — Unified IPv4/IPv6 Network Control Daemon
-# Substitui progressivamente: radvd, dnsmasq (DHCP), ipv6_namer.
-After=network-online.target
+After=network-online.target pihole-FTL.service
 Wants=network-online.target
-# Since it replaces dnsmasq's DHCP and radvd, it should run alongside or after pihole-FTL
-After=pihole-FTL.service
 
 [Service]
 # CLI subcomando 'run' sobe todos os serviços habilitados
