@@ -70,11 +70,19 @@ use tracing::{debug, error, info, warn};
 
 // DEPOIS: main síncrona + runtime current_thread + função async separada
 fn main() -> Result<()> {
-    tokio::runtime::Builder::new_current_thread()
+    let res = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .thread_name("main")
+        .thread_name("lanforge-main")
         .build()?
-        .block_on(async_main())
+        .block_on(async_main());
+
+    // Forçamos a saída imediata para evitar hangs em destrutores globais
+    // ou runtimes que se recusam a morrer após o "Lanforge encerrado".
+    if let Err(e) = res {
+        eprintln!("❌ Erro fatal: {e:#}");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
 }
 
 /// Ponto de entrada principal do daemon.
@@ -227,7 +235,7 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     let (mut connection, handle, mut messages) = new_connection()?;
     connection.socket_mut().socket_mut().add_membership(3)?;
-    tokio::spawn(connection);
+    let netlink_task = tokio::spawn(connection);
 
     // -----------------------------------------------------------------------
     // RA service
@@ -574,6 +582,7 @@ async fn async_main() -> Result<()> {
     info!("🛑 Iniciando sequência de shutdown...");
     bus.publish(LanforgeEvent::Shutdown);
     cancel.cancel();
+    netlink_task.abort();
 
     // O wait é bloqueante mas estamos fora do hot path — o runtime main
     // pode ficar idle enquanto as threads de serviço terminam.

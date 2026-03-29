@@ -58,7 +58,11 @@ pub async fn supervise_task<F, Fut>(
             res = factory() => {
                 match res {
                     Ok(()) => {
-                        // Task terminou normalmente — reinicia (pode ser um ciclo finito)
+                        // Task terminou normalmente — verifica se foi por shutdown
+                        if cancel.is_cancelled() {
+                            info!("Supervisor '{name}' shutting down after clean service exit");
+                            return;
+                        }
                         info!("Service '{name}' exited cleanly, restarting");
                         consecutive_failures = 0;
                     }
