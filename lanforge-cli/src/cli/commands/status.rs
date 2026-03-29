@@ -1,6 +1,6 @@
 use super::{CliCommand, format_uptime};
-use anyhow::Result;
 use bytesize::ByteSize;
+use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;

@@ -1,6 +1,7 @@
 use super::CliCommand;
-use crate::config::HostCommand;
-use anyhow::Result;
+use crate::args::HostCommand;
+use color_eyre::Result;
+use color_eyre::eyre::bail;
 use inquire::{Confirm, Select, Text as InquireText};
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
@@ -25,7 +26,7 @@ impl CliCommand for HostHandler {
                     if ans.trim().is_empty() {
                         // user skipped, we probably want to return an error or a dummy command handled gracefully.
                         // Actually, if it's empty, returning an error exits early.
-                        anyhow::bail!("MAC address is required");
+                        bail!("MAC address is required");
                     }
                     ans.trim().to_string()
                 };
@@ -35,7 +36,7 @@ impl CliCommand for HostHandler {
                 } else {
                     let ans = InquireText::new("Hostname:").prompt()?;
                     if ans.trim().is_empty() {
-                        anyhow::bail!("Hostname is required");
+                        bail!("Hostname is required");
                     }
                     ans.trim().to_string()
                 };
@@ -78,7 +79,7 @@ impl CliCommand for HostHandler {
                         .with_default(true)
                         .prompt()?;
                     if !confirm {
-                        anyhow::bail!("Cancelado.");
+                        bail!("Cancelado.");
                     }
                 }
 

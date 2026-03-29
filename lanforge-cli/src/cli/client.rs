@@ -1,10 +1,10 @@
-use anyhow::{Context, Result};
+use color_eyre::eyre::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
+use crate::args::Command;
 use crate::cli::commands::CliCommand;
 use crate::cli::commands::GenericHandler;
-use crate::config::Command;
 use lanforge_api::api::Response;
 
 pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
@@ -42,18 +42,10 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             cmd: lanforge_api::api::Command::Scan,
             streaming: false,
         }),
-        Command::Shutdown => Box::new(GenericHandler {
-            cmd: lanforge_api::api::Command::Shutdown,
-            streaming: false,
-        }),
         Command::Purge { mac } => Box::new(GenericHandler {
             cmd: lanforge_api::api::Command::Purge { mac },
             streaming: false,
         }),
-        Command::Run { .. } => {
-            println!("Este comando ainda não está implementado na CLI.");
-            return Ok(());
-        }
     };
 
     let control_cmd = match handler.prepare() {

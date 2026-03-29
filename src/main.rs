@@ -31,7 +31,6 @@
 //! - **`EventBus`**: Barramento de eventos reativo asincrono.
 //! - **Supervisores**: Garantem que tasks de protocolo continuem rodando após erros.
 
-mod cli;
 mod config;
 mod supervisor;
 
@@ -74,32 +73,20 @@ use tracing::{debug, error, info, warn};
 /// `SQLite` e dispara os serviços de rede (RA, DHCP, DNS, Control) como tasks do Tokio.
 #[tokio::main]
 async fn main() -> Result<()> {
+    #[cfg(feature = "debug-commands")]
     let mut cfg = Config::load();
 
-    // Se for comando cliente (Devices, Status, Reload), executa e sai sem subir o daemon (nem env filter/logging)
-    match &cfg.command {
-        config::Command::Devices { .. }
-        | config::Command::Status
-        | config::Command::Reload
-        | config::Command::Watch
-        | config::Command::Log { .. }
-        | config::Command::Lease { .. }
-        | config::Command::Scan
-        | config::Command::Host { .. }
-        | config::Command::Db { .. }
-        | config::Command::Purge { .. }
-        | config::Command::Shutdown => {
-            return cli::run_client(cfg.command.clone(), &cfg.control_socket).await;
-        }
-        config::Command::Run { only: Some(s) } => {
-            let modules: Vec<&str> = s.split(',').collect();
-            cfg.ra_enabled = modules.contains(&"ra");
-            cfg.dhcpv4_enabled = modules.contains(&"dhcpv4") || modules.contains(&"dhcp");
-            cfg.dhcpv6_enabled = modules.contains(&"dhcpv6") || modules.contains(&"dhcp");
-            cfg.dns_enabled = modules.contains(&"dns");
-            info!("🎯 Running ONLY: {:?}", modules);
-        }
-        config::Command::Run { only: None } => {}
+    #[cfg(not(feature = "debug-commands"))]
+    let cfg = Config::load();
+
+    #[cfg(feature = "debug-commands")]
+    if let config::Command::Run { only: Some(s) } = &cfg.command {
+        let modules: Vec<&str> = s.split(',').collect();
+        cfg.ra_enabled = modules.contains(&"ra");
+        cfg.dhcpv4_enabled = modules.contains(&"dhcpv4") || modules.contains(&"dhcp");
+        cfg.dhcpv6_enabled = modules.contains(&"dhcpv6") || modules.contains(&"dhcp");
+        cfg.dns_enabled = modules.contains(&"dns");
+        info!("🎯 Running ONLY (Debug Mode): {:?}", modules);
     }
 
     let cfg = Arc::new(cfg);

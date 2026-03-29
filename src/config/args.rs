@@ -1,96 +1,22 @@
-use clap::{Parser, Subcommand};
+use clap::Parser;
+#[cfg(feature = "debug-commands")]
+use clap::Subcommand;
 
+#[cfg(feature = "debug-commands")]
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Start all enabled services (default behavior)
+    /// Start all enabled services with optional module filtering (debug only)
     Run {
         /// Run only a specific subsystem (e.g. ra, dhcpv4, dhcpv6, dns, slaac)
         #[arg(long)]
         only: Option<String>,
     },
-    /// List known devices
-    Devices {
-        #[arg(short, long)]
-        verbose: bool,
-        #[arg(long)]
-        filter: Option<String>,
-        #[arg(long)]
-        format: Option<String>,
-    },
-    /// Live view reativo via socket (sem polling)
-    Watch,
-    /// Service health and general status
-    Status,
-    /// `EventBus` interno em tempo real
-    Log {
-        #[arg(long)]
-        follow: bool,
-    },
-    /// Gerenciamento de leases (renew/release)
-    Lease {
-        #[command(subcommand)]
-        action: LeaseCommand,
-    },
-    /// Dispara ciclo NDP imediato com feedback
-    Scan,
-    /// Gerenciamento de devices customizados
-    Host {
-        #[command(subcommand)]
-        action: HostCommand,
-    },
-    /// Send reload signal to running daemon (recarrega config estática do TOML)
-    Reload,
-    /// Gerenciamento de persistência
-    Db {
-        #[command(subcommand)]
-        action: DbCommand,
-    },
-    /// Encerramento gracioso com flush imediato
-    Shutdown,
-    /// Forcefully purge a device from memory and database by its MAC
-    Purge {
-        /// MAC address of the device to purge
-        mac: String,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum LeaseCommand {
-    Renew { mac: String },
-    Release { mac: String },
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum HostCommand {
-    Add {
-        /// Prefix MAC with this argument, or run interactively
-        mac: Option<String>,
-        #[arg(long)]
-        hostname: Option<String>,
-        #[arg(long)]
-        v4: Option<String>,
-        #[arg(long)]
-        v6_suffix: Option<String>,
-    },
-    Set {
-        mac: String,
-        field: String,
-        value: String,
-    },
-    List,
-    Remove {
-        mac: String,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum DbCommand {
-    Vacuum,
 }
 
 #[derive(Parser, Debug)]
 #[command(name = "lanforge", version, about, long_about = None)]
 pub struct CliArgs {
+    #[cfg(feature = "debug-commands")]
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -108,15 +34,10 @@ pub struct CliArgs {
     pub db_path: Option<String>,
 
     /// Caminho para o banco de dados SQLite de logs (history).
-    #[arg(
-        long,
-        env = "LANFORGE_LOG_DB",
-        default_value = "/tmp/lanforge_logs.db"
-    )]
+    #[arg(long, env = "LANFORGE_LOG_DB", default_value = "/tmp/lanforge_logs.db")]
     pub log_db: String,
 
     /// Caminho para um arquivo TOML/JSON adicional contendo apenas devices estáticos (debug).
-
     #[arg(long, env = "LANFORGE_DEVICES_FILE")]
     pub devices_file: Option<String>,
 
@@ -221,9 +142,17 @@ mod tests {
     #[test]
     fn test_cli_args_parsing() {
         // Just verify it doesn't panic on a simple case
-        let args = CliArgs::try_parse_from(["lanforge", "status"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        assert_eq!(args.command, Some(Command::Status));
+        #[cfg(feature = "debug-commands")]
+        {
+            let args = CliArgs::try_parse_from(["lanforge", "run"]);
+            assert!(args.is_ok());
+            let args = args.unwrap();
+            assert!(matches!(args.command, Some(Command::Run { .. })));
+        }
+        #[cfg(not(feature = "debug-commands"))]
+        {
+            let args = CliArgs::try_parse_from(["lanforge"]);
+            assert!(args.is_ok());
+        }
     }
 }

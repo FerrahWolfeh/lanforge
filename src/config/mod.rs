@@ -26,7 +26,9 @@
 pub mod args;
 pub mod toml;
 
-pub use args::{CliArgs, Command, DbCommand, HostCommand, LeaseCommand};
+pub use args::CliArgs;
+#[cfg(feature = "debug-commands")]
+pub use args::Command;
 use lanforge_api::config::ApiConfig;
 use lanforge_dns::DnsConfig;
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
@@ -52,6 +54,7 @@ use tracing::warn;
 #[derive(Debug)]
 pub struct Config {
     // general
+    #[cfg(feature = "debug-commands")]
     pub command: Command,
     pub iface_lan: String,
     pub target_prefix: String,
@@ -97,6 +100,7 @@ impl Config {
         let toml_cfg = load_toml(&cli.config);
 
         Self {
+            #[cfg(feature = "debug-commands")]
             command: cli.command.unwrap_or(Command::Run { only: None }),
             iface_lan: cli.iface_lan.unwrap_or(toml_cfg.general.iface_lan),
             target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),

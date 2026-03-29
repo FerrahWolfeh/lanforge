@@ -1,6 +1,6 @@
 use super::CliCommand;
-use crate::config::LeaseCommand;
-use anyhow::Result;
+use crate::args::LeaseCommand;
+use color_eyre::eyre::Result;
 use lanforge_api::api::Command as ControlCommand;
 
 pub struct LeaseHandler {

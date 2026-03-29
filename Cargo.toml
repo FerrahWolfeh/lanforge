@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "lanforge-api",
+    "lanforge-cli",
     "lanforge-core",
     "lanforge-db",
     "lanforge-dns",
@@ -9,8 +10,12 @@ members = [
 
 [package]
 name = "lanforge"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
+
+[features]
+default = []
+debug-commands = []
 
 [dependencies]
 lanforge-core = { path = "lanforge-core" }
@@ -18,6 +23,7 @@ lanforge-db = { path = "lanforge-db" }
 lanforge-dns = { path = "lanforge-dns" }
 lanforge-network = { path = "lanforge-network" }
 lanforge-api = { path = "lanforge-api" }
+lanforge-cli = { path = "lanforge-cli", optional = true }
 
 # Async & runtime
 tokio = { version = "1", features = [
@@ -50,16 +56,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
     "ansi",
 ] }
 
-# Control
-serde_json = "1.0.149"
 
-# CLI
-iocraft = "0.8.0"
-tabled = "0.20.0"
-chrono = { version = "0.4.44", features = ["serde"] }
-inquire = "0.9.4"
-colored = "3.1.1"
-bytesize = "2.3.1"
 tokio-util = { version = "0.7.18", features = ["rt"] }
 
 [profile.release]

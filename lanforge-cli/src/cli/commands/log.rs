@@ -1,5 +1,5 @@
 use super::CliCommand;
-use anyhow::Result;
+use color_eyre::eyre::Result;
 use colored::*;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;

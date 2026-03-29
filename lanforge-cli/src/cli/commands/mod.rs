@@ -5,8 +5,8 @@ pub mod lease;
 pub mod log;
 pub mod status;
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
+use color_eyre::eyre::Result;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
 

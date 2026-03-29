@@ -1,0 +1,27 @@
+[package]
+name = "lanforge-cli"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+name = "lanforge_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lanforge-cli"
+path = "src/main.rs"
+
+[dependencies]
+bytesize = "2.3.1"
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.6.0", features = ["cargo", "derive", "env"] }
+color-eyre = "0.6.5"
+colored = "3.1.1"
+inquire = "0.9.4"
+iocraft = "0.8.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tabled = "0.20.0"
+tokio = { version = "1.50.0", features = ["full"] }
+lanforge-api = { path = "../lanforge-api" }
+lanforge-core = { path = "../lanforge-core" }

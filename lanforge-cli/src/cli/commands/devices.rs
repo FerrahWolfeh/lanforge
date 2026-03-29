@@ -1,5 +1,5 @@
 use super::{CliCommand, format_relative_iso8601};
-use anyhow::Result;
+use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
