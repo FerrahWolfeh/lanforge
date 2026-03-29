@@ -33,8 +33,10 @@
 
 mod config;
 mod supervisor;
+mod threads;
 
 use crate::config::load_devices_only;
+use crate::threads::{spawn_service_thread, wait_for_service_threads};
 
 use anyhow::Result;
 use config::Config;
@@ -60,19 +62,26 @@ use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
+// DEPOIS: main síncrona + runtime current_thread + função async separada
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .thread_name("main")
+        .build()?
+        .block_on(async_main())
+}
+
 /// Ponto de entrada principal do daemon.
 ///
 /// Configura o logging, carrega a configuração TOML, inicia o banco de dados
 /// `SQLite` e dispara os serviços de rede (RA, DHCP, DNS, Control) como tasks do Tokio.
-#[tokio::main]
-async fn main() -> Result<()> {
+async fn async_main() -> Result<()> {
     #[cfg(feature = "debug-commands")]
     let mut cfg = Config::load();
 
@@ -188,18 +197,25 @@ async fn main() -> Result<()> {
     // 4. Transformamos em ManagedTable reativa (Arc<RwLock<DeviceTable>>)
     let table = Arc::new(ManagedTable::from_table(bus.clone(), initial_table));
 
-    let tracker = TaskTracker::new();
+    // TaskTracker não é necessário — cada serviço vira uma thread
     let cancel = CancellationToken::new();
+    let mut service_threads: Vec<(&'static str, std::thread::JoinHandle<()>)> = Vec::new();
 
     // -----------------------------------------------------------------------
     // DB worker — persiste reativamente via EventBus
     // -----------------------------------------------------------------------
-    tracker.spawn(db_worker(
-        leases_db_path.clone(),
-        cfg.log_db.clone().into(),
-        table.clone(),
-        bus.clone(),
-    ));
+    {
+        let leases_db_path = leases_db_path.clone();
+        let log_db = cfg.log_db.clone();
+        let table = table.clone();
+        let bus = bus.clone();
+        service_threads.push((
+            "db",
+            spawn_service_thread("db", 768, move || async move {
+                db_worker(leases_db_path, log_db.into(), table, bus).await;
+            }),
+        ));
+    }
 
     // -----------------------------------------------------------------------
     // mDNS Prober — descoberta ativa e passiva de hostnames
@@ -219,6 +235,7 @@ async fn main() -> Result<()> {
     if cfg.ra_enabled {
         let ra_cfg = cfg.to_ra_config();
         let ra_bus = bus.clone();
+        let ra_cancel = cancel.clone();
 
         info!(
             "⚡ Iniciando: RA (iface={}, M={}, O={})",
@@ -227,19 +244,25 @@ async fn main() -> Result<()> {
             u8::from(ra_cfg.other_config)
         );
 
-        tracker.spawn(supervisor::supervise_task(
+        service_threads.push((
             "ra",
-            true,
-            0,
-            Duration::from_secs(5),
-            Duration::from_secs(60),
-            cancel.clone(),
-            move || {
-                let cfg = ra_cfg.clone();
-                let bus = ra_bus.clone();
-                async move { ra_service(cfg, bus).await.map_err(anyhow::Error::from) }
-            },
-        ));
+            spawn_service_thread("ra", 256, move || async move {
+                supervisor::supervise_task(
+                    "ra",
+                    true,
+                    0,
+                    Duration::from_secs(5),
+                    Duration::from_secs(60),
+                    ra_cancel,
+                    move || {
+                        let cfg = ra_cfg.clone();
+                        let bus = ra_bus.clone();
+                        async move { ra_service(cfg, bus).await.map_err(anyhow::Error::from) }
+                    },
+                )
+                .await
+            }),
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -248,29 +271,36 @@ async fn main() -> Result<()> {
     if cfg.dhcpv4_enabled {
         let dhcp_cfg = cfg.to_dhcpv4_config();
         let dhcp_table = table.clone();
+        let dhcpv4_cancel = cancel.clone();
 
         info!(
             "⚡ Iniciando: DHCPv4 ({}–{}, mask={})",
             dhcp_cfg.range_start, dhcp_cfg.range_end, dhcp_cfg.subnet_mask
         );
 
-        tracker.spawn(supervisor::supervise_task(
+        service_threads.push((
             "dhcpv4",
-            true,
-            0,
-            Duration::from_secs(5),
-            Duration::from_secs(60),
-            cancel.clone(),
-            move || {
-                let cfg = dhcp_cfg.clone();
-                let table = dhcp_table.clone();
-                async move {
-                    dhcpv4_service(cfg, table)
-                        .await
-                        .map_err(anyhow::Error::from)
-                }
-            },
-        ));
+            spawn_service_thread("dhcpv4", 384, move || async move {
+                supervisor::supervise_task(
+                    "dhcpv4",
+                    true,
+                    0,
+                    Duration::from_secs(5),
+                    Duration::from_secs(60),
+                    dhcpv4_cancel,
+                    move || {
+                        let cfg = dhcp_cfg.clone();
+                        let table = dhcp_table.clone();
+                        async move {
+                            dhcpv4_service(cfg, table)
+                                .await
+                                .map_err(anyhow::Error::from)
+                        }
+                    },
+                )
+                .await
+            }),
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -280,27 +310,34 @@ async fn main() -> Result<()> {
         let dhcp_cfg = cfg.to_dhcpv6_config();
         let dhcp_table = table.clone();
         let dhcp_handle = handle.clone();
+        let dhcpv6_cancel = cancel.clone();
 
         info!("⚡ Iniciando: DHCPv6 ({})", dhcp_cfg.iface);
 
-        tracker.spawn(supervisor::supervise_task(
+        service_threads.push((
             "dhcpv6",
-            true,
-            0,
-            Duration::from_secs(5),
-            Duration::from_secs(60),
-            cancel.clone(),
-            move || {
-                let handle = dhcp_handle.clone();
-                let cfg = dhcp_cfg.clone();
-                let table = dhcp_table.clone();
-                async move {
-                    dhcpv6_service(cfg, table, &handle)
-                        .await
-                        .map_err(anyhow::Error::from)
-                }
-            },
-        ));
+            spawn_service_thread("dhcpv6", 384, move || async move {
+                supervisor::supervise_task(
+                    "dhcpv6",
+                    true,
+                    0,
+                    Duration::from_secs(5),
+                    Duration::from_secs(60),
+                    dhcpv6_cancel,
+                    move || {
+                        let handle = dhcp_handle.clone();
+                        let cfg = dhcp_cfg.clone();
+                        let table = dhcp_table.clone();
+                        async move {
+                            dhcpv6_service(cfg, table, &handle)
+                                .await
+                                .map_err(anyhow::Error::from)
+                        }
+                    },
+                )
+                .await
+            }),
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -309,21 +346,26 @@ async fn main() -> Result<()> {
     if cfg.dns_enabled {
         let dns_cfg = cfg.to_dns_config();
         let dns_table = table.clone();
+        let dns_cancel = cancel.clone();
 
-        info!("⚡ Iniciando: DNS");
-
-        tracker.spawn(supervisor::supervise_task(
+        service_threads.push((
             "dns",
-            true,
-            0,
-            Duration::from_secs(5),
-            Duration::from_secs(60),
-            cancel.clone(),
-            move || {
-                let cfg = dns_cfg.clone();
-                let table = dns_table.clone();
-                async move { dns_service(cfg, table).await.map_err(anyhow::Error::from) }
-            },
+            spawn_service_thread("dns", 384, move || async move {
+                supervisor::supervise_task(
+                    "dns",
+                    true,
+                    0,
+                    Duration::from_secs(5),
+                    Duration::from_secs(60),
+                    dns_cancel,
+                    move || {
+                        let cfg = dns_cfg.clone();
+                        let table = dns_table.clone();
+                        async move { dns_service(cfg, table).await.map_err(anyhow::Error::from) }
+                    },
+                )
+                .await
+            }),
         ));
     }
 
@@ -335,24 +377,31 @@ async fn main() -> Result<()> {
     let api_cfg = Arc::new(cfg.to_api_config());
     let api_cfg_ctrl = api_cfg.clone();
     let api_cfg_http = api_cfg.clone();
+    let ctrl_cancel = cancel.clone();
 
-    tracker.spawn(supervisor::supervise_task(
+    service_threads.push((
         "control",
-        true,
-        0,
-        Duration::from_secs(2),
-        Duration::from_secs(30),
-        cancel.clone(),
-        move || {
-            let table = ctrl_table.clone();
-            let bus = ctrl_bus.clone();
-            let cfg = api_cfg_ctrl.clone();
-            async move {
-                lanforge_api::server::control_service(table, bus, cfg)
-                    .await
-                    .map_err(anyhow::Error::from)
-            }
-        },
+        spawn_service_thread("control", 256, move || async move {
+            supervisor::supervise_task(
+                "control",
+                true,
+                0,
+                Duration::from_secs(2),
+                Duration::from_secs(30),
+                ctrl_cancel,
+                move || {
+                    let table = ctrl_table.clone();
+                    let bus = ctrl_bus.clone();
+                    let cfg = api_cfg_ctrl.clone();
+                    async move {
+                        lanforge_api::server::control_service(table, bus, cfg)
+                            .await
+                            .map_err(anyhow::Error::from)
+                    }
+                },
+            )
+            .await
+        }),
     ));
 
     // -----------------------------------------------------------------------
@@ -361,27 +410,32 @@ async fn main() -> Result<()> {
     if cfg.http_listen.is_some() {
         let http_table = table.clone();
         let http_api_cfg = api_cfg_http.clone();
+        let http_cancel = cancel.clone();
 
-        tracker.spawn(supervisor::supervise_task(
+        service_threads.push((
             "http",
-            true,
-            0,
-            Duration::from_secs(2),
-            Duration::from_secs(30),
-            cancel.clone(),
-            move || {
-                let table = http_table.clone();
-                let cfg = http_api_cfg.clone();
-                async move {
-                    lanforge_api::http::http_service(table, cfg)
-                        .await
-                        .map_err(anyhow::Error::from)
-                }
-            },
+            spawn_service_thread("http", 1536, move || async move {
+                supervisor::supervise_task(
+                    "http",
+                    true,
+                    0,
+                    Duration::from_secs(2),
+                    Duration::from_secs(30),
+                    http_cancel,
+                    move || {
+                        let table = http_table.clone();
+                        let cfg = http_api_cfg.clone();
+                        async move {
+                            lanforge_api::http::http_service(table, cfg)
+                                .await
+                                .map_err(anyhow::Error::from)
+                        }
+                    },
+                )
+                .await
+            }),
         ));
     }
-
-    tracker.close();
 
     // -----------------------------------------------------------------------
     // Prefixo GUA — aprendido dinamicamente via PrefixChanged do RA.
@@ -521,15 +575,9 @@ async fn main() -> Result<()> {
     bus.publish(LanforgeEvent::Shutdown);
     cancel.cancel();
 
-    // Aguarda tasks finalizarem com timeout
-    tokio::select! {
-        _ = tracker.wait() => {
-            info!("✅ Todas as tasks finalizadas graciosamente.");
-        }
-        _ = tokio::time::sleep(Duration::from_secs(5)) => {
-            warn!("⚠️ Shutdown demorou muito, forçando saída...");
-        }
-    }
+    // O wait é bloqueante mas estamos fora do hot path — o runtime main
+    // pode ficar idle enquanto as threads de serviço terminam.
+    wait_for_service_threads(service_threads, Duration::from_secs(5));
 
     info!("👋 Lanforge encerrado.");
     Ok(())
