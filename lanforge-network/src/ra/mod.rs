@@ -149,11 +149,14 @@ pub struct RaContext<'a> {
 // Entry point
 // ---------------------------------------------------------------------------
 
+use tokio::io::unix::AsyncFd;
+use tokio::sync::mpsc::UnboundedReceiver;
+
 /// Main task for the RA service.
-pub fn ra_service(
+pub async fn ra_service(
     cfg: RaConfig,
     bus: Arc<EventBus>,
-    bus_rx: std::sync::mpsc::Receiver<LanforgeEvent>,
+    mut bus_rx: UnboundedReceiver<LanforgeEvent>,
     handle: Handle,
 ) -> Result<()> {
     cfg.validate()?;
@@ -167,8 +170,6 @@ pub fn ra_service(
         cfg.effective_router_lifetime().as_secs(),
     );
 
-    // handle is now passed from caller
-
     let iface_index = get_iface_index(&cfg.iface)?;
     let mac = get_iface_mac(&cfg.iface)?;
 
@@ -181,15 +182,13 @@ pub fn ra_service(
     );
 
     let socket = create_ra_socket(&cfg.iface, iface_index)?;
-    // set read timeout for sync polling
-    socket
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .map_err(NetworkError::Io)?;
+    let async_sock =
+        AsyncFd::new(socket).map_err(|e| NetworkError::Socket(format!("AsyncFd: {e}")))?;
 
     let mut state = RaState::new();
 
     let ctx = RaContext {
-        socket: &socket,
+        socket: async_sock.get_ref(),
         cfg: &cfg,
         handle: &handle,
         mac: &mac,
@@ -197,47 +196,51 @@ pub fn ra_service(
         bus: &bus,
     };
 
-    let rt = tokio::runtime::Handle::current();
-
     // Immediate RA on startup — active clients get configured without waiting
-    rt.block_on(do_multicast_ra(&ctx, &mut state));
+    do_multicast_ra(&ctx, &mut state).await;
 
-    let mut next_ra = Instant::now() + state.next_interval(&cfg);
+    let next_ra_timer = tokio::time::sleep(state.next_interval(&cfg));
+    tokio::pin!(next_ra_timer);
 
     loop {
-        let now = Instant::now();
-        if now >= next_ra {
-            rt.block_on(do_multicast_ra(&ctx, &mut state));
-            next_ra = now + state.next_interval(&cfg);
-            debug!("Next periodic RA in {:.1}s", (next_ra - now).as_secs_f64());
-        }
+        tokio::select! {
+            _ = &mut next_ra_timer => {
+                do_multicast_ra(&ctx, &mut state).await;
+                let interval = state.next_interval(&cfg);
+                next_ra_timer.as_mut().reset(tokio::time::Instant::now() + interval);
+                debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
+            }
 
-        // 1. Packet processing
-        let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 1500];
-        match socket.recv_from(&mut buf) {
-            Ok((n, src_sa)) if n > 0 => {
-                let data = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
-                if data.first() == Some(&ICMPV6_TYPE_RS) {
-                    let rs_src = src_sa.as_socket_ipv6().map(|s| *s.ip());
-                    debug!("RS received from {rs_src:?}");
-                    rt.block_on(handle_rs(&ctx, rs_src, &mut state));
+            // 1. Packet processing
+            Ok(mut guard) = async_sock.readable() => {
+                let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 1500];
+                match guard.try_io(|inner| -> std::io::Result<(usize, SockAddr)> {
+                    inner.get_ref().recv_from(&mut buf)
+                }) {
+                    Ok(Ok((n, src_sa))) if n > 0 => {
+                        let data = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
+                        if data.first() == Some(&ICMPV6_TYPE_RS) {
+                            let rs_src = src_sa.as_socket().and_then(|s| match s {
+                                std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
+                                _ => None,
+                            });
+                            debug!("RS received from {rs_src:?}");
+                            handle_rs(&ctx, rs_src, &mut state).await;
+                        }
+                    }
+                    Ok(Err(e)) => warn!("RA socket error: {e}"),
+                    _ => {
+                        // Would block or other result, guard dropped
+                    }
                 }
             }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                // Timeout, no packet
-            }
-            Err(e) => warn!("RA socket error: {e}"),
-            _ => {}
-        }
 
-        // 2. EventBus signals
-        while let Ok(event) = bus_rx.try_recv() {
-            if let LanforgeEvent::Shutdown = event {
-                info!("RA service: shutdown recebido, encerrando...");
-                return Ok(());
+            // 2. EventBus signals
+            Some(event) = bus_rx.recv() => {
+                if let LanforgeEvent::Shutdown = event {
+                    info!("RA service: shutdown recebido, encerrando...");
+                    return Ok(());
+                }
             }
         }
     }

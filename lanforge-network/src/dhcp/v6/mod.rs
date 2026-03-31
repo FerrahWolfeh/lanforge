@@ -35,7 +35,6 @@ use lanforge_core::bus::{DeviceChange, LanforgeEvent, ManagedTable};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::update::DeviceUpdate;
 use rtnetlink::Handle;
-use socket2::{Domain, Protocol, Socket, Type};
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -47,39 +46,27 @@ use server::{Dhcpv6Server, HandleResult};
 
 const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2);
 
+use tokio::sync::mpsc::UnboundedReceiver;
+
 /// Starts the `DHCPv6` service (UDP port 547, multicast `ff02::1:2`).
-pub fn dhcpv6_service(
+pub async fn dhcpv6_service(
     config: Dhcpv6Config,
     table: Arc<ManagedTable>,
     nl_handle: &Handle,
-    bus_rx: std::sync::mpsc::Receiver<LanforgeEvent>,
+    mut bus_rx: UnboundedReceiver<LanforgeEvent>,
 ) -> Result<()> {
     if !config.enabled {
         info!("DHCPv6 is disabled in config.");
-        // Em um serviço síncrono, simplesmente saímos ou bloqueamos se necessário.
-        // Como o supervisor espera que a thread rode, vamos apenas retornar Ok.
         return Ok(());
     }
 
-    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| NetworkError::Socket(format!("Failed to create IPv6 UDP socket: {e}")))?;
-
-    let addr = std::net::SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::UNSPECIFIED), config.port);
-
-    socket
-        .set_only_v6(true)
-        .map_err(|e| NetworkError::Socket(format!("IPV6_V6ONLY: {e}")))?;
-    socket
-        .bind(&addr.into())
-        .map_err(|e| NetworkError::Socket(format!("bind :{}: {e}", config.port)))?;
+    let socket = tokio::net::UdpSocket::bind(("::", config.port))
+        .await
+        .map_err(|e| NetworkError::Socket(format!("Failed to bind DHCPv6 socket: {e}")))?;
 
     if let Err(e) = socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
         warn!("Failed to join ff02::1:2: {e}");
     }
-
-    let udp: std::net::UdpSocket = socket.into();
-    udp.set_read_timeout(Some(Duration::from_millis(200)))
-        .map_err(NetworkError::Io)?;
 
     info!(
         "DHCPv6 listening on [ff02::1:2]:{} (iface: {})",
@@ -100,13 +87,9 @@ pub fn dhcpv6_service(
         server_mac.copy_from_slice(&mac_bytes);
     }
 
-    // Persistent socket for NDP pokes (Optimization 2)
+    // Persistent socket for NDP pokes
     let poke_sock = std::net::UdpSocket::bind("::0:0")
         .map_err(|e| NetworkError::Socket(format!("Failed to bind NDP poke socket: {e}")))?;
-    poke_sock
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .map_err(NetworkError::Io)?;
-
     let ndp_poke_sock = Arc::new(poke_sock);
 
     let mut server = Dhcpv6Server::new(
@@ -141,9 +124,9 @@ pub fn dhcpv6_service(
     info!("DHCPv6 state machine started");
 
     loop {
-        // 1. Process network packets
-        match udp.recv_from(&mut buf) {
-            Ok((len, peer)) => {
+        tokio::select! {
+            // 1. Process network packets
+            Ok((len, peer)) = socket.recv_from(&mut buf) => {
                 let payload = &buf[..len];
 
                 let (peer_ip, scope_id) = match peer {
@@ -151,11 +134,8 @@ pub fn dhcpv6_service(
                     std::net::SocketAddr::V4(_) => continue,
                 };
 
-                // Reuses the buffer for response encoding (Optimization 1)
                 let mut resp_vec = Vec::with_capacity(1024);
-
-                // Reutilizamos o runtime principal para o lookup de MAC (infrequente)
-                let res = server.handle_packet(payload, peer_ip, &table, nl_handle, &mut resp_vec);
+                let res = server.handle_packet(payload, peer_ip, &table, nl_handle, &mut resp_vec).await;
 
                 match res {
                     HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, ias) => {
@@ -167,7 +147,7 @@ pub fn dhcpv6_service(
                         let dest_addr =
                             std::net::SocketAddrV6::new(dest_ip, client_port, 0, scope_id);
 
-                        if let Err(e) = udp.send_to(reply_bytes, dest_addr) {
+                        if let Err(e) = socket.send_to(reply_bytes, dest_addr).await {
                             warn!("send error to {dest_ip}: {e}");
                         }
 
@@ -176,96 +156,86 @@ pub fn dhcpv6_service(
                     HandleResult::Ignore => {}
                 }
             }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                // Timeout, continue to check bus
-            }
-            Err(e) => {
-                warn!("DHCPv6: recv error: {e}");
-            }
-        }
 
-        // 2. Process Bus events
-        while let Ok(event) = bus_rx.try_recv() {
-            match event {
-                LanforgeEvent::LeaseRelease { mac } => {
-                    info!("DHCPv6: Forcing release of {} via CLI", mac);
-                    server.pool.release_mac(mac);
-                }
-                LanforgeEvent::DeviceUpdated {
-                    mac,
-                    change: DeviceChange::V6SuffixChanged { suffix },
-                } => match suffix {
-                    Some(s) => {
-                        if let Some(ip) = server.pool.construct_static_ula(&s) {
-                            info!("DHCPv6: New static reservation via CLI: {mac} -> {ip}");
-                            server.pool.add_reservation(ip, mac);
-                        }
-                    }
-                    None => {
-                        info!("DHCPv6: Static reservation removed via CLI: {mac}");
+            // 2. Process Bus events
+            Some(event) = bus_rx.recv() => {
+                match event {
+                    LanforgeEvent::LeaseRelease { mac } => {
+                        info!("DHCPv6: Forcing release of {} via CLI", mac);
                         server.pool.release_mac(mac);
                     }
-                },
-                LanforgeEvent::PrefixChanged {
-                    gua,
-                    preferred,
-                    valid,
-                } => {
-                    server.prefix_lifetimes = Some((preferred, valid));
-                    if let Some(g) = gua {
-                        info!("DHCPv6: Propagating new GUA prefix to pool: {g}");
-                        server.pool.set_gua_prefix(g);
-                    }
-                    debug!(
-                        "DHCPv6: Updated prefix lifetimes from bus: pref={}, valid={}",
-                        preferred, valid
-                    );
-                }
-                LanforgeEvent::LeaseRenew { mac } => {
-                    let (duid, target_ip) = {
-                        let t = table.read();
-                        let device = t.get_device(&mac);
-                        let duid = device.and_then(|d| d.duid.clone());
-
-                        // RECONFIGURE must be sent to the client's link-local address (RFC 3315)
-                        let ll_ip = device.and_then(|d| {
-                            d.v6.iter().find_map(|s| {
-                                s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
-                            })
-                        });
-
-                        (duid, ll_ip)
-                    };
-
-                    if let (Some(duid), Some(ip)) = (duid, target_ip) {
-                        info!("DHCPv6: Sending manual RECONFIGURE to {} ({})", ip, mac);
-                        let packet =
-                            server.build_reconfigure(&duid, dhcproto::v6::MessageType::Renew);
-
-                        let client_port = if config.port == 547 {
-                            546
-                        } else {
-                            config.port - 1
-                        };
-                        let dest_addr = std::net::SocketAddrV6::new(ip, client_port, 0, 0);
-
-                        if let Err(e) = udp.send_to(&packet, dest_addr) {
-                            warn!("DHCPv6: Failed to send RECONFIGURE to {ip}: {e}");
+                    LanforgeEvent::DeviceUpdated {
+                        mac,
+                        change: DeviceChange::V6SuffixChanged { suffix },
+                    } => match suffix {
+                        Some(s) => {
+                            if let Some(ip) = server.pool.construct_static_ula(&s) {
+                                info!("DHCPv6: New static reservation via CLI: {mac} -> {ip}");
+                                server.pool.add_reservation(ip, mac);
+                            }
                         }
-                    } else {
-                        warn!(
-                            "DHCPv6: Cannot send RECONFIGURE to {mac}: DUID or Link-Local IP not found"
+                        None => {
+                            info!("DHCPv6: Static reservation removed via CLI: {mac}");
+                            server.pool.release_mac(mac);
+                        }
+                    },
+                    LanforgeEvent::PrefixChanged {
+                        gua,
+                        preferred,
+                        valid,
+                    } => {
+                        server.prefix_lifetimes = Some((preferred, valid));
+                        if let Some(g) = gua {
+                            info!("DHCPv6: Propagating new GUA prefix to pool: {g}");
+                            server.pool.set_gua_prefix(g);
+                        }
+                        debug!(
+                            "DHCPv6: Updated prefix lifetimes from bus: pref={}, valid={}",
+                            preferred, valid
                         );
                     }
+                    LanforgeEvent::LeaseRenew { mac } => {
+                        let (duid, target_ip) = {
+                            let t = table.read();
+                            let device = t.get_device(&mac);
+                            let duid = device.and_then(|d| d.duid.clone());
+
+                            let ll_ip = device.and_then(|d| {
+                                d.v6.iter().find_map(|s| {
+                                    s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
+                                })
+                            });
+
+                            (duid, ll_ip)
+                        };
+
+                        if let (Some(duid), Some(ip)) = (duid, target_ip) {
+                            info!("DHCPv6: Sending manual RECONFIGURE to {} ({})", ip, mac);
+                            let packet =
+                                server.build_reconfigure(&duid, dhcproto::v6::MessageType::Renew);
+
+                            let client_port = if config.port == 547 {
+                                546
+                            } else {
+                                config.port - 1
+                            };
+                            let dest_addr = std::net::SocketAddrV6::new(ip, client_port, 0, 0);
+
+                            if let Err(e) = socket.send_to(&packet, dest_addr).await {
+                                warn!("DHCPv6: Failed to send RECONFIGURE to {ip}: {e}");
+                            }
+                        } else {
+                            warn!(
+                                "DHCPv6: Cannot send RECONFIGURE to {mac}: DUID or Link-Local IP not found"
+                            );
+                        }
+                    }
+                    LanforgeEvent::Shutdown => {
+                        info!("DHCPv6: Shutdown recebido");
+                        return Ok(());
+                    }
+                    _ => {}
                 }
-                LanforgeEvent::Shutdown => {
-                    info!("DHCPv6: Shutdown recebido");
-                    return Ok(());
-                }
-                _ => {}
             }
         }
     }

@@ -215,9 +215,9 @@ async fn async_main() -> Result<()> {
     // Sync Bridges & Service Channels
     // -----------------------------------------------------------------------
     let (db_tx, db_rx) = std::sync::mpsc::channel::<DbWorkerCmd>();
-    let (ra_tx, ra_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+    let (ra_tx, ra_rx) = tokio::sync::mpsc::unbounded_channel::<LanforgeEvent>();
     let (d4_tx, d4_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
-    let (d6_tx, d6_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+    let (d6_tx, d6_rx) = tokio::sync::mpsc::unbounded_channel::<LanforgeEvent>();
 
     // Bridge task: forward EventBus to sync mpsc channels
     let mut bridge_sub = bus.subscribe();
@@ -291,8 +291,8 @@ async fn async_main() -> Result<()> {
 
         service_threads.push((
             "ra",
-            crate::threads::spawn_sync_service_thread("RA", 256, move || {
-                if let Err(e) = ra_service(ra_cfg, ra_bus, ra_rx, ra_handle) {
+            crate::threads::spawn_service_thread("RA", 256, move || async move {
+                if let Err(e) = ra_service(ra_cfg, ra_bus, ra_rx, ra_handle).await {
                     error!("RA service failed: {e}");
                 }
             }),
@@ -326,8 +326,8 @@ async fn async_main() -> Result<()> {
 
         service_threads.push((
             "dhcpv6",
-            crate::threads::spawn_sync_service_thread("DHCPv6 Server", 384, move || {
-                if let Err(e) = dhcpv6_service(dhcp_cfg, dhcp_table, &dhcp_handle, d6_rx) {
+            crate::threads::spawn_service_thread("DHCPv6 Server", 384, move || async move {
+                if let Err(e) = dhcpv6_service(dhcp_cfg, dhcp_table, &dhcp_handle, d6_rx).await {
                     error!("DHCPv6 service failed: {e}");
                 }
             }),

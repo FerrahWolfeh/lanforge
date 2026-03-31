@@ -108,7 +108,7 @@ impl Dhcpv6Server {
     }
 
     /// Processes a raw `DHCPv6` packet and returns a response (if any).
-    pub fn handle_packet<'a>(
+    pub async fn handle_packet<'a>(
         &mut self,
         data: &[u8],
         peer: Ipv6Addr,
@@ -167,8 +167,7 @@ impl Dhcpv6Server {
         // 2. If still no MAC, try a kernel lookup (asynchronous — NO LOCK)
         if mac.is_none() {
             debug!("Cache miss. Performing kernel lookup for {peer}...");
-            let rt = tokio::runtime::Handle::current();
-            if let Some(ndp_mac) = rt.block_on(crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer)) {
+            if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
                 let _ = table.update(DeviceUpdate::NdpSeen {
                     mac: ndp_mac,
                     ip: peer,
