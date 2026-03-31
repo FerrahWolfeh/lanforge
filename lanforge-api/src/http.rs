@@ -113,7 +113,7 @@ async fn process_registration(state: AppState, req: RegisterRequest) -> impl Int
         mac_addr, req.hostname, v4_static, v6_suffix
     );
 
-    let _ = state.table.update(DeviceUpdate::CliHostUpdated {
+    let _ = state.table.update(&DeviceUpdate::CliHostUpdated {
         mac: mac_addr,
         hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
         v4_static: FieldUpdate::from(v4_static),

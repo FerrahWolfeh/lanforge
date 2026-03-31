@@ -31,7 +31,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 1. Add a CLI device
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
-    let _ = table.update(DeviceUpdate::CliHostUpdated {
+    let _ = table.update(&DeviceUpdate::CliHostUpdated {
         mac: mac_cli,
         hostname: FieldUpdate::Set("cli-host".to_string()),
         v4_static: FieldUpdate::NoChange,
@@ -41,7 +41,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 2. Add a Dynamic device
     let mac_dyn = MacAddr::parse("00:00:00:00:00:02").unwrap();
-    let _ = table.update(DeviceUpdate::V4LeaseGranted {
+    let _ = table.update(&DeviceUpdate::V4LeaseGranted {
         mac: mac_dyn,
         ip: "192.168.1.10".parse().unwrap(),
         expires: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),

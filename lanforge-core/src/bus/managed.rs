@@ -44,14 +44,14 @@ impl ManagedTable {
     ///
     /// Returns `true` if the state was actually modified.
     #[must_use]
-    pub fn update(&self, update: DeviceUpdate) -> bool {
+    pub fn update(&self, update: &DeviceUpdate) -> bool {
         let mut table = self.inner.write();
 
-        let opt_mac = mac_of(&update);
+        let opt_mac = mac_of(update);
         let is_new = opt_mac.is_some_and(|mac| table.get_device(&mac).is_none());
 
-        let change = device_change_of(&update);
-        let changed = table.apply_update(update);
+        let change = device_change_of(update);
+        let changed = table.apply_update(update.clone());
 
         drop(table);
 
@@ -69,6 +69,12 @@ impl ManagedTable {
                     .bus
                     .publish(LanforgeEvent::DeviceUpdated { mac, change });
             }
+        }
+
+        if let DeviceUpdate::InterfaceIpsChanged { ifindex, .. } = update {
+            let _ = self
+                .bus
+                .publish(LanforgeEvent::InterfaceUpdated { ifindex: *ifindex });
         }
 
         let _ = self.bus.publish(LanforgeEvent::DeviceTableDirty);
@@ -117,7 +123,9 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         | DeviceUpdate::SlaacCleared { mac }
         | DeviceUpdate::HostRemoved { mac }
         | DeviceUpdate::LeaseReleased { mac } => Some(*mac),
-        DeviceUpdate::IpDeleted { .. } | DeviceUpdate::RebuildDnsIndices => None,
+        DeviceUpdate::IpDeleted { .. }
+        | DeviceUpdate::InterfaceIpsChanged { .. }
+        | DeviceUpdate::RebuildDnsIndices => None,
     }
 }
 
@@ -150,6 +158,7 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         | DeviceUpdate::HostRemoved { .. }
         | DeviceUpdate::LeaseReleased { .. }
         | DeviceUpdate::IpDeleted { .. }
+        | DeviceUpdate::InterfaceIpsChanged { .. }
         | DeviceUpdate::RebuildDnsIndices => None,
         DeviceUpdate::CliHostUpdated {
             hostname,

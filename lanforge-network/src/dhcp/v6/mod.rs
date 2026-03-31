@@ -179,7 +179,7 @@ pub async fn dhcpv6_service(
                 if resolved_mac.is_none() {
                     debug!("Cache miss. Performing kernel lookup for {peer_ip}...");
                     if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer_ip).await {
-                        let _ = table.update(DeviceUpdate::NdpSeen {
+                        let _ = table.update(&DeviceUpdate::NdpSeen {
                             mac: ndp_mac,
                             ip: peer_ip,
                         });
@@ -321,7 +321,7 @@ fn apply_learned_state(
         if let Some(duid) = learned_duid.clone() {
             if assigned_ips.is_empty() {
                 // No IPs assigned yet, but IAID is known
-                let _ = table.update(DeviceUpdate::DuidAssociated {
+                let _ = table.update(&DeviceUpdate::DuidAssociated {
                     mac: opt_mac,
                     duid,
                     iaid,
@@ -329,7 +329,7 @@ fn apply_learned_state(
             } else {
                 // One or more IPs assigned
                 for ip in assigned_ips {
-                    let _ = table.update(DeviceUpdate::V6LeaseGranted {
+                    let _ = table.update(&DeviceUpdate::V6LeaseGranted {
                         mac: opt_mac,
                         duid: duid.clone(),
                         iaid,
@@ -346,7 +346,7 @@ fn apply_learned_state(
             let existing_duid = table.read().get_duid_by_mac(mac).cloned();
             if let Some(duid) = existing_duid {
                 for ip in assigned_ips {
-                    let _ = table.update(DeviceUpdate::V6LeaseGranted {
+                    let _ = table.update(&DeviceUpdate::V6LeaseGranted {
                         mac: Some(mac),
                         duid: duid.clone(),
                         iaid,
@@ -368,7 +368,7 @@ fn apply_learned_state(
         };
 
         if let (Some(duid), Some((prefix, len))) = (learned_duid.clone(), assigned_prefix) {
-            let _ = table.update(DeviceUpdate::V6PrefixAssigned {
+            let _ = table.update(&DeviceUpdate::V6PrefixAssigned {
                 mac: opt_mac,
                 duid,
                 iaid,
@@ -384,7 +384,7 @@ fn apply_learned_state(
         && ias.pd.is_empty()
         && let Some(duid) = learned_duid
     {
-        let _ = table.update(DeviceUpdate::DuidAssociated {
+        let _ = table.update(&DeviceUpdate::DuidAssociated {
             mac: opt_mac,
             duid,
             iaid: 0,

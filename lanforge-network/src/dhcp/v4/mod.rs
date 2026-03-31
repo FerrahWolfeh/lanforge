@@ -183,7 +183,7 @@ pub fn dhcpv4_service(
                         if let Some(assigned_ip) = server.last_assignment_for(mac) {
                             let expires =
                                 SystemTime::now() + Duration::from_secs(u64::from(cfg.lease_time));
-                            let _ = table.update(DeviceUpdate::V4LeaseGranted {
+                            let _ = table.update(&DeviceUpdate::V4LeaseGranted {
                                 mac,
                                 ip: assigned_ip,
                                 expires,
@@ -193,7 +193,7 @@ pub fn dhcpv4_service(
                                 && !hostname.is_empty()
                             {
                                 let _ =
-                                    table.update(DeviceUpdate::DhcpHostnameHint { mac, hostname });
+                                    table.update(&DeviceUpdate::DhcpHostnameHint { mac, hostname });
                             }
                         }
                     }

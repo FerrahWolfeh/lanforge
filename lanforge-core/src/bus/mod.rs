@@ -110,6 +110,8 @@ pub enum LanforgeEvent {
         /// Valid lifetime of the prefix.
         valid: u32,
     },
+    /// A local network interface's IP configuration was updated.
+    InterfaceUpdated { ifindex: u32 },
     /// Request an active mDNS network scan.
     ScanRequested,
 
@@ -138,6 +140,7 @@ impl LanforgeEvent {
             | Self::DeviceUpdated { .. }
             | Self::DeviceExpired { .. }
             | Self::PrefixChanged { .. }
+            | Self::InterfaceUpdated { .. }
             | Self::LeaseRelease { .. }
             | Self::LeaseRenew { .. }
             | Self::DbVacuum

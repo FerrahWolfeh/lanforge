@@ -139,6 +139,13 @@ pub enum DeviceUpdate {
     /// An IP address was explicitly removed from the system neighbor cache.
     IpDeleted { ip: std::net::IpAddr },
 
+    /// Local interface IP address change.
+    InterfaceIpsChanged {
+        ifindex: u32,
+        link_local: Option<Ipv6Addr>,
+        gua: Option<Ipv6Addr>,
+    },
+
     /// Request to rebuild the high-performance DNS lookup indices.
     RebuildDnsIndices,
 }
@@ -527,6 +534,23 @@ impl DeviceTable {
         }
         changed_ndp || changed_devices
     }
+
+    fn handle_interface_ips_changed(
+        &mut self,
+        ifindex: u32,
+        link_local: Option<Ipv6Addr>,
+        gua: Option<Ipv6Addr>,
+    ) -> bool {
+        use super::InterfaceState;
+        let entry = self.interface_ips.entry(ifindex).or_default();
+        if entry.link_local == link_local && entry.gua == gua {
+            false
+        } else {
+            *entry = InterfaceState { link_local, gua };
+            debug!("[state] Interface {} IPs updated: LL={:?}, GUA={:?}", ifindex, link_local, gua);
+            true
+        }
+    }
 }
 
 impl DeviceTable {
@@ -598,6 +622,9 @@ impl DeviceTable {
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
             DeviceUpdate::LeaseReleased { mac } => self.handle_lease_released(mac),
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
+            DeviceUpdate::InterfaceIpsChanged { ifindex, link_local, gua } => {
+                self.handle_interface_ips_changed(ifindex, link_local, gua)
+            }
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 false

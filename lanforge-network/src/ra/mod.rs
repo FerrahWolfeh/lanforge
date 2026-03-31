@@ -32,15 +32,12 @@ pub use config::*;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::{NetworkError, Result};
-use futures::TryStreamExt;
-use lanforge_core::bus::{EventBus, LanforgeEvent};
+use lanforge_core::bus::{LanforgeEvent, ManagedTable};
 use rand::RngExt;
-use rtnetlink::Handle;
-use rtnetlink::packet_route::address::{AddressAttribute, AddressMessage};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
+use std::net::{Ipv6Addr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -139,30 +136,25 @@ impl RaState {
 pub struct RaContext<'a> {
     pub(crate) socket: &'a Socket,
     pub(crate) cfg: &'a RaConfig,
-    pub(crate) handle: &'a Handle,
+    pub(crate) table: &'a ManagedTable,
     pub(crate) mac: &'a [u8; 6],
     pub(crate) iface_index: u32,
-    pub(crate) bus: &'a EventBus,
 }
 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-use tokio::io::unix::AsyncFd;
-use tokio::sync::mpsc::UnboundedReceiver;
-
-/// Main task for the RA service.
-pub async fn ra_service(
+/// Main task for the RA service (Synchronous OS thread).
+pub fn ra_service(
     cfg: RaConfig,
-    bus: Arc<EventBus>,
-    mut bus_rx: UnboundedReceiver<LanforgeEvent>,
-    handle: Handle,
+    table: Arc<ManagedTable>,
+    bus_rx: std::sync::mpsc::Receiver<LanforgeEvent>,
 ) -> Result<()> {
     cfg.validate()?;
 
     info!(
-        "Iniciando na interface '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
+        "RA: Iniciando na '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
         cfg.iface,
         u8::from(cfg.managed),
         u8::from(cfg.other_config),
@@ -173,74 +165,69 @@ pub async fn ra_service(
     let iface_index = get_iface_index(&cfg.iface)?;
     let mac = get_iface_mac(&cfg.iface)?;
 
-    info!(
-        "ifindex={iface_index}, MAC={}",
-        mac.iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":")
-    );
-
     let socket = create_ra_socket(&cfg.iface, iface_index)?;
-    let async_sock =
-        AsyncFd::new(socket).map_err(|e| NetworkError::Socket(format!("AsyncFd: {e}")))?;
+    // Set a short read timeout to allow checking the bus periodically
+    socket
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .map_err(|e| NetworkError::Socket(format!("set_read_timeout: {e}")))?;
 
     let mut state = RaState::new();
-
     let ctx = RaContext {
-        socket: async_sock.get_ref(),
+        socket: &socket,
         cfg: &cfg,
-        handle: &handle,
+        table: &table,
         mac: &mac,
         iface_index,
-        bus: &bus,
     };
 
-    // Immediate RA on startup — active clients get configured without waiting
-    do_multicast_ra(&ctx, &mut state).await;
+    // Immediate RA on startup
+    do_multicast_ra(&ctx, &mut state);
 
-    let next_ra_timer = tokio::time::sleep(state.next_interval(&cfg));
-    tokio::pin!(next_ra_timer);
+    let mut next_ra_at = Instant::now() + state.next_interval(&cfg);
 
     loop {
-        tokio::select! {
-            _ = &mut next_ra_timer => {
-                do_multicast_ra(&ctx, &mut state).await;
-                let interval = state.next_interval(&cfg);
-                next_ra_timer.as_mut().reset(tokio::time::Instant::now() + interval);
-                debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
-            }
+        // 1. Periodic Advertisement
+        if Instant::now() >= next_ra_at {
+            do_multicast_ra(&ctx, &mut state);
+            let interval = state.next_interval(&cfg);
+            next_ra_at = Instant::now() + interval;
+            debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
+        }
 
-            // 1. Packet processing
-            Ok(mut guard) = async_sock.readable() => {
-                let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 1500];
-                match guard.try_io(|inner| -> std::io::Result<(usize, SockAddr)> {
-                    inner.get_ref().recv_from(&mut buf)
-                }) {
-                    Ok(Ok((n, src_sa))) if n > 0 => {
-                        let data = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
-                        if data.first() == Some(&ICMPV6_TYPE_RS) {
-                            let rs_src = src_sa.as_socket().and_then(|s| match s {
-                                std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
-                                _ => None,
-                            });
-                            debug!("RS received from {rs_src:?}");
-                            handle_rs(&ctx, rs_src, &mut state).await;
-                        }
-                    }
-                    Ok(Err(e)) => warn!("RA socket error: {e}"),
-                    _ => {
-                        // Would block or other result, guard dropped
+        // 2. Packet processing (RS)
+        let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 1500];
+        match socket.recv_from(&mut buf) {
+            Ok((n, src_sa)) => {
+                if n > 0 {
+                    let data = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
+                    if data.first() == Some(&ICMPV6_TYPE_RS) {
+                        let rs_src =
+                            src_sa
+                                .as_socket()
+                                .and_then(|s: std::net::SocketAddr| match s {
+                                    std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
+                                    _ => None,
+                                });
+                        debug!("RS received from {rs_src:?}");
+                        handle_rs(&ctx, rs_src, &mut state);
                     }
                 }
             }
-
-            // 2. EventBus signals
-            Some(event) = bus_rx.recv() => {
-                if let LanforgeEvent::Shutdown = event {
-                    info!("RA service: shutdown recebido, encerrando...");
-                    return Ok(());
+            Err(e) => {
+                let kind = e.kind();
+                if kind == std::io::ErrorKind::WouldBlock || kind == std::io::ErrorKind::TimedOut {
+                    // Read timeout, continue to bus check
+                } else {
+                    warn!("RA socket error: {e}");
                 }
+            }
+        }
+
+        // 3. EventBus signals
+        while let Ok(event) = bus_rx.try_recv() {
+            if let LanforgeEvent::Shutdown = event {
+                info!("RA service: shutdown recebido, encerrando...");
+                return Ok(());
             }
         }
     }
@@ -250,17 +237,17 @@ pub async fn ra_service(
 // RS Response Logic (RFC 4861 §6.2.6)
 // ---------------------------------------------------------------------------
 
-async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut RaState) {
+fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut RaState) {
     // Random delay of 0–500ms before responding (RFC 4861 §6.2.6).
     let delay_ms = rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS);
-    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+    std::thread::sleep(Duration::from_millis(delay_ms));
 
     // Destination: unicast to solicitant (if they have a valid address) or multicast.
     let dst = rs_src.filter(|ip| !ip.is_unspecified());
 
     match dst {
         Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
-            match send_ra(ctx, Some(unicast_dst), state).await {
+            match send_ra(ctx, Some(unicast_dst), state) {
                 Ok(()) => {
                     debug!("RA unicast -> {unicast_dst}");
                     state.record_unicast(unicast_dst);
@@ -269,14 +256,14 @@ async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut Ra
             }
         }
         None if state.can_multicast_now() => {
-            do_multicast_ra(ctx, state).await;
+            do_multicast_ra(ctx, state);
         }
         _ => debug!("RS discarded: rate limit active"),
     }
 }
 
-async fn do_multicast_ra(ctx: &RaContext<'_>, state: &mut RaState) {
-    match send_ra(ctx, None, state).await {
+fn do_multicast_ra(ctx: &RaContext<'_>, state: &mut RaState) {
+    match send_ra(ctx, None, state) {
         Ok(()) => {
             debug!("RA multicast -> ff02::1");
             state.record_multicast();
@@ -287,35 +274,25 @@ async fn do_multicast_ra(ctx: &RaContext<'_>, state: &mut RaState) {
 
 /// Constructs, signs (checksum), and sends an RA.
 /// `unicast_dst = None` → multicast to `ff02::1` (all-nodes).
-async fn send_ra(
-    ctx: &RaContext<'_>,
-    unicast_dst: Option<Ipv6Addr>,
-    state: &mut RaState,
-) -> Result<()> {
-    // Addresses are re-detected on every send: GUA may change when the ISP
-    // renews prefix delegation via DHCPv6-PD, without requiring a service restart.
-    let src_ll = get_link_local_addr(ctx.handle, ctx.iface_index)
-        .await
-        .map_err(|_| NetworkError::NoLinkLocal(ctx.iface_index))?;
-    let gua_info = get_gua_prefix(ctx.handle, ctx.iface_index).await?;
-    let (gua, preferred, valid) = match gua_info {
-        Some((ip, p, v)) => (Some(ip), p, v),
-        None => (None, 0, 0),
-    };
-    let prefix_bits = gua.map(|ip| (ip, preferred, valid));
+fn send_ra(ctx: &RaContext<'_>, unicast_dst: Option<Ipv6Addr>, state: &mut RaState) -> Result<()> {
+    // Addresses are read from the cached interface state in ManagedTable.
+    let if_ips = ctx.table.read().get_interface_ips(ctx.iface_index);
+
+    let src_ll = if_ips
+        .link_local
+        .ok_or(NetworkError::NoLinkLocal(ctx.iface_index))?;
+    let gua = if_ips.gua;
 
     // Publish PrefixChanged on the EventBus if the GUA changed.
-    if prefix_bits.as_ref().map(|(ip, _, _)| *ip) != state.last_gua {
-        info!(
-            "GUA prefix changed: {:?} -> {:?} (pref={}, valid={})",
-            state.last_gua, gua, preferred, valid
-        );
+    if gua != state.last_gua {
+        info!("GUA prefix changed: {:?} -> {:?}", state.last_gua, gua);
         state.last_gua = gua;
-        let _ = ctx.bus.publish(LanforgeEvent::PrefixChanged {
-            gua,
-            preferred,
-            valid,
-        });
+
+        // Note: in a sync thread, we might not want to publish back to the bus
+        // to avoid loops, but RA is the authority for prefix changes learning
+        // from the monitor, so we let the ManagedTable handle the bus event.
+        // Actually, RA doesn't need to publish back anymore because the MONITOR
+        // already updated the table which triggers the event!
     }
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());
@@ -389,7 +366,7 @@ fn set_icmp6_filter_rs_only(sock: &Socket) -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// setsockopt wrappers not exposed by socket2 0.5
+// setsockopt wrappers not exposed by socket2
 // ---------------------------------------------------------------------------
 
 fn set_sockopt_int(
@@ -460,79 +437,6 @@ fn get_iface_mac(iface: &str) -> Result<[u8; 6]> {
     bytes
         .try_into()
         .map_err(|_| NetworkError::InvalidMac("MAC deve ter 6 bytes".to_string()))
-}
-
-// ---------------------------------------------------------------------------
-// Address Detection via rtnetlink (reused existing Handle)
-// ---------------------------------------------------------------------------
-
-/// Returns the link-local address (`fe80::/10`) of the interface.
-/// Mandatory as the source address for all RAs (RFC 4861 §4.2).
-async fn get_link_local_addr(handle: &Handle, iface_index: u32) -> Result<Ipv6Addr> {
-    let mut stream = handle.address().get().execute();
-    while let Some(msg) = stream.try_next().await? {
-        if msg.header.index != iface_index {
-            continue;
-        }
-        if let Some(addr) = extract_ipv6(&msg) {
-            let o = addr.octets();
-            if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
-                return Ok(addr);
-            }
-        }
-    }
-    Err(NetworkError::NoLinkLocal(iface_index))
-}
-
-/// Detects the GUA /64 prefix on the interface and returns it along with lifetimes.
-///
-/// GUA (`2000::/3)`: first byte in range [0x20, 0x3F].
-/// The address on the interface (e.g. `2a01:x:y:z::1`) is masked to obtain `2a01:x:y:z::`.
-/// Returns `None` if no GUA is assigned (ISP without IPv6 or pending delegation).
-async fn get_gua_prefix(handle: &Handle, iface_index: u32) -> Result<Option<(Ipv6Addr, u32, u32)>> {
-    let mut stream = handle.address().get().execute();
-    while let Some(msg) = stream.try_next().await? {
-        if msg.header.index != iface_index {
-            continue;
-        }
-
-        let mut addr = None;
-        let mut cache_info = None;
-
-        for attr in &msg.attributes {
-            match attr {
-                AddressAttribute::Address(IpAddr::V6(v6)) => addr = Some(*v6),
-                AddressAttribute::CacheInfo(info) => cache_info = Some(info),
-                _ => {}
-            }
-        }
-
-        if let Some(v6) = addr {
-            let o = v6.octets();
-            if (0x20..=0x3F).contains(&o[0]) {
-                let mut masked = o;
-                masked[8..].fill(0);
-                let ip = Ipv6Addr::from(masked);
-                let (pref, valid) = if let Some(info) = cache_info {
-                    (info.ifa_preferred, info.ifa_valid)
-                } else {
-                    (3600, 7200) // Fallback if no cache_info is present
-                };
-                return Ok(Some((ip, pref, valid)));
-            }
-        }
-    }
-    Ok(None)
-}
-
-fn extract_ipv6(msg: &AddressMessage) -> Option<Ipv6Addr> {
-    msg.attributes.iter().find_map(|a| {
-        if let AddressAttribute::Address(IpAddr::V6(v6)) = a {
-            Some(*v6)
-        } else {
-            None
-        }
-    })
 }
 
 #[cfg(test)]

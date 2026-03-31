@@ -32,6 +32,14 @@ use crate::device::{Device, Hostname, IPv4State, Origin};
 use crate::identifiers::{Duid, MacAddr};
 use crate::state::update::StaticEntry;
 
+
+/// Represents the dynamic IP state of a local network interface.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InterfaceState {
+    pub link_local: Option<Ipv6Addr>,
+    pub gua: Option<Ipv6Addr>,
+}
+
 // ---------------------------------------------------------------------------
 // DeviceTable
 // ---------------------------------------------------------------------------
@@ -53,6 +61,9 @@ pub struct DeviceTable {
     /// IPv6 leases discovered before a corresponding MAC was known.
     orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
 
+    /// Local interface IP address state (ifindex -> state).
+    interface_ips: HashMap<u32, InterfaceState>,
+
     // --- DNS Hot Path Indices ---
     /// Index: Hostname -> MAC
     name_index: HashMap<String, MacAddr>,
@@ -70,6 +81,7 @@ impl DeviceTable {
             static_entries: HashMap::new(),
             ndp_cache: HashMap::new(),
             orphaned_v6: HashMap::new(),
+            interface_ips: HashMap::new(),
             name_index: HashMap::new(),
             ip_index: HashMap::new(),
         }
@@ -143,6 +155,12 @@ impl DeviceTable {
     /// Returns an iterator over orphaned IPv6 leases (assigned but MAC unknown).
     pub fn iter_orphaned_v6(&self) -> impl Iterator<Item = (&Ipv6Addr, &(Duid, u32, SystemTime))> {
         self.orphaned_v6.iter()
+    }
+
+    /// Retrieves the cached IP configuration for a local interface.
+    #[must_use]
+    pub fn get_interface_ips(&self, ifindex: u32) -> InterfaceState {
+        self.interface_ips.get(&ifindex).cloned().unwrap_or_default()
     }
 
     // -----------------------------------------------------------------------

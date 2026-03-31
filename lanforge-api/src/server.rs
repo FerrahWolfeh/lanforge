@@ -313,7 +313,7 @@ where
                     if let Some(mac_addr) = MacAddr::parse(&m) {
                         let v4_static = v4.and_then(|s| s.parse().ok());
                         let v6_suffix_parsed = v6_suffix.and_then(|s| Ipv6AddrOrSuffix::parse(&s));
-                        let _ = ctx.table.update(DeviceUpdate::CliHostUpdated {
+                        let _ = ctx.table.update(&DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
                             hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
                             v4_static: v4_static.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
@@ -377,7 +377,7 @@ where
                             error: e.to_string(),
                         }
                     } else {
-                        let _ = ctx.table.update(DeviceUpdate::CliHostUpdated {
+                        let _ = ctx.table.update(&DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
                             hostname: hn,
                             v4_static: v4s,
@@ -401,7 +401,7 @@ where
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
                     let _ = ctx
                         .table
-                        .update(DeviceUpdate::HostRemoved { mac: mac_addr });
+                        .update(&DeviceUpdate::HostRemoved { mac: mac_addr });
                     Response::Success(SimpleSuccess {
                         message: format!("Host removido (MAC {mac})"),
                     })
@@ -427,7 +427,7 @@ where
                 if let Ok(mac_addr) = mac.parse::<MacAddr>() {
                     let _ = ctx
                         .table
-                        .update(DeviceUpdate::LeaseReleased { mac: mac_addr });
+                        .update(&DeviceUpdate::LeaseReleased { mac: mac_addr });
                     let _ = ctx
                         .bus
                         .publish(LanforgeEvent::LeaseRelease { mac: mac_addr });
@@ -450,7 +450,7 @@ where
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
                     let _ = ctx
                         .table
-                        .update(DeviceUpdate::HostRemoved { mac: mac_addr });
+                        .update(&DeviceUpdate::HostRemoved { mac: mac_addr });
                     Response::Success(SimpleSuccess {
                         message: format!("Dispositivo expurgado da memória: {mac}"),
                     })

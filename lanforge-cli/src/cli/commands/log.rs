@@ -126,6 +126,15 @@ impl LogHandler {
                     "mDNS Scan requested".dimmed()
                 );
             }
+            LanforgeEvent::InterfaceUpdated { ifindex } => {
+                println!(
+                    "[{}] {} {} (ifindex={})",
+                    now,
+                    "NET".magenta().bold(),
+                    "Local interface IP configuration changed".white(),
+                    ifindex
+                );
+            }
             LanforgeEvent::DeviceTableDirty | LanforgeEvent::Shutdown => {
                 // Ignore these or print subtly if needed
             }

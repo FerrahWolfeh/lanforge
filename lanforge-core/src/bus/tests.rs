@@ -22,7 +22,7 @@ async fn new_device_publishes_discovered_and_updated() {
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
     let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
 
-    let _ = table.update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+    let _ = table.update(&DeviceUpdate::V4LeaseGranted { mac, ip, expires });
 
     let mut events = vec![];
     while let Ok(ev) = rx.try_recv() {
@@ -56,7 +56,7 @@ async fn known_device_does_not_publish_discovered() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
 
-    let _ = table.update(DeviceUpdate::V4LeaseGranted {
+    let _ = table.update(&DeviceUpdate::V4LeaseGranted {
         mac,
         ip: "192.168.0.10".parse().unwrap(),
         expires,
@@ -64,7 +64,7 @@ async fn known_device_does_not_publish_discovered() {
 
     let mut rx = bus.subscribe();
 
-    let _ = table.update(DeviceUpdate::V4LeaseGranted {
+    let _ = table.update(&DeviceUpdate::V4LeaseGranted {
         mac,
         ip: "192.168.0.11".parse().unwrap(),
         expires,
@@ -92,7 +92,7 @@ async fn ndp_seen_publishes_nothing() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: std::net::Ipv6Addr = "fe80::1".parse().unwrap();
 
-    let _ = table.update(DeviceUpdate::NdpSeen { mac, ip });
+    let _ = table.update(&DeviceUpdate::NdpSeen { mac, ip });
 
     let count = {
         let mut n = 0;
@@ -112,7 +112,7 @@ async fn cli_host_update_publishes_events() {
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    let _ = table.update(DeviceUpdate::CliHostUpdated {
+    let _ = table.update(&DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("cli-host".to_string()),
         v4_static: FieldUpdate::NoChange,
@@ -136,7 +136,7 @@ async fn cli_host_update_publishes_events() {
         "Deve publicar HostnameChanged"
     );
 
-    let _ = table.update(DeviceUpdate::CliHostUpdated {
+    let _ = table.update(&DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::NoChange,
         v4_static: FieldUpdate::Set("1.2.3.4".parse().unwrap()),

@@ -40,7 +40,6 @@ use crate::threads::{spawn_service_thread, wait_for_service_threads};
 
 use anyhow::Result;
 use config::Config;
-use futures::StreamExt;
 use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
@@ -52,7 +51,6 @@ use lanforge_dns::dns_service;
 use lanforge_network::dhcp::v4::dhcpv4_service;
 use lanforge_network::dhcp::v6::dhcpv6_service;
 use lanforge_network::mdns::MdnsProber;
-use lanforge_network::netlink::extract_neigh_info;
 use lanforge_network::ra::ra_service;
 use lanforge_network::slaac::bootstrap_table;
 use netlink_sys::AsyncSocket;
@@ -215,7 +213,7 @@ async fn async_main() -> Result<()> {
     // Sync Bridges & Service Channels
     // -----------------------------------------------------------------------
     let (db_tx, db_rx) = std::sync::mpsc::channel::<DbWorkerCmd>();
-    let (ra_tx, ra_rx) = tokio::sync::mpsc::unbounded_channel::<LanforgeEvent>();
+    let (ra_tx, ra_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
     let (d4_tx, d4_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
     let (d6_tx, d6_rx) = tokio::sync::mpsc::unbounded_channel::<LanforgeEvent>();
 
@@ -272,27 +270,32 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     // mDNS Prober — descoberta ativa e passiva de hostnames
     // -----------------------------------------------------------------------
-    let prober = Arc::new(MdnsProber::new(bus.clone(), table.clone()));
+    let _prober = Arc::new(MdnsProber::new(bus.clone(), table.clone()));
 
     // -----------------------------------------------------------------------
     // Netlink connection
     // -----------------------------------------------------------------------
-    let (mut connection, handle, mut messages) = new_connection()?;
+    let (mut connection, handle, messages) = new_connection()?;
     connection.socket_mut().socket_mut().add_membership(3)?;
     let netlink_task = tokio::spawn(connection);
+
+    // -----------------------------------------------------------------------
+    // NdpMonitor — reactive netlink state management
+    // -----------------------------------------------------------------------
+    let monitor = lanforge_network::netlink::NdpMonitor::new(handle.clone(), table.clone());
+    let _monitor_task = tokio::spawn(monitor.run(messages));
 
     // -----------------------------------------------------------------------
     // RA service — sync OS thread
     // -----------------------------------------------------------------------
     if cfg.ra_enabled {
         let ra_cfg = cfg.to_ra_config();
-        let ra_bus = bus.clone();
-        let ra_handle = handle.clone();
+        let ra_table = table.clone();
 
         service_threads.push((
             "ra",
-            crate::threads::spawn_service_thread("RA", 256, move || async move {
-                if let Err(e) = ra_service(ra_cfg, ra_bus, ra_rx, ra_handle).await {
+            crate::threads::spawn_sync_service_thread("RA Server", 256, move || {
+                if let Err(e) = ra_service(ra_cfg, ra_table, ra_rx) {
                     error!("RA service failed: {e}");
                 }
             }),
@@ -461,38 +464,6 @@ async fn async_main() -> Result<()> {
 
     loop {
         tokio::select! {
-            // ── Netlink — Eventos Reativos (Delta) ───────────────────────
-            Some((msg, _)) = messages.next() => {
-                // Alimenta o Manager APENAS com o IP/MAC reportado pelo kernel no momento.
-                // Zero overhead de varredura completa. CPU agradece.
-                if let Some(event) = extract_neigh_info(&msg) {
-                    let update = event.to_device_update(current_gua.as_ref());
-
-                    // Trigger passive mDNS probe for new/named-less devices
-                    match update {
-                        DeviceUpdate::NdpSeen { mac, ip } => {
-                            let table_read = table.read();
-                            if let Some(dev) = table_read.get_device(&mac)
-                                && dev.hostname.name.is_empty() {
-                                    let p = prober.clone();
-                                    tokio::spawn(async move { p.probe_ip(ip.into()).await });
-                                }
-                        }
-                        DeviceUpdate::ArpSeen { mac, ip } => {
-                            let table_read = table.read();
-                            if let Some(dev) = table_read.get_device(&mac)
-                                && dev.hostname.name.is_empty() {
-                                    let p = prober.clone();
-                                    tokio::spawn(async move { p.probe_ip(ip.into()).await });
-                                }
-                        }
-                        _ => {}
-                    }
-
-                    let _ = table.update(update);
-                }
-            }
-
             // ── Fallback — Garantia de Consistência ──────────────────────
             _ = fallback.tick() => {
                 debug!("Sincronização periódica de SLAAC (Fallback)...");

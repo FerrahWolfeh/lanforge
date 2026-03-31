@@ -9,8 +9,15 @@ dhcproto = "0.14.0"
 netlink-packet-core = "0.8.1"
 pnet = "0.35.0"
 rtnetlink = "0.20.0"
+netlink-sys = "0.8.8"
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["time", "net", "io-util", "macros", "sync"] }
+tokio = { version = "1.50.0", features = [
+    "time",
+    "net",
+    "io-util",
+    "macros",
+    "sync",
+] }
 tracing = "0.1.44"
 socket2 = "0.6.3"
 futures = "0.3.32"
