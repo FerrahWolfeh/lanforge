@@ -36,7 +36,7 @@ impl<'a> LocalResolver<'a> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
         if let Some(device) = self.table.get_by_hostname(hostname) {
-            if let Some(records) = self.resolve_local_with_device(query, device, qtype) {
+            if let Some(records) = self.resolve_local_with_device(query, &device, qtype) {
                 return rb.success(records);
             } else {
                 // Host exists but has no records for the requested type (NODATA)

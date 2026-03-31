@@ -253,9 +253,9 @@ pub fn dhcpv6_service(
                     let (duid, target_ip) = {
                         let t = table.read();
                         let device = t.get_device(&mac);
-                        let duid = device.and_then(|d| d.duid.clone());
+                        let duid = device.as_ref().and_then(|d| d.duid.clone());
 
-                        let ll_ip = device.and_then(|d| {
+                        let ll_ip = device.as_ref().and_then(|d| {
                             d.v6.iter().find_map(|s| {
                                 s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
                             })

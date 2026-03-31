@@ -5,6 +5,7 @@
 //! state transitions, merging rules, and administrative precedence.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use tracing::{debug, warn};
@@ -156,16 +157,18 @@ pub enum DeviceUpdate {
 
 impl DeviceTable {
     fn handle_v4_lease_granted(&mut self, mac: MacAddr, ip: Ipv4Addr, expires: SystemTime) -> bool {
-        let dev = self.get_or_insert(mac);
+        let dev_arc = self.get_or_insert(mac);
         let new_lease = V4Lease { ip, expires };
 
-        match &dev.v4 {
+        match &dev_arc.v4 {
             IPv4State::Static(s_ip) if *s_ip == ip => false,
             IPv4State::Dynamic(old) if old.ip == ip && old.expires == expires => false,
             _ => {
                 debug!("[state] V4 lease {} → {}", mac, ip);
+                let mut dev = (*dev_arc).clone();
                 dev.v4 = IPv4State::Dynamic(new_lease);
                 dev.last_seen = SystemTime::now();
+                self.devices.insert(mac, Arc::new(dev));
                 true
             }
         }
@@ -186,17 +189,31 @@ impl DeviceTable {
         };
 
         self.duid_index.insert(duid.clone(), m);
-        let dev = self.get_or_insert(m);
+        let dev_arc = self.get_or_insert(m);
         let new_lease = V6Lease { ip, iaid, expires };
 
+        let mut already_correct = false;
+        for state in &dev_arc.v6 {
+            if let IPv6State::Dynamic(old) = state
+                && old.iaid == iaid
+            {
+                if old.ip == ip && old.expires == expires {
+                    already_correct = true;
+                }
+                break;
+            }
+        }
+
+        if already_correct {
+            return false;
+        }
+
+        let mut dev = (*dev_arc).clone();
         let mut found = false;
         for state in &mut dev.v6 {
             if let IPv6State::Dynamic(old) = state
                 && old.iaid == iaid
             {
-                if old.ip == ip && old.expires == expires {
-                    return false; // Sem mudança real
-                }
                 *state = IPv6State::Dynamic(new_lease.clone());
                 found = true;
                 break;
@@ -208,6 +225,7 @@ impl DeviceTable {
         }
         dev.duid = Some(duid);
         dev.last_seen = SystemTime::now();
+        self.devices.insert(m, Arc::new(dev));
         true
     }
 
@@ -225,7 +243,7 @@ impl DeviceTable {
         };
 
         self.duid_index.insert(duid.clone(), m);
-        let dev = self.get_or_insert(m);
+        let dev_arc = self.get_or_insert(m);
         let new_lease = V6PrefixLease {
             prefix,
             len,
@@ -233,12 +251,24 @@ impl DeviceTable {
             expires,
         };
 
+        let mut already_correct = false;
+        for old in &dev_arc.v6_prefixes {
+            if old.iaid == iaid {
+                if old.prefix == prefix && old.len == len && old.expires == expires {
+                    already_correct = true;
+                }
+                break;
+            }
+        }
+
+        if already_correct {
+            return false;
+        }
+
+        let mut dev = (*dev_arc).clone();
         let mut found = false;
         for old in &mut dev.v6_prefixes {
             if old.iaid == iaid {
-                if old.prefix == prefix && old.len == len && old.expires == expires {
-                    return false;
-                }
                 *old = new_lease.clone();
                 found = true;
                 break;
@@ -250,21 +280,25 @@ impl DeviceTable {
         }
         dev.duid = Some(duid);
         dev.last_seen = SystemTime::now();
+        self.devices.insert(m, Arc::new(dev));
         true
     }
 
     fn handle_slaac_observed(&mut self, mac: MacAddr, addr: Ipv6Addr) -> bool {
-        let dev = self.get_or_insert(mac);
+        let dev_arc = self.get_or_insert(mac);
+        let mut dev = (*dev_arc).clone();
+        dev.last_seen = SystemTime::now();
+
         if dev
             .v6
             .iter()
             .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr))
         {
-            dev.last_seen = SystemTime::now();
+            self.devices.insert(mac, Arc::new(dev));
             false
         } else {
             dev.v6.push(IPv6State::Slaac(addr));
-            dev.last_seen = SystemTime::now();
+            self.devices.insert(mac, Arc::new(dev));
             debug!("[state] SLAAC {} → {}", mac, addr);
             true
         }
@@ -282,18 +316,24 @@ impl DeviceTable {
             });
             return true;
         }
-        let dev = self.get_or_insert(mac);
+        let dev_arc = self.get_or_insert(mac);
+        let mut dev = (*dev_arc).clone();
         dev.last_seen = SystemTime::now();
+        self.devices.insert(mac, Arc::new(dev));
         false
     }
 
     fn handle_arp_seen(&mut self, mac: MacAddr, ip: Ipv4Addr) -> bool {
-        let dev = self.get_or_insert(mac);
+        let dev_arc = self.get_or_insert(mac);
+        let mut dev = (*dev_arc).clone();
         dev.last_seen = SystemTime::now();
+
         if dev.seen_v4.contains(&ip) {
+            self.devices.insert(mac, Arc::new(dev));
             false
         } else {
             dev.seen_v4.push(ip);
+            self.devices.insert(mac, Arc::new(dev));
             true
         }
     }
@@ -304,12 +344,14 @@ impl DeviceTable {
         hostname: String,
         origin: HostnameOrigin,
     ) -> bool {
-        let dev = self.get_or_insert(mac);
-        if origin >= dev.hostname.origin && dev.hostname.name != hostname {
+        let dev_arc = self.get_or_insert(mac);
+        if origin >= dev_arc.hostname.origin && dev_arc.hostname.name != hostname {
+            let mut dev = (*dev_arc).clone();
             dev.hostname = Hostname {
                 name: hostname,
                 origin,
             };
+            self.devices.insert(mac, Arc::new(dev));
             return true;
         }
         false
@@ -322,9 +364,11 @@ impl DeviceTable {
 
         let mut changed = false;
         self.duid_index.insert(duid.clone(), m);
-        let dev = self.get_or_insert(m);
-        if dev.duid.as_ref() != Some(duid) {
+        let dev_arc = self.get_or_insert(m);
+        if dev_arc.duid.as_ref() != Some(duid) {
+            let mut dev = (*dev_arc).clone();
             dev.duid = Some(duid.clone());
+            self.devices.insert(m, Arc::new(dev));
             changed = true;
         }
 
@@ -363,12 +407,13 @@ impl DeviceTable {
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
         origin: Origin,
     ) -> bool {
-        let dev = self.get_or_insert(mac);
-        if dev.origin == Origin::Toml {
+        let dev_arc = self.get_or_insert(mac);
+        if dev_arc.origin == Origin::Toml {
             warn!("Tentativa de modificar device estático do TOML: {}", mac);
             return false;
         }
 
+        let mut dev = (*dev_arc).clone();
         let mut changed = false;
         match hostname {
             FieldUpdate::Set(hn) => {
@@ -462,23 +507,29 @@ impl DeviceTable {
                     v6_suffix: v6_suffix_opt,
                 },
             );
+
+            self.devices.insert(mac, Arc::new(dev));
         }
         changed
     }
 
     fn handle_slaac_cleared(&mut self, mac: MacAddr) -> bool {
-        if let Some(dev) = self.devices.get_mut(&mac) {
+        if let Some(dev_arc) = self.devices.get(&mac) {
+            let mut dev = (**dev_arc).clone();
             let initial_len = dev.v6.len();
             dev.v6.retain(|s| !matches!(s, IPv6State::Slaac(_)));
-            return dev.v6.len() != initial_len;
+            if dev.v6.len() != initial_len {
+                self.devices.insert(mac, Arc::new(dev));
+                return true;
+            }
         }
         false
     }
 
     fn handle_host_removed(&mut self, mac: MacAddr) -> bool {
         let changed_dev = if let Some(dev) = self.devices.remove(&mac) {
-            if let Some(duid) = dev.duid {
-                self.duid_index.remove(&duid);
+            if let Some(duid) = &dev.duid {
+                self.duid_index.remove(duid);
             }
             true
         } else {
@@ -489,7 +540,8 @@ impl DeviceTable {
     }
 
     fn handle_lease_released(&mut self, mac: MacAddr) -> bool {
-        if let Some(dev) = self.devices.get_mut(&mac) {
+        if let Some(dev_arc) = self.devices.get(&mac) {
+            let mut dev = (**dev_arc).clone();
             let changed_v4 = if matches!(dev.v4, IPv4State::None) {
                 false
             } else {
@@ -499,7 +551,11 @@ impl DeviceTable {
             let initial_v6_len = dev.v6.len();
             dev.v6.retain(|s| !matches!(s, IPv6State::Dynamic(_)));
             let changed_v6 = dev.v6.len() != initial_v6_len;
-            return changed_v4 || changed_v6;
+
+            if changed_v4 || changed_v6 {
+                self.devices.insert(mac, Arc::new(dev));
+                return true;
+            }
         }
         false
     }
@@ -514,24 +570,37 @@ impl DeviceTable {
         };
 
         let mut changed_devices = false;
-        for dev in self.devices.values_mut() {
+        let mut updates = Vec::new();
+
+        for (&mac, dev_arc) in &self.devices {
+            let mut dev = (**dev_arc).clone();
+            let mut local_changed = false;
             match ip {
                 std::net::IpAddr::V6(ip6) => {
                     let initial_len = dev.v6.len();
                     dev.v6
                         .retain(|s| !matches!(s, IPv6State::Slaac(a) if *a == ip6));
                     if dev.v6.len() != initial_len {
-                        changed_devices = true;
+                        local_changed = true;
                     }
                 }
                 std::net::IpAddr::V4(ip4) => {
                     if let Some(pos) = dev.seen_v4.iter().position(|&x| x == ip4) {
                         dev.seen_v4.remove(pos);
-                        changed_devices = true;
+                        local_changed = true;
                     }
                 }
             }
+            if local_changed {
+                updates.push((mac, Arc::new(dev)));
+                changed_devices = true;
+            }
         }
+
+        for (mac, new_dev) in updates {
+            self.devices.insert(mac, new_dev);
+        }
+
         changed_ndp || changed_devices
     }
 
@@ -547,7 +616,10 @@ impl DeviceTable {
             false
         } else {
             *entry = InterfaceState { link_local, gua };
-            debug!("[state] Interface {} IPs updated: LL={:?}, GUA={:?}", ifindex, link_local, gua);
+            debug!(
+                "[state] Interface {} IPs updated: LL={:?}, GUA={:?}",
+                ifindex, link_local, gua
+            );
             true
         }
     }
@@ -622,9 +694,11 @@ impl DeviceTable {
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
             DeviceUpdate::LeaseReleased { mac } => self.handle_lease_released(mac),
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
-            DeviceUpdate::InterfaceIpsChanged { ifindex, link_local, gua } => {
-                self.handle_interface_ips_changed(ifindex, link_local, gua)
-            }
+            DeviceUpdate::InterfaceIpsChanged {
+                ifindex,
+                link_local,
+                gua,
+            } => self.handle_interface_ips_changed(ifindex, link_local, gua),
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 false
@@ -661,7 +735,8 @@ impl DeviceTable {
 
         self.static_entries.insert(mac, static_entry);
 
-        let dev = self.get_or_insert(mac);
+        let dev_arc = self.get_or_insert(mac);
+        let mut dev = (*dev_arc).clone();
         dev.hostname = Hostname {
             name: hostname,
             origin: HostnameOrigin::Static,
@@ -671,8 +746,20 @@ impl DeviceTable {
             dev.v4 = IPv4State::Static(ip);
         }
         if let Some(suf) = v6_suffix {
-            dev.v6.push(IPv6State::Static(suf));
+            let new_state = IPv6State::Static(suf);
+            let mut found = false;
+            for state in &mut dev.v6 {
+                if matches!(state, IPv6State::Static(_)) {
+                    *state = new_state.clone();
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                dev.v6.push(new_state);
+            }
         }
         dev.origin = Origin::Toml;
+        self.devices.insert(mac, Arc::new(dev));
     }
 }

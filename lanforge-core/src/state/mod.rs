@@ -28,10 +28,11 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::time::SystemTime;
 
+use std::sync::Arc;
+
 use crate::device::{Device, Hostname, IPv4State, Origin};
 use crate::identifiers::{Duid, MacAddr};
 use crate::state::update::StaticEntry;
-
 
 /// Represents the dynamic IP state of a local network interface.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -46,12 +47,11 @@ pub struct InterfaceState {
 
 /// The central device table — typically shared via `Arc<RwLock<DeviceTable>>`.
 ///
-/// It is the **sole authority** for system state. All state modifications
-/// MUST pass through `apply_update`.
+/// It now stores `Arc<Device>` to allow for zero-cost snapshots (COW).
 #[derive(Debug, Clone)]
 pub struct DeviceTable {
     /// Global map of devices keyed by MAC address.
-    devices: HashMap<MacAddr, Device>,
+    devices: HashMap<MacAddr, Arc<Device>>,
     /// Index: DUID -> MAC
     duid_index: HashMap<Duid, MacAddr>,
     /// Static entries from configuration files or database.
@@ -87,33 +87,38 @@ impl DeviceTable {
         }
     }
 
+    /// Manually inserts a pre-built device into the table. Useful for DB loading.
+    pub fn insert_device(&mut self, mac: MacAddr, device: Device) {
+        if let Some(duid) = &device.duid {
+            self.duid_index.insert(duid.clone(), mac);
+        }
+        self.devices.insert(mac, Arc::new(device));
+    }
+
     // -----------------------------------------------------------------------
     // Public Queries
     // -----------------------------------------------------------------------
 
     /// Retrieves a device by its MAC address.
     #[must_use]
-    pub fn get_device(&self, mac: &MacAddr) -> Option<&Device> {
-        self.devices.get(mac)
-    }
-
-    /// Retrieves a mutable reference to a device by its MAC address.
-    pub fn get_device_mut(&mut self, mac: &MacAddr) -> Option<&mut Device> {
-        self.devices.get_mut(mac)
+    pub fn get_device(&self, mac: &MacAddr) -> Option<Arc<Device>> {
+        self.devices.get(mac).cloned()
     }
 
     /// Retrieves a device by its configured hostname.
     #[must_use]
-    pub fn get_by_hostname(&self, hostname: &str) -> Option<&Device> {
+    pub fn get_by_hostname(&self, hostname: &str) -> Option<Arc<Device>> {
         self.name_index
             .get(hostname)
-            .and_then(|mac| self.devices.get(mac))
+            .and_then(|mac| self.devices.get(mac).cloned())
     }
 
     /// Retrieves a device by any of its assigned IP addresses.
     #[must_use]
-    pub fn get_by_ip(&self, ip: &IpAddr) -> Option<&Device> {
-        self.ip_index.get(ip).and_then(|mac| self.devices.get(mac))
+    pub fn get_by_ip(&self, ip: &IpAddr) -> Option<Arc<Device>> {
+        self.ip_index
+            .get(ip)
+            .and_then(|mac| self.devices.get(mac).cloned())
     }
 
     /// Helper to find a MAC address by its IP in the DNS index.
@@ -124,10 +129,10 @@ impl DeviceTable {
 
     /// Retrieves a device by its DUID (`DHCPv6` Unique Identifier).
     #[must_use]
-    pub fn get_by_duid(&self, duid: &Duid) -> Option<&Device> {
+    pub fn get_by_duid(&self, duid: &Duid) -> Option<Arc<Device>> {
         self.duid_index
             .get(duid)
-            .and_then(|mac| self.devices.get(mac))
+            .and_then(|mac| self.devices.get(mac).cloned())
     }
 
     /// Retrieves the DUID associated with a MAC address, if already learned.
@@ -137,8 +142,8 @@ impl DeviceTable {
     }
 
     /// Returns an iterator over all known devices.
-    pub fn devices(&self) -> impl Iterator<Item = &Device> {
-        self.devices.values()
+    pub fn devices(&self) -> impl Iterator<Item = Arc<Device>> + '_ {
+        self.devices.values().cloned()
     }
 
     /// Returns an iterator over all static entries (configurations).
@@ -160,28 +165,36 @@ impl DeviceTable {
     /// Retrieves the cached IP configuration for a local interface.
     #[must_use]
     pub fn get_interface_ips(&self, ifindex: u32) -> InterfaceState {
-        self.interface_ips.get(&ifindex).cloned().unwrap_or_default()
+        self.interface_ips
+            .get(&ifindex)
+            .cloned()
+            .unwrap_or_default()
     }
 
     // -----------------------------------------------------------------------
     // Helpers internos
     // -----------------------------------------------------------------------
 
-    /// Retorna o device mutável, criando-o se não existir.
+    /// Retorna o device recém-criado ou existente como Arc.
     /// Prefira `apply_update` para todo o código de protocolo.
-    pub fn get_or_insert(&mut self, mac: MacAddr) -> &mut Device {
-        self.devices.entry(mac).or_insert_with(|| Device {
-            mac,
-            hostname: Hostname::default(),
-            origin: Origin::Dynamic,
-            managed_at: None,
-            duid: None,
-            v4: IPv4State::None,
-            v6: Vec::new(),
-            v6_prefixes: Vec::new(),
-            seen_v4: Vec::new(),
-            last_seen: SystemTime::now(),
-        })
+    pub fn get_or_insert(&mut self, mac: MacAddr) -> Arc<Device> {
+        self.devices
+            .entry(mac)
+            .or_insert_with(|| {
+                Arc::new(Device {
+                    mac,
+                    hostname: Hostname::default(),
+                    origin: Origin::Dynamic,
+                    managed_at: None,
+                    duid: None,
+                    v4: IPv4State::None,
+                    v6: Vec::new(),
+                    v6_prefixes: Vec::new(),
+                    seen_v4: Vec::new(),
+                    last_seen: SystemTime::now(),
+                })
+            })
+            .clone()
     }
 
     /// Adiciona ou atualiza uma entrada estática. Usado principalmente na carga do DB.

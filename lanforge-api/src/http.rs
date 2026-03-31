@@ -132,7 +132,7 @@ async fn process_registration(state: AppState, req: RegisterRequest) -> impl Int
 }
 
 async fn handle_devices(State(state): State<AppState>) -> impl IntoResponse {
-    let devices: Vec<_> = state.table.read().devices().cloned().collect();
+    let devices: Vec<_> = state.table.read().devices().collect();
     Json(devices)
 }
 

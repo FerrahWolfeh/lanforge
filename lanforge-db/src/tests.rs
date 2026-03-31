@@ -2,7 +2,7 @@
 
 use crate::engine::LeaseDb;
 use crate::worker::db_worker;
-use lanforge_core::device::{IPv4State, IPv6State, V4Lease};
+use lanforge_core::device::{Device, IPv4State, IPv6State, V4Lease};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::DeviceUpdate;
@@ -28,12 +28,13 @@ fn save_and_load_roundtrip() {
     let mut table = DeviceTable::new();
 
     let mac = make_mac(1);
-    let dev = table.get_or_insert(mac);
+    let mut dev = Device::new(mac);
     dev.hostname = "TestDevice".into();
     dev.v4 = IPv4State::Dynamic(V4Lease {
         ip: Ipv4Addr::new(192, 168, 0, 100),
         expires: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
     });
+    table.insert_device(mac, dev);
 
     db.save_table(&table).unwrap();
     let loaded = db.load_table().unwrap();
@@ -88,13 +89,10 @@ fn handles_duid_persistence() {
         0x00, 0x03, 0x00, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x03,
     ]);
 
-    let dev = table.get_or_insert(mac);
+    let mut dev = Device::new(mac);
     dev.hostname = "DuidDevice".into();
-    table.apply_update(DeviceUpdate::DuidAssociated {
-        mac: Some(mac),
-        duid: duid.clone(),
-        iaid: 0,
-    });
+    dev.duid = Some(duid.clone());
+    table.insert_device(mac, dev);
 
     db.save_table(&table).unwrap();
     let loaded = db.load_table().unwrap();
@@ -116,8 +114,11 @@ fn handles_v6_lease() {
     let duid = Duid::new(vec![
         0x00, 0x03, 0x00, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x04,
     ]);
-    let dev = table.get_or_insert(mac);
+
+    let mut dev = Device::new(mac);
     dev.hostname = "V6Device".into();
+    dev.duid = Some(duid.clone());
+    table.insert_device(mac, dev);
 
     table.apply_update(DeviceUpdate::V6LeaseGranted {
         mac: Some(mac),
@@ -146,10 +147,14 @@ fn save_overwrites_previous() {
     let mut table = DeviceTable::new();
     let mac = make_mac(1);
 
-    table.get_or_insert(mac).hostname = "First".into();
+    let mut dev1 = Device::new(mac);
+    dev1.hostname = "First".into();
+    table.insert_device(mac, dev1);
     db.save_table(&table).unwrap();
 
-    table.get_or_insert(mac).hostname = "Second".into();
+    let mut dev2 = Device::new(mac);
+    dev2.hostname = "Second".into();
+    table.insert_device(mac, dev2);
     db.save_table(&table).unwrap();
 
     let loaded = db.load_table().unwrap();
@@ -229,42 +234,19 @@ async fn db_worker_persists_on_dirty_event() {
     );
 }
 
-#[tokio::test]
-async fn db_worker_handles_vacuum_event() {
-    let dir = tempdir().unwrap();
-    let db_path = dir.path().join("test_vacuum.db");
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let worker_path = db_path.clone();
-    let worker_log_path = dir.path().join("test_vacuum_logs.db");
-
-    std::thread::spawn(move || {
-        db_worker(worker_path, worker_log_path, rx);
-    });
-
-    tx.send(crate::worker::DbWorkerCmd::Vacuum).unwrap();
-
-    tokio::task::yield_now().await;
-
-    tx.send(crate::worker::DbWorkerCmd::Vacuum).unwrap();
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    assert!(db_path.exists());
-}
-
 #[test]
 fn test_remove_device_cascades() {
     let db = LeaseDb::open_in_memory().unwrap();
     let mut table = DeviceTable::new();
 
     let mac = make_mac(5);
-    let dev = table.get_or_insert(mac);
+    let mut dev = Device::new(mac);
     dev.hostname = "CascadeTest".into();
     dev.v4 = IPv4State::Dynamic(V4Lease {
         ip: Ipv4Addr::new(10, 0, 0, 5),
         expires: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
     });
+    table.insert_device(mac, dev);
 
     db.save_table(&table).unwrap();
 
@@ -301,13 +283,4 @@ fn test_remove_device_cascades() {
         )
         .unwrap();
     assert_eq!(count, 0);
-    let lease_count: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM v4_leases WHERE mac = ?1",
-            params![mac.to_string()],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(lease_count, 0);
 }

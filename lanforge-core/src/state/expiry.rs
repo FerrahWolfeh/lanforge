@@ -1,7 +1,7 @@
 //! Periodic maintenance and high-performance DNS lookup indexing.
 
-use std::net::IpAddr;
 use std::time::SystemTime;
+use std::{net::IpAddr, sync::Arc};
 
 use tracing::debug;
 
@@ -37,31 +37,43 @@ impl DeviceTable {
         let macs: Vec<_> = self.devices.keys().copied().collect();
         for mac in macs {
             let mut remove_device = false;
-            if let Some(dev) = self.devices.get_mut(&mac) {
-                // V4 expiration
-                if let IPv4State::Dynamic(lease) = &dev.v4
-                    && lease.expires < now
-                {
-                    dev.v4 = IPv4State::None;
-                    changed = true;
-                }
-                // V6 expiration
-                let initial_v6_len = dev.v6.len();
-                dev.v6.retain(|state| match state {
-                    IPv6State::Dynamic(lease) => lease.expires > now,
-                    _ => true,
+
+            if let Some(dev_arc) = self.devices.get(&mac) {
+                // Check if anything *would* change first to avoid unnecessary clones
+                let v4_expired = if let IPv4State::Dynamic(lease) = &dev_arc.v4 {
+                    lease.expires < now
+                } else {
+                    false
+                };
+
+                let v6_expired = dev_arc.v6.iter().any(|s| match s {
+                    IPv6State::Dynamic(lease) => lease.expires < now,
+                    _ => false,
                 });
-                if dev.v6.len() != initial_v6_len {
+
+                let prefix_expired = dev_arc.v6_prefixes.iter().any(|p| p.expires < now);
+
+                if v4_expired || v6_expired || prefix_expired {
+                    let mut dev = (**dev_arc).clone();
+                    if v4_expired {
+                        dev.v4 = IPv4State::None;
+                    }
+                    if v6_expired {
+                        dev.v6.retain(|state| match state {
+                            IPv6State::Dynamic(lease) => lease.expires > now,
+                            _ => true,
+                        });
+                    }
+                    if prefix_expired {
+                        dev.v6_prefixes.retain(|p| p.expires > now);
+                    }
+                    self.devices.insert(mac, Arc::new(dev));
                     changed = true;
                 }
 
-                let initial_prefixes_len = dev.v6_prefixes.len();
-                dev.v6_prefixes.retain(|p| p.expires > now);
-                if dev.v6_prefixes.len() != initial_prefixes_len {
-                    changed = true;
-                }
-
-                if !dev.is_static()
+                // Re-get the potentially updated device to check if it should be removed
+                if let Some(dev) = self.devices.get(&mac)
+                    && !dev.is_static()
                     && matches!(dev.v4, IPv4State::None)
                     && dev.v6.is_empty()
                     && dev.v6_prefixes.is_empty()
@@ -73,9 +85,9 @@ impl DeviceTable {
 
             if remove_device {
                 if let Some(dev) = self.devices.remove(&mac)
-                    && let Some(duid) = dev.duid
+                    && let Some(duid) = &dev.duid
                 {
-                    self.duid_index.remove(&duid);
+                    self.duid_index.remove(duid);
                 }
                 changed = true;
                 debug!("[state] Removed stale dynamic device {}", mac);

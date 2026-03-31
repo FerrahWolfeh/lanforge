@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
-use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
+use lanforge_core::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::{DeviceUpdate, StaticEntry};
@@ -341,73 +341,66 @@ impl LeaseDb {
                 continue;
             };
 
-            {
-                let dev = table.get_or_insert(mac);
-                dev.hostname = lanforge_core::device::Hostname {
-                    name: row.hostname.clone(),
-                    origin: match row.hostname_origin {
-                        1 => lanforge_core::device::HostnameOrigin::Mdns,
-                        2 => lanforge_core::device::HostnameOrigin::Dhcp,
-                        3 => lanforge_core::device::HostnameOrigin::Static,
-                        _ => lanforge_core::device::HostnameOrigin::None,
-                    },
-                };
-                dev.last_seen = unix_to_system_time(row.last_seen);
-                dev.origin = match row.origin.as_str() {
-                    "toml" => Origin::Toml,
-                    "cli" => Origin::Cli,
-                    _ => Origin::Dynamic,
-                };
-                dev.managed_at = row.managed_at.map(unix_to_system_time);
+            let mut device = Device::new(mac);
+            device.hostname = lanforge_core::device::Hostname {
+                name: row.hostname.clone(),
+                origin: match row.hostname_origin {
+                    1 => lanforge_core::device::HostnameOrigin::Mdns,
+                    2 => lanforge_core::device::HostnameOrigin::Dhcp,
+                    3 => lanforge_core::device::HostnameOrigin::Static,
+                    _ => lanforge_core::device::HostnameOrigin::None,
+                },
+            };
+            device.last_seen = unix_to_system_time(row.last_seen);
+            device.origin = match row.origin.as_str() {
+                "toml" => Origin::Toml,
+                "cli" => Origin::Cli,
+                _ => Origin::Dynamic,
+            };
+            device.managed_at = row.managed_at.map(unix_to_system_time);
 
-                if let Some(v4) = &row.v4_static
-                    && let Ok(ip) = v4.parse::<Ipv4Addr>()
-                {
-                    dev.v4 = IPv4State::Static(ip);
-                }
-                if let Some(v6) = &row.v6_suffix
-                    && let Some(suf) = Ipv6AddrOrSuffix::parse(v6)
-                {
-                    dev.v6.push(IPv6State::Static(suf));
-                }
+            if let Some(v4) = &row.v4_static
+                && let Ok(ip) = v4.parse::<Ipv4Addr>()
+            {
+                device.v4 = IPv4State::Static(ip);
+            }
+            if let Some(v6) = &row.v6_suffix
+                && let Some(suf) = Ipv6AddrOrSuffix::parse(v6)
+            {
+                device.v6.push(IPv6State::Static(suf));
             }
 
-            if let Some(bytes) = row.duid {
-                table.apply_update(DeviceUpdate::DuidAssociated {
-                    mac: Some(mac),
-                    duid: Duid::new(bytes),
-                    iaid: 0,
-                });
+            // Restore DUID if it was persisted
+            if let Some(bytes) = &row.duid {
+                device.duid = Some(Duid::new(bytes.clone()));
             }
 
             // Restore static entries for CLI-managed devices
             if row.origin == "cli" {
-                let (hn, v4_ip, v6_suffix) = {
-                    let dev = table.get_or_insert(mac);
-                    let v4_ip = match dev.v4 {
-                        IPv4State::Static(ip) => Some(ip),
-                        _ => None,
-                    };
-                    let v6_suffix = dev.v6.iter().find_map(|s| {
-                        if let IPv6State::Static(suffix) = s {
-                            Some(suffix.clone())
-                        } else {
-                            None
-                        }
-                    });
-                    (dev.hostname.name.clone(), v4_ip, v6_suffix)
+                let v4_ip = match device.v4 {
+                    IPv4State::Static(ip) => Some(ip),
+                    _ => None,
                 };
+                let v6_suffix = device.v6.iter().find_map(|s| {
+                    if let IPv6State::Static(suffix) = s {
+                        Some(suffix.clone())
+                    } else {
+                        None
+                    }
+                });
 
                 table.add_static_entry(
                     mac,
                     StaticEntry {
                         mac,
-                        hostname: hn,
+                        hostname: device.hostname.name.clone(),
                         v4_ip,
                         v6_suffix,
                     },
                 );
             }
+
+            table.insert_device(mac, device);
         }
 
         // 2. V4 leases

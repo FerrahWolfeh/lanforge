@@ -483,6 +483,23 @@ pub struct Device {
 }
 
 impl Device {
+    /// Creates a new device with the given MAC and default values.
+    #[must_use]
+    pub fn new(mac: MacAddr) -> Self {
+        Self {
+            mac,
+            hostname: Hostname::default(),
+            origin: Origin::Dynamic,
+            managed_at: None,
+            v4: IPv4State::None,
+            v6: Vec::new(),
+            v6_prefixes: Vec::new(),
+            seen_v4: Vec::new(),
+            last_seen: SystemTime::now(),
+            duid: None,
+        }
+    }
+
     /// Returns true if the device's configuration is persistent (Toml or Cli).
     #[must_use]
     pub const fn is_static(&self) -> bool {

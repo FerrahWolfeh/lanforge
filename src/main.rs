@@ -206,6 +206,9 @@ async fn async_main() -> Result<()> {
     // 4. Transformamos em ManagedTable reativa (Arc<RwLock<DeviceTable>>)
     let table = Arc::new(ManagedTable::from_table(bus.clone(), initial_table));
 
+    // 5. Inicializa o contexto global para facilitar o acesso de qualquer parte do sistema
+    lanforge_core::context::LanforgeContext::init(bus.clone(), table.clone());
+
     // TaskTracker não é necessário — cada serviço vira uma thread
     let cancel = CancellationToken::new();
     let mut service_threads: Vec<(&'static str, std::thread::JoinHandle<()>)> = Vec::new();

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V4Lease, V6Lease};
+use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use crate::identifiers::{Duid, MacAddr};
 use crate::state::update::{DeviceUpdate, FieldUpdate};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -71,12 +71,8 @@ fn apply_update_hostname_hint_respects_static() {
     let mut table = DeviceTable::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    // Simula device estático
-    {
-        let dev = table.get_or_insert(mac);
-        dev.hostname = "static-host".into();
-        dev.origin = Origin::Toml;
-    }
+    // Simula device estático via API correta
+    table.add_static_device(mac, "static-host".to_string(), None, None);
 
     let changed = table.apply_update(DeviceUpdate::DhcpHostnameHint {
         mac,
@@ -151,12 +147,12 @@ fn apply_update_lease_released() {
         expires: now,
     });
 
-    let dev = table.devices.get(&mac).unwrap();
+    let dev = table.get_device(&mac).unwrap();
     assert!(matches!(dev.v4, IPv4State::Dynamic(_)));
     assert_eq!(dev.v6.len(), 1);
 
     assert!(table.apply_update(DeviceUpdate::LeaseReleased { mac }));
-    let dev = table.devices.get(&mac).unwrap();
+    let dev = table.get_device(&mac).unwrap();
     assert!(matches!(dev.v4, IPv4State::None));
     assert!(dev.v6.is_empty());
 
@@ -170,7 +166,12 @@ fn apply_update_duid_associated() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let duid = Duid::new(vec![1, 2, 3, 4]);
 
-    table.get_or_insert(mac).hostname = "DuidHost".into();
+    // Setup inicial via update para ser clean
+    table.apply_update(DeviceUpdate::MdnsHostnameHint {
+        mac,
+        hostname: "DuidHost".to_string(),
+    });
+
     assert!(table.apply_update(DeviceUpdate::DuidAssociated {
         mac: Some(mac),
         duid: duid.clone(),
@@ -183,7 +184,7 @@ fn apply_update_duid_associated() {
     // Mesmo DUID novamente — não dirty
     assert!(!table.apply_update(DeviceUpdate::DuidAssociated {
         mac: Some(mac),
-        duid: duid.clone(),
+        duid,
         iaid: 1,
     }));
 }
@@ -209,16 +210,18 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
     let past = SystemTime::now() - std::time::Duration::from_secs(100);
     let future = SystemTime::now() + std::time::Duration::from_secs(100);
 
-    let dev = table.get_or_insert(mac);
-    dev.v4 = IPv4State::Dynamic(V4Lease {
+    table.apply_update(DeviceUpdate::V4LeaseGranted {
+        mac,
         ip: "192.168.0.2".parse().unwrap(),
         expires: past,
     });
-    dev.v6.push(IPv6State::Dynamic(V6Lease {
+    table.apply_update(DeviceUpdate::V6LeaseGranted {
+        mac: Some(mac),
+        duid: Duid::new(vec![1]),
+        iaid: 1,
         ip: "fd00::1".parse().unwrap(),
         expires: future,
-        iaid: 1,
-    }));
+    });
 
     assert!(table.expire_stale());
 
@@ -248,7 +251,7 @@ fn test_orphaned_v6_promotion() {
     });
 
     // Não deve existir device ainda
-    assert!(!table.devices.contains_key(&mac));
+    assert!(table.get_device(&mac).is_none());
     assert!(!table.orphaned_v6.is_empty());
 
     // 2. NDP visto para o mesmo IP -> Promove
@@ -256,7 +259,7 @@ fn test_orphaned_v6_promotion() {
     assert!(changed);
 
     // Agora deve existir o device com o DUID e IP corretos
-    let dev = table.devices.get(&mac).expect("Device deve existir");
+    let dev = table.get_device(&mac).expect("Device deve existir");
     assert_eq!(dev.duid.as_ref(), Some(&duid));
     assert_eq!(dev.v6[0].ip().unwrap(), ip);
     assert!(table.orphaned_v6.is_empty());
@@ -283,7 +286,7 @@ fn test_cli_host_updated_sync() {
     });
 
     assert!(changed);
-    let dev = table.devices.get(&mac).unwrap();
+    let dev = table.get_device(&mac).unwrap();
     assert_eq!(dev.hostname.name, "cli-host");
     assert!(
         matches!(dev.v4, IPv4State::Static(ip) if ip == "192.168.1.10".parse::<Ipv4Addr>().unwrap())
@@ -327,7 +330,7 @@ fn test_ip_deleted_cleanup() {
     table.apply_update(DeviceUpdate::NdpSeen { mac, ip });
     table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
 
-    let dev = table.devices.get(&mac).unwrap();
+    let dev = table.get_device(&mac).unwrap();
     assert!(
         dev.v6
             .iter()
@@ -341,7 +344,7 @@ fn test_ip_deleted_cleanup() {
 
     // 3. Verify cleanup
     assert!(table.get_mac_from_ndp_cache(&ip).is_none());
-    let dev = table.devices.get(&mac).unwrap();
+    let dev = table.get_device(&mac).unwrap();
     assert!(
         !dev.v6
             .iter()
@@ -395,7 +398,7 @@ fn test_multiple_iaids_and_prefixes() {
         expires: future,
     });
 
-    let dev = table.devices.get(&mac).unwrap();
+    let dev = table.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 2, "Deve ter 2 endereços dinâmicos");
     assert_eq!(dev.v6_prefixes.len(), 2, "Deve ter 2 prefixos");
 
@@ -408,7 +411,7 @@ fn test_multiple_iaids_and_prefixes() {
         expires: future,
     });
 
-    let dev = table.devices.get(&mac).unwrap();
+    let dev = table.get_device(&mac).unwrap();
     assert_eq!(
         dev.v6.len(),
         2,
@@ -433,7 +436,7 @@ fn test_multiple_iaids_and_prefixes() {
     });
 
     assert!(table.expire_stale());
-    let dev = table.devices.get(&mac).unwrap();
+    let dev = table.get_device(&mac).unwrap();
     assert_eq!(
         dev.v6_prefixes.len(),
         1,
@@ -461,7 +464,7 @@ fn apply_update_duid_associated_resolves_orphan() {
     });
 
     assert!(table.orphaned_v6.contains_key(&ip));
-    assert!(!table.devices.contains_key(&mac));
+    assert!(table.get_device(&mac).is_none());
 
     // 2. Recebe associação DUID+IAID+MAC (ex: via Solicit que precedeu o Request, ou via DB)
     let changed = table.apply_update(DeviceUpdate::DuidAssociated {
@@ -476,10 +479,7 @@ fn apply_update_duid_associated_resolves_orphan() {
         "Órfão deveria ter sido resolvido"
     );
 
-    let dev = table
-        .devices
-        .get(&mac)
-        .expect("Device deve ter sido criado");
+    let dev = table.get_device(&mac).expect("Device deve ter sido criado");
     assert_eq!(dev.duid.as_ref(), Some(&duid));
     assert!(
         dev.v6

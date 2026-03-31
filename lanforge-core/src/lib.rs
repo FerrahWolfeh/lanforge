@@ -21,6 +21,7 @@
 //! back to any interested listeners.
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod bus;
+pub mod context;
 pub mod device;
 pub mod identifiers;
 pub mod ndp;
