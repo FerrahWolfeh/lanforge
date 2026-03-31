@@ -298,7 +298,7 @@ fn test_resolve_local_v6_suffix_merging() {
 
     assert!(
         answers.len() >= 2,
-        "Deveria retornar o ULA combinado e o GUA combinado"
+        "Deveria retornar o ULA combinado e o GUA observado"
     );
 
     let ips: HashSet<Ipv6Addr> = answers
@@ -312,8 +312,18 @@ fn test_resolve_local_v6_suffix_merging() {
         })
         .collect();
 
-    assert!(ips.contains(&"fd00::beef".parse().unwrap()));
-    assert!(ips.contains(&"2001:db8::beef".parse().unwrap()));
+    assert!(
+        ips.contains(&"fd00::beef".parse().unwrap()),
+        "Deveria conter ULA+sufixo"
+    );
+    assert!(
+        ips.contains(&"2001:db8::1".parse().unwrap()),
+        "Deveria conter o GUA SLAAC original"
+    );
+    assert!(
+        !ips.contains(&"2001:db8::beef".parse().unwrap()),
+        "NÃO deveria conter GUA+sufixo (inacessível)"
+    );
 }
 
 #[tokio::test]

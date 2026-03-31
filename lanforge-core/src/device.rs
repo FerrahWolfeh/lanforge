@@ -318,11 +318,11 @@ impl fmt::Display for Ipv6AddrOrSuffix {
     }
 }
 
-/// Priority classification for IP addresses.
+/// Priority classification for IP addresses and prefixes.
 ///
 /// Lower values have higher priority in sorting and display.
 /// ULA (Unique Local Address) has the highest priority for local consistency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IpClassification {
     /// IPv6 Unique Local Address (fc00::/7).
     Ula = 0,
@@ -365,21 +365,65 @@ pub fn classify_ip(addr: &IpAddr) -> IpClassification {
                 IpClassification::Ipv4
             }
         }
-        IpAddr::V6(v6) => {
-            if v6.is_loopback() {
-                IpClassification::Loopback
-            } else if is_ula(v6) {
-                IpClassification::Ula
-            } else if (v6.segments()[0] & 0xe000) == 0x2000 {
-                // GUA: 2000::/3 (RFC 4291)
-                IpClassification::Gua
-            } else if (v6.segments()[0] & 0xffc0) == 0xfe80 {
-                // Link-Local: fe80::/10
-                IpClassification::LinkLocal
-            } else {
-                IpClassification::Other
-            }
+        IpAddr::V6(v6) => classify_ipv6(v6),
+    }
+}
+
+/// Classifies an IPv6 address.
+pub fn classify_ipv6(v6: &Ipv6Addr) -> IpClassification {
+    if v6.is_loopback() {
+        IpClassification::Loopback
+    } else if is_ula(v6) {
+        IpClassification::Ula
+    } else if (v6.segments()[0] & 0xe000) == 0x2000 {
+        // GUA: 2000::/3 (RFC 4291)
+        IpClassification::Gua
+    } else if (v6.segments()[0] & 0xffc0) == 0xfe80 {
+        // Link-Local: fe80::/10
+        IpClassification::LinkLocal
+    } else {
+        IpClassification::Other
+    }
+}
+
+/// Represents a formal IPv6 prefix (/64) with its classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Ipv6Prefix {
+    pub segments: [u16; 4],
+    pub group: IpClassification,
+}
+
+impl Ipv6Prefix {
+    /// Creates a prefix from an IPv6 address, automatically classifying it.
+    pub fn from_addr(addr: Ipv6Addr) -> Self {
+        let segs = addr.segments();
+        Self {
+            segments: [segs[0], segs[1], segs[2], segs[3]],
+            group: classify_ipv6(&addr),
         }
+    }
+
+    /// Explicitly creates a prefix with a specific group.
+    pub fn new(addr: Ipv6Addr, group: IpClassification) -> Self {
+        let segs = addr.segments();
+        Self {
+            segments: [segs[0], segs[1], segs[2], segs[3]],
+            group,
+        }
+    }
+
+    /// Returns the full Ipv6Addr representation of this prefix (with 0 suffix).
+    pub fn to_addr(&self) -> Ipv6Addr {
+        Ipv6Addr::new(
+            self.segments[0],
+            self.segments[1],
+            self.segments[2],
+            self.segments[3],
+            0,
+            0,
+            0,
+            0,
+        )
     }
 }
 

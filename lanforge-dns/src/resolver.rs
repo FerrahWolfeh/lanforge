@@ -1,7 +1,9 @@
 use crate::error::DnsError;
 use hickory_proto::op::Message;
 use hickory_proto::rr::{Name, RData, Record, RecordType};
-use lanforge_core::device::{IPv6State, Ipv6AddrOrSuffix, classify_ip};
+use lanforge_core::device::{
+    IPv6State, IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ip,
+};
 use lanforge_core::state::DeviceTable;
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -93,22 +95,15 @@ impl<'a> LocalResolver<'a> {
             return None;
         }
 
-        let mut ula_prefix_segs = None;
+        let mut applied_prefixes = HashSet::<Ipv6Prefix>::new();
         if let Some(ula) = self.cfg.ula_prefix {
-            let segs = ula.segments();
-            ula_prefix_segs = Some([segs[0], segs[1], segs[2], segs[3]]);
+            applied_prefixes.insert(Ipv6Prefix::new(ula, IpClassification::Ula));
         }
 
-        let mut applied_prefixes = HashSet::<[u16; 4]>::new();
-        if let Some(p) = ula_prefix_segs {
-            applied_prefixes.insert(p);
-        }
-
-        // 1. Collect SLAAC address prefixes to apply to static suffixes later.
+        // 1. Collect SLAAC address prefixes to ensure we return them (and potentially apply suffixes if they are ULA)
         for state in &device.v6 {
             if let IPv6State::Slaac(ip) = state {
-                let segs = ip.segments();
-                applied_prefixes.insert([segs[0], segs[1], segs[2], segs[3]]);
+                applied_prefixes.insert(Ipv6Prefix::from_addr(*ip));
             }
         }
 
@@ -132,7 +127,11 @@ impl<'a> LocalResolver<'a> {
                     Ipv6AddrOrSuffix::Full(ip) => all_ips.push(IpAddr::V6(*ip)),
                     Ipv6AddrOrSuffix::Suffix(_) => {
                         for prefix in &applied_prefixes {
-                            if let Some(ip) = combine_prefix_suffix(prefix, suf) {
+                            // Only apply custom suffixes to prefixes we are authoritative for (ULA).
+                            // This prevents "inventing" unreachable GUA addresses.
+                            if prefix.group == IpClassification::Ula
+                                && let Some(ip) = combine_prefix_suffix(&prefix.segments, suf)
+                            {
                                 all_ips.push(IpAddr::V6(ip));
                             }
                         }

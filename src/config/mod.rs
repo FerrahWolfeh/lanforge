@@ -310,7 +310,10 @@ impl Config {
 
         let ula_prefix = self.ra_toml.prefix.iter().find_map(|p| {
             if p.source == "ula" {
-                p.address.as_deref().and_then(|a| a.parse().ok())
+                p.address
+                    .as_deref()
+                    .and_then(|a| self.parse_cidr(a))
+                    .map(|(addr, _)| addr)
             } else {
                 None
             }
