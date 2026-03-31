@@ -4,7 +4,6 @@
 //! with debounce, protecting the SD card from excessive writes.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
@@ -15,16 +14,7 @@ use crate::engine::LeaseDb;
 use crate::log_engine::LogDb;
 
 // ---------------------------------------------------------------------------
-// Constantes
-// ---------------------------------------------------------------------------
-
-/// Debounce duration after a `DeviceTableDirty` event before persisting.
-pub(crate) const DEBOUNCE_SILENCE: Duration = Duration::from_secs(5);
-/// Maximum time to wait for a quiet window before forcing a save.
-const MAX_DEBOUNCE_WAIT: Duration = Duration::from_secs(60);
-
-// ---------------------------------------------------------------------------
-// db_worker — task reativa com debounce
+// db_worker — task reativa
 // ---------------------------------------------------------------------------
 
 /// Synchronous worker that persists the `ManagedTable` to SQLite.

@@ -1,6 +1,5 @@
 #![cfg(test)]
 
-use super::*;
 use crate::engine::LeaseDb;
 use crate::worker::db_worker;
 use lanforge_core::device::{IPv4State, IPv6State, V4Lease};
@@ -199,8 +198,6 @@ fn skips_invalid_database_records_gracefully() {
 
 #[tokio::test]
 async fn db_worker_persists_on_dirty_event() {
-    use worker::DEBOUNCE_SILENCE;
-
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
@@ -221,7 +218,7 @@ async fn db_worker_persists_on_dirty_event() {
     tx.send(crate::worker::DbWorkerCmd::Save(Box::new(table_snapshot)))
         .unwrap();
 
-    tokio::time::sleep(DEBOUNCE_SILENCE + Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_secs(1) + Duration::from_millis(500)).await;
 
     let db = LeaseDb::open(&db_path).unwrap();
     let loaded = db.load_table().unwrap();
