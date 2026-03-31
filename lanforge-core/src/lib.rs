@@ -19,7 +19,7 @@
 //! submit [`DeviceUpdate`](state::update::DeviceUpdate) requests to the [`ManagedTable`].
 //! The table applies the logic and broadcasts [`LanforgeEvent`](bus::LanforgeEvent)s
 //! back to any interested listeners.
-
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod bus;
 pub mod device;
 pub mod identifiers;

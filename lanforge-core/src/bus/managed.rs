@@ -23,6 +23,7 @@ pub struct ManagedTable {
 
 impl ManagedTable {
     /// Creates a new managed table wrapping an empty device table.
+    #[must_use]
     pub fn new(bus: Arc<EventBus>) -> Self {
         Self {
             inner: RwLock::new(DeviceTable::new()),
@@ -31,7 +32,8 @@ impl ManagedTable {
     }
 
     /// Creates a new managed table wrapping an existing device table.
-    pub fn from_table(bus: Arc<EventBus>, table: DeviceTable) -> Self {
+    #[must_use]
+    pub const fn from_table(bus: Arc<EventBus>, table: DeviceTable) -> Self {
         Self {
             inner: RwLock::new(table),
             bus,
@@ -39,15 +41,11 @@ impl ManagedTable {
     }
 
     /// Applies a [`DeviceUpdate`] to the table and publishes corresponding events to the bus.
-    pub async fn update(&self, update: DeviceUpdate) {
+    pub fn update(&self, update: DeviceUpdate) {
         let mut table = self.inner.write();
 
         let opt_mac = mac_of(&update);
-        let is_new = if let Some(mac) = opt_mac {
-            table.get_device(&mac).is_none()
-        } else {
-            false
-        };
+        let is_new = opt_mac.is_some_and(|mac| table.get_device(&mac).is_none());
 
         let change = device_change_of(&update);
         let changed = table.apply_update(update);
@@ -60,16 +58,17 @@ impl ManagedTable {
 
         if let Some(mac) = opt_mac {
             if is_new {
-                self.bus.publish(LanforgeEvent::DeviceDiscovered { mac });
+                let _ = self.bus.publish(LanforgeEvent::DeviceDiscovered { mac });
             }
 
             if let Some(change) = change {
-                self.bus
+                let _ = self
+                    .bus
                     .publish(LanforgeEvent::DeviceUpdated { mac, change });
             }
         }
 
-        self.bus.publish(LanforgeEvent::DeviceTableDirty);
+        let _ = self.bus.publish(LanforgeEvent::DeviceTableDirty);
     }
 
     /// Provides a read-only lock to the internal device table.
@@ -101,21 +100,20 @@ use crate::identifiers::MacAddr;
 /// Extracts the MAC address from any variant of [`DeviceUpdate`], if present.
 const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
     match update {
-        DeviceUpdate::V4LeaseGranted { mac, .. } => Some(*mac),
-        DeviceUpdate::V6LeaseGranted { mac, .. } => *mac,
-        DeviceUpdate::V6PrefixAssigned { mac, .. } => *mac,
-        DeviceUpdate::SlaacObserved { mac, .. } => Some(*mac),
-        DeviceUpdate::NdpSeen { mac, .. } => Some(*mac),
-        DeviceUpdate::ArpSeen { mac, .. } => Some(*mac),
-        DeviceUpdate::DhcpHostnameHint { mac, .. } => Some(*mac),
-        DeviceUpdate::MdnsHostnameHint { mac, .. } => Some(*mac),
-        DeviceUpdate::DuidAssociated { mac, .. } => *mac,
-        DeviceUpdate::CliHostUpdated { mac, .. } => Some(*mac),
-        DeviceUpdate::SlaacCleared { mac } => Some(*mac),
-        DeviceUpdate::HostRemoved { mac } => Some(*mac),
-        DeviceUpdate::LeaseReleased { mac } => Some(*mac),
-        DeviceUpdate::IpDeleted { .. } => None,
-        DeviceUpdate::RebuildDnsIndices => None,
+        DeviceUpdate::V6LeaseGranted { mac, .. }
+        | DeviceUpdate::V6PrefixAssigned { mac, .. }
+        | DeviceUpdate::DuidAssociated { mac, .. } => *mac,
+        DeviceUpdate::V4LeaseGranted { mac, .. }
+        | DeviceUpdate::SlaacObserved { mac, .. }
+        | DeviceUpdate::NdpSeen { mac, .. }
+        | DeviceUpdate::ArpSeen { mac, .. }
+        | DeviceUpdate::DhcpHostnameHint { mac, .. }
+        | DeviceUpdate::MdnsHostnameHint { mac, .. }
+        | DeviceUpdate::CliHostUpdated { mac, .. }
+        | DeviceUpdate::SlaacCleared { mac }
+        | DeviceUpdate::HostRemoved { mac }
+        | DeviceUpdate::LeaseReleased { mac } => Some(*mac),
+        DeviceUpdate::IpDeleted { .. } | DeviceUpdate::RebuildDnsIndices => None,
     }
 }
 
@@ -146,7 +144,9 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         | DeviceUpdate::ArpSeen { .. }
         | DeviceUpdate::SlaacCleared { .. }
         | DeviceUpdate::HostRemoved { .. }
-        | DeviceUpdate::LeaseReleased { .. } => None,
+        | DeviceUpdate::LeaseReleased { .. }
+        | DeviceUpdate::IpDeleted { .. }
+        | DeviceUpdate::RebuildDnsIndices => None,
         DeviceUpdate::CliHostUpdated {
             hostname,
             v4_static,
@@ -166,7 +166,5 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
             }
             None
         }
-        DeviceUpdate::IpDeleted { .. } => None,
-        DeviceUpdate::RebuildDnsIndices => None,
     }
 }

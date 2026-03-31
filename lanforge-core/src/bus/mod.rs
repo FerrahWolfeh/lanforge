@@ -45,19 +45,19 @@ use serde::{Deserialize, Serialize};
 /// Published within a [`LanforgeEvent::DeviceUpdated`] event on the bus.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DeviceChange {
-    /// An IPv4 address was assigned or renewed via DHCPv4.
+    /// An IPv4 address was assigned or renewed via `DHCPv4`.
     V4Assigned { ip: Ipv4Addr },
 
     /// The IPv4 lease expired and was removed from the device.
     V4Expired,
 
-    /// An IPv6 address was assigned or renewed via DHCPv6.
+    /// An IPv6 address was assigned or renewed via `DHCPv6`.
     V6Assigned { ip: Ipv6Addr, iaid: u32 },
 
-    /// The DHCPv6 lease expired and was removed.
+    /// The `DHCPv6` lease expired and was removed.
     V6Expired,
 
-    /// An IPv6 prefix was delegated to the device via DHCPv6 Prefix Delegation (IA_PD).
+    /// An IPv6 prefix was delegated to the device via `DHCPv6 Prefix Delegation` (`IA_PD`).
     V6PrefixAssigned {
         /// The base prefix address.
         prefix: Ipv6Addr,
@@ -118,7 +118,7 @@ pub enum LanforgeEvent {
     DeviceTableDirty,
     /// Request the daemon to reload its configuration.
     ReloadConfig,
-    /// Signal to trigger a SQLite database vacuum.
+    /// Signal to trigger a `SQLite` database vacuum.
     DbVacuum,
     /// Request to release a lease for a device.
     LeaseRelease { mac: MacAddr },
@@ -131,20 +131,21 @@ pub enum LanforgeEvent {
 impl LanforgeEvent {
     /// Returns true if this event represents a user-facing system activity
     /// that should be recorded in the persistent log history.
-    pub fn is_loggable(&self) -> bool {
+    #[must_use]
+    pub const fn is_loggable(&self) -> bool {
         match self {
-            LanforgeEvent::DeviceDiscovered { .. }
-            | LanforgeEvent::DeviceUpdated { .. }
-            | LanforgeEvent::DeviceExpired { .. }
-            | LanforgeEvent::PrefixChanged { .. }
-            | LanforgeEvent::LeaseRelease { .. }
-            | LanforgeEvent::LeaseRenew { .. }
-            | LanforgeEvent::DbVacuum
-            | LanforgeEvent::ReloadConfig
-            | LanforgeEvent::ScanRequested => true,
+            Self::DeviceDiscovered { .. }
+            | Self::DeviceUpdated { .. }
+            | Self::DeviceExpired { .. }
+            | Self::PrefixChanged { .. }
+            | Self::LeaseRelease { .. }
+            | Self::LeaseRenew { .. }
+            | Self::DbVacuum
+            | Self::ReloadConfig
+            | Self::ScanRequested => true,
 
             // Internal signals or very high-frequency events
-            LanforgeEvent::DeviceTableDirty | LanforgeEvent::Shutdown => false,
+            Self::DeviceTableDirty | Self::Shutdown => false,
         }
     }
 }
@@ -165,12 +166,14 @@ pub struct EventBus {
 
 impl EventBus {
     /// Creates a new, initially empty event bus.
+    #[must_use]
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(BUS_CAPACITY);
         Self { tx }
     }
 
     /// Creates a new subscriber to receive events from the bus.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<LanforgeEvent> {
         self.tx.subscribe()
     }
@@ -178,6 +181,7 @@ impl EventBus {
     /// Publishes a new event to the bus.
     ///
     /// Returns the number of active subscribers who received the message.
+    #[must_use]
     pub fn publish(&self, event: LanforgeEvent) -> usize {
         self.tx.send(event).unwrap_or(0)
     }

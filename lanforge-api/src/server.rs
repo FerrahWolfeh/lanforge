@@ -237,19 +237,19 @@ where
             Ok(Command::Status) => ctx.handle_status().await,
             Ok(Command::Devices { filter, .. }) => ctx.handle_devices(filter).await,
             Ok(Command::Reload) => {
-                ctx.bus.publish(LanforgeEvent::ReloadConfig);
+                let _ = ctx.bus.publish(LanforgeEvent::ReloadConfig);
                 Response::Success(SimpleSuccess {
                     message: "Reload signal sent successfully".to_string(),
                 })
             }
             Ok(Command::Scan) => {
-                ctx.bus.publish(LanforgeEvent::ScanRequested);
+                let _ = ctx.bus.publish(LanforgeEvent::ScanRequested);
                 Response::Success(SimpleSuccess {
                     message: "mDNS Discovery Scan disparado".to_string(),
                 })
             }
             Ok(Command::Shutdown) => {
-                ctx.bus.publish(LanforgeEvent::Shutdown);
+                let _ = ctx.bus.publish(LanforgeEvent::Shutdown);
                 Response::Success(SimpleSuccess {
                     message: "Desligando graciosa e instantaneamente".to_string(),
                 })
@@ -313,15 +313,13 @@ where
                     if let Some(mac_addr) = MacAddr::parse(&m) {
                         let v4_static = v4.and_then(|s| s.parse().ok());
                         let v6_suffix_parsed = v6_suffix.and_then(|s| Ipv6AddrOrSuffix::parse(&s));
-                        ctx.table
-                            .update(DeviceUpdate::CliHostUpdated {
-                                mac: mac_addr,
-                                hostname: hostname.map(Some),
-                                v4_static: Some(v4_static),
-                                v6_suffix: Some(v6_suffix_parsed),
-                                origin: Origin::Cli,
-                            })
-                            .await;
+                        ctx.table.update(DeviceUpdate::CliHostUpdated {
+                            mac: mac_addr,
+                            hostname: hostname.map(Some),
+                            v4_static: Some(v4_static),
+                            v6_suffix: Some(v6_suffix_parsed),
+                            origin: Origin::Cli,
+                        });
 
                         Response::Success(SimpleSuccess {
                             message: "Host adicionado e persistido.".to_string(),
@@ -378,15 +376,13 @@ where
                             error: e.to_string(),
                         }
                     } else {
-                        ctx.table
-                            .update(DeviceUpdate::CliHostUpdated {
-                                mac: mac_addr,
-                                hostname: hn,
-                                v4_static: v4s,
-                                v6_suffix: v6s,
-                                origin: Origin::Cli,
-                            })
-                            .await;
+                        ctx.table.update(DeviceUpdate::CliHostUpdated {
+                            mac: mac_addr,
+                            hostname: hn,
+                            v4_static: v4s,
+                            v6_suffix: v6s,
+                            origin: Origin::Cli,
+                        });
 
                         Response::Success(SimpleSuccess {
                             message: format!("Host {mac} atualizado: {field}={value}"),
@@ -403,8 +399,7 @@ where
             Ok(Command::HostRemove { mac }) => {
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
                     ctx.table
-                        .update(DeviceUpdate::HostRemoved { mac: mac_addr })
-                        .await;
+                        .update(DeviceUpdate::HostRemoved { mac: mac_addr });
                     Response::Success(SimpleSuccess {
                         message: format!("Host removido (MAC {mac})"),
                     })
@@ -416,7 +411,7 @@ where
             }
             Ok(Command::LeaseRenew { mac }) => {
                 if let Ok(mac_addr) = mac.parse::<MacAddr>() {
-                    ctx.bus.publish(LanforgeEvent::LeaseRenew { mac: mac_addr });
+                    let _ = ctx.bus.publish(LanforgeEvent::LeaseRenew { mac: mac_addr });
                     Response::Success(SimpleSuccess {
                         message: format!("Solicitando renovação (forcerenew) para {mac}"),
                     })
@@ -429,9 +424,9 @@ where
             Ok(Command::LeaseRelease { mac }) => {
                 if let Ok(mac_addr) = mac.parse::<MacAddr>() {
                     ctx.table
-                        .update(DeviceUpdate::LeaseReleased { mac: mac_addr })
-                        .await;
-                    ctx.bus
+                        .update(DeviceUpdate::LeaseReleased { mac: mac_addr });
+                    let _ = ctx
+                        .bus
                         .publish(LanforgeEvent::LeaseRelease { mac: mac_addr });
                     Response::Success(SimpleSuccess {
                         message: format!("Liberando lease para {mac}"),
@@ -443,7 +438,7 @@ where
                 }
             }
             Ok(Command::DbVacuum) => {
-                ctx.bus.publish(LanforgeEvent::DbVacuum);
+                let _ = ctx.bus.publish(LanforgeEvent::DbVacuum);
                 Response::Success(SimpleSuccess {
                     message: "Iniciando vacuum do sqlite...".to_string(),
                 })
@@ -451,8 +446,7 @@ where
             Ok(Command::Purge { mac }) => {
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
                     ctx.table
-                        .update(DeviceUpdate::HostRemoved { mac: mac_addr })
-                        .await;
+                        .update(DeviceUpdate::HostRemoved { mac: mac_addr });
                     Response::Success(SimpleSuccess {
                         message: format!("Dispositivo expurgado da memória: {mac}"),
                     })

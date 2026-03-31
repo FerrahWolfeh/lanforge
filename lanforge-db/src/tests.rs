@@ -220,12 +220,10 @@ async fn db_worker_persists_on_dirty_event() {
     tokio::task::yield_now().await;
 
     let mac = make_mac(0xAB);
-    table
-        .update(DeviceUpdate::DhcpHostnameHint {
-            mac,
-            hostname: "worker-test".into(),
-        })
-        .await;
+    table.update(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "worker-test".into(),
+    });
 
     tokio::time::sleep(DEBOUNCE_SILENCE + Duration::from_millis(500)).await;
 
@@ -257,7 +255,7 @@ async fn db_worker_handles_vacuum_event() {
 
     tokio::task::yield_now().await;
 
-    bus.publish(LanforgeEvent::DbVacuum);
+    let _ = bus.publish(LanforgeEvent::DbVacuum);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 

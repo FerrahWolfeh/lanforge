@@ -43,14 +43,14 @@ pub struct StaticEntry {
 /// by the [`DeviceTable::apply_update`] method to maintain a consistent state.
 #[derive(Debug, Clone)]
 pub enum DeviceUpdate {
-    /// A DHCPv4 lease was granted or renewed.
+    /// A `DHCPv4` lease was granted or renewed.
     V4LeaseGranted {
         mac: MacAddr,
         ip: Ipv4Addr,
         expires: SystemTime,
     },
 
-    /// A DHCPv6 address lease (IA_NA) was granted or renewed.
+    /// A `DHCPv6` address lease (`IA_NA`) was granted or renewed.
     V6LeaseGranted {
         /// Optional MAC (resolved later via NDP if missing).
         mac: Option<MacAddr>,
@@ -60,7 +60,7 @@ pub enum DeviceUpdate {
         expires: SystemTime,
     },
 
-    /// A DHCPv6 prefix delegation (IA_PD) was granted or renewed.
+    /// A `DHCPv6` prefix delegation (`IA_PD`) was granted or renewed.
     V6PrefixAssigned {
         mac: Option<MacAddr>,
         duid: Duid,
@@ -83,7 +83,7 @@ pub enum DeviceUpdate {
     /// A hostname was learned via mDNS.
     MdnsHostnameHint { mac: MacAddr, hostname: String },
 
-    /// A DUID was associated with a MAC address (e.g., during DHCPv6 Solicit).
+    /// A DUID was associated with a MAC address (e.g., during `DHCPv6` Solicit).
     DuidAssociated {
         mac: Option<MacAddr>,
         duid: Duid,
@@ -129,9 +129,9 @@ impl DeviceTable {
     ///
     /// ## Precedence and Merging Rules
     ///
-    /// - **Hostnames**: Static configuration (Toml/Cli) always overrides dynamic hints.
-    /// - **IPv4 Addresses**: Static reservations take priority over DHCPv4 leases.
-    /// - **Orphan Handling**: DHCPv6 leases without a MAC are cached until an NDP
+    /// - **Hostnames**: Static configuration (`Toml`/`Cli`) always overrides dynamic hints.
+    /// - **IPv4 Addresses**: Static reservations take priority over `DHCPv4` leases.
+    /// - **Orphan Handling**: `DHCPv6` leases without a MAC are cached until an `NDP`
     ///   event allows resolution.
     ///
     /// ```mermaid
@@ -373,10 +373,7 @@ impl DeviceTable {
                 }
 
                 if let Some(v4_opt) = v4_static {
-                    let new_state = match v4_opt {
-                        Some(ip) => IPv4State::Static(ip),
-                        None => IPv4State::None,
-                    };
+                    let new_state = v4_opt.map_or(IPv4State::None, IPv4State::Static);
                     if dev.v4 != new_state {
                         dev.v4 = new_state;
                         changed = true;

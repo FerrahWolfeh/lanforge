@@ -31,25 +31,21 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 1. Add a CLI device
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
-    table
-        .update(DeviceUpdate::CliHostUpdated {
-            mac: mac_cli,
-            hostname: Some(Some("cli-host".to_string())),
-            v4_static: None,
-            v6_suffix: None,
-            origin: Origin::Cli,
-        })
-        .await;
+    table.update(DeviceUpdate::CliHostUpdated {
+        mac: mac_cli,
+        hostname: Some(Some("cli-host".to_string())),
+        v4_static: None,
+        v6_suffix: None,
+        origin: Origin::Cli,
+    });
 
     // 2. Add a Dynamic device
     let mac_dyn = MacAddr::parse("00:00:00:00:00:02").unwrap();
-    table
-        .update(DeviceUpdate::V4LeaseGranted {
-            mac: mac_dyn,
-            ip: "192.168.1.10".parse().unwrap(),
-            expires: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
-        })
-        .await;
+    table.update(DeviceUpdate::V4LeaseGranted {
+        mac: mac_dyn,
+        ip: "192.168.1.10".parse().unwrap(),
+        expires: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
+    });
 
     // 3. Add a TOML device
     let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();

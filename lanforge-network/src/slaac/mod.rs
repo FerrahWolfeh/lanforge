@@ -54,11 +54,11 @@ pub async fn bootstrap_table(
         if let Some(mac) = event.mac()
             && seen_macs.insert(mac)
         {
-            table.update(DeviceUpdate::SlaacCleared { mac }).await;
+            table.update(DeviceUpdate::SlaacCleared { mac });
         }
 
         let update = event.to_device_update(gua.as_ref());
-        table.update(update).await;
+        table.update(update);
     }
 
     Ok(())

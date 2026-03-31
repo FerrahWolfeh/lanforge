@@ -425,7 +425,7 @@ fn test_multiple_iaids_and_prefixes() {
     let past = now - std::time::Duration::from_secs(10);
     table.apply_update(DeviceUpdate::V6PrefixAssigned {
         mac: Some(mac),
-        duid: duid.clone(),
+        duid,
         iaid: 100,
         prefix: "2001:db8:1::".parse().unwrap(),
         len: 64,

@@ -62,6 +62,7 @@ pub struct DeviceTable {
 
 impl DeviceTable {
     /// Creates a new, empty device table.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             devices: HashMap::new(),
@@ -79,6 +80,7 @@ impl DeviceTable {
     // -----------------------------------------------------------------------
 
     /// Retrieves a device by its MAC address.
+    #[must_use]
     pub fn get_device(&self, mac: &MacAddr) -> Option<&Device> {
         self.devices.get(mac)
     }
@@ -89,6 +91,7 @@ impl DeviceTable {
     }
 
     /// Retrieves a device by its configured hostname.
+    #[must_use]
     pub fn get_by_hostname(&self, hostname: &str) -> Option<&Device> {
         self.name_index
             .get(hostname)
@@ -96,16 +99,19 @@ impl DeviceTable {
     }
 
     /// Retrieves a device by any of its assigned IP addresses.
+    #[must_use]
     pub fn get_by_ip(&self, ip: &IpAddr) -> Option<&Device> {
         self.ip_index.get(ip).and_then(|mac| self.devices.get(mac))
     }
 
     /// Helper to find a MAC address by its IP in the DNS index.
+    #[must_use]
     pub fn get_mac_by_ip(&self, ip: IpAddr) -> Option<MacAddr> {
         self.ip_index.get(&ip).copied()
     }
 
-    /// Retrieves a device by its DUID (DHCPv6 Unique Identifier).
+    /// Retrieves a device by its DUID (`DHCPv6` Unique Identifier).
+    #[must_use]
     pub fn get_by_duid(&self, duid: &Duid) -> Option<&Device> {
         self.duid_index
             .get(duid)
@@ -113,6 +119,7 @@ impl DeviceTable {
     }
 
     /// Retrieves the DUID associated with a MAC address, if already learned.
+    #[must_use]
     pub fn get_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
         self.devices.get(&mac)?.duid.as_ref()
     }
@@ -128,6 +135,7 @@ impl DeviceTable {
     }
 
     /// Retrieves a MAC address from the NDP cache for a given IPv6 address.
+    #[must_use]
     pub fn get_mac_from_ndp_cache(&self, ip: &Ipv6Addr) -> Option<MacAddr> {
         self.ndp_cache.get(ip).map(|(mac, _)| *mac)
     }
@@ -164,6 +172,7 @@ impl DeviceTable {
     }
 
     /// Retorna estatísticas resumidas da tabela.
+    #[must_use]
     pub fn stats(&self) -> DeviceTableStats {
         let total = self.devices.len();
         let online = self.devices.values().filter(|d| d.is_online()).count();

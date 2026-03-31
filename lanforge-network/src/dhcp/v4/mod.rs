@@ -174,10 +174,10 @@ pub async fn dhcpv4_service(cfg: Dhcpv4Config, table: Arc<ManagedTable>) -> Resu
                         // Update the global table (triggers EventBus events)
                         if let Some(assigned_ip) = server.last_assignment_for(mac) {
                             let expires = SystemTime::now() + Duration::from_secs(u64::from(cfg.lease_time));
-                            table.update(DeviceUpdate::V4LeaseGranted { mac, ip: assigned_ip, expires }).await;
+                            table.update(DeviceUpdate::V4LeaseGranted { mac, ip: assigned_ip, expires });
 
                             if let Some(hostname) = req_hostname && !hostname.is_empty() {
-                                table.update(DeviceUpdate::DhcpHostnameHint { mac, hostname }).await;
+                                table.update(DeviceUpdate::DhcpHostnameHint { mac, hostname });
                             }
                         }
                     }

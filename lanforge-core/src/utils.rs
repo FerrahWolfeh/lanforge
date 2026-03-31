@@ -3,6 +3,7 @@ use std::net::Ipv6Addr;
 use crate::identifiers::MacAddr;
 
 /// Returns true if the given `ip` belongs to the same /64 subnet as the `prefix`.
+#[must_use]
 pub fn ip_matches_prefix(ip: &Ipv6Addr, prefix: &Ipv6Addr) -> bool {
     let ip_segs = ip.segments();
     let prefix_segs = prefix.segments();
@@ -28,6 +29,7 @@ pub fn ip_matches_prefix(ip: &Ipv6Addr, prefix: &Ipv6Addr) -> bool {
 ///
 /// Returns `None` if the address is not within `fe80::/10` or does not
 /// appear to follow the EUI-64 pattern.
+#[must_use]
 pub const fn mac_from_eui64_link_local(ip: &Ipv6Addr) -> Option<MacAddr> {
     let o = ip.octets();
     if o[0] != 0xfe || (o[1] & 0xc0) != 0x80 {

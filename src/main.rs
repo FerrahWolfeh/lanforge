@@ -503,7 +503,7 @@ async fn async_main() -> Result<()> {
                         _ => {}
                     }
 
-                    table.update(update).await;
+                    table.update(update);
                 }
             }
 
@@ -519,7 +519,7 @@ async fn async_main() -> Result<()> {
             _ = stale_timer.tick() => {
                 let changed = table.write().expire_stale();
                 if changed {
-                    bus.publish(LanforgeEvent::DeviceTableDirty);
+                    let _ = bus.publish(LanforgeEvent::DeviceTableDirty);
                 }
             }
 

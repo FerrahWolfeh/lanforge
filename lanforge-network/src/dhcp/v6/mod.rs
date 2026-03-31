@@ -274,25 +274,21 @@ async fn apply_learned_state(
         if let Some(duid) = learned_duid.clone() {
             if assigned_ips.is_empty() {
                 // No IPs assigned yet, but IAID is known
-                table
-                    .update(DeviceUpdate::DuidAssociated {
-                        mac: opt_mac,
-                        duid,
-                        iaid,
-                    })
-                    .await;
+                table.update(DeviceUpdate::DuidAssociated {
+                    mac: opt_mac,
+                    duid,
+                    iaid,
+                });
             } else {
                 // One or more IPs assigned
                 for ip in assigned_ips {
-                    table
-                        .update(DeviceUpdate::V6LeaseGranted {
-                            mac: opt_mac,
-                            duid: duid.clone(),
-                            iaid,
-                            ip,
-                            expires,
-                        })
-                        .await;
+                    table.update(DeviceUpdate::V6LeaseGranted {
+                        mac: opt_mac,
+                        duid: duid.clone(),
+                        iaid,
+                        ip,
+                        expires,
+                    });
                 }
             }
         } else if !assigned_ips.is_empty()
@@ -303,15 +299,13 @@ async fn apply_learned_state(
             let existing_duid = table.read().get_duid_by_mac(mac).cloned();
             if let Some(duid) = existing_duid {
                 for ip in assigned_ips {
-                    table
-                        .update(DeviceUpdate::V6LeaseGranted {
-                            mac: Some(mac),
-                            duid: duid.clone(),
-                            iaid,
-                            ip,
-                            expires,
-                        })
-                        .await;
+                    table.update(DeviceUpdate::V6LeaseGranted {
+                        mac: Some(mac),
+                        duid: duid.clone(),
+                        iaid,
+                        ip,
+                        expires,
+                    });
                 }
             }
         }
@@ -327,16 +321,14 @@ async fn apply_learned_state(
         };
 
         if let (Some(duid), Some((prefix, len))) = (learned_duid.clone(), assigned_prefix) {
-            table
-                .update(DeviceUpdate::V6PrefixAssigned {
-                    mac: opt_mac,
-                    duid,
-                    iaid,
-                    prefix,
-                    len,
-                    expires,
-                })
-                .await;
+            table.update(DeviceUpdate::V6PrefixAssigned {
+                mac: opt_mac,
+                duid,
+                iaid,
+                prefix,
+                len,
+                expires,
+            });
         }
     }
 
@@ -345,12 +337,10 @@ async fn apply_learned_state(
         && ias.pd.is_empty()
         && let Some(duid) = learned_duid
     {
-        table
-            .update(DeviceUpdate::DuidAssociated {
-                mac: opt_mac,
-                duid,
-                iaid: 0,
-            })
-            .await;
+        table.update(DeviceUpdate::DuidAssociated {
+            mac: opt_mac,
+            duid,
+            iaid: 0,
+        });
     }
 }

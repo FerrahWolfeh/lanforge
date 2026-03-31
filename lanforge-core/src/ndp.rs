@@ -20,24 +20,26 @@ pub enum NeighborEvent {
 }
 
 impl NeighborEvent {
-    pub fn ip(&self) -> &std::net::IpAddr {
+    #[must_use]
+    pub const fn ip(&self) -> &std::net::IpAddr {
         match self {
-            NeighborEvent::Added { ip, .. } => ip,
-            NeighborEvent::Deleted { ip, .. } => ip,
+            Self::Added { ip, .. } | Self::Deleted { ip, .. } => ip,
         }
     }
 
-    pub fn mac(&self) -> Option<MacAddr> {
+    #[must_use]
+    pub const fn mac(&self) -> Option<MacAddr> {
         match self {
-            NeighborEvent::Added { mac, .. } => Some(*mac),
-            NeighborEvent::Deleted { .. } => None,
+            Self::Added { mac, .. } => Some(*mac),
+            Self::Deleted { .. } => None,
         }
     }
 
     /// Maps the raw neighbor event into a higher-level [`DeviceUpdate`].
+    #[must_use]
     pub fn to_device_update(&self, gua_prefix: Option<&Ipv6Addr>) -> DeviceUpdate {
         match self {
-            NeighborEvent::Added { ip, mac, .. } => match ip {
+            Self::Added { ip, mac, .. } => match ip {
                 std::net::IpAddr::V6(ip6) => {
                     let is_slaac = gua_prefix.is_some_and(|prefix| ip_matches_prefix(ip6, prefix));
                     if is_slaac {
@@ -57,7 +59,7 @@ impl NeighborEvent {
                     ip: *ip4,
                 },
             },
-            NeighborEvent::Deleted { ip, .. } => DeviceUpdate::IpDeleted { ip: *ip },
+            Self::Deleted { ip, .. } => DeviceUpdate::IpDeleted { ip: *ip },
         }
     }
 }

@@ -168,12 +168,10 @@ impl Dhcpv6Server {
         if mac.is_none() {
             debug!("Cache miss. Performing asynchronous kernel lookup for {peer}...");
             if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
-                table
-                    .update(DeviceUpdate::NdpSeen {
-                        mac: ndp_mac,
-                        ip: peer,
-                    })
-                    .await;
+                table.update(DeviceUpdate::NdpSeen {
+                    mac: ndp_mac,
+                    ip: peer,
+                });
                 mac = Some(ndp_mac);
             }
         }

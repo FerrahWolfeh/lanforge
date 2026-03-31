@@ -3,7 +3,7 @@ use std::{fmt, str::FromStr};
 
 /// Represents a DHCP Unique Identifier (DUID).
 ///
-/// Used in DHCPv6 to uniquely identify a client or server.
+/// Used in `DHCPv6` to uniquely identify a client or server.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Duid {
     /// The raw bytes of the DUID.
@@ -26,11 +26,13 @@ where
 
 impl Duid {
     /// Creates a new DUID from a vector of bytes.
+    #[must_use]
     pub const fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
 
     /// Returns the raw bytes of the DUID.
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -38,6 +40,7 @@ impl Duid {
     /// Returns a human-readable description of the DUID type.
     ///
     /// Based on RFC 3315 / RFC 8415 DUID types.
+    #[must_use]
     pub fn duid_type(&self) -> &'static str {
         if self.bytes.len() < 2 {
             return "unknown (too short)";
@@ -64,6 +67,7 @@ impl Duid {
     /// assert_eq!(mac.to_string(), "00:01:02:03:04:05");
     /// ```
     #[allow(clippy::match_same_arms)]
+    #[must_use]
     pub fn extract_mac(&self) -> Option<MacAddr> {
         if self.bytes.len() < 2 {
             return None;
@@ -99,6 +103,7 @@ impl Duid {
     /// Generates a valid 10-byte DUID-LL (Link-Layer) using a MAC address.
     ///
     /// The format is Type (0x0003) + Hardware Type (0x0001 for Ethernet) + MAC (6 bytes).
+    #[must_use]
     pub fn generate_ll_from_mac(mac: [u8; 6]) -> Self {
         let mut bytes = vec![0x00, 0x03, 0x00, 0x01];
         bytes.extend_from_slice(&mac);
@@ -147,7 +152,7 @@ where
     let s = String::deserialize(deserializer)?;
     MacAddr::parse(&s)
         .map(|m| m.0)
-        .ok_or_else(|| serde::de::Error::custom(format!("Invalid MAC address: {}", s)))
+        .ok_or_else(|| serde::de::Error::custom(format!("Invalid MAC address: {s}")))
 }
 
 fn serialize_mac<S>(mac: &[u8; 6], serializer: S) -> Result<S::Ok, S::Error>
@@ -171,6 +176,7 @@ impl MacAddr {
     /// let mac = MacAddr::parse("00:de:ad:be:ef:00").unwrap();
     /// assert_eq!(mac.0, [0x00, 0xde, 0xad, 0xbe, 0xef, 0x00]);
     /// ```
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
@@ -185,6 +191,7 @@ impl MacAddr {
     }
 
     /// Creates a `MacAddr` from a slice of 6 bytes.
+    #[must_use]
     pub const fn from_slice(bytes: &[u8]) -> Option<Self> {
         if bytes.len() == 6 {
             let mut arr = [0u8; 6];
@@ -202,6 +209,7 @@ impl MacAddr {
     }
 
     /// Returns true if the MAC address is all zeros (00:00:00:00:00:00).
+    #[must_use]
     pub const fn is_zero(&self) -> bool {
         let b = self.0;
         b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0 && b[4] == 0 && b[5] == 0
@@ -217,7 +225,7 @@ impl From<[u8; 6]> for MacAddr {
 impl FromStr for MacAddr {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s).ok_or_else(|| format!("Invalid MAC address: {}", s))
+        Self::parse(s).ok_or_else(|| format!("Invalid MAC address: {s}"))
     }
 }
 

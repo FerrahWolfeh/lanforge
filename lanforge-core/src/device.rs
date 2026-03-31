@@ -59,10 +59,12 @@ impl Origin {
         }
     }
 
+    #[must_use]
     pub const fn is_static(&self) -> bool {
         !matches!(self, Self::Dynamic)
     }
 
+    #[must_use]
     pub const fn symbol(&self) -> &'static str {
         match self {
             Self::Toml => "★",
@@ -115,6 +117,7 @@ pub struct Hostname {
 
 impl Hostname {
     /// Returns the name as a string slice, or "?" if empty.
+    #[must_use]
     pub fn display(&self) -> &str {
         if self.name.is_empty() {
             "?"
@@ -154,7 +157,7 @@ impl fmt::Display for Hostname {
     }
 }
 
-/// Represents an active DHCPv4 lease.
+/// Represents an active `DHCPv4` lease.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V4Lease {
     /// The assigned IPv4 address.
@@ -164,7 +167,7 @@ pub struct V4Lease {
     pub expires: SystemTime,
 }
 
-/// Represents an active DHCPv6 IA_NA (Address) lease.
+/// Represents an active `DHCPv6` `IA_NA` (Address) lease.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V6Lease {
     /// The assigned IPv6 address.
@@ -176,7 +179,7 @@ pub struct V6Lease {
     pub expires: SystemTime,
 }
 
-/// Represents an active DHCPv6 IA_PD (Prefix Delegation) lease.
+/// Represents an active `DHCPv6` `IA_PD` (Prefix Delegation) lease.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V6PrefixLease {
     /// The delegated IPv6 prefix.
@@ -195,14 +198,15 @@ pub struct V6PrefixLease {
 pub enum IPv4State {
     /// A manually configured static IPv4 address.
     Static(Ipv4Addr),
-    /// An address assigned via a dynamic DHCPv4 lease.
+    /// An address assigned via a dynamic `DHCPv4` lease.
     Dynamic(V4Lease),
     /// No IPv4 address currently assigned or configured.
     None,
 }
 
 impl IPv4State {
-    pub fn ip(&self) -> Option<Ipv4Addr> {
+    #[must_use]
+    pub const fn ip(&self) -> Option<Ipv4Addr> {
         match self {
             Self::Static(ip) => Some(*ip),
             Self::Dynamic(lease) => Some(lease.ip),
@@ -213,23 +217,23 @@ impl IPv4State {
 
 /// Represents a specific IPv6 address state for a device.
 ///
-/// A single device may have multiple IPv6 states (e.g., a SLAAC address and a DHCPv6 lease).
+/// A single device may have multiple IPv6 states (e.g., a SLAAC address and a `DHCPv6` lease).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IPv6State {
     /// A manually configured static address or suffix.
     Static(Ipv6AddrOrSuffix),
-    /// An address assigned via a dynamic DHCPv6 lease (IA_NA).
+    /// An address assigned via a dynamic `DHCPv6` lease (`IA_NA`).
     Dynamic(V6Lease),
     /// An address observed being used via SLAAC (Stateless Address Autoconfiguration).
     Slaac(Ipv6Addr),
 }
 
 impl IPv6State {
-    pub fn ip(&self) -> Option<Ipv6Addr> {
+    #[must_use]
+    pub const fn ip(&self) -> Option<Ipv6Addr> {
         match self {
             Self::Dynamic(lease) => Some(lease.ip),
-            Self::Slaac(ip) => Some(*ip),
-            Self::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(*ip),
+            Self::Slaac(ip) | Self::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(*ip),
             Self::Static(Ipv6AddrOrSuffix::Suffix(_)) => None, // Needs prefix to resolve
         }
     }
@@ -254,6 +258,7 @@ impl Ipv6AddrOrSuffix {
     /// - If the string is a valid `Ipv6Addr` and the first 64 bits are zero, it is treated as a `Suffix`.
     /// - If it's a valid `Ipv6Addr` with non-zero prefix bits, it is a `Full` address.
     /// - If it's a short string (e.g., "1", "beef") that can be parsed as the lower bits of an IPv6 address, it's a `Suffix`.
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         if s.is_empty() {
             return None;
@@ -277,13 +282,13 @@ impl Ipv6AddrOrSuffix {
         }
 
         // Caso "1", "beef", "dead:beef" (sem o ::)
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() > 4 {
+
+        if s.split(':').count() > 4 {
             return None;
         }
 
-        let full_s = format!("::{}", s);
-        if let Ok(ip) = full_s.parse::<Ipv6Addr>() {
+        let full_s = format!("::{s}");
+        full_s.parse::<Ipv6Addr>().map_or(None, |ip| {
             let segs = ip.segments();
             let mut bytes = [0u8; 8];
             bytes[0..2].copy_from_slice(&segs[4].to_be_bytes());
@@ -291,9 +296,7 @@ impl Ipv6AddrOrSuffix {
             bytes[4..6].copy_from_slice(&segs[6].to_be_bytes());
             bytes[6..8].copy_from_slice(&segs[7].to_be_bytes());
             Some(Self::Suffix(bytes))
-        } else {
-            None
-        }
+        })
     }
 }
 
@@ -324,15 +327,15 @@ impl fmt::Display for Ipv6AddrOrSuffix {
 /// ULA (Unique Local Address) has the highest priority for local consistency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IpClassification {
-    /// IPv6 Unique Local Address (fc00::/7).
+    /// IPv6 Unique Local Address (`fc00::/7`).
     Ula = 0,
     /// Standard IPv4 address.
     Ipv4 = 1,
-    /// IPv6 Global Unicast Address (2000::/3).
+    /// IPv6 Global Unicast Address (`2000::/3`).
     Gua = 2,
-    /// IPv6 Link-Local address (fe80::/10).
+    /// IPv6 Link-Local address (`fe80::/10`).
     LinkLocal = 3,
-    /// Local loopback (127.0.0.1 or ::1).
+    /// Local loopback (127.0.0.1 or `::1`).
     Loopback = 4,
     /// Unknown or non-categorized address type.
     Other = 10,
@@ -340,7 +343,8 @@ pub enum IpClassification {
 
 impl IpClassification {
     /// Returns the sorting score for this classification.
-    pub fn score(&self) -> u8 {
+    #[must_use]
+    pub const fn score(&self) -> u8 {
         *self as u8
     }
 }
@@ -356,7 +360,8 @@ impl IpClassification {
 /// let ula = "fd00::1".parse::<IpAddr>().unwrap();
 /// assert_eq!(classify_ip(&ula), IpClassification::Ula);
 /// ```
-pub fn classify_ip(addr: &IpAddr) -> IpClassification {
+#[must_use]
+pub const fn classify_ip(addr: &IpAddr) -> IpClassification {
     match addr {
         IpAddr::V4(v4) => {
             if v4.is_loopback() {
@@ -370,7 +375,8 @@ pub fn classify_ip(addr: &IpAddr) -> IpClassification {
 }
 
 /// Classifies an IPv6 address.
-pub fn classify_ipv6(v6: &Ipv6Addr) -> IpClassification {
+#[must_use]
+pub const fn classify_ipv6(v6: &Ipv6Addr) -> IpClassification {
     if v6.is_loopback() {
         IpClassification::Loopback
     } else if is_ula(v6) {
@@ -395,7 +401,8 @@ pub struct Ipv6Prefix {
 
 impl Ipv6Prefix {
     /// Creates a prefix from an IPv6 address, automatically classifying it.
-    pub fn from_addr(addr: Ipv6Addr) -> Self {
+    #[must_use]
+    pub const fn from_addr(addr: Ipv6Addr) -> Self {
         let segs = addr.segments();
         Self {
             segments: [segs[0], segs[1], segs[2], segs[3]],
@@ -404,7 +411,8 @@ impl Ipv6Prefix {
     }
 
     /// Explicitly creates a prefix with a specific group.
-    pub fn new(addr: Ipv6Addr, group: IpClassification) -> Self {
+    #[must_use]
+    pub const fn new(addr: Ipv6Addr, group: IpClassification) -> Self {
         let segs = addr.segments();
         Self {
             segments: [segs[0], segs[1], segs[2], segs[3]],
@@ -412,8 +420,9 @@ impl Ipv6Prefix {
         }
     }
 
-    /// Returns the full Ipv6Addr representation of this prefix (with 0 suffix).
-    pub fn to_addr(&self) -> Ipv6Addr {
+    /// Returns the full `Ipv6Addr` representation of this prefix (with 0 suffix).
+    #[must_use]
+    pub const fn to_addr(&self) -> Ipv6Addr {
         Ipv6Addr::new(
             self.segments[0],
             self.segments[1],
@@ -446,7 +455,7 @@ pub struct Device {
 
     /// Current IPv4 connectivity state.
     pub v4: IPv4State,
-    /// List of IPv6 connectivity states (SLAAC, DHCPv6, etc.).
+    /// List of IPv6 connectivity states (SLAAC, `DHCPv6`, etc.).
     pub v6: Vec<IPv6State>,
     /// List of delegated IPv6 prefixes assigned to this device.
     pub v6_prefixes: Vec<V6PrefixLease>,
@@ -458,13 +467,14 @@ pub struct Device {
     #[serde(serialize_with = "serialize_time")]
     pub last_seen: SystemTime,
 
-    /// DHCPv6 Unique Identifier (DUID), if tracked.
+    /// `DHCPv6` Unique Identifier (DUID), if tracked.
     pub duid: Option<Duid>,
 }
 
 impl Device {
     /// Returns true if the device's configuration is persistent (Toml or Cli).
-    pub fn is_static(&self) -> bool {
+    #[must_use]
+    pub const fn is_static(&self) -> bool {
         self.origin.is_static()
     }
 }
@@ -475,11 +485,13 @@ impl Device {
 
 impl Device {
     /// Returns the device's hostname, or "?" if not available.
+    #[must_use]
     pub fn display_hostname(&self) -> &str {
         self.hostname.display()
     }
 
     /// Returns true if the device was seen within the last 5 minutes.
+    #[must_use]
     pub fn is_online(&self) -> bool {
         self.last_seen
             .elapsed()
@@ -488,17 +500,15 @@ impl Device {
     }
 
     /// Returns a human-readable primary IPv4 address or "—".
+    #[must_use]
     pub fn display_v4(&self) -> String {
         match &self.v4 {
             IPv4State::Static(ip) => ip.to_string(),
             IPv4State::Dynamic(lease) => lease.ip.to_string(),
-            IPv4State::None => {
-                if let Some(seen) = self.seen_v4.first() {
-                    format!("{} ?", seen)
-                } else {
-                    "—".to_string()
-                }
-            }
+            IPv4State::None => self
+                .seen_v4
+                .first()
+                .map_or_else(|| "—".to_string(), |seen| format!("{seen} ?")),
         }
     }
 
@@ -507,6 +517,7 @@ impl Device {
     /// 1. **ULA** (Unique Local Address): Static or Dynamic Lease. Preferred for local consistency.
     /// 2. **SLAAC**: Any observed SLAAC address.
     /// 3. **GUA** (Global Unicast Address): Static or Dynamic Lease.
+    #[must_use]
     pub fn primary_v6(&self) -> Option<Ipv6Addr> {
         // 1. Check for ULA in leases/static
         for state in &self.v6 {
@@ -535,15 +546,16 @@ impl Device {
     }
 
     /// Returns a human-readable primary IPv6 address or "—".
+    #[must_use]
     pub fn display_v6(&self) -> String {
         self.primary_v6()
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "—".to_string())
+            .map_or_else(|| "—".to_string(), |ip| ip.to_string())
     }
 
     /// Returns all available IP addresses (v4 and v6) sorted by priority:
     /// ULA (0) > IPv4 (1) > GUA (2) > others.
     #[cfg(test)]
+    #[must_use]
     pub fn all_addresses_sorted(&self) -> Vec<IpAddr> {
         let mut addrs = Vec::new();
 
@@ -575,7 +587,7 @@ impl Device {
 }
 
 /// Checks if an IPv6 address is a Unique Local Address (ULA).
-fn is_ula(addr: &Ipv6Addr) -> bool {
+const fn is_ula(addr: &Ipv6Addr) -> bool {
     (addr.segments()[0] & 0xfe00) == 0xfc00
 }
 

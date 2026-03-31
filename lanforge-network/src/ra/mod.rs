@@ -324,7 +324,7 @@ async fn send_ra(
             state.last_gua, gua, preferred, valid
         );
         state.last_gua = gua;
-        ctx.bus.publish(LanforgeEvent::PrefixChanged {
+        let _ = ctx.bus.publish(LanforgeEvent::PrefixChanged {
             gua,
             preferred,
             valid,
