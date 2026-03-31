@@ -19,7 +19,7 @@ use dhcproto::v6::{
     Status, StatusCode,
 };
 use dhcproto::{Encodable, Encoder};
-use lanforge_core::bus::ManagedTable;
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::utils::mac_from_eui64_link_local;
 use std::net::Ipv6Addr;
@@ -111,7 +111,6 @@ impl Dhcpv6Server {
         &mut self,
         msg: &Message,
         peer: Ipv6Addr,
-        table: &ManagedTable,
         resolved_mac: Option<MacAddr>,
         buf: &'a mut Vec<u8>,
     ) -> HandleResult<'a> {
@@ -144,8 +143,9 @@ impl Dhcpv6Server {
 
         // 1. Try to recover MAC from NDP cache (synchronous lock)
         if mac.is_none() {
-            let t = table.read();
-            if let Some(cached) = t.get_mac_from_ndp_cache(&peer) {
+            let t = LanforgeContext::table();
+            let table_read = t.read();
+            if let Some(cached) = table_read.get_mac_from_ndp_cache(&peer) {
                 debug!("MAC recovered from NDP cache for {peer}");
                 mac = Some(cached);
             }
@@ -153,8 +153,9 @@ impl Dhcpv6Server {
 
         // 2. Resolve identity (new synchronous lock)
         let identity = mac.map(|m| {
-            let t = table.read();
-            DeviceIdentity::resolve(m, None, Self::get_vendor_class(msg), Some(&t))
+            let t = LanforgeContext::table();
+            let table_read = t.read();
+            DeviceIdentity::resolve(m, None, Self::get_vendor_class(msg), Some(&table_read))
         });
 
         if mac.is_none() {

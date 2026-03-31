@@ -32,6 +32,8 @@ use std::net::Ipv6Addr;
 use std::sync::Arc;
 
 use lanforge_core::bus::{LanforgeEvent, ManagedTable};
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{AsyncService, LanforgeService};
 use lanforge_core::state::update::DeviceUpdate;
 use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 
@@ -210,25 +212,104 @@ pub async fn get_ipv6_neighbors(
 // NdpMonitor — The "Serviceable Struct" for Netlink
 // ---------------------------------------------------------------------------
 
-pub type NetlinkStream =
-    UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, netlink_sys::SocketAddr)>;
+pub type NetlinkStream = Arc<
+    tokio::sync::Mutex<
+        UnboundedReceiver<(
+            NetlinkMessage<RouteNetlinkMessage>,
+            rtnetlink::sys::SocketAddr,
+        )>,
+    >,
+>;
 
-/// Monitor that reacts to Netlink events and maintains the ManagedTable.
+/// Monitor que reage a eventos Netlink e mantém a ManagedTable atualizada.
 pub struct NdpMonitor {
     handle: Handle,
-    table: Arc<ManagedTable>,
+    messages: NetlinkStream,
 }
 
 impl NdpMonitor {
-    pub fn new(handle: Handle, table: Arc<ManagedTable>) -> Self {
-        Self { handle, table }
+    #[must_use]
+    pub fn new(handle: Handle, messages: NetlinkStream) -> Self {
+        Self { handle, messages }
     }
 
-    /// Primary reactive loop. Processes inbound Netlink messages (deltas).
-    pub async fn run(self, mut messages: NetlinkStream) -> Result<()> {
-        use crate::slaac::bootstrap_table;
+    /// Full refresh of all interfaces known to the kernel.
+    ///
+    /// # Errors
+    /// Returns an error if the Netlink query fails.
+    pub async fn refresh_interfaces(&self) -> crate::error::Result<()> {
+        let mut stream = self.handle.address().get().execute();
+        let table = lanforge_core::context::LanforgeContext::table();
+        while let Some(msg) = stream.try_next().await? {
+            self.update_interface_state(&msg, &table);
+        }
+        Ok(())
+    }
+    /// Refresh a single interface's IP state.
+    async fn refresh_interface(&self, ifindex: u32) -> crate::error::Result<()> {
+        let mut stream = self
+            .handle
+            .address()
+            .get()
+            .set_link_index_filter(ifindex)
+            .execute();
 
-        let mut bus_rx = self.table.bus().subscribe();
+        let table = lanforge_core::context::LanforgeContext::table();
+        while let Some(msg) = stream.try_next().await? {
+            self.update_interface_state(&msg, &table);
+        }
+        Ok(())
+    }
+
+    fn update_interface_state(&self, msg: &AddressMessage, table: &Arc<ManagedTable>) {
+        let mut link_local = None;
+        let mut gua = None;
+
+        for attr in &msg.attributes {
+            if let rtnetlink::packet_route::address::AddressAttribute::Address(
+                std::net::IpAddr::V6(v6),
+            ) = attr
+            {
+                let o = v6.octets();
+                if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
+                    link_local = Some(*v6);
+                } else if (0x20..=0x3F).contains(&o[0]) {
+                    // Mask to /64
+                    let mut masked = o;
+                    masked[8..].fill(0);
+                    gua = Some(Ipv6Addr::from(masked));
+                }
+            }
+        }
+
+        if link_local.is_some() || gua.is_some() {
+            let _ = table.update(&DeviceUpdate::InterfaceIpsChanged {
+                ifindex: msg.header.index,
+                link_local,
+                gua,
+            });
+        }
+    }
+}
+
+impl LanforgeService for NdpMonitor {
+    fn name(&self) -> &str {
+        "NdpMonitor"
+    }
+
+    fn on_shutdown(&mut self) -> std::result::Result<(), CoreError> {
+        tracing::info!("NdpMonitor: Deinitializing Service");
+        Ok(())
+    }
+}
+
+impl AsyncService for NdpMonitor {
+    async fn run(&mut self) -> std::result::Result<(), CoreError> {
+        use crate::slaac::bootstrap_table;
+        use lanforge_core::context::LanforgeContext;
+
+        let table = LanforgeContext::table();
+        let mut bus_rx = LanforgeContext::bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
 
         // 1. Initial Interface Scan
@@ -237,20 +318,22 @@ impl NdpMonitor {
         }
 
         // 2. Initial Neighbor Scan (Bootstrap)
-        if let Err(e) = bootstrap_table("", &self.handle, &self.table, None).await {
+        if let Err(e) = bootstrap_table("", &self.handle, None).await {
             tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
         }
 
         tracing::info!("NdpMonitor: Service started (reactive mode)");
 
+        let mut rx = self.messages.lock().await;
+
         loop {
             tokio::select! {
-                res = messages.next() => {
+                res = rx.next() => {
                     let Some((msg, _addr)) = res else { break };
                     // A. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg) {
                         let update = event.to_device_update(current_gua.as_ref());
-                        let _ = self.table.update(&update);
+                        let _ = table.update(&update);
                     }
 
                     // B. Handle Address Events
@@ -280,59 +363,6 @@ impl NdpMonitor {
 
         tracing::info!("NdpMonitor: Service stopped");
         Ok(())
-    }
-
-    /// Full refresh of all interfaces known to the kernel.
-    pub async fn refresh_interfaces(&self) -> Result<()> {
-        let mut stream = self.handle.address().get().execute();
-        while let Some(msg) = stream.try_next().await? {
-            self.update_interface_state(&msg);
-        }
-        Ok(())
-    }
-
-    /// Refresh a single interface's IP state.
-    async fn refresh_interface(&self, ifindex: u32) -> Result<()> {
-        let mut stream = self
-            .handle
-            .address()
-            .get()
-            .set_link_index_filter(ifindex)
-            .execute();
-        while let Some(msg) = stream.try_next().await? {
-            self.update_interface_state(&msg);
-        }
-        Ok(())
-    }
-
-    fn update_interface_state(&self, msg: &AddressMessage) {
-        let mut link_local = None;
-        let mut gua = None;
-
-        for attr in &msg.attributes {
-            if let rtnetlink::packet_route::address::AddressAttribute::Address(
-                std::net::IpAddr::V6(v6),
-            ) = attr
-            {
-                let o = v6.octets();
-                if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
-                    link_local = Some(*v6);
-                } else if (0x20..=0x3F).contains(&o[0]) {
-                    // Mask to /64
-                    let mut masked = o;
-                    masked[8..].fill(0);
-                    gua = Some(Ipv6Addr::from(masked));
-                }
-            }
-        }
-
-        if link_local.is_some() || gua.is_some() {
-            let _ = self.table.update(&DeviceUpdate::InterfaceIpsChanged {
-                ifindex: msg.header.index,
-                link_local,
-                gua,
-            });
-        }
     }
 }
 

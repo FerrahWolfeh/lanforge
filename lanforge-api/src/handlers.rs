@@ -10,6 +10,7 @@ use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use crate::api;
 use crate::api::Response;
 use crate::server::ClientContext;
+use lanforge_core::context::LanforgeContext;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -42,7 +43,8 @@ impl ClientContext {
     /// Generates a full `StatusResponse` by gathering data from the configuration
     /// and the active device table.
     pub(crate) async fn handle_status(&self) -> Response {
-        let table_guard = self.table.read();
+        let t = LanforgeContext::table();
+        let table_guard = t.read();
 
         let mut status = api::StatusResponse {
             uptime_secs: self.uptime_secs,
@@ -174,7 +176,8 @@ impl ClientContext {
     ///
     /// The filter is matched against hostnames, MAC addresses, and IP addresses.
     pub(crate) async fn handle_devices(&self, filter: Option<String>) -> Response {
-        let table_guard = self.table.read();
+        let t = LanforgeContext::table();
+        let table_guard = t.read();
 
         let mut api_devices = Vec::new();
         let mut online = 0;
@@ -270,7 +273,8 @@ impl ClientContext {
     ///
     /// Devices with `Origin::Dynamic` are excluded from this list.
     pub(crate) async fn handle_hosts(&self) -> Response {
-        let table_guard = self.table.read();
+        let t = LanforgeContext::table();
+        let table_guard = t.read();
         let mut hosts = Vec::new();
 
         for dev in table_guard.devices() {

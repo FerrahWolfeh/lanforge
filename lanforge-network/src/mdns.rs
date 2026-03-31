@@ -1,5 +1,4 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -15,28 +14,46 @@ const MDNS_PORT: u16 = 5353;
 const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const MDNS_IPV6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
 
-pub struct MdnsProber {
-    tx: mpsc::Sender<MdnsCommand>,
-}
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{AsyncService, LanforgeService};
 
 enum MdnsCommand {
     ProbeAll,
     ProbeIp(IpAddr),
 }
 
-impl MdnsProber {
-    pub fn new(bus: Arc<EventBus>, table: Arc<ManagedTable>) -> Self {
+pub struct MdnsProber {
+    tx: mpsc::Sender<MdnsCommand>,
+}
+
+impl LanforgeService for MdnsProber {
+    fn name(&self) -> &str {
+        "MdnsProber"
+    }
+}
+
+impl AsyncService for MdnsProber {
+    async fn run(&mut self) -> lanforge_core::error::Result<()> {
         let (tx, rx) = mpsc::channel(32);
-        let bus_clone = bus.clone();
-        let table_clone = table.clone();
-        let tx_clone = tx.clone();
+        self.tx = tx.clone();
 
-        tokio::spawn(async move {
-            if let Err(e) = run_mdns_worker(bus_clone, table_clone, rx, tx_clone).await {
-                error!("mDNS worker fatal error: {e}");
-            }
-        });
+        if let Err(e) = run_mdns_worker(rx, tx).await {
+            error!("mDNS worker fatal error: {e}");
+            return Err(CoreError::Generic(e.to_string()));
+        }
+        Ok(())
+    }
+}
 
+impl Default for MdnsProber {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MdnsProber {
+    pub fn new() -> Self {
+        let (tx, _) = mpsc::channel(32);
         Self { tx }
     }
 
@@ -50,11 +67,12 @@ impl MdnsProber {
 }
 
 async fn run_mdns_worker(
-    bus: Arc<EventBus>,
-    table: Arc<ManagedTable>,
     mut rx: mpsc::Receiver<MdnsCommand>,
     tx: mpsc::Sender<MdnsCommand>,
 ) -> Result<()> {
+    use lanforge_core::context::LanforgeContext;
+    let bus = LanforgeContext::bus();
+    let table = LanforgeContext::table();
     // We bind to a random port to SEND queries, and a fixed port to LISTEN if we want passive,
     // but on Linux, to receive multicast, we usually bind to 5353 with REUSEPORT.
     let socket_v4 = setup_multicast_socket_v4()?;

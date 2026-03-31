@@ -46,14 +46,10 @@ use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::DeviceUpdate;
 use lanforge_db::engine::LeaseDb;
-use lanforge_db::worker::db_worker;
-use lanforge_dns::dns_service;
-use lanforge_network::dhcp::v4::dhcpv4_service;
-use lanforge_network::dhcp::v6::dhcpv6_service;
 use lanforge_network::mdns::MdnsProber;
-use lanforge_network::ra::ra_service;
 use lanforge_network::slaac::bootstrap_table;
 use netlink_sys::AsyncSocket;
+use rtnetlink::constants::RTMGRP_NEIGH;
 use rtnetlink::new_connection;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
@@ -61,8 +57,6 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
-
-use lanforge_db::worker::DbWorkerCmd;
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -206,136 +200,204 @@ async fn async_main() -> Result<()> {
     // 4. Transformamos em ManagedTable reativa (Arc<RwLock<DeviceTable>>)
     let table = Arc::new(ManagedTable::from_table(bus.clone(), initial_table));
 
-    // 5. Inicializa o contexto global para facilitar o acesso de qualquer parte do sistema
+    // 5. Initialize global context
     lanforge_core::context::LanforgeContext::init(bus.clone(), table.clone());
 
-    // TaskTracker não é necessário — cada serviço vira uma thread
-    let cancel = CancellationToken::new();
+    let global_cancel = CancellationToken::new();
     let mut service_threads: Vec<(&'static str, std::thread::JoinHandle<()>)> = Vec::new();
 
     // -----------------------------------------------------------------------
-    // Sync Bridges & Service Channels
+    // API Config & Control Tokens
     // -----------------------------------------------------------------------
-    let (db_tx, db_rx) = std::sync::mpsc::channel::<DbWorkerCmd>();
-    let (ra_tx, ra_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+    let api_cfg = Arc::new(cfg.to_api_config());
+    let api_cfg_ctrl = api_cfg.clone();
+    let api_cfg_http = api_cfg.clone();
+    let ctrl_cancel = global_cancel.clone();
+
+    // -----------------------------------------------------------------------
+    // Sync Bridges & Service Channels (for SyncService)
+    // -----------------------------------------------------------------------
+    let (db_tx, db_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+    let db_rx = Arc::new(std::sync::Mutex::new(db_rx));
     let (d4_tx, d4_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+    let d4_rx = Arc::new(std::sync::Mutex::new(d4_rx));
     let (d6_tx, d6_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+    let d6_rx = Arc::new(std::sync::Mutex::new(d6_rx));
 
     // Bridge task: forward EventBus to sync mpsc channels
     let mut bridge_sub = bus.subscribe();
-    let bridge_table = table.clone();
-    let db_tx_bridge = db_tx.clone();
-    let ra_tx_bridge = ra_tx.clone();
-    let d4_tx_bridge = d4_tx.clone();
-    let d6_tx_bridge = d6_tx.clone();
+    let bridge_db = db_tx.clone();
+    let bridge_d4 = d4_tx.clone();
+    let bridge_d6 = d6_tx.clone();
 
     tokio::spawn(async move {
         while let Ok(event) = bridge_sub.recv().await {
-            // Forward relevant signals to protocols
-            let _ = ra_tx_bridge.send(event.clone());
-            let _ = d4_tx_bridge.send(event.clone());
-            let _ = d6_tx_bridge.send(event.clone());
-
-            // Process DB commands based on events
-            match event {
-                LanforgeEvent::DeviceTableDirty => {
-                    let snapshot = bridge_table.read().clone();
-                    let _ = db_tx_bridge.send(DbWorkerCmd::Save(Box::new(snapshot)));
-                }
-                LanforgeEvent::DbVacuum => {
-                    let _ = db_tx_bridge.send(DbWorkerCmd::Vacuum);
-                }
-                LanforgeEvent::Shutdown => {
-                    let _ = db_tx_bridge.send(DbWorkerCmd::Shutdown);
-                    break;
-                }
-                other => {
-                    // All other events are recorded in the log DB
-                    let _ = db_tx_bridge.send(DbWorkerCmd::RecordLog(other));
-                }
-            }
+            let _ = bridge_db.send(event.clone());
+            let _ = bridge_d4.send(event.clone());
+            let _ = bridge_d6.send(event);
         }
     });
 
-    // -----------------------------------------------------------------------
-    // DB worker — sync OS thread
-    // -----------------------------------------------------------------------
     {
-        let leases_db_path = leases_db_path.clone();
-        let log_db = cfg.log_db.clone();
+        let db_path = leases_db_path.clone();
+        let log_db_path: std::path::PathBuf = cfg.log_db.clone().into();
+        let db_cancel = global_cancel.clone();
+        let rx = db_rx.clone();
+
         service_threads.push((
-            "DB",
-            crate::threads::spawn_sync_service_thread("DB Worker", 768, move || {
-                db_worker(leases_db_path, log_db.into(), db_rx);
+            "db",
+            threads::spawn_sync_service_thread("DB Worker", 512, move || {
+                supervisor::supervise_sync(
+                    "db",
+                    true,
+                    0,
+                    Duration::from_secs(2),
+                    Duration::from_secs(30),
+                    db_cancel,
+                    move || {
+                        lanforge_db::worker::DbWorker::new(
+                            db_path.clone(),
+                            log_db_path.clone(),
+                            rx.clone(),
+                        )
+                    },
+                )
             }),
         ));
     }
 
     // -----------------------------------------------------------------------
-    // mDNS Prober — descoberta ativa e passiva de hostnames
+    // mDNS Prober — Supervised service
     // -----------------------------------------------------------------------
-    let _prober = Arc::new(MdnsProber::new(bus.clone(), table.clone()));
+    let mdns_cancel = global_cancel.clone();
+    service_threads.push((
+        "mdns",
+        spawn_service_thread("mDNS Prober", 256, move || async move {
+            supervisor::supervise_async(
+                "mdns",
+                false,
+                0,
+                Duration::from_secs(5),
+                Duration::from_secs(60),
+                mdns_cancel,
+                MdnsProber::new,
+            )
+            .await
+        }),
+    ));
 
     // -----------------------------------------------------------------------
     // Netlink connection
     // -----------------------------------------------------------------------
     let (mut connection, handle, messages) = new_connection()?;
-    connection.socket_mut().socket_mut().add_membership(3)?;
+    // Forçamos o join no grupo multicast da vizinhança
+    connection
+        .socket_mut()
+        .socket_mut()
+        .add_membership(RTMGRP_NEIGH)?;
     let netlink_task = tokio::spawn(connection);
 
-    // -----------------------------------------------------------------------
-    // NdpMonitor — reactive netlink state management
-    // -----------------------------------------------------------------------
-    let monitor = lanforge_network::netlink::NdpMonitor::new(handle.clone(), table.clone());
-    let monitor_task = tokio::spawn(monitor.run(messages));
+    let messages = Arc::new(tokio::sync::Mutex::new(messages));
+
+    let monitor_handle = handle.clone();
+    let monitor_messages = messages.clone();
+    let monitor_cancel = global_cancel.clone();
+    service_threads.push((
+        "monitor",
+        spawn_service_thread("NdpMonitor", 512, move || {
+            let h = monitor_handle.clone();
+            let m = monitor_messages.clone();
+            let c = monitor_cancel.clone();
+            async move {
+                supervisor::supervise_async(
+                    "monitor",
+                    true,
+                    0,
+                    Duration::from_secs(1),
+                    Duration::from_secs(10),
+                    c,
+                    move || lanforge_network::netlink::NdpMonitor::new(h.clone(), m.clone()),
+                )
+                .await
+            }
+        }),
+    ));
 
     // -----------------------------------------------------------------------
-    // RA service — sync OS thread
+    // RA service — Supervised service
     // -----------------------------------------------------------------------
     if cfg.ra_enabled {
         let ra_cfg = cfg.to_ra_config();
-        let ra_table = table.clone();
+        let ra_cancel = global_cancel.clone();
 
         service_threads.push((
             "ra",
-            crate::threads::spawn_sync_service_thread("RA Server", 256, move || {
-                if let Err(e) = ra_service(ra_cfg, ra_table, ra_rx) {
-                    error!("RA service failed: {e}");
+            spawn_service_thread("RA Server", 512, move || {
+                let rc = ra_cfg.clone();
+                let c = ra_cancel.clone();
+                async move {
+                    supervisor::supervise_async(
+                        "ra",
+                        true,
+                        0,
+                        Duration::from_secs(2),
+                        Duration::from_secs(30),
+                        c,
+                        move || lanforge_network::ra::RaService::new(rc.clone()),
+                    )
+                    .await
                 }
             }),
         ));
     }
 
     // -----------------------------------------------------------------------
-    // DHCPv4 service — sync OS thread
+    // DHCPv4 service — Supervised service
     // -----------------------------------------------------------------------
     if cfg.dhcpv4_enabled {
         let dhcp_cfg = cfg.to_dhcpv4_config();
-        let dhcp_table = table.clone();
+        let d4_cancel = global_cancel.clone();
+        let rx = d4_rx.clone();
 
         service_threads.push((
             "dhcpv4",
-            crate::threads::spawn_sync_service_thread("DHCPv4 Server", 384, move || {
-                if let Err(e) = dhcpv4_service(dhcp_cfg, dhcp_table, d4_rx) {
-                    error!("DHCPv4 service failed: {e}");
-                }
+            threads::spawn_sync_service_thread("DHCPv4 Server", 512, move || {
+                let dc = dhcp_cfg.clone();
+                let c = d4_cancel.clone();
+                let r = rx.clone();
+                supervisor::supervise_sync(
+                    "dhcpv4",
+                    true,
+                    0,
+                    Duration::from_secs(2),
+                    Duration::from_secs(30),
+                    c,
+                    move || lanforge_network::dhcp::v4::Dhcpv4Service::new(dc.clone(), r.clone()),
+                )
             }),
         ));
     }
 
-    // -----------------------------------------------------------------------
-    // DHCPv6 service — sync OS thread
-    // -----------------------------------------------------------------------
     if cfg.dhcpv6_enabled {
         let dhcp_cfg = cfg.to_dhcpv6_config();
-        let dhcp_table = table.clone();
+        let d6_cancel = global_cancel.clone();
+        let rx = d6_rx.clone();
 
         service_threads.push((
             "dhcpv6",
-            crate::threads::spawn_sync_service_thread("DHCPv6 Server", 384, move || {
-                if let Err(e) = dhcpv6_service(dhcp_cfg, dhcp_table, d6_rx) {
-                    error!("DHCPv6 service failed: {e}");
-                }
+            threads::spawn_sync_service_thread("DHCPv6 Server", 512, move || {
+                let dc = dhcp_cfg.clone();
+                let c = d6_cancel.clone();
+                let r = rx.clone();
+                supervisor::supervise_sync(
+                    "dhcpv6",
+                    true,
+                    0,
+                    Duration::from_secs(2),
+                    Duration::from_secs(30),
+                    c,
+                    move || lanforge_network::dhcp::v6::Dhcpv6Service::new(dc.clone(), r.clone()),
+                )
             }),
         ));
     }
@@ -345,26 +407,25 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     if cfg.dns_enabled {
         let dns_cfg = cfg.to_dns_config();
-        let dns_table = table.clone();
-        let dns_cancel = cancel.clone();
+        let dns_cancel = global_cancel.clone();
 
         service_threads.push((
             "dns",
-            spawn_service_thread("DNS Server", 384, move || async move {
-                supervisor::supervise_task(
-                    "dns",
-                    true,
-                    0,
-                    Duration::from_secs(5),
-                    Duration::from_secs(60),
-                    dns_cancel,
-                    move || {
-                        let cfg = dns_cfg.clone();
-                        let table = dns_table.clone();
-                        async move { dns_service(cfg, table).await.map_err(anyhow::Error::from) }
-                    },
-                )
-                .await
+            spawn_service_thread("DNS Server", 384, move || {
+                let dc = dns_cfg.clone();
+                let c = dns_cancel.clone();
+                async move {
+                    supervisor::supervise_async(
+                        "dns",
+                        true,
+                        0,
+                        Duration::from_secs(5),
+                        Duration::from_secs(60),
+                        c,
+                        move || lanforge_dns::server::DnsService::new(dc.clone()),
+                    )
+                    .await
+                }
             }),
         ));
     }
@@ -372,33 +433,20 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     // Control service (UDS) — Interface de controle via JSON-RPC
     // -----------------------------------------------------------------------
-    let ctrl_table = table.clone();
-    let ctrl_bus = bus.clone();
-    let api_cfg = Arc::new(cfg.to_api_config());
-    let api_cfg_ctrl = api_cfg.clone();
-    let api_cfg_http = api_cfg.clone();
-    let ctrl_cancel = cancel.clone();
-
+    // -----------------------------------------------------------------------
+    // Control service (UDS) — Supervised service
+    // -----------------------------------------------------------------------
     service_threads.push((
         "control",
         spawn_service_thread("Control Service", 256, move || async move {
-            supervisor::supervise_task(
+            supervisor::supervise_async(
                 "control",
                 true,
                 0,
                 Duration::from_secs(2),
                 Duration::from_secs(30),
                 ctrl_cancel,
-                move || {
-                    let table = ctrl_table.clone();
-                    let bus = ctrl_bus.clone();
-                    let cfg = api_cfg_ctrl.clone();
-                    async move {
-                        lanforge_api::server::control_service(table, bus, cfg)
-                            .await
-                            .map_err(anyhow::Error::from)
-                    }
-                },
+                move || lanforge_api::server::ControlService::new(api_cfg_ctrl.clone()),
             )
             .await
         }),
@@ -407,30 +455,24 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     // HTTP API responder — Axum service
     // -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // HTTP API responder — Supervised service
+    // -----------------------------------------------------------------------
     if cfg.http_listen.is_some() {
-        let http_table = table.clone();
         let http_api_cfg = api_cfg_http.clone();
-        let http_cancel = cancel.clone();
+        let http_cancel = global_cancel.clone();
 
         service_threads.push((
             "http",
             spawn_service_thread("http", 1536, move || async move {
-                supervisor::supervise_task(
+                supervisor::supervise_async(
                     "http",
                     true,
                     0,
                     Duration::from_secs(2),
                     Duration::from_secs(30),
                     http_cancel,
-                    move || {
-                        let table = http_table.clone();
-                        let cfg = http_api_cfg.clone();
-                        async move {
-                            lanforge_api::http::http_service(table, cfg)
-                                .await
-                                .map_err(anyhow::Error::from)
-                        }
-                    },
+                    move || lanforge_api::http::HttpService::new(http_api_cfg.clone()),
                 )
                 .await
             }),
@@ -459,7 +501,7 @@ async fn async_main() -> Result<()> {
     stale_timer.tick().await;
 
     // Scan inicial (sem GUA ainda — RA ainda não anunciou)
-    if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+    if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
         error!("❌ Erro no scan inicial: {e:#}");
     }
 
@@ -470,7 +512,7 @@ async fn async_main() -> Result<()> {
             // ── Fallback — Garantia de Consistência ──────────────────────
             _ = fallback.tick() => {
                 debug!("Sincronização periódica de SLAAC (Fallback)...");
-                if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
                     error!("Erro no fallback: {e:#}");
                 }
             }
@@ -486,7 +528,7 @@ async fn async_main() -> Result<()> {
             // ── SIGUSR1 — Sincronização manual ───────────────────────────
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 recebido, forçando sincronização de estado...");
-                if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
                     error!("Erro na sincronização manual: {e:#}");
                 }
             }
@@ -510,7 +552,7 @@ async fn async_main() -> Result<()> {
                             current_gua = gua;
                         }
                         // Novo prefixo exige repopular o estado do zero
-                        if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                        if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
                             error!("Erro ao atualizar prefixo: {e:#}");
                         }
                     }
@@ -522,7 +564,7 @@ async fn async_main() -> Result<()> {
                     }
                     Ok(LanforgeEvent::ReloadConfig) => {
                         info!("ReloadConfig: Forçando sincronização via sinalizador manual!");
-                        if let Err(e) = run_scan(&cfg, &handle, &table, current_gua).await {
+                        if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
                             error!("Erro no reload: {e:#}");
                         }
                     }
@@ -540,20 +582,8 @@ async fn async_main() -> Result<()> {
     }
 
     info!("🛑 Iniciando sequência de shutdown...");
-    let _ = bus.publish(LanforgeEvent::Shutdown);
-
-    // Sinalização manual para os workers síncronos.
-    // Como estamos em um runtime `current_thread`, o "bridge task" que envia esses eventos
-    // via EventBus será bloqueado pelo `wait_for_service_threads` abaixo. Enviamos direto
-    // nos canais para garantir que os workers recebam o sinal IMEDIATAMENTE.
-    let _ = ra_tx.send(LanforgeEvent::Shutdown);
-    let _ = d4_tx.send(LanforgeEvent::Shutdown);
-    let _ = d6_tx.send(LanforgeEvent::Shutdown);
-    let _ = db_tx.send(DbWorkerCmd::Shutdown);
-
-    cancel.cancel();
+    global_cancel.cancel();
     netlink_task.abort();
-    monitor_task.abort();
 
     // O wait é bloqueante mas estamos fora do hot path — o runtime main
     // pode ficar idle enquanto as threads de serviço terminam.
@@ -567,13 +597,8 @@ async fn async_main() -> Result<()> {
 ///
 /// Este helper centraliza a chamada ao módulo `slaac` para descobrir
 /// endereços IPv6 ativos (GUA e link-local) no segmento de rede.
-async fn run_scan(
-    cfg: &Config,
-    handle: &rtnetlink::Handle,
-    table: &Arc<ManagedTable>,
-    gua: Option<Ipv6Addr>,
-) -> Result<()> {
-    bootstrap_table(&cfg.target_prefix, handle, table, gua)
+async fn run_scan(cfg: &Config, handle: &rtnetlink::Handle, gua: Option<Ipv6Addr>) -> Result<()> {
+    bootstrap_table(&cfg.target_prefix, handle, gua)
         .await
         .map_err(anyhow::Error::from)
 }

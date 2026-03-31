@@ -20,4 +20,4 @@ mod tests;
 // Re-exports para conveniência e compatibilidade
 pub use config::DnsConfig;
 pub use error::DnsError;
-pub use server::dns_service;
+pub use server::DnsService;

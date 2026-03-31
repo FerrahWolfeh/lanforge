@@ -8,19 +8,15 @@ use axum::{
 use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::update::DeviceUpdate;
-use lanforge_core::{bus::ManagedTable, state::update::FieldUpdate};
+use lanforge_core::state::update::FieldUpdate;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tracing::info;
 
-use crate::config::ApiConfig;
-use crate::error::Result;
-
 /// State shared across Axum handlers.
 #[derive(Clone)]
 struct AppState {
-    table: Arc<ManagedTable>,
     cfg: Arc<ApiConfig>,
 }
 
@@ -37,43 +33,72 @@ pub struct RegisterRequest {
     pub v6_suffix: Option<String>,
 }
 
-/// Starts the HTTP REST API service using Axum.
-pub async fn http_service(table: Arc<ManagedTable>, cfg: Arc<ApiConfig>) -> Result<()> {
-    let listen_addr = cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080");
-    let addr: SocketAddr = listen_addr
-        .parse()
-        .map_err(|e| crate::error::ApiError::Config {
-            message: format!("Invalid http_listen address '{}': {}", listen_addr, e),
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::service::{AsyncService, LanforgeService};
+
+use crate::config::ApiConfig;
+
+pub struct HttpService {
+    cfg: Arc<ApiConfig>,
+}
+
+impl HttpService {
+    pub fn new(cfg: Arc<ApiConfig>) -> Self {
+        Self { cfg }
+    }
+}
+
+impl LanforgeService for HttpService {
+    fn name(&self) -> &str {
+        "HttpService"
+    }
+}
+
+impl AsyncService for HttpService {
+    async fn run(&mut self) -> lanforge_core::error::Result<()> {
+        let cfg = self.cfg.clone();
+
+        let listen_addr = cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080");
+        let addr: SocketAddr = listen_addr.parse().map_err(|e| {
+            lanforge_core::error::CoreError::Generic(format!(
+                "Invalid http_listen address '{}': {}",
+                listen_addr, e
+            ))
         })?;
 
-    let state = AppState { table, cfg };
+        let state = AppState { cfg };
 
-    let app = Router::new()
-        .route(
-            "/register",
-            get(handle_register_get).post(handle_register_post),
-        )
-        .route("/devices", get(handle_devices))
-        .route("/status", get(handle_status))
-        .with_state(state);
+        let app = Router::new()
+            .route(
+                "/register",
+                get(handle_register_get).post(handle_register_post),
+            )
+            .route("/devices", get(handle_devices))
+            .route("/status", get(handle_status))
+            .with_state(state);
 
-    info!("🌐 HTTP API responder pronto em http://{}", addr);
+        let tcp_listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
+            lanforge_core::error::CoreError::Generic(format!("Failed to bind to {}: {}", addr, e))
+        })?;
 
-    let listener =
-        tokio::net::TcpListener::bind(addr)
+        info!("HTTP: listening on {}", addr);
+
+        axum::serve(tcp_listener, app)
+            .with_graceful_shutdown(async move {
+                while let Ok(event) = LanforgeContext::bus().subscribe().recv().await {
+                    if matches!(event, lanforge_core::bus::LanforgeEvent::Shutdown) {
+                        info!("HTTP: shutdown signal received");
+                        break;
+                    }
+                }
+            })
             .await
-            .map_err(|e| crate::error::ApiError::Bind {
-                path: addr.to_string(),
-                source: e,
+            .map_err(|e| {
+                lanforge_core::error::CoreError::Generic(format!("Axum server error: {}", e))
             })?;
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| crate::error::ApiError::Internal {
-            message: format!("Axum server error: {}", e),
-        })?;
-
-    Ok(())
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -81,20 +106,20 @@ pub async fn http_service(table: Arc<ManagedTable>, cfg: Arc<ApiConfig>) -> Resu
 // ---------------------------------------------------------------------------
 
 async fn handle_register_get(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Query(payload): Query<RegisterRequest>,
 ) -> impl IntoResponse {
-    process_registration(state, payload).await
+    process_registration(payload).await
 }
 
 async fn handle_register_post(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> impl IntoResponse {
-    process_registration(state, payload).await
+    process_registration(payload).await
 }
 
-async fn process_registration(state: AppState, req: RegisterRequest) -> impl IntoResponse {
+async fn process_registration(req: RegisterRequest) -> impl IntoResponse {
     let mac_addr = match MacAddr::parse(&req.mac) {
         Some(m) => m,
         None => {
@@ -113,7 +138,7 @@ async fn process_registration(state: AppState, req: RegisterRequest) -> impl Int
         mac_addr, req.hostname, v4_static, v6_suffix
     );
 
-    let _ = state.table.update(&DeviceUpdate::CliHostUpdated {
+    let _ = LanforgeContext::table().update(&DeviceUpdate::CliHostUpdated {
         mac: mac_addr,
         hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
         v4_static: FieldUpdate::from(v4_static),
@@ -131,13 +156,14 @@ async fn process_registration(state: AppState, req: RegisterRequest) -> impl Int
     )
 }
 
-async fn handle_devices(State(state): State<AppState>) -> impl IntoResponse {
-    let devices: Vec<_> = state.table.read().devices().collect();
+async fn handle_devices() -> impl IntoResponse {
+    let devices: Vec<_> = LanforgeContext::table().read().devices().collect();
     Json(devices)
 }
 
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
-    let table_read = state.table.read();
+    let t = LanforgeContext::table();
+    let table_read = t.read();
     let stats = table_read.stats();
 
     Json(serde_json::json!({

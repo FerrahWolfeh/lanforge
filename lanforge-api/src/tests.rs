@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use lanforge_core::bus::{EventBus, ManagedTable};
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Origin;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::update::{DeviceUpdate, FieldUpdate};
@@ -17,13 +18,20 @@ fn make_dummy_config() -> ApiConfig {
 #[tokio::test]
 async fn test_host_list_returns_static_and_cli_only() {
     let bus = Arc::new(EventBus::new());
-    let table = Arc::new(ManagedTable::new(bus.clone()));
+    let table = Arc::new(ManagedTable::from_table(
+        bus.clone(),
+        lanforge_core::state::DeviceTable::new(),
+    ));
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        LanforgeContext::init(bus.clone(), table.clone());
+    }));
+
+    let t = LanforgeContext::table();
     let cfg = Arc::new(make_dummy_config());
 
     let ctx = ClientContext {
-        table: table.clone(),
         current_gua: None,
-        bus: bus.clone(),
         uptime_secs: 10,
         last_scan_secs_ago: 5,
         cfg,
@@ -31,7 +39,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 1. Add a CLI device
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
-    let _ = table.update(&DeviceUpdate::CliHostUpdated {
+    let _ = t.update(&DeviceUpdate::CliHostUpdated {
         mac: mac_cli,
         hostname: FieldUpdate::Set("cli-host".to_string()),
         v4_static: FieldUpdate::NoChange,
@@ -41,7 +49,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 2. Add a Dynamic device
     let mac_dyn = MacAddr::parse("00:00:00:00:00:02").unwrap();
-    let _ = table.update(&DeviceUpdate::V4LeaseGranted {
+    let _ = t.update(&DeviceUpdate::V4LeaseGranted {
         mac: mac_dyn,
         ip: "192.168.1.10".parse().unwrap(),
         expires: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
@@ -50,7 +58,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     // 3. Add a TOML device
     let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
     {
-        let mut w = table.write();
+        let mut w = t.write();
         let mac = mac_toml;
         let hostname = "toml-host".to_string();
         let v4_ip = Some("192.168.1.5".parse().unwrap());

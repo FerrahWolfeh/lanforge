@@ -25,10 +25,9 @@ use crate::error::Result;
 use lanforge_core::state::update::DeviceUpdate;
 use rtnetlink::Handle;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use crate::netlink;
-use lanforge_core::bus::ManagedTable;
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
 
 /// Performs a full dump of the IPv6 neighbor table (State Synchronization).
@@ -41,7 +40,6 @@ use lanforge_core::identifiers::MacAddr;
 pub async fn bootstrap_table(
     target_prefix: &str,
     handle: &Handle,
-    table: &Arc<ManagedTable>,
     gua: Option<std::net::Ipv6Addr>,
 ) -> Result<()> {
     let neighbors = netlink::get_ipv6_neighbors(handle, target_prefix).await?;
@@ -54,11 +52,13 @@ pub async fn bootstrap_table(
         if let Some(mac) = event.mac()
             && seen_macs.insert(mac)
         {
-            let _ = table.update(&DeviceUpdate::SlaacCleared { mac });
+            let t = LanforgeContext::table();
+            let _ = t.update(&DeviceUpdate::SlaacCleared { mac });
         }
 
         let update = event.to_device_update(gua.as_ref());
-        let _ = table.update(&update);
+        let t = LanforgeContext::table();
+        let _ = t.update(&update);
     }
 
     Ok(())

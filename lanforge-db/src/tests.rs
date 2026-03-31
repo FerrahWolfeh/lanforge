@@ -1,7 +1,6 @@
 #![cfg(test)]
 
 use crate::engine::LeaseDb;
-use crate::worker::db_worker;
 use lanforge_core::device::{Device, IPv4State, IPv6State, V4Lease};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::DeviceTable;
@@ -203,27 +202,54 @@ fn skips_invalid_database_records_gracefully() {
 
 #[tokio::test]
 async fn db_worker_persists_on_dirty_event() {
+    use lanforge_core::bus::LanforgeEvent;
+    use lanforge_core::context::LanforgeContext;
+    use lanforge_core::service::SyncService;
+    use std::sync::{Arc, Mutex};
+
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
+    let log_db_path = dir.path().join("test_logs.db");
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let worker_path = db_path.clone();
-    let worker_log_path = dir.path().join("test_logs.db");
-    std::thread::spawn(move || {
-        db_worker(worker_path, worker_log_path, rx);
-    });
+    let rx = Arc::new(Mutex::new(rx));
 
+    let bus = Arc::new(lanforge_core::bus::EventBus::new());
+    let table = Arc::new(lanforge_core::bus::ManagedTable::from_table(
+        bus.clone(),
+        lanforge_core::state::DeviceTable::new(),
+    ));
+
+    // Ensure LanforgeContext is initialized for tests without panicking if another test did it.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        LanforgeContext::init(bus.clone(), table.clone());
+    }));
+
+    let mut worker = crate::worker::DbWorker::new(db_path.clone(), log_db_path, rx);
+
+    // Prepare table and context
     let mac = make_mac(0xAB);
-    let mut table_snapshot = DeviceTable::new();
-    table_snapshot.apply_update(DeviceUpdate::DhcpHostnameHint {
-        mac,
-        hostname: "worker-test".into(),
+    {
+        let t_ref = LanforgeContext::table();
+        let _ = t_ref.update(&DeviceUpdate::DhcpHostnameHint {
+            mac,
+            hostname: "worker-test".into(),
+        });
+    }
+
+    std::thread::spawn(move || {
+        let _ = worker.run();
     });
 
-    tx.send(crate::worker::DbWorkerCmd::Save(Box::new(table_snapshot)))
-        .unwrap();
+    // Send Dirty event to trigger save
+    tx.send(LanforgeEvent::DeviceTableDirty).unwrap();
 
-    tokio::time::sleep(Duration::from_secs(1) + Duration::from_millis(500)).await;
+    // Small wait for the sync thread to process
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Shutdown worker
+    tx.send(LanforgeEvent::Shutdown).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let db = LeaseDb::open(&db_path).unwrap();
     let loaded = db.load_table().unwrap();

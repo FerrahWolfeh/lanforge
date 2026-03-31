@@ -2,15 +2,9 @@ use std::collections::HashMap;
 use std::net::Ipv6Addr;
 use std::time::SystemTime;
 
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Ipv6AddrOrSuffix;
-use lanforge_core::identifiers::MacAddr;
-
-/// Key for identifying a lease, strictly following RFC 8415 (DUID + IAID).
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct LeaseKey {
-    pub duid: Vec<u8>,
-    pub iaid: u32,
-}
+use lanforge_core::identifiers::{Duid, MacAddr};
 
 use crate::dhcp::v6::config::Dhcpv6PoolConfig;
 
@@ -142,17 +136,8 @@ pub struct Ipv6Pool {
     /// Dynamic GUA prefix detected from RA.
     pub gua_prefix: Option<Ipv6Addr>,
     pub ula_prefix_len: u8,
-    /// Active leases indexed by DUID + IAID.
-    /// Supports multiple addresses per IAID.
-    active: HashMap<LeaseKey, Vec<Ipv6Addr>>,
-    /// Reverse index (IP → LeaseKey) for fast reverse lookups.
-    ip_to_lease: HashMap<Ipv6Addr, LeaseKey>,
-    /// Static reservations mapped by MAC (Device-centric).
-    reserved: HashMap<Ipv6Addr, MacAddr>,
     /// IPs in quarantine.
     blacklisted: HashMap<Ipv6Addr, SystemTime>,
-    /// Delegated prefixes (IA_PD).
-    prefix_active: HashMap<LeaseKey, (Ipv6Addr, u8)>,
 }
 
 impl Ipv6Pool {
@@ -166,26 +151,12 @@ impl Ipv6Pool {
             ula_prefix,
             gua_prefix: None,
             ula_prefix_len,
-            active: HashMap::new(),
-            ip_to_lease: HashMap::new(),
-            reserved: HashMap::new(),
             blacklisted: HashMap::new(),
-            prefix_active: HashMap::new(),
         }
     }
     /// Updates the dynamic GUA prefix.
     pub fn set_gua_prefix(&mut self, prefix: Ipv6Addr) {
         self.gua_prefix = Some(prefix);
-    }
-
-    /// Add a static reservation directly to the pool
-    pub fn add_reservation(&mut self, ip: Ipv6Addr, mac: MacAddr) {
-        self.reserved.insert(ip, mac);
-    }
-
-    /// Remove a static reservation for a MAC.
-    pub fn remove_reservation(&mut self, mac: MacAddr) {
-        self.reserved.retain(|_, m| *m != mac);
     }
 
     /// Constructs an IPv6 address given a device's configured suffix and a prefix.
@@ -223,16 +194,29 @@ impl Ipv6Pool {
         mac: Option<MacAddr>,
         _requested: Option<Ipv6Addr>,
     ) -> Vec<Ipv6Addr> {
-        let lease_key = LeaseKey {
-            duid: duid.to_vec(),
-            iaid,
-        };
+        let t = LanforgeContext::table();
+        let table = t.read();
 
-        // 1. Sticky IP check: if we already have addresses for this key, return them.
-        if let Some(ips) = self.active.get(&lease_key)
-            && !ips.is_empty()
+        // 1. Sticky IP check: if we already have addresses globally, return them.
+        let mut dev_opt = table.get_by_duid(&Duid::new(duid.to_vec()));
+        if dev_opt.is_none()
+            && let Some(m) = mac
         {
-            return ips.clone();
+            dev_opt = table.get_device(&m);
+        }
+
+        if let Some(dev) = dev_opt.as_ref() {
+            let mut sticky = Vec::new();
+            for state in &dev.v6 {
+                if let lanforge_core::device::IPv6State::Dynamic(lease) = state
+                    && lease.iaid == iaid
+                {
+                    sticky.push(lease.ip);
+                }
+            }
+            if !sticky.is_empty() {
+                return sticky;
+            }
         }
 
         let mut assigned = Vec::new();
@@ -261,20 +245,18 @@ impl Ipv6Pool {
             let mut pool_attempted = false;
 
             // 2. Static Reservation check for this prefix
-            if let Some(known_mac) = mac {
-                let reserved_ip = self
-                    .reserved
-                    .iter()
-                    .find(|(ip, res_mac)| {
-                        **res_mac == known_mac
-                            && self.is_on_prefix(ip, &prefix)
-                            && self.is_available(ip)
-                    })
-                    .map(|(ip, _)| *ip);
-
-                if let Some(ip) = reserved_ip {
-                    assigned.push(ip);
-                    prefix_assigned = true;
+            if let Some(dev) = dev_opt.as_ref() {
+                for state in &dev.v6 {
+                    if let lanforge_core::device::IPv6State::Static(suffix) = state {
+                        let ip = self.construct_addr(prefix, suffix);
+                        if self.is_on_prefix(&ip, &prefix)
+                            && self.is_available(&ip, &table)
+                            && !assigned.contains(&ip)
+                        {
+                            assigned.push(ip);
+                            prefix_assigned = true;
+                        }
+                    }
                 }
             }
 
@@ -295,7 +277,7 @@ impl Ipv6Pool {
                     if pref_segs[0..4] == *p {
                         pool_attempted = true;
                         // Fixed pool matches this prefix
-                        if let Some(ip) = self.allocate_from_range(*start_u128, *end_u128) {
+                        if let Some(ip) = self.allocate_from_range(*start_u128, *end_u128, &table) {
                             assigned.push(ip);
                             prefix_assigned = true;
                             break;
@@ -319,7 +301,7 @@ impl Ipv6Pool {
                     // Floating pool applies to any prefix
                     let start_u128 = self.combine_pref_suf(&prefix, start_suffix);
                     let end_u128 = self.combine_pref_suf(&prefix, end_suffix);
-                    if let Some(ip) = self.allocate_from_range(start_u128, end_u128) {
+                    if let Some(ip) = self.allocate_from_range(start_u128, end_u128, &table) {
                         assigned.push(ip);
                         prefix_assigned = true;
                         break;
@@ -339,7 +321,7 @@ impl Ipv6Pool {
                 for _ in 0..20 {
                     let random_suffix: u128 = rand::random::<u128>() & mask;
                     let ip = Ipv6Addr::from((pref_int | random_suffix).to_be_bytes());
-                    if self.is_available(&ip) {
+                    if self.is_available(&ip, &table) {
                         assigned.push(ip);
                         break;
                     }
@@ -347,12 +329,74 @@ impl Ipv6Pool {
             }
         }
 
-        // Register all assigned IPs
-        for ip in &assigned {
-            self.mark_used(*ip, lease_key.clone());
-        }
-
         assigned
+    }
+
+    pub fn has_binding(&self, duid: &[u8], iaid: u32) -> bool {
+        let t = LanforgeContext::table();
+        let table = t.read();
+        if let Some(dev) = table.get_by_duid(&Duid::new(duid.to_vec())) {
+            for state in &dev.v6 {
+                if let lanforge_core::device::IPv6State::Dynamic(lease) = state
+                    && lease.iaid == iaid
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn has_prefix_binding(&self, duid: &[u8], iaid: u32) -> bool {
+        let t = LanforgeContext::table();
+        let table = t.read();
+        if let Some(dev) = table.get_by_duid(&Duid::new(duid.to_vec())) {
+            for pref in &dev.v6_prefixes {
+                if pref.iaid == iaid {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn lookup(&self, duid: &[u8], iaid: u32) -> Vec<Ipv6Addr> {
+        let t = LanforgeContext::table();
+        let table = t.read();
+        let mut ips = Vec::new();
+        if let Some(dev) = table.get_by_duid(&Duid::new(duid.to_vec())) {
+            for state in &dev.v6 {
+                if let lanforge_core::device::IPv6State::Dynamic(lease) = state
+                    && lease.iaid == iaid
+                {
+                    ips.push(lease.ip);
+                }
+            }
+        }
+        ips
+    }
+
+    pub fn lookup_prefix(&self, duid: &[u8], iaid: u32) -> Option<(Ipv6Addr, u8)> {
+        let t = LanforgeContext::table();
+        let table = t.read();
+        if let Some(dev) = table.get_by_duid(&Duid::new(duid.to_vec())) {
+            for pref in &dev.v6_prefixes {
+                if pref.iaid == iaid {
+                    return Some((pref.prefix, pref.len));
+                }
+            }
+        }
+        None
+    }
+
+    pub fn lookup_by_mac_legacy(&self, mac: MacAddr) -> Vec<Ipv6Addr> {
+        let t = LanforgeContext::table();
+        let table = t.read();
+        if let Some(dev) = table.get_device(&mac) {
+            dev.v6.iter().filter_map(|s| s.ip()).collect()
+        } else {
+            Vec::new()
+        }
     }
 
     fn combine_pref_suf(&self, prefix: &Ipv6Addr, suffix: &[u8; 8]) -> u128 {
@@ -366,13 +410,18 @@ impl Ipv6Pool {
         u128::from_be_bytes(octets)
     }
 
-    fn allocate_from_range(&self, start: u128, end: u128) -> Option<Ipv6Addr> {
+    fn allocate_from_range(
+        &self,
+        start: u128,
+        end: u128,
+        table: &lanforge_core::state::DeviceTable,
+    ) -> Option<Ipv6Addr> {
         let size = end - start + 1;
         let offset = rand::random::<u128>() % size;
         for i in 0..size {
             let raw = start + (offset + i) % size;
             let ip = Ipv6Addr::from(raw.to_be_bytes());
-            if self.is_available(&ip) {
+            if self.is_available(&ip, table) {
                 return Some(ip);
             }
         }
@@ -385,69 +434,16 @@ impl Ipv6Pool {
         ip_segs[0..4] == pref_segs[0..4]
     }
 
-    fn is_available(&self, ip: &Ipv6Addr) -> bool {
-        !self.ip_to_lease.contains_key(ip) && !self.blacklisted.contains_key(ip)
+    fn is_available(&self, ip: &Ipv6Addr, table: &lanforge_core::state::DeviceTable) -> bool {
+        table.get_mac_by_ip(std::net::IpAddr::V6(*ip)).is_none()
+            && !self.blacklisted.contains_key(ip)
     }
 
-    pub fn release(&mut self, ip: &Ipv6Addr) {
-        if let Some(key) = self.ip_to_lease.remove(ip)
-            && let Some(ips) = self.active.get_mut(&key)
-        {
-            ips.retain(|a| a != ip);
-            if ips.is_empty() {
-                self.active.remove(&key);
-            }
-        }
+    pub fn release(&mut self, _ip: &Ipv6Addr) {
+        // Releases are handled by DeviceTable event updates matching the IP.
+        // We do not manage the mapping internally anymore.
     }
 
-    pub fn release_mac(&mut self, mac: MacAddr) {
-        self.remove_reservation(mac);
-        // We could also iterate through active leases and release those by IP,
-        // but lookup_by_mac_legacy is usually used for forceful cleanup.
-        let to_release: Vec<Ipv6Addr> = self
-            .ip_to_lease
-            .iter()
-            .filter(|(ip, _)| self.reserved.get(ip).is_some_and(|m| *m == mac))
-            .map(|(ip, _)| *ip)
-            .collect();
-        for ip in to_release {
-            self.release(&ip);
-        }
-    }
-
-    fn mark_used(&mut self, ip: Ipv6Addr, key: LeaseKey) {
-        if let Some(old_key) = self.ip_to_lease.remove(&ip)
-            && let Some(ips) = self.active.get_mut(&old_key)
-        {
-            ips.retain(|a| a != &ip);
-        }
-        self.active.entry(key.clone()).or_default().push(ip);
-        self.ip_to_lease.insert(ip, key);
-    }
-
-    pub fn lookup(&self, duid: &[u8], iaid: u32) -> Vec<Ipv6Addr> {
-        let key = LeaseKey {
-            duid: duid.to_vec(),
-            iaid,
-        };
-        self.active.get(&key).cloned().unwrap_or_default()
-    }
-
-    pub fn lookup_prefix(&self, duid: &[u8], iaid: u32) -> Option<(Ipv6Addr, u8)> {
-        let key = LeaseKey {
-            duid: duid.to_vec(),
-            iaid,
-        };
-        self.prefix_active.get(&key).copied()
-    }
-
-    pub fn lookup_by_mac_legacy(&self, mac: MacAddr) -> Vec<Ipv6Addr> {
-        self.reserved
-            .iter()
-            .filter(|(_, res_mac)| **res_mac == mac)
-            .map(|(ip, _)| *ip)
-            .collect()
-    }
     /// Allocates an IPv6 prefix for the given DUID+IAID (Prefix Delegation).
     pub fn allocate_prefix(
         &mut self,
@@ -455,13 +451,16 @@ impl Ipv6Pool {
         iaid: u32,
         _requested: Option<(Ipv6Addr, u8)>,
     ) -> Option<(Ipv6Addr, u8)> {
-        let lease_key = LeaseKey {
-            duid: duid.to_vec(),
-            iaid,
-        };
+        let t = LanforgeContext::table();
+        let table = t.read();
 
-        if let Some(res) = self.prefix_active.get(&lease_key) {
-            return Some(*res);
+        // Sticky prefix check globally
+        if let Some(dev) = table.get_by_duid(&Duid::new(duid.to_vec())) {
+            for pref in &dev.v6_prefixes {
+                if pref.iaid == iaid {
+                    return Some((pref.prefix, pref.len));
+                }
+            }
         }
 
         // If the ULA prefix is /64 or smaller, we cannot delegate /64 sub-prefixes.
@@ -481,8 +480,7 @@ impl Ipv6Pool {
         let mut curr = start + step;
         while curr < end {
             let prefix_addr = Ipv6Addr::from(curr.to_be_bytes());
-            if self.is_prefix_available(&prefix_addr, 64) {
-                self.prefix_active.insert(lease_key, (prefix_addr, 64));
+            if self.is_prefix_available(&prefix_addr, 64, &table) {
                 return Some((prefix_addr, 64));
             }
             curr += step;
@@ -490,22 +488,6 @@ impl Ipv6Pool {
 
         None
     }
-    pub fn has_binding(&self, duid: &[u8], iaid: u32) -> bool {
-        let lease_key = LeaseKey {
-            duid: duid.to_vec(),
-            iaid,
-        };
-        self.active.contains_key(&lease_key)
-    }
-
-    pub fn has_prefix_binding(&self, duid: &[u8], iaid: u32) -> bool {
-        let lease_key = LeaseKey {
-            duid: duid.to_vec(),
-            iaid,
-        };
-        self.prefix_active.contains_key(&lease_key)
-    }
-
     pub fn is_on_link(&self, ip: &Ipv6Addr) -> bool {
         let ula = match self.ula_prefix {
             Some(u) => u,
@@ -517,11 +499,18 @@ impl Ipv6Pool {
         (ip_int & mask) == (ula_int & mask)
     }
 
-    fn is_prefix_available(&self, addr: &Ipv6Addr, len: u8) -> bool {
+    fn is_prefix_available(
+        &self,
+        addr: &Ipv6Addr,
+        len: u8,
+        table: &lanforge_core::state::DeviceTable,
+    ) -> bool {
         // Check for conflicts with delegated prefixes
-        for (a, l) in self.prefix_active.values() {
-            if *a == *addr && *l == len {
-                return false;
+        for dev in table.devices() {
+            for p in &dev.v6_prefixes {
+                if p.prefix == *addr && p.len == len {
+                    return false;
+                }
             }
         }
         // Check for conflicts with individual LAN IPs
@@ -540,6 +529,29 @@ mod tests {
     use lanforge_core::device::Ipv6AddrOrSuffix;
 
     use super::*;
+    use lanforge_core::bus::{EventBus, ManagedTable};
+    use std::sync::Arc;
+
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+
+    fn init_context() {
+        INIT.call_once(|| {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let bus = Arc::new(EventBus::new());
+                let table = Arc::new(ManagedTable::from_table(
+                    bus.clone(),
+                    lanforge_core::state::DeviceTable::new(),
+                ));
+                LanforgeContext::init(bus, table);
+            }));
+        });
+
+        // Clear the state before each test runs to avoid cross-contamination
+        let binding = LanforgeContext::table();
+        let mut w = binding.write();
+        *w = lanforge_core::state::DeviceTable::new();
+    }
 
     // Função auxiliar para gerar MACs nos testes
     fn mac(last_byte: u8) -> MacAddr {
@@ -552,6 +564,7 @@ mod tests {
 
     #[test]
     fn test_construct_static_ula() {
+        init_context();
         let ula = "fd12:3456:7890:abcd::".parse().ok();
         let pool = Ipv6Pool::new(Vec::new(), ula, 64);
 
@@ -566,6 +579,7 @@ mod tests {
 
     #[test]
     fn test_dynamic_allocation_ranged() {
+        init_context();
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::102".parse().unwrap();
         let ula = "fd00::".parse().ok();
@@ -603,6 +617,7 @@ mod tests {
 
     #[test]
     fn test_multi_prefix_allocation() {
+        init_context();
         let ula = "fd00::".parse::<Ipv6Addr>().ok();
         let gua = "2001:db8::".parse::<Ipv6Addr>().unwrap();
 
@@ -630,6 +645,7 @@ mod tests {
 
     #[test]
     fn test_dynamic_allocation_opaque_random() {
+        init_context();
         let ula: Ipv6Addr = "fd97:f00d:cafe:3731::".parse().unwrap();
         // No range limits, just the ULA prefix
         let mut pool = Ipv6Pool::new(Vec::new(), Some(ula), 64);
@@ -650,6 +666,7 @@ mod tests {
 
     #[test]
     fn test_requested_ip_ranged() {
+        init_context();
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::200".parse().unwrap();
         let pools = vec![Dhcpv6PoolConfig {
@@ -682,6 +699,7 @@ mod tests {
 
     #[test]
     fn test_sticky_allocation() {
+        init_context();
         let ula = "fd00::".parse().unwrap();
         let mut pool = Ipv6Pool::new(Vec::new(), Some(ula), 64);
 
@@ -694,18 +712,23 @@ mod tests {
 
     #[test]
     fn test_static_reservation() {
+        init_context();
         let ula = "fd00::".parse().unwrap();
         let mut pool = Ipv6Pool::new(Vec::new(), Some(ula), 64);
 
-        let static_ip = "fd00::cafe".parse().unwrap();
-        pool.add_reservation(static_ip, mac(1));
+        let static_suffix = Ipv6AddrOrSuffix::parse("::cafe").unwrap();
+        let binding = LanforgeContext::table();
+        let mut w = binding.write();
+        w.add_static_device(mac(1), "test".to_string(), None, Some(static_suffix));
+        drop(w);
 
         let ips = pool.allocate(&duid(1), 1, Some(mac(1)), None);
-        assert!(ips.contains(&static_ip));
+        assert!(ips.contains(&"fd00::cafe".parse().unwrap()));
     }
 
     #[test]
     fn test_release() {
+        init_context();
         let start = "fd00::100".parse().unwrap();
         let end = "fd00::100".parse().unwrap();
         let pools = vec![Dhcpv6PoolConfig {
@@ -726,21 +749,8 @@ mod tests {
     }
 
     #[test]
-    fn test_add_remove_reservation() {
-        let ula = "fd00::".parse().unwrap();
-        let mut p = Ipv6Pool::new(Vec::new(), Some(ula), 64);
-        let mac = mac(1);
-        let ip = "fd00::cafe".parse().unwrap();
-
-        p.add_reservation(ip, mac);
-        assert!(p.lookup_by_mac_legacy(mac).contains(&ip));
-
-        p.remove_reservation(mac);
-        assert!(p.lookup_by_mac_legacy(mac).is_empty());
-    }
-
-    #[test]
     fn test_random_allocation_fills_and_releases() {
+        init_context();
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::102".parse().unwrap();
         let pools = vec![Dhcpv6PoolConfig {

@@ -132,181 +132,197 @@ impl RaState {
     }
 }
 
-/// Shared context for RA service internal functions.
-pub struct RaContext<'a> {
-    pub(crate) socket: &'a Socket,
-    pub(crate) cfg: &'a RaConfig,
-    pub(crate) table: &'a ManagedTable,
-    pub(crate) mac: &'a [u8; 6],
-    pub(crate) iface_index: u32,
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{AsyncService, LanforgeService};
+use tokio::io::unix::AsyncFd;
+
+pub struct RaService {
+    cfg: RaConfig,
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
+impl RaService {
+    #[must_use]
+    pub fn new(cfg: RaConfig) -> Self {
+        Self { cfg }
+    }
+}
 
-/// Main task for the RA service (Synchronous OS thread).
-pub fn ra_service(
-    cfg: RaConfig,
-    table: Arc<ManagedTable>,
-    bus_rx: std::sync::mpsc::Receiver<LanforgeEvent>,
-) -> Result<()> {
-    cfg.validate()?;
+impl LanforgeService for RaService {
+    fn name(&self) -> &str {
+        "RaService"
+    }
+}
 
-    info!(
-        "RA: Iniciando na '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
-        cfg.iface,
-        u8::from(cfg.managed),
-        u8::from(cfg.other_config),
-        cfg.max_interval.as_secs(),
-        cfg.effective_router_lifetime().as_secs(),
-    );
+impl AsyncService for RaService {
+    async fn run(&mut self) -> std::result::Result<(), CoreError> {
+        use lanforge_core::context::LanforgeContext;
 
-    let iface_index = get_iface_index(&cfg.iface)?;
-    let mac = get_iface_mac(&cfg.iface)?;
+        self.cfg
+            .validate()
+            .map_err(|e| CoreError::Generic(e.to_string()))?;
 
-    let socket = create_ra_socket(&cfg.iface, iface_index)?;
-    // Set a short read timeout to allow checking the bus periodically
-    socket
-        .set_read_timeout(Some(Duration::from_millis(250)))
-        .map_err(|e| NetworkError::Socket(format!("set_read_timeout: {e}")))?;
+        info!(
+            "RA: Starting on '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
+            self.cfg.iface,
+            u8::from(self.cfg.managed),
+            u8::from(self.cfg.other_config),
+            self.cfg.max_interval.as_secs(),
+            self.cfg.effective_router_lifetime().as_secs(),
+        );
 
-    let mut state = RaState::new();
-    let ctx = RaContext {
-        socket: &socket,
-        cfg: &cfg,
-        table: &table,
-        mac: &mac,
-        iface_index,
-    };
+        let table = LanforgeContext::table();
+        let bus = LanforgeContext::bus();
+        let mut bus_rx = bus.subscribe();
 
-    // Immediate RA on startup
-    do_multicast_ra(&ctx, &mut state);
+        let iface_index =
+            get_iface_index(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
+        let mac = get_iface_mac(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
 
-    let mut next_ra_at = Instant::now() + state.next_interval(&cfg);
+        let socket = create_ra_socket(&self.cfg.iface, iface_index)
+            .map_err(|e| CoreError::Generic(e.to_string()))?;
+        socket.set_nonblocking(true).map_err(CoreError::Io)?;
+        let async_socket = AsyncFd::new(socket).map_err(CoreError::Io)?;
 
-    loop {
-        // 1. Periodic Advertisement
-        if Instant::now() >= next_ra_at {
-            do_multicast_ra(&ctx, &mut state);
-            let interval = state.next_interval(&cfg);
-            next_ra_at = Instant::now() + interval;
-            debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
-        }
+        let mut state = RaState::new();
 
-        // 2. Packet processing (RS)
-        let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 1500];
-        match socket.recv_from(&mut buf) {
-            Ok((n, src_sa)) => {
-                if n > 0 {
-                    let data = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
-                    if data.first() == Some(&ICMPV6_TYPE_RS) {
-                        let rs_src =
-                            src_sa
-                                .as_socket()
-                                .and_then(|s: std::net::SocketAddr| match s {
-                                    std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
-                                    _ => None,
-                                });
-                        debug!("RS received from {rs_src:?}");
-                        handle_rs(&ctx, rs_src, &mut state);
+        // Immediate RA on startup
+        send_ra_internal(
+            &async_socket,
+            &self.cfg,
+            &table,
+            &mac,
+            iface_index,
+            None,
+            &mut state,
+        )
+        .map_err(|e| CoreError::Generic(e.to_string()))?;
+        state.record_multicast();
+
+        let mut next_ra_at = Instant::now() + state.next_interval(&self.cfg);
+
+        let mut buf = [0u8; 1500];
+
+        loop {
+            let now = Instant::now();
+            let sleep_duration = if next_ra_at > now {
+                next_ra_at - now
+            } else {
+                Duration::ZERO
+            };
+
+            tokio::select! {
+                // 1. Periodic Advertisement & Timers
+                _ = tokio::time::sleep(sleep_duration) => {
+                    send_ra_internal(&async_socket, &self.cfg, &table, &mac, iface_index, None, &mut state)
+                        .map_err(|e| CoreError::Generic(e.to_string()))?;
+                    state.record_multicast();
+                    let interval = state.next_interval(&self.cfg);
+                    next_ra_at = Instant::now() + interval;
+                    debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
+                }
+
+                // 2. Packet processing (RS)
+                res = async_socket.readable() => {
+                    let mut guard = res.map_err(CoreError::Io)?;
+                    match guard.get_inner().recv_from(unsafe { &mut *(std::ptr::from_mut(&mut buf) as *mut [std::mem::MaybeUninit<u8>; 1500]) }) {
+                        Ok((n, src_sa)) => {
+                            guard.clear_ready();
+                            if n > 0 {
+                                let data = &buf[..n];
+                                if data.first() == Some(&ICMPV6_TYPE_RS) {
+                                    let rs_src = src_sa.as_socket().and_then(|s| match s {
+                                        std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
+                                        _ => None,
+                                    });
+                                    debug!("RS received from {rs_src:?}");
+
+                                    // Handle RS async with delay
+                                    let cfg_clone = self.cfg.clone();
+                                    let table_clone = Arc::clone(&table);
+                                    // We need to clone some state or use a separate task
+                                    // For simplicity, we just do it here for now, but sleep is non-blocking
+                                    let delay_ms = rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS);
+                                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+
+                                    let dst = rs_src.filter(|ip| !ip.is_unspecified());
+                                    match dst {
+                                        Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
+                                            if let Err(e) = send_ra_internal(&async_socket, &cfg_clone, &table_clone, &mac, iface_index, Some(unicast_dst), &mut state) {
+                                                warn!("RA unicast error: {e:?}");
+                                            } else {
+                                                debug!("RA unicast -> {unicast_dst}");
+                                                state.record_unicast(unicast_dst);
+                                            }
+                                        }
+                                        None if state.can_multicast_now() => {
+                                            if let Err(e) = send_ra_internal(&async_socket, &cfg_clone, &table_clone, &mac, iface_index, None, &mut state) {
+                                                warn!("RA multicast error: {e:?}");
+                                            } else {
+                                                debug!("RA multicast -> ff02::1");
+                                                state.record_multicast();
+                                            }
+                                        }
+                                        _ => debug!("RS discarded: rate limit active"),
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            guard.clear_ready();
+                        }
+                        Err(e) => warn!("RA socket error: {e}"),
+                    }
+                }
+
+                // 3. EventBus signals
+                res = bus_rx.recv() => {
+                    match res {
+                        Ok(LanforgeEvent::Shutdown) => {
+                            info!("RA service: shutdown received");
+                            return Ok(());
+                        }
+                        Err(_) => break,
+                        _ => {}
                     }
                 }
             }
-            Err(e) => {
-                let kind = e.kind();
-                if kind == std::io::ErrorKind::WouldBlock || kind == std::io::ErrorKind::TimedOut {
-                    // Read timeout, continue to bus check
-                } else {
-                    warn!("RA socket error: {e}");
-                }
-            }
         }
-
-        // 3. EventBus signals
-        while let Ok(event) = bus_rx.try_recv() {
-            if let LanforgeEvent::Shutdown = event {
-                info!("RA service: shutdown recebido, encerrando...");
-                return Ok(());
-            }
-        }
+        Ok(())
     }
 }
 
-// ---------------------------------------------------------------------------
-// RS Response Logic (RFC 4861 §6.2.6)
-// ---------------------------------------------------------------------------
-
-fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut RaState) {
-    // Random delay of 0–500ms before responding (RFC 4861 §6.2.6).
-    let delay_ms = rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS);
-    std::thread::sleep(Duration::from_millis(delay_ms));
-
-    // Destination: unicast to solicitant (if they have a valid address) or multicast.
-    let dst = rs_src.filter(|ip| !ip.is_unspecified());
-
-    match dst {
-        Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
-            match send_ra(ctx, Some(unicast_dst), state) {
-                Ok(()) => {
-                    debug!("RA unicast -> {unicast_dst}");
-                    state.record_unicast(unicast_dst);
-                }
-                Err(e) => warn!("RA unicast error: {e:?}"),
-            }
-        }
-        None if state.can_multicast_now() => {
-            do_multicast_ra(ctx, state);
-        }
-        _ => debug!("RS discarded: rate limit active"),
-    }
-}
-
-fn do_multicast_ra(ctx: &RaContext<'_>, state: &mut RaState) {
-    match send_ra(ctx, None, state) {
-        Ok(()) => {
-            debug!("RA multicast -> ff02::1");
-            state.record_multicast();
-        }
-        Err(e) => warn!("RA multicast error: {e:?}"),
-    }
-}
-
-/// Constructs, signs (checksum), and sends an RA.
-/// `unicast_dst = None` → multicast to `ff02::1` (all-nodes).
-fn send_ra(ctx: &RaContext<'_>, unicast_dst: Option<Ipv6Addr>, state: &mut RaState) -> Result<()> {
-    // Addresses are read from the cached interface state in ManagedTable.
-    let if_ips = ctx.table.read().get_interface_ips(ctx.iface_index);
+fn send_ra_internal(
+    socket: &AsyncFd<Socket>,
+    cfg: &RaConfig,
+    table: &ManagedTable,
+    mac: &[u8; 6],
+    iface_index: u32,
+    unicast_dst: Option<Ipv6Addr>,
+    state: &mut RaState,
+) -> Result<()> {
+    let if_ips = table.read().get_interface_ips(iface_index);
 
     let src_ll = if_ips
         .link_local
-        .ok_or(NetworkError::NoLinkLocal(ctx.iface_index))?;
+        .ok_or(NetworkError::NoLinkLocal(iface_index))?;
     let gua = if_ips.gua;
 
-    // Publish PrefixChanged on the EventBus if the GUA changed.
     if gua != state.last_gua {
         info!("GUA prefix changed: {:?} -> {:?}", state.last_gua, gua);
         state.last_gua = gua;
-
-        // Note: in a sync thread, we might not want to publish back to the bus
-        // to avoid loops, but RA is the authority for prefix changes learning
-        // from the monitor, so we let the ManagedTable handle the bus event.
-        // Actually, RA doesn't need to publish back anymore because the MONITOR
-        // already updated the table which triggers the event!
     }
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());
-    // scope_id obrigatório para destinos link-scoped (multicast e link-local)
-    let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, ctx.iface_index));
+    let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, iface_index));
 
-    let mut pkt = build_ra_packet(ctx.cfg, *ctx.mac, gua.as_ref());
+    let mut pkt = build_ra_packet(cfg, *mac, gua.as_ref());
 
-    // Checksum calculado sobre o pseudo-header IPv6 + payload
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
     pkt[2] = (csum >> 8) as u8;
     pkt[3] = (csum & 0xFF) as u8;
 
-    ctx.socket
+    socket
+        .get_ref()
         .send_to(&pkt, &dst_sa)
         .map_err(|e| NetworkError::Socket(format!("ICMPv6 send_to: {e}")))?;
     Ok(())

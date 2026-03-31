@@ -41,6 +41,8 @@ pub enum HandleResult {
         /// Hostname suggested by the client.
         hostname: Option<String>,
     },
+    /// A lease was formally released by the client.
+    Release { ip: Ipv4Addr },
     /// No response necessary.
     Ignore,
 }
@@ -51,18 +53,24 @@ pub enum HandleResult {
 pub struct DhcpServer {
     /// Server configuration (range, lease time, etc.)
     pub cfg: Dhcpv4Config,
-    /// Address pool and reservation management
     pub pool: IpPool,
+    /// Temporarily stores the last allocated IP during packet processing.
+    pub last_assigned_ip: Option<Ipv4Addr>,
 }
 
 impl DhcpServer {
     pub fn new(cfg: Dhcpv4Config) -> Self {
         let pool = IpPool::new(cfg.range_start, cfg.range_end);
-        Self { cfg, pool }
+        Self {
+            cfg,
+            pool,
+            last_assigned_ip: None,
+        }
     }
 
     /// Processes a raw DHCP packet and returns a response (if any).
     pub fn handle_packet(&mut self, data: &[u8], table: Option<&DeviceTable>) -> HandleResult {
+        self.last_assigned_ip = None;
         let msg = match Message::decode(&mut Decoder::new(data)) {
             Ok(m) => m,
             Err(e) => {
@@ -132,6 +140,8 @@ impl DhcpServer {
             return HandleResult::Ignore;
         };
 
+        self.last_assigned_ip = Some(offered_ip);
+
         info!("DHCPv4: {identity} is looking for an address -> Offering {offered_ip}");
         let packet = self.build_reply(msg, MessageType::Offer, offered_ip);
         HandleResult::Reply {
@@ -161,7 +171,6 @@ impl DhcpServer {
         {
             // Client selected a different server — release our offer
             debug!("DHCPv4: {identity} selected different server {sid}");
-            self.pool.release_mac(mac);
             return HandleResult::Ignore;
         }
 
@@ -192,6 +201,8 @@ impl DhcpServer {
             return self.send_nak(msg, "Requested IP not available");
         }
 
+        self.last_assigned_ip = Some(assigned_ip);
+
         info!("DHCPv4: Assigning {assigned_ip} to {identity}");
         let packet = self.build_reply(msg, MessageType::Ack, assigned_ip);
         HandleResult::Reply {
@@ -209,7 +220,7 @@ impl DhcpServer {
         let ip = msg.ciaddr();
         info!("DHCPv4: {identity} released its address {ip}");
         self.pool.release(ip);
-        HandleResult::Ignore
+        HandleResult::Release { ip }
     }
 
     // ── DECLINE ──────────────────────────────────────────────────────────
@@ -220,7 +231,6 @@ impl DhcpServer {
             self.pool.mark_declined(declined_ip);
         } else {
             warn!("DHCPv4: {identity} declined an unspecified IP");
-            self.pool.release_mac(identity.mac);
         }
         HandleResult::Ignore
     }
@@ -340,8 +350,8 @@ impl DhcpServer {
 
     /// Returns the MAC and assigned IP from the last successful allocation.
     /// Used by the service loop to publish events.
-    pub fn last_assignment_for(&self, mac: MacAddr) -> Option<Ipv4Addr> {
-        self.pool.lookup(mac)
+    pub fn last_assignment_for(&mut self) -> Option<Ipv4Addr> {
+        self.last_assigned_ip.take()
     }
 
     /// Constructs a `FORCERENEW` (RFC 3203) packet for a specific client.
@@ -474,7 +484,9 @@ mod tests {
                 assert_eq!(reply.yiaddr(), dest_ip);
                 assert!(dest_ip >= Ipv4Addr::new(192, 168, 1, 100));
             }
-            HandleResult::Ignore => panic!("Expected Reply for DISCOVER"),
+            HandleResult::Ignore | HandleResult::Release { .. } => {
+                panic!("Expected Reply for DISCOVER")
+            }
         }
     }
 
@@ -500,9 +512,11 @@ mod tests {
                 assert_eq!(reply.yiaddr(), requested_ip);
 
                 // O lease deve ter sido gravado internamente no servidor
-                assert_eq!(srv.last_assignment_for(mac), Some(requested_ip));
+                assert_eq!(srv.last_assignment_for(), Some(requested_ip));
             }
-            HandleResult::Ignore => panic!("Expected ACK Reply for valid REQUEST"),
+            HandleResult::Ignore | HandleResult::Release { .. } => {
+                panic!("Expected ACK Reply for valid REQUEST")
+            }
         }
     }
 
@@ -555,7 +569,9 @@ mod tests {
                     "NAKs no IPv4 devem ser enviados via Broadcast L2 (segundo a RFC)"
                 );
             }
-            HandleResult::Ignore => panic!("Expected NAK for contested IP"),
+            HandleResult::Ignore | HandleResult::Release { .. } => {
+                panic!("Expected NAK for contested IP")
+            }
         }
     }
 
@@ -567,18 +583,19 @@ mod tests {
         let expiry = SystemTime::now() + Duration::from_secs(3600);
 
         srv.pool.allocate(mac, Some(ip), expiry);
-        assert_eq!(srv.last_assignment_for(mac), Some(ip));
+        srv.last_assigned_ip = Some(ip);
+        assert_eq!(srv.last_assignment_for(), Some(ip));
 
         // Envia o Release informando o IP no ciaddr (Client IP Address)
         let raw_msg = build_raw_msg(MessageType::Release, mac, None, Some(ip), None);
         let res = srv.handle_packet(&raw_msg, None);
 
         assert!(
-            matches!(res, HandleResult::Ignore),
-            "RELEASE não deve gerar resposta"
+            matches!(res, HandleResult::Release { .. }),
+            "RELEASE deve retornar HandleResult::Release"
         );
         assert_eq!(
-            srv.last_assignment_for(mac),
+            srv.last_assignment_for(),
             None,
             "IP deve ter sido liberado no pool interno"
         );
@@ -599,7 +616,7 @@ mod tests {
 
         assert!(matches!(res, HandleResult::Ignore));
         assert_eq!(
-            srv.last_assignment_for(mac),
+            srv.last_assignment_for(),
             None,
             "DECLINE deve revogar a associação do MAC"
         );
@@ -630,7 +647,9 @@ mod tests {
                 // Mas a resposta é direcionada para o ciaddr (o IP que o cliente disse já possuir)
                 assert_eq!(dest_ip, client_static_ip);
             }
-            HandleResult::Ignore => panic!("Expected ACK for INFORM request"),
+            HandleResult::Ignore | HandleResult::Release { .. } => {
+                panic!("Expected ACK for INFORM request")
+            }
         }
     }
 

@@ -30,14 +30,14 @@ pub mod config;
 pub mod pool;
 pub mod server;
 
-use crate::error::{NetworkError, Result};
-use lanforge_core::bus::{DeviceChange, LanforgeEvent, ManagedTable};
+use lanforge_core::bus::{DeviceChange, LanforgeEvent};
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::update::DeviceUpdate;
 use std::net::Ipv6Addr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use config::Dhcpv6Config;
 use pool::Ipv6Pool;
@@ -47,249 +47,208 @@ const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 
 
 use dhcproto::v6::{DhcpOption, Message, OptionCode};
 use dhcproto::{Decodable, Decoder};
-use std::sync::mpsc::Receiver;
 
-/// Starts the `DHCPv6` service (UDP port 547, multicast `ff02::1:2`).
-pub fn dhcpv6_service(
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{LanforgeService, SyncService};
+
+pub struct Dhcpv6Service {
     config: Dhcpv6Config,
-    table: Arc<ManagedTable>,
-    bus_rx: Receiver<LanforgeEvent>,
-) -> Result<()> {
-    if !config.enabled {
-        info!("DHCPv6 is disabled in config.");
-        return Ok(());
+    bus_rx: Arc<Mutex<std::sync::mpsc::Receiver<LanforgeEvent>>>,
+}
+
+impl Dhcpv6Service {
+    #[must_use]
+    pub fn new(
+        config: Dhcpv6Config,
+        bus_rx: Arc<Mutex<std::sync::mpsc::Receiver<LanforgeEvent>>>,
+    ) -> Self {
+        Self { config, bus_rx }
     }
+}
 
-    let socket = std::net::UdpSocket::bind(("::", config.port))
-        .map_err(|e| NetworkError::Socket(format!("Failed to bind DHCPv6 socket: {e}")))?;
-
-    // Set a timeout to allow periodic bus signal checks
-    socket
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .map_err(|e| NetworkError::Socket(format!("Failed to set read timeout: {e}")))?;
-
-    if let Err(e) = socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
-        warn!("Failed to join ff02::1:2: {e}");
+impl LanforgeService for Dhcpv6Service {
+    fn name(&self) -> &str {
+        "Dhcpv6Service"
     }
+}
 
-    info!(
-        "DHCPv6 listening on [ff02::1:2]:{} (iface: {})",
-        config.port, config.iface
-    );
-
-    // Read interface MAC to generate a legitimate DUID-LL
-    let mac_str = std::fs::read_to_string(format!("/sys/class/net/{}/address", config.iface))
-        .unwrap_or_else(|_| "02:04:06:08:0a:0c\n".to_string());
-
-    let mut server_mac = [0u8; 6];
-    let mac_bytes: Vec<u8> = mac_str
-        .trim()
-        .split(':')
-        .filter_map(|x| u8::from_str_radix(x, 16).ok())
-        .collect();
-    if mac_bytes.len() == 6 {
-        server_mac.copy_from_slice(&mac_bytes);
-    }
-
-    // Persistent socket for NDP pokes
-    let poke_sock = std::net::UdpSocket::bind("::0:0")
-        .map_err(|e| NetworkError::Socket(format!("Failed to bind NDP poke socket: {e}")))?;
-    let ndp_poke_sock = Arc::new(poke_sock);
-
-    let mut server = Dhcpv6Server::new(
-        config.clone(),
-        Ipv6Pool::new(
-            config.pools.clone(),
-            config.ula_prefix,
-            config.ula_prefix_len,
-        ),
-        Duid::generate_ll_from_mac(server_mac),
-        ndp_poke_sock,
-    );
-
-    {
-        let t = table.read();
-        for entry in t.static_entries() {
-            if let Some(suffix) = &entry.v6_suffix {
-                if let Some(ip) = server.pool.construct_static_ula(suffix) {
-                    server.pool.add_reservation(ip, entry.mac);
-                    info!(
-                        "Static reservation: {} ({}) → {}",
-                        entry.mac, entry.hostname, ip
-                    );
-                } else {
-                    warn!("Failed to construct ULA for suffix: {:?}", suffix);
-                }
-            }
-        }
-    }
-
-    let mut buf = [0u8; 2048];
-    info!("DHCPv6 state machine started");
-
-    loop {
-        // 1. Process network packets
-        match socket.recv_from(&mut buf) {
-            Ok((len, peer)) => {
-                let payload = &buf[..len];
-
-                let (peer_ip, scope_id) = match peer {
-                    std::net::SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
-                    std::net::SocketAddr::V4(_) => continue,
-                };
-
-                let mut resp_vec = Vec::with_capacity(1024);
-                let msg = match Message::decode(&mut Decoder::new(payload)) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        debug!("Failed to decode packet: {e}");
-                        continue;
-                    }
-                };
-
-                // Logic: MAC resolution is now reactive via ManagedTable
-                let client_id_opt = msg.opts().get(OptionCode::ClientId);
-                let client_duid = if let Some(DhcpOption::ClientId(duid_bytes)) = client_id_opt {
-                    Some(Duid::new(duid_bytes.clone()))
-                } else {
-                    None
-                };
-
-                let mut resolved_mac = client_duid
-                    .as_ref()
-                    .and_then(|d| d.extract_mac())
-                    .or_else(|| {
-                        msg.opts().iter().find_map(|opt| {
-                            if let DhcpOption::Unknown(u) = opt
-                                && u.code() == 79.into()
-                                && u.data().len() >= 8
-                            {
-                                return MacAddr::from_slice(&u.data()[2..8]);
-                            }
-                            None
-                        })
-                    })
-                    .or_else(|| lanforge_core::utils::mac_from_eui64_link_local(&peer_ip));
-
-                // Try NDP cache (synchronous lookup in ManagedTable)
-                if resolved_mac.is_none() {
-                    let t = table.read();
-                    if let Some(cached) = t.get_mac_from_ndp_cache(&peer_ip) {
-                        resolved_mac = Some(cached);
-                    }
-                }
-
-                // If still unknown, Dhcpv6Server::handle_packet will send an NDP poke (dummy UDP)
-                // which will eventually be caught by NdpMonitor and added to the table.
-
-                let res = server.handle_packet(&msg, peer_ip, &table, resolved_mac, &mut resp_vec);
-
-                match res {
-                    HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, ias) => {
-                        let client_port = if config.port == 547 {
-                            546
-                        } else {
-                            config.port - 1
-                        };
-                        let dest_addr =
-                            std::net::SocketAddrV6::new(dest_ip, client_port, 0, scope_id);
-
-                        if let Err(e) = socket.send_to(reply_bytes, dest_addr) {
-                            warn!("send error to {dest_ip}: {e}");
-                        }
-
-                        apply_learned_state(&table, opt_mac, learned_duid, ias, &server, &config);
-                    }
-                    HandleResult::Ignore => {}
-                }
-            }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                // Timeout, proceed to Bus check
-            }
-            Err(e) => warn!("DHCPv6 socket error: {e}"),
+impl SyncService for Dhcpv6Service {
+    fn run(&mut self) -> std::result::Result<(), CoreError> {
+        if !self.config.enabled {
+            info!("DHCPv6 is disabled in config.");
+            return Ok(());
         }
 
-        // 2. Process Bus events (poll the sync channel)
-        while let Ok(event) = bus_rx.try_recv() {
-            match event {
-                LanforgeEvent::LeaseRelease { mac } => {
-                    info!("DHCPv6: Forcing release of {} via CLI", mac);
-                    server.pool.release_mac(mac);
-                }
-                LanforgeEvent::DeviceUpdated {
-                    mac,
-                    change: DeviceChange::V6SuffixChanged { suffix },
-                } => match suffix {
-                    Some(s) => {
-                        if let Some(ip) = server.pool.construct_static_ula(&s) {
-                            info!("DHCPv6: New static reservation via CLI: {mac} -> {ip}");
-                            server.pool.add_reservation(ip, mac);
-                        }
-                    }
-                    None => {
-                        info!("DHCPv6: Static reservation removed via CLI: {mac}");
-                        server.pool.release_mac(mac);
-                    }
-                },
-                LanforgeEvent::PrefixChanged {
-                    gua,
-                    preferred,
-                    valid,
-                } => {
-                    server.prefix_lifetimes = Some((preferred, valid));
-                    if let Some(g) = gua {
-                        info!("DHCPv6: Propagating new GUA prefix to pool: {g}");
-                        server.pool.set_gua_prefix(g);
-                    }
-                    debug!(
-                        "DHCPv6: Updated prefix lifetimes from bus: pref={}, valid={}",
-                        preferred, valid
-                    );
-                }
-                LanforgeEvent::LeaseRenew { mac } => {
-                    let (duid, target_ip) = {
-                        let t = table.read();
-                        let device = t.get_device(&mac);
-                        let duid = device.as_ref().and_then(|d| d.duid.clone());
+        let socket = std::net::UdpSocket::bind(("::", self.config.port))
+            .map_err(|e| CoreError::Generic(format!("Failed to bind DHCPv6 socket: {e}")))?;
+        socket
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .map_err(CoreError::Io)?;
 
-                        let ll_ip = device.as_ref().and_then(|d| {
-                            d.v6.iter().find_map(|s| {
-                                s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
-                            })
-                        });
+        if let Err(e) = socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
+            warn!("Failed to join ff02::1:2: {e}");
+        }
 
-                        (duid, ll_ip)
+        info!(
+            "DHCPv6 listening on [ff02::1:2]:{} (iface: {})",
+            self.config.port, self.config.iface
+        );
+
+        // Read interface MAC to generate a legitimate DUID-LL
+        let mac_str =
+            std::fs::read_to_string(format!("/sys/class/net/{}/address", self.config.iface))
+                .unwrap_or_else(|_| "02:04:06:08:0a:0c\n".to_string());
+
+        let mut server_mac = [0u8; 6];
+        let mac_bytes: Vec<u8> = mac_str
+            .trim()
+            .split(':')
+            .filter_map(|x| u8::from_str_radix(x, 16).ok())
+            .collect();
+        if mac_bytes.len() == 6 {
+            server_mac.copy_from_slice(&mac_bytes);
+        }
+
+        // Persistent socket for NDP pokes
+        let std_poke_sock = std::net::UdpSocket::bind("::0:0")
+            .map_err(|e| CoreError::Generic(format!("Failed to bind NDP poke socket: {e}")))?;
+        let ndp_poke_sock = Arc::new(std_poke_sock);
+
+        let mut server = Dhcpv6Server::new(
+            self.config.clone(),
+            Ipv6Pool::new(
+                self.config.pools.clone(),
+                self.config.ula_prefix,
+                self.config.ula_prefix_len,
+            ),
+            Duid::generate_ll_from_mac(server_mac),
+            ndp_poke_sock,
+        );
+
+        let mut buf = [0u8; 2048];
+        info!("DHCPv6 state machine started");
+
+        loop {
+            // 1. Process network packets
+            match socket.recv_from(&mut buf) {
+                Ok((len, peer)) => {
+                    let payload = &buf[..len];
+                    let (peer_ip, scope_id) = match peer {
+                        std::net::SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
+                        _ => continue,
                     };
 
-                    if let (Some(duid), Some(ip)) = (duid, target_ip) {
-                        info!("DHCPv6: Sending manual RECONFIGURE to {} ({})", ip, mac);
-                        let packet =
-                            server.build_reconfigure(&duid, dhcproto::v6::MessageType::Renew);
+                    let mut resp_vec = Vec::with_capacity(1024);
+                    if let Ok(msg) = Message::decode(&mut Decoder::new(payload)) {
+                        let mut resolved_mac = msg
+                            .opts()
+                            .get(OptionCode::ClientId)
+                            .and_then(|opt| {
+                                if let DhcpOption::ClientId(duid) = opt {
+                                    Some(Duid::new(duid.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .and_then(|d| d.extract_mac());
 
-                        let client_port = if config.port == 547 {
-                            546
-                        } else {
-                            config.port - 1
-                        };
-                        let dest_addr = std::net::SocketAddrV6::new(ip, client_port, 0, 0);
-
-                        if let Err(e) = socket.send_to(&packet, dest_addr) {
-                            warn!("DHCPv6: Failed to send RECONFIGURE to {ip}: {e}");
+                        if resolved_mac.is_none() {
+                            resolved_mac =
+                                lanforge_core::utils::mac_from_eui64_link_local(&peer_ip);
                         }
-                    } else {
-                        warn!(
-                            "DHCPv6: Cannot send RECONFIGURE to {mac}: DUID or Link-Local IP not found"
-                        );
+
+                        let handle_res =
+                            server.handle_packet(&msg, peer_ip, resolved_mac, &mut resp_vec);
+                        if let HandleResult::Reply(
+                            reply_bytes,
+                            dest_ip,
+                            learned_duid,
+                            opt_mac,
+                            ias,
+                        ) = handle_res
+                        {
+                            let client_port = if self.config.port == 547 {
+                                546
+                            } else {
+                                self.config.port - 1
+                            };
+                            let dest_addr =
+                                std::net::SocketAddrV6::new(dest_ip, client_port, 0, scope_id);
+                            let _ = socket.send_to(reply_bytes, dest_addr);
+                            apply_learned_state(opt_mac, learned_duid, ias, &server, &self.config);
+                        }
                     }
                 }
-                LanforgeEvent::Shutdown => {
-                    info!("DHCPv6: Shutdown recebido");
-                    return Ok(());
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(e) => warn!("DHCPv6 socket error: {e}"),
+            }
+
+            // 2. Process Bus events
+            if let Ok(rx) = self.bus_rx.lock() {
+                while let Ok(event) = rx.try_recv() {
+                    match event {
+                        LanforgeEvent::LeaseRelease { mac } => {
+                            info!("DHCPv6: Forcing release of {} via CLI", mac);
+                            // Pool state is stateless, so we don't need to do anything. Global state is updated.
+                        }
+                        LanforgeEvent::DeviceUpdated {
+                            mac,
+                            change: DeviceChange::V6SuffixChanged { suffix },
+                        } => {
+                            if let Some(s) = suffix {
+                                info!(
+                                    "DHCPv6: New static reservation handled globally for {mac} -> {s}"
+                                );
+                            } else {
+                                info!("DHCPv6: Static reservation cleared globally for {mac}");
+                            }
+                        }
+                        LanforgeEvent::PrefixChanged {
+                            gua,
+                            preferred,
+                            valid,
+                        } => {
+                            server.prefix_lifetimes = Some((preferred, valid));
+                            if let Some(g) = gua {
+                                server.pool.set_gua_prefix(g);
+                            }
+                        }
+                        LanforgeEvent::LeaseRenew { mac } => {
+                            let (duid, target_ip) = {
+                                let t = LanforgeContext::table();
+                                let table_read = t.read();
+                                let device = table_read.get_device(&mac);
+                                let duid = device.as_ref().and_then(|d| d.duid.clone());
+                                let ll_ip = device.as_ref().and_then(|d| {
+                                    d.v6.iter().find_map(|s| {
+                                        s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
+                                    })
+                                });
+                                (duid, ll_ip)
+                            };
+
+                            if let (Some(duid), Some(ip)) = (duid, target_ip) {
+                                info!("DHCPv6: Sending manual RECONFIGURE to {} ({})", ip, mac);
+                                let packet = server
+                                    .build_reconfigure(&duid, dhcproto::v6::MessageType::Renew);
+                                let client_port = if self.config.port == 547 {
+                                    546
+                                } else {
+                                    self.config.port - 1
+                                };
+                                let dest_addr = std::net::SocketAddrV6::new(ip, client_port, 0, 0);
+                                let _ = socket.send_to(&packet, dest_addr);
+                            }
+                        }
+                        LanforgeEvent::Shutdown => {
+                            info!("DHCPv6: Shutdown received");
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
                 }
-                _ => {}
             }
         }
     }
@@ -300,7 +259,6 @@ pub fn dhcpv6_service(
 /// Separated from the main loop for clarity — all logic regarding "what we
 /// learned from this packet" lives here, without mixing with network I/O.
 fn apply_learned_state(
-    table: &ManagedTable,
     opt_mac: Option<MacAddr>,
     learned_duid: Option<Duid>,
     ias: server::AssignedIAs,
@@ -308,6 +266,7 @@ fn apply_learned_state(
     config: &Dhcpv6Config,
 ) {
     let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+    let table = LanforgeContext::table();
 
     // 1. Process IA_NA (Non-temporary Addresses)
     for iaid in &ias.na {
@@ -340,21 +299,21 @@ fn apply_learned_state(
                     });
                 }
             }
-        } else if !assigned_ips.is_empty()
-            && let Some(mac) = opt_mac
-        {
-            // Case where we have IPs but no DUID in current message?
-            // (Unlikely in DHCPv6, but handled for consistency)
-            let existing_duid = table.read().get_duid_by_mac(mac).cloned();
-            if let Some(duid) = existing_duid {
-                for ip in assigned_ips {
-                    let _ = table.update(&DeviceUpdate::V6LeaseGranted {
-                        mac: Some(mac),
-                        duid: duid.clone(),
-                        iaid,
-                        ip,
-                        expires,
-                    });
+        } else {
+            if !assigned_ips.is_empty()
+                && let Some(mac) = opt_mac
+            {
+                let existing_duid = table.read().get_duid_by_mac(mac).cloned();
+                if let Some(duid) = existing_duid {
+                    for ip in assigned_ips {
+                        let _ = table.update(&DeviceUpdate::V6LeaseGranted {
+                            mac: Some(mac),
+                            duid: duid.clone(),
+                            iaid,
+                            ip,
+                            expires,
+                        });
+                    }
                 }
             }
         }
@@ -381,7 +340,6 @@ fn apply_learned_state(
         }
     }
 
-    // 3. Fallback: Associate DUID even without IAID if it was learned
     if ias.na.is_empty()
         && ias.pd.is_empty()
         && let Some(duid) = learned_duid

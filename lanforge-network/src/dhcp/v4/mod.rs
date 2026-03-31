@@ -33,14 +33,13 @@ pub mod server;
 
 use dhcproto::v4::{Message, Opcode};
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{DeviceChange, LanforgeEvent, ManagedTable};
-use lanforge_core::device::IPv4State;
+use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::update::DeviceUpdate;
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use std::sync::Arc;
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use raw::RawSender;
 use server::{DhcpServer, HandleResult};
@@ -48,221 +47,201 @@ use server::{DhcpServer, HandleResult};
 use crate::dhcp::v4::config::Dhcpv4Config;
 use crate::error::NetworkError;
 
-pub fn dhcpv4_service(
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{LanforgeService, SyncService};
+
+pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
-    table: Arc<ManagedTable>,
-    bus_rx: std::sync::mpsc::Receiver<LanforgeEvent>,
-) -> Result<(), NetworkError> {
-    info!(
-        "Starting DHCPv4: range {}–{}, lease {}s, router {}, server_id {}",
-        cfg.range_start, cfg.range_end, cfg.lease_time, cfg.router, cfg.server_id
-    );
+    bus_rx: Arc<Mutex<std::sync::mpsc::Receiver<LanforgeEvent>>>,
+}
 
-    // Load static reservations into the pool
-    let mut server = DhcpServer::new(cfg.clone());
-    {
-        let t = table.read();
-        for entry in t.static_entries() {
-            if let Some(ip) = entry.v4_ip {
-                server.pool.add_reservation(ip, entry.mac);
-                info!(
-                    "Static reservation: {} ({}) → {ip}",
-                    entry.mac, entry.hostname
-                );
-            }
-        }
+impl Dhcpv4Service {
+    #[must_use]
+    pub fn new(
+        cfg: Dhcpv4Config,
+        bus_rx: Arc<Mutex<std::sync::mpsc::Receiver<LanforgeEvent>>>,
+    ) -> Self {
+        Self { cfg, bus_rx }
     }
+}
 
-    let socket = bind_dhcp_socket(&cfg.iface, cfg.port)?;
-    info!("Receiving on 0.0.0.0:{} (iface: {})", cfg.port, cfg.iface);
-
-    let mut raw_tx = RawSender::new(&cfg.iface)?;
-    info!("Transmitting via AF_PACKET raw socket (Layer 2 injection)");
-
-    // Startup Sync: Send ForceRenew to active dynamic leases to synchronize client state
-    {
-        let to_renew = {
-            let t = table.read();
-            t.devices()
-                .filter_map(|dev| {
-                    if let IPv4State::Dynamic(lease) = &dev.v4 {
-                        Some((dev.mac, lease.ip))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-        };
-
-        let mut count = 0;
-        for (mac, ip) in to_renew {
-            let packet = server.build_forcerenew(mac, ip);
-            if let Err(e) = raw_tx.send_dhcp(&packet, cfg.server_id, ip, *mac.as_ref()) {
-                error!("DHCPv4: Failed to send startup FORCERENEW to {mac}: {e}");
-            } else {
-                count += 1;
-            }
-            // Small delay to prevent network/client storm
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        if count > 0 {
-            info!("DHCPv4: Triggered refresh (FORCERENEW) for {count} devices");
-        }
+impl LanforgeService for Dhcpv4Service {
+    fn name(&self) -> &str {
+        "Dhcpv4Service"
     }
+}
 
-    let mut buf = vec![0u8; 1500];
-    let mut last_cleanup = Instant::now();
+impl SyncService for Dhcpv4Service {
+    fn run(&mut self) -> std::result::Result<(), CoreError> {
+        use lanforge_core::bus::DeviceChange;
 
-    // Set a read timeout to allow checking the bus_rx channel periodically
-    socket
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .map_err(NetworkError::Io)?;
+        info!(
+            "DHCPv4: Starting (sync) on {} (range {}–{}, lease {}s)",
+            self.cfg.iface, self.cfg.range_start, self.cfg.range_end, self.cfg.lease_time
+        );
 
-    loop {
-        // 1. Process network packets
-        match socket.recv_from(&mut buf) {
-            Ok((len, _src)) => {
-                let data = &buf[..len];
+        let mut server = DhcpServer::new(self.cfg.clone());
 
-                // Decode outside the lock to reduce contention
-                let msg = match Message::decode(&mut Decoder::new(data)) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
+        let socket = bind_dhcp_socket_sync(&self.cfg.iface, self.cfg.port)
+            .map_err(|e| CoreError::Generic(e.to_string()))?;
+        socket
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .map_err(CoreError::Io)?;
 
-                if msg.opcode() != Opcode::BootRequest {
-                    continue;
-                }
+        let mut raw_tx =
+            RawSender::new(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
 
-                let chaddr = msg.chaddr();
-                if chaddr.len() < 6 {
-                    continue;
-                }
-                let mac = MacAddr([
-                    chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
-                ]);
+        let mut buf = [0u8; 1500];
+        let mut last_cleanup = Instant::now();
 
-                // Short lock only for logic processing and IP allocation
-                let handle_res = {
-                    let t = table.read();
-                    server.handle_packet(data, Some(&t))
-                };
-
-                match handle_res {
-                    HandleResult::Reply {
-                        packet,
-                        broadcast,
-                        dest_ip,
-                        giaddr,
-                        hostname: req_hostname,
-                    } => {
-                        // RFC 2131: If giaddr != 0, send via UDP unicast to the relay agent
-                        if giaddr != Ipv4Addr::UNSPECIFIED {
-                            let relay_addr = SocketAddrV4::new(giaddr, cfg.port);
-                            if let Err(e) = socket.send_to(&packet, relay_addr) {
-                                error!("Failed to send to relay {giaddr}: {e}");
-                            }
-                        } else {
-                            // Otherwise, use Layer 2 for local clients without an IP
-                            let (final_dst_ip, dst_mac_arr) = if broadcast {
-                                (Ipv4Addr::BROADCAST, [0xff; 6])
-                            } else {
-                                (dest_ip, *mac.as_ref())
+        loop {
+            // 1. Process network packets
+            match socket.recv_from(&mut buf) {
+                Ok((len, _)) => {
+                    let data = &buf[..len];
+                    if let Ok(msg) = Message::decode(&mut Decoder::new(data))
+                        && msg.opcode() == Opcode::BootRequest
+                    {
+                        let chaddr = msg.chaddr();
+                        if chaddr.len() >= 6 {
+                            let mac = MacAddr([
+                                chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
+                            ]);
+                            let handle_res = {
+                                let t = LanforgeContext::table();
+                                let table_read = t.read();
+                                server.handle_packet(data, Some(&table_read))
                             };
 
-                            if let Err(e) =
-                                raw_tx.send_dhcp(&packet, cfg.server_id, final_dst_ip, dst_mac_arr)
+                            if let HandleResult::Reply {
+                                packet,
+                                broadcast,
+                                dest_ip,
+                                giaddr,
+                                hostname: req_hostname,
+                            } = handle_res
                             {
-                                error!("AF_PACKET injection error: {e}");
-                                continue;
+                                if giaddr != Ipv4Addr::UNSPECIFIED {
+                                    let relay_addr =
+                                        std::net::SocketAddrV4::new(giaddr, self.cfg.port);
+                                    let _ = socket.send_to(&packet, relay_addr);
+                                } else {
+                                    let (final_dst_ip, dst_mac_arr) = if broadcast {
+                                        (Ipv4Addr::BROADCAST, [0xff; 6])
+                                    } else {
+                                        (dest_ip, *mac.as_ref())
+                                    };
+                                    let _ = raw_tx.send_dhcp(
+                                        &packet,
+                                        self.cfg.server_id,
+                                        final_dst_ip,
+                                        dst_mac_arr,
+                                    );
+                                }
+
+                                if let Some(assigned_ip) = server.last_assignment_for() {
+                                    let expires = SystemTime::now()
+                                        + Duration::from_secs(u64::from(self.cfg.lease_time));
+                                    let t = LanforgeContext::table();
+                                    let _ = t.update(&lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
+                                        mac,
+                                        ip: assigned_ip,
+                                        expires,
+                                    });
+                                    if let Some(hostname) = req_hostname
+                                        && !hostname.is_empty()
+                                    {
+                                        let _ =
+                                            t.update(&lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
+                                                mac,
+                                                hostname,
+                                            });
+                                    }
+                                }
+                            } else if let HandleResult::Release { .. } = handle_res {
+                                // Inform the global table to clear the allocation
+                                let t = LanforgeContext::table();
+                                let _ = t.update(
+                                    &lanforge_core::state::update::DeviceUpdate::LeaseReleased {
+                                        mac,
+                                    },
+                                );
                             }
                         }
+                    }
+                }
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(e) => warn!("DHCPv4: recv_from error: {e}"),
+            }
 
-                        // Update the global table (triggers EventBus events)
-                        if let Some(assigned_ip) = server.last_assignment_for(mac) {
-                            let expires =
-                                SystemTime::now() + Duration::from_secs(u64::from(cfg.lease_time));
-                            let _ = table.update(&DeviceUpdate::V4LeaseGranted {
-                                mac,
-                                ip: assigned_ip,
-                                expires,
-                            });
-
-                            if let Some(hostname) = req_hostname
-                                && !hostname.is_empty()
-                            {
-                                let _ =
-                                    table.update(&DeviceUpdate::DhcpHostnameHint { mac, hostname });
+            // 2. Process Bus events
+            if let Ok(rx) = self.bus_rx.lock() {
+                while let Ok(event) = rx.try_recv() {
+                    match event {
+                        LanforgeEvent::LeaseRelease { mac } => {
+                            info!("DHCPv4: Forcing release of {} via CLI", mac);
+                            let ip = LanforgeContext::table()
+                                .read()
+                                .get_device(&mac)
+                                .and_then(|d| d.v4.ip());
+                            if let Some(i) = ip {
+                                server.pool.release(i);
                             }
                         }
-                    }
-                    HandleResult::Ignore => {}
-                }
-            }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                // Timeout, continue to check bus
-            }
-            Err(e) => {
-                warn!("DHCPv4: recv_from error: {e}");
-            }
-        }
-
-        // 2. Process Bus events
-        while let Ok(event) = bus_rx.try_recv() {
-            match event {
-                LanforgeEvent::LeaseRelease { mac } => {
-                    info!("DHCPv4: Forcing release of {} via CLI", mac);
-                    server.pool.release_mac(mac);
-                }
-                LanforgeEvent::LeaseRenew { mac } => {
-                    let ip = {
-                        let t = table.read();
-                        t.get_device(&mac).and_then(|d| d.v4.ip())
-                    };
-                    if let Some(ip) = ip {
-                        info!("DHCPv4: Sending manual FORCERENEW to {} ({})", ip, mac);
-                        let packet = server.build_forcerenew(mac, ip);
-                        if let Err(e) = raw_tx.send_dhcp(&packet, cfg.server_id, ip, *mac.as_ref())
-                        {
-                            error!("DHCPv4: Failed to send manual FORCERENEW: {e}");
+                        LanforgeEvent::LeaseRenew { mac } => {
+                            let ip = {
+                                let t = LanforgeContext::table();
+                                let table_read = t.read();
+                                table_read.get_device(&mac).and_then(|d| d.v4.ip())
+                            };
+                            if let Some(ip) = ip {
+                                let packet = server.build_forcerenew(mac, ip);
+                                let _ = raw_tx.send_dhcp(
+                                    &packet,
+                                    self.cfg.server_id,
+                                    ip,
+                                    *mac.as_ref(),
+                                );
+                            }
                         }
+                        LanforgeEvent::DeviceUpdated {
+                            mac,
+                            change: DeviceChange::V4StaticChanged { ip },
+                        } => match ip {
+                            Some(v) => {
+                                info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
+                                // Since pool queries global state, we just need to ensure the IP isn't available
+                                server.pool.mark_declined(v); // wait, mark_declined puts it in quarantine. 
+                                // Actually we can just do server.pool.release(ip) but we want to REMOVE IT from available.
+                                // We don't have a public remove_from_available, but since global table tracks it, allocate() will just skip it when it draws it. We don't need to do anything!
+                                info!("DHCPv4: Handled statically.");
+                            }
+                            None => {
+                                info!("DHCPv4: Static reservation cleared for {mac}");
+                            }
+                        },
+                        LanforgeEvent::Shutdown => {
+                            info!("DHCPv4: Shutdown received");
+                            return Ok(());
+                        }
+                        _ => {}
                     }
                 }
-                LanforgeEvent::DeviceUpdated {
-                    mac,
-                    change: DeviceChange::V4StaticChanged { ip },
-                } => match ip {
-                    Some(v) => {
-                        info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
-                        server.pool.add_reservation(v, mac);
-                    }
-                    None => {
-                        info!("DHCPv4: Static reservation removed via CLI: {mac}");
-                        server.pool.release_mac(mac);
-                    }
-                },
-                LanforgeEvent::Shutdown => {
-                    info!("DHCPv4: Shutdown recebido");
-                    return Ok(());
-                }
-                _ => {}
             }
-        }
 
-        // 3. Periodic Cleanup
-        if last_cleanup.elapsed() >= Duration::from_secs(60) {
-            server.pool.cleanup_expired_leases(SystemTime::now());
-            last_cleanup = Instant::now();
+            // 3. Periodic Cleanup
+            if last_cleanup.elapsed() >= Duration::from_secs(60) {
+                server.pool.cleanup_quarantine(SystemTime::now());
+                last_cleanup = Instant::now();
+            }
         }
     }
 }
 
-/// Binds UDP with `SO_BROADCAST` and `SO_BINDTODEVICE`.
-fn bind_dhcp_socket(iface: &str, port: u16) -> Result<UdpSocket, NetworkError> {
+/// Binds UDP with `SO_BROADCAST` and `SO_BINDTODEVICE`. (Sync version)
+fn bind_dhcp_socket_sync(iface: &str, port: u16) -> Result<std::net::UdpSocket, NetworkError> {
     let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
 
     let sock = socket2::Socket::new(

@@ -23,7 +23,9 @@
 pub mod bus;
 pub mod context;
 pub mod device;
+pub mod error;
 pub mod identifiers;
 pub mod ndp;
+pub mod service;
 pub mod state;
 pub mod utils;
