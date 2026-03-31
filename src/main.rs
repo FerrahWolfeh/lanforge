@@ -70,11 +70,12 @@ use lanforge_db::worker::DbWorkerCmd;
 
 // DEPOIS: main síncrona + runtime current_thread + função async separada
 fn main() -> Result<()> {
-    let res = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .thread_name("lanforge-main")
-        .build()?
-        .block_on(async_main());
+        .build()?;
+
+    let res = rt.block_on(async_main());
 
     // Forçamos a saída imediata para evitar hangs em destrutores globais
     // ou runtimes que se recusam a morrer após o "Lanforge encerrado".
@@ -283,7 +284,7 @@ async fn async_main() -> Result<()> {
     // NdpMonitor — reactive netlink state management
     // -----------------------------------------------------------------------
     let monitor = lanforge_network::netlink::NdpMonitor::new(handle.clone(), table.clone());
-    let _monitor_task = tokio::spawn(monitor.run(messages));
+    let monitor_task = tokio::spawn(monitor.run(messages));
 
     // -----------------------------------------------------------------------
     // RA service — sync OS thread
@@ -537,8 +538,19 @@ async fn async_main() -> Result<()> {
 
     info!("🛑 Iniciando sequência de shutdown...");
     let _ = bus.publish(LanforgeEvent::Shutdown);
+
+    // Sinalização manual para os workers síncronos.
+    // Como estamos em um runtime `current_thread`, o "bridge task" que envia esses eventos
+    // via EventBus será bloqueado pelo `wait_for_service_threads` abaixo. Enviamos direto
+    // nos canais para garantir que os workers recebam o sinal IMEDIATAMENTE.
+    let _ = ra_tx.send(LanforgeEvent::Shutdown);
+    let _ = d4_tx.send(LanforgeEvent::Shutdown);
+    let _ = d6_tx.send(LanforgeEvent::Shutdown);
+    let _ = db_tx.send(DbWorkerCmd::Shutdown);
+
     cancel.cancel();
     netlink_task.abort();
+    monitor_task.abort();
 
     // O wait é bloqueante mas estamos fora do hot path — o runtime main
     // pode ficar idle enquanto as threads de serviço terminam.

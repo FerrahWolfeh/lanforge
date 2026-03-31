@@ -26,7 +26,15 @@ lanforge-api = { path = "lanforge-api" }
 lanforge-cli = { path = "lanforge-cli", optional = true }
 
 # Async & runtime
-tokio = { version = "1", features = ["macros", "rt", "signal", "process", "time", "sync", "io-util", "rt-multi-thread"] }
+tokio = { version = "1", features = [
+    "macros",
+    "rt",
+    "signal",
+    "process",
+    "time",
+    "sync",
+    "io-util",
+] }
 futures = { version = "0.3.32", default-features = false, features = ["std"] }
 
 # CLI e config

@@ -108,8 +108,12 @@ async fn run_mdns_worker(
     loop {
         tokio::select! {
             event = bus_rx.recv() => {
-                if let Ok(LanforgeEvent::ScanRequested) = event {
-                    let _ = tx.send(MdnsCommand::ProbeAll).await;
+                match event {
+                    Ok(LanforgeEvent::ScanRequested) => {
+                        let _ = tx.send(MdnsCommand::ProbeAll).await;
+                    }
+                    Ok(LanforgeEvent::Shutdown) => break,
+                    _ => {}
                 }
             }
             cmd = rx.recv() => {

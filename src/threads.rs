@@ -58,6 +58,7 @@ pub fn wait_for_service_threads(
 
     let (tx, rx) = mpsc::channel::<&'static str>();
     let expected = handles.len();
+    let mut pending: Vec<&'static str> = handles.iter().map(|(n, _)| *n).collect();
 
     // Spawna uma thread de monitor por serviço — apenas notifica quando termina.
     for (name, handle) in handles {
@@ -79,18 +80,21 @@ pub fn wait_for_service_threads(
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             warn!(
-                "⚠️  Shutdown timeout atingido ({}/{} serviços finalizados)",
-                finished, expected
+                "⚠️  Shutdown timeout atingido ({}/{} serviços finalizados). Pendentes: {:?}",
+                finished,
+                expected,
+                pending
             );
             return;
         }
         match rx.recv_timeout(remaining) {
             Ok(name) => {
                 info!("  ✓ Thread '{name}' finalizada");
+                pending.retain(|&n| n != name);
                 finished += 1;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                warn!("⚠️  Shutdown timeout — forçando saída");
+                warn!("⚠️  Shutdown timeout — forçando saída. Pendentes: {:?}", pending);
                 return;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
