@@ -6,7 +6,7 @@ use crate::error::{ApiError, Result};
 use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
 use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::update::DeviceUpdate;
+use lanforge_core::state::update::{DeviceUpdate, FieldUpdate};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -315,9 +315,10 @@ where
                         let v6_suffix_parsed = v6_suffix.and_then(|s| Ipv6AddrOrSuffix::parse(&s));
                         let _ = ctx.table.update(DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
-                            hostname: hostname.map(Some),
-                            v4_static: Some(v4_static),
-                            v6_suffix: Some(v6_suffix_parsed),
+                            hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                            v4_static: v4_static.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                            v6_suffix: v6_suffix_parsed
+                                .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
                             origin: Origin::Cli,
                         });
 
@@ -337,21 +338,21 @@ where
             }
             Ok(Command::HostSet { mac, field, value }) => {
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
-                    let mut hn = None;
-                    let mut v4s = None;
-                    let mut v6s = None;
+                    let mut hn = FieldUpdate::NoChange;
+                    let mut v4s = FieldUpdate::NoChange;
+                    let mut v6s = FieldUpdate::NoChange;
 
                     let err_msg = match field.as_str() {
                         "hostname" => {
-                            hn = Some(Some(value.clone()));
+                            hn = FieldUpdate::Set(value.clone());
                             None
                         }
                         "v4" | "ipv4" => {
                             if value.is_empty() {
-                                v4s = Some(None);
+                                v4s = FieldUpdate::Clear;
                                 None
                             } else if let Ok(ip) = value.parse() {
-                                v4s = Some(Some(ip));
+                                v4s = FieldUpdate::Set(ip);
                                 None
                             } else {
                                 Some("IPv4 inválido")
@@ -359,10 +360,10 @@ where
                         }
                         "v6_suffix" | "v6" => {
                             if value.is_empty() {
-                                v6s = Some(None);
+                                v6s = FieldUpdate::Clear;
                                 None
                             } else if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
-                                v6s = Some(Some(suf));
+                                v6s = FieldUpdate::Set(suf);
                                 None
                             } else {
                                 Some("Interface ID (sufixo) ou IPv6 inválido")

@@ -3,7 +3,7 @@
 use lanforge_core::bus::{EventBus, ManagedTable};
 use lanforge_core::device::Origin;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::update::DeviceUpdate;
+use lanforge_core::state::update::{DeviceUpdate, FieldUpdate};
 use std::sync::Arc;
 
 use crate::api::Response;
@@ -33,9 +33,9 @@ async fn test_host_list_returns_static_and_cli_only() {
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
     let _ = table.update(DeviceUpdate::CliHostUpdated {
         mac: mac_cli,
-        hostname: Some(Some("cli-host".to_string())),
-        v4_static: None,
-        v6_suffix: None,
+        hostname: FieldUpdate::Set("cli-host".to_string()),
+        v4_static: FieldUpdate::NoChange,
+        v6_suffix: FieldUpdate::NoChange,
         origin: Origin::Cli,
     });
 

@@ -3,7 +3,7 @@
 use crate::bus::{DeviceChange, EventBus, LanforgeEvent, ManagedTable};
 use crate::device::Origin;
 use crate::identifiers::MacAddr;
-use crate::state::update::DeviceUpdate;
+use crate::state::update::{DeviceUpdate, FieldUpdate};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -114,9 +114,9 @@ async fn cli_host_update_publishes_events() {
 
     let _ = table.update(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: Some(Some("cli-host".to_string())),
-        v4_static: None,
-        v6_suffix: None,
+        hostname: FieldUpdate::Set("cli-host".to_string()),
+        v4_static: FieldUpdate::NoChange,
+        v6_suffix: FieldUpdate::NoChange,
         origin: Origin::Cli,
     });
 
@@ -138,9 +138,9 @@ async fn cli_host_update_publishes_events() {
 
     let _ = table.update(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: None,
-        v4_static: Some(Some("1.2.3.4".parse().unwrap())),
-        v6_suffix: None,
+        hostname: FieldUpdate::NoChange,
+        v4_static: FieldUpdate::Set("1.2.3.4".parse().unwrap()),
+        v6_suffix: FieldUpdate::NoChange,
         origin: Origin::Cli,
     });
 

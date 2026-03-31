@@ -11,6 +11,11 @@ pub struct Duid {
     pub bytes: Vec<u8>,
 }
 
+/// Serializes a DUID as a colon-separated hex string.
+///
+/// # Errors
+///
+/// Returns an error if the serializer fails to serialize the string.
 fn serialize_duid<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -140,10 +145,17 @@ impl fmt::Display for Duid {
 // ---------------------------------------------------------------------------
 
 /// Represents a 6-byte IEEE 802 MAC address.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MacAddr(
-    #[serde(serialize_with = "serialize_mac", deserialize_with = "deserialize_mac")] pub [u8; 6],
-);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+pub struct MacAddr(#[serde(deserialize_with = "deserialize_mac")] pub [u8; 6]);
+
+impl Serialize for MacAddr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_mac(self.0, serializer)
+    }
+}
 
 fn deserialize_mac<'de, D>(deserializer: D) -> Result<[u8; 6], D::Error>
 where
@@ -155,7 +167,12 @@ where
         .ok_or_else(|| serde::de::Error::custom(format!("Invalid MAC address: {s}")))
 }
 
-fn serialize_mac<S>(mac: &[u8; 6], serializer: S) -> Result<S::Ok, S::Error>
+/// Serializes a MAC address as a colon-separated string.
+///
+/// # Errors
+///
+/// Returns an error if the serializer fails to serialize the string.
+fn serialize_mac<S>(mac: [u8; 6], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {

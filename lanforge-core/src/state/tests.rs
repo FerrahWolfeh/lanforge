@@ -3,7 +3,7 @@
 use super::*;
 use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V4Lease, V6Lease};
 use crate::identifiers::{Duid, MacAddr};
-use crate::state::update::DeviceUpdate;
+use crate::state::update::{DeviceUpdate, FieldUpdate};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
@@ -276,9 +276,9 @@ fn test_cli_host_updated_sync() {
     // 2. Update via CLI (Hostname + Static V4)
     let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: Some(Some("cli-host".to_string())),
-        v4_static: Some(Some("192.168.1.10".parse().unwrap())),
-        v6_suffix: Some(Some(Ipv6AddrOrSuffix::parse("::10").unwrap())),
+        hostname: FieldUpdate::Set("cli-host".to_string()),
+        v4_static: FieldUpdate::Set("192.168.1.10".parse().unwrap()),
+        v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::10").unwrap()),
         origin: Origin::Cli,
     });
 
@@ -305,9 +305,9 @@ fn test_cli_host_updated_sync() {
     // 4. Partial update (Only hostname)
     let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: Some(Some("new-name".to_string())),
-        v4_static: None, // No change
-        v6_suffix: None, // No change
+        hostname: FieldUpdate::Set("new-name".to_string()),
+        v4_static: FieldUpdate::NoChange, // No change
+        v6_suffix: FieldUpdate::NoChange, // No change
         origin: Origin::Cli,
     });
 

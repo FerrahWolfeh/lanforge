@@ -262,8 +262,8 @@ async fn async_main() -> Result<()> {
         let leases_db_path = leases_db_path.clone();
         let log_db = cfg.log_db.clone();
         service_threads.push((
-            "db",
-            crate::threads::spawn_sync_service_thread("db", 768, move || {
+            "DB",
+            crate::threads::spawn_sync_service_thread("DB Worker", 768, move || {
                 db_worker(leases_db_path, log_db.into(), db_rx);
             }),
         ));
@@ -291,7 +291,7 @@ async fn async_main() -> Result<()> {
 
         service_threads.push((
             "ra",
-            crate::threads::spawn_sync_service_thread("ra", 256, move || {
+            crate::threads::spawn_sync_service_thread("RA", 256, move || {
                 if let Err(e) = ra_service(ra_cfg, ra_bus, ra_rx, ra_handle) {
                     error!("RA service failed: {e}");
                 }
@@ -308,7 +308,7 @@ async fn async_main() -> Result<()> {
 
         service_threads.push((
             "dhcpv4",
-            crate::threads::spawn_sync_service_thread("dhcpv4", 384, move || {
+            crate::threads::spawn_sync_service_thread("DHCPv4 Server", 384, move || {
                 if let Err(e) = dhcpv4_service(dhcp_cfg, dhcp_table, d4_rx) {
                     error!("DHCPv4 service failed: {e}");
                 }
@@ -326,7 +326,7 @@ async fn async_main() -> Result<()> {
 
         service_threads.push((
             "dhcpv6",
-            crate::threads::spawn_sync_service_thread("dhcpv6", 384, move || {
+            crate::threads::spawn_sync_service_thread("DHCPv6 Server", 384, move || {
                 if let Err(e) = dhcpv6_service(dhcp_cfg, dhcp_table, &dhcp_handle, d6_rx) {
                     error!("DHCPv6 service failed: {e}");
                 }
@@ -344,7 +344,7 @@ async fn async_main() -> Result<()> {
 
         service_threads.push((
             "dns",
-            spawn_service_thread("dns", 384, move || async move {
+            spawn_service_thread("DNS Server", 384, move || async move {
                 supervisor::supervise_task(
                     "dns",
                     true,
@@ -375,7 +375,7 @@ async fn async_main() -> Result<()> {
 
     service_threads.push((
         "control",
-        spawn_service_thread("control", 256, move || async move {
+        spawn_service_thread("Control Service", 256, move || async move {
             supervisor::supervise_task(
                 "control",
                 true,

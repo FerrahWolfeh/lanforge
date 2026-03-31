@@ -5,10 +5,10 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use lanforge_core::bus::ManagedTable;
 use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::update::DeviceUpdate;
+use lanforge_core::{bus::ManagedTable, state::update::FieldUpdate};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -115,9 +115,9 @@ async fn process_registration(state: AppState, req: RegisterRequest) -> impl Int
 
     let _ = state.table.update(DeviceUpdate::CliHostUpdated {
         mac: mac_addr,
-        hostname: req.hostname.map(Some),
-        v4_static: Some(v4_static),
-        v6_suffix: Some(v6_suffix),
+        hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+        v4_static: FieldUpdate::from(v4_static),
+        v6_suffix: FieldUpdate::from(v6_suffix),
         origin: Origin::External,
     });
 

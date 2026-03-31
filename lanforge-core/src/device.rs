@@ -10,6 +10,11 @@ use crate::identifiers::{Duid, MacAddr};
 // Helpers for Serde
 // ---------------------------------------------------------------------------
 
+/// Serializes an optional `SystemTime` as a Unix timestamp.
+///
+/// # Errors
+///
+/// Returns an error if the serializer fails to serialize the timestamp.
 pub fn serialize_time_opt<S>(time: &Option<SystemTime>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -23,6 +28,11 @@ where
     }
 }
 
+/// Serializes a `SystemTime` as a Unix timestamp.
+///
+/// # Errors
+///
+/// Returns an error if the serializer fails to serialize the timestamp.
 pub fn serialize_time<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -50,6 +60,7 @@ pub enum Origin {
 }
 
 impl Origin {
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Toml => "toml",

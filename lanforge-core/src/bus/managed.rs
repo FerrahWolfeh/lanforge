@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::{DeviceChange, EventBus, LanforgeEvent};
 use crate::state::DeviceTable;
-use crate::state::update::DeviceUpdate;
+use crate::state::update::{DeviceUpdate, FieldUpdate};
 
 /// A thread-safe wrapper around `DeviceTable` that automatically publishes events
 /// to the `EventBus` after each successful `update`.
@@ -157,16 +157,18 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
             v6_suffix,
             ..
         } => {
-            if let Some(Some(hn)) = hostname {
+            if let FieldUpdate::Set(hn) = hostname {
                 return Some(DeviceChange::HostnameChanged {
                     hostname: hn.clone(),
                 });
             }
-            if let Some(v4) = v4_static {
-                return Some(DeviceChange::V4StaticChanged { ip: *v4 });
+            if let FieldUpdate::Set(ip) = v4_static {
+                return Some(DeviceChange::V4StaticChanged { ip: Some(*ip) });
             }
-            if let Some(v6) = v6_suffix {
-                return Some(DeviceChange::V6SuffixChanged { suffix: v6.clone() });
+            if let FieldUpdate::Set(v6) = v6_suffix {
+                return Some(DeviceChange::V6SuffixChanged {
+                    suffix: Some(v6.clone()),
+                });
             }
             None
         }
