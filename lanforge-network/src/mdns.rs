@@ -312,7 +312,7 @@ async fn handle_mdns_packet(_bus: &EventBus, table: &ManagedTable, data: &[u8], 
                 }
 
                 debug!("mDNS descoberta: {} -> {}", from.ip(), clean_host);
-                table.update(DeviceUpdate::MdnsHostnameHint {
+                let _ = table.update(DeviceUpdate::MdnsHostnameHint {
                     mac,
                     hostname: clean_host.to_string(),
                 });

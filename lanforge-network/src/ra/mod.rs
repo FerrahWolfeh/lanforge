@@ -34,7 +34,7 @@ pub use packet::{build_ra_packet, icmpv6_checksum};
 use crate::error::{NetworkError, Result};
 use futures::TryStreamExt;
 use lanforge_core::bus::{EventBus, LanforgeEvent};
-use rand::{RngExt, rng};
+use rand::RngExt;
 use rtnetlink::Handle;
 use rtnetlink::packet_route::address::{AddressAttribute, AddressMessage};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -43,9 +43,7 @@ use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
-use std::time::Instant;
-use tokio::io::unix::AsyncFd;
-use tokio::time::{Duration, sleep};
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -139,7 +137,7 @@ impl RaState {
 
 /// Shared context for RA service internal functions.
 pub struct RaContext<'a> {
-    pub(crate) async_fd: &'a AsyncFd<Socket>,
+    pub(crate) socket: &'a Socket,
     pub(crate) cfg: &'a RaConfig,
     pub(crate) handle: &'a Handle,
     pub(crate) mac: &'a [u8; 6],
@@ -151,11 +149,13 @@ pub struct RaContext<'a> {
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Main task for the RA service. Should be invoked via `tokio::spawn`.
-///
-/// Returns `Err` only on unrecoverable failures (permission denied, interface
-/// not found, etc.). The caller is responsible for restarting with backoff.
-pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
+/// Main task for the RA service.
+pub fn ra_service(
+    cfg: RaConfig,
+    bus: Arc<EventBus>,
+    bus_rx: std::sync::mpsc::Receiver<LanforgeEvent>,
+    handle: Handle,
+) -> Result<()> {
     cfg.validate()?;
 
     info!(
@@ -167,9 +167,7 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
         cfg.effective_router_lifetime().as_secs(),
     );
 
-    let (connection, handle, _) = rtnetlink::new_connection()
-        .map_err(|e| NetworkError::Socket(format!("Netlink connection para RA: {e}")))?;
-    tokio::spawn(connection);
+    // handle is now passed from caller
 
     let iface_index = get_iface_index(&cfg.iface)?;
     let mac = get_iface_mac(&cfg.iface)?;
@@ -183,11 +181,15 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
     );
 
     let socket = create_ra_socket(&cfg.iface, iface_index)?;
-    let async_fd = AsyncFd::new(socket).map_err(NetworkError::Io)?;
+    // set read timeout for sync polling
+    socket
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .map_err(NetworkError::Io)?;
+
     let mut state = RaState::new();
 
     let ctx = RaContext {
-        async_fd: &async_fd,
+        socket: &socket,
         cfg: &cfg,
         handle: &handle,
         mac: &mac,
@@ -195,63 +197,50 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
         bus: &bus,
     };
 
-    let mut bus_rx = bus.subscribe();
+    let rt = tokio::runtime::Handle::current();
 
     // Immediate RA on startup — active clients get configured without waiting
-    do_multicast_ra(&ctx, &mut state).await;
+    rt.block_on(do_multicast_ra(&ctx, &mut state));
+
+    let mut next_ra = Instant::now() + state.next_interval(&cfg);
 
     loop {
-        let next = state.next_interval(&cfg);
-        debug!("Next periodic RA in {:.1}s", next.as_secs_f64());
+        let now = Instant::now();
+        if now >= next_ra {
+            rt.block_on(do_multicast_ra(&ctx, &mut state));
+            next_ra = now + state.next_interval(&cfg);
+            debug!("Next periodic RA in {:.1}s", (next_ra - now).as_secs_f64());
+        }
 
-        tokio::select! {
-            // ── Periodic RA ──────────────────────────────────────────────
-            () = sleep(next) => {
-                do_multicast_ra(&ctx, &mut state).await;
-            }
-
-            // ── Router Solicitation Received ──────────────────────────────
-            guard = async_fd.readable() => {
-                let mut guard = guard?;
-                let mut buf = [0u8; 1500];
-
-                match guard.try_io(|fd| {
-                    let buf_uninit = unsafe {
-                        &mut *(std::ptr::from_mut::<[u8]>(&mut buf)
-                            as *mut [std::mem::MaybeUninit<u8>])
-                    };
-                    fd.get_ref().recv_from(buf_uninit)
-                }) {
-                    Ok(Ok((n, src_sa))) if n > 0 => {
-                        let data = &buf[..n];
-
-                        // ICMP6_FILTER already rejects non-RS packets in the kernel;
-                        // this is a secondary safety check.
-                        if data.first() != Some(&ICMPV6_TYPE_RS) {
-                            continue;
-                        }
-
-                        let rs_src = src_sa.as_socket_ipv6().map(|s| *s.ip());
-                        debug!("RS received from {rs_src:?}");
-
-                        handle_rs(&ctx, rs_src, &mut state).await;
-                    }
-                    Ok(Ok(_)) | Err(_)  => {}
-                    Ok(Err(e)) => warn!("Socket read error: {e}"),
-                    // WouldBlock — AsyncFd resets automatically
+        // 1. Packet processing
+        let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 1500];
+        match socket.recv_from(&mut buf) {
+            Ok((n, src_sa)) if n > 0 => {
+                let data = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
+                if data.first() == Some(&ICMPV6_TYPE_RS) {
+                    let rs_src = src_sa.as_socket_ipv6().map(|s| *s.ip());
+                    debug!("RS received from {rs_src:?}");
+                    rt.block_on(handle_rs(&ctx, rs_src, &mut state));
                 }
             }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                // Timeout, no packet
+            }
+            Err(e) => warn!("RA socket error: {e}"),
+            _ => {}
+        }
 
-            // ── EventBus — Shutdown ──────────────────────────────────────
-            event = bus_rx.recv() => {
-                if let Ok(LanforgeEvent::Shutdown) = event {
-                    info!("RA service: shutdown recebido, encerrando...");
-                    break;
-                }
+        // 2. EventBus signals
+        while let Ok(event) = bus_rx.try_recv() {
+            if let LanforgeEvent::Shutdown = event {
+                info!("RA service: shutdown recebido, encerrando...");
+                return Ok(());
             }
         }
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -260,9 +249,8 @@ pub async fn ra_service(cfg: RaConfig, bus: Arc<EventBus>) -> Result<()> {
 
 async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut RaState) {
     // Random delay of 0–500ms before responding (RFC 4861 §6.2.6).
-    // Prevents multiple routers from responding to the same RS simultaneously.
-    let delay_ms = rng().random_range(0..MAX_RA_DELAY_TIME_MS);
-    sleep(Duration::from_millis(delay_ms)).await;
+    let delay_ms = rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS);
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
     // Destination: unicast to solicitant (if they have a valid address) or multicast.
     let dst = rs_src.filter(|ip| !ip.is_unspecified());
@@ -278,13 +266,9 @@ async fn handle_rs(ctx: &RaContext<'_>, rs_src: Option<Ipv6Addr>, state: &mut Ra
             }
         }
         None if state.can_multicast_now() => {
-            // Solicitant with unspecified address (::) → multicast response.
             do_multicast_ra(ctx, state).await;
         }
-        _ => {
-            // Rate limit active — RFC 4861 §6.2.6 allows silent discard.
-            debug!("RS discarded: MIN_DELAY_BETWEEN_RAS rate limit active");
-        }
+        _ => debug!("RS discarded: rate limit active"),
     }
 }
 
@@ -342,8 +326,7 @@ async fn send_ra(
     pkt[2] = (csum >> 8) as u8;
     pkt[3] = (csum & 0xFF) as u8;
 
-    ctx.async_fd
-        .get_ref()
+    ctx.socket
         .send_to(&pkt, &dst_sa)
         .map_err(|e| NetworkError::Socket(format!("ICMPv6 send_to: {e}")))?;
     Ok(())
@@ -381,8 +364,8 @@ fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket> {
     set_icmp6_filter_rs_only(&sock)
         .map_err(|e| NetworkError::Socket(format!("ICMP6_FILTER: {e}")))?;
 
-    sock.set_nonblocking(true)
-        .map_err(|e| NetworkError::Socket(format!("O_NONBLOCK: {e}")))?;
+    sock.set_nonblocking(false)
+        .map_err(|e| NetworkError::Socket(format!("O_NONBLOCK(false): {e}")))?;
 
     info!("ICMPv6 raw socket OK — ICMP6_FILTER active (RS only), subscribed to ff02::2");
     Ok(sock)

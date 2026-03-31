@@ -41,7 +41,10 @@ impl ManagedTable {
     }
 
     /// Applies a [`DeviceUpdate`] to the table and publishes corresponding events to the bus.
-    pub fn update(&self, update: DeviceUpdate) {
+    ///
+    /// Returns `true` if the state was actually modified.
+    #[must_use]
+    pub fn update(&self, update: DeviceUpdate) -> bool {
         let mut table = self.inner.write();
 
         let opt_mac = mac_of(&update);
@@ -53,7 +56,7 @@ impl ManagedTable {
         drop(table);
 
         if !changed {
-            return;
+            return false;
         }
 
         if let Some(mac) = opt_mac {
@@ -69,6 +72,7 @@ impl ManagedTable {
         }
 
         let _ = self.bus.publish(LanforgeEvent::DeviceTableDirty);
+        true
     }
 
     /// Provides a read-only lock to the internal device table.

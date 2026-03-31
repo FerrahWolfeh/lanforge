@@ -64,6 +64,8 @@ use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use lanforge_db::worker::DbWorkerCmd;
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -210,17 +212,59 @@ async fn async_main() -> Result<()> {
     let mut service_threads: Vec<(&'static str, std::thread::JoinHandle<()>)> = Vec::new();
 
     // -----------------------------------------------------------------------
-    // DB worker — persiste reativamente via EventBus
+    // Sync Bridges & Service Channels
+    // -----------------------------------------------------------------------
+    let (db_tx, db_rx) = std::sync::mpsc::channel::<DbWorkerCmd>();
+    let (ra_tx, ra_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+    let (d4_tx, d4_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+    let (d6_tx, d6_rx) = std::sync::mpsc::channel::<LanforgeEvent>();
+
+    // Bridge task: forward EventBus to sync mpsc channels
+    let mut bridge_sub = bus.subscribe();
+    let bridge_table = table.clone();
+    let db_tx_bridge = db_tx.clone();
+    let ra_tx_bridge = ra_tx.clone();
+    let d4_tx_bridge = d4_tx.clone();
+    let d6_tx_bridge = d6_tx.clone();
+
+    tokio::spawn(async move {
+        while let Ok(event) = bridge_sub.recv().await {
+            // Forward relevant signals to protocols
+            let _ = ra_tx_bridge.send(event.clone());
+            let _ = d4_tx_bridge.send(event.clone());
+            let _ = d6_tx_bridge.send(event.clone());
+
+            // Process DB commands based on events
+            match event {
+                LanforgeEvent::DeviceTableDirty => {
+                    let snapshot = bridge_table.read().clone();
+                    let _ = db_tx_bridge.send(DbWorkerCmd::Save(Box::new(snapshot)));
+                }
+                LanforgeEvent::DbVacuum => {
+                    let _ = db_tx_bridge.send(DbWorkerCmd::Vacuum);
+                }
+                LanforgeEvent::Shutdown => {
+                    let _ = db_tx_bridge.send(DbWorkerCmd::Shutdown);
+                    break;
+                }
+                other => {
+                    // All other events are recorded in the log DB
+                    let _ = db_tx_bridge.send(DbWorkerCmd::RecordLog(other));
+                }
+            }
+        }
+    });
+
+    // -----------------------------------------------------------------------
+    // DB worker — sync OS thread
     // -----------------------------------------------------------------------
     {
         let leases_db_path = leases_db_path.clone();
         let log_db = cfg.log_db.clone();
-        let table = table.clone();
-        let bus = bus.clone();
         service_threads.push((
             "db",
-            spawn_service_thread("db", 768, move || async move {
-                db_worker(leases_db_path, log_db.into(), table, bus).await;
+            crate::threads::spawn_sync_service_thread("db", 768, move || {
+                db_worker(leases_db_path, log_db.into(), db_rx);
             }),
         ));
     }
@@ -238,114 +282,56 @@ async fn async_main() -> Result<()> {
     let netlink_task = tokio::spawn(connection);
 
     // -----------------------------------------------------------------------
-    // RA service
+    // RA service — sync OS thread
     // -----------------------------------------------------------------------
     if cfg.ra_enabled {
         let ra_cfg = cfg.to_ra_config();
         let ra_bus = bus.clone();
-        let ra_cancel = cancel.clone();
-
-        info!(
-            "⚡ Iniciando: RA (iface={}, M={}, O={})",
-            ra_cfg.iface,
-            u8::from(ra_cfg.managed),
-            u8::from(ra_cfg.other_config)
-        );
+        let ra_handle = handle.clone();
 
         service_threads.push((
             "ra",
-            spawn_service_thread("ra", 256, move || async move {
-                supervisor::supervise_task(
-                    "ra",
-                    true,
-                    0,
-                    Duration::from_secs(5),
-                    Duration::from_secs(60),
-                    ra_cancel,
-                    move || {
-                        let cfg = ra_cfg.clone();
-                        let bus = ra_bus.clone();
-                        async move { ra_service(cfg, bus).await.map_err(anyhow::Error::from) }
-                    },
-                )
-                .await
+            crate::threads::spawn_sync_service_thread("ra", 256, move || {
+                if let Err(e) = ra_service(ra_cfg, ra_bus, ra_rx, ra_handle) {
+                    error!("RA service failed: {e}");
+                }
             }),
-        ))
+        ));
     }
 
     // -----------------------------------------------------------------------
-    // DHCPv4 service
+    // DHCPv4 service — sync OS thread
     // -----------------------------------------------------------------------
     if cfg.dhcpv4_enabled {
         let dhcp_cfg = cfg.to_dhcpv4_config();
         let dhcp_table = table.clone();
-        let dhcpv4_cancel = cancel.clone();
-
-        info!(
-            "⚡ Iniciando: DHCPv4 ({}–{}, mask={})",
-            dhcp_cfg.range_start, dhcp_cfg.range_end, dhcp_cfg.subnet_mask
-        );
 
         service_threads.push((
             "dhcpv4",
-            spawn_service_thread("dhcpv4", 384, move || async move {
-                supervisor::supervise_task(
-                    "dhcpv4",
-                    true,
-                    0,
-                    Duration::from_secs(5),
-                    Duration::from_secs(60),
-                    dhcpv4_cancel,
-                    move || {
-                        let cfg = dhcp_cfg.clone();
-                        let table = dhcp_table.clone();
-                        async move {
-                            dhcpv4_service(cfg, table)
-                                .await
-                                .map_err(anyhow::Error::from)
-                        }
-                    },
-                )
-                .await
+            crate::threads::spawn_sync_service_thread("dhcpv4", 384, move || {
+                if let Err(e) = dhcpv4_service(dhcp_cfg, dhcp_table, d4_rx) {
+                    error!("DHCPv4 service failed: {e}");
+                }
             }),
-        ))
+        ));
     }
 
     // -----------------------------------------------------------------------
-    // DHCPv6 service
+    // DHCPv6 service — sync OS thread
     // -----------------------------------------------------------------------
     if cfg.dhcpv6_enabled {
         let dhcp_cfg = cfg.to_dhcpv6_config();
         let dhcp_table = table.clone();
         let dhcp_handle = handle.clone();
-        let dhcpv6_cancel = cancel.clone();
-
-        info!("⚡ Iniciando: DHCPv6 ({})", dhcp_cfg.iface);
 
         service_threads.push((
             "dhcpv6",
-            spawn_service_thread("dhcpv6", 384, move || async move {
-                supervisor::supervise_task(
-                    "dhcpv6",
-                    true,
-                    0,
-                    Duration::from_secs(5),
-                    Duration::from_secs(60),
-                    dhcpv6_cancel,
-                    move || {
-                        let handle = dhcp_handle.clone();
-                        let cfg = dhcp_cfg.clone();
-                        let table = dhcp_table.clone();
-                        async move {
-                            dhcpv6_service(cfg, table, &handle)
-                                .await
-                                .map_err(anyhow::Error::from)
-                        }
-                    },
-                )
-                .await
+            crate::threads::spawn_sync_service_thread("dhcpv6", 384, move || {
+                if let Err(e) = dhcpv6_service(dhcp_cfg, dhcp_table, &dhcp_handle, d6_rx) {
+                    error!("DHCPv6 service failed: {e}");
+                }
             }),
-        ))
+        ));
     }
 
     // -----------------------------------------------------------------------
@@ -503,7 +489,7 @@ async fn async_main() -> Result<()> {
                         _ => {}
                     }
 
-                    table.update(update);
+                    let _ = table.update(update);
                 }
             }
 
@@ -580,7 +566,7 @@ async fn async_main() -> Result<()> {
     }
 
     info!("🛑 Iniciando sequência de shutdown...");
-    bus.publish(LanforgeEvent::Shutdown);
+    let _ = bus.publish(LanforgeEvent::Shutdown);
     cancel.cancel();
     netlink_task.abort();
 

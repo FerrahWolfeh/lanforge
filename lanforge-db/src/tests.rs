@@ -3,14 +3,12 @@
 use super::*;
 use crate::engine::LeaseDb;
 use crate::worker::db_worker;
-use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
 use lanforge_core::device::{IPv4State, IPv6State, V4Lease};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::DeviceUpdate;
 use rusqlite::params;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 use tempfile::tempdir;
 
@@ -206,24 +204,22 @@ async fn db_worker_persists_on_dirty_event() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
-    let bus = Arc::new(EventBus::new());
-    let table = Arc::new(ManagedTable::new(bus.clone()));
-
-    let worker_table = Arc::clone(&table);
-    let worker_bus = Arc::clone(&bus);
+    let (tx, rx) = std::sync::mpsc::channel();
     let worker_path = db_path.clone();
     let worker_log_path = dir.path().join("test_logs.db");
-    tokio::spawn(async move {
-        db_worker(worker_path, worker_log_path, worker_table, worker_bus).await;
+    std::thread::spawn(move || {
+        db_worker(worker_path, worker_log_path, rx);
     });
 
-    tokio::task::yield_now().await;
-
     let mac = make_mac(0xAB);
-    table.update(DeviceUpdate::DhcpHostnameHint {
+    let mut table_snapshot = DeviceTable::new();
+    table_snapshot.apply_update(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "worker-test".into(),
     });
+
+    tx.send(crate::worker::DbWorkerCmd::Save(Box::new(table_snapshot)))
+        .unwrap();
 
     tokio::time::sleep(DEBOUNCE_SILENCE + Duration::from_millis(500)).await;
 
@@ -241,21 +237,19 @@ async fn db_worker_handles_vacuum_event() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test_vacuum.db");
 
-    let bus = Arc::new(EventBus::new());
-    let table = Arc::new(ManagedTable::new(bus.clone()));
-
+    let (tx, rx) = std::sync::mpsc::channel();
     let worker_path = db_path.clone();
     let worker_log_path = dir.path().join("test_vacuum_logs.db");
-    let worker_bus = Arc::clone(&bus);
-    let worker_table = Arc::clone(&table);
 
-    tokio::spawn(async move {
-        db_worker(worker_path, worker_log_path, worker_table, worker_bus).await;
+    std::thread::spawn(move || {
+        db_worker(worker_path, worker_log_path, rx);
     });
+
+    tx.send(crate::worker::DbWorkerCmd::Vacuum).unwrap();
 
     tokio::task::yield_now().await;
 
-    let _ = bus.publish(LanforgeEvent::DbVacuum);
+    tx.send(crate::worker::DbWorkerCmd::Vacuum).unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 

@@ -12,19 +12,36 @@ use std::{
 pub fn spawn_service_thread<F, Fut>(name: &'static str, stack_kb: usize, f: F) -> JoinHandle<()>
 where
     F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = ()>,
+    Fut: std::future::Future<Output = ()>,
 {
     Builder::new()
         .name(name.into())
         .stack_size(stack_kb * 1024)
         .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
+            let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap_or_else(|e| panic!("thread '{name}': failed to build runtime: {e}"))
-                .block_on(f())
+                .unwrap_or_else(|e| panic!("thread '{name}': failed to build runtime: {e}"));
+            rt.block_on(f());
         })
         .unwrap_or_else(|e| panic!("failed to spawn thread '{name}': {e}"))
+}
+
+/// Spawna um serviço como OS thread nomeada SÍNCRONA (sem runtime Tokio próprio).
+///
+/// Use para tarefas puramente bloqueantes ou que gerenciam seu próprio bloqueio
+/// sem depender de um executor assíncrono na thread.
+pub fn spawn_sync_service_thread<F>(name: &'static str, stack_kb: usize, f: F) -> JoinHandle<()>
+where
+    F: FnOnce() + Send + 'static,
+{
+    Builder::new()
+        .name(name.into())
+        .stack_size(stack_kb * 1024)
+        .spawn(move || {
+            f();
+        })
+        .unwrap_or_else(|e| panic!("failed to spawn sync thread '{name}': {e}"))
 }
 
 /// Aguarda que todas as threads de serviço terminem, com timeout de parede.

@@ -73,7 +73,7 @@ pub struct Dhcpv6Server {
     /// Learned lifetimes from the GUA prefix (preferred, valid).
     pub prefix_lifetimes: Option<(u32, u32)>,
     /// Persistent socket for NDP pokes (saves socket() syscalls).
-    pub ndp_poke_sock: Arc<tokio::net::UdpSocket>,
+    pub ndp_poke_sock: Arc<std::net::UdpSocket>,
 }
 
 impl Dhcpv6Server {
@@ -81,7 +81,7 @@ impl Dhcpv6Server {
         cfg: Dhcpv6Config,
         pool: Ipv6Pool,
         server_duid: Duid,
-        ndp_poke_sock: Arc<tokio::net::UdpSocket>,
+        ndp_poke_sock: Arc<std::net::UdpSocket>,
     ) -> Self {
         Self {
             cfg,
@@ -108,7 +108,7 @@ impl Dhcpv6Server {
     }
 
     /// Processes a raw `DHCPv6` packet and returns a response (if any).
-    pub async fn handle_packet<'a>(
+    pub fn handle_packet<'a>(
         &mut self,
         data: &[u8],
         peer: Ipv6Addr,
@@ -166,9 +166,10 @@ impl Dhcpv6Server {
 
         // 2. If still no MAC, try a kernel lookup (asynchronous — NO LOCK)
         if mac.is_none() {
-            debug!("Cache miss. Performing asynchronous kernel lookup for {peer}...");
-            if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
-                table.update(DeviceUpdate::NdpSeen {
+            debug!("Cache miss. Performing kernel lookup for {peer}...");
+            let rt = tokio::runtime::Handle::current();
+            if let Some(ndp_mac) = rt.block_on(crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer)) {
+                let _ = table.update(DeviceUpdate::NdpSeen {
                     mac: ndp_mac,
                     ip: peer,
                 });
@@ -191,11 +192,8 @@ impl Dhcpv6Server {
             // Force the kernel to resolve the MAC by sending an empty packet.
             // Reusing the persistent poke socket!
             let poke_sock = self.ndp_poke_sock.clone();
-            let peer_ip = peer;
-            tokio::spawn(async move {
-                let addr = std::net::SocketAddrV6::new(peer_ip, 546, 0, 0);
-                let _ = poke_sock.send_to(&[0], addr).await;
-            });
+            let addr = std::net::SocketAddrV6::new(peer, 546, 0, 0);
+            let _ = poke_sock.send_to(&[0], addr);
         }
 
         match msg.msg_type() {
@@ -817,8 +815,7 @@ mod tests {
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
-        sock.set_nonblocking(true).unwrap();
-        let ndp_poke_sock = Arc::new(tokio::net::UdpSocket::from_std(sock).unwrap());
+        let ndp_poke_sock = Arc::new(sock);
 
         Dhcpv6Server::new(cfg, pool, server_duid, ndp_poke_sock)
     }
@@ -855,8 +852,8 @@ mod tests {
         Message::decode(&mut Decoder::new(bytes)).expect("Should decode valid DHCPv6 reply")
     }
 
-    #[tokio::test]
-    async fn solicit_yields_no_addrs_avail_when_pool_empty() {
+    #[test]
+    fn solicit_yields_no_addrs_avail_when_pool_empty() {
         let cfg = Dhcpv6Config {
             enabled: true,
             iface: "lo".to_string(),
@@ -868,8 +865,7 @@ mod tests {
         };
         let pool = Ipv6Pool::new(Vec::new(), None, 64);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
-        sock.set_nonblocking(true).unwrap();
-        let ndp_poke_sock = Arc::new(tokio::net::UdpSocket::from_std(sock).unwrap());
+        let ndp_poke_sock = Arc::new(sock);
         let mut srv = Dhcpv6Server::new(cfg, pool, Duid::new(vec![1, 2, 3]), ndp_poke_sock);
 
         let msg = build_solicit(true);
@@ -902,8 +898,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn request_not_on_link_yields_status_code() {
+    #[test]
+    fn request_not_on_link_yields_status_code() {
         let mut srv = dummy_server();
         let mut msg = Message::new(MessageType::Request);
         msg.opts_mut()
@@ -953,8 +949,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn renew_no_binding_yields_status_code() {
+    #[test]
+    fn renew_no_binding_yields_status_code() {
         let mut srv = dummy_server();
         let mut msg = Message::new(MessageType::Renew);
         msg.opts_mut()
@@ -995,8 +991,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn decline_acknowledgment_and_blacklisting() {
+    #[test]
+    fn decline_acknowledgment_and_blacklisting() {
         let mut srv = dummy_server();
         let ip: Ipv6Addr = "fd97:f00d:cafe:3731::101".parse().unwrap();
         let duid = dummy_client_duid();
@@ -1049,8 +1045,8 @@ mod tests {
         assert!(!ips.contains(&ip));
     }
 
-    #[tokio::test]
-    async fn lifetime_capping_respects_wan_prefix() {
+    #[test]
+    fn lifetime_capping_respects_wan_prefix() {
         let mut srv = dummy_server();
         // WAN prefix lifetime = 3600s
         srv.prefix_lifetimes = Some((1800, 3600));
@@ -1080,8 +1076,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn information_request_yields_reply_without_ia_na() {
+    #[test]
+    fn information_request_yields_reply_without_ia_na() {
         let srv = dummy_server();
         let msg = Message::new(MessageType::InformationRequest);
         let mut resp_vec = Vec::with_capacity(1024);
@@ -1098,8 +1094,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn solicit_with_iapd_yields_prefix_delegation() {
+    #[test]
+    fn solicit_with_iapd_yields_prefix_delegation() {
         let ula = "fd97:f00d:cafe::".parse::<Ipv6Addr>().unwrap();
         let cfg = Dhcpv6Config {
             enabled: true,
@@ -1112,8 +1108,7 @@ mod tests {
         };
         let pool = Ipv6Pool::new(Vec::new(), Some(ula), 48);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
-        sock.set_nonblocking(true).unwrap();
-        let ndp_poke_sock = Arc::new(tokio::net::UdpSocket::from_std(sock).unwrap());
+        let ndp_poke_sock = Arc::new(sock);
         let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid(), ndp_poke_sock);
 
         let mut msg = Message::new(MessageType::Solicit);
