@@ -49,7 +49,7 @@ pub mod api;
 pub mod config;
 pub mod error;
 pub mod handlers;
-pub mod server;
 pub mod http;
+pub mod server;
 #[cfg(test)]
 pub mod tests;

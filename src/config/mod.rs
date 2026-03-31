@@ -30,6 +30,7 @@ pub use args::CliArgs;
 #[cfg(feature = "debug-commands")]
 pub use args::Command;
 use lanforge_api::config::ApiConfig;
+use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_dns::DnsConfig;
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
 use lanforge_network::dhcp::v6::config::Dhcpv6Config;
@@ -283,9 +284,57 @@ impl Config {
             ula_prefix_len = len;
         }
 
-        let parse_ipv6 = |s: &Option<String>| -> Option<Ipv6Addr> {
+        let _parse_ipv6 = |s: &Option<String>| -> Option<Ipv6Addr> {
             s.as_deref().and_then(|ip_str| ip_str.parse().ok())
         };
+
+        let mut pools = Vec::new();
+
+        // 1. Legacy support: if range_start/end are present in TOML, convert them to a pool
+        if let (Some(start_s), Some(end_s)) =
+            (&self.dhcpv6_toml.range_start, &self.dhcpv6_toml.range_end)
+            && let (Some(start), Some(end)) = (
+                Ipv6AddrOrSuffix::parse(start_s),
+                Ipv6AddrOrSuffix::parse(end_s),
+            )
+        {
+            pools.push(lanforge_network::dhcp::v6::config::Dhcpv6PoolConfig {
+                range_start: Some(start),
+                range_end: Some(end),
+                address: None,
+            });
+        }
+
+        // 2. New multi-pool support
+        for p in &self.dhcpv6_toml.pools {
+            if let Some(addr_str) = &p.address {
+                if p.range_start.is_some() || p.range_end.is_some() {
+                    warn!(
+                        "[config] DHCPv6 pool has both 'address' (CIDR) and 'range_start/end'. Prioritizing CIDR."
+                    );
+                }
+                pools.push(lanforge_network::dhcp::v6::config::Dhcpv6PoolConfig {
+                    range_start: None,
+                    range_end: None,
+                    address: Some(addr_str.clone()),
+                });
+            } else if let (Some(start_s), Some(end_s)) = (&p.range_start, &p.range_end) {
+                if let (Some(start), Some(end)) = (
+                    Ipv6AddrOrSuffix::parse(start_s),
+                    Ipv6AddrOrSuffix::parse(end_s),
+                ) {
+                    pools.push(lanforge_network::dhcp::v6::config::Dhcpv6PoolConfig {
+                        range_start: Some(start),
+                        range_end: Some(end),
+                        address: None,
+                    });
+                }
+            } else {
+                warn!(
+                    "[config] DHCPv6 pool missing both 'address' (CIDR) and 'range_start/end', ignoring."
+                );
+            }
+        }
 
         Dhcpv6Config {
             enabled: self.dhcpv6_enabled,
@@ -293,9 +342,8 @@ impl Config {
             lease_time: self.dhcpv6_toml.lease_time,
             ula_prefix,
             ula_prefix_len,
-            range_start: parse_ipv6(&self.dhcpv6_toml.range_start),
-            range_end: parse_ipv6(&self.dhcpv6_toml.range_end),
             port: self.dhcpv6_port,
+            pools,
         }
     }
 

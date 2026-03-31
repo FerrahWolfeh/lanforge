@@ -181,9 +181,9 @@ impl DeviceTable {
                             && old.iaid == iaid
                         {
                             if old.ip == ip && old.expires == expires {
-                                return false;
+                                return false; // Sem mudança real
                             }
-                            *old = new_lease.clone();
+                            *state = IPv6State::Dynamic(new_lease.clone());
                             found = true;
                             break;
                         }

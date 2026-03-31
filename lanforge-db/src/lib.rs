@@ -5,12 +5,11 @@
 //! and static configurations survive system restarts.
 
 pub mod engine;
-pub mod log_engine;
 pub mod error;
+pub mod log_engine;
 #[cfg(test)]
 mod tests;
 pub mod worker;
-
 
 pub use error::LeaseDbError;
 pub type Result<T> = std::result::Result<T, LeaseDbError>;

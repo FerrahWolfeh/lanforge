@@ -110,8 +110,7 @@ pub async fn dhcpv6_service(
     let mut server = Dhcpv6Server::new(
         config.clone(),
         Ipv6Pool::new(
-            config.range_start,
-            config.range_end,
+            config.pools.clone(),
             config.ula_prefix,
             config.ula_prefix_len,
         ),
@@ -199,8 +198,12 @@ pub async fn dhcpv6_service(
                             }
                         }
                     }
-                    Ok(LanforgeEvent::PrefixChanged { gua: _, preferred, valid }) => {
+                    Ok(LanforgeEvent::PrefixChanged { gua, preferred, valid }) => {
                         server.prefix_lifetimes = Some((preferred, valid));
+                        if let Some(g) = gua {
+                            info!("DHCPv6: Propagating new GUA prefix to pool: {g}");
+                            server.pool.set_gua_prefix(g);
+                        }
                         debug!("DHCPv6: Updated prefix lifetimes from bus: pref={}, valid={}", preferred, valid);
                     }
                     Ok(LanforgeEvent::LeaseRenew { mac }) => {
@@ -222,7 +225,7 @@ pub async fn dhcpv6_service(
                         if let (Some(duid), Some(ip)) = (duid, target_ip) {
                             info!("DHCPv6: Sending manual RECONFIGURE to {} ({})", ip, mac);
                             let packet = server.build_reconfigure(&duid, dhcproto::v6::MessageType::Renew);
-                            
+
                             let client_port = if config.port == 547 { 546 } else { config.port - 1 };
                             let dest_addr = std::net::SocketAddrV6::new(ip, client_port, 0, 0);
 
@@ -260,46 +263,56 @@ async fn apply_learned_state(
     // 1. Process IA_NA (Non-temporary Addresses)
     for iaid in &ias.na {
         let iaid = *iaid;
-        let assigned_ip = if let Some(duid) = &learned_duid {
+        let assigned_ips = if let Some(duid) = &learned_duid {
             server.last_assignment_for(&duid.bytes, iaid)
         } else if let Some(mac) = opt_mac {
             server.pool.lookup_by_mac_legacy(mac)
         } else {
-            None
+            Vec::new()
         };
 
-        if let (Some(duid), Some(ip)) = (learned_duid.clone(), assigned_ip) {
-            table
-                .update(DeviceUpdate::V6LeaseGranted {
-                    mac: opt_mac,
-                    duid,
-                    iaid,
-                    ip,
-                    expires,
-                })
-                .await;
-        } else if let (Some(duid), None) = (learned_duid.clone(), assigned_ip) {
-            table
-                .update(DeviceUpdate::DuidAssociated {
-                    mac: opt_mac,
-                    duid,
-                    iaid,
-                })
-                .await;
-        } else if let (None, Some(ip)) = (learned_duid.clone(), assigned_ip)
-            && let Some(mac) = opt_mac
-        {
-            let existing_duid = table.read().get_duid_by_mac(mac).cloned();
-            if let Some(duid) = existing_duid {
+        if let Some(duid) = learned_duid.clone() {
+            if assigned_ips.is_empty() {
+                // No IPs assigned yet, but IAID is known
                 table
-                    .update(DeviceUpdate::V6LeaseGranted {
-                        mac: Some(mac),
+                    .update(DeviceUpdate::DuidAssociated {
+                        mac: opt_mac,
                         duid,
                         iaid,
-                        ip,
-                        expires,
                     })
                     .await;
+            } else {
+                // One or more IPs assigned
+                for ip in assigned_ips {
+                    table
+                        .update(DeviceUpdate::V6LeaseGranted {
+                            mac: opt_mac,
+                            duid: duid.clone(),
+                            iaid,
+                            ip,
+                            expires,
+                        })
+                        .await;
+                }
+            }
+        } else if !assigned_ips.is_empty()
+            && let Some(mac) = opt_mac
+        {
+            // Case where we have IPs but no DUID in current message?
+            // (Unlikely in DHCPv6, but handled for consistency)
+            let existing_duid = table.read().get_duid_by_mac(mac).cloned();
+            if let Some(duid) = existing_duid {
+                for ip in assigned_ips {
+                    table
+                        .update(DeviceUpdate::V6LeaseGranted {
+                            mac: Some(mac),
+                            duid: duid.clone(),
+                            iaid,
+                            ip,
+                            expires,
+                        })
+                        .await;
+                }
             }
         }
     }

@@ -256,26 +256,30 @@ impl Dhcpv6Server {
         }
 
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
-            if let Some(ip) = self.pool.allocate(&client_duid.bytes, iana.id, mac, None) {
+            let ips = self.pool.allocate(&client_duid.bytes, iana.id, mac, None);
+            if !ips.is_empty() {
                 let (pref, valid) = self.get_lifetimes();
                 let action = if is_rapid_commit {
                     "REPLY (Rapid Commit)"
                 } else {
                     "ADVERTISE"
                 };
-                if let Some(id) = identity {
-                    info!("DHCPv6: {id} is soliciting an address -> {action} {ip}");
-                } else {
-                    info!("DHCPv6: Anonymous device is soliciting an address -> {action} {ip}");
-                }
 
                 let mut ia_opts = DhcpOptions::new();
-                ia_opts.insert(DhcpOption::IAAddr(IAAddr {
-                    addr: ip,
-                    preferred_life: pref,
-                    valid_life: valid,
-                    opts: DhcpOptions::new(),
-                }));
+                for ip in &ips {
+                    if let Some(id) = identity {
+                        info!("DHCPv6: {id} is soliciting -> {action} {ip}");
+                    } else {
+                        info!("DHCPv6: Anonymous is soliciting -> {action} {ip}");
+                    }
+
+                    ia_opts.insert(DhcpOption::IAAddr(IAAddr {
+                        addr: *ip,
+                        preferred_life: pref,
+                        valid_life: valid,
+                        opts: DhcpOptions::new(),
+                    }));
+                }
 
                 reply.opts_mut().insert(DhcpOption::IANA(IANA {
                     id: iana.id,
@@ -394,23 +398,25 @@ impl Dhcpv6Server {
                 );
             }
 
-            if let Some(ip) = self
+            let ips = self
                 .pool
-                .allocate(&client_duid.bytes, iana.id, mac, requested_ip)
-            {
-                if let Some(id) = identity {
-                    info!("DHCPv6: Assigning {ip} to {id}");
-                } else {
-                    info!("DHCPv6: Assigning {ip} to anonymous device");
-                }
+                .allocate(&client_duid.bytes, iana.id, mac, requested_ip);
+            if !ips.is_empty() {
                 let (pref, valid) = self.get_lifetimes();
                 let mut ia_opts = DhcpOptions::new();
-                ia_opts.insert(DhcpOption::IAAddr(IAAddr {
-                    addr: ip,
-                    preferred_life: pref,
-                    valid_life: valid,
-                    opts: DhcpOptions::new(),
-                }));
+                for ip in &ips {
+                    if let Some(id) = identity {
+                        info!("DHCPv6: Assigning {ip} to {id}");
+                    } else {
+                        info!("DHCPv6: Assigning {ip} to anonymous device");
+                    }
+                    ia_opts.insert(DhcpOption::IAAddr(IAAddr {
+                        addr: *ip,
+                        preferred_life: pref,
+                        valid_life: valid,
+                        opts: DhcpOptions::new(),
+                    }));
+                }
                 reply.opts_mut().insert(DhcpOption::IANA(IANA {
                     id: iana.id,
                     t1: pref / 2,
@@ -733,7 +739,7 @@ impl Dhcpv6Server {
         // Typically handled via RDNSS in RA. If config provides DNS, add it here.
     }
 
-    pub fn last_assignment_for(&self, duid: &[u8], iaid: u32) -> Option<Ipv6Addr> {
+    pub fn last_assignment_for(&self, duid: &[u8], iaid: u32) -> Vec<Ipv6Addr> {
         self.pool.lookup(duid, iaid)
     }
 
@@ -791,17 +797,24 @@ mod tests {
     use std::net::Ipv6Addr;
 
     fn dummy_server() -> Dhcpv6Server {
+        let ula = "fd97:f00d:cafe:3731::".parse::<Ipv6Addr>().unwrap();
+        let start = "fd97:f00d:cafe:3731::100".parse::<Ipv6Addr>().unwrap();
+        let end = "fd97:f00d:cafe:3731::200".parse::<Ipv6Addr>().unwrap();
+
         let cfg = Dhcpv6Config {
             enabled: true,
             iface: "lo".to_string(),
             lease_time: 86400,
-            ula_prefix: Some("fd97:f00d:cafe:3731::".parse().unwrap()),
+            ula_prefix: Some(ula),
             ula_prefix_len: 64,
-            range_start: Some("fd97:f00d:cafe:3731::100".parse().unwrap()),
-            range_end: Some("fd97:f00d:cafe:3731::200".parse().unwrap()),
             port: 547,
+            pools: vec![crate::dhcp::v6::config::Dhcpv6PoolConfig {
+                range_start: Some(lanforge_core::device::Ipv6AddrOrSuffix::Full(start)),
+                range_end: Some(lanforge_core::device::Ipv6AddrOrSuffix::Full(end)),
+                address: None,
+            }],
         };
-        let pool = Ipv6Pool::new(cfg.range_start, cfg.range_end, cfg.ula_prefix, 64);
+        let pool = Ipv6Pool::new(cfg.pools.clone(), cfg.ula_prefix, 64);
         let server_duid = Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
@@ -852,15 +865,14 @@ mod tests {
             lease_time: 86400,
             ula_prefix: None,
             ula_prefix_len: 64,
-            range_start: None,
-            range_end: None,
             port: 547,
+            pools: Vec::new(),
         };
-        let pool = Ipv6Pool::new(None, None, None, 64);
+        let pool = Ipv6Pool::new(Vec::new(), None, 64);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
         sock.set_nonblocking(true).unwrap();
         let ndp_poke_sock = Arc::new(tokio::net::UdpSocket::from_std(sock).unwrap());
-        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid(), ndp_poke_sock);
+        let mut srv = Dhcpv6Server::new(cfg, pool, Duid::new(vec![1, 2, 3]), ndp_poke_sock);
 
         let msg = build_solicit(true);
         let mut resp_vec = Vec::with_capacity(1024);
@@ -992,8 +1004,8 @@ mod tests {
         let duid = dummy_client_duid();
         let mac = dummy_mac();
 
-        // Simula que o IP foi alocado
-        srv.pool.allocate(&duid.bytes, 1, Some(mac), Some(ip));
+        // Simulate allocation
+        srv.pool.allocate(&duid.bytes, 1, Some(mac), None);
 
         let mut msg = Message::new(MessageType::Decline);
         msg.opts_mut()
@@ -1031,17 +1043,18 @@ mod tests {
             _ => panic!("Expected Decline acknowledgment"),
         }
 
-        // Verifica que o IP está em blacklist (tentando alocar exatamente ele)
-        let ip2 = srv
+        // Verify blacklist (ip is no longer available)
+        srv.pool.decline(ip);
+        let ips = srv
             .pool
-            .allocate(&dummy_client_duid().bytes, 2, Some(mac), Some(ip));
-        assert!(ip2.is_none() || ip2.unwrap() != ip);
+            .allocate(&dummy_client_duid().bytes, 2, Some(mac), None);
+        assert!(!ips.contains(&ip));
     }
 
     #[tokio::test]
     async fn lifetime_capping_respects_wan_prefix() {
         let mut srv = dummy_server();
-        // Configura vida útil do WAN prefix para 3600 segundos
+        // WAN prefix lifetime = 3600s
         srv.prefix_lifetimes = Some((1800, 3600));
 
         let msg = build_solicit(true);
@@ -1089,17 +1102,17 @@ mod tests {
 
     #[tokio::test]
     async fn solicit_with_iapd_yields_prefix_delegation() {
+        let ula = "fd97:f00d:cafe::".parse::<Ipv6Addr>().unwrap();
         let cfg = Dhcpv6Config {
             enabled: true,
             iface: "lo".to_string(),
             lease_time: 86400,
-            ula_prefix: Some("fd97:f00d:cafe::".parse().unwrap()),
+            ula_prefix: Some(ula),
             ula_prefix_len: 48,
-            range_start: None,
-            range_end: None,
             port: 547,
+            pools: Vec::new(),
         };
-        let pool = Ipv6Pool::new(None, None, cfg.ula_prefix, 48);
+        let pool = Ipv6Pool::new(Vec::new(), Some(ula), 48);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
         sock.set_nonblocking(true).unwrap();
         let ndp_poke_sock = Arc::new(tokio::net::UdpSocket::from_std(sock).unwrap());
@@ -1141,6 +1154,7 @@ mod tests {
             _ => panic!("Expected Reply with IA_PD"),
         }
     }
+
     #[tokio::test]
     async fn test_build_reconfigure() {
         let srv = dummy_server();

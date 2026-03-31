@@ -57,6 +57,15 @@ pub struct DhcpV6Cfg {
     pub lease_time: u32,
     pub range_start: Option<String>,
     pub range_end: Option<String>,
+    #[serde(default)]
+    pub pools: Vec<DhcpV6PoolCfg>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct DhcpV6PoolCfg {
+    pub range_start: Option<String>,
+    pub range_end: Option<String>,
+    pub address: Option<String>,
 }
 
 impl Default for DhcpV6Cfg {
@@ -66,6 +75,7 @@ impl Default for DhcpV6Cfg {
             lease_time: 86400,
             range_start: None,
             range_end: None,
+            pools: Vec::new(),
         }
     }
 }

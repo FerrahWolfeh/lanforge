@@ -1,6 +1,14 @@
-//! `DHCPv6` server configuration.
-
 use std::net::Ipv6Addr;
+
+use lanforge_core::device::Ipv6AddrOrSuffix;
+
+/// Configuration for a single DHCPv6 address pool.
+#[derive(Clone, Debug)]
+pub struct Dhcpv6PoolConfig {
+    pub range_start: Option<Ipv6AddrOrSuffix>,
+    pub range_end: Option<Ipv6AddrOrSuffix>,
+    pub address: Option<String>,
+}
 
 /// `DHCPv6` server configuration — built from the `[dhcp.v6]` TOML section.
 #[derive(Clone, Debug)]
@@ -15,12 +23,10 @@ pub struct Dhcpv6Config {
     pub ula_prefix: Option<Ipv6Addr>,
     /// Prefix length of the ULA.
     pub ula_prefix_len: u8,
-    /// Start of the dynamic range (optional).
-    pub range_start: Option<Ipv6Addr>,
-    /// End of the dynamic range (optional).
-    pub range_end: Option<Ipv6Addr>,
     /// UDP port to listen on (default: 547).
     pub port: u16,
+    /// Multiple pools for address assignment (new).
+    pub pools: Vec<Dhcpv6PoolConfig>,
 }
 
 impl Default for Dhcpv6Config {
@@ -31,9 +37,8 @@ impl Default for Dhcpv6Config {
             lease_time: 86400,
             ula_prefix: None,
             ula_prefix_len: 64,
-            range_start: None,
-            range_end: None,
             port: 547,
+            pools: Vec::new(),
         }
     }
 }

@@ -91,8 +91,17 @@ enabled = true
 # Lease time (in seconds) for IPv6 addresses.
 lease_time = 86400
 
-# IPv6 address range for dynamic allocation (Stateful).
-# Must be contained within one of the ULA prefixes configured in [ra].
+# Global prefix (ULA)
+ula_prefix = "fd97:f00d:cafe:3731::"
+
+# 1. Floating Pool: Applies to any managed prefix (ULA or detected GUA).
+# Using CIDR format: "::/64" means the server can use any suffix in a /64 prefix.
+[[dhcp.v6.pools]]
+address = "::/64"
+
+# 2. Fixed Pool: Restricts the ULA prefix to a specific range for tighter control.
+# Fixed pools have precedence over floating pools for their matching prefix.
+[[dhcp.v6.pools]]
 range_start = "fd97:f00d:cafe:3731::100"
 range_end = "fd97:f00d:cafe:3731::1fff"
 
