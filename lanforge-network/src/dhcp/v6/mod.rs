@@ -46,6 +46,8 @@ use server::{Dhcpv6Server, HandleResult};
 
 const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2);
 
+use dhcproto::v6::{DhcpOption, Message, OptionCode};
+use dhcproto::{Decodable, Decoder};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// Starts the `DHCPv6` service (UDP port 547, multicast `ff02::1:2`).
@@ -135,7 +137,57 @@ pub async fn dhcpv6_service(
                 };
 
                 let mut resp_vec = Vec::with_capacity(1024);
-                let res = server.handle_packet(payload, peer_ip, &table, nl_handle, &mut resp_vec).await;
+                let msg = match Message::decode(&mut Decoder::new(payload)) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        debug!("Failed to decode packet: {e}");
+                        continue;
+                    }
+                };
+
+                // 1. Try to extract MAC address without async lookups
+                let client_id_opt = msg.opts().get(OptionCode::ClientId);
+                let client_duid = if let Some(DhcpOption::ClientId(duid_bytes)) = client_id_opt {
+                    Some(Duid::new(duid_bytes.clone()))
+                } else {
+                    None
+                };
+
+                let mut resolved_mac = client_duid.as_ref().and_then(|d| d.extract_mac())
+                    .or_else(|| {
+                        msg.opts().iter().find_map(|opt| {
+                            if let DhcpOption::Unknown(u) = opt
+                                && u.code() == 79.into()
+                                && u.data().len() >= 8
+                            {
+                                return MacAddr::from_slice(&u.data()[2..8]);
+                            }
+                            None
+                        })
+                    })
+                    .or_else(|| lanforge_core::utils::mac_from_eui64_link_local(&peer_ip));
+
+                // 2. Try NDP cache (sync check)
+                if resolved_mac.is_none() {
+                    let t = table.read();
+                    if let Some(cached) = t.get_mac_from_ndp_cache(&peer_ip) {
+                        resolved_mac = Some(cached);
+                    }
+                }
+
+                // 3. Fallback to async netlink lookup if still unknown
+                if resolved_mac.is_none() {
+                    debug!("Cache miss. Performing kernel lookup for {peer_ip}...");
+                    if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer_ip).await {
+                        let _ = table.update(DeviceUpdate::NdpSeen {
+                            mac: ndp_mac,
+                            ip: peer_ip,
+                        });
+                        resolved_mac = Some(ndp_mac);
+                    }
+                }
+
+                let res = server.handle_packet(&msg, peer_ip, &table, resolved_mac, &mut resp_vec);
 
                 match res {
                     HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, ias) => {

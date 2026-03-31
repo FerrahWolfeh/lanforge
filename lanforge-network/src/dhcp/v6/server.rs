@@ -18,10 +18,9 @@ use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,
     Status, StatusCode,
 };
-use dhcproto::{Decodable, Decoder, Encodable, Encoder};
+use dhcproto::{Encodable, Encoder};
 use lanforge_core::bus::ManagedTable;
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::update::DeviceUpdate;
 use lanforge_core::utils::mac_from_eui64_link_local;
 use std::net::Ipv6Addr;
 use tracing::{debug, info, warn};
@@ -107,23 +106,15 @@ impl Dhcpv6Server {
         (preferred, valid)
     }
 
-    /// Processes a raw `DHCPv6` packet and returns a response (if any).
-    pub async fn handle_packet<'a>(
+    /// Processes a decoded `DHCPv6` message and returns a response (if any).
+    pub fn handle_packet<'a>(
         &mut self,
-        data: &[u8],
+        msg: &Message,
         peer: Ipv6Addr,
         table: &ManagedTable,
-        nl_handle: &rtnetlink::Handle,
+        resolved_mac: Option<MacAddr>,
         buf: &'a mut Vec<u8>,
     ) -> HandleResult<'a> {
-        let msg = match Message::decode(&mut Decoder::new(data)) {
-            Ok(m) => m,
-            Err(e) => {
-                debug!("Failed to decode packet: {e}");
-                return HandleResult::Ignore;
-            }
-        };
-
         let client_id_opt = msg.opts().get(OptionCode::ClientId);
         let client_duid = if let Some(DhcpOption::ClientId(duid_bytes)) = client_id_opt {
             Duid::new(duid_bytes.clone())
@@ -136,8 +127,8 @@ impl Dhcpv6Server {
         };
 
         // Try to extract MAC address in increasing order of cost
-        let mut mac = client_duid
-            .extract_mac()
+        let mut mac = resolved_mac
+            .or_else(|| client_duid.extract_mac())
             .or_else(|| {
                 msg.opts().iter().find_map(|opt| {
                     if let DhcpOption::Unknown(u) = opt
@@ -151,10 +142,6 @@ impl Dhcpv6Server {
             })
             .or_else(|| mac_from_eui64_link_local(&peer));
 
-        // Take a single read lock on the table for:
-        // 1. NDP Cache lookup
-        // 2. DeviceIdentity resolution (if MAC is known)
-
         // 1. Try to recover MAC from NDP cache (synchronous lock)
         if mac.is_none() {
             let t = table.read();
@@ -164,22 +151,10 @@ impl Dhcpv6Server {
             }
         }
 
-        // 2. If still no MAC, try a kernel lookup (asynchronous — NO LOCK)
-        if mac.is_none() {
-            debug!("Cache miss. Performing kernel lookup for {peer}...");
-            if let Some(ndp_mac) = crate::netlink::lookup_mac_for_ipv6(nl_handle, &peer).await {
-                let _ = table.update(DeviceUpdate::NdpSeen {
-                    mac: ndp_mac,
-                    ip: peer,
-                });
-                mac = Some(ndp_mac);
-            }
-        }
-
-        // 3. Resolve identity (new synchronous lock)
+        // 2. Resolve identity (new synchronous lock)
         let identity = mac.map(|m| {
             let t = table.read();
-            DeviceIdentity::resolve(m, None, Self::get_vendor_class(&msg), Some(&t))
+            DeviceIdentity::resolve(m, None, Self::get_vendor_class(msg), Some(&t))
         });
 
         if mac.is_none() {
@@ -197,25 +172,23 @@ impl Dhcpv6Server {
 
         match msg.msg_type() {
             MessageType::Solicit => {
-                self.handle_solicit(&msg, client_duid, identity.as_ref(), peer, buf)
+                self.handle_solicit(msg, client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Request => {
-                self.handle_request(&msg, client_duid, identity.as_ref(), peer, buf)
+                self.handle_request(msg, client_duid, identity.as_ref(), peer, buf)
             }
-            MessageType::Renew => {
-                self.handle_renew(&msg, client_duid, identity.as_ref(), peer, buf)
-            }
+            MessageType::Renew => self.handle_renew(msg, client_duid, identity.as_ref(), peer, buf),
             MessageType::Rebind => {
-                self.handle_rebind(&msg, client_duid, identity.as_ref(), peer, buf)
+                self.handle_rebind(msg, client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Release => {
-                self.handle_release(&msg, &client_duid, identity.as_ref(), peer, buf)
+                self.handle_release(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Decline => {
-                self.handle_decline(&msg, client_duid, identity.as_ref(), peer, buf)
+                self.handle_decline(msg, client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::InformationRequest => {
-                self.handle_information_request(&msg, &client_duid, peer, buf)
+                self.handle_information_request(msg, &client_duid, peer, buf)
             }
             other => {
                 debug!("Ignoring message type: {other:?}");
@@ -787,8 +760,14 @@ fn encode_msg<'a>(msg: &Message, buf: &'a mut Vec<u8>) -> &'a [u8] {
 
 #[cfg(test)]
 mod tests {
+    use crate::dhcp::v6::config::Dhcpv6PoolConfig;
+
     use super::*;
-    use dhcproto::v6::{DhcpOptions, IANA, OptionCode};
+    use dhcproto::{
+        Decodable, Decoder,
+        v6::{DhcpOptions, IANA, OptionCode},
+    };
+    use lanforge_core::device::Ipv6AddrOrSuffix;
     use std::net::Ipv6Addr;
 
     fn dummy_server() -> Dhcpv6Server {
@@ -803,9 +782,9 @@ mod tests {
             ula_prefix: Some(ula),
             ula_prefix_len: 64,
             port: 547,
-            pools: vec![crate::dhcp::v6::config::Dhcpv6PoolConfig {
-                range_start: Some(lanforge_core::device::Ipv6AddrOrSuffix::Full(start)),
-                range_end: Some(lanforge_core::device::Ipv6AddrOrSuffix::Full(end)),
+            pools: vec![Dhcpv6PoolConfig {
+                range_start: Some(Ipv6AddrOrSuffix::Full(start)),
+                range_end: Some(Ipv6AddrOrSuffix::Full(end)),
                 address: None,
             }],
         };
