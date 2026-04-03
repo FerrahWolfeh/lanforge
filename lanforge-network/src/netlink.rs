@@ -240,11 +240,42 @@ impl NdpMonitor {
     pub async fn refresh_interfaces(&self) -> crate::error::Result<()> {
         let mut stream = self.handle.address().get().execute();
         let table = lanforge_core::context::LanforgeContext::table();
+        
+        // Group extracted IPs by ifindex to aggregate link-local and GUA
+        let mut ifaces: std::collections::HashMap<u32, (Option<Ipv6Addr>, Option<Ipv6Addr>)> = std::collections::HashMap::new();
+
         while let Some(msg) = stream.try_next().await? {
-            self.update_interface_state(&msg, &table);
+            let ifindex = msg.header.index;
+            let (ll, g) = ifaces.entry(ifindex).or_insert((None, None));
+
+            for attr in &msg.attributes {
+                if let rtnetlink::packet_route::address::AddressAttribute::Address(
+                    std::net::IpAddr::V6(v6),
+                ) = attr
+                {
+                    let o = v6.octets();
+                    if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
+                        *ll = Some(*v6);
+                    } else if (0x20..=0x3F).contains(&o[0]) {
+                        let mut masked = o;
+                        masked[8..].fill(0);
+                        *g = Some(Ipv6Addr::from(masked));
+                    }
+                }
+            }
         }
+
+        for (ifindex, (link_local, gua)) in ifaces {
+            let _ = table.update(&DeviceUpdate::InterfaceIpsChanged {
+                ifindex,
+                link_local,
+                gua,
+            });
+        }
+
         Ok(())
     }
+
     /// Refresh a single interface's IP state.
     async fn refresh_interface(&self, ifindex: u32) -> crate::error::Result<()> {
         let mut stream = self
@@ -255,40 +286,35 @@ impl NdpMonitor {
             .execute();
 
         let table = lanforge_core::context::LanforgeContext::table();
-        while let Some(msg) = stream.try_next().await? {
-            self.update_interface_state(&msg, &table);
-        }
-        Ok(())
-    }
-
-    fn update_interface_state(&self, msg: &AddressMessage, table: &Arc<ManagedTable>) {
         let mut link_local = None;
         let mut gua = None;
 
-        for attr in &msg.attributes {
-            if let rtnetlink::packet_route::address::AddressAttribute::Address(
-                std::net::IpAddr::V6(v6),
-            ) = attr
-            {
-                let o = v6.octets();
-                if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
-                    link_local = Some(*v6);
-                } else if (0x20..=0x3F).contains(&o[0]) {
-                    // Mask to /64
-                    let mut masked = o;
-                    masked[8..].fill(0);
-                    gua = Some(Ipv6Addr::from(masked));
+        // Iterate over ALL address messages for this specific interface and aggregate them
+        while let Some(msg) = stream.try_next().await? {
+            for attr in &msg.attributes {
+                if let rtnetlink::packet_route::address::AddressAttribute::Address(
+                    std::net::IpAddr::V6(v6),
+                ) = attr
+                {
+                    let o = v6.octets();
+                    if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
+                        link_local = Some(*v6);
+                    } else if (0x20..=0x3F).contains(&o[0]) {
+                        let mut masked = o;
+                        masked[8..].fill(0);
+                        gua = Some(Ipv6Addr::from(masked));
+                    }
                 }
             }
         }
 
-        if link_local.is_some() || gua.is_some() {
-            let _ = table.update(&DeviceUpdate::InterfaceIpsChanged {
-                ifindex: msg.header.index,
-                link_local,
-                gua,
-            });
-        }
+        let _ = table.update(&DeviceUpdate::InterfaceIpsChanged {
+            ifindex,
+            link_local,
+            gua,
+        });
+
+        Ok(())
     }
 }
 
