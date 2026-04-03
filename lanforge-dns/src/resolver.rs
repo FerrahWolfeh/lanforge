@@ -65,7 +65,10 @@ impl<'a> LocalResolver<'a> {
         let host = if device.hostname.name.is_empty() {
             format!("host-{}", device.mac.to_string().replace(':', ""))
         } else {
-            device.hostname.name.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "-")
+            device
+                .hostname
+                .name
+                .replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "-")
         };
 
         let fqdn = format!("{}.{}.", host, self.cfg.search_domain);
@@ -100,10 +103,11 @@ impl<'a> LocalResolver<'a> {
             applied_prefixes.insert(Ipv6Prefix::new(ula, IpClassification::Ula));
         }
 
-        // 1. Collect SLAAC address prefixes to ensure we return them (and potentially apply suffixes if they are ULA)
+        // 1. Collect all known absolute address prefixes (Slaac, Dynamic, and Full Static)
+        // to ensure we return them and potentially apply suffixes to them if needed.
         for state in &device.v6 {
-            if let IPv6State::Slaac(ip) = state {
-                applied_prefixes.insert(Ipv6Prefix::from_addr(*ip));
+            if let Some(ip) = state.ip() {
+                applied_prefixes.insert(Ipv6Prefix::from_addr(ip));
             }
         }
 
@@ -127,9 +131,10 @@ impl<'a> LocalResolver<'a> {
                     Ipv6AddrOrSuffix::Full(ip) => all_ips.push(IpAddr::V6(*ip)),
                     Ipv6AddrOrSuffix::Suffix(_) => {
                         for prefix in &applied_prefixes {
-                            // Only apply custom suffixes to prefixes we are authoritative for (ULA).
-                            // This prevents "inventing" unreachable GUA addresses.
-                            if prefix.group == IpClassification::Ula
+                            // Apply custom suffixes to both ULA and GUA prefixes.
+                            // This mirrors OpenWrt's behavior, ensuring local devices can resolve GUAs
+                            // generated from standard SLAAC or DHCPv6 prefixes.
+                            if matches!(prefix.group, IpClassification::Ula | IpClassification::Gua)
                                 && let Some(ip) = combine_prefix_suffix(&prefix.segments, suf)
                             {
                                 all_ips.push(IpAddr::V6(ip));
