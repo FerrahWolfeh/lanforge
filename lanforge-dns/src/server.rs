@@ -127,21 +127,23 @@ impl AsyncService for DnsService {
                             let c = Arc::clone(&tcp_ctx);
 
                             tokio::spawn(async move {
-                                let mut len_buf = [0u8; 2];
-                                if stream.read_exact(&mut len_buf).await.is_err() {
-                                    return;
-                                }
-                                let len = u16::from_be_bytes(len_buf) as usize;
-                                let mut buf = vec![0u8; len];
-                                if stream.read_exact(&mut buf).await.is_err() {
-                                    return;
-                                }
+                                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                                    let mut len_buf = [0u8; 2];
+                                    if stream.read_exact(&mut len_buf).await.is_err() {
+                                        return;
+                                    }
+                                    let len = u16::from_be_bytes(len_buf) as usize;
+                                    let mut buf = vec![0u8; len];
+                                    if stream.read_exact(&mut buf).await.is_err() {
+                                        return;
+                                    }
 
-                                if let Ok(Some(response)) = handle_query(&buf, &c).await {
-                                    let resp_len = (response.len() as u16).to_be_bytes();
-                                    let _ = stream.write_all(&resp_len).await;
-                                    let _ = stream.write_all(&response).await;
-                                }
+                                    if let Ok(Some(response)) = handle_query(&buf, &c).await {
+                                        let resp_len = (response.len() as u16).to_be_bytes();
+                                        let _ = stream.write_all(&resp_len).await;
+                                        let _ = stream.write_all(&response).await;
+                                    }
+                                }).await;
                             });
                         }
                     }
@@ -254,7 +256,7 @@ pub(crate) async fn handle_query(
         _ => Ok(Some(WireResponseWriter::write_error_response(
             data,
             &question,
-            5, // REFUSED
+            3, // NXDOMAIN (Changed from 5 REFUSED for authoritative conditional forwarding)
             edns.as_ref(),
             ra,
         ))),
@@ -295,6 +297,6 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
     if let (Some(upstream), Some(mgr)) = (ctx.cfg.upstream, &ctx.upstream_mgr) {
         forward_to_upstream(data, upstream, mgr).await.map(Some)
     } else {
-        Ok(Some(rb.refused()?))
+        Ok(Some(rb.nxdomain()?))
     }
 }

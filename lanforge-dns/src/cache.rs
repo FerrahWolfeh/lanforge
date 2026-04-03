@@ -113,7 +113,15 @@ impl DnsCache {
         }
 
         if !found {
-            min_ttl = 60; // Negative caching
+            min_ttl = 60; // Default fallback
+
+            // RFC 2308: Negative caching TTL comes from the minimum of the SOA's TTL and the SOA's MINIMUM field
+            for record in response_msg.name_servers() {
+                if let hickory_proto::rr::RData::SOA(soa) = record.data() {
+                    min_ttl = std::cmp::min(record.ttl(), soa.minimum());
+                    break;
+                }
+            }
         }
 
         let key = CacheKey {

@@ -39,8 +39,8 @@ impl UpstreamManager {
                     if src != upstream {
                         continue;
                     }
-                    if let Ok(msg) = Message::from_bytes(&buf[..len]) {
-                        let id = msg.id();
+                    if len >= 2 {
+                        let id = u16::from_be_bytes([buf[0], buf[1]]);
                         let tx = {
                             let mut map = p.lock().unwrap();
                             map.remove(&id)
@@ -118,14 +118,13 @@ impl UpstreamManager {
                     self.cache.insert(&query, &resp, final_bytes.clone());
                     Ok(final_bytes)
                 } else {
-                    // If Message::from_bytes failed, we still return the raw bytes if they were Ok from UDP
-                    // This case should ideally not happen if the previous `if let Ok(resp) = Message::from_bytes(&resp_bytes)` passed.
-                    // But if it failed *after* the TC check, we return the original bytes.
-                    // However, the logic implies that if `Message::from_bytes` fails, it's an error.
-                    // Let's assume if we reach here, `resp_bytes` is valid and we just need to restore ID.
-                    // The `else` branch here means `Message::from_bytes(&resp_bytes)` failed *again*.
-                    // This is a bit redundant, but keeping it as per user's snippet.
-                    Ok(resp_bytes)
+                    let mut raw = resp_bytes;
+                    if raw.len() >= 2 {
+                        let id_bytes = orig_id.to_be_bytes();
+                        raw[0] = id_bytes[0];
+                        raw[1] = id_bytes[1];
+                    }
+                    Ok(raw)
                 }
             }
             Err(e) => Err(e),
@@ -138,20 +137,25 @@ impl UpstreamManager {
             .await
             .map_err(|_| DnsError::UpstreamTimeout)??;
 
-        // RFC 1035: In TCP, DNS data is prefixed by its 2-byte length (Big Endian).
-        let len = (data.len() as u16).to_be_bytes();
-        stream.write_all(&len).await?;
-        stream.write_all(data).await?;
+        timeout(Duration::from_secs(5), async {
+            // RFC 1035: In TCP, DNS data is prefixed by its 2-byte length (Big Endian).
+            let len = (data.len() as u16).to_be_bytes();
+            stream.write_all(&len).await?;
+            stream.write_all(data).await?;
 
-        // Reading response...
-        let mut len_buf = [0u8; 2];
-        stream.read_exact(&mut len_buf).await?;
-        let resp_len = u16::from_be_bytes(len_buf) as usize;
+            // Reading response...
+            let mut len_buf = [0u8; 2];
+            stream.read_exact(&mut len_buf).await?;
+            let resp_len = u16::from_be_bytes(len_buf) as usize;
 
-        let mut resp_buf = vec![0u8; resp_len];
-        stream.read_exact(&mut resp_buf).await?;
+            let mut resp_buf = vec![0u8; resp_len];
+            stream.read_exact(&mut resp_buf).await?;
 
-        Ok(resp_buf)
+            Ok::<Vec<u8>, std::io::Error>(resp_buf)
+        })
+        .await
+        .map_err(|_| DnsError::UpstreamTimeout)?
+        .map_err(DnsError::Io)
     }
 }
 

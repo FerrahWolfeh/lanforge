@@ -65,7 +65,7 @@ impl<'a> LocalResolver<'a> {
         let host = if device.hostname.name.is_empty() {
             format!("host-{}", device.mac.to_string().replace(':', ""))
         } else {
-            device.hostname.name.clone()
+            device.hostname.name.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "-")
         };
 
         let fqdn = format!("{}.{}.", host, self.cfg.search_domain);
