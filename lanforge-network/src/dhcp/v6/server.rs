@@ -628,6 +628,10 @@ impl Dhcpv6Server {
     }
 
     fn check_server_id(&self, msg: &Message) -> bool {
+        // RFC 8415 §18.2.4: REBIND messages are multicast and do not include a Server Identifier.
+        if msg.msg_type() == MessageType::Rebind {
+            return true;
+        }
         match msg.opts().get(OptionCode::ServerId) {
             Some(DhcpOption::ServerId(sid)) => *sid == self.server_duid.bytes,
             _ => false,

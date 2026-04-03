@@ -58,7 +58,6 @@ impl IpPool {
     pub fn mark_declined(&mut self, ip: Ipv4Addr) {
         self.remove_from_available(ip);
         self.declined.insert(ip, SystemTime::now());
-        self.remove_from_available(ip);
     }
 
     /// Cleans up quarantine IPs.
@@ -123,6 +122,24 @@ impl IpPool {
         }
 
         // 3. Fallback: Pick from available pool (O(1))
+        while let Some(ip) = self.available_ips.last().copied() {
+            self.remove_from_available(ip);
+            if table.get_mac_by_ip(std::net::IpAddr::V4(ip)).is_none() {
+                return Some(ip);
+            }
+        }
+
+        // 3.5. Garbage Collection: If pool is empty, scan for naturally expired leases
+        for i in self.start..=self.end {
+            let ip = Ipv4Addr::from(i);
+            if table.get_mac_by_ip(std::net::IpAddr::V4(ip)).is_none()
+                && !self.declined.contains_key(&ip)
+            {
+                self.add_to_available(ip);
+            }
+        }
+
+        // Second pass after GC
         while let Some(ip) = self.available_ips.last().copied() {
             self.remove_from_available(ip);
             if table.get_mac_by_ip(std::net::IpAddr::V4(ip)).is_none() {
