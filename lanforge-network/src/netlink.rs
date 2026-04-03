@@ -127,7 +127,7 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
         })
     } else {
         let mac = mac?;
-        if mac.is_zero() {
+        if mac.is_zero() || (mac.0[0] & 1) == 1 {
             return None;
         }
 
@@ -170,7 +170,7 @@ fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
     let ip = ip?;
     let mac = mac?;
 
-    if mac.is_zero() {
+    if mac.is_zero() || (mac.0[0] & 1) == 1 {
         return None;
     }
 
