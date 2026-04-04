@@ -17,7 +17,7 @@
 //!     E->>T: SlaacObserved (GUA) / NdpSeen (Other)
 //! ```
 
-use crate::error::Result;
+use crate::{error::Result, slaac::bootstrap_table};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::TryStreamExt;
@@ -323,8 +323,6 @@ impl LanforgeService for NdpMonitor {
 
 impl AsyncService for NdpMonitor {
     async fn run(&mut self) -> std::result::Result<(), CoreError> {
-        use crate::slaac::bootstrap_table;
-
         let table = LanforgeContext::table();
         let mut bus_rx = LanforgeContext::bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;

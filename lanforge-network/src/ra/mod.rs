@@ -29,10 +29,13 @@ pub mod config;
 pub mod packet;
 
 pub use config::*;
+use lanforge_core::context::LanforgeContext;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::{NetworkError, Result};
 use lanforge_core::bus::{LanforgeEvent, ManagedTable};
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{AsyncService, LanforgeService};
 use rand::RngExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
@@ -41,6 +44,7 @@ use std::net::{Ipv6Addr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::unix::AsyncFd;
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -132,10 +136,6 @@ impl RaState {
     }
 }
 
-use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService};
-use tokio::io::unix::AsyncFd;
-
 pub struct RaService {
     cfg: RaConfig,
 }
@@ -155,8 +155,6 @@ impl LanforgeService for RaService {
 
 impl AsyncService for RaService {
     async fn run(&mut self) -> std::result::Result<(), CoreError> {
-        use lanforge_core::context::LanforgeContext;
-
         self.cfg
             .validate()
             .map_err(|e| CoreError::Generic(e.to_string()))?;

@@ -1,3 +1,4 @@
+use lanforge_core::context::LanforgeContext;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -70,7 +71,6 @@ async fn run_mdns_worker(
     mut rx: mpsc::Receiver<MdnsCommand>,
     tx: mpsc::Sender<MdnsCommand>,
 ) -> Result<()> {
-    use lanforge_core::context::LanforgeContext;
     let bus = LanforgeContext::bus();
     let table = LanforgeContext::table();
     // We bind to a random port to SEND queries, and a fixed port to LISTEN if we want passive,

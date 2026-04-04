@@ -25,6 +25,7 @@ use crate::error::Result;
 use lanforge_core::state::update::DeviceUpdate;
 use rtnetlink::Handle;
 use std::collections::HashSet;
+use std::net::Ipv6Addr;
 
 use crate::netlink;
 use lanforge_core::context::LanforgeContext;
@@ -40,7 +41,7 @@ use lanforge_core::identifiers::MacAddr;
 pub async fn bootstrap_table(
     target_prefix: &str,
     handle: &Handle,
-    gua: Option<std::net::Ipv6Addr>,
+    gua: Option<Ipv6Addr>,
 ) -> Result<()> {
     let neighbors = netlink::get_ipv6_neighbors(handle, target_prefix).await?;
 
