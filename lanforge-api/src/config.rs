@@ -37,6 +37,10 @@ pub struct ApiConfig {
     pub tcp_port: Option<u16>,
     /// Optional address to listen for the HTTP REST API (e.g., "0.0.0.0:8080").
     pub http_listen: Option<String>,
+    /// Total number of addresses in the DHCPv4 dynamic pool.
+    pub dhcp_v4_range_size: u32,
+    /// Total number of addresses in the DHCPv6 dynamic pool (if finite).
+    pub dhcp_v6_pool_size: Option<u64>,
 }
 
 #[cfg(test)]
@@ -56,6 +60,8 @@ impl ApiConfig {
             log_db_path: "/tmp/lanforge_logs.db".to_string(),
             tcp_port: None,
             http_listen: None,
+            dhcp_v4_range_size: 100,
+            dhcp_v6_pool_size: Some(100),
         }
     }
 }

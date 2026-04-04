@@ -70,20 +70,67 @@ impl ClientContext {
         status.services.ra.gua.clone_from(&self.current_gua);
         status.services.ra.ula.clone_from(&status.network.ula);
 
-        // Services -> DHCPv4
-        status.services.dhcp_v4.state = if self.cfg.dhcp_v4_enabled {
-            "online".to_string()
-        } else {
-            "offline".to_string()
-        };
-        status.services.dhcp_v4.uptime_secs = self.uptime_secs;
+        // Devices + Leases
+        let dev_ct = table_guard.devices().count();
+        let mut online_ct = 0;
+        let mut static_toml = 0;
+        let mut dynamic = 0;
 
-        // Services -> DHCPv6
-        status.services.dhcp_v6.state = if self.cfg.dhcp_v6_enabled {
-            "online".to_string()
+        let mut v4_dynamic_count = 0;
+        let mut v6_dynamic_count = 0;
+        let mut slaac_addrs = 0;
+
+        for dev in table_guard.devices() {
+            let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
+            if is_online {
+                online_ct += 1;
+            }
+
+            if dev.is_static() {
+                static_toml += 1;
+            } else {
+                dynamic += 1;
+                if dev.v4.ip().is_some() {
+                    v4_dynamic_count += 1;
+                }
+                if dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))) {
+                    v6_dynamic_count += 1;
+                }
+            }
+
+            slaac_addrs += dev
+                .v6
+                .iter()
+                .filter(|s| matches!(s, IPv6State::Slaac(_)))
+                .count();
+        }
+
+        status.services.dhcp_v4.leases_active = v4_dynamic_count as usize;
+        status.services.dhcp_v4.state = if self.cfg.dhcp_v4_enabled {
+            "ativo"
         } else {
-            "offline".to_string()
-        };
+            "inativo"
+        }
+        .to_string();
+        status.services.dhcp_v4.pool_free =
+            self.cfg
+                .dhcp_v4_range_size
+                .saturating_sub(v4_dynamic_count as u32) as usize;
+
+        status.services.dhcp_v6.leases_active = v6_dynamic_count as usize;
+        status.services.dhcp_v6.state = if self.cfg.dhcp_v6_enabled {
+            "ativo"
+        } else {
+            "inativo"
+        }
+        .to_string();
+        status.services.dhcp_v6.pool_free = self
+            .cfg
+            .dhcp_v6_pool_size
+            .map(|total| total.saturating_sub(v6_dynamic_count as u64) as usize)
+            .unwrap_or(9999);
+        status.services.dhcp_v6.ula = self.cfg.ula_prefix.clone();
+        status.services.dhcp_v6.gua = self.current_gua.clone();
         status.services.dhcp_v6.uptime_secs = self.uptime_secs;
 
         // Services -> DNS
@@ -99,57 +146,6 @@ impl ClientContext {
             .upstream
             .clone_from(&self.cfg.dns_upstream);
 
-        // Services -> SLAAC
-        status.services.slaac.state = "online".to_string();
-        status.services.slaac.uptime_secs = self.uptime_secs;
-        status.services.slaac.last_scan_secs_ago = self.last_scan_secs_ago;
-
-        // Database
-        status.db.path.clone_from(&self.cfg.db_path);
-        status.db.size_bytes = std::fs::metadata(&self.cfg.db_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
-        status.db.last_flush_secs_ago = 0;
-
-        // Devices + Leases
-        let dev_ct = table_guard.devices().count();
-        let mut online_ct = 0;
-        let mut static_toml = 0;
-        let mut dynamic = 0;
-
-        let mut v4_active = 0;
-        let mut v6_active = 0;
-        let mut slaac_addrs = 0;
-
-        for dev in table_guard.devices() {
-            let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
-            if is_online {
-                online_ct += 1;
-            }
-
-            if dev.is_static() {
-                static_toml += 1;
-            } else {
-                dynamic += 1;
-            }
-
-            if dev.v4.ip().is_some() {
-                v4_active += 1;
-            }
-            if dev
-                .v6
-                .iter()
-                .any(|s| matches!(s, IPv6State::Dynamic(_) | IPv6State::Static(_)))
-            {
-                v6_active += 1;
-            }
-            slaac_addrs += dev
-                .v6
-                .iter()
-                .filter(|s| matches!(s, IPv6State::Slaac(_)))
-                .count();
-        }
-
         status.devices.total = dev_ct;
         status.devices.online = online_ct;
         status.devices.static_toml = static_toml;
@@ -157,17 +153,11 @@ impl ClientContext {
             .devices()
             .filter(|d| d.origin == Origin::Cli)
             .count();
+        status.devices.dynamic = dynamic;
 
         drop(table_guard);
 
-        status.devices.dynamic = dynamic;
-
-        status.services.dhcp_v4.leases_active = v4_active;
-        status.services.dhcp_v6.leases_active = v6_active;
         status.services.slaac.addrs_tracked = slaac_addrs;
-
-        status.services.dhcp_v4.pool_free = 143;
-        status.services.dhcp_v6.pool_free = 247;
 
         Response::Status(Box::new(status))
     }

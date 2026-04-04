@@ -192,7 +192,7 @@ impl Ipv6Pool {
         duid: &[u8],
         iaid: u32,
         mac: Option<MacAddr>,
-        _requested: Option<Ipv6Addr>,
+        requested: Option<Ipv6Addr>,
     ) -> Vec<Ipv6Addr> {
         let t = LanforgeContext::table();
         let table = t.read();
@@ -260,11 +260,21 @@ impl Ipv6Pool {
                 }
             }
 
+            // 3. Requested IP check for this prefix
+            if !prefix_assigned
+                && let Some(req_ip) = requested
+                && self.is_on_prefix(&req_ip, &prefix)
+                && self.is_available(&req_ip, &table)
+            {
+                assigned.push(req_ip);
+                prefix_assigned = true;
+            }
+
             if prefix_assigned {
                 continue;
             }
 
-            // 3. Dynamic Pools check for this prefix
+            // 4. Dynamic Pools check for this prefix
             // Search Fixed pools first for precedence
             for pool in &self.pools {
                 if let PoolRange::Fixed {
@@ -685,6 +695,18 @@ mod tests {
 
         // Collision chance in 64 host bits is statistically zero
         assert_ne!(ip1, ip2);
+    }
+
+    #[test]
+    fn test_requested_ip_honoring() {
+        init_context();
+        let ula = "fd00::".parse::<Ipv6Addr>().ok();
+        let mut pool = Ipv6Pool::new(Vec::new(), ula, 64);
+
+        let requested = "fd00::dead:beef".parse::<Ipv6Addr>().unwrap();
+        let ips = pool.allocate(&duid(1), 1, Some(mac(1)), Some(requested));
+
+        assert!(ips.contains(&requested), "Must honor requested IP");
     }
 
     #[test]

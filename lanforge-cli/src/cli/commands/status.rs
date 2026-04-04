@@ -74,6 +74,20 @@ fn print_status_header(st: &StatusResponse) {
 }
 
 fn print_status_services(st: &StatusResponse, gua: &str, ula: &str, upstream: &str) {
+    let v6_free_str = if st.services.dhcp_v6.pool_free >= 9999 {
+        "ilimitado".to_string()
+    } else {
+        st.services.dhcp_v6.pool_free.to_string()
+    };
+
+    let mut v6_extra = String::new();
+    if let Some(ref g) = st.services.dhcp_v6.gua {
+        v6_extra.push_str(&format!("\n                        GUA  {g}"));
+    }
+    if let Some(ref u) = st.services.dhcp_v6.ula {
+        v6_extra.push_str(&format!("\n                        ULA  {u}"));
+    }
+
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View { Text(content: "SERVIÇOS") }
@@ -101,8 +115,8 @@ fn print_status_services(st: &StatusResponse, gua: &str, ula: &str, upstream: &s
                 Text(content: "● DHCPv6      ", color: Color::Cyan)
                 Text(content: format!("{:<9}", st.services.dhcp_v6.state))
             }
-            View(flex_direction: FlexDirection::Row) {
-                Text(content: format!("                        {} leases ativos  ·  {} livres", st.services.dhcp_v6.leases_active, st.services.dhcp_v6.pool_free))
+            View(flex_direction: FlexDirection::Column) {
+                Text(content: format!("                        {} leases ativos  ·  {} livres{}", st.services.dhcp_v6.leases_active, v6_free_str, v6_extra))
             }
 
             View(margin_top: 1, flex_direction: FlexDirection::Row) {

@@ -282,6 +282,10 @@ pub struct ServiceDhcpV6 {
     pub leases_active: usize,
     /// Number of available addresses in the pool.
     pub pool_free: usize,
+    /// Current Global Unicast Address (GUA) prefix being managed.
+    pub gua: Option<String>,
+    /// Unique Local Address (ULA) prefix being managed, if any.
+    pub ula: Option<String>,
 }
 
 /// Status of the DNS service.

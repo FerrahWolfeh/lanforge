@@ -235,13 +235,21 @@ impl Dhcpv6Server {
                 };
 
                 let mut ia_opts = DhcpOptions::new();
-                for ip in &ips {
-                    if let Some(id) = identity {
-                        info!("DHCPv6: {id} is soliciting -> {action} {ip}");
-                    } else {
-                        info!("DHCPv6: Anonymous is soliciting -> {action} {ip}");
-                    }
+                let ip_list: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
 
+                if let Some(id) = identity {
+                    info!(
+                        "DHCPv6: {id} is soliciting -> {action} [{}]",
+                        ip_list.join(", ")
+                    );
+                } else {
+                    info!(
+                        "DHCPv6: Anonymous is soliciting -> {action} [{}]",
+                        ip_list.join(", ")
+                    );
+                }
+
+                for ip in &ips {
                     ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                         addr: *ip,
                         preferred_life: pref,
@@ -370,15 +378,22 @@ impl Dhcpv6Server {
             let ips = self
                 .pool
                 .allocate(&client_duid.bytes, iana.id, mac, requested_ip);
+
             if !ips.is_empty() {
                 let (pref, valid) = self.get_lifetimes();
                 let mut ia_opts = DhcpOptions::new();
+                let ip_list: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+
+                if let Some(id) = identity {
+                    info!("DHCPv6: Assigning [{}] to {id}", ip_list.join(", "));
+                } else {
+                    info!(
+                        "DHCPv6: Assigning [{}] to anonymous device",
+                        ip_list.join(", ")
+                    );
+                }
+
                 for ip in &ips {
-                    if let Some(id) = identity {
-                        info!("DHCPv6: Assigning {ip} to {id}");
-                    } else {
-                        info!("DHCPv6: Assigning {ip} to anonymous device");
-                    }
                     ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                         addr: *ip,
                         preferred_life: pref,

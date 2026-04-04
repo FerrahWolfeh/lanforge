@@ -415,6 +415,29 @@ impl Config {
             log_db_path: self.log_db.clone(),
             tcp_port: self.api_port,
             http_listen: self.http_listen.clone(),
+            dhcp_v4_range_size: {
+                let v4 = self.to_dhcpv4_config();
+                u32::from(v4.range_end) - u32::from(v4.range_start) + 1
+            },
+            dhcp_v6_pool_size: {
+                let v6 = self.to_dhcpv6_config();
+                let mut total = 0;
+                let mut finite = true;
+                for p in &v6.pools {
+                    if let (Some(start), Some(end)) = (&p.range_start, &p.range_end) {
+                        // Very rough approximation for IPv6 range size
+                        // Since we only care about FINITE ranges here
+                        let s = start.as_u128(None);
+                        let e = end.as_u128(None);
+                        total += (e - s + 1) as u64;
+                    } else {
+                        // CIDR-based or dynamic prefix: potentially "infinite" for status purposes
+                        finite = false;
+                        break;
+                    }
+                }
+                if finite { Some(total) } else { None }
+            },
         }
     }
 }

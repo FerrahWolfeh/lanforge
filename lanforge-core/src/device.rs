@@ -309,6 +309,25 @@ impl Ipv6AddrOrSuffix {
             Some(Self::Suffix(bytes))
         })
     }
+
+    /// Returns the 128-bit integer representation of this address or suffix.
+    ///
+    /// If it is a `Suffix`, it is combined with the given `prefix` if provided.
+    /// If no `prefix` is provided, the suffix is returned as the lower 64 bits with zeroes in the upper 64 bits.
+    #[must_use]
+    pub fn as_u128(&self, prefix: Option<Ipv6Addr>) -> u128 {
+        match self {
+            Self::Full(ip) => u128::from_be_bytes(ip.octets()),
+            Self::Suffix(s) => {
+                let mut bytes = [0u8; 16];
+                if let Some(p) = prefix {
+                    bytes.copy_from_slice(&p.octets());
+                }
+                bytes[8..16].copy_from_slice(s);
+                u128::from_be_bytes(bytes)
+            }
+        }
+    }
 }
 
 impl fmt::Display for Ipv6AddrOrSuffix {

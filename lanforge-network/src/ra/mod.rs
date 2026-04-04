@@ -308,6 +308,21 @@ fn send_ra_internal(
     if gua != state.last_gua {
         info!("GUA prefix changed: {:?} -> {:?}", state.last_gua, gua);
         state.last_gua = gua;
+
+        let (preferred, valid) = cfg
+            .prefixes
+            .iter()
+            .find(|p| matches!(p.source, PrefixSource::AutoGua))
+            .map_or(
+                (DEFAULT_PREFERRED_LIFETIME_SECS, DEFAULT_VALID_LIFETIME_SECS),
+                |p| (p.preferred_lifetime.as_u32(), p.valid_lifetime.as_u32()),
+            );
+
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::PrefixChanged {
+            gua,
+            preferred,
+            valid,
+        });
     }
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());
