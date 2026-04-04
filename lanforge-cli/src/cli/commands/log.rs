@@ -73,16 +73,29 @@ impl LogHandler {
                 gua,
                 preferred,
                 valid,
+                ula,
             } => {
-                println!(
-                    "[{}] {} {} {:?} (pref={}, valid={})",
-                    now,
-                    "NET".magenta().bold(),
-                    "GUA Prefix changed:".white(),
-                    gua,
-                    preferred,
-                    valid
-                );
+                if let Some(ula) = ula {
+                    println!(
+                        "[{}] {} {} {:?} (pref={}, valid={})",
+                        now,
+                        "NET".magenta().bold(),
+                        "ULA Prefix changed:".white(),
+                        ula,
+                        preferred,
+                        valid,
+                    );
+                } else {
+                    println!(
+                        "[{}] {} {} {:?} (pref={}, valid={})",
+                        now,
+                        "NET".magenta().bold(),
+                        "GUA Prefix changed:".white(),
+                        gua,
+                        preferred,
+                        valid,
+                    );
+                }
             }
             LanforgeEvent::LeaseRelease { mac } => {
                 println!(
@@ -210,6 +223,12 @@ impl LogHandler {
                     "IA_PD assigned: {}/{}",
                     prefix.to_string().bright_cyan(),
                     len
+                )
+            }
+            DeviceChange::SlaacSynced { addresses } => {
+                format!(
+                    "SLAAC synced: {} addresses",
+                    addresses.len().to_string().bright_magenta()
                 )
             }
         }

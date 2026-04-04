@@ -21,6 +21,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     let table = Arc::new(ManagedTable::from_table(
         bus.clone(),
         lanforge_core::state::DeviceTable::new(),
+        None,
     ));
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

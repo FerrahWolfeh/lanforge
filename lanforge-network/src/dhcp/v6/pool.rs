@@ -554,6 +554,7 @@ mod tests {
                 let table = Arc::new(ManagedTable::from_table(
                     bus.clone(),
                     lanforge_core::state::DeviceTable::new(),
+                    None,
                 ));
                 LanforgeContext::init(bus, table);
             }));

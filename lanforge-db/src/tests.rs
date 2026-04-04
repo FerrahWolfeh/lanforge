@@ -218,6 +218,7 @@ async fn db_worker_persists_on_dirty_event() {
     let table = Arc::new(lanforge_core::bus::ManagedTable::from_table(
         bus.clone(),
         lanforge_core::state::DeviceTable::new(),
+        None,
     ));
 
     // Ensure LanforgeContext is initialized for tests without panicking if another test did it.

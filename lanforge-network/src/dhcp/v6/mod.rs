@@ -241,6 +241,7 @@ impl SyncService for Dhcpv6Service {
                         }
                         LanforgeEvent::PrefixChanged {
                             gua,
+                            ula: _,
                             preferred,
                             valid,
                         } => {

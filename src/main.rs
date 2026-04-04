@@ -45,7 +45,6 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::DeviceTable;
-use lanforge_core::state::update::DeviceUpdate;
 use lanforge_db::engine::LeaseDb;
 use lanforge_network::mdns::MdnsProber;
 use lanforge_network::slaac::bootstrap_table;
@@ -207,13 +206,22 @@ async fn async_main() -> Result<()> {
         info!("👥 Static reservations: {count} entries");
     }
 
-    // 3. Montamos os índices O(1) do DNS apenas UMA vez após tudo ser carregado
-    initial_table.apply_update(DeviceUpdate::RebuildDnsIndices);
+    // 4. Resolve Interface Index for authoritative filtering
+    let interfaces = pnet::datalink::interfaces();
+    let target_ifindex = interfaces
+        .iter()
+        .find(|iface| iface.name == cfg.iface_lan)
+        .map(|iface| iface.index)
+        .ok_or_else(|| anyhow::anyhow!("Interface '{}' not found", cfg.iface_lan))?;
 
-    // 4. Transformamos em ManagedTable reativa (Arc<RwLock<DeviceTable>>)
-    let table = Arc::new(ManagedTable::from_table(bus.clone(), initial_table));
+    // 5. Transformamos em ManagedTable reativa (Arc<RwLock<DeviceTable>>)
+    let table = Arc::new(ManagedTable::from_table(
+        bus.clone(),
+        initial_table,
+        Some(target_ifindex),
+    ));
 
-    // 5. Initialize global context
+    // 6. Initialize global context
     lanforge_core::context::LanforgeContext::init(bus.clone(), table.clone());
     let _ = bus.publish(LanforgeEvent::StateReady);
 
@@ -321,7 +329,13 @@ async fn async_main() -> Result<()> {
                     0,
                     Duration::from_secs(1),
                     Duration::from_secs(10),
-                    move || lanforge_network::netlink::NdpMonitor::new(h.clone(), m.clone()),
+                    move || {
+                        lanforge_network::netlink::NdpMonitor::new(
+                            h.clone(),
+                            m.clone(),
+                            target_ifindex,
+                        )
+                    },
                 )
                 .await
             }
@@ -467,11 +481,12 @@ async fn async_main() -> Result<()> {
     }
 
     // -----------------------------------------------------------------------
-    // Prefixo GUA — aprendido dinamicamente via PrefixChanged do RA.
+    // Prefixo GUA/ULA — aprendido dinamicamente via PrefixChanged do RA.
     // Começa como None; é atualizado no handler do EventBus abaixo.
     // Passado para o scan SLAAC para distinguir SlaacObserved de NdpSeen.
     // -----------------------------------------------------------------------
     let mut current_gua: Option<Ipv6Addr> = None;
+    let mut current_ula: Option<Ipv6Addr> = None;
 
     // -----------------------------------------------------------------------
     // Loop principal — eventos Netlink, timers, sinais
@@ -487,8 +502,8 @@ async fn async_main() -> Result<()> {
     let mut stale_timer = interval(Duration::from_secs(600));
     stale_timer.tick().await;
 
-    // Scan inicial (sem GUA ainda — RA ainda não anunciou)
-    if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
+    // Scan inicial (sem prefixos ainda — RA ainda não anunciou)
+    if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
         error!("❌ Erro no scan inicial: {e:#}");
     }
 
@@ -517,7 +532,7 @@ async fn async_main() -> Result<()> {
             // ── Fallback — Garantia de Consistência ──────────────────────
             _ = fallback.tick() => {
                 debug!("Sincronização periódica de SLAAC (Fallback)...");
-                if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
+                if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
                     error!("Erro no fallback: {e:#}");
                 }
             }
@@ -533,7 +548,7 @@ async fn async_main() -> Result<()> {
             // ── SIGUSR1 — Sincronização manual ───────────────────────────
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 recebido, forçando sincronização de estado...");
-                if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
+                if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
                     error!("Erro na sincronização manual: {e:#}");
                 }
             }
@@ -564,14 +579,22 @@ async fn async_main() -> Result<()> {
                             }
                         }
                     }
-                    Ok(LanforgeEvent::PrefixChanged { gua, .. }) => {
-                        if current_gua != gua {
-                            info!("Prefixo GUA alterado: {:?} → {:?}", current_gua, gua);
+                    Ok(LanforgeEvent::PrefixChanged { gua, ula, .. }) => {
+                        if current_gua != gua || current_ula != ula {
+                            info!(
+                                "IPv6 Prefix update (Event): GUA={:?}, ULA={:?}",
+                                gua, ula
+                            );
                             current_gua = gua;
-                        }
-                        // Novo prefixo exige repopular o estado do zero
-                        if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
-                            error!("Erro ao atualizar prefixo: {e:#}");
+                            current_ula = ula;
+
+                            // Novo prefixo exige repopular o estado do zero
+                            if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
+                                error!(
+                                    "Erro ao atualizar prefixo (GUA={:?}, ULA={:?}): {e:#}",
+                                    current_gua, current_ula
+                                );
+                            }
                         }
                     }
                     Ok(LanforgeEvent::DeviceDiscovered { mac }) => {
@@ -582,7 +605,7 @@ async fn async_main() -> Result<()> {
                     }
                     Ok(LanforgeEvent::ReloadConfig) => {
                         info!("ReloadConfig: Forçando sincronização via sinalizador manual!");
-                        if let Err(e) = run_scan(&cfg, &handle, current_gua).await {
+                        if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
                             error!("Erro no reload: {e:#}");
                         }
                     }
@@ -615,9 +638,15 @@ async fn async_main() -> Result<()> {
 /// Executa um ciclo de scan SLAAC via netlink.
 ///
 /// Este helper centraliza a chamada ao módulo `slaac` para descobrir
-/// endereços IPv6 ativos (GUA e link-local) no segmento de rede.
-async fn run_scan(cfg: &Config, handle: &rtnetlink::Handle, gua: Option<Ipv6Addr>) -> Result<()> {
-    bootstrap_table(&cfg.target_prefix, handle, gua)
+/// endereços IPv6 ativos (GUA, ULA e link-local) no segmento de rede.
+async fn run_scan(
+    cfg: &Config,
+    handle: &rtnetlink::Handle,
+    gua: Option<Ipv6Addr>,
+    ula: Option<Ipv6Addr>,
+    target_ifindex: u32,
+) -> Result<()> {
+    bootstrap_table(&cfg.target_prefix, handle, gua, ula, Some(target_ifindex))
         .await
         .map_err(anyhow::Error::from)
 }

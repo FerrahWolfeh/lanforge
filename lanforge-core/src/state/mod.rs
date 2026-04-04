@@ -39,6 +39,7 @@ use crate::state::update::StaticEntry;
 pub struct InterfaceState {
     pub link_local: Option<Ipv6Addr>,
     pub gua: Option<Ipv6Addr>,
+    pub ula: Option<Ipv6Addr>,
     pub gua_preferred: u32,
     pub gua_valid: u32,
 }

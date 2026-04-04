@@ -19,24 +19,31 @@ use crate::state::update::{DeviceUpdate, FieldUpdate};
 pub struct ManagedTable {
     inner: RwLock<DeviceTable>,
     bus: Arc<EventBus>,
+    target_ifindex: Option<u32>,
 }
 
 impl ManagedTable {
     /// Creates a new managed table wrapping an empty device table.
     #[must_use]
-    pub fn new(bus: Arc<EventBus>) -> Self {
+    pub fn new(bus: Arc<EventBus>, target_ifindex: Option<u32>) -> Self {
         Self {
             inner: RwLock::new(DeviceTable::new()),
             bus,
+            target_ifindex,
         }
     }
 
     /// Creates a new managed table wrapping an existing device table.
     #[must_use]
-    pub const fn from_table(bus: Arc<EventBus>, table: DeviceTable) -> Self {
+    pub const fn from_table(
+        bus: Arc<EventBus>,
+        table: DeviceTable,
+        target_ifindex: Option<u32>,
+    ) -> Self {
         Self {
             inner: RwLock::new(table),
             bus,
+            target_ifindex,
         }
     }
 
@@ -74,6 +81,7 @@ impl ManagedTable {
         if let DeviceUpdate::InterfaceIpsChanged {
             ifindex,
             gua,
+            ula,
             preferred,
             valid,
             ..
@@ -83,10 +91,14 @@ impl ManagedTable {
                 .bus
                 .publish(LanforgeEvent::InterfaceUpdated { ifindex: *ifindex });
 
-            // Detect GUA and publish global PrefixChanged
-            if let Some(g) = gua {
+            // Detect GUA/ULA and publish global PrefixChanged
+            // 🔒 Restricted ONLY to the authoritative interface
+            let is_primary = self.target_ifindex.is_none_or(|target| target == *ifindex);
+
+            if is_primary && (gua.is_some() || ula.is_some()) {
                 let _ = self.bus.publish(LanforgeEvent::PrefixChanged {
-                    gua: Some(*g),
+                    gua: *gua,
+                    ula: *ula,
                     preferred: *preferred,
                     valid: *valid,
                 });
@@ -129,8 +141,9 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         DeviceUpdate::V6LeaseGranted { mac, .. }
         | DeviceUpdate::V6PrefixAssigned { mac, .. }
         | DeviceUpdate::DuidAssociated { mac, .. } => *mac,
-        DeviceUpdate::V4LeaseGranted { mac, .. }
+        DeviceUpdate::SlaacSynced { mac, .. }
         | DeviceUpdate::SlaacObserved { mac, .. }
+        | DeviceUpdate::V4LeaseGranted { mac, .. }
         | DeviceUpdate::NdpSeen { mac, .. }
         | DeviceUpdate::ArpSeen { mac, .. }
         | DeviceUpdate::DhcpHostnameHint { mac, .. }
@@ -139,6 +152,7 @@ const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         | DeviceUpdate::SlaacCleared { mac }
         | DeviceUpdate::HostRemoved { mac }
         | DeviceUpdate::LeaseReleased { mac } => Some(*mac),
+
         DeviceUpdate::IpDeleted { .. }
         | DeviceUpdate::InterfaceIpsChanged { .. }
         | DeviceUpdate::RebuildDnsIndices => None,
@@ -163,6 +177,9 @@ fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         DeviceUpdate::SlaacObserved { addr, .. } => {
             Some(DeviceChange::SlaacObserved { addr: *addr })
         }
+        DeviceUpdate::SlaacSynced { addresses, .. } => Some(DeviceChange::SlaacSynced {
+            addresses: addresses.clone(),
+        }),
         DeviceUpdate::DhcpHostnameHint { hostname, .. }
         | DeviceUpdate::MdnsHostnameHint { hostname, .. } => Some(DeviceChange::HostnameChanged {
             hostname: hostname.clone(),

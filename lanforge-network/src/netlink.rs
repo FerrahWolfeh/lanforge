@@ -187,16 +187,22 @@ fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
 pub async fn get_ipv6_neighbors(
     handle: &Handle,
     target_prefix: &str,
+    target_ifindex: Option<u32>,
 ) -> Result<Vec<NeighborEvent>> {
     let mut neighbors = Vec::new();
-    let mut stream = handle
-        .neighbours()
-        .get()
-        .set_family(IpVersion::V6)
-        .execute();
+    let neighbours_get = handle.neighbours().get();
+    let neighbours_get = neighbours_get.set_family(IpVersion::V6);
+
+    let mut stream = neighbours_get.execute();
 
     while let Some(msg) = stream.try_next().await? {
         if let Some(event) = parse_neighbor_msg(msg) {
+            if let Some(target) = target_ifindex
+                && event.ifindex() != target
+            {
+                continue;
+            }
+
             let matches = match event.ip() {
                 IpAddr::V6(ip) => ip.to_string().starts_with(target_prefix),
                 _ => false,
@@ -217,16 +223,32 @@ pub async fn get_ipv6_neighbors(
 pub type NetlinkStream =
     Arc<tokio::sync::Mutex<UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>>>;
 
+type Ifaces = HashMap<
+    u32,
+    (
+        Option<Ipv6Addr>,
+        Option<Ipv6Addr>,
+        Option<Ipv6Addr>,
+        u32,
+        u32,
+    ),
+>;
+
 /// Monitor que reage a eventos Netlink e mantém a ManagedTable atualizada.
 pub struct NdpMonitor {
     handle: Handle,
     messages: NetlinkStream,
+    target_ifindex: u32,
 }
 
 impl NdpMonitor {
     #[must_use]
-    pub fn new(handle: Handle, messages: NetlinkStream) -> Self {
-        Self { handle, messages }
+    pub fn new(handle: Handle, messages: NetlinkStream, target_ifindex: u32) -> Self {
+        Self {
+            handle,
+            messages,
+            target_ifindex,
+        }
     }
 
     /// Full refresh of all interfaces known to the kernel.
@@ -234,17 +256,21 @@ impl NdpMonitor {
     /// # Errors
     /// Returns an error if the Netlink query fails.
     pub async fn refresh_interfaces(&self) -> crate::error::Result<()> {
-        let mut stream = self.handle.address().get().execute();
+        let mut stream = self
+            .handle
+            .address()
+            .get()
+            .set_link_index_filter(self.target_ifindex)
+            .execute();
         let table = LanforgeContext::table();
 
-        // Group extracted IPs by ifindex to aggregate link-local and GUA
-        // Added (Preferred, Valid) lifetimes to the GUA storage
-        let mut ifaces: HashMap<u32, (Option<Ipv6Addr>, Option<Ipv6Addr>, u32, u32)> =
-            HashMap::new();
+        // Group extracted IPs by ifindex to aggregate link-local, GUA and ULA
+        // Added (Preferred, Valid) lifetimes to the prefix storage
+        let mut ifaces: Ifaces = HashMap::new();
 
         while let Some(msg) = stream.try_next().await? {
             let ifindex = msg.header.index;
-            let (ll, g, pref, val) = ifaces.entry(ifindex).or_insert((None, None, 0, 0));
+            let (ll, g, u, pref, val) = ifaces.entry(ifindex).or_insert((None, None, None, 0, 0));
 
             for attr in &msg.attributes {
                 match attr {
@@ -256,6 +282,10 @@ impl NdpMonitor {
                             let mut masked = o;
                             masked[8..].fill(0);
                             *g = Some(Ipv6Addr::from(masked));
+                        } else if o[0] == 0xFD {
+                            let mut masked = o;
+                            masked[8..].fill(0);
+                            *u = Some(Ipv6Addr::from(masked));
                         }
                     }
                     AddressAttribute::CacheInfo(info) => {
@@ -271,14 +301,23 @@ impl NdpMonitor {
         let if_names: HashMap<u32, String> =
             interfaces.into_iter().map(|i| (i.index, i.name)).collect();
 
-        for (ifindex, (link_local, gua, preferred, valid)) in ifaces {
+        for (ifindex, (link_local, gua, ula, preferred, valid)) in ifaces {
             let name = if_names
                 .get(&ifindex)
                 .map(|s| s.as_str())
                 .unwrap_or("unnamed");
 
-            match (link_local, gua) {
-                (Some(ll), Some(g)) => {
+            match (link_local, gua, ula) {
+                (Some(ll), Some(g), Some(u)) => {
+                    tracing::info!(
+                        "NdpMonitor: Interface {} up (LL: {}, GUA: {}/64, ULA: {}/64)",
+                        name,
+                        ll,
+                        g,
+                        u
+                    );
+                }
+                (Some(ll), Some(g), None) => {
                     tracing::info!(
                         "NdpMonitor: Interface {} up (LL: {}, GUA: {}/64)",
                         name,
@@ -286,7 +325,15 @@ impl NdpMonitor {
                         g
                     );
                 }
-                (Some(ll), None) => {
+                (Some(ll), None, Some(u)) => {
+                    tracing::info!(
+                        "NdpMonitor: Interface {} up (LL: {}, ULA: {}/64)",
+                        name,
+                        ll,
+                        u
+                    );
+                }
+                (Some(ll), None, None) => {
                     tracing::info!("NdpMonitor: Interface {} up (LL: {})", name, ll);
                 }
                 _ => {
@@ -298,6 +345,7 @@ impl NdpMonitor {
                 ifindex,
                 link_local,
                 gua,
+                ula,
                 preferred,
                 valid,
             });
@@ -318,6 +366,7 @@ impl NdpMonitor {
         let table = LanforgeContext::table();
         let mut link_local = None;
         let mut gua = None;
+        let mut ula = None;
         let mut preferred = 0;
         let mut valid = 0;
 
@@ -333,6 +382,10 @@ impl NdpMonitor {
                             let mut masked = o;
                             masked[8..].fill(0);
                             gua = Some(Ipv6Addr::from(masked));
+                        } else if o[0] == 0xFD {
+                            let mut masked = o;
+                            masked[8..].fill(0);
+                            ula = Some(Ipv6Addr::from(masked));
                         }
                     }
                     AddressAttribute::CacheInfo(info) => {
@@ -348,6 +401,7 @@ impl NdpMonitor {
             ifindex,
             link_local,
             gua,
+            ula,
             preferred,
             valid,
         });
@@ -372,6 +426,7 @@ impl AsyncService for NdpMonitor {
         let table = LanforgeContext::table();
         let mut bus_rx = LanforgeContext::bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
+        let current_ula: Option<Ipv6Addr> = None;
 
         // 1. Initial Interface Scan
         if let Err(e) = self.refresh_interfaces().await {
@@ -379,7 +434,9 @@ impl AsyncService for NdpMonitor {
         }
 
         // 2. Initial Neighbor Scan (Bootstrap)
-        if let Err(e) = bootstrap_table("", &self.handle, None).await {
+        if let Err(e) =
+            bootstrap_table("", &self.handle, None, None, Some(self.target_ifindex)).await
+        {
             tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
         }
 
@@ -402,20 +459,23 @@ impl AsyncService for NdpMonitor {
                 res = rx.next() => {
                     let Some((msg, _addr)) = res else { break };
                     // A. Handle Neighbor Events
-                    if let Some(event) = extract_neigh_info(&msg) {
-                        let update = event.to_device_update(current_gua.as_ref());
-                        let _ = table.update(&update);
-                    }
+                    if let Some(event) = extract_neigh_info(&msg)
+                        && event.ifindex() == self.target_ifindex {
+                            let update =
+                                event.to_device_update(current_gua.as_ref(), current_ula.as_ref());
+                            let _ = table.update(&update);
+                        }
 
                     // B. Handle Address Events
                     if let NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewAddress(addr))
                     | NetlinkPayload::InnerMessage(RouteNetlinkMessage::DelAddress(addr)) = &msg.payload
-                        && let Err(e) = self.refresh_interface(addr.header.index).await {
-                            tracing::warn!(
-                                "NdpMonitor: Failed to refresh interface {}: {e}",
-                                addr.header.index
-                            );
-                        }
+                        && addr.header.index == self.target_ifindex
+                            && let Err(e) = self.refresh_interface(addr.header.index).await {
+                                tracing::warn!(
+                                    "NdpMonitor: Failed to refresh interface {}: {e}",
+                                    addr.header.index
+                                );
+                            }
                 }
 
                 Ok(event) = bus_rx.recv() => {
@@ -585,7 +645,7 @@ mod tests {
             mac,
             ifindex: 2,
         };
-        let update = event.to_device_update(Some(&gua_prefix));
+        let update = event.to_device_update(Some(&gua_prefix), None);
 
         assert!(
             matches!(update, DeviceUpdate::SlaacObserved { addr, .. } if addr == slaac_ip),
@@ -604,7 +664,7 @@ mod tests {
             mac,
             ifindex: 2,
         };
-        let update = event.to_device_update(Some(&gua_prefix));
+        let update = event.to_device_update(Some(&gua_prefix), None);
 
         assert!(
             matches!(update, DeviceUpdate::NdpSeen { .. }),
@@ -623,7 +683,7 @@ mod tests {
             ifindex: 2,
         };
         // Sem prefixo configurado — nunca assume SLAAC
-        let update = event.to_device_update(None);
+        let update = event.to_device_update(None, None);
 
         assert!(matches!(update, DeviceUpdate::NdpSeen { .. }));
     }

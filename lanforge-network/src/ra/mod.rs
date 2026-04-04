@@ -84,6 +84,8 @@ pub struct RaState {
     unicast_rl: HashMap<Ipv6Addr, Instant>,
     /// Last detected GUA — used to publish `PrefixChanged` only when a change occurs.
     last_gua: Option<Ipv6Addr>,
+    /// Last detected ULA
+    last_ula: Option<Ipv6Addr>,
 }
 
 impl RaState {
@@ -93,6 +95,7 @@ impl RaState {
             last_multicast_ra: None,
             unicast_rl: HashMap::new(),
             last_gua: None,
+            last_ula: None,
         }
     }
 
@@ -327,10 +330,12 @@ fn send_ra_internal(
         .link_local
         .ok_or(NetworkError::NoLinkLocal(iface_index))?;
     let gua = if_ips.gua;
+    let ula = if_ips.ula;
 
-    if gua != state.last_gua {
-        info!("GUA prefix changed: {:?} -> {:?}", state.last_gua, gua);
+    if gua != state.last_gua || ula != state.last_ula {
+        info!("IPv6 Prefix update: GUA={:?}, ULA={:?}", gua, ula);
         state.last_gua = gua;
+        state.last_ula = ula;
 
         let (preferred, valid) = cfg
             .prefixes
@@ -343,6 +348,7 @@ fn send_ra_internal(
 
         let _ = LanforgeContext::bus().publish(LanforgeEvent::PrefixChanged {
             gua,
+            ula,
             preferred,
             valid,
         });

@@ -16,7 +16,7 @@ fn make_bus() -> Arc<EventBus> {
 async fn new_device_publishes_discovered_and_updated() {
     let bus = make_bus();
     let mut rx = bus.subscribe();
-    let table = ManagedTable::new(bus);
+    let table = ManagedTable::new(bus, None);
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
@@ -52,7 +52,7 @@ async fn new_device_publishes_discovered_and_updated() {
 #[tokio::test]
 async fn known_device_does_not_publish_discovered() {
     let bus = make_bus();
-    let table = ManagedTable::new(bus.clone());
+    let table = ManagedTable::new(bus.clone(), None);
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
 
@@ -86,7 +86,7 @@ async fn known_device_does_not_publish_discovered() {
 #[tokio::test]
 async fn ndp_seen_publishes_nothing() {
     let bus = make_bus();
-    let table = ManagedTable::new(bus.clone());
+    let table = ManagedTable::new(bus.clone(), None);
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
@@ -107,7 +107,7 @@ async fn ndp_seen_publishes_nothing() {
 #[tokio::test]
 async fn cli_host_update_publishes_events() {
     let bus = make_bus();
-    let table = ManagedTable::new(bus.clone());
+    let table = ManagedTable::new(bus.clone(), None);
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();

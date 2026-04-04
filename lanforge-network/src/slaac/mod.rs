@@ -24,7 +24,6 @@
 use crate::error::Result;
 use lanforge_core::state::update::DeviceUpdate;
 use rtnetlink::Handle;
-use std::collections::HashSet;
 use std::net::Ipv6Addr;
 
 use crate::netlink;
@@ -42,24 +41,39 @@ pub async fn bootstrap_table(
     target_prefix: &str,
     handle: &Handle,
     gua: Option<Ipv6Addr>,
+    ula: Option<Ipv6Addr>,
+    target_ifindex: Option<u32>,
 ) -> Result<()> {
-    let neighbors = netlink::get_ipv6_neighbors(handle, target_prefix).await?;
+    let neighbors = netlink::get_ipv6_neighbors(handle, target_prefix, target_ifindex).await?;
 
-    let mut seen_macs: HashSet<MacAddr> = HashSet::new();
+    let mut mac_groups: std::collections::HashMap<MacAddr, Vec<Ipv6Addr>> =
+        std::collections::HashMap::new();
 
     for event in neighbors {
-        // Clear old addresses for this MAC only the first time
-        // we encounter it during this specific dump.
-        if let Some(mac) = event.mac()
-            && seen_macs.insert(mac)
+        if let Some(target) = target_ifindex
+            && event.ifindex() != target
         {
-            let t = LanforgeContext::table();
-            let _ = t.update(&DeviceUpdate::SlaacCleared { mac });
+            continue;
         }
 
-        let update = event.to_device_update(gua.as_ref());
-        let t = LanforgeContext::table();
-        let _ = t.update(&update);
+        if let Some(mac) = event.mac() {
+            let update = event.to_device_update(gua.as_ref(), ula.as_ref());
+            match update {
+                DeviceUpdate::SlaacObserved { addr, .. } => {
+                    mac_groups.entry(mac).or_default().push(addr);
+                }
+                _ => {
+                    // Outros eventos (como NdpSeen) processamos individualmente
+                    let t = LanforgeContext::table();
+                    let _ = t.update(&update);
+                }
+            }
+        }
+    }
+
+    let t = LanforgeContext::table();
+    for (mac, addresses) in mac_groups {
+        let _ = t.update(&DeviceUpdate::SlaacSynced { mac, addresses });
     }
 
     Ok(())

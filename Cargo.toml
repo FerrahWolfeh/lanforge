@@ -45,6 +45,7 @@ toml = "1.1.0"
 # Networking / netlink
 netlink-sys = "0.8"
 rtnetlink = "0.20"
+pnet = "0.35.0"
 
 # Observabilidade
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }

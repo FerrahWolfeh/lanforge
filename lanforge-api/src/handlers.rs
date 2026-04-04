@@ -231,27 +231,47 @@ impl ClientContext {
                     IPv4State::None => None,
                 },
                 seen_v4: dev.seen_v4.iter().map(|ip| ip.to_string()).collect(),
-                v6: dev.v6.iter().find_map(|s| match s {
-                    IPv6State::Dynamic(v) => Some(api::LeaseInfo {
-                        ip: v.ip.to_string(),
-                        expires: format_iso8601(v.expires),
-                        reserved: dev.is_static(),
-                    }),
-                    IPv6State::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(api::LeaseInfo {
+                v6: dev.primary_v6(gua_prefix, ula_prefix).map(|ip| {
+                    let state = dev.v6.iter().find(|s| {
+                        s.ip_with_prefix(gua_prefix) == Some(ip)
+                            || s.ip_with_prefix(ula_prefix) == Some(ip)
+                    });
+                    api::LeaseInfo {
                         ip: ip.to_string(),
-                        expires: "Static".to_string(),
-                        reserved: true,
-                    }),
-                    _ => None,
+                        expires: state
+                            .and_then(|s| match s {
+                                IPv6State::Dynamic(l) => Some(format_iso8601(l.expires)),
+                                IPv6State::Static(_) => Some("Static".to_string()),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| "—".to_string()),
+                        reserved: state.is_some_and(|s| matches!(s, IPv6State::Static(_)))
+                            || dev.is_static(),
+                    }
                 }),
                 ipv6_addrs: {
                     let mut list = Vec::new();
                     for state in &dev.v6 {
-                        if let IPv6State::Slaac(ip) = state {
+                        if let Some(ip) = state.ip_with_prefix(None) {
                             list.push(api::Ipv6Entry {
                                 addr: ip.to_string(),
-                                kind: get_v6_kind(ip).to_string(),
+                                kind: get_v6_kind(&ip).to_string(),
                             });
+                        } else if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_)) = state {
+                            if let Some(ip) = ula_prefix.and_then(|p| state.ip_with_prefix(Some(p)))
+                            {
+                                list.push(api::Ipv6Entry {
+                                    addr: ip.to_string(),
+                                    kind: "ULA (Static)".to_string(),
+                                });
+                            }
+                            if let Some(ip) = gua_prefix.and_then(|p| state.ip_with_prefix(Some(p)))
+                            {
+                                list.push(api::Ipv6Entry {
+                                    addr: ip.to_string(),
+                                    kind: "GUA (Static)".to_string(),
+                                });
+                            }
                         }
                     }
                     list

@@ -41,3 +41,27 @@ pub const fn mac_from_eui64_link_local(ip: &Ipv6Addr) -> Option<MacAddr> {
     // Revert the U/L bit (bit 1 of the first IID octet, i.e., byte 8 of the IP)
     Some(MacAddr([o[8] ^ 0x02, o[9], o[10], o[13], o[14], o[15]]))
 }
+
+/// Returns true if the IPv6 address suffix matches the EUI-64 identifier for the given MAC.
+#[must_use]
+pub const fn is_slaac_iid(ip: &Ipv6Addr, mac: &MacAddr) -> bool {
+    let o = ip.octets();
+    let m = mac.0;
+
+    // Check EUI-64 markers
+    if o[11] != 0xff || o[12] != 0xfe {
+        return false;
+    }
+
+    // Compare rest of the IID (ignoring Universal/Local bit flip)
+    if o[9] != m[1] || o[10] != m[2] || o[13] != m[3] || o[14] != m[4] || o[15] != m[5] {
+        return false;
+    }
+
+    // Finally check first byte with U/L bit (bit 7 of the OUI / bit 1 of the IID)
+    if (o[8] ^ 0x02) != m[0] {
+        return false;
+    }
+
+    true
+}

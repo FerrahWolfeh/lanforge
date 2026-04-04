@@ -215,15 +215,24 @@ mod tests {
     use lanforge_core::bus::{EventBus, ManagedTable};
     use std::sync::Arc;
 
+    static INIT: std::sync::Once = std::sync::Once::new();
     fn init_context() {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let bus = Arc::new(EventBus::new());
-            let table = Arc::new(ManagedTable::from_table(
-                bus.clone(),
-                lanforge_core::state::DeviceTable::new(),
-            ));
-            LanforgeContext::init(bus, table);
-        }));
+        INIT.call_once(|| {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let bus = Arc::new(EventBus::new());
+                let table = Arc::new(ManagedTable::from_table(
+                    bus.clone(),
+                    lanforge_core::state::DeviceTable::new(),
+                    None,
+                ));
+                LanforgeContext::init(bus, table);
+            }));
+        });
+
+        // Clear the state before each test runs to avoid cross-contamination
+        let binding = LanforgeContext::table();
+        let mut w = binding.write();
+        *w = lanforge_core::state::DeviceTable::new();
     }
 
     fn pool() -> IpPool {

@@ -98,8 +98,17 @@ pub enum DeviceUpdate {
         expires: SystemTime,
     },
 
+    /// A set of SLAAC addresses were observed active via Neighbor Discovery (NDP Sync).
+    SlaacSynced {
+        mac: MacAddr,
+        addresses: Vec<Ipv6Addr>,
+    },
+
     /// A SLAAC address was observed active via Neighbor Discovery (NDP).
-    SlaacObserved { mac: MacAddr, addr: Ipv6Addr },
+    SlaacObserved {
+        mac: MacAddr,
+        addr: Ipv6Addr,
+    },
 
     /// A generic IPv6 neighbor event was observed.
     NdpSeen { mac: MacAddr, ip: Ipv6Addr },
@@ -140,11 +149,12 @@ pub enum DeviceUpdate {
     /// An IP address was explicitly removed from the system neighbor cache.
     IpDeleted { ip: std::net::IpAddr },
 
-    /// Local interface IP address change.
+    /// A local network interface's IP configuration was updated.
     InterfaceIpsChanged {
         ifindex: u32,
         link_local: Option<Ipv6Addr>,
         gua: Option<Ipv6Addr>,
+        ula: Option<Ipv6Addr>,
         preferred: u32,
         valid: u32,
     },
@@ -289,7 +299,67 @@ impl DeviceTable {
         true
     }
 
+    fn handle_slaac_synced(&mut self, mac: MacAddr, addresses: Vec<Ipv6Addr>) -> bool {
+        let dev_arc = self.get_device_or_new(mac);
+
+        // Map existing SLAAC addresses
+        let mut current_slaac: Vec<Ipv6Addr> = dev_arc
+            .v6
+            .iter()
+            .filter_map(|s| match s {
+                IPv6State::Slaac(a) => Some(*a),
+                _ => None,
+            })
+            .collect();
+
+        // Sort both for comparison
+        current_slaac.sort();
+        let mut new_slaac = addresses;
+        new_slaac.sort();
+
+        if current_slaac == new_slaac {
+            return false;
+        }
+
+        // We have differences. Reconstruct the v6 list.
+        let mut dev = (*dev_arc).clone();
+        dev.last_seen = SystemTime::now();
+
+        // Remove all old SLAAC and add all new ones
+        dev.v6.retain(|s| !matches!(s, IPv6State::Slaac(_)));
+        for addr in new_slaac {
+            dev.v6.push(IPv6State::Slaac(addr));
+            debug!("[state] SLAAC {} synced: {}", mac, addr);
+        }
+
+        let exists = self.devices.contains_key(&mac);
+        if dev.is_worthy() || exists {
+            self.devices.insert(mac, Arc::new(dev));
+            return true;
+        }
+        false
+    }
+
     fn handle_slaac_observed(&mut self, mac: MacAddr, addr: Ipv6Addr) -> bool {
+        // Authoritative filtering: is this address already a known lease or static entry?
+        if let Some(owner_mac) = self.ip_index.get(&std::net::IpAddr::V6(addr)) {
+            let owner = self.get_device_or_new(*owner_mac);
+            let is_managed = owner.v6.iter().any(|s| match s {
+                IPv6State::Dynamic(lease) if lease.ip == addr => true,
+                IPv6State::Static(crate::device::Ipv6AddrOrSuffix::Full(ip)) if *ip == addr => true,
+                _ => false,
+            });
+
+            if is_managed {
+                // Address is DHCPv6 or Static. Ignore SLAAC observation but update last_seen.
+                let dev_arc = self.get_device_or_new(mac);
+                let mut dev = (*dev_arc).clone();
+                dev.last_seen = SystemTime::now();
+                self.devices.insert(mac, Arc::new(dev));
+                return true;
+            }
+        }
+
         let dev_arc = self.get_device_or_new(mac);
         let mut dev = (*dev_arc).clone();
         dev.last_seen = SystemTime::now();
@@ -634,6 +704,7 @@ impl DeviceTable {
         ifindex: u32,
         link_local: Option<Ipv6Addr>,
         gua: Option<Ipv6Addr>,
+        ula: Option<Ipv6Addr>,
         preferred: u32,
         valid: u32,
     ) -> bool {
@@ -641,6 +712,7 @@ impl DeviceTable {
         let entry = self.interface_ips.entry(ifindex).or_default();
         if entry.link_local == link_local
             && entry.gua == gua
+            && entry.ula == ula
             && entry.gua_preferred == preferred
             && entry.gua_valid == valid
         {
@@ -649,12 +721,13 @@ impl DeviceTable {
             *entry = InterfaceState {
                 link_local,
                 gua,
+                ula,
                 gua_preferred: preferred,
                 gua_valid: valid,
             };
             debug!(
-                "[state] Interface {} IPs updated: LL={:?}, GUA={:?} (pref={}, valid={})",
-                ifindex, link_local, gua, preferred, valid
+                "[state] Interface {} IPs updated: LL={:?}, GUA={:?}, ULA={:?} (pref={}, valid={})",
+                ifindex, link_local, gua, ula, preferred, valid
             );
             true
         }
@@ -707,6 +780,9 @@ impl DeviceTable {
                 len,
                 expires,
             } => self.handle_v6_prefix_assigned(mac, duid, iaid, prefix, len, expires),
+            DeviceUpdate::SlaacSynced { mac, addresses } => {
+                self.handle_slaac_synced(mac, addresses)
+            }
             DeviceUpdate::SlaacObserved { mac, addr } => self.handle_slaac_observed(mac, addr),
             DeviceUpdate::NdpSeen { mac, ip } => self.handle_ndp_seen(mac, ip),
             DeviceUpdate::ArpSeen { mac, ip } => self.handle_arp_seen(mac, ip),
@@ -734,9 +810,10 @@ impl DeviceTable {
                 ifindex,
                 link_local,
                 gua,
+                ula,
                 preferred,
                 valid,
-            } => self.handle_interface_ips_changed(ifindex, link_local, gua, preferred, valid),
+            } => self.handle_interface_ips_changed(ifindex, link_local, gua, ula, preferred, valid),
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 false

@@ -70,6 +70,9 @@ pub enum DeviceChange {
     /// A SLAAC address was observed via Neighbor Discovery (NDP).
     SlaacObserved { addr: Ipv6Addr },
 
+    /// A set of SLAAC addresses was synchronized for the device.
+    SlaacSynced { addresses: Vec<Ipv6Addr> },
+
     /// The device's hostname was updated (e.g., via DHCP hint or CLI).
     HostnameChanged { hostname: String },
 
@@ -105,6 +108,8 @@ pub enum LanforgeEvent {
     PrefixChanged {
         /// The new GUA prefix, if any.
         gua: Option<Ipv6Addr>,
+        /// The new ULA prefix, if any.
+        ula: Option<Ipv6Addr>,
         /// Preferred lifetime of the prefix.
         preferred: u32,
         /// Valid lifetime of the prefix.

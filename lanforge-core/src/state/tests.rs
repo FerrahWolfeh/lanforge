@@ -115,6 +115,84 @@ fn apply_update_slaac_deduplicates() {
 }
 
 #[test]
+fn apply_update_slaac_excludes_managed_addr() {
+    let mut table = DeviceTable::new();
+    let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    let ip: Ipv6Addr = "fd00::101".parse().unwrap();
+    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+
+    // 1. Grant a DHCPv6 lease
+    table.apply_update(DeviceUpdate::V6LeaseGranted {
+        mac: Some(mac),
+        duid: Duid::new(vec![1, 2, 3]),
+        iaid: 1,
+        ip,
+        expires,
+    });
+
+    // 2. Observe the same IP via SLAAC
+    // A tabela reconstrói índices de DNS automaticamente no final de apply_update (changed=true)
+    let _ = table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
+
+    let dev = table.get_device(&mac).unwrap();
+    assert_eq!(
+        dev.v6.len(),
+        1,
+        "Should only have the Dynamic lease, not a SLAAC entry"
+    );
+    assert!(matches!(dev.v6[0], IPv6State::Dynamic(_)));
+}
+
+#[test]
+fn apply_update_slaac_synced() {
+    let mut table = DeviceTable::new();
+    let mac = MacAddr::parse("11:22:33:44:55:66").unwrap();
+
+    let addr1: Ipv6Addr = "fd00::1".parse().unwrap();
+    let addr2: Ipv6Addr = "fd00::2".parse().unwrap();
+
+    // 1. Initial sync - should be dirty
+    assert!(table.apply_update(DeviceUpdate::SlaacSynced {
+        mac,
+        addresses: vec![addr1, addr2],
+    }));
+
+    let dev = table.get_device(&mac).unwrap();
+    assert_eq!(dev.v6.len(), 2);
+
+    // 2. Same addresses, different order - should NOT be dirty
+    assert!(!table.apply_update(DeviceUpdate::SlaacSynced {
+        mac,
+        addresses: vec![addr2, addr1],
+    }));
+
+    // 3. Differential change - remove addr1, add addr3 - should be dirty
+    let addr3: Ipv6Addr = "fd00::3".parse().unwrap();
+    assert!(table.apply_update(DeviceUpdate::SlaacSynced {
+        mac,
+        addresses: vec![addr2, addr3],
+    }));
+
+    let dev = table.get_device(&mac).unwrap();
+    assert_eq!(dev.v6.len(), 2);
+    assert!(
+        !dev.v6
+            .iter()
+            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr1))
+    );
+    assert!(
+        dev.v6
+            .iter()
+            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr2))
+    );
+    assert!(
+        dev.v6
+            .iter()
+            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr3))
+    );
+}
+
+#[test]
 fn apply_update_slaac_cleared() {
     let mut table = DeviceTable::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();

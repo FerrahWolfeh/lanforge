@@ -200,11 +200,26 @@ pub fn supervise_sync<S, F>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lanforge_core::bus::EventBus;
+    use lanforge_core::bus::ManagedTable;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Once;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::Ordering;
+
+    static INIT: Once = Once::new();
+
+    fn init_context() {
+        INIT.call_once(|| {
+            let bus = Arc::new(EventBus::new());
+            let table = Arc::new(ManagedTable::new(bus.clone(), None));
+            LanforgeContext::init(bus, table);
+        });
+    }
 
     #[tokio::test]
     async fn gives_up_after_max_retries_non_critical() {
+        init_context();
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
@@ -247,6 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn resets_failure_counter_on_success() {
+        init_context();
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 

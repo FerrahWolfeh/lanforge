@@ -175,7 +175,7 @@ fn test_resolve_local_priority_ordering() {
 async fn test_nxdomain_leak_prevention_and_soa() {
     let mut cfg = mock_config();
     cfg.upstream = Some("127.0.0.1:9999".parse().unwrap());
-    let table_arc = Arc::new(ManagedTable::new(Arc::new(EventBus::new())));
+    let table_arc = Arc::new(ManagedTable::new(Arc::new(EventBus::new()), None));
     let mut query = Message::new();
     let name = Name::from_str("fantasma.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::A));
