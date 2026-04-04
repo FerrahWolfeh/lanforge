@@ -66,15 +66,7 @@ impl AsyncService for DnsService {
 
         // 1. Wait for DB Ready (Parallel optimization)
         info!("DNS: Waiting for database engine...");
-        let mut ready_rx = bus.subscribe();
-        while let Ok(event) = ready_rx.recv().await {
-            if matches!(event, LanforgeEvent::DbReady) {
-                break;
-            }
-            if matches!(event, LanforgeEvent::Shutdown) {
-                return Ok(());
-            }
-        }
+        LanforgeContext::wait_for_db().await?;
 
         let udp_sock = Arc::new(
             UdpSocket::bind(self.cfg.listen)
@@ -116,6 +108,9 @@ impl AsyncService for DnsService {
         let udp_task = tokio::spawn(async move {
             let mut buf = vec![0u8; 4096];
             loop {
+                if !LanforgeContext::is_running() {
+                    break;
+                }
                 tokio::select! {
                     res = udp_sock.recv_from(&mut buf) => {
                         let Ok((len, src)) = res else {
@@ -138,6 +133,9 @@ impl AsyncService for DnsService {
         let mut tcp_rx = bus.subscribe();
         let tcp_task = tokio::spawn(async move {
             loop {
+                if !LanforgeContext::is_running() {
+                    break;
+                }
                 tokio::select! {
                     res = tcp_listener.accept() => {
                         if let Ok((mut stream, _)) = res {

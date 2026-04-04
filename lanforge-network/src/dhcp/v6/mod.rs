@@ -97,29 +97,8 @@ impl SyncService for Dhcpv6Service {
         // 1. Wait for DB and Interface Ready
         if let Ok(rx) = self.bus_rx.lock() {
             info!("DHCPv6: Waiting for dependencies (DB and Interfaces)...");
-            let mut db_ready = false;
-            let mut if_ready = false;
-            while let Ok(event) = rx.recv() {
-                match event {
-                    LanforgeEvent::DbReady => {
-                        db_ready = true;
-                        if if_ready {
-                            break;
-                        }
-                    }
-                    LanforgeEvent::InterfaceReady => {
-                        if_ready = true;
-                        if db_ready {
-                            break;
-                        }
-                    }
-                    LanforgeEvent::Shutdown => {
-                        info!("DHCPv6: Shutdown during init");
-                        return Ok(());
-                    }
-                    _ => {}
-                }
-            }
+            LanforgeContext::wait_for_db_sync(&rx);
+            LanforgeContext::wait_for_interfaces_sync(&rx);
         }
 
         // Read interface MAC to generate a legitimate DUID-LL
@@ -181,6 +160,9 @@ impl SyncService for Dhcpv6Service {
         });
 
         loop {
+            if !LanforgeContext::is_running() {
+                break;
+            }
             // 1. Process network packets
             match socket.recv_from(&mut buf) {
                 Ok((len, peer)) => {
@@ -303,6 +285,7 @@ impl SyncService for Dhcpv6Service {
                 }
             }
         }
+        Ok(())
     }
 }
 

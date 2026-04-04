@@ -1149,7 +1149,6 @@ dependencies = [
  "rtnetlink",
  "serde",
  "tokio",
- "tokio-util",
  "toml",
  "tracing",
  "tracing-subscriber",
@@ -1219,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dns"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "hickory-proto",
  "lanforge-core",
@@ -2325,7 +2324,6 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]

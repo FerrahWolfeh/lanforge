@@ -17,8 +17,9 @@
 //!          └───────────────────────────┘
 //! ```
 
+use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::context::LanforgeContext;
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 /// Executa uma task supervisionada que implementa `AsyncService`.
@@ -28,7 +29,6 @@ pub async fn supervise_async<S, F>(
     max_retries: u32,
     base_backoff: Duration,
     max_backoff: Duration,
-    cancel: CancellationToken,
     factory: F,
 ) where
     S: lanforge_core::service::AsyncService,
@@ -40,9 +40,16 @@ pub async fn supervise_async<S, F>(
         info!("Starting async service '{name}'");
         let mut service = factory();
 
+        let mut bus_rx = LanforgeContext::bus().subscribe();
         tokio::select! {
-            _ = cancel.cancelled() => {
-                info!("Supervisor '{name}' received shutdown signal, stopping");
+            _event = async {
+                while let Ok(e) = bus_rx.recv().await {
+                    if matches!(e, LanforgeEvent::Shutdown) {
+                        return;
+                    }
+                }
+            } => {
+                info!("Supervisor '{name}' received shutdown signal via bus, stopping");
                 if let Err(e) = service.on_shutdown() {
                     error!("Error during async service '{name}' shutdown: {e}");
                 }
@@ -51,7 +58,7 @@ pub async fn supervise_async<S, F>(
             res = service.run() => {
                 match res {
                     Ok(()) => {
-                        if cancel.is_cancelled() {
+                        if !LanforgeContext::is_running() {
                             info!("Supervisor '{name}' shutting down after clean service exit");
                             return;
                         }
@@ -87,7 +94,13 @@ pub async fn supervise_async<S, F>(
                         );
 
                         tokio::select! {
-                            _ = cancel.cancelled() => {
+                            _ = async {
+                                while let Ok(e) = bus_rx.recv().await {
+                                    if matches!(e, LanforgeEvent::Shutdown) {
+                                        return;
+                                    }
+                                }
+                            } => {
                                 info!("Supervisor '{name}' received shutdown signal during backoff, stopping");
                                 return;
                             }
@@ -110,7 +123,6 @@ pub fn supervise_sync<S, F>(
     max_retries: u32,
     base_backoff: Duration,
     max_backoff: Duration,
-    cancel: CancellationToken,
     factory: F,
 ) where
     S: lanforge_core::service::SyncService,
@@ -119,7 +131,7 @@ pub fn supervise_sync<S, F>(
     let mut consecutive_failures: u32 = 0;
 
     loop {
-        if cancel.is_cancelled() {
+        if !LanforgeContext::is_running() {
             info!("Supervisor (sync) '{name}' received shutdown, stopping before start");
             return;
         }
@@ -131,7 +143,7 @@ pub fn supervise_sync<S, F>(
 
         match res {
             Ok(()) => {
-                if cancel.is_cancelled() {
+                if !LanforgeContext::is_running() {
                     info!("Supervisor (sync) '{name}' shutting down after clean service exit");
                     return;
                 }
@@ -174,7 +186,7 @@ pub fn supervise_sync<S, F>(
                 // Verificamos o cancelamento antes e depois do sleep.
                 let start = std::time::Instant::now();
                 while start.elapsed() < backoff {
-                    if cancel.is_cancelled() {
+                    if !LanforgeContext::is_running() {
                         info!("Supervisor (sync) '{name}' received shutdown during backoff");
                         return;
                     }
@@ -202,7 +214,6 @@ mod tests {
             3,     // max 3 retries
             Duration::from_millis(1),
             Duration::from_millis(10),
-            CancellationToken::new(),
             move || {
                 let a = attempts_clone.clone();
                 TestAsyncService { attempts: a }
@@ -245,7 +256,6 @@ mod tests {
             3,
             Duration::from_millis(1),
             Duration::from_millis(10),
-            CancellationToken::new(),
             move || {
                 let a = attempts_clone.clone();
                 TestResetService { attempts: a }

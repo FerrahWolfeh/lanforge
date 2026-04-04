@@ -384,6 +384,7 @@ impl AsyncService for NdpMonitor {
         }
 
         tracing::info!("NdpMonitor: Initial scan complete, signaling ready");
+        LanforgeContext::set_if_ready(true);
         let _ = LanforgeContext::bus().publish(LanforgeEvent::InterfaceReady);
         let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
             name: "monitor".to_string(),
@@ -394,6 +395,9 @@ impl AsyncService for NdpMonitor {
         let mut rx = self.messages.lock().await;
 
         loop {
+            if !LanforgeContext::is_running() {
+                break;
+            }
             tokio::select! {
                 res = rx.next() => {
                     let Some((msg, _addr)) = res else { break };

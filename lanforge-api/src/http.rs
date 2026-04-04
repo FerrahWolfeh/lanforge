@@ -89,8 +89,11 @@ impl AsyncService for HttpService {
 
         axum::serve(tcp_listener, app)
             .with_graceful_shutdown(async move {
-                while let Ok(event) = LanforgeContext::bus().subscribe().recv().await {
-                    if matches!(event, lanforge_core::bus::LanforgeEvent::Shutdown) {
+                let mut rx = LanforgeContext::bus().subscribe();
+                while let Ok(event) = rx.recv().await {
+                    if !LanforgeContext::is_running()
+                        || matches!(event, lanforge_core::bus::LanforgeEvent::Shutdown)
+                    {
                         info!("HTTP: shutdown signal received");
                         break;
                     }

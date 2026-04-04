@@ -84,13 +84,23 @@ async fn run_mdns_worker(
     let socket_v4_clone = socket_v4
         .try_clone()
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
+    socket_v4_clone
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .map_err(|e| NetworkError::Socket(e.to_string()))?;
     let resp_tx_v4 = resp_tx.clone();
+
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
-        loop {
+        while LanforgeContext::is_running() {
             match socket_v4_clone.recv_from(&mut buf) {
                 Ok((n, addr)) => {
                     let _ = resp_tx_v4.blocking_send((buf[..n].to_vec(), addr));
+                }
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    continue;
                 }
                 Err(e) => {
                     warn!("mDNS v4 listen error: {e}");
@@ -98,18 +108,29 @@ async fn run_mdns_worker(
                 }
             }
         }
+        debug!("mDNS v4 listener exited");
     });
 
     let socket_v6_clone = socket_v6
         .try_clone()
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
+    socket_v6_clone
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .map_err(|e| NetworkError::Socket(e.to_string()))?;
     let resp_tx_v6 = resp_tx.clone();
+
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
-        loop {
+        while LanforgeContext::is_running() {
             match socket_v6_clone.recv_from(&mut buf) {
                 Ok((n, addr)) => {
                     let _ = resp_tx_v6.blocking_send((buf[..n].to_vec(), addr));
+                }
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    continue;
                 }
                 Err(e) => {
                     warn!("mDNS v6 listen error: {e}");
@@ -117,6 +138,7 @@ async fn run_mdns_worker(
                 }
             }
         }
+        debug!("mDNS v6 listener exited");
     });
 
     info!("mDNS prober ativo (v4/v6)");
@@ -127,6 +149,10 @@ async fn run_mdns_worker(
     let mut bus_rx = bus.subscribe();
 
     loop {
+        if !LanforgeContext::is_running() {
+            break;
+        }
+
         tokio::select! {
             event = bus_rx.recv() => {
                 match event {
@@ -156,6 +182,9 @@ async fn run_mdns_worker(
                         handle_mdns_packet(&bus, &table, &data, addr).await;
                     });
                 }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                // Periodic flag check if idle
             }
         }
     }

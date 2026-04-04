@@ -90,6 +90,9 @@ impl AsyncService for ControlService {
         };
 
         loop {
+            if !LanforgeContext::is_running() {
+                break;
+            }
             tokio::select! {
                 // Monitora mudanças de prefixo GUA para reportar no 'status'
                 msg = bus_rx.recv() => {

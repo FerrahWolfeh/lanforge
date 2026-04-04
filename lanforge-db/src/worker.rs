@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing::{debug, info, warn};
 
 pub struct DbWorker {
@@ -52,38 +53,52 @@ impl SyncService for DbWorker {
             .lock()
             .map_err(|e| CoreError::Generic(format!("Mutex poison: {e}")))?;
 
+        lanforge_core::context::LanforgeContext::set_db_ready(true);
         let _ = LanforgeContext::bus().publish(LanforgeEvent::DbReady);
         let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
             name: "db".to_string(),
         });
 
-        while let Ok(event) = rx.recv() {
-            match event {
-                LanforgeEvent::DeviceTableDirty => {
-                    let snapshot = Box::new((*LanforgeContext::table().read()).clone());
-                    if let Err(e) = db.save_table(&snapshot) {
-                        warn!("DB worker: failed to save snapshot: {e}");
-                    } else {
-                        debug!("DB worker: snapshot persisted");
+        loop {
+            let event = match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(e) => Some(e),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            if let Some(event) = event {
+                match event {
+                    LanforgeEvent::DeviceTableDirty => {
+                        let snapshot = Box::new((*LanforgeContext::table().read()).clone());
+                        if let Err(e) = db.save_table(&snapshot) {
+                            warn!("DB worker: failed to save snapshot: {e}");
+                        } else {
+                            debug!("DB worker: snapshot persisted");
+                        }
                     }
-                }
-                LanforgeEvent::DbVacuum => {
-                    if let Err(e) = db.vacuum() {
-                        warn!("DB worker: failed to execute VACUUM: {e}");
-                    } else {
-                        info!("DB worker: VACUUM completed");
+                    LanforgeEvent::DbVacuum => {
+                        if let Err(e) = db.vacuum() {
+                            warn!("DB worker: failed to execute VACUUM: {e}");
+                        } else {
+                            info!("DB worker: VACUUM completed");
+                        }
                     }
-                }
-                LanforgeEvent::Shutdown => {
-                    info!("DB worker: shutting down gracefully");
-                    break;
-                }
-                e if e.is_loggable() => {
-                    if let Err(err) = log_db.record_log(&e) {
-                        warn!("DB worker: failed to record log: {err}");
+                    LanforgeEvent::Shutdown => {
+                        info!("DB worker: shutting down gracefully (event)");
+                        break;
                     }
+                    e if e.is_loggable() => {
+                        if let Err(err) = log_db.record_log(&e) {
+                            warn!("DB worker: failed to record log: {err}");
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+
+            if !LanforgeContext::is_running() {
+                info!("DB worker: shutting down gracefully (context flag)");
+                break;
             }
         }
 

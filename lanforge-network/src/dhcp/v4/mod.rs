@@ -83,29 +83,8 @@ impl SyncService for Dhcpv4Service {
         // 1. Wait for DB and Interface Ready
         if let Ok(rx) = self.bus_rx.lock() {
             info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
-            let mut db_ready = false;
-            let mut if_ready = false;
-            while let Ok(event) = rx.recv() {
-                match event {
-                    LanforgeEvent::DbReady => {
-                        db_ready = true;
-                        if if_ready {
-                            break;
-                        }
-                    }
-                    LanforgeEvent::InterfaceReady => {
-                        if_ready = true;
-                        if db_ready {
-                            break;
-                        }
-                    }
-                    LanforgeEvent::Shutdown => {
-                        info!("DHCPv4: Shutdown during init");
-                        return Ok(());
-                    }
-                    _ => {}
-                }
-            }
+            LanforgeContext::wait_for_db_sync(&rx);
+            LanforgeContext::wait_for_interfaces_sync(&rx);
         }
 
         let mut server = DhcpServer::new(self.cfg.clone());
@@ -128,6 +107,9 @@ impl SyncService for Dhcpv4Service {
         });
 
         loop {
+            if !LanforgeContext::is_running() {
+                break;
+            }
             // 1. Process network packets
             match socket.recv_from(&mut buf) {
                 Ok((len, _)) => {
@@ -270,6 +252,7 @@ impl SyncService for Dhcpv4Service {
                 last_cleanup = Instant::now();
             }
         }
+        Ok(())
     }
 }
 

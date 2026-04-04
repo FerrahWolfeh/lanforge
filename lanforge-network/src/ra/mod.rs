@@ -186,14 +186,7 @@ impl AsyncService for RaService {
                 "RA: Waiting for interface discovery on '{}'...",
                 self.cfg.iface
             );
-            while let Ok(event) = bus_rx.recv().await {
-                if matches!(event, LanforgeEvent::InterfaceReady) {
-                    break;
-                }
-                if matches!(event, LanforgeEvent::Shutdown) {
-                    return Ok(());
-                }
-            }
+            LanforgeContext::wait_for_interfaces().await?;
         }
 
         let mac = get_iface_mac(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -228,6 +221,9 @@ impl AsyncService for RaService {
         let mut buf = [0u8; 1500];
 
         loop {
+            if !LanforgeContext::is_running() {
+                break;
+            }
             let now = Instant::now();
             let sleep_duration = if next_ra_at > now {
                 next_ra_at - now

@@ -41,6 +41,7 @@ use crate::threads::{spawn_service_thread, wait_for_service_threads};
 use anyhow::Result;
 use config::Config;
 use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::DeviceTable;
@@ -53,16 +54,15 @@ use rtnetlink::constants::RTMGRP_NEIGH;
 use rtnetlink::new_connection;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
+use std::os::unix::net::UnixDatagram;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, interval};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Notifies systemd that the service is ready if $NOTIFY_SOCKET is set.
 fn sd_notify_ready() {
     if let Ok(path) = std::env::var("NOTIFY_SOCKET") {
-        use std::os::unix::net::UnixDatagram;
         debug!("systemd: Notificando READY=1 via {}", path);
         if let Ok(sock) = UnixDatagram::unbound()
             && sock.connect(path).is_ok()
@@ -217,7 +217,6 @@ async fn async_main() -> Result<()> {
     lanforge_core::context::LanforgeContext::init(bus.clone(), table.clone());
     let _ = bus.publish(LanforgeEvent::StateReady);
 
-    let global_cancel = CancellationToken::new();
     let mut service_threads: Vec<(&'static str, std::thread::JoinHandle<()>)> = Vec::new();
 
     // -----------------------------------------------------------------------
@@ -226,7 +225,6 @@ async fn async_main() -> Result<()> {
     let api_cfg = Arc::new(cfg.to_api_config());
     let api_cfg_ctrl = api_cfg.clone();
     let api_cfg_http = api_cfg.clone();
-    let ctrl_cancel = global_cancel.clone();
 
     // -----------------------------------------------------------------------
     // Sync Bridges & Service Channels (for SyncService)
@@ -255,7 +253,6 @@ async fn async_main() -> Result<()> {
     {
         let db_path = leases_db_path.clone();
         let log_db_path: std::path::PathBuf = cfg.log_db.clone().into();
-        let db_cancel = global_cancel.clone();
         let rx = db_rx.clone();
 
         service_threads.push((
@@ -267,7 +264,6 @@ async fn async_main() -> Result<()> {
                     0,
                     Duration::from_secs(2),
                     Duration::from_secs(30),
-                    db_cancel,
                     move || {
                         lanforge_db::worker::DbWorker::new(
                             db_path.clone(),
@@ -283,7 +279,6 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     // mDNS Prober — Supervised service
     // -----------------------------------------------------------------------
-    let mdns_cancel = global_cancel.clone();
     service_threads.push((
         "mdns",
         spawn_service_thread("mDNS Prober", 256, move || async move {
@@ -293,7 +288,6 @@ async fn async_main() -> Result<()> {
                 0,
                 Duration::from_secs(5),
                 Duration::from_secs(60),
-                mdns_cancel,
                 MdnsProber::new,
             )
             .await
@@ -315,13 +309,11 @@ async fn async_main() -> Result<()> {
 
     let monitor_handle = handle.clone();
     let monitor_messages = messages.clone();
-    let monitor_cancel = global_cancel.clone();
     service_threads.push((
         "monitor",
         spawn_service_thread("NdpMonitor", 512, move || {
             let h = monitor_handle.clone();
             let m = monitor_messages.clone();
-            let c = monitor_cancel.clone();
             async move {
                 supervisor::supervise_async(
                     "monitor",
@@ -329,7 +321,6 @@ async fn async_main() -> Result<()> {
                     0,
                     Duration::from_secs(1),
                     Duration::from_secs(10),
-                    c,
                     move || lanforge_network::netlink::NdpMonitor::new(h.clone(), m.clone()),
                 )
                 .await
@@ -342,13 +333,11 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     if cfg.ra_enabled {
         let ra_cfg = cfg.to_ra_config();
-        let ra_cancel = global_cancel.clone();
 
         service_threads.push((
             "ra",
             spawn_service_thread("RA Server", 512, move || {
                 let rc = ra_cfg.clone();
-                let c = ra_cancel.clone();
                 async move {
                     supervisor::supervise_async(
                         "ra",
@@ -356,7 +345,6 @@ async fn async_main() -> Result<()> {
                         0,
                         Duration::from_secs(2),
                         Duration::from_secs(30),
-                        c,
                         move || lanforge_network::ra::RaService::new(rc.clone()),
                     )
                     .await
@@ -370,14 +358,12 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     if cfg.dhcpv4_enabled {
         let dhcp_cfg = cfg.to_dhcpv4_config();
-        let d4_cancel = global_cancel.clone();
         let rx = d4_rx.clone();
 
         service_threads.push((
             "dhcpv4",
             threads::spawn_sync_service_thread("DHCPv4 Server", 512, move || {
                 let dc = dhcp_cfg.clone();
-                let c = d4_cancel.clone();
                 let r = rx.clone();
                 supervisor::supervise_sync(
                     "dhcpv4",
@@ -385,7 +371,6 @@ async fn async_main() -> Result<()> {
                     0,
                     Duration::from_secs(2),
                     Duration::from_secs(30),
-                    c,
                     move || lanforge_network::dhcp::v4::Dhcpv4Service::new(dc.clone(), r.clone()),
                 )
             }),
@@ -394,14 +379,12 @@ async fn async_main() -> Result<()> {
 
     if cfg.dhcpv6_enabled {
         let dhcp_cfg = cfg.to_dhcpv6_config();
-        let d6_cancel = global_cancel.clone();
         let rx = d6_rx.clone();
 
         service_threads.push((
             "dhcpv6",
             threads::spawn_sync_service_thread("DHCPv6 Server", 512, move || {
                 let dc = dhcp_cfg.clone();
-                let c = d6_cancel.clone();
                 let r = rx.clone();
                 supervisor::supervise_sync(
                     "dhcpv6",
@@ -409,7 +392,6 @@ async fn async_main() -> Result<()> {
                     0,
                     Duration::from_secs(2),
                     Duration::from_secs(30),
-                    c,
                     move || lanforge_network::dhcp::v6::Dhcpv6Service::new(dc.clone(), r.clone()),
                 )
             }),
@@ -421,13 +403,11 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     if cfg.dns_enabled {
         let dns_cfg = cfg.to_dns_config();
-        let dns_cancel = global_cancel.clone();
 
         service_threads.push((
             "dns",
             spawn_service_thread("DNS Server", 384, move || {
                 let dc = dns_cfg.clone();
-                let c = dns_cancel.clone();
                 async move {
                     supervisor::supervise_async(
                         "dns",
@@ -435,7 +415,6 @@ async fn async_main() -> Result<()> {
                         0,
                         Duration::from_secs(5),
                         Duration::from_secs(60),
-                        c,
                         move || lanforge_dns::server::DnsService::new(dc.clone()),
                     )
                     .await
@@ -459,7 +438,6 @@ async fn async_main() -> Result<()> {
                 0,
                 Duration::from_secs(2),
                 Duration::from_secs(30),
-                ctrl_cancel,
                 move || lanforge_api::server::ControlService::new(api_cfg_ctrl.clone()),
             )
             .await
@@ -467,14 +445,10 @@ async fn async_main() -> Result<()> {
     ));
 
     // -----------------------------------------------------------------------
-    // HTTP API responder — Axum service
-    // -----------------------------------------------------------------------
-    // -----------------------------------------------------------------------
-    // HTTP API responder — Supervised service
+    // HTTP API responder — Supervised Axum service
     // -----------------------------------------------------------------------
     if cfg.http_listen.is_some() {
         let http_api_cfg = api_cfg_http.clone();
-        let http_cancel = global_cancel.clone();
 
         service_threads.push((
             "http",
@@ -485,7 +459,6 @@ async fn async_main() -> Result<()> {
                     0,
                     Duration::from_secs(2),
                     Duration::from_secs(30),
-                    http_cancel,
                     move || lanforge_api::http::HttpService::new(http_api_cfg.clone()),
                 )
                 .await
@@ -627,7 +600,8 @@ async fn async_main() -> Result<()> {
     }
 
     info!("🛑 Iniciando sequência de shutdown...");
-    global_cancel.cancel();
+    LanforgeContext::terminate();
+    let _ = bus.publish(LanforgeEvent::Shutdown);
     netlink_task.abort();
 
     // O wait é bloqueante mas estamos fora do hot path — o runtime main
