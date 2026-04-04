@@ -13,10 +13,8 @@ pub struct LanforgeContext {
     table: Arc<ManagedTable>,
 }
 
-#[cfg(not(test))]
 static INSTANCE: OnceLock<LanforgeContext> = OnceLock::new();
 
-#[cfg(not(test))]
 impl LanforgeContext {
     /// Initializes the global context. MUST be called exactly once during system startup.
     ///
@@ -57,41 +55,5 @@ impl LanforgeContext {
             .expect("LanforgeContext not initialized")
             .table
             .clone()
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    static INSTANCE: std::cell::RefCell<Option<LanforgeContext>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-impl LanforgeContext {
-    pub fn init(bus: Arc<EventBus>, table: Arc<ManagedTable>) {
-        INSTANCE.with(|i| {
-            *i.borrow_mut() = Some(Self { bus, table });
-        });
-    }
-
-    #[must_use]
-    pub fn bus() -> Arc<EventBus> {
-        INSTANCE.with(|i| {
-            i.borrow()
-                .as_ref()
-                .expect("LanforgeContext not initialized")
-                .bus
-                .clone()
-        })
-    }
-
-    #[must_use]
-    pub fn table() -> Arc<ManagedTable> {
-        INSTANCE.with(|i| {
-            i.borrow()
-                .as_ref()
-                .expect("LanforgeContext not initialized")
-                .table
-                .clone()
-        })
     }
 }
