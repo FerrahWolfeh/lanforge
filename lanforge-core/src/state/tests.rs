@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
+use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
 use crate::identifiers::{Duid, MacAddr};
 use crate::state::update::{DeviceUpdate, FieldUpdate};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -485,5 +485,126 @@ fn apply_update_duid_associated_resolves_orphan() {
         dev.v6
             .iter()
             .any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == ip && l.iaid == iaid))
+    );
+}
+
+// --- Novos testes de Worthy e Prioridade ---
+
+#[test]
+fn test_is_worthy_logic() {
+    let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+    let mut dev = Device::new(mac);
+
+    // 1. Vazio -> Não digno
+    assert!(!dev.is_worthy());
+
+    // 2. Com hostname -> Digno
+    dev.hostname.name = "host".to_string();
+    assert!(dev.is_worthy());
+    dev.hostname.name.clear();
+
+    // 3. Com IPv4 (visto ou lease) -> Digno
+    dev.seen_v4.push("1.1.1.1".parse().unwrap());
+    assert!(dev.is_worthy());
+    dev.seen_v4.clear();
+
+    // 4. Com IPv6 Link-Local -> Não digno
+    dev.v6.push(IPv6State::Slaac("fe80::1".parse().unwrap()));
+    assert!(!dev.is_worthy());
+
+    // 5. Com IPv6 ULA -> Digno
+    dev.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
+    assert!(dev.is_worthy());
+    dev.v6.clear();
+
+    // 6. Com Suffix (Intencional) -> Digno
+    dev.v6
+        .push(IPv6State::Static(Ipv6AddrOrSuffix::parse("::1").unwrap()));
+    assert!(dev.is_worthy());
+}
+
+#[test]
+fn test_filtering_ndp_seen_worthy() {
+    let mut table = DeviceTable::new();
+    let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+    let ll_ip: Ipv6Addr = "fe80::1".parse().unwrap();
+    let ula_ip: Ipv6Addr = "fd00::1".parse().unwrap();
+
+    // 1. NDP Seen com Link-Local em novo MAC -> Não registra
+    assert!(!table.apply_update(DeviceUpdate::NdpSeen { mac, ip: ll_ip }));
+    assert!(table.get_device(&mac).is_none());
+
+    // 2. SLAAC Observed com ULA -> Registra
+    assert!(table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ula_ip }));
+    assert!(table.get_device(&mac).is_some());
+
+    // 3. Agora que existe, NDP Seen com Link-Local deve marcar dirty (para persistence de last_seen)
+    assert!(table.apply_update(DeviceUpdate::NdpSeen { mac, ip: ll_ip }));
+}
+
+#[test]
+fn test_primary_v6_priority() {
+    let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+    let mut dev = Device::new(mac);
+    let gua_prefix: Ipv6Addr = "2001:db8::".parse().unwrap();
+    let ula_prefix: Ipv6Addr = "fd00::".parse().unwrap();
+
+    let slaac_gua: Ipv6Addr = "2001:db8::1".parse().unwrap();
+    let slaac_ula: Ipv6Addr = "fd00::1".parse().unwrap();
+    let lease_gua: Ipv6Addr = "2001:db8::beef".parse().unwrap();
+    let lease_ula: Ipv6Addr = "fd00::beef".parse().unwrap();
+
+    // 4. SLAAC GUA
+    dev.v6.push(IPv6State::Slaac(slaac_gua));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(slaac_gua)
+    );
+
+    // 3. SLAAC ULA > SLAAC GUA
+    dev.v6.push(IPv6State::Slaac(slaac_ula));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(slaac_ula)
+    );
+
+    // 2. GUA Lease > SLAAC ULA
+    dev.v6.push(IPv6State::Dynamic(V6Lease {
+        ip: lease_gua,
+        iaid: 1,
+        expires: SystemTime::now(),
+    }));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(lease_gua)
+    );
+
+    // 1. ULA Lease > GUA Lease
+    dev.v6.push(IPv6State::Dynamic(V6Lease {
+        ip: lease_ula,
+        iaid: 2,
+        expires: SystemTime::now(),
+    }));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(lease_ula)
+    );
+
+    // Teste de Suffix
+    let mut dev_suffix = Device::new(mac);
+    dev_suffix
+        .v6
+        .push(IPv6State::Static(Ipv6AddrOrSuffix::parse("::42").unwrap()));
+    // Sem prefixo -> None
+    assert_eq!(dev_suffix.primary_v6(None, None), None);
+    // Com GUA prefix -> Gera GUA (Priority 2)
+    assert_eq!(
+        dev_suffix.primary_v6(Some(gua_prefix), None).unwrap(),
+        "2001:db8::42".parse::<Ipv6Addr>().unwrap()
+    );
+    // Com ULA prefix -> Gera ULA (Priority 1)
+    assert_eq!(
+        dev_suffix.primary_v6(None, Some(ula_prefix)).unwrap(),
+        "fd00::42".parse::<Ipv6Addr>().unwrap()
     );
 }

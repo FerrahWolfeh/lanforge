@@ -198,6 +198,16 @@ impl ClientContext {
                 online += 1;
             }
 
+            let gua_prefix = self
+                .current_gua
+                .as_ref()
+                .and_then(|s| s.parse::<Ipv6Addr>().ok());
+            let ula_prefix = self
+                .cfg
+                .ula_prefix
+                .as_ref()
+                .and_then(|s| s.parse::<Ipv6Addr>().ok());
+
             api_devices.push(api::DeviceEntry {
                 mac: dev.mac.to_string(),
                 hostname: dev.display_hostname().to_string(),
@@ -206,7 +216,7 @@ impl ClientContext {
                 last_seen: format_iso8601(dev.last_seen),
                 duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),
                 display_v4: dev.display_v4(),
-                display_v6: dev.display_v6(),
+                display_v6: dev.display_v6(gua_prefix, ula_prefix),
                 v4: match &dev.v4 {
                     IPv4State::Static(ip) => Some(api::LeaseInfo {
                         ip: ip.to_string(),

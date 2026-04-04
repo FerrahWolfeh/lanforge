@@ -310,3 +310,109 @@ fn test_remove_device_cascades() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+// --- Novos testes de Persistência e Integração ---
+
+#[test]
+fn test_seen_v4_persistence() {
+    let db = LeaseDb::open_in_memory().unwrap();
+    let mut table = DeviceTable::new();
+    let mac = make_mac(10);
+    let ip: Ipv4Addr = "1.2.3.4".parse().unwrap();
+
+    // 1. Give it a hostname to make it worthy
+    table.apply_update(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "WorthyHost".to_string(),
+    });
+
+    // 2. Add some seen IPs
+    table.apply_update(DeviceUpdate::ArpSeen { mac, ip });
+    table.apply_update(DeviceUpdate::ArpSeen {
+        mac,
+        ip: "5.6.7.8".parse().unwrap(),
+    });
+
+    // 3. Save and Load
+    db.save_table(&table).unwrap();
+    let loaded = db.load_table().unwrap();
+
+    let dev = loaded
+        .get_device(&mac)
+        .expect("Deve persistir dispositivo digno");
+    assert_eq!(dev.seen_v4.len(), 2);
+    assert!(dev.seen_v4.contains(&ip));
+    assert!(
+        dev.seen_v4
+            .contains(&"5.6.7.8".parse::<Ipv4Addr>().unwrap())
+    );
+}
+
+#[test]
+fn test_slaac_persistence_integration() {
+    let db = LeaseDb::open_in_memory().unwrap();
+    let mut table = DeviceTable::new();
+    let mac = make_mac(11);
+    let slaac1: Ipv6Addr = "fd00::1".parse().unwrap();
+    let slaac2: Ipv6Addr = "fd00::2".parse().unwrap();
+
+    // 1. Initial SLAAC (is_worthy via ULA)
+    table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: slaac1 });
+    db.save_table(&table).unwrap();
+
+    // 2. Add another SLAAC and save again
+    table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: slaac2 });
+    db.save_table(&table).unwrap();
+
+    let loaded = db.load_table().unwrap();
+    let dev = loaded.get_device(&mac).unwrap();
+    assert_eq!(dev.v6.len(), 2);
+    assert!(
+        dev.v6
+            .iter()
+            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == slaac1))
+    );
+    assert!(
+        dev.v6
+            .iter()
+            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == slaac2))
+    );
+
+    // 3. Verify it doesn't duplicate if we save the table as-is
+    db.save_table(&table).unwrap();
+    let loaded2 = db.load_table().unwrap();
+    assert_eq!(loaded2.get_device(&mac).unwrap().v6.len(), 2);
+}
+
+#[test]
+fn test_worthy_filtering_db_integration() {
+    let db = LeaseDb::open_in_memory().unwrap();
+    let mut table = DeviceTable::new();
+    let mac = make_mac(12);
+    let ll_ip: Ipv6Addr = "fe80::dead:beef".parse().unwrap();
+
+    // 1. Unworthy device (Link-Local only)
+    table.apply_update(DeviceUpdate::NdpSeen { mac, ip: ll_ip });
+    assert!(
+        table.get_device(&mac).is_none(),
+        "Device should be filtered out"
+    );
+
+    // 2. Save should result in empty DB
+    db.save_table(&table).unwrap();
+    let loaded = db.load_table().unwrap();
+    assert!(loaded.get_device(&mac).is_none());
+
+    // 3. Make it worthy (Hostname)
+    table.apply_update(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "NowWorthy".to_string(),
+    });
+    assert!(table.get_device(&mac).is_some());
+
+    // 4. Save and Load
+    db.save_table(&table).unwrap();
+    let loaded2 = db.load_table().unwrap();
+    assert!(loaded2.get_device(&mac).is_some());
+    assert_eq!(loaded2.get_device(&mac).unwrap().hostname.name, "NowWorthy");
+}

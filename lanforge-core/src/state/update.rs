@@ -159,21 +159,24 @@ pub enum DeviceUpdate {
 
 impl DeviceTable {
     fn handle_v4_lease_granted(&mut self, mac: MacAddr, ip: Ipv4Addr, expires: SystemTime) -> bool {
-        let dev_arc = self.get_or_insert(mac);
+        let dev_arc = self.get_device_or_new(mac);
         let new_lease = V4Lease { ip, expires };
 
-        match &dev_arc.v4 {
+        let changed = match &dev_arc.v4 {
             IPv4State::Static(s_ip) if *s_ip == ip => false,
             IPv4State::Dynamic(old) if old.ip == ip && old.expires == expires => false,
-            _ => {
-                debug!("[state] V4 lease {} → {}", mac, ip);
-                let mut dev = (*dev_arc).clone();
-                dev.v4 = IPv4State::Dynamic(new_lease);
-                dev.last_seen = SystemTime::now();
-                self.devices.insert(mac, Arc::new(dev));
-                true
-            }
+            _ => true,
+        };
+
+        if changed {
+            debug!("[state] V4 lease {} → {}", mac, ip);
+            let mut dev = (*dev_arc).clone();
+            dev.v4 = IPv4State::Dynamic(new_lease);
+            dev.last_seen = SystemTime::now();
+            self.devices.insert(mac, Arc::new(dev));
+            return true;
         }
+        false
     }
 
     fn handle_v6_lease_granted(
@@ -191,7 +194,7 @@ impl DeviceTable {
         };
 
         self.duid_index.insert(duid.clone(), m);
-        let dev_arc = self.get_or_insert(m);
+        let dev_arc = self.get_device_or_new(m);
         let new_lease = V6Lease { ip, iaid, expires };
 
         let mut already_correct = false;
@@ -245,7 +248,7 @@ impl DeviceTable {
         };
 
         self.duid_index.insert(duid.clone(), m);
-        let dev_arc = self.get_or_insert(m);
+        let dev_arc = self.get_device_or_new(m);
         let new_lease = V6PrefixLease {
             prefix,
             len,
@@ -287,23 +290,29 @@ impl DeviceTable {
     }
 
     fn handle_slaac_observed(&mut self, mac: MacAddr, addr: Ipv6Addr) -> bool {
-        let dev_arc = self.get_or_insert(mac);
+        let dev_arc = self.get_device_or_new(mac);
         let mut dev = (*dev_arc).clone();
         dev.last_seen = SystemTime::now();
 
-        if dev
+        let exists = self.devices.contains_key(&mac);
+        let mut changed = false;
+
+        if !dev
             .v6
             .iter()
             .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr))
         {
-            self.devices.insert(mac, Arc::new(dev));
-            false
-        } else {
             dev.v6.push(IPv6State::Slaac(addr));
-            self.devices.insert(mac, Arc::new(dev));
+            changed = true;
             debug!("[state] SLAAC {} → {}", mac, addr);
-            true
         }
+
+        // Only register if worthy OR already exists
+        if dev.is_worthy() || exists {
+            self.devices.insert(mac, Arc::new(dev));
+            return changed || !exists;
+        }
+        false
     }
 
     fn handle_ndp_seen(&mut self, mac: MacAddr, ip: Ipv6Addr) -> bool {
@@ -318,26 +327,36 @@ impl DeviceTable {
             });
             return true;
         }
-        let dev_arc = self.get_or_insert(mac);
+
+        let dev_arc = self.get_device_or_new(mac);
         let mut dev = (*dev_arc).clone();
         dev.last_seen = SystemTime::now();
-        self.devices.insert(mac, Arc::new(dev));
+
+        let exists = self.devices.contains_key(&mac);
+        if dev.is_worthy() || exists {
+            self.devices.insert(mac, Arc::new(dev));
+            // Always return true if it exists to trigger persistence of last_seen
+            return true;
+        }
         false
     }
 
     fn handle_arp_seen(&mut self, mac: MacAddr, ip: Ipv4Addr) -> bool {
-        let dev_arc = self.get_or_insert(mac);
+        let dev_arc = self.get_device_or_new(mac);
         let mut dev = (*dev_arc).clone();
         dev.last_seen = SystemTime::now();
 
-        if dev.seen_v4.contains(&ip) {
-            self.devices.insert(mac, Arc::new(dev));
-            false
-        } else {
+        if !dev.seen_v4.contains(&ip) {
             dev.seen_v4.push(ip);
-            self.devices.insert(mac, Arc::new(dev));
-            true
         }
+
+        let exists = self.devices.contains_key(&mac);
+        if dev.is_worthy() || exists {
+            self.devices.insert(mac, Arc::new(dev));
+            // Return true to trigger persistence of seen_v4 or last_seen
+            return true;
+        }
+        false
     }
 
     fn handle_hostname_hint(
@@ -346,13 +365,14 @@ impl DeviceTable {
         hostname: String,
         origin: HostnameOrigin,
     ) -> bool {
-        let dev_arc = self.get_or_insert(mac);
+        let dev_arc = self.get_device_or_new(mac);
         if origin >= dev_arc.hostname.origin && dev_arc.hostname.name != hostname {
             let mut dev = (*dev_arc).clone();
             dev.hostname = Hostname {
                 name: hostname,
                 origin,
             };
+            // A hostname ALWAYS makes a device worthy
             self.devices.insert(mac, Arc::new(dev));
             return true;
         }
@@ -366,12 +386,15 @@ impl DeviceTable {
 
         let mut changed = false;
         self.duid_index.insert(duid.clone(), m);
-        let dev_arc = self.get_or_insert(m);
+        let dev_arc = self.get_device_or_new(m);
         if dev_arc.duid.as_ref() != Some(duid) {
             let mut dev = (*dev_arc).clone();
             dev.duid = Some(duid.clone());
-            self.devices.insert(m, Arc::new(dev));
-            changed = true;
+            // DUID itself might not make it worthy, but if it exists, keep it
+            if dev.is_worthy() || self.devices.contains_key(&m) {
+                self.devices.insert(m, Arc::new(dev));
+                changed = true;
+            }
         }
 
         // Resolve órfãos que estavam esperando por este DUID+IAID

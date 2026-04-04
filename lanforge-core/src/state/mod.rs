@@ -30,7 +30,7 @@ use std::time::SystemTime;
 
 use std::sync::Arc;
 
-use crate::device::{Device, Hostname, IPv4State, Origin};
+use crate::device::Device;
 use crate::identifiers::{Duid, MacAddr};
 use crate::state::update::StaticEntry;
 
@@ -188,23 +188,23 @@ impl DeviceTable {
     /// Retorna o device recém-criado ou existente como Arc.
     /// Prefira `apply_update` para todo o código de protocolo.
     pub fn get_or_insert(&mut self, mac: MacAddr) -> Arc<Device> {
+        if let Some(dev) = self.devices.get(&mac) {
+            return dev.clone();
+        }
+
+        let dev = Arc::new(Device::new(mac));
+        self.devices.insert(mac, dev.clone());
+        dev
+    }
+
+    /// Returns the existing device or a new one, but does NOT insert it into the map.
+    /// This is used by `apply_update` to perform "what-if" checks before persisting.
+    #[must_use]
+    pub fn get_device_or_new(&self, mac: MacAddr) -> Arc<Device> {
         self.devices
-            .entry(mac)
-            .or_insert_with(|| {
-                Arc::new(Device {
-                    mac,
-                    hostname: Hostname::default(),
-                    origin: Origin::Dynamic,
-                    managed_at: None,
-                    duid: None,
-                    v4: IPv4State::None,
-                    v6: Vec::new(),
-                    v6_prefixes: Vec::new(),
-                    seen_v4: Vec::new(),
-                    last_seen: SystemTime::now(),
-                })
-            })
-            .clone()
+            .get(&mac)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(Device::new(mac)))
     }
 
     /// Adiciona ou atualiza uma entrada estática. Usado principalmente na carga do DB.

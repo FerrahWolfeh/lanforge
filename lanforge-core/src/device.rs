@@ -240,13 +240,21 @@ pub enum IPv6State {
 }
 
 impl IPv6State {
+    /// Returns the IPv6 address for this state.
+    ///
+    /// If it is a `Suffix`, it is combined with the given `prefix` if provided.
     #[must_use]
-    pub const fn ip(&self) -> Option<Ipv6Addr> {
+    pub fn ip_with_prefix(&self, prefix: Option<Ipv6Addr>) -> Option<Ipv6Addr> {
         match self {
             Self::Dynamic(lease) => Some(lease.ip),
             Self::Slaac(ip) | Self::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(*ip),
-            Self::Static(Ipv6AddrOrSuffix::Suffix(_)) => None, // Needs prefix to resolve
+            Self::Static(suf) => prefix.map(|p| Ipv6Addr::from(suf.as_u128(Some(p)))),
         }
+    }
+
+    #[must_use]
+    pub fn ip(&self) -> Option<Ipv6Addr> {
+        self.ip_with_prefix(None)
     }
 }
 
@@ -524,6 +532,35 @@ impl Device {
     pub const fn is_static(&self) -> bool {
         self.origin.is_static()
     }
+
+    /// Returns true if the device has enough "meaningful" information to be officially
+    /// registered in the table.
+    ///
+    /// Criteria:
+    /// - Has a non-empty hostname.
+    /// - Has an IPv4 address (Static or DHCP).
+    /// - Has a routable IPv6 address (Dynamic lease, or SLAAC/Static that is GUA/ULA).
+    /// - Has a static configuration origin.
+    #[must_use]
+    pub fn is_worthy(&self) -> bool {
+        if self.is_static() || !self.hostname.name.is_empty() {
+            return true;
+        }
+
+        if !matches!(self.v4, IPv4State::None) || !self.seen_v4.is_empty() {
+            return true;
+        }
+
+        self.v6.iter().any(|s| {
+            s.ip_with_prefix(None).map_or(
+                matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_))),
+                |ip| {
+                    let class = classify_ipv6(&ip);
+                    matches!(class, IpClassification::Gua | IpClassification::Ula)
+                },
+            )
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -561,41 +598,56 @@ impl Device {
 
     /// Returns the primary IPv6 address based on following priority:
     ///
-    /// 1. **ULA** (Unique Local Address): Static or Dynamic Lease. Preferred for local consistency.
-    /// 2. **SLAAC**: Any observed SLAAC address.
-    /// 3. **GUA** (Global Unicast Address): Static or Dynamic Lease.
+    /// 1. **ULA** (Unique Local Address): Static or Dynamic Lease.
+    /// 2. **Custom GUA**: Static or Dynamic Lease.
+    /// 3. **SLAAC ULA**: Observed SLAAC address in ULA range.
+    /// 4. **SLAAC GUA**: Observed SLAAC address in GUA range.
+    ///
+    /// Suffixes are resolved using the provided `gua_prefix` or `ula_prefix`.
     #[must_use]
-    pub fn primary_v6(&self) -> Option<Ipv6Addr> {
-        // 1. Check for ULA in leases/static
-        for state in &self.v6 {
-            if let Some(ip) = state.ip()
-                && is_ula(&ip)
-            {
-                return Some(ip);
-            }
-        }
+    pub fn primary_v6(
+        &self,
+        gua_prefix: Option<Ipv6Addr>,
+        ula_prefix: Option<Ipv6Addr>,
+    ) -> Option<Ipv6Addr> {
+        let mut best: Option<(u8, Ipv6Addr)> = None;
 
-        // 2. Check for SLAAC
+        let mut update_best = |prio: u8, addr: Ipv6Addr| {
+            if best.as_ref().is_none_or(|(b_prio, _)| prio < *b_prio) {
+                best = Some((prio, addr));
+            }
+        };
+
         for state in &self.v6 {
             if let IPv6State::Slaac(ip) = state {
-                return Some(*ip);
+                if is_ula(ip) {
+                    update_best(3, *ip);
+                } else if matches!(classify_ipv6(ip), IpClassification::Gua) {
+                    update_best(4, *ip);
+                }
+            } else {
+                // 1. Check for ULA
+                if let Some(ip) = state.ip_with_prefix(ula_prefix)
+                    && is_ula(&ip)
+                {
+                    update_best(1, ip);
+                }
+                // 2. Check for GUA
+                if let Some(ip) = state.ip_with_prefix(gua_prefix)
+                    && matches!(classify_ipv6(&ip), IpClassification::Gua)
+                {
+                    update_best(2, ip);
+                }
             }
         }
 
-        // 3. Fallback to GUA (leases/static)
-        for state in &self.v6 {
-            if let Some(ip) = state.ip() {
-                return Some(ip);
-            }
-        }
-
-        None
+        best.map(|(_, addr)| addr)
     }
 
     /// Returns a human-readable primary IPv6 address or "—".
     #[must_use]
-    pub fn display_v6(&self) -> String {
-        self.primary_v6()
+    pub fn display_v6(&self, gua_prefix: Option<Ipv6Addr>, ula_prefix: Option<Ipv6Addr>) -> String {
+        self.primary_v6(gua_prefix, ula_prefix)
             .map_or_else(|| "—".to_string(), |ip| ip.to_string())
     }
 
