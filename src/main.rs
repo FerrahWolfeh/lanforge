@@ -222,8 +222,15 @@ async fn async_main() -> Result<()> {
     ));
 
     // 6. Initialize global context
-    lanforge_core::context::LanforgeContext::init(bus.clone(), table.clone());
+    LanforgeContext::init(bus.clone(), table.clone());
     let _ = bus.publish(LanforgeEvent::StateReady);
+
+    // IMPORTANT: Subscribe to the bus BEFORE spawning any service threads.
+    // Services run on independent OS threads and can publish ServiceReady
+    // events almost immediately. If we subscribe after spawning, we race
+    // against fast services (DB, mDNS) and miss their readiness signals,
+    // causing the system to never report READY to systemd.
+    let mut bus_rx = bus.subscribe();
 
     let mut service_threads: Vec<(&'static str, std::thread::JoinHandle<()>)> = Vec::new();
 
@@ -491,7 +498,8 @@ async fn async_main() -> Result<()> {
     // -----------------------------------------------------------------------
     // Loop principal — eventos Netlink, timers, sinais
     // -----------------------------------------------------------------------
-    let mut bus_rx = bus.subscribe();
+    // NOTE: bus_rx was subscribed earlier (before service thread spawning)
+    // to avoid missing ServiceReady events from fast-starting services.
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
@@ -503,9 +511,13 @@ async fn async_main() -> Result<()> {
     stale_timer.tick().await;
 
     // Scan inicial (sem prefixos ainda — RA ainda não anunciou)
-    if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
-        error!("❌ Erro no scan inicial: {e:#}");
-    }
+    let b_cfg = cfg.clone();
+    let b_handle = handle.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_scan(&b_cfg, &b_handle, None, None, target_ifindex).await {
+            error!("❌ Erro no scan inicial: {e:#}");
+        }
+    });
 
     let mut expected_services = HashSet::from(["db", "mdns", "monitor", "control"]);
     if cfg.ra_enabled {
@@ -532,9 +544,13 @@ async fn async_main() -> Result<()> {
             // ── Fallback — Garantia de Consistência ──────────────────────
             _ = fallback.tick() => {
                 debug!("Sincronização periódica de SLAAC (Fallback)...");
-                if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
-                    error!("Erro no fallback: {e:#}");
-                }
+                let b_cfg = cfg.clone();
+                let b_handle = handle.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = run_scan(&b_cfg, &b_handle, current_gua, current_ula, target_ifindex).await {
+                        error!("Erro no fallback scan: {e:#}");
+                    }
+                });
             }
 
             // ── Stale — Expiração de leases e IPs antigos ────────────────
@@ -548,9 +564,13 @@ async fn async_main() -> Result<()> {
             // ── SIGUSR1 — Sincronização manual ───────────────────────────
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 recebido, forçando sincronização de estado...");
-                if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
-                    error!("Erro na sincronização manual: {e:#}");
-                }
+                let b_cfg = cfg.clone();
+                let b_handle = handle.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = run_scan(&b_cfg, &b_handle, current_gua, current_ula, target_ifindex).await {
+                        error!("Erro na sincronização manual: {e:#}");
+                    }
+                });
             }
 
             // ── SIGINT/SIGTERM — Shutdown gracioso ──────────────────────
@@ -588,13 +608,14 @@ async fn async_main() -> Result<()> {
                             current_gua = gua;
                             current_ula = ula;
 
-                            // Novo prefixo exige repopular o estado do zero
-                            if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
-                                error!(
-                                    "Erro ao atualizar prefixo (GUA={:?}, ULA={:?}): {e:#}",
-                                    current_gua, current_ula
-                                );
-                            }
+                            // Background scan to avoid blocking the main loop
+                            let cfg = cfg.clone();
+                            let handle = handle.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = run_scan(&cfg, &handle, gua, ula, target_ifindex).await {
+                                    error!("Erro ao atualizar prefixo (GUA={:?}, ULA={:?}): {e:#}", gua, ula);
+                                }
+                            });
                         }
                     }
                     Ok(LanforgeEvent::DeviceDiscovered { mac }) => {
@@ -604,10 +625,14 @@ async fn async_main() -> Result<()> {
                         debug!("Device expirado: {mac}");
                     }
                     Ok(LanforgeEvent::ReloadConfig) => {
-                        info!("ReloadConfig: Forçando sincronização via sinalizador manual!");
-                        if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
-                            error!("Erro no reload: {e:#}");
-                        }
+                        info!("ReloadConfig: Forçando sincronização em background...");
+                        let cfg = cfg.clone();
+                        let handle = handle.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
+                                error!("Erro no reload scan: {e:#}");
+                            }
+                        });
                     }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
