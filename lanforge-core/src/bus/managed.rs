@@ -71,10 +71,26 @@ impl ManagedTable {
             }
         }
 
-        if let DeviceUpdate::InterfaceIpsChanged { ifindex, .. } = update {
+        if let DeviceUpdate::InterfaceIpsChanged {
+            ifindex,
+            gua,
+            preferred,
+            valid,
+            ..
+        } = update
+        {
             let _ = self
                 .bus
                 .publish(LanforgeEvent::InterfaceUpdated { ifindex: *ifindex });
+
+            // Detect GUA and publish global PrefixChanged
+            if let Some(g) = gua {
+                let _ = self.bus.publish(LanforgeEvent::PrefixChanged {
+                    gua: Some(*g),
+                    preferred: *preferred,
+                    valid: *valid,
+                });
+            }
         }
 
         let _ = self.bus.publish(LanforgeEvent::DeviceTableDirty);

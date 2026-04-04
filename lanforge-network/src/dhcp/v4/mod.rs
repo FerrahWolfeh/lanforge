@@ -80,6 +80,34 @@ impl SyncService for Dhcpv4Service {
             self.cfg.iface, self.cfg.range_start, self.cfg.range_end, self.cfg.lease_time
         );
 
+        // 1. Wait for DB and Interface Ready
+        if let Ok(rx) = self.bus_rx.lock() {
+            info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
+            let mut db_ready = false;
+            let mut if_ready = false;
+            while let Ok(event) = rx.recv() {
+                match event {
+                    LanforgeEvent::DbReady => {
+                        db_ready = true;
+                        if if_ready {
+                            break;
+                        }
+                    }
+                    LanforgeEvent::InterfaceReady => {
+                        if_ready = true;
+                        if db_ready {
+                            break;
+                        }
+                    }
+                    LanforgeEvent::Shutdown => {
+                        info!("DHCPv4: Shutdown during init");
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let mut server = DhcpServer::new(self.cfg.clone());
 
         let socket = bind_dhcp_socket_sync(&self.cfg.iface, self.cfg.port)
@@ -93,6 +121,11 @@ impl SyncService for Dhcpv4Service {
 
         let mut buf = [0u8; 1500];
         let mut last_cleanup = Instant::now();
+
+        // Signal readiness
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+            name: "dhcpv4".to_string(),
+        });
 
         loop {
             // 1. Process network packets

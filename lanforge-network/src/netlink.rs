@@ -21,6 +21,12 @@ use crate::{error::Result, slaac::bootstrap_table};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::TryStreamExt;
+use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{AsyncService, LanforgeService};
+use lanforge_core::state::update::DeviceUpdate;
+use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_sys::SocketAddr;
 use rtnetlink::packet_route::{
@@ -29,17 +35,9 @@ use rtnetlink::packet_route::{
     neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState},
 };
 use rtnetlink::{Handle, IpVersion, packet_route::AddressFamily};
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
-use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv6Addr},
-};
-
-use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService};
-use lanforge_core::state::update::DeviceUpdate;
-use lanforge_core::{bus::LanforgeEvent, context::LanforgeContext};
-use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 
 // ---------------------------------------------------------------------------
 // Neighbor event filter (Netlink stream events)
@@ -240,31 +238,68 @@ impl NdpMonitor {
         let table = LanforgeContext::table();
 
         // Group extracted IPs by ifindex to aggregate link-local and GUA
-        let mut ifaces: HashMap<u32, (Option<Ipv6Addr>, Option<Ipv6Addr>)> = HashMap::new();
+        // Added (Preferred, Valid) lifetimes to the GUA storage
+        let mut ifaces: HashMap<u32, (Option<Ipv6Addr>, Option<Ipv6Addr>, u32, u32)> =
+            HashMap::new();
 
         while let Some(msg) = stream.try_next().await? {
             let ifindex = msg.header.index;
-            let (ll, g) = ifaces.entry(ifindex).or_insert((None, None));
+            let (ll, g, pref, val) = ifaces.entry(ifindex).or_insert((None, None, 0, 0));
 
             for attr in &msg.attributes {
-                if let AddressAttribute::Address(IpAddr::V6(v6)) = attr {
-                    let o = v6.octets();
-                    if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
-                        *ll = Some(*v6);
-                    } else if (0x20..=0x3F).contains(&o[0]) {
-                        let mut masked = o;
-                        masked[8..].fill(0);
-                        *g = Some(Ipv6Addr::from(masked));
+                match attr {
+                    AddressAttribute::Address(IpAddr::V6(v6)) => {
+                        let o = v6.octets();
+                        if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
+                            *ll = Some(*v6);
+                        } else if (0x20..=0x3F).contains(&o[0]) {
+                            let mut masked = o;
+                            masked[8..].fill(0);
+                            *g = Some(Ipv6Addr::from(masked));
+                        }
                     }
+                    AddressAttribute::CacheInfo(info) => {
+                        *pref = info.ifa_preferred;
+                        *val = info.ifa_valid;
+                    }
+                    _ => {}
                 }
             }
         }
 
-        for (ifindex, (link_local, gua)) in ifaces {
+        let interfaces = pnet::datalink::interfaces();
+        let if_names: HashMap<u32, String> =
+            interfaces.into_iter().map(|i| (i.index, i.name)).collect();
+
+        for (ifindex, (link_local, gua, preferred, valid)) in ifaces {
+            let name = if_names
+                .get(&ifindex)
+                .map(|s| s.as_str())
+                .unwrap_or("unnamed");
+
+            match (link_local, gua) {
+                (Some(ll), Some(g)) => {
+                    tracing::info!(
+                        "NdpMonitor: Interface {} up (LL: {}, GUA: {}/64)",
+                        name,
+                        ll,
+                        g
+                    );
+                }
+                (Some(ll), None) => {
+                    tracing::info!("NdpMonitor: Interface {} up (LL: {})", name, ll);
+                }
+                _ => {
+                    tracing::debug!("NdpMonitor: Interface {} up (No IPv6 yet)", name);
+                }
+            }
+
             let _ = table.update(&DeviceUpdate::InterfaceIpsChanged {
                 ifindex,
                 link_local,
                 gua,
+                preferred,
+                valid,
             });
         }
 
@@ -283,19 +318,28 @@ impl NdpMonitor {
         let table = LanforgeContext::table();
         let mut link_local = None;
         let mut gua = None;
+        let mut preferred = 0;
+        let mut valid = 0;
 
         // Iterate over ALL address messages for this specific interface and aggregate them
         while let Some(msg) = stream.try_next().await? {
             for attr in &msg.attributes {
-                if let AddressAttribute::Address(IpAddr::V6(v6)) = attr {
-                    let o = v6.octets();
-                    if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
-                        link_local = Some(*v6);
-                    } else if (0x20..=0x3F).contains(&o[0]) {
-                        let mut masked = o;
-                        masked[8..].fill(0);
-                        gua = Some(Ipv6Addr::from(masked));
+                match attr {
+                    AddressAttribute::Address(IpAddr::V6(v6)) => {
+                        let o = v6.octets();
+                        if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
+                            link_local = Some(*v6);
+                        } else if (0x20..=0x3F).contains(&o[0]) {
+                            let mut masked = o;
+                            masked[8..].fill(0);
+                            gua = Some(Ipv6Addr::from(masked));
+                        }
                     }
+                    AddressAttribute::CacheInfo(info) => {
+                        preferred = info.ifa_preferred;
+                        valid = info.ifa_valid;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -304,6 +348,8 @@ impl NdpMonitor {
             ifindex,
             link_local,
             gua,
+            preferred,
+            valid,
         });
 
         Ok(())
@@ -336,6 +382,12 @@ impl AsyncService for NdpMonitor {
         if let Err(e) = bootstrap_table("", &self.handle, None).await {
             tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
         }
+
+        tracing::info!("NdpMonitor: Initial scan complete, signaling ready");
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::InterfaceReady);
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+            name: "monitor".to_string(),
+        });
 
         tracing::info!("NdpMonitor: Service started (reactive mode)");
 

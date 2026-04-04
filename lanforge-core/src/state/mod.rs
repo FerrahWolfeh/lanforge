@@ -39,6 +39,8 @@ use crate::state::update::StaticEntry;
 pub struct InterfaceState {
     pub link_local: Option<Ipv6Addr>,
     pub gua: Option<Ipv6Addr>,
+    pub gua_preferred: u32,
+    pub gua_valid: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +171,14 @@ impl DeviceTable {
             .get(&ifindex)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Helper to find the GUA prefix and its lifetimes for a specific interface.
+    #[must_use]
+    pub fn get_interface_gua_at(&self, ifindex: u32) -> Option<(Ipv6Addr, u32, u32)> {
+        self.interface_ips
+            .get(&ifindex)
+            .and_then(|s| s.gua.map(|g| (g, s.gua_preferred, s.gua_valid)))
     }
 
     // -----------------------------------------------------------------------

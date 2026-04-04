@@ -5,6 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::update::DeviceUpdate;
@@ -82,6 +83,9 @@ impl AsyncService for HttpService {
         })?;
 
         info!("HTTP: listening on {}", addr);
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+            name: "http".to_string(),
+        });
 
         axum::serve(tcp_listener, app)
             .with_graceful_shutdown(async move {

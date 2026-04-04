@@ -128,6 +128,18 @@ pub enum LanforgeEvent {
     LeaseRenew { mac: MacAddr },
     /// Signal the entire daemon to undergo a graceful shutdown.
     Shutdown,
+
+    // -- Initialization & Lifecycle --
+    /// Internal device table and static config are loaded.
+    StateReady,
+    /// Database worker is active and ready for persistence.
+    DbReady,
+    /// Network interfaces have been discovered and addresses are in the table.
+    InterfaceReady,
+    /// A specific service has completed its initialization.
+    ServiceReady { name: String },
+    /// Final signal indicating the entire system is operational.
+    SystemReady,
 }
 
 impl LanforgeEvent {
@@ -148,7 +160,13 @@ impl LanforgeEvent {
             | Self::ScanRequested => true,
 
             // Internal signals or very high-frequency events
-            Self::DeviceTableDirty | Self::Shutdown => false,
+            Self::DeviceTableDirty
+            | Self::Shutdown
+            | Self::StateReady
+            | Self::DbReady
+            | Self::InterfaceReady
+            | Self::ServiceReady { .. }
+            | Self::SystemReady => false,
         }
     }
 }

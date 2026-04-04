@@ -52,6 +52,11 @@ impl SyncService for DbWorker {
             .lock()
             .map_err(|e| CoreError::Generic(format!("Mutex poison: {e}")))?;
 
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::DbReady);
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+            name: "db".to_string(),
+        });
+
         while let Ok(event) = rx.recv() {
             match event {
                 LanforgeEvent::DeviceTableDirty => {

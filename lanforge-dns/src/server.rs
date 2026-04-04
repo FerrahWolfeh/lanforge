@@ -64,6 +64,18 @@ impl AsyncService for DnsService {
         let table = LanforgeContext::table();
         let bus = LanforgeContext::bus();
 
+        // 1. Wait for DB Ready (Parallel optimization)
+        info!("DNS: Waiting for database engine...");
+        let mut ready_rx = bus.subscribe();
+        while let Ok(event) = ready_rx.recv().await {
+            if matches!(event, LanforgeEvent::DbReady) {
+                break;
+            }
+            if matches!(event, LanforgeEvent::Shutdown) {
+                return Ok(());
+            }
+        }
+
         let udp_sock = Arc::new(
             UdpSocket::bind(self.cfg.listen)
                 .await
@@ -92,6 +104,11 @@ impl AsyncService for DnsService {
             cfg: self.cfg.clone(),
             table: Arc::clone(&table),
             upstream_mgr,
+        });
+
+        // Signal readiness
+        let _ = bus.publish(LanforgeEvent::ServiceReady {
+            name: "dns".to_string(),
         });
 
         let udp_ctx = Arc::clone(&ctx);

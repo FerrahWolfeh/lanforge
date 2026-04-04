@@ -145,6 +145,8 @@ pub enum DeviceUpdate {
         ifindex: u32,
         link_local: Option<Ipv6Addr>,
         gua: Option<Ipv6Addr>,
+        preferred: u32,
+        valid: u32,
     },
 
     /// Request to rebuild the high-performance DNS lookup indices.
@@ -609,16 +611,27 @@ impl DeviceTable {
         ifindex: u32,
         link_local: Option<Ipv6Addr>,
         gua: Option<Ipv6Addr>,
+        preferred: u32,
+        valid: u32,
     ) -> bool {
         use super::InterfaceState;
         let entry = self.interface_ips.entry(ifindex).or_default();
-        if entry.link_local == link_local && entry.gua == gua {
+        if entry.link_local == link_local
+            && entry.gua == gua
+            && entry.gua_preferred == preferred
+            && entry.gua_valid == valid
+        {
             false
         } else {
-            *entry = InterfaceState { link_local, gua };
+            *entry = InterfaceState {
+                link_local,
+                gua,
+                gua_preferred: preferred,
+                gua_valid: valid,
+            };
             debug!(
-                "[state] Interface {} IPs updated: LL={:?}, GUA={:?}",
-                ifindex, link_local, gua
+                "[state] Interface {} IPs updated: LL={:?}, GUA={:?} (pref={}, valid={})",
+                ifindex, link_local, gua, preferred, valid
             );
             true
         }
@@ -698,7 +711,9 @@ impl DeviceTable {
                 ifindex,
                 link_local,
                 gua,
-            } => self.handle_interface_ips_changed(ifindex, link_local, gua),
+                preferred,
+                valid,
+            } => self.handle_interface_ips_changed(ifindex, link_local, gua, preferred, valid),
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 false

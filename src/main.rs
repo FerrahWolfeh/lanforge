@@ -51,12 +51,26 @@ use lanforge_network::slaac::bootstrap_table;
 use netlink_sys::AsyncSocket;
 use rtnetlink::constants::RTMGRP_NEIGH;
 use rtnetlink::new_connection;
+use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+
+/// Notifies systemd that the service is ready if $NOTIFY_SOCKET is set.
+fn sd_notify_ready() {
+    if let Ok(path) = std::env::var("NOTIFY_SOCKET") {
+        use std::os::unix::net::UnixDatagram;
+        debug!("systemd: Notificando READY=1 via {}", path);
+        if let Ok(sock) = UnixDatagram::unbound()
+            && sock.connect(path).is_ok()
+        {
+            let _ = sock.send(b"READY=1\n");
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -111,14 +125,13 @@ async fn async_main() -> Result<()> {
         )
         .init();
 
-    info!("🚀 Lanforge starting up...");
+    info!(
+        "🚀 Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
+        cfg.ra_enabled, cfg.dhcpv4_enabled, cfg.dhcpv6_enabled, cfg.dns_enabled
+    );
     debug!("  target_prefix = {}", cfg.target_prefix);
     debug!("  debounce      = {}s", cfg.debounce_secs);
     debug!("  fallback scan = every {}min", cfg.fallback_mins);
-    info!(
-        "🔧 Configuration loaded (RA={}, DHCPv4={}, DHCPv6={}, DNS={})",
-        cfg.ra_enabled, cfg.dhcpv4_enabled, cfg.dhcpv6_enabled, cfg.dns_enabled
-    );
 
     // -----------------------------------------------------------------------
     // EventBus — instanciado antes de tudo para que o ManagedTable possa
@@ -140,7 +153,7 @@ async fn async_main() -> Result<()> {
     let mut initial_table = match LeaseDb::open(&leases_db_path) {
         Ok(db) => match db.load_table() {
             Ok(persisted) => {
-                info!("📦 Estado persistido carregado de {}", cfg.leases_db);
+                info!("📦 Database loaded: {}", cfg.leases_db);
                 persisted
             }
             Err(e) => {
@@ -191,7 +204,7 @@ async fn async_main() -> Result<()> {
             initial_table.add_static_device(mac, e.hostname.clone(), v4_ip, v6_suffix);
         }
 
-        info!("👥 {count} reservas estáticas carregadas (TOML + Overrides)");
+        info!("👥 Static reservations: {count} entries");
     }
 
     // 3. Montamos os índices O(1) do DNS apenas UMA vez após tudo ser carregado
@@ -202,6 +215,7 @@ async fn async_main() -> Result<()> {
 
     // 5. Initialize global context
     lanforge_core::context::LanforgeContext::init(bus.clone(), table.clone());
+    let _ = bus.publish(LanforgeEvent::StateReady);
 
     let global_cancel = CancellationToken::new();
     let mut service_threads: Vec<(&'static str, std::thread::JoinHandle<()>)> = Vec::new();
@@ -484,7 +498,7 @@ async fn async_main() -> Result<()> {
     // Começa como None; é atualizado no handler do EventBus abaixo.
     // Passado para o scan SLAAC para distinguir SlaacObserved de NdpSeen.
     // -----------------------------------------------------------------------
-    let mut current_gua: Option<std::net::Ipv6Addr> = None;
+    let mut current_gua: Option<Ipv6Addr> = None;
 
     // -----------------------------------------------------------------------
     // Loop principal — eventos Netlink, timers, sinais
@@ -505,7 +519,25 @@ async fn async_main() -> Result<()> {
         error!("❌ Erro no scan inicial: {e:#}");
     }
 
-    info!("✅ Sistema pronto. Escutando eventos de rede.");
+    let mut expected_services = HashSet::from(["db", "mdns", "monitor", "control"]);
+    if cfg.ra_enabled {
+        expected_services.insert("ra");
+    }
+    if cfg.dhcpv4_enabled {
+        expected_services.insert("dhcpv4");
+    }
+    if cfg.dhcpv6_enabled {
+        expected_services.insert("dhcpv6");
+    }
+    if cfg.dns_enabled {
+        expected_services.insert("dns");
+    }
+    if cfg.http_listen.is_some() {
+        expected_services.insert("http");
+    }
+
+    let mut ready_services = HashSet::new();
+    let mut system_ready_sent = false;
 
     loop {
         tokio::select! {
@@ -546,6 +578,19 @@ async fn async_main() -> Result<()> {
             // ── EventBus — Eventos internos ──────────────────────────────
             event = bus_rx.recv() => {
                 match event {
+                    Ok(LanforgeEvent::ServiceReady { name }) => {
+                        if expected_services.contains(name.as_str()) {
+                            ready_services.insert(name.clone());
+                            debug!("ServiceReady: {} ({}/{})", name, ready_services.len(), expected_services.len());
+
+                            if !system_ready_sent && ready_services.len() >= expected_services.len() {
+                                info!("✅ All internal services ready. System fully operational.");
+                                let _ = bus.publish(LanforgeEvent::SystemReady);
+                                sd_notify_ready();
+                                system_ready_sent = true;
+                            }
+                        }
+                    }
                     Ok(LanforgeEvent::PrefixChanged { gua, .. }) => {
                         if current_gua != gua {
                             info!("Prefixo GUA alterado: {:?} → {:?}", current_gua, gua);

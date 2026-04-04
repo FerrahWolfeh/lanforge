@@ -120,6 +120,9 @@ async fn run_mdns_worker(
     });
 
     info!("mDNS prober ativo (v4/v6)");
+    let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+        name: "mdns".to_string(),
+    });
 
     let mut bus_rx = bus.subscribe();
 

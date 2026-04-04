@@ -135,6 +135,47 @@ impl LogHandler {
                     ifindex
                 );
             }
+            LanforgeEvent::StateReady => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "Internal state ready".white()
+                );
+            }
+            LanforgeEvent::DbReady => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "Database engine ready".white()
+                );
+            }
+            LanforgeEvent::InterfaceReady => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "Network interfaces ready".white()
+                );
+            }
+            LanforgeEvent::ServiceReady { name } => {
+                println!(
+                    "[{}] {} {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "Service ready:".white(),
+                    name.cyan()
+                );
+            }
+            LanforgeEvent::SystemReady => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".green().bold(),
+                    "System fully operational!".bright_green().bold()
+                );
+            }
             LanforgeEvent::DeviceTableDirty | LanforgeEvent::Shutdown => {
                 // Ignore these or print subtly if needed
             }

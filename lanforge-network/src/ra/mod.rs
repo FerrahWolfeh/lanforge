@@ -174,12 +174,39 @@ impl AsyncService for RaService {
 
         let iface_index =
             get_iface_index(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
+
+        // Parallel optimization: Wait for interface data ONLY if not already present
+        if table
+            .read()
+            .get_interface_ips(iface_index)
+            .link_local
+            .is_none()
+        {
+            info!(
+                "RA: Waiting for interface discovery on '{}'...",
+                self.cfg.iface
+            );
+            while let Ok(event) = bus_rx.recv().await {
+                if matches!(event, LanforgeEvent::InterfaceReady) {
+                    break;
+                }
+                if matches!(event, LanforgeEvent::Shutdown) {
+                    return Ok(());
+                }
+            }
+        }
+
         let mac = get_iface_mac(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
 
         let socket = create_ra_socket(&self.cfg.iface, iface_index)
             .map_err(|e| CoreError::Generic(e.to_string()))?;
         socket.set_nonblocking(true).map_err(CoreError::Io)?;
         let async_socket = AsyncFd::new(socket).map_err(CoreError::Io)?;
+
+        // Signal readiness to the supervisor counter
+        let _ = bus.publish(LanforgeEvent::ServiceReady {
+            name: "ra".to_string(),
+        });
 
         let mut state = RaState::new();
 

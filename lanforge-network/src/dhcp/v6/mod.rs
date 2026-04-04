@@ -94,6 +94,34 @@ impl SyncService for Dhcpv6Service {
             self.config.port, self.config.iface
         );
 
+        // 1. Wait for DB and Interface Ready
+        if let Ok(rx) = self.bus_rx.lock() {
+            info!("DHCPv6: Waiting for dependencies (DB and Interfaces)...");
+            let mut db_ready = false;
+            let mut if_ready = false;
+            while let Ok(event) = rx.recv() {
+                match event {
+                    LanforgeEvent::DbReady => {
+                        db_ready = true;
+                        if if_ready {
+                            break;
+                        }
+                    }
+                    LanforgeEvent::InterfaceReady => {
+                        if_ready = true;
+                        if db_ready {
+                            break;
+                        }
+                    }
+                    LanforgeEvent::Shutdown => {
+                        info!("DHCPv6: Shutdown during init");
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Read interface MAC to generate a legitimate DUID-LL
         let mac_str =
             std::fs::read_to_string(format!("/sys/class/net/{}/address", self.config.iface))
@@ -125,8 +153,32 @@ impl SyncService for Dhcpv6Service {
             ndp_poke_sock,
         );
 
+        // 2. Re-sync GUA from global state (honoring configured interface)
+        // This ensures that if the prefix was discovered while we were waiting
+        // for DB/Interfaces, we catch up now.
+        if let Some(ifindex) = pnet::datalink::interfaces()
+            .iter()
+            .find(|i| i.name == self.config.iface)
+            .map(|i| i.index)
+            && let Some((gua, pref, val)) = LanforgeContext::table()
+                .read()
+                .get_interface_gua_at(ifindex)
+        {
+            info!(
+                "DHCPv6: Resyncing GUA from global state: {} (pref={}, valid={})",
+                gua, pref, val
+            );
+            server.pool.set_gua_prefix(gua);
+            server.prefix_lifetimes = Some((pref, val));
+        }
+
         let mut buf = [0u8; 2048];
         info!("DHCPv6 state machine started");
+
+        // Signal readiness
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+            name: "dhcpv6".to_string(),
+        });
 
         loop {
             // 1. Process network packets

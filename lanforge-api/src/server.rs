@@ -62,6 +62,9 @@ impl AsyncService for ControlService {
         }
 
         info!("Control: ready at {}", path_ref.display());
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+            name: "control".to_string(),
+        });
 
         let mut bus_rx = LanforgeContext::bus().subscribe();
         let mut current_gua: Option<String> = None;
