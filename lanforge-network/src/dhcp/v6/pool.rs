@@ -530,7 +530,9 @@ mod tests {
 
     use super::*;
     use lanforge_core::bus::{EventBus, ManagedTable};
+    use lanforge_core::state::update::DeviceUpdate;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use std::sync::Once;
     static INIT: Once = Once::new();
@@ -560,6 +562,22 @@ mod tests {
 
     fn duid(last_byte: u8) -> Vec<u8> {
         vec![0, 3, 0, 1, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, last_byte]
+    }
+
+    fn commit_lease(mac: Option<MacAddr>, duid: &[u8], iaid: u32, ip: Ipv6Addr) {
+        let table = LanforgeContext::table();
+        let _ = table.update(&DeviceUpdate::V6LeaseGranted {
+            mac,
+            duid: Duid::new(duid.to_vec()),
+            iaid,
+            ip,
+            expires: SystemTime::now() + Duration::from_secs(3600),
+        });
+    }
+
+    fn release_mac(mac: MacAddr) {
+        let table = LanforgeContext::table();
+        let _ = table.update(&DeviceUpdate::HostRemoved { mac });
     }
 
     #[test]
@@ -595,10 +613,15 @@ mod tests {
 
         let ips1 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
         let ip1 = ips1[0];
+        commit_lease(Some(mac(1)), &duid(1), 1, ip1);
+
         let ips2 = pool.allocate(&duid(2), 1, Some(mac(2)), None);
         let ip2 = ips2[0];
+        commit_lease(Some(mac(2)), &duid(2), 1, ip2);
+
         let ips3 = pool.allocate(&duid(3), 1, Some(mac(3)), None);
         let ip3 = ips3[0];
+        commit_lease(Some(mac(3)), &duid(3), 1, ip3);
 
         // All IPs must be within range
         for ip in [ip1, ip2, ip3] {
@@ -704,6 +727,8 @@ mod tests {
         let mut pool = Ipv6Pool::new(Vec::new(), Some(ula), 64);
 
         let ips1 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        commit_lease(Some(mac(1)), &duid(1), 1, ips1[0]);
+
         let ips2 = pool.allocate(&duid(1), 1, Some(mac(1)), None); // Same client asking again
 
         // Must return exactly the same list of IPs
@@ -740,9 +765,11 @@ mod tests {
 
         let ips1 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
         let ip1 = ips1[0];
+        commit_lease(Some(mac(1)), &duid(1), 1, ip1);
+
         assert!(pool.allocate(&duid(2), 1, Some(mac(2)), None).is_empty()); // Exhausted
 
-        pool.release(&ip1);
+        release_mac(mac(1));
 
         let ips2 = pool.allocate(&duid(2), 1, Some(mac(2)), None); // Released, Mac 2 can take it
         assert_eq!(ip1, ips2[0]);
@@ -764,9 +791,14 @@ mod tests {
         let end_int = u128::from_be_bytes(end.octets());
 
         // Fill the pool (3 IPs)
-        let ip1 = pool.allocate(&duid(1), 1, None, None)[0];
-        let ip2 = pool.allocate(&duid(2), 1, None, None)[0];
-        let ip3 = pool.allocate(&duid(3), 1, None, None)[0];
+        let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None)[0];
+        commit_lease(Some(mac(1)), &duid(1), 1, ip1);
+
+        let ip2 = pool.allocate(&duid(2), 1, Some(mac(2)), None)[0];
+        commit_lease(Some(mac(2)), &duid(2), 1, ip2);
+
+        let ip3 = pool.allocate(&duid(3), 1, Some(mac(3)), None)[0];
+        commit_lease(Some(mac(3)), &duid(3), 1, ip3);
 
         // All must be unique and in range
         let ips = [ip1, ip2, ip3];
@@ -782,8 +814,18 @@ mod tests {
         assert!(pool.allocate(&duid(4), 1, None, None).is_empty());
 
         // Release one and allocate again — the freed IP should be reused
-        pool.release(&ip1);
-        let ip4 = pool.allocate(&duid(4), 1, None, None)[0];
+        // Since we don't have MACs in this test, we use DuidAssociated which might be tricky,
+        // but HostRemoved by MAC won't work.
+        // Let's use a simpler way: just clear the table for this test's contet.
+        let binding = LanforgeContext::table();
+        let mut w = binding.write();
+        *w = lanforge_core::state::DeviceTable::new();
+        // Re-filling with 2 and 3 so 1 is free
+        drop(w);
+        commit_lease(Some(mac(2)), &duid(2), 1, ip2);
+        commit_lease(Some(mac(3)), &duid(3), 1, ip3);
+
+        let ip4 = pool.allocate(&duid(4), 1, Some(mac(4)), None)[0];
         assert_eq!(ip4, ip1, "Released IP should be reusable");
     }
 

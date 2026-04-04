@@ -22,19 +22,23 @@ use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::TryStreamExt;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
+use netlink_sys::SocketAddr;
 use rtnetlink::packet_route::{
     RouteNetlinkMessage,
-    address::AddressMessage,
+    address::AddressAttribute,
     neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState},
 };
 use rtnetlink::{Handle, IpVersion, packet_route::AddressFamily};
-use std::net::Ipv6Addr;
 use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv6Addr},
+};
 
-use lanforge_core::bus::{LanforgeEvent, ManagedTable};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, LanforgeService};
 use lanforge_core::state::update::DeviceUpdate;
+use lanforge_core::{bus::LanforgeEvent, context::LanforgeContext};
 use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 
 // ---------------------------------------------------------------------------
@@ -148,17 +152,17 @@ fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
         return None;
     }
 
-    let mut ip: Option<std::net::IpAddr> = None;
+    let mut ip: Option<IpAddr> = None;
     let mut mac: Option<MacAddr> = None;
     let ifindex = msg.header.ifindex;
 
     for attr in msg.attributes {
         match attr {
             NeighbourAttribute::Destination(NeighbourAddress::Inet6(addr)) => {
-                ip = Some(std::net::IpAddr::V6(addr));
+                ip = Some(IpAddr::V6(addr));
             }
             NeighbourAttribute::Destination(NeighbourAddress::Inet(addr)) => {
-                ip = Some(std::net::IpAddr::V4(addr));
+                ip = Some(IpAddr::V4(addr));
             }
             NeighbourAttribute::LinkLocalAddress(bytes) => {
                 mac = MacAddr::from_slice(&bytes);
@@ -196,7 +200,7 @@ pub async fn get_ipv6_neighbors(
     while let Some(msg) = stream.try_next().await? {
         if let Some(event) = parse_neighbor_msg(msg) {
             let matches = match event.ip() {
-                std::net::IpAddr::V6(ip) => ip.to_string().starts_with(target_prefix),
+                IpAddr::V6(ip) => ip.to_string().starts_with(target_prefix),
                 _ => false,
             };
             if matches {
@@ -212,14 +216,8 @@ pub async fn get_ipv6_neighbors(
 // NdpMonitor — The "Serviceable Struct" for Netlink
 // ---------------------------------------------------------------------------
 
-pub type NetlinkStream = Arc<
-    tokio::sync::Mutex<
-        UnboundedReceiver<(
-            NetlinkMessage<RouteNetlinkMessage>,
-            rtnetlink::sys::SocketAddr,
-        )>,
-    >,
->;
+pub type NetlinkStream =
+    Arc<tokio::sync::Mutex<UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>>>;
 
 /// Monitor que reage a eventos Netlink e mantém a ManagedTable atualizada.
 pub struct NdpMonitor {
@@ -239,20 +237,17 @@ impl NdpMonitor {
     /// Returns an error if the Netlink query fails.
     pub async fn refresh_interfaces(&self) -> crate::error::Result<()> {
         let mut stream = self.handle.address().get().execute();
-        let table = lanforge_core::context::LanforgeContext::table();
-        
+        let table = LanforgeContext::table();
+
         // Group extracted IPs by ifindex to aggregate link-local and GUA
-        let mut ifaces: std::collections::HashMap<u32, (Option<Ipv6Addr>, Option<Ipv6Addr>)> = std::collections::HashMap::new();
+        let mut ifaces: HashMap<u32, (Option<Ipv6Addr>, Option<Ipv6Addr>)> = HashMap::new();
 
         while let Some(msg) = stream.try_next().await? {
             let ifindex = msg.header.index;
             let (ll, g) = ifaces.entry(ifindex).or_insert((None, None));
 
             for attr in &msg.attributes {
-                if let rtnetlink::packet_route::address::AddressAttribute::Address(
-                    std::net::IpAddr::V6(v6),
-                ) = attr
-                {
+                if let AddressAttribute::Address(IpAddr::V6(v6)) = attr {
                     let o = v6.octets();
                     if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
                         *ll = Some(*v6);
@@ -285,17 +280,14 @@ impl NdpMonitor {
             .set_link_index_filter(ifindex)
             .execute();
 
-        let table = lanforge_core::context::LanforgeContext::table();
+        let table = LanforgeContext::table();
         let mut link_local = None;
         let mut gua = None;
 
         // Iterate over ALL address messages for this specific interface and aggregate them
         while let Some(msg) = stream.try_next().await? {
             for attr in &msg.attributes {
-                if let rtnetlink::packet_route::address::AddressAttribute::Address(
-                    std::net::IpAddr::V6(v6),
-                ) = attr
-                {
+                if let AddressAttribute::Address(IpAddr::V6(v6)) = attr {
                     let o = v6.octets();
                     if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
                         link_local = Some(*v6);
@@ -332,7 +324,6 @@ impl LanforgeService for NdpMonitor {
 impl AsyncService for NdpMonitor {
     async fn run(&mut self) -> std::result::Result<(), CoreError> {
         use crate::slaac::bootstrap_table;
-        use lanforge_core::context::LanforgeContext;
 
         let table = LanforgeContext::table();
         let mut bus_rx = LanforgeContext::bus().subscribe();
