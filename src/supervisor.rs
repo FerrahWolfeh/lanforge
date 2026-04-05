@@ -341,4 +341,83 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn test_supervisor_reference_implementation() {
+        init_context();
+        let bus = LanforgeContext::bus();
+        let mut sub = bus.subscribe();
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = attempts.clone();
+
+        // Spawn supervisor in background
+        let handle = tokio::spawn(async move {
+            supervise_async(move || {
+                let a = attempts_clone.clone();
+                RefService { attempts: a }
+            })
+            .await;
+        });
+
+        // 1. Check for ServiceReady
+        let mut ready = false;
+        // We might get multiple events, we want to see at least one ServiceReady
+        for _ in 0..20 {
+            if let Ok(event) = sub.recv().await
+                && let LanforgeEvent::ServiceReady { name } = event
+                && name == "ref-service"
+            {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready, "ServiceReady should be published");
+
+        // 2. Wait for a few attempts (it fails and restarts)
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            attempts.load(Ordering::Relaxed) > 1,
+            "Should have restarted at least once"
+        );
+
+        // 3. Signal Shutdown
+        let _ = bus.publish(LanforgeEvent::Shutdown);
+
+        // 4. Verify supervisor terminates
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("Supervisor should terminate on shutdown")
+            .expect("Supervisor task panicked");
+    }
+
+    struct RefService {
+        attempts: Arc<AtomicU32>,
+    }
+    impl lanforge_core::service::LanforgeService for RefService {
+        fn meta(&self) -> lanforge_core::service::ServiceMeta {
+            lanforge_core::service::ServiceMeta {
+                id: "ref-service",
+                display_name: "Reference Service",
+                critical: false,
+                max_retries: 0, // infinite
+                base_backoff: Duration::from_millis(5),
+                max_backoff: Duration::from_millis(20),
+                stack_kb: 1,
+            }
+        }
+        fn describe(&self) -> String {
+            "RefService".into()
+        }
+    }
+    impl lanforge_core::service::AsyncService for RefService {
+        async fn run(&mut self) -> lanforge_core::error::Result<()> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            // Simulate work then failure
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            Err(lanforge_core::error::CoreError::Generic(
+                "simulated error".into(),
+            ))
+        }
+    }
 }

@@ -101,3 +101,39 @@ async fn test_host_list_returns_static_and_cli_only() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_api_status_reports_gua_and_ula() {
+    let bus = Arc::new(EventBus::new());
+    let table = Arc::new(ManagedTable::from_table(
+        bus.clone(),
+        lanforge_core::state::DeviceTable::new(),
+        None,
+    ));
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        LanforgeContext::init(bus.clone(), table.clone());
+    }));
+
+    let gua = "2001:db8::1".to_string();
+    let ula = "fd00::".to_string();
+    let mut cfg = make_dummy_config();
+    cfg.ula_prefix = Some(ula.clone());
+    let cfg = Arc::new(cfg);
+
+    let ctx = ClientContext {
+        current_gua: Some(gua.clone()),
+        uptime_secs: 100,
+        last_scan_secs_ago: 10,
+        cfg: cfg.clone(),
+    };
+
+    let resp = ctx.handle_status().await;
+    if let Response::Status(s) = resp {
+        assert_eq!(s.network.gua, Some(gua));
+        assert_eq!(s.network.ula, Some(ula));
+        assert_eq!(s.uptime_secs, 100);
+    } else {
+        panic!("Expected Response::Status, got {:?}", resp);
+    }
+}

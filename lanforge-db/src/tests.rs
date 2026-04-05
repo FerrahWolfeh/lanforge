@@ -417,3 +417,43 @@ fn test_worthy_filtering_db_integration() {
     assert!(loaded2.get_device(&mac).is_some());
     assert_eq!(loaded2.get_device(&mac).unwrap().hostname.name, "NowWorthy");
 }
+
+#[test]
+fn test_persistence_of_various_updates() {
+    let db = LeaseDb::open_in_memory().unwrap();
+    let mut table = DeviceTable::new();
+    let mac = make_mac(20);
+
+    // 1. Hostname Hint
+    table.apply_update(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "persistence-test".to_string(),
+    });
+
+    // 2. NDP Discovery
+    table.apply_update(DeviceUpdate::NdpSeen {
+        mac,
+        ip: "fe80::1".parse().unwrap(),
+    });
+
+    // 3. DHCPv4 Registration
+    let ip_v4 = "192.168.1.100".parse().unwrap();
+    table.apply_update(DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip: ip_v4,
+        expires: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
+    });
+
+    // 4. SLAAC Probe (Observed)
+    let ip_v6 = "2001:db8::abc".parse().unwrap();
+    table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip_v6 });
+
+    // Save and Reload
+    db.save_table(&table).unwrap();
+    let loaded = db.load_table().unwrap();
+
+    let dev = loaded.get_device(&mac).expect("Device should be persisted");
+    assert_eq!(dev.hostname.name, "persistence-test");
+    assert_eq!(dev.v4.ip().unwrap(), ip_v4);
+    assert!(dev.v6.iter().any(|s| s.ip() == Some(ip_v6)));
+}

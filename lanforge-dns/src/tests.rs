@@ -232,3 +232,46 @@ fn test_local_resolver_direct_api() {
     let resp = Message::from_bytes(&resp_bytes).unwrap();
     assert_eq!(resp.response_code(), ResponseCode::NoError);
 }
+
+#[test]
+fn test_dhcp_registration_creates_dns_record() {
+    let cfg = mock_config();
+    let bus = Arc::new(EventBus::new());
+    let table = Arc::new(ManagedTable::new(bus.clone(), None));
+    let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    let ip = Ipv4Addr::new(192, 168, 1, 50);
+
+    // 1. Simulate DHCPv4 Lease
+    let _ = table.update(&DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip,
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+
+    // 2. Simulate Hostname Hint from DHCP
+    let _ = table.update(&DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "my-device".to_string(),
+    });
+
+    // 3. Verify DNS resolution via LocalResolver
+    let t_read = table.read();
+    let resolver = LocalResolver::new(&cfg, &t_read);
+
+    let mut query = Message::new();
+    let name = Name::from_str("my-device.lan.").unwrap();
+    query.add_query(Query::query(name.clone(), RecordType::A));
+
+    let resp_bytes = resolver
+        .resolve_ip(&query, "my-device", RecordType::A)
+        .unwrap();
+    let resp = Message::from_bytes(&resp_bytes).unwrap();
+
+    assert_eq!(resp.response_code(), ResponseCode::NoError);
+    assert_eq!(resp.answers().len(), 1);
+    if let RData::A(resolved_ip) = resp.answers()[0].data() {
+        assert_eq!(**resolved_ip, ip);
+    } else {
+        panic!("Wrong RData type");
+    }
+}
