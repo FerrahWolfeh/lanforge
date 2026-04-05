@@ -686,3 +686,33 @@ fn test_primary_v6_priority() {
         "fd00::42".parse::<Ipv6Addr>().unwrap()
     );
 }
+
+#[test]
+fn test_static_registry_validation() {
+    let mut table = DeviceTable::new();
+    let mac1 = MacAddr([1, 1, 1, 1, 1, 1]);
+    let mac2 = MacAddr([2, 2, 2, 2, 2, 2]);
+
+    let ip1: Ipv4Addr = "192.168.1.100".parse().unwrap();
+    let suf1 = Ipv6AddrOrSuffix::parse("::100").unwrap();
+
+    // 1. Setup normal registrations
+    table.add_static_device(mac1, "host1".to_string(), Some(ip1), Some(suf1.clone()));
+
+    // 2. Add conflicting registrations for mac2
+    // mac2 tries to claim the same IPv4 and IPv6 suffix as mac1
+    table.add_static_device(mac2, "host2".to_string(), Some(ip1), Some(suf1));
+
+    // 3. Get registry - should perform collision detection
+    let registry = table.get_static_registry();
+
+    // 4. Verify "first-win" logic (mac1 should own both)
+    assert_eq!(registry.v4.get(&ip1), Some(&mac1));
+    assert_eq!(
+        registry.v6.get(&Ipv6AddrOrSuffix::parse("::100").unwrap()),
+        Some(&mac1)
+    );
+
+    assert_eq!(registry.v4.len(), 1);
+    assert_eq!(registry.v6.len(), 1);
+}

@@ -25,12 +25,12 @@ pub mod tests;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
 use std::sync::Arc;
 
-use crate::device::Device;
+use crate::device::{Device, Ipv6AddrOrSuffix};
 use crate::identifiers::{Duid, MacAddr};
 use crate::state::update::StaticEntry;
 
@@ -72,6 +72,31 @@ pub struct DeviceTable {
     name_index: HashMap<String, MacAddr>,
     /// Index: IP Address -> MAC
     ip_index: HashMap<IpAddr, MacAddr>,
+}
+
+/// A validated snapshot of all static network reservations.
+///
+/// This registry is built by the `DeviceTable` after performing
+/// consistency checks and collision detection. Services like
+/// `DHCPv4` and `DHCPv6` use this to pre-allocate addresses.
+#[derive(Debug, Clone, Default)]
+pub struct StaticRegistry {
+    /// Mapping: IPv4 -> MAC
+    pub v4: HashMap<Ipv4Addr, MacAddr>,
+    /// Mapping: IPv6 (Suffix or IP) -> MAC
+    pub v6: HashMap<Ipv6AddrOrSuffix, MacAddr>,
+}
+
+impl StaticRegistry {
+    /// Returns an iterator over all resolved static IPv4 addresses.
+    pub fn v4_ips(&self) -> impl Iterator<Item = Ipv4Addr> + '_ {
+        self.v4.keys().copied()
+    }
+
+    /// Returns an iterator over all static IPv6 reservations (suffixes or full IPs).
+    pub fn v6_reservations(&self) -> impl Iterator<Item = Ipv6AddrOrSuffix> + '_ {
+        self.v6.keys().cloned()
+    }
 }
 
 impl DeviceTable {
@@ -225,6 +250,52 @@ impl DeviceTable {
             online_devices: online,
             static_entries: statics,
         }
+    }
+
+    /// Produz um registro validado das configurações estáticas.
+    /// Realiza detecção de colisões e loga avisos para IPs duplicados.
+    pub fn get_static_registry(&self) -> StaticRegistry {
+        let mut registry = StaticRegistry::default();
+
+        // Sort by MAC to guarantee deterministic "first-win" logic
+        let mut sorted_entries: Vec<_> = self.static_entries.iter().collect::<Vec<_>>();
+        sorted_entries.sort_by_key(|(mac, _)| **mac);
+
+        for (&mac, entry) in sorted_entries {
+            // 1. Validar IPv4
+            if let Some(ip) = entry.v4_ip {
+                if let Some(&owner) = registry.v4.get(&ip) {
+                    if owner != mac {
+                        tracing::warn!(
+                            "❌ Colisão de IP Estático (v4): {} solicitado por {}, mas já pertence a {}",
+                            ip,
+                            mac,
+                            owner
+                        );
+                    }
+                } else {
+                    registry.v4.insert(ip, mac);
+                }
+            }
+
+            // 2. Validar IPv6 (Sufixo ou IP Full)
+            if let Some(v6) = &entry.v6_suffix {
+                if let Some(owner) = registry.v6.get(v6) {
+                    if *owner != mac {
+                        tracing::warn!(
+                            "❌ Colisão de IP Estático (v6): {} solicitado por {}, mas já pertence a {}",
+                            v6,
+                            mac,
+                            owner
+                        );
+                    }
+                } else {
+                    registry.v6.insert(v6.clone(), mac);
+                }
+            }
+        }
+
+        registry
     }
 }
 

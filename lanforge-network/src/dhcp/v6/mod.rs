@@ -139,6 +139,16 @@ impl SyncService for Dhcpv6Service {
             ndp_poke_sock,
         );
 
+        // Pre-allocate static reservations for ULA prefix
+        let registry = LanforgeContext::table().read().get_static_registry();
+        if let Some(ula) = self.config.ula_prefix {
+            let ula_ips: Vec<_> = registry
+                .v6_reservations()
+                .map(|s| server.pool.construct_addr(ula, &s))
+                .collect();
+            server.pool.reserve_statics(ula_ips);
+        }
+
         // 2. Re-sync GUA from global state (honoring configured interface)
         // This ensures that if the prefix was discovered while we were waiting
         // for DB/Interfaces, we catch up now.
@@ -156,6 +166,13 @@ impl SyncService for Dhcpv6Service {
             );
             server.pool.set_gua_prefix(gua);
             server.prefix_lifetimes = Some((pref, val));
+
+            // Also pre-allocate static reservations for the newly discovered GUA prefix
+            let gua_ips: Vec<_> = registry
+                .v6_reservations()
+                .map(|s| server.pool.construct_addr(gua, &s))
+                .collect();
+            server.pool.reserve_statics(gua_ips);
         }
 
         let mut buf = [0u8; 2048];
@@ -255,6 +272,16 @@ impl SyncService for Dhcpv6Service {
                                     "DHCPv6: GUA prefix changed ({:?} -> {}), notifying clients",
                                     old_gua, g
                                 );
+
+                                // Update static reservations for the new GUA prefix
+                                let registry =
+                                    LanforgeContext::table().read().get_static_registry();
+                                let gua_ips: Vec<_> = registry
+                                    .v6_reservations()
+                                    .map(|s| server.pool.construct_addr(g, &s))
+                                    .collect();
+                                server.pool.reserve_statics(gua_ips);
+
                                 let table = LanforgeContext::table();
                                 let table_read = table.read();
                                 for dev in table_read.devices() {

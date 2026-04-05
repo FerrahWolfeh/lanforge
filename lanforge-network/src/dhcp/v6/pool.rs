@@ -138,6 +138,8 @@ pub struct Ipv6Pool {
     pub ula_prefix_len: u8,
     /// IPs in quarantine.
     blacklisted: HashMap<Ipv6Addr, SystemTime>,
+    /// Static IP reservations to avoid dynamic pool collisions.
+    reserved_static: Vec<Ipv6Addr>,
 }
 
 impl Ipv6Pool {
@@ -152,11 +154,22 @@ impl Ipv6Pool {
             gua_prefix: None,
             ula_prefix_len,
             blacklisted: HashMap::new(),
+            reserved_static: Vec::new(),
         }
     }
     /// Updates the dynamic GUA prefix.
     pub fn set_gua_prefix(&mut self, prefix: Ipv6Addr) {
         self.gua_prefix = Some(prefix);
+    }
+
+    /// Reserves a batch of static addresses by marking them as taken.
+    /// This prevents dynamic allocation collisions on startup.
+    pub fn reserve_statics(&mut self, ips: impl IntoIterator<Item = Ipv6Addr>) {
+        for ip in ips {
+            if !self.reserved_static.contains(&ip) {
+                self.reserved_static.push(ip);
+            }
+        }
     }
 
     /// Constructs an IPv6 address given a device's configured suffix and a prefix.
@@ -249,10 +262,9 @@ impl Ipv6Pool {
                 for state in &dev.v6 {
                     if let lanforge_core::device::IPv6State::Static(suffix) = state {
                         let ip = self.construct_addr(prefix, suffix);
-                        if self.is_on_prefix(&ip, &prefix)
-                            && self.is_available(&ip, &table)
-                            && !assigned.contains(&ip)
-                        {
+                        if self.is_on_prefix(&ip, &prefix) && !assigned.contains(&ip) {
+                            // Static reservations ALWAYS win and skip the availability check
+                            // as requested by the user.
                             assigned.push(ip);
                             prefix_assigned = true;
                         }
@@ -264,7 +276,7 @@ impl Ipv6Pool {
             if !prefix_assigned
                 && let Some(req_ip) = requested
                 && self.is_on_prefix(&req_ip, &prefix)
-                && self.is_available(&req_ip, &table)
+                && self.is_available(&req_ip, &table, mac)
             {
                 assigned.push(req_ip);
                 prefix_assigned = true;
@@ -331,7 +343,7 @@ impl Ipv6Pool {
                 for _ in 0..20 {
                     let random_suffix: u128 = rand::random::<u128>() & mask;
                     let ip = Ipv6Addr::from((pref_int | random_suffix).to_be_bytes());
-                    if self.is_available(&ip, &table) {
+                    if self.is_available(&ip, &table, mac) {
                         assigned.push(ip);
                         break;
                     }
@@ -431,7 +443,7 @@ impl Ipv6Pool {
         for i in 0..size {
             let raw = start + (offset + i) % size;
             let ip = Ipv6Addr::from(raw.to_be_bytes());
-            if self.is_available(&ip, table) {
+            if self.is_available(&ip, table, None) {
                 return Some(ip);
             }
         }
@@ -444,9 +456,23 @@ impl Ipv6Pool {
         ip_segs[0..4] == pref_segs[0..4]
     }
 
-    fn is_available(&self, ip: &Ipv6Addr, table: &lanforge_core::state::DeviceTable) -> bool {
-        table.get_mac_by_ip(std::net::IpAddr::V6(*ip)).is_none()
-            && !self.blacklisted.contains_key(ip)
+    fn is_available(
+        &self,
+        ip: &Ipv6Addr,
+        table: &lanforge_core::state::DeviceTable,
+        target_mac: Option<MacAddr>,
+    ) -> bool {
+        if let Some(mac) = table.get_mac_by_ip(std::net::IpAddr::V6(*ip))
+            && Some(mac) != target_mac
+        {
+            return false;
+        }
+
+        if self.reserved_static.contains(ip) {
+            return false;
+        }
+
+        !self.blacklisted.contains_key(ip)
     }
 
     pub fn release(&mut self, _ip: &Ipv6Addr) {
@@ -796,6 +822,37 @@ mod tests {
 
         let ips2 = pool.allocate(&duid(2), 1, Some(mac(2)), None); // Released, Mac 2 can take it
         assert_eq!(ip1, ips2[0]);
+    }
+
+    #[test]
+    fn test_static_reservation_reconnect() {
+        init_context();
+        let ula = "fd00::".parse().unwrap();
+        let mut pool = Ipv6Pool::new(Vec::new(), Some(ula), 64);
+
+        let static_suffix = Ipv6AddrOrSuffix::parse("::cafe").unwrap();
+        let static_ip: Ipv6Addr = "fd00::cafe".parse().unwrap();
+
+        // 1. Setup static device
+        let binding = LanforgeContext::table();
+        let mut w = binding.write();
+        w.add_static_device(mac(1), "test".to_string(), None, Some(static_suffix));
+        drop(w);
+
+        // 2. Allocate first time
+        let ips = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        assert!(ips.contains(&static_ip));
+
+        // 3. Commit lease (this puts it in the ip_index)
+        commit_lease(Some(mac(1)), &duid(1), 1, static_ip);
+
+        // 4. Allocate again (simulated reconnect)
+        // Even though fd00::cafe is in the index, it should still be assigned because it's static
+        let ips2 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        assert!(
+            ips2.contains(&static_ip),
+            "Should still return static IP on reconnect"
+        );
     }
 
     #[test]

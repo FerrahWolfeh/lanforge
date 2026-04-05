@@ -195,6 +195,16 @@ impl IpPool {
         }
     }
 
+    /// Reserves a batch of static addresses by removing them from the available pool.
+    /// This prevents dynamic allocation collisions on startup.
+    pub fn reserve_statics(&mut self, ips: impl IntoIterator<Item = Ipv4Addr>) {
+        for ip in ips {
+            if self.is_in_range(ip) {
+                self.remove_from_available(ip);
+            }
+        }
+    }
+
     /// Check if an IP is in the dynamic available pool.
     fn is_available_in_pool(&self, ip: Ipv4Addr) -> bool {
         self.ip_to_index.contains_key(&ip)

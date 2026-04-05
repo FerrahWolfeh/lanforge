@@ -145,7 +145,7 @@ impl fmt::Display for Duid {
 // ---------------------------------------------------------------------------
 
 /// Represents a 6-byte IEEE 802 MAC address.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Deserialize, PartialOrd, Ord)]
 pub struct MacAddr(#[serde(deserialize_with = "deserialize_mac")] pub [u8; 6]);
 
 impl Serialize for MacAddr {

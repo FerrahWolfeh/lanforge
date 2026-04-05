@@ -94,6 +94,9 @@ pub async fn run_bootstrap() -> Result<BootstrapResult> {
         }
     }
 
+    // Trigger early collision validation and logging
+    let _ = initial_table.get_static_registry();
+
     let interfaces = pnet::datalink::interfaces();
     let target_ifindex = interfaces
         .iter()

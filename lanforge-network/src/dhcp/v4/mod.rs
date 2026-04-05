@@ -95,6 +95,10 @@ impl SyncService for Dhcpv4Service {
 
         let mut server = DhcpServer::new(self.cfg.clone());
 
+        // Pre-allocate static reservations to avoid collisions with dynamic pool
+        let registry = LanforgeContext::table().read().get_static_registry();
+        server.pool.reserve_statics(registry.v4_ips());
+
         let socket = bind_dhcp_socket_sync(&self.cfg.iface, self.cfg.port)
             .map_err(|e| CoreError::Generic(e.to_string()))?;
         socket
