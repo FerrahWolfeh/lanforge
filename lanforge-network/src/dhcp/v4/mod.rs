@@ -37,7 +37,6 @@ use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
 
@@ -52,40 +51,47 @@ use lanforge_core::service::{LanforgeService, SyncService};
 
 pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
-    bus_rx: Arc<Mutex<std::sync::mpsc::Receiver<LanforgeEvent>>>,
 }
 
 impl Dhcpv4Service {
     #[must_use]
-    pub fn new(
-        cfg: Dhcpv4Config,
-        bus_rx: Arc<Mutex<std::sync::mpsc::Receiver<LanforgeEvent>>>,
-    ) -> Self {
-        Self { cfg, bus_rx }
+    pub fn new(cfg: Dhcpv4Config) -> Self {
+        Self { cfg }
     }
 }
 
 impl LanforgeService for Dhcpv4Service {
-    fn name(&self) -> &str {
-        "Dhcpv4Service"
+    fn meta(&self) -> lanforge_core::service::ServiceMeta {
+        lanforge_core::service::ServiceMeta {
+            id: "dhcpv4",
+            display_name: "DHCPv4 Server",
+            critical: true,
+            max_retries: 0,
+            base_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(30),
+            stack_kb: 512,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "DHCPv4 on {} (range {}–{}, lease {}s)",
+            self.cfg.iface, self.cfg.range_start, self.cfg.range_end, self.cfg.lease_time
+        )
     }
 }
 
 impl SyncService for Dhcpv4Service {
-    fn run(&mut self) -> std::result::Result<(), CoreError> {
+    fn run(
+        &mut self,
+        bus_rx: &lanforge_core::service::SyncBusReceiver,
+    ) -> std::result::Result<(), CoreError> {
         use lanforge_core::bus::DeviceChange;
 
-        info!(
-            "DHCPv4: Starting (sync) on {} (range {}–{}, lease {}s)",
-            self.cfg.iface, self.cfg.range_start, self.cfg.range_end, self.cfg.lease_time
-        );
-
         // 1. Wait for DB and Interface Ready
-        if let Ok(rx) = self.bus_rx.lock() {
-            info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
-            LanforgeContext::wait_for_db_sync(&rx);
-            LanforgeContext::wait_for_interfaces_sync(&rx);
-        }
+        info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
+        bus_rx.wait_for_db();
+        bus_rx.wait_for_interfaces();
 
         let mut server = DhcpServer::new(self.cfg.clone());
 
@@ -100,11 +106,6 @@ impl SyncService for Dhcpv4Service {
 
         let mut buf = [0u8; 1500];
         let mut last_cleanup = Instant::now();
-
-        // Signal readiness
-        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
-            name: "dhcpv4".to_string(),
-        });
 
         loop {
             if !LanforgeContext::is_running() {
@@ -192,57 +193,48 @@ impl SyncService for Dhcpv4Service {
             }
 
             // 2. Process Bus events
-            if let Ok(rx) = self.bus_rx.lock() {
-                while let Ok(event) = rx.try_recv() {
-                    match event {
-                        LanforgeEvent::LeaseRelease { mac } => {
-                            info!("DHCPv4: Forcing release of {} via CLI", mac);
-                            let ip = LanforgeContext::table()
-                                .read()
-                                .get_device(&mac)
-                                .and_then(|d| d.v4.ip());
-                            if let Some(i) = ip {
-                                server.pool.release(i);
-                            }
+            for event in bus_rx.try_recv_all() {
+                match event {
+                    LanforgeEvent::LeaseRelease { mac } => {
+                        info!("DHCPv4: Forcing release of {} via CLI", mac);
+                        let ip = LanforgeContext::table()
+                            .read()
+                            .get_device(&mac)
+                            .and_then(|d| d.v4.ip());
+                        if let Some(i) = ip {
+                            server.pool.release(i);
                         }
-                        LanforgeEvent::LeaseRenew { mac } => {
-                            let ip = {
-                                let t = LanforgeContext::table();
-                                let table_read = t.read();
-                                table_read.get_device(&mac).and_then(|d| d.v4.ip())
-                            };
-                            if let Some(ip) = ip {
-                                let packet = server.build_forcerenew(mac, ip);
-                                let _ = raw_tx.send_dhcp(
-                                    &packet,
-                                    self.cfg.server_id,
-                                    ip,
-                                    *mac.as_ref(),
-                                );
-                            }
-                        }
-                        LanforgeEvent::DeviceUpdated {
-                            mac,
-                            change: DeviceChange::V4StaticChanged { ip },
-                        } => match ip {
-                            Some(v) => {
-                                info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
-                                // Since pool queries global state, we just need to ensure the IP isn't available
-                                server.pool.mark_declined(v); // wait, mark_declined puts it in quarantine. 
-                                // Actually we can just do server.pool.release(ip) but we want to REMOVE IT from available.
-                                // We don't have a public remove_from_available, but since global table tracks it, allocate() will just skip it when it draws it. We don't need to do anything!
-                                info!("DHCPv4: Handled statically.");
-                            }
-                            None => {
-                                info!("DHCPv4: Static reservation cleared for {mac}");
-                            }
-                        },
-                        LanforgeEvent::Shutdown => {
-                            info!("DHCPv4: Shutdown received");
-                            return Ok(());
-                        }
-                        _ => {}
                     }
+                    LanforgeEvent::LeaseRenew { mac } => {
+                        let ip = {
+                            let t = LanforgeContext::table();
+                            let table_read = t.read();
+                            table_read.get_device(&mac).and_then(|d| d.v4.ip())
+                        };
+                        if let Some(ip) = ip {
+                            let packet = server.build_forcerenew(mac, ip);
+                            let _ =
+                                raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref());
+                        }
+                    }
+                    LanforgeEvent::DeviceUpdated {
+                        mac,
+                        change: DeviceChange::V4StaticChanged { ip },
+                    } => match ip {
+                        Some(v) => {
+                            info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
+                            server.pool.mark_declined(v);
+                            info!("DHCPv4: Handled statically.");
+                        }
+                        None => {
+                            info!("DHCPv4: Static reservation cleared for {mac}");
+                        }
+                    },
+                    LanforgeEvent::Shutdown => {
+                        info!("DHCPv4: Shutdown received");
+                        return Ok(());
+                    }
+                    _ => {}
                 }
             }
 

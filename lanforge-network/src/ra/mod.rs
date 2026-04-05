@@ -151,8 +151,16 @@ impl RaService {
 }
 
 impl LanforgeService for RaService {
-    fn name(&self) -> &str {
-        "RaService"
+    fn meta(&self) -> lanforge_core::service::ServiceMeta {
+        lanforge_core::service::ServiceMeta {
+            id: "ra",
+            display_name: "RA Server",
+            critical: true,
+            max_retries: 0,
+            base_backoff: std::time::Duration::from_secs(2),
+            max_backoff: std::time::Duration::from_secs(30),
+            stack_kb: 512,
+        }
     }
 }
 
@@ -198,11 +206,6 @@ impl AsyncService for RaService {
             .map_err(|e| CoreError::Generic(e.to_string()))?;
         socket.set_nonblocking(true).map_err(CoreError::Io)?;
         let async_socket = AsyncFd::new(socket).map_err(CoreError::Io)?;
-
-        // Signal readiness to the supervisor counter
-        let _ = bus.publish(LanforgeEvent::ServiceReady {
-            name: "ra".to_string(),
-        });
 
         let mut state = RaState::new();
 

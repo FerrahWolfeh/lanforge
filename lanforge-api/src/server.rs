@@ -29,8 +29,20 @@ impl ControlService {
 }
 
 impl LanforgeService for ControlService {
-    fn name(&self) -> &str {
-        "ControlService"
+    fn meta(&self) -> lanforge_core::service::ServiceMeta {
+        lanforge_core::service::ServiceMeta {
+            id: "control",
+            display_name: "Control API",
+            critical: true,
+            max_retries: 0,
+            base_backoff: std::time::Duration::from_secs(1),
+            max_backoff: std::time::Duration::from_secs(30),
+            stack_kb: 512,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("Control API at {}", self.cfg.socket_path)
     }
 }
 
@@ -60,11 +72,6 @@ impl AsyncService for ControlService {
         if let Err(e) = fs::set_permissions(path_ref, fs::Permissions::from_mode(0o666)) {
             debug!("Aviso: não foi possível setar permissões 0666 no socket: {e}");
         }
-
-        info!("Control: ready at {}", path_ref.display());
-        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
-            name: "control".to_string(),
-        });
 
         let mut bus_rx = LanforgeContext::bus().subscribe();
         let mut current_gua: Option<String> = None;

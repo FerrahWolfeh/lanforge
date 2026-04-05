@@ -19,26 +19,35 @@
 
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::service::{AsyncService, ServiceMeta, SyncBusReceiver, SyncService};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
+/// Publishes a `ServiceReady` event and logs the readiness signal.
+fn signal_ready(meta: &ServiceMeta, description: &str) {
+    info!("▸ {} ready ({})", description, meta.id);
+    let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+        name: meta.id.to_string(),
+    });
+}
+
 /// Executa uma task supervisionada que implementa `AsyncService`.
-pub async fn supervise_async<S, F>(
-    name: &'static str,
-    critical: bool,
-    max_retries: u32,
-    base_backoff: Duration,
-    max_backoff: Duration,
-    factory: F,
-) where
-    S: lanforge_core::service::AsyncService,
+pub async fn supervise_async<S, F>(factory: F)
+where
+    S: AsyncService,
     F: Fn() -> S,
 {
     let mut consecutive_failures: u32 = 0;
 
     loop {
-        info!("Starting async service '{name}'");
         let mut service = factory();
+        let meta = service.meta();
+        let description = service.describe();
+        let name = meta.display_name;
+
+        info!("▸ Starting async service: {}", description);
+
+        signal_ready(&meta, &description);
 
         let mut bus_rx = LanforgeContext::bus().subscribe();
         tokio::select! {
@@ -49,9 +58,9 @@ pub async fn supervise_async<S, F>(
                     }
                 }
             } => {
-                info!("Supervisor '{name}' received shutdown signal via bus, stopping");
+                info!("▪ {} shutting down", description);
                 if let Err(e) = service.on_shutdown() {
-                    error!("Error during async service '{name}' shutdown: {e}");
+                    error!("Error during async service '{}' shutdown: {e}", name);
                 }
                 return;
             }
@@ -59,38 +68,36 @@ pub async fn supervise_async<S, F>(
                 match res {
                     Ok(()) => {
                         if !LanforgeContext::is_running() {
-                            info!("Supervisor '{name}' shutting down after clean service exit");
+                            info!("▪ {} exited (shutdown)", description);
                             return;
                         }
-                        info!("Async service '{name}' exited cleanly, restarting");
+                        info!("▪ {} exited cleanly, restarting", description);
                         consecutive_failures = 0;
                     }
-                    Err(e) => {
+                    Err(err) => {
                         consecutive_failures += 1;
-                        error!("Async service '{name}' failed ({consecutive_failures}x): {e:#}");
+                        error!("✗ {} failed ({}x): {:#}", description, consecutive_failures, err);
 
-                        if max_retries > 0 && consecutive_failures >= max_retries {
-                            if critical {
-                                error!(
-                                    "Critical async service '{name}' exhausted {max_retries} retries — aborting process"
-                                );
-                                std::process::exit(1);
+                        if meta.max_retries > 0 && consecutive_failures >= meta.max_retries {
+                            if meta.critical {
+                                error!("FATAL: Critical service '{}' failed after {} retries. Shutting down.", name, consecutive_failures);
+                                LanforgeContext::terminate();
+                                return;
                             } else {
-                                warn!(
-                                    "Non-critical async service '{name}' exhausted {max_retries} retries — giving up"
-                                );
+                                warn!("Service '{}' exhausted {} retries — giving up", name, meta.max_retries);
                                 return;
                             }
                         }
 
-                        let exp = base_backoff.saturating_mul(1 << (consecutive_failures - 1).min(16));
-                        let backoff = exp.min(max_backoff);
+                        let exp = meta.base_backoff.saturating_mul(1 << (consecutive_failures - 1).min(16));
+                        let backoff = exp.min(meta.max_backoff);
 
                         warn!(
-                            "Restarting async service '{name}' in {:.1}s (attempt {}/{})",
+                            "Restarting async service '{}' in {:.1}s (attempt {}/{})",
+                            name,
                             backoff.as_secs_f64(),
                             consecutive_failures + 1,
-                            if max_retries == 0 { "∞".into() } else { max_retries.to_string() }
+                            if meta.max_retries == 0 { "∞".into() } else { meta.max_retries.to_string() }
                         );
 
                         tokio::select! {
@@ -101,7 +108,7 @@ pub async fn supervise_async<S, F>(
                                     }
                                 }
                             } => {
-                                info!("Supervisor '{name}' received shutdown signal during backoff, stopping");
+                                info!("Supervisor '{}' received shutdown signal during backoff, stopping", name);
                                 return;
                             }
                             _ = tokio::time::sleep(backoff) => {}
@@ -117,68 +124,93 @@ pub async fn supervise_async<S, F>(
 ///
 /// Esta função é SÍNCRONA e deve ser chamada dentro de uma OS thread dedicada
 /// (ex: via `spawn_sync_service_thread`). Ela não requer um executor Tokio.
-pub fn supervise_sync<S, F>(
-    name: &'static str,
-    critical: bool,
-    max_retries: u32,
-    base_backoff: Duration,
-    max_backoff: Duration,
-    factory: F,
-) where
-    S: lanforge_core::service::SyncService,
+pub fn supervise_sync<S, F>(rt_handle: tokio::runtime::Handle, factory: F)
+where
+    S: SyncService,
     F: Fn() -> S,
 {
     let mut consecutive_failures: u32 = 0;
 
     loop {
         if !LanforgeContext::is_running() {
-            info!("Supervisor (sync) '{name}' received shutdown, stopping before start");
+            info!("Supervisor (sync) received shutdown, stopping before start");
             return;
         }
 
-        info!("Starting sync service '{name}'");
         let mut service = factory();
+        let meta = service.meta();
+        let description = service.describe();
+        let name = meta.display_name;
 
-        let res = service.run();
+        info!("▸ Starting sync service: {}", description);
+
+        // Create the event bus bridge for this sync service
+        let bus = LanforgeContext::bus();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let bus_rx = SyncBusReceiver::new(rx);
+
+        // Spawn the bridge task on the Tokio runtime (not this OS thread)
+        let mut event_rx = bus.subscribe();
+        rt_handle.spawn(async move {
+            while let Ok(event) = event_rx.recv().await {
+                let is_shutdown = matches!(event, LanforgeEvent::Shutdown);
+                if tx.send(event).is_err() || is_shutdown {
+                    break;
+                }
+            }
+        });
+
+        signal_ready(&meta, &description);
+
+        let res = service.run(&bus_rx);
 
         match res {
             Ok(()) => {
                 if !LanforgeContext::is_running() {
-                    info!("Supervisor (sync) '{name}' shutting down after clean service exit");
+                    info!("▪ {} exited (shutdown)", description);
                     return;
                 }
-                info!("Sync service '{name}' exited cleanly, restarting");
+                info!("▪ {} exited cleanly, restarting", description);
                 consecutive_failures = 0;
             }
-            Err(e) => {
+            Err(err) => {
                 consecutive_failures += 1;
-                error!("Sync service '{name}' failed ({consecutive_failures}x): {e:#}");
+                error!(
+                    "✗ {} failed ({}x): {:#}",
+                    description, consecutive_failures, err
+                );
 
-                if max_retries > 0 && consecutive_failures >= max_retries {
-                    if critical {
+                if meta.max_retries > 0 && consecutive_failures >= meta.max_retries {
+                    if meta.critical {
                         error!(
-                            "Critical sync service '{name}' exhausted {max_retries} retries — aborting"
+                            "FATAL: Critical service '{}' failed after {} retries. Shutting down.",
+                            name, consecutive_failures
                         );
-                        std::process::exit(1);
+                        LanforgeContext::terminate();
+                        return;
                     } else {
                         warn!(
-                            "Non-critical sync service '{name}' exhausted {max_retries} retries — giving up"
+                            "Service '{}' exhausted {} retries — giving up",
+                            name, meta.max_retries
                         );
                         return;
                     }
                 }
 
-                let exp = base_backoff.saturating_mul(1 << (consecutive_failures - 1).min(16));
-                let backoff = exp.min(max_backoff);
+                let exp = meta
+                    .base_backoff
+                    .saturating_mul(1 << (consecutive_failures - 1).min(16));
+                let backoff = exp.min(meta.max_backoff);
 
                 warn!(
-                    "Restarting sync service '{name}' in {:.1}s (attempt {}/{})",
+                    "Restarting sync service '{}' in {:.1}s (attempt {}/{})",
+                    name,
                     backoff.as_secs_f64(),
                     consecutive_failures + 1,
-                    if max_retries == 0 {
+                    if meta.max_retries == 0 {
                         "∞".into()
                     } else {
-                        max_retries.to_string()
+                        meta.max_retries.to_string()
                     }
                 );
 
@@ -187,7 +219,10 @@ pub fn supervise_sync<S, F>(
                 let start = std::time::Instant::now();
                 while start.elapsed() < backoff {
                     if !LanforgeContext::is_running() {
-                        info!("Supervisor (sync) '{name}' received shutdown during backoff");
+                        info!(
+                            "Supervisor (sync) '{}' received shutdown during backoff",
+                            name
+                        );
                         return;
                     }
                     std::thread::sleep(Duration::from_millis(100));
@@ -223,17 +258,10 @@ mod tests {
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
-        supervise_async(
-            "test-service",
-            false, // non-critical
-            3,     // max 3 retries
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-            move || {
-                let a = attempts_clone.clone();
-                TestAsyncService { attempts: a }
-            },
-        )
+        supervise_async(move || {
+            let a = attempts_clone.clone();
+            TestAsyncService { attempts: a }
+        })
         .await;
 
         assert_eq!(
@@ -247,8 +275,16 @@ mod tests {
         attempts: Arc<AtomicU32>,
     }
     impl lanforge_core::service::LanforgeService for TestAsyncService {
-        fn name(&self) -> &str {
-            "test"
+        fn meta(&self) -> lanforge_core::service::ServiceMeta {
+            lanforge_core::service::ServiceMeta {
+                id: "test",
+                display_name: "test",
+                critical: false,
+                max_retries: 3,
+                base_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(10),
+                stack_kb: 1,
+            }
         }
     }
     impl lanforge_core::service::AsyncService for TestAsyncService {
@@ -266,17 +302,10 @@ mod tests {
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
-        supervise_async(
-            "test-reset",
-            false,
-            3,
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-            move || {
-                let a = attempts_clone.clone();
-                TestResetService { attempts: a }
-            },
-        )
+        supervise_async(move || {
+            let a = attempts_clone.clone();
+            TestResetService { attempts: a }
+        })
         .await;
 
         assert_eq!(attempts.load(Ordering::Relaxed), 4);
@@ -286,8 +315,16 @@ mod tests {
         attempts: Arc<AtomicU32>,
     }
     impl lanforge_core::service::LanforgeService for TestResetService {
-        fn name(&self) -> &str {
-            "test-reset"
+        fn meta(&self) -> lanforge_core::service::ServiceMeta {
+            lanforge_core::service::ServiceMeta {
+                id: "test-reset",
+                display_name: "test-reset",
+                critical: false,
+                max_retries: 3,
+                base_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(10),
+                stack_kb: 1,
+            }
         }
     }
     impl lanforge_core::service::AsyncService for TestResetService {

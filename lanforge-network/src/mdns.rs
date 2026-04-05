@@ -1,7 +1,7 @@
 use lanforge_core::context::LanforgeContext;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RData, RecordType};
@@ -28,8 +28,20 @@ pub struct MdnsProber {
 }
 
 impl LanforgeService for MdnsProber {
-    fn name(&self) -> &str {
-        "MdnsProber"
+    fn meta(&self) -> lanforge_core::service::ServiceMeta {
+        lanforge_core::service::ServiceMeta {
+            id: "mdns",
+            display_name: "mDNS Prober",
+            critical: false,
+            max_retries: 0,
+            base_backoff: std::time::Duration::from_secs(2),
+            max_backoff: std::time::Duration::from_secs(30),
+            stack_kb: 256,
+        }
+    }
+
+    fn describe(&self) -> String {
+        "mDNS Prober (v4/v6)".to_string()
     }
 }
 
@@ -139,11 +151,6 @@ async fn run_mdns_worker(
             }
         }
         debug!("mDNS v6 listener exited");
-    });
-
-    info!("mDNS prober ativo (v4/v6)");
-    let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
-        name: "mdns".to_string(),
     });
 
     let mut bus_rx = bus.subscribe();

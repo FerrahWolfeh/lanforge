@@ -112,12 +112,23 @@ impl InterfaceMonitor {
 }
 
 impl LanforgeService for InterfaceMonitor {
-    fn name(&self) -> &str {
-        "InterfaceMonitor"
+    fn meta(&self) -> lanforge_core::service::ServiceMeta {
+        lanforge_core::service::ServiceMeta {
+            id: "ifmon",
+            display_name: "InterfaceMonitor",
+            critical: true,
+            max_retries: 0,
+            base_backoff: std::time::Duration::from_secs(2),
+            max_backoff: std::time::Duration::from_secs(30),
+            stack_kb: 256,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("Interface Monitor (ifindex: {})", self.target_ifindex)
     }
 
     fn on_shutdown(&mut self) -> std::result::Result<(), CoreError> {
-        info!("InterfaceMonitor: Deinitializing Service");
         Ok(())
     }
 }
@@ -125,12 +136,6 @@ impl LanforgeService for InterfaceMonitor {
 impl AsyncService for InterfaceMonitor {
     async fn run(&mut self) -> std::result::Result<(), CoreError> {
         let mut bus_rx = LanforgeContext::bus().subscribe();
-
-        info!("InterfaceMonitor: Service started (reactive mode)");
-
-        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
-            name: "ifmon".to_string(),
-        });
 
         let mut rx = self.messages.lock().await;
 
@@ -163,7 +168,6 @@ impl AsyncService for InterfaceMonitor {
             }
         }
 
-        info!("InterfaceMonitor: Service stopped");
         Ok(())
     }
 }

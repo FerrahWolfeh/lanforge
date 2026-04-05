@@ -47,8 +47,23 @@ impl DnsService {
 }
 
 impl LanforgeService for DnsService {
-    fn name(&self) -> &str {
-        "DnsService"
+    fn meta(&self) -> lanforge_core::service::ServiceMeta {
+        lanforge_core::service::ServiceMeta {
+            id: "dns",
+            display_name: "DNS Server",
+            critical: true,
+            max_retries: 0,
+            base_backoff: std::time::Duration::from_secs(2),
+            max_backoff: std::time::Duration::from_secs(30),
+            stack_kb: 384,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "DNS on {} (upstream: {:?}, domain: .{})",
+            self.cfg.listen, self.cfg.upstream, self.cfg.search_domain
+        )
     }
 }
 
@@ -76,11 +91,6 @@ impl AsyncService for DnsService {
         let tcp_listener = TcpListener::bind(self.cfg.listen)
             .await
             .map_err(|e| CoreError::Generic(format!("TCP Bind Error: {e}")))?;
-
-        info!(
-            "DNS Service listening (UDP/TCP) on {} (upstream: {:?}, domain: .{})",
-            self.cfg.listen, self.cfg.upstream, self.cfg.search_domain
-        );
 
         let upstream_mgr = if let Some(upstream) = self.cfg.upstream {
             Some(

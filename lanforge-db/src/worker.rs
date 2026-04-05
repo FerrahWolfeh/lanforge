@@ -6,41 +6,44 @@ use lanforge_core::error::{CoreError, Result};
 use lanforge_core::service::{LanforgeService, SyncService};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
 pub struct DbWorker {
     db_path: PathBuf,
     log_db_path: PathBuf,
-    cmd_rx: Arc<Mutex<Receiver<LanforgeEvent>>>,
 }
 
 impl DbWorker {
-    pub fn new(
-        db_path: PathBuf,
-        log_db_path: PathBuf,
-        cmd_rx: Arc<Mutex<Receiver<LanforgeEvent>>>,
-    ) -> Self {
+    #[must_use]
+    pub fn new(db_path: PathBuf, log_db_path: PathBuf) -> Self {
         Self {
             db_path,
             log_db_path,
-            cmd_rx,
         }
     }
 }
 
 impl LanforgeService for DbWorker {
-    fn name(&self) -> &str {
-        "DbWorker"
+    fn meta(&self) -> lanforge_core::service::ServiceMeta {
+        lanforge_core::service::ServiceMeta {
+            id: "db",
+            display_name: "DB Worker",
+            critical: true,
+            max_retries: 0,
+            base_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(30),
+            stack_kb: 512,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("DB Worker (leases: {})", self.db_path.display())
     }
 }
 
 impl SyncService for DbWorker {
-    fn run(&mut self) -> Result<()> {
-        info!("DB worker started (sync, path: {})", self.db_path.display());
-
+    fn run(&mut self, bus_rx: &lanforge_core::service::SyncBusReceiver) -> Result<()> {
         let db = LeaseDb::open(&self.db_path).map_err(|e| CoreError::Generic(e.to_string()))?;
         let log_db =
             LogDb::open(&self.log_db_path).map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -48,23 +51,11 @@ impl SyncService for DbWorker {
         let db = Rc::new(db);
         let log_db = Rc::new(log_db);
 
-        let rx = self
-            .cmd_rx
-            .lock()
-            .map_err(|e| CoreError::Generic(format!("Mutex poison: {e}")))?;
-
         lanforge_core::context::LanforgeContext::set_db_ready(true);
         let _ = LanforgeContext::bus().publish(LanforgeEvent::DbReady);
-        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
-            name: "db".to_string(),
-        });
 
         loop {
-            let event = match rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(e) => Some(e),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            };
+            let event = bus_rx.recv_timeout(Duration::from_millis(500));
 
             if let Some(event) = event {
                 match event {
@@ -84,7 +75,6 @@ impl SyncService for DbWorker {
                         }
                     }
                     LanforgeEvent::Shutdown => {
-                        info!("DB worker: shutting down gracefully (event)");
                         break;
                     }
                     e if e.is_loggable() => {
@@ -97,12 +87,10 @@ impl SyncService for DbWorker {
             }
 
             if !LanforgeContext::is_running() {
-                info!("DB worker: shutting down gracefully (context flag)");
                 break;
             }
         }
 
-        info!("DB worker: stopped");
         Ok(())
     }
 }

@@ -7,6 +7,7 @@ use lanforge_core::state::DeviceTable;
 use lanforge_core::state::update::DeviceUpdate;
 use rusqlite::params;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 use tempfile::tempdir;
 
@@ -204,15 +205,14 @@ fn skips_invalid_database_records_gracefully() {
 async fn db_worker_persists_on_dirty_event() {
     use lanforge_core::bus::LanforgeEvent;
     use lanforge_core::context::LanforgeContext;
-    use lanforge_core::service::SyncService;
-    use std::sync::{Arc, Mutex};
+    use lanforge_core::service::{SyncBusReceiver, SyncService};
 
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
     let log_db_path = dir.path().join("test_logs.db");
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let rx = Arc::new(Mutex::new(rx));
+    let bus_rx = SyncBusReceiver::new(rx);
 
     let bus = Arc::new(lanforge_core::bus::EventBus::new());
     let table = Arc::new(lanforge_core::bus::ManagedTable::from_table(
@@ -226,7 +226,7 @@ async fn db_worker_persists_on_dirty_event() {
         LanforgeContext::init(bus.clone(), table.clone());
     }));
 
-    let mut worker = crate::worker::DbWorker::new(db_path.clone(), log_db_path, rx);
+    let mut worker = crate::worker::DbWorker::new(db_path.clone(), log_db_path);
 
     // Prepare table and context
     let mac = make_mac(0xAB);
@@ -239,7 +239,7 @@ async fn db_worker_persists_on_dirty_event() {
     }
 
     std::thread::spawn(move || {
-        let _ = worker.run();
+        let _ = worker.run(&bus_rx);
     });
 
     // Send Dirty event to trigger save

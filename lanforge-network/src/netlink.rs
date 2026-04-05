@@ -236,12 +236,23 @@ impl NdpMonitor {
 }
 
 impl LanforgeService for NdpMonitor {
-    fn name(&self) -> &str {
-        "NdpMonitor"
+    fn meta(&self) -> lanforge_core::service::ServiceMeta {
+        lanforge_core::service::ServiceMeta {
+            id: "monitor",
+            display_name: "NdpMonitor",
+            critical: true,
+            max_retries: 0,
+            base_backoff: std::time::Duration::from_secs(2),
+            max_backoff: std::time::Duration::from_secs(30),
+            stack_kb: 512,
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("NDP Monitor (ifindex: {})", self.target_ifindex)
     }
 
     fn on_shutdown(&mut self) -> std::result::Result<(), CoreError> {
-        tracing::info!("NdpMonitor: Deinitializing Service");
         Ok(())
     }
 }
@@ -259,12 +270,6 @@ impl AsyncService for NdpMonitor {
         {
             tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
         }
-
-        tracing::info!("NdpMonitor: Service started (reactive mode)");
-
-        let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
-            name: "monitor".to_string(),
-        });
 
         let mut rx = self.messages.lock().await;
 
