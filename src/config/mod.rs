@@ -414,10 +414,10 @@ impl Config {
             }
         });
 
-        let search_domain = self.dns_toml.search_domain.clone();
-        let search_labels: Vec<Vec<u8>> = search_domain
-            .split('.')
-            .map(|s| s.as_bytes().to_vec())
+        let multi_search_labels: Vec<Vec<Vec<u8>>> = self
+            .search_domains
+            .iter()
+            .map(|d| d.split('.').map(|s| s.as_bytes().to_vec()).collect())
             .collect();
 
         DnsConfig {
@@ -437,7 +437,7 @@ impl Config {
             search_domain: self.dns_toml.search_domain.clone(),
             ula_prefix,
             ttl: self.dns_toml.ttl,
-            search_labels,
+            multi_search_labels,
         }
     }
 

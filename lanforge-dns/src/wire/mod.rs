@@ -123,6 +123,7 @@ impl<'a> WireQuestion<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct WireLabelIter<'a> {
     data: &'a [u8],
     pos: usize,

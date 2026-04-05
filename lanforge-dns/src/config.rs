@@ -10,7 +10,7 @@ pub struct DnsConfig {
     pub search_domain: String,
     pub ula_prefix: Option<Ipv6Addr>,
     pub ttl: u32,
-    pub search_labels: Vec<Vec<u8>>,
+    pub multi_search_labels: Vec<Vec<Vec<u8>>>,
 }
 
 impl Default for DnsConfig {
@@ -22,7 +22,7 @@ impl Default for DnsConfig {
             search_domain: "lan".into(),
             ula_prefix: None,
             ttl: 60,
-            search_labels: vec!["lan".into()],
+            multi_search_labels: vec![vec![b"lan".to_vec()]],
         }
     }
 }

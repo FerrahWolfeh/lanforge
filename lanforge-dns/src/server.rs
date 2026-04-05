@@ -231,9 +231,15 @@ pub(crate) async fn handle_query(
     let local_response: Option<Vec<u8>> = match qtype {
         QType::A | QType::AAAA | QType::Any => {
             let mut labels = question.labels();
-            if let Some(hostname_slice) =
-                extract_local_hostname_wire(&mut labels, &ctx.cfg.search_labels)
+            let hostname_slice = if ctx.cfg.enabled
+                && matches!(question.qtype(), 1 | 28 | 255)
+                && (labels.clone().next().is_some())
             {
+                extract_local_hostname_wire(&mut labels, &ctx.cfg.multi_search_labels)
+            } else {
+                None
+            };
+            if let Some(hostname_slice) = hostname_slice {
                 let safe_hostname = fast_lowercase(hostname_slice);
                 let Ok(query) = Message::from_bytes(data) else {
                     return Ok(None);
@@ -305,7 +311,7 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
     let qtype = question.query_type();
 
     if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
-        if let Some(hostname_slice) = extract_local_hostname(qname, &ctx.cfg.search_labels) {
+        if let Some(hostname_slice) = extract_local_hostname(qname, &ctx.cfg.multi_search_labels) {
             let safe_hostname = fast_lowercase(hostname_slice);
             let t = ctx.table.read();
             let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &t);

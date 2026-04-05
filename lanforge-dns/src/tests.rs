@@ -24,7 +24,7 @@ use crate::utils::extract_local_hostname;
 fn mock_config() -> DnsConfig {
     DnsConfig {
         search_domain: "lan".to_string(),
-        search_labels: vec![b"lan".to_vec()],
+        multi_search_labels: vec![vec![b"lan".to_vec()]],
         ..Default::default()
     }
 }
@@ -66,7 +66,7 @@ pub fn resolve_local(
 fn test_extract_local_hostname_matches_domain() {
     let labels = vec![b"lan".to_vec()];
     let name = Name::from_str("archie.lan.").unwrap();
-    assert_eq!(extract_local_hostname(&name, &labels), Some("archie"));
+    assert_eq!(extract_local_hostname(&name, &[labels]), Some("archie"));
 }
 
 #[test]
