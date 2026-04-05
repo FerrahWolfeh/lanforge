@@ -12,7 +12,7 @@ pub struct ServiceRegistry {
 
 impl ServiceRegistry {
     /// Creates a new, empty service registry.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             handles: Vec::new(),
         }
@@ -46,7 +46,7 @@ impl ServiceRegistry {
                     .expect("Failed to build per-service runtime");
                 rt.block_on(supervise_async(factory));
             })
-            .unwrap_or_else(|e| panic!("Failed to spawn async thread for {}: {}", name, e));
+            .unwrap_or_else(|e| panic!("Failed to spawn async thread for {name}: {e}"));
 
         self.handles.push(handle);
     }
@@ -71,15 +71,15 @@ impl ServiceRegistry {
             .name(name.clone())
             .stack_size(stack_size)
             .spawn(move || {
-                supervise_sync(rt_handle, factory);
+                supervise_sync(&rt_handle, factory);
             })
-            .unwrap_or_else(|e| panic!("Failed to spawn sync thread for {}: {}", name, e));
+            .unwrap_or_else(|e| panic!("Failed to spawn sync thread for {name}: {e}"));
 
         self.handles.push(handle);
     }
 
     /// Waits for all registered services to complete.
-    pub async fn wait_all(self) {
+    pub fn wait_all(self) {
         for handle in self.handles {
             let _ = handle.join();
         }

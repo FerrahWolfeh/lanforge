@@ -33,8 +33,8 @@ use lanforge_api::config::ApiConfig;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_dns::DnsConfig;
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
-use lanforge_network::dhcp::v6::config::Dhcpv6Config;
-use lanforge_network::ra::{PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
+use lanforge_network::dhcp::v6::config::{Dhcpv6Config, Dhcpv6PoolConfig};
+use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
 pub use toml::{
     DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg, load_devices_only, load_toml,
 };
@@ -53,6 +53,7 @@ use tracing::warn;
 /// Criada através de `Config::load()`, esta struct contém todos os parâmetros
 /// necessários para inicializar os subsistemas do lanforge.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Config {
     // general
     #[cfg(feature = "debug-commands")]
@@ -156,8 +157,7 @@ impl Config {
                 range_end: cli.dhcpv4_range_end.unwrap_or(toml_cfg.dhcp.v4.range_end),
                 lease_time: cli
                     .dhcpv4_lease_time
-                    .map(u64::from)
-                    .unwrap_or(toml_cfg.dhcp.v4.lease_time),
+                    .map_or(toml_cfg.dhcp.v4.lease_time, u64::from),
                 ..toml_cfg.dhcp.v4
             },
 
@@ -183,8 +183,8 @@ impl Config {
         }
     }
 
-    /// Parses a CIDR string (e.g., "fd00::/48") into an Ipv6Addr and a prefix length.
-    fn parse_cidr(&self, s: &str) -> Option<(Ipv6Addr, u8)> {
+    /// Parses a CIDR string (e.g., "`fd00::/48`") into an `Ipv6Addr` and a prefix length.
+    fn parse_cidr(s: &str) -> Option<(Ipv6Addr, u8)> {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.is_empty() {
             return None;
@@ -206,7 +206,7 @@ impl Config {
             match p.source.as_str() {
                 "ula" => {
                     if let Some(ref addr_str) = p.address
-                        && let Some((addr, len)) = self.parse_cidr(addr_str)
+                        && let Some((addr, len)) = Self::parse_cidr(addr_str)
                     {
                         prefixes.push(PrefixConfig {
                             source: PrefixSource::Static(addr),
@@ -256,7 +256,7 @@ impl Config {
             mtu: self.ra_toml.mtu,
             prefixes,
             rdnss,
-            dnssl: vec![lanforge_network::ra::DnsslConfig {
+            dnssl: vec![DnsslConfig {
                 domains: self.search_domains.clone(),
                 lifetime: None,
             }],
@@ -307,18 +307,15 @@ impl Config {
     /// Builds a `Dhcpv6Config` from the merged configuration.
     pub fn to_dhcpv6_config(&self) -> Dhcpv6Config {
         let mut ula_prefix = None;
-        let mut ula_prefix_len = 64;
 
-        if let Some(p) = self.ra_toml.prefix.iter().find(|p| p.source == "ula")
+        let ula_prefix_len = if let Some(p) = self.ra_toml.prefix.iter().find(|p| p.source == "ula")
             && let Some(addr_str) = &p.address
-            && let Some((addr, len)) = self.parse_cidr(addr_str)
+            && let Some((addr, len)) = Self::parse_cidr(addr_str)
         {
             ula_prefix = Some(addr);
-            ula_prefix_len = len;
-        }
-
-        let _parse_ipv6 = |s: &Option<String>| -> Option<Ipv6Addr> {
-            s.as_deref().and_then(|ip_str| ip_str.parse().ok())
+            len
+        } else {
+            64
         };
 
         let mut pools = Vec::new();
@@ -331,7 +328,7 @@ impl Config {
                 Ipv6AddrOrSuffix::parse(end_s),
             )
         {
-            pools.push(lanforge_network::dhcp::v6::config::Dhcpv6PoolConfig {
+            pools.push(Dhcpv6PoolConfig {
                 range_start: Some(start),
                 range_end: Some(end),
                 address: None,
@@ -346,7 +343,7 @@ impl Config {
                         "[config] DHCPv6 pool has both 'address' (CIDR) and 'range_start/end'. Prioritizing CIDR."
                     );
                 }
-                pools.push(lanforge_network::dhcp::v6::config::Dhcpv6PoolConfig {
+                pools.push(Dhcpv6PoolConfig {
                     range_start: None,
                     range_end: None,
                     address: Some(addr_str.clone()),
@@ -356,7 +353,7 @@ impl Config {
                     Ipv6AddrOrSuffix::parse(start_s),
                     Ipv6AddrOrSuffix::parse(end_s),
                 ) {
-                    pools.push(lanforge_network::dhcp::v6::config::Dhcpv6PoolConfig {
+                    pools.push(Dhcpv6PoolConfig {
                         range_start: Some(start),
                         range_end: Some(end),
                         address: None,
@@ -382,14 +379,17 @@ impl Config {
                 .upstream
                 .as_deref()
                 .and_then(|s| s.parse::<SocketAddr>().ok())
-                .map(|sa| match sa {
-                    SocketAddr::V6(v6) => vec![*v6.ip()],
-                    _ => vec![],
-                })
-                .unwrap_or_else(|| {
-                    // If no upstream, we might want to suggest ourselves if we have a ULA
-                    ula_prefix.map(|ip| vec![ip]).unwrap_or_default()
-                }),
+                .map_or_else(
+                    || {
+                        // If no upstream, we might want to suggest ourselves if we have a ULA
+                        ula_prefix.map(|ip| vec![ip]).unwrap_or_default()
+                    },
+                    |sa| match sa {
+                        SocketAddr::V6(v6) => vec![*v6.ip()],
+
+                        SocketAddr::V4(_) => vec![],
+                    },
+                ),
             search_domains: self.search_domains.clone(),
         }
     }
@@ -407,7 +407,7 @@ impl Config {
             if p.source == "ula" {
                 p.address
                     .as_deref()
-                    .and_then(|a| self.parse_cidr(a))
+                    .and_then(Self::parse_cidr)
                     .map(|(addr, _)| addr)
             } else {
                 None
@@ -476,7 +476,7 @@ impl Config {
                         // Since we only care about FINITE ranges here
                         let s = start.as_u128(None);
                         let e = end.as_u128(None);
-                        total += (e - s + 1) as u64;
+                        total += u64::try_from(e - s + 1).unwrap_or(u64::MAX);
                     } else {
                         // CIDR-based or dynamic prefix: potentially "infinite" for status purposes
                         finite = false;

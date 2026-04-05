@@ -32,7 +32,7 @@ pub struct DhcpV4Cfg {
     pub router: String,
     pub dns: Vec<String>,
     pub subnet_mask: Option<String>,
-    /// @deprecated use [general].search_domains instead. will be removed in the future.
+    /// @deprecated use `[general].search_domains` instead. will be removed in the future.
     pub domain_name: Option<String>,
 }
 
@@ -168,7 +168,7 @@ pub struct DnsCfg {
     pub listen: String,
     /// Resolver upstream para queries não-LAN, normalmente o Unbound (ex: "127.0.0.1:5335")
     pub upstream: Option<String>,
-    /// @deprecated use [general].search_domains instead. will be removed in the future.
+    /// @deprecated use `[general].search_domains` instead. will be removed in the future.
     pub search_domain: String,
     /// TTL das respostas LAN em segundos
     pub ttl: u32,

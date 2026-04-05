@@ -86,10 +86,9 @@ where
                                 error!("FATAL: Critical service '{}' failed after {} retries. Shutting down.", name, consecutive_failures);
                                 LanforgeContext::terminate();
                                 return;
-                            } else {
-                                warn!("Service '{}' exhausted {} retries — giving up", name, meta.max_retries);
-                                return;
                             }
+                            warn!("Service '{}' exhausted {} retries — giving up", name, meta.max_retries);
+                            return;
                         }
 
                         let exp = meta.base_backoff.saturating_mul(1 << (consecutive_failures - 1).min(16));
@@ -104,7 +103,7 @@ where
                         );
 
                         tokio::select! {
-                            _ = async {
+                            () = async {
                                 while let Ok(e) = bus_rx.recv().await {
                                     if matches!(e.event, LanforgeEvent::Shutdown) {
                                         return;
@@ -114,7 +113,7 @@ where
                                 info!("Supervisor '{}' received shutdown signal during backoff, stopping", name);
                                 return;
                             }
-                            _ = tokio::time::sleep(backoff) => {}
+                            () = tokio::time::sleep(backoff) => {}
                         }
                     }
                 }
@@ -127,7 +126,7 @@ where
 ///
 /// Esta função é SÍNCRONA e deve ser chamada dentro de uma OS thread dedicada
 /// (ex: via `spawn_sync_service_thread`). Ela não requer um executor Tokio.
-pub fn supervise_sync<S, F>(rt_handle: tokio::runtime::Handle, factory: F)
+pub fn supervise_sync<S, F>(rt_handle: &tokio::runtime::Handle, factory: F)
 where
     S: SyncService,
     F: Fn() -> S,
@@ -192,13 +191,12 @@ where
                         LanforgeContext::terminate();
                         let _ = bus.publish(LanforgeEvent::Shutdown);
                         return;
-                    } else {
-                        warn!(
-                            "Service '{}' exhausted {} retries — giving up",
-                            name, meta.max_retries
-                        );
-                        return;
                     }
+                    warn!(
+                        "Service '{}' exhausted {} retries — giving up",
+                        name, meta.max_retries
+                    );
+                    return;
                 }
 
                 let exp = meta

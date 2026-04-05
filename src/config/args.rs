@@ -29,11 +29,11 @@ pub struct CliArgs {
     )]
     pub config: String,
 
-    /// Caminho para o banco de dados SQLite (leases).
+    /// Caminho para o banco de dados `SQLite` (leases).
     #[arg(short = 'd', long, env = "LANFORGE_DB_PATH")]
     pub db_path: Option<String>,
 
-    /// Caminho para o banco de dados SQLite de logs (history).
+    /// Caminho para o banco de dados `SQLite` de logs (history).
     #[arg(long, env = "LANFORGE_LOG_DB", default_value = "/tmp/lanforge_logs.db")]
     pub log_db: String,
 
@@ -76,15 +76,15 @@ pub struct CliArgs {
     pub ra_max_interval: Option<u64>,
 
     // ── DHCPv4 ────────────────────────────────────────────────────────────
-    /// Habilita o servidor DHCPv4.
+    /// Habilita o servidor `DHCPv4`.
     #[arg(long, env = "LANFORGE_DHCPV4_ENABLED")]
     pub dhcpv4_enabled: Option<bool>,
 
-    /// Primeiro IP do pool DHCPv4.
+    /// Primeiro IP do pool `DHCPv4`.
     #[arg(long, env = "LANFORGE_DHCPV4_START")]
     pub dhcpv4_range_start: Option<String>,
 
-    /// Último IP do pool DHCPv4.
+    /// Último IP do pool `DHCPv4`.
     #[arg(long, env = "LANFORGE_DHCPV4_END")]
     pub dhcpv4_range_end: Option<String>,
 
@@ -92,16 +92,16 @@ pub struct CliArgs {
     #[arg(long, env = "LANFORGE_DHCPV4_LEASE")]
     pub dhcpv4_lease_time: Option<u32>,
 
-    /// Porta UDP do servidor DHCPv4 (default 67).
+    /// Porta UDP do servidor `DHCPv4` (default 67).
     #[arg(long, env = "LANFORGE_DHCPV4_PORT")]
     pub dhcpv4_port: Option<u16>,
 
     // ── DHCPv6 ────────────────────────────────────────────────────────────
-    /// Habilita o servidor DHCPv6.
+    /// Habilita o servidor `DHCPv6`.
     #[arg(long, env = "LANFORGE_DHCPV6_ENABLED")]
     pub dhcpv6_enabled: Option<bool>,
 
-    /// Porta UDP do servidor DHCPv6 (default 547).
+    /// Porta UDP do servidor `DHCPv6` (default 547).
     #[arg(long, env = "LANFORGE_DHCPV6_PORT")]
     pub dhcpv6_port: Option<u16>,
 
