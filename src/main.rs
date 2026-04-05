@@ -51,6 +51,12 @@ use lanforge_network::slaac::bootstrap_table;
 use netlink_sys::AsyncSocket;
 use rtnetlink::constants::RTMGRP_NEIGH;
 use rtnetlink::new_connection;
+
+// RTNLGRP_* group numbers for setsockopt(NETLINK_ADD_MEMBERSHIP).
+// The rtnetlink crate only exports RTMGRP_* bitmask constants, but
+// add_membership() expects 1-based group numbers from the kernel enum.
+const RTNLGRP_IPV4_IFADDR: u32 = 5;
+const RTNLGRP_IPV6_IFADDR: u32 = 9;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::os::unix::net::UnixDatagram;
@@ -225,12 +231,58 @@ async fn async_main() -> Result<()> {
     LanforgeContext::init(bus.clone(), table.clone());
     let _ = bus.publish(LanforgeEvent::StateReady);
 
-    // IMPORTANT: Subscribe to the bus BEFORE spawning any service threads.
-    // Services run on independent OS threads and can publish ServiceReady
-    // events almost immediately. If we subscribe after spawning, we race
-    // against fast services (DB, mDNS) and miss their readiness signals,
-    // causing the system to never report READY to systemd.
     let mut bus_rx = bus.subscribe();
+
+    // -----------------------------------------------------------------------
+    // Netlink connection
+    // -----------------------------------------------------------------------
+    let (mut connection, handle, messages) = new_connection()?;
+    connection
+        .socket_mut()
+        .socket_mut()
+        .add_membership(RTMGRP_NEIGH)?;
+    connection
+        .socket_mut()
+        .socket_mut()
+        .add_membership(RTNLGRP_IPV6_IFADDR)?;
+    connection
+        .socket_mut()
+        .socket_mut()
+        .add_membership(RTNLGRP_IPV4_IFADDR)?;
+    let netlink_task = tokio::spawn(connection);
+
+    let messages = Arc::new(tokio::sync::Mutex::new(messages));
+
+    // ───────────────── Interface Configuration (Synchronous) ─────────────────
+    let ifmon_init = lanforge_network::ifmon::InterfaceMonitor::new(
+        handle.clone(),
+        messages.clone(),
+        target_ifindex,
+    );
+    let if_state = ifmon_init
+        .initial_scan()
+        .await
+        .map_err(|e| anyhow::anyhow!("Initial interface scan failed: {e}"))?;
+
+    // Lanforge Startup Banner
+    info!("╔══════════════════════════════════════════╗");
+    info!("║         Lanforge Network Daemon          ║");
+    info!("╠══════════════════════════════════════════╣");
+    info!("║  Interface : {:<27} ║", cfg.iface_lan);
+    if let Some(ll) = if_state.link_local {
+        info!("║  Link-Local: {:<27} ║", ll);
+    }
+    if let Some(gua) = if_state.gua {
+        info!("║  GUA Prefix: {:<24}/64 ║", gua);
+    }
+    if let Some(ula) = if_state.ula {
+        info!("║  ULA Prefix: {:<24}/64 ║", ula);
+    }
+    info!("╚══════════════════════════════════════════╝");
+
+    // Signal readiness of interface configuration
+    LanforgeContext::set_if_ready(true);
+    let _ = bus.publish(LanforgeEvent::InterfaceReady);
 
     let mut service_threads: Vec<(&'static str, std::thread::JoinHandle<()>)> = Vec::new();
 
@@ -310,17 +362,34 @@ async fn async_main() -> Result<()> {
     ));
 
     // -----------------------------------------------------------------------
-    // Netlink connection
+    // Interface & NDP Monitoring
     // -----------------------------------------------------------------------
-    let (mut connection, handle, messages) = new_connection()?;
-    // Forçamos o join no grupo multicast da vizinhança
-    connection
-        .socket_mut()
-        .socket_mut()
-        .add_membership(RTMGRP_NEIGH)?;
-    let netlink_task = tokio::spawn(connection);
-
-    let messages = Arc::new(tokio::sync::Mutex::new(messages));
+    let ifmon_handle = handle.clone();
+    let ifmon_messages = messages.clone();
+    service_threads.push((
+        "ifmon",
+        spawn_service_thread("InterfaceMonitor", 256, move || {
+            let h = ifmon_handle.clone();
+            let m = ifmon_messages.clone();
+            async move {
+                supervisor::supervise_async(
+                    "ifmon",
+                    true,
+                    0,
+                    Duration::from_secs(1),
+                    Duration::from_secs(10),
+                    move || {
+                        lanforge_network::ifmon::InterfaceMonitor::new(
+                            h.clone(),
+                            m.clone(),
+                            target_ifindex,
+                        )
+                    },
+                )
+                .await
+            }
+        }),
+    ));
 
     let monitor_handle = handle.clone();
     let monitor_messages = messages.clone();
@@ -519,7 +588,7 @@ async fn async_main() -> Result<()> {
         }
     });
 
-    let mut expected_services = HashSet::from(["db", "mdns", "monitor", "control"]);
+    let mut expected_services = HashSet::from(["db", "mdns", "monitor", "ifmon", "control"]);
     if cfg.ra_enabled {
         expected_services.insert("ra");
     }

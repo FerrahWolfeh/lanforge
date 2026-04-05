@@ -32,6 +32,7 @@ pub mod server;
 
 use lanforge_core::bus::{DeviceChange, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::device::IPv6State;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::update::DeviceUpdate;
 use std::net::Ipv6Addr;
@@ -247,7 +248,54 @@ impl SyncService for Dhcpv6Service {
                         } => {
                             server.prefix_lifetimes = Some((preferred, valid));
                             if let Some(g) = gua {
+                                let old_gua = server.pool.gua_prefix;
                                 server.pool.set_gua_prefix(g);
+
+                                if old_gua != Some(g) {
+                                    info!(
+                                        "DHCPv6: GUA prefix changed ({:?} -> {}), notifying clients",
+                                        old_gua, g
+                                    );
+                                    let table = LanforgeContext::table();
+                                    let table_read = table.read();
+                                    for dev in table_read.devices() {
+                                        if let Some(duid) = &dev.duid {
+                                            let has_gua_lease = dev.v6.iter().any(|s| {
+                                                if let IPv6State::Dynamic(lease) = s {
+                                                    let o = lease.ip.octets();
+                                                    (0x20..=0x3F).contains(&o[0])
+                                                } else {
+                                                    false
+                                                }
+                                            });
+                                            if has_gua_lease {
+                                                // Find link-local for sending
+                                                if let Some(ll_ip) = dev.v6.iter().find_map(|s| {
+                                                    s.ip().filter(|ip| {
+                                                        (ip.segments()[0] & 0xffc0) == 0xfe80
+                                                    })
+                                                }) {
+                                                    let packet = server.build_reconfigure(
+                                                        duid,
+                                                        dhcproto::v6::MessageType::Renew,
+                                                    );
+                                                    let client_port = if self.config.port == 547 {
+                                                        546
+                                                    } else {
+                                                        self.config.port - 1
+                                                    };
+                                                    let dest_addr = std::net::SocketAddrV6::new(
+                                                        ll_ip,
+                                                        client_port,
+                                                        0,
+                                                        0,
+                                                    );
+                                                    let _ = socket.send_to(&packet, dest_addr);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         LanforgeEvent::LeaseRenew { mac } => {

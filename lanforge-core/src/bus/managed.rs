@@ -9,6 +9,7 @@ use std::sync::Arc;
 use super::{DeviceChange, EventBus, LanforgeEvent};
 use crate::state::DeviceTable;
 use crate::state::update::{DeviceUpdate, FieldUpdate};
+use tracing::info;
 
 /// A thread-safe wrapper around `DeviceTable` that automatically publishes events
 /// to the `EventBus` after each successful `update`.
@@ -58,9 +59,18 @@ impl ManagedTable {
         let is_new = opt_mac.is_some_and(|mac| table.get_device(&mac).is_none());
 
         let change = device_change_of(update);
-        let changed = table.apply_update(update.clone());
 
-        drop(table);
+        // Pre-capture prefix state for comparison if this is an authoritative interface update.
+        let mut prev_prefix = None;
+        if let DeviceUpdate::InterfaceIpsChanged { ifindex, .. } = update {
+            let is_primary = self.target_ifindex.is_none_or(|target| target == *ifindex);
+            if is_primary {
+                let ips = table.get_interface_ips(*ifindex);
+                prev_prefix = Some((ips.gua, ips.ula));
+            }
+        }
+
+        let changed = table.apply_update(update.clone());
 
         if !changed {
             return false;
@@ -91,19 +101,25 @@ impl ManagedTable {
                 .bus
                 .publish(LanforgeEvent::InterfaceUpdated { ifindex: *ifindex });
 
-            // Detect GUA/ULA and publish global PrefixChanged
-            // 🔒 Restricted ONLY to the authoritative interface
-            let is_primary = self.target_ifindex.is_none_or(|target| target == *ifindex);
-
-            if is_primary && (gua.is_some() || ula.is_some()) {
-                let _ = self.bus.publish(LanforgeEvent::PrefixChanged {
-                    gua: *gua,
-                    ula: *ula,
-                    preferred: *preferred,
-                    valid: *valid,
-                });
+            // Detect actual GUA/ULA address changes and publish global PrefixChanged.
+            if let Some((prev_gua, prev_ula)) = prev_prefix {
+                // Only fire if the address values themselves changed, ignoring lifetime-only jitter.
+                if (gua.is_some() && *gua != prev_gua) || (ula.is_some() && *ula != prev_ula) {
+                    info!(
+                        "ManagedTable: Prefix change detected on interface {} (GUA: {:?}, ULA: {:?})",
+                        ifindex, gua, ula
+                    );
+                    let _ = self.bus.publish(LanforgeEvent::PrefixChanged {
+                        gua: *gua,
+                        ula: *ula,
+                        preferred: *preferred,
+                        valid: *valid,
+                    });
+                }
             }
         }
+
+        drop(table);
 
         let _ = self.bus.publish(LanforgeEvent::DeviceTableDirty);
         true

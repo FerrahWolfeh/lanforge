@@ -301,6 +301,11 @@ impl AsyncService for RaService {
                 // 3. EventBus signals
                 res = bus_rx.recv() => {
                     match res {
+                        Ok(LanforgeEvent::PrefixChanged { .. }) => {
+                            info!("RA: Prefix change detected — sending immediate RA burst");
+                            state.initial_sent = 0; // Reset startup burst counter
+                            next_ra_at = Instant::now(); // Force immediate send
+                        }
                         Ok(LanforgeEvent::Shutdown) => {
                             info!("RA service: shutdown received");
                             return Ok(());
@@ -333,25 +338,12 @@ fn send_ra_internal(
     let ula = if_ips.ula;
 
     if gua != state.last_gua || ula != state.last_ula {
-        info!("IPv6 Prefix update: GUA={:?}, ULA={:?}", gua, ula);
+        info!(
+            "RA: Internal prefix state updated: GUA={:?}, ULA={:?}",
+            gua, ula
+        );
         state.last_gua = gua;
         state.last_ula = ula;
-
-        let (preferred, valid) = cfg
-            .prefixes
-            .iter()
-            .find(|p| matches!(p.source, PrefixSource::AutoGua))
-            .map_or(
-                (DEFAULT_PREFERRED_LIFETIME_SECS, DEFAULT_VALID_LIFETIME_SECS),
-                |p| (p.preferred_lifetime.as_u32(), p.valid_lifetime.as_u32()),
-            );
-
-        let _ = LanforgeContext::bus().publish(LanforgeEvent::PrefixChanged {
-            gua,
-            ula,
-            preferred,
-            valid,
-        });
     }
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());

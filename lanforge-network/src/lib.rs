@@ -12,6 +12,7 @@
 
 pub mod dhcp;
 pub mod error;
+pub mod ifmon;
 pub mod mdns;
 pub mod netlink;
 pub mod ra;
