@@ -1,4 +1,4 @@
-use crate::bus::LanforgeEvent;
+use crate::bus::TimedEvent;
 use crate::error::Result;
 use std::time::Duration;
 
@@ -79,24 +79,24 @@ pub trait AsyncService: LanforgeService {
 /// from the async `EventBus`. Provides convenience methods for common
 /// patterns like shutdown detection and dependency waiting.
 pub struct SyncBusReceiver {
-    rx: std::sync::mpsc::Receiver<LanforgeEvent>,
+    rx: std::sync::mpsc::Receiver<TimedEvent>,
 }
 
 impl SyncBusReceiver {
     #[must_use]
-    pub const fn new(rx: std::sync::mpsc::Receiver<LanforgeEvent>) -> Self {
+    pub const fn new(rx: std::sync::mpsc::Receiver<TimedEvent>) -> Self {
         Self { rx }
     }
 
     /// Blocking receive with timeout.
     #[must_use]
-    pub fn recv_timeout(&self, timeout: Duration) -> Option<LanforgeEvent> {
+    pub fn recv_timeout(&self, timeout: Duration) -> Option<TimedEvent> {
         self.rx.recv_timeout(timeout).ok()
     }
 
     /// Non-blocking drain of all pending events.
     #[must_use]
-    pub fn try_recv_all(&self) -> Vec<LanforgeEvent> {
+    pub fn try_recv_all(&self) -> Vec<TimedEvent> {
         let mut events = Vec::new();
         while let Ok(e) = self.rx.try_recv() {
             events.push(e);

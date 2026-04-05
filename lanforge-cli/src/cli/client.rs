@@ -20,10 +20,14 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
         Command::Devices {
             verbose,
             filter,
+            vendor,
+            method,
             format,
         } => Box::new(crate::cli::commands::devices::DevicesHandler {
             verbose,
             filter,
+            vendor,
+            method,
             format,
         }),
         Command::Host { action } => Box::new(crate::cli::commands::host::HostHandler { action }),
@@ -46,6 +50,9 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             cmd: lanforge_api::api::Command::Purge { mac },
             streaming: false,
         }),
+        Command::Wol { target } => Box::new(crate::cli::commands::wol::WolCommand { target }),
+        Command::Whois { target } => Box::new(crate::cli::commands::whois::WhoisHandler { target }),
+        Command::Dns { action } => Box::new(crate::cli::commands::dns::DnsCommand { action }),
     };
 
     let control_cmd = match handler.prepare() {

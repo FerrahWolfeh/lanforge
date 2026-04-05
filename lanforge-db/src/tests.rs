@@ -243,13 +243,21 @@ async fn db_worker_persists_on_dirty_event() {
     });
 
     // Send Dirty event to trigger save
-    tx.send(LanforgeEvent::DeviceTableDirty).unwrap();
+    tx.send(lanforge_core::bus::TimedEvent::new(
+        LanforgeEvent::DeviceTableDirty,
+        None,
+    ))
+    .unwrap();
 
     // Small wait for the sync thread to process
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Shutdown worker
-    tx.send(LanforgeEvent::Shutdown).unwrap();
+    tx.send(lanforge_core::bus::TimedEvent::new(
+        LanforgeEvent::Shutdown,
+        None,
+    ))
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let db = LeaseDb::open(&db_path).unwrap();

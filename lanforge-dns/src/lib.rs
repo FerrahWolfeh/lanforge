@@ -10,6 +10,7 @@ pub mod error;
 pub mod resolver;
 pub mod response;
 pub mod server;
+pub mod stats;
 pub mod upstream;
 pub mod utils;
 pub mod wire;

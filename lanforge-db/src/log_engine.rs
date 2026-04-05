@@ -9,7 +9,7 @@ use std::path::Path;
 use tracing::info;
 
 use crate::{LeaseDbError, Result};
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 
 pub struct LogDb {
     conn: Connection,
@@ -35,6 +35,7 @@ impl LogDb {
              CREATE TABLE IF NOT EXISTS system_logs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp  INTEGER NOT NULL,
+                module     TEXT,
                 event_json TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);",
@@ -45,23 +46,22 @@ impl LogDb {
     }
 
     /// Records a new event in the log history.
-    pub fn record_log(&self, event: &LanforgeEvent) -> Result<()> {
-        let json = serde_json::to_string(event)
+    pub fn record_log(&self, timed_event: &TimedEvent) -> Result<()> {
+        let json = serde_json::to_string(&timed_event.event)
             .map_err(|e| LeaseDbError::Migration("event serialization".into(), e.to_string()))?;
 
-        let now = std::time::SystemTime::now()
+        let timestamp = timed_event
+            .timestamp
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
         self.conn.execute(
-            "INSERT INTO system_logs (timestamp, event_json) VALUES (?1, ?2)",
-            params![now, json],
+            "INSERT INTO system_logs (timestamp, module, event_json) VALUES (?1, ?2, ?3)",
+            params![timestamp, timed_event.module, json],
         )?;
 
         // Pruning: Keep only the last 1000 entries
-        // This is done on every insert to keep the tmpfs usage predictable.
-        // We delete anything with an ID less than (CurrentMaxID - 1000).
         self.conn.execute(
             "DELETE FROM system_logs WHERE id <= (SELECT MAX(id) FROM system_logs) - 1000",
             &[] as &[&dyn rusqlite::ToSql],
@@ -71,25 +71,32 @@ impl LogDb {
     }
 
     /// Retrieves the most recent log entries.
-    pub fn get_history(&self, limit: usize) -> Result<Vec<LanforgeEvent>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT event_json FROM system_logs ORDER BY id DESC LIMIT ?1")?;
+    pub fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, module, event_json FROM system_logs ORDER BY id DESC LIMIT ?1",
+        )?;
 
         let rows = stmt.query_map(params![limit as i64], |row| {
-            let json: String = row.get(0)?;
-            Ok(json)
+            let ts: i64 = row.get(0)?;
+            let module: Option<String> = row.get(1)?;
+            let json: String = row.get(2)?;
+            Ok((ts, module, json))
         })?;
 
-        let mut events = Vec::new();
-        for json in rows.flatten() {
+        let mut entries = Vec::new();
+        for row in rows.flatten() {
+            let (ts, module, json) = row;
             if let Ok(event) = serde_json::from_str::<LanforgeEvent>(&json) {
-                events.push(event);
+                entries.push(TimedEvent {
+                    event,
+                    timestamp: std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts as u64),
+                    module,
+                });
             }
         }
 
         // Return in chronological order (oldest first for the UI)
-        events.reverse();
-        Ok(events)
+        entries.reverse();
+        Ok(entries)
     }
 }

@@ -240,7 +240,7 @@ impl SyncService for Dhcpv6Service {
 
             // 2. Process Bus events
             for event in bus_rx.try_recv_all() {
-                match event {
+                match event.event {
                     LanforgeEvent::LeaseRelease { mac } => {
                         info!("DHCPv6: Forcing release of {} via CLI", mac);
                     }

@@ -1,4 +1,4 @@
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::TimedEvent;
 use serde::{Deserialize, Serialize};
 
 /// Represents a command sent from a client to the Lanforge daemon.
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// ```rust
 /// use lanforge_api::api::Command;
 ///
-/// let cmd = Command::Devices { filter: Some("arch".into()), format: None };
+/// let cmd = Command::Devices { filter: Some("arch".into()), vendor: None, method: None, format: None };
 /// let json = serde_json::to_string(&cmd).unwrap();
 /// assert!(json.contains(r#""command":"devices""#));
 /// ```
@@ -23,6 +23,10 @@ pub enum Command {
     Devices {
         /// Filter by hostname, MAC, or IP address.
         filter: Option<String>,
+        /// Filter by specific vendor name (OUI).
+        vendor: Option<String>,
+        /// Filter by specific learning method.
+        method: Option<String>,
         /// Output format (reserved for future use).
         format: Option<String>,
     },
@@ -83,6 +87,25 @@ pub enum Command {
         /// Target device MAC address.
         mac: String,
     },
+    /// Send a Wake-on-LAN magic packet to a target (MAC or Name).
+    Wol {
+        /// Target device MAC or Hostname.
+        target: String,
+    },
+    /// Retrieve detailed aggregated information about a device.
+    Whois {
+        /// Target MAC, IP, or Hostname.
+        target: String,
+    },
+    /// Retrieve DNS resolver statistics.
+    DnsStats,
+    /// Perform a diagnostic DNS query.
+    DnsQuery {
+        /// Name to resolve.
+        name: String,
+        /// Optional record type (A, AAAA, TXT, etc.).
+        record_type: Option<String>,
+    },
 }
 
 /// Represents a response sent from the daemon to a client.
@@ -105,7 +128,13 @@ pub enum Response {
     /// Generic success indicator.
     Success(SimpleSuccess),
     /// A live event from the internal bus (for 'watch' or 'log' commands).
-    Event(LanforgeEvent),
+    Event(TimedEvent),
+    /// Response for a Whois query.
+    Whois(Box<WhoisResponse>),
+    /// Response for DNS statistics.
+    DnsStats(DnsStatsResponse),
+    /// Response for a DNS diagnostic query.
+    DnsQuery(DnsQueryResponse),
 }
 
 /// A simple success result containing a message.
@@ -180,6 +209,10 @@ pub struct DeviceEntry {
     pub v6: Option<LeaseInfo>,
     /// List of IPv6 addresses (SLAAC, GUA, etc.) tracked for this device.
     pub ipv6_addrs: Vec<Ipv6Entry>,
+    /// The primary method used to discover this device.
+    pub learning_method: String,
+    /// The resolved vendor name from OUI, if available.
+    pub vendor: Option<String>,
 }
 
 /// A single IPv6 address entry with its type category.
@@ -351,6 +384,62 @@ pub struct DevicesStats {
     pub dynamic: usize,
 }
 
+/// Detailed aggregated information for a single device.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WhoisResponse {
+    /// Current device state.
+    pub entry: DeviceEntry,
+    /// Historical lease assignments.
+    pub history: Vec<lanforge_db::engine::LeaseHistoryEntry>,
+}
+
+/// A snapshot of DNS resolver statistics.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DnsStatsResponse {
+    /// Total requests received.
+    pub total_requests: u64,
+    /// Number of cache hits.
+    pub cache_hits: u64,
+    /// Number of cache misses.
+    pub cache_misses: u64,
+    /// Number of upstream errors encountered.
+    pub upstream_errors: u64,
+    /// Number of authoritative queries resolved locally.
+    pub auth_queries: u64,
+    /// Number of recursive queries forwarded.
+    pub recursions: u64,
+}
+
+/// Results of a DNS diagnostic query.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DnsQueryResponse {
+    /// The resolved records.
+    pub records: Vec<DnsRecordEntry>,
+    /// Query latency in milliseconds.
+    pub latency_ms: u64,
+    /// Whether the result was authoritative.
+    pub authoritative: bool,
+}
+
+/// A single DNS record in a query response.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DnsRecordEntry {
+    /// Record name.
+    pub name: String,
+    /// Record type string (A, AAAA, etc.).
+    pub kind: String,
+    /// Record data (IP, Target, etc.).
+    pub data: String,
+    /// Time-to-Live.
+    pub ttl: u32,
+}
+
+impl std::fmt::Display for DnsRecordEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:<5} {:<20} -> {}", self.kind, self.name, self.data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,12 +452,14 @@ mod tests {
 
         let cmd = Command::Devices {
             filter: Some("arch".to_string()),
+            vendor: None,
+            method: None,
             format: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert_eq!(
             json,
-            r#"{"command":"devices","filter":"arch","format":null}"#
+            r#"{"command":"devices","filter":"arch","vendor":null,"method":null,"format":null}"#
         );
     }
 }

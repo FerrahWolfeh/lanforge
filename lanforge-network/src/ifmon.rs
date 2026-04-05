@@ -20,6 +20,7 @@ use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::packet_route::address::AddressAttribute;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -118,8 +119,8 @@ impl LanforgeService for InterfaceMonitor {
             display_name: "InterfaceMonitor",
             critical: true,
             max_retries: 0,
-            base_backoff: std::time::Duration::from_secs(2),
-            max_backoff: std::time::Duration::from_secs(30),
+            base_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(30),
             stack_kb: 256,
         }
     }
@@ -159,7 +160,7 @@ impl AsyncService for InterfaceMonitor {
                 }
 
                 Ok(event) = bus_rx.recv() => {
-                    if matches!(event, LanforgeEvent::Shutdown) {
+                    if matches!(event.event, LanforgeEvent::Shutdown) {
                         break;
                     }
                 }

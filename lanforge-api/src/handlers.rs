@@ -165,7 +165,13 @@ impl ClientContext {
     /// Generates a `DevicesResponse`, optionally filtering by a search string.
     ///
     /// The filter is matched against hostnames, MAC addresses, and IP addresses.
-    pub(crate) async fn handle_devices(&self, filter: Option<String>) -> Response {
+    /// Generates a `DevicesResponse`, optionally filtering by search string, vendor, or method.
+    pub(crate) async fn handle_devices(
+        &self,
+        filter: Option<String>,
+        vendor: Option<String>,
+        method: Option<String>,
+    ) -> Response {
         let t = LanforgeContext::table();
         let table_guard = t.read();
 
@@ -189,7 +195,25 @@ impl ClientContext {
                     })
             });
 
-            if !matches_filter {
+            if let Some(v) = vendor.as_deref() {
+                let v_lower = v.to_lowercase();
+                if !dev
+                    .vendor()
+                    .is_some_and(|name: &str| name.to_lowercase().contains(&v_lower))
+                {
+                    continue;
+                }
+            }
+
+            let matches_method = method.as_ref().is_none_or(|m| {
+                let m_lower = m.to_lowercase();
+                dev.learning_method()
+                    .to_string()
+                    .to_lowercase()
+                    .contains(&m_lower)
+            });
+
+            if !matches_filter || !matches_method {
                 continue;
             }
 
@@ -214,7 +238,12 @@ impl ClientContext {
                 origin: dev.origin.as_str().to_string(),
                 online: is_online,
                 last_seen: format_iso8601(dev.last_seen),
-                duid: dev.duid.as_ref().map(|d| hex::encode(d.as_bytes())),
+                learning_method: dev.learning_method().to_string(),
+                vendor: dev.vendor().map(|s: &str| s.to_string()),
+                duid: dev
+                    .duid
+                    .as_ref()
+                    .map(|d: &lanforge_core::identifiers::Duid| hex::encode(d.as_bytes())),
                 display_v4: dev.display_v4(),
                 display_v6: dev.display_v6(gua_prefix, ula_prefix),
                 v4: match &dev.v4 {
@@ -321,5 +350,178 @@ impl ClientContext {
         }
 
         Response::Hosts(api::HostsResponse { hosts })
+    }
+
+    /// Triggers a Wake-on-LAN magic packet.
+    pub(crate) async fn handle_wol(&self, target: String) -> Response {
+        let mac = if let Some(m) = lanforge_core::identifiers::MacAddr::parse(&target) {
+            m
+        } else {
+            // Search by hostname
+            let t = LanforgeContext::table();
+            let table = t.read();
+            let found = table
+                .devices()
+                .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase());
+            match found {
+                Some(d) => d.mac,
+                None => {
+                    return Response::Error {
+                        error: format!("Target '{target}' not found (not a MAC or known Hostname)"),
+                    };
+                }
+            }
+        };
+
+        // Emit WoL event
+        let _ =
+            LanforgeContext::bus().publish(lanforge_core::bus::LanforgeEvent::WolTriggered { mac });
+
+        Response::Success(api::SimpleSuccess {
+            message: format!("Wake-on-LAN magic packet queued for {mac}"),
+        })
+    }
+
+    /// Gathers detailed information and history for a device.
+    pub(crate) async fn handle_whois(&self, target: String) -> Response {
+        let device = {
+            let t = LanforgeContext::table();
+            let table = t.read();
+
+            if let Some(m) = lanforge_core::identifiers::MacAddr::parse(&target) {
+                table.get_device(&m)
+            } else if let Ok(ip) = target.parse::<std::net::IpAddr>() {
+                table.get_mac_by_ip(ip).and_then(|m| table.get_device(&m))
+            } else {
+                table
+                    .devices()
+                    .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
+            }
+        };
+
+        if let Some(dev) = device {
+            let mac = dev.mac;
+
+            // Fetch history from DB
+            let history: Vec<lanforge_db::engine::LeaseHistoryEntry> =
+                tokio::task::spawn_blocking(move || {
+                    match lanforge_db::engine::LeaseDb::open(std::path::Path::new("lanforge.db")) {
+                        Ok(db) => db.get_lease_history(mac).unwrap_or_default(),
+                        Err(_) => Vec::new(),
+                    }
+                })
+                .await
+                .unwrap_or_default();
+
+            // Build DeviceEntry (reusing implementation from handle_devices)
+            let gua_prefix = self
+                .current_gua
+                .as_ref()
+                .and_then(|s| s.parse::<std::net::Ipv6Addr>().ok());
+            let ula_prefix = self
+                .cfg
+                .ula_prefix
+                .as_ref()
+                .and_then(|s| s.parse::<std::net::Ipv6Addr>().ok());
+
+            let entry = api::DeviceEntry {
+                mac: dev.mac.to_string(),
+                hostname: dev.display_hostname().to_string(),
+                origin: dev.origin.as_str().to_string(),
+                online: dev.is_online(),
+                last_seen: format_iso8601(dev.last_seen),
+                learning_method: dev.learning_method().to_string(),
+                vendor: dev.vendor().map(|s: &str| s.to_string()),
+                duid: dev
+                    .duid
+                    .as_ref()
+                    .map(|d: &lanforge_core::identifiers::Duid| hex::encode(d.as_bytes())),
+                display_v4: dev.display_v4(),
+                display_v6: dev.display_v6(gua_prefix, ula_prefix),
+                v4: match &dev.v4 {
+                    IPv4State::Static(ip) => Some(api::LeaseInfo {
+                        ip: ip.to_string(),
+                        expires: "Static".to_string(),
+                        reserved: true,
+                    }),
+                    IPv4State::Dynamic(v) => Some(api::LeaseInfo {
+                        ip: v.ip.to_string(),
+                        expires: format_iso8601(v.expires),
+                        reserved: dev.is_static(),
+                    }),
+                    IPv4State::None => None,
+                },
+                seen_v4: dev
+                    .seen_v4
+                    .iter()
+                    .map(|ip: &std::net::Ipv4Addr| ip.to_string())
+                    .collect(),
+                v6: dev
+                    .primary_v6(gua_prefix, ula_prefix)
+                    .map(|ip: std::net::Ipv6Addr| api::LeaseInfo {
+                        ip: ip.to_string(),
+                        expires: "Lease".to_string(),
+                        reserved: dev.is_static(),
+                    }),
+                ipv6_addrs: {
+                    dev.v6
+                        .iter()
+                        .filter_map(|s: &IPv6State| {
+                            s.ip_with_prefix(None)
+                                .map(|ip: std::net::Ipv6Addr| api::Ipv6Entry {
+                                    addr: ip.to_string(),
+                                    kind: get_v6_kind(&ip).to_string(),
+                                })
+                        })
+                        .collect()
+                },
+            };
+
+            Response::Whois(Box::new(api::WhoisResponse { entry, history }))
+        } else {
+            Response::Error {
+                error: format!("Device '{target}' not found"),
+            }
+        }
+    }
+
+    /// Snapshot of DNS resolver statistics.
+    pub(crate) async fn handle_dns_stats(&self) -> Response {
+        use lanforge_dns::stats::DnsStats;
+        use std::sync::atomic::Ordering;
+
+        if let Some(stats) = LanforgeContext::get_dns_stats::<DnsStats>() {
+            Response::DnsStats(api::DnsStatsResponse {
+                total_requests: stats.requests_total.load(Ordering::Relaxed),
+                cache_hits: stats.cache_hits.load(Ordering::Relaxed),
+                cache_misses: stats.cache_misses.load(Ordering::Relaxed),
+                upstream_errors: stats.upstream_errors.load(Ordering::Relaxed),
+                auth_queries: stats.auth_queries.load(Ordering::Relaxed),
+                recursions: stats.recursions.load(Ordering::Relaxed),
+            })
+        } else {
+            Response::DnsStats(api::DnsStatsResponse {
+                total_requests: 0,
+                cache_hits: 0,
+                cache_misses: 0,
+                upstream_errors: 0,
+                auth_queries: 0,
+                recursions: 0,
+            })
+        }
+    }
+
+    /// DNS diagnostic query.
+    pub(crate) async fn handle_dns_query(
+        &self,
+        _name: String,
+        _record_type: Option<String>,
+    ) -> Response {
+        // This would probably send a msg to DnsService or use a shared client
+        Response::DnsQuery(api::DnsQueryResponse {
+            records: Vec::new(),
+            latency_ms: 0,
+            authoritative: false,
+        })
     }
 }

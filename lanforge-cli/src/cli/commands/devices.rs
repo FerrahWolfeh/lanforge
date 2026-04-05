@@ -11,6 +11,8 @@ use tabled::{Table, Tabled};
 pub struct DevicesHandler {
     pub verbose: bool,
     pub filter: Option<String>,
+    pub vendor: Option<String>,
+    pub method: Option<String>,
     pub format: Option<String>,
 }
 
@@ -18,6 +20,8 @@ impl CliCommand for DevicesHandler {
     fn prepare(&mut self) -> Result<ControlCommand> {
         Ok(ControlCommand::Devices {
             filter: self.filter.clone(),
+            vendor: self.vendor.clone(),
+            method: self.method.clone(),
             format: self.format.clone(),
         })
     }
@@ -51,6 +55,8 @@ struct DeviceRow {
     v4: String,
     #[tabled(rename = "V6 / SLAAC")]
     v6: String,
+    #[tabled(rename = "VENDOR")]
+    vendor: String,
     #[tabled(rename = "STATUS")]
     status: String,
 }
@@ -163,6 +169,7 @@ fn build_device_row(dev: &DeviceEntry) -> DeviceRow {
         mac: dev.mac.clone(),
         v4: dev.display_v4.clone(),
         v6: dev.display_v6.clone(),
+        vendor: dev.vendor.as_deref().unwrap_or("—").to_string(),
         status,
     }
 }
@@ -234,6 +241,14 @@ fn render_verbose_device(dev: &DeviceEntry) {
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "DUID       ", color: Color::DarkGrey)
                     Text(content: duid_str)
+                }
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: "Vendor     ", color: Color::DarkGrey)
+                    Text(content: dev.vendor.as_deref().unwrap_or("—"))
+                }
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: "Method     ", color: Color::DarkGrey)
+                    Text(content: &dev.learning_method)
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "last seen  ", color: Color::DarkGrey)

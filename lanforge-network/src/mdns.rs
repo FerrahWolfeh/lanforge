@@ -6,7 +6,7 @@ use tracing::{debug, error, warn};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RData, RecordType};
 use lanforge_core::bus::ManagedTable;
-use lanforge_core::bus::{EventBus, LanforgeEvent};
+use lanforge_core::bus::{EventBus, LanforgeEvent, TimedEvent};
 use lanforge_core::state::update::DeviceUpdate;
 
 use crate::error::{NetworkError, Result};
@@ -163,10 +163,10 @@ async fn run_mdns_worker(
         tokio::select! {
             event = bus_rx.recv() => {
                 match event {
-                    Ok(LanforgeEvent::ScanRequested) => {
+                    Ok(TimedEvent { event: LanforgeEvent::ScanRequested, .. }) => {
                         let _ = tx.send(MdnsCommand::ProbeAll).await;
                     }
-                    Ok(LanforgeEvent::Shutdown) => break,
+                    Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) => break,
                     _ => {}
                 }
             }

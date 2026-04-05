@@ -1,7 +1,7 @@
 use crate::error::DnsError;
 use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
-use lanforge_core::bus::ManagedTable;
-use std::sync::Arc;
+use lanforge_core::bus::{ManagedTable, TimedEvent};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UdpSocket},
@@ -9,8 +9,8 @@ use tokio::{
 use tracing::info;
 
 use crate::{
-    config::DnsConfig, resolver::LocalResolver, utils::extract_local_hostname_wire,
-    wire::qtypes::QType,
+    config::DnsConfig, resolver::LocalResolver, stats::DnsStats,
+    utils::extract_local_hostname_wire, wire::qtypes::QType,
 };
 use crate::{
     upstream::{UpstreamManager, forward_to_upstream},
@@ -30,6 +30,7 @@ pub(crate) struct DnsContext {
     pub cfg: DnsConfig,
     pub table: Arc<ManagedTable>,
     pub upstream_mgr: Option<Arc<UpstreamManager>>,
+    pub stats: Arc<DnsStats>,
 }
 
 use lanforge_core::error::CoreError;
@@ -37,12 +38,20 @@ use lanforge_core::service::{AsyncService, LanforgeService};
 
 pub struct DnsService {
     cfg: DnsConfig,
+    stats: Arc<DnsStats>,
 }
 
 impl DnsService {
     #[must_use]
     pub fn new(cfg: DnsConfig) -> Self {
-        Self { cfg }
+        let stats = Arc::new(DnsStats::new());
+        lanforge_core::context::LanforgeContext::set_dns_stats(Arc::clone(&stats));
+        Self { cfg, stats }
+    }
+
+    /// Returns a snapshot of the current DNS statistics.
+    pub fn stats_snapshot(&self) -> crate::stats::DnsStatsSnapshot {
+        self.stats.snapshot()
     }
 }
 
@@ -53,8 +62,8 @@ impl LanforgeService for DnsService {
             display_name: "DNS Server",
             critical: true,
             max_retries: 0,
-            base_backoff: std::time::Duration::from_secs(2),
-            max_backoff: std::time::Duration::from_secs(30),
+            base_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(30),
             stack_kb: 384,
         }
     }
@@ -106,6 +115,7 @@ impl AsyncService for DnsService {
             cfg: self.cfg.clone(),
             table: Arc::clone(&table),
             upstream_mgr,
+            stats: Arc::clone(&self.stats),
         });
 
         // Signal readiness
@@ -131,7 +141,7 @@ impl AsyncService for DnsService {
                             let _ = udp_sock.send_to(&response, src).await;
                         }
                     }
-                    Ok(LanforgeEvent::Shutdown) = udp_rx.recv() => {
+                    Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = udp_rx.recv() => {
                         info!("DNS UDP service: shutdown received");
                         break;
                     }
@@ -172,7 +182,7 @@ impl AsyncService for DnsService {
                             });
                         }
                     }
-                    Ok(LanforgeEvent::Shutdown) = tcp_rx.recv() => {
+                    Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = tcp_rx.recv() => {
                         info!("DNS TCP service: shutdown received");
                         break;
                     }
@@ -206,6 +216,7 @@ pub(crate) async fn handle_query(
     data: &[u8],
     ctx: &DnsContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
+    ctx.stats.inc_requests();
     // Phase 1: Zero-Alloc Wire Parsing
     let Some(header) = crate::wire::WireHeader::parse(data) else {
         return Ok(None);
@@ -278,12 +289,19 @@ pub(crate) async fn handle_query(
     };
 
     if let Some(response) = local_response {
+        ctx.stats.inc_auth();
+        ctx.stats.inc_cache_hit();
         return Ok(Some(response));
     }
 
+    ctx.stats.inc_cache_miss();
+
     // Phase 3: Upstream or Refused — The single point for this decision
     match (ctx.cfg.upstream, &ctx.upstream_mgr) {
-        (Some(upstream), Some(mgr)) => forward_to_upstream(data, upstream, mgr).await.map(Some),
+        (Some(upstream), Some(mgr)) => {
+            ctx.stats.inc_recursive();
+            forward_to_upstream(data, upstream, mgr).await.map(Some)
+        }
         _ => Ok(Some(WireResponseWriter::write_error_response(
             data,
             &question,
@@ -303,8 +321,6 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
     };
     let rb = crate::response::ResponseBuilder::new(&query, &ctx.cfg);
     let Some(question) = query.queries().first() else {
-        // Even in fallback, if the question is missing, we try a wire-level FormErr if possible.
-        // However, if we reached here, the wire-parser already failed, so we use the ResponseBuilder.
         return Ok(Some(rb.formerr()?));
     };
     let qname = question.name();
@@ -315,17 +331,24 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
             let safe_hostname = fast_lowercase(hostname_slice);
             let t = ctx.table.read();
             let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &t);
+            ctx.stats.inc_auth();
+            ctx.stats.inc_cache_hit();
             return Ok(Some(resolver.resolve_ip(&query, &safe_hostname, qtype)?));
         }
     } else if qtype == RecordType::PTR {
         let t = ctx.table.read();
         let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &t);
         if let Some(response) = resolver.resolve_ptr(&query, qname)? {
+            ctx.stats.inc_auth();
+            ctx.stats.inc_cache_hit();
             return Ok(Some(response));
         }
     }
 
+    ctx.stats.inc_cache_miss();
+
     if let (Some(upstream), Some(mgr)) = (ctx.cfg.upstream, &ctx.upstream_mgr) {
+        ctx.stats.inc_recursive();
         forward_to_upstream(data, upstream, mgr).await.map(Some)
     } else {
         Ok(Some(rb.nxdomain()?))

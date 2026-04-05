@@ -101,7 +101,7 @@ impl AsyncService for HttpService {
                 let mut rx = LanforgeContext::bus().subscribe();
                 while let Ok(event) = rx.recv().await {
                     if !LanforgeContext::is_running()
-                        || matches!(event, lanforge_core::bus::LanforgeEvent::Shutdown)
+                        || matches!(event.event, lanforge_core::bus::LanforgeEvent::Shutdown)
                     {
                         info!("HTTP: shutdown signal received");
                         break;

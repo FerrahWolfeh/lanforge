@@ -18,6 +18,7 @@ use crate::error::DnsError;
 use crate::resolver::LocalResolver;
 use crate::response::ResponseBuilder;
 use crate::server::{DnsContext, handle_query};
+use crate::stats::DnsStats;
 use crate::utils::extract_local_hostname;
 
 // Helper para gerar um DnsConfig pronto para os testes do Fast Path
@@ -184,6 +185,7 @@ async fn test_nxdomain_leak_prevention_and_soa() {
         cfg,
         table: table_arc,
         upstream_mgr: None,
+        stats: Arc::new(DnsStats::default()),
     };
     let resp_bytes = handle_query(&data, &ctx)
         .await

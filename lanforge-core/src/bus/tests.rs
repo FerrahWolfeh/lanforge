@@ -30,21 +30,23 @@ async fn new_device_publishes_discovered_and_updated() {
     }
 
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, LanforgeEvent::DeviceDiscovered { .. })),
+        events.iter().any(|e: &crate::bus::TimedEvent| matches!(
+            e.event,
+            LanforgeEvent::DeviceDiscovered { .. }
+        )),
         "Deve publicar DeviceDiscovered para device novo"
     );
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, LanforgeEvent::DeviceUpdated { .. })),
+        events.iter().any(|e: &crate::bus::TimedEvent| matches!(
+            e.event,
+            LanforgeEvent::DeviceUpdated { .. }
+        )),
         "Deve publicar DeviceUpdated"
     );
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, LanforgeEvent::DeviceTableDirty)),
+            .any(|e: &crate::bus::TimedEvent| matches!(e.event, LanforgeEvent::DeviceTableDirty)),
         "Deve publicar DeviceTableDirty"
     );
 }
@@ -76,9 +78,10 @@ async fn known_device_does_not_publish_discovered() {
     }
 
     assert!(
-        !events
-            .iter()
-            .any(|e| matches!(e, LanforgeEvent::DeviceDiscovered { .. })),
+        !events.iter().any(|e: &crate::bus::TimedEvent| matches!(
+            e.event,
+            LanforgeEvent::DeviceDiscovered { .. }
+        )),
         "Device já conhecido não deve gerar DeviceDiscovered"
     );
 }
@@ -127,7 +130,7 @@ async fn cli_host_update_publishes_events() {
 
     assert!(
         events.iter().any(|e| matches!(
-            e,
+            e.event,
             LanforgeEvent::DeviceUpdated {
                 mac: _,
                 change: DeviceChange::HostnameChanged { .. }
@@ -151,7 +154,7 @@ async fn cli_host_update_publishes_events() {
 
     assert!(
         events.iter().any(|e| matches!(
-            e,
+            e.event,
             LanforgeEvent::DeviceUpdated {
                 mac: _,
                 change: DeviceChange::V4StaticChanged { .. }

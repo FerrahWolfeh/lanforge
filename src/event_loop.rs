@@ -10,7 +10,7 @@ use crate::bootstrap::BootstrapResult;
 
 pub async fn run_event_loop(
     bootstrap: BootstrapResult,
-    mut bus_rx: tokio::sync::broadcast::Receiver<LanforgeEvent>,
+    mut bus_rx: tokio::sync::broadcast::Receiver<lanforge_core::bus::TimedEvent>,
 ) -> Result<()> {
     let cfg = bootstrap.cfg;
     let bus = bootstrap.bus;
@@ -98,49 +98,53 @@ pub async fn run_event_loop(
             }
             event = bus_rx.recv() => {
                 match event {
-                    Ok(LanforgeEvent::ServiceReady { name }) => {
-                        if expected_services.contains(name.as_str()) {
-                            ready_services.insert(name.clone());
-                            debug!("ServiceReady: {} ({}/{})", name, ready_services.len(), expected_services.len());
+                    Ok(timed_event) => {
+                        match timed_event.event {
+                            LanforgeEvent::ServiceReady { name } => {
+                                if expected_services.contains(name.as_str()) {
+                                    ready_services.insert(name.clone());
+                                    debug!("ServiceReady: {} ({}/{})", name, ready_services.len(), expected_services.len());
 
-                            if !system_ready_sent && ready_services.len() >= expected_services.len() {
-                                info!("✅ All internal services ready. System fully operational.");
-                                let _ = bus.publish(LanforgeEvent::SystemReady);
-                                crate::sd_notify_ready();
-                                system_ready_sent = true;
-                            }
-                        }
-                    }
-                    Ok(LanforgeEvent::PrefixChanged { gua, ula, .. }) => {
-                        if current_gua != gua || current_ula != ula {
-                            info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
-                            current_gua = gua;
-                            current_ula = ula;
-
-                            let cfg = cfg.clone();
-                            let handle = handle.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = crate::run_scan(&cfg, &handle, gua, ula, target_ifindex).await {
-                                    error!("Erro ao atualizar prefixo (GUA={:?}, ULA={:?}): {e:#}", gua, ula);
+                                    if !system_ready_sent && ready_services.len() >= expected_services.len() {
+                                        info!("✅ All internal services ready. System fully operational.");
+                                        let _ = bus.publish(LanforgeEvent::SystemReady);
+                                        crate::sd_notify_ready();
+                                        system_ready_sent = true;
+                                    }
                                 }
-                            });
+                            }
+                            LanforgeEvent::PrefixChanged { gua, ula, .. } => {
+                                if current_gua != gua || current_ula != ula {
+                                    info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
+                                    current_gua = gua;
+                                    current_ula = ula;
+
+                                    let cfg = cfg.clone();
+                                    let handle = handle.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = crate::run_scan(&cfg, &handle, gua, ula, target_ifindex).await {
+                                            error!("Erro ao atualizar prefixo (GUA={:?}, ULA={:?}): {e:#}", gua, ula);
+                                        }
+                                    });
+                                }
+                            }
+                            LanforgeEvent::ReloadConfig => {
+                                info!("ReloadConfig: Forçando sincronização em background...");
+                                let cfg = cfg.clone();
+                                let handle = handle.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = crate::run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
+                                        error!("Erro no reload scan: {e:#}");
+                                    }
+                                });
+                            }
+                            LanforgeEvent::Shutdown => {
+                                debug!("EventLoop: shutdown received via bus");
+                                break;
+                            }
+                            _ => {}
                         }
                     }
-                    Ok(LanforgeEvent::ReloadConfig) => {
-                        info!("ReloadConfig: Forçando sincronização em background...");
-                        let cfg = cfg.clone();
-                        let handle = handle.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = crate::run_scan(&cfg, &handle, current_gua, current_ula, target_ifindex).await {
-                                error!("Erro no reload scan: {e:#}");
-                            }
-                        });
-                    }
-                    Ok(LanforgeEvent::Shutdown) => {
-                        debug!("EventLoop: shutdown received via bus");
-                        break;
-                    }
-                    Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         warn!("EventBus: consumer atrasado, perdeu {n} eventos");
                     }

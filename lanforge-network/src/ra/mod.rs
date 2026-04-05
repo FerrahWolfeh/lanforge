@@ -33,7 +33,7 @@ use lanforge_core::context::LanforgeContext;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::{NetworkError, Result};
-use lanforge_core::bus::{LanforgeEvent, ManagedTable};
+use lanforge_core::bus::{LanforgeEvent, ManagedTable, TimedEvent};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, LanforgeService};
 use rand::RngExt;
@@ -304,12 +304,12 @@ impl AsyncService for RaService {
                 // 3. EventBus signals
                 res = bus_rx.recv() => {
                     match res {
-                        Ok(LanforgeEvent::PrefixChanged { .. }) => {
+                        Ok(TimedEvent { event: LanforgeEvent::PrefixChanged { .. }, .. }) => {
                             info!("RA: Prefix change detected — sending immediate RA burst");
                             state.initial_sent = 0; // Reset startup burst counter
                             next_ra_at = Instant::now(); // Force immediate send
                         }
-                        Ok(LanforgeEvent::Shutdown) => {
+                        Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) => {
                             info!("RA service: shutdown received");
                             return Ok(());
                         }

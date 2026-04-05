@@ -47,6 +47,9 @@ pub enum ApiError {
     /// Generic internal server error.
     #[error("Internal API error: {message}")]
     Internal { message: String },
+    /// Generic error string.
+    #[error("API error: {0}")]
+    Generic(String),
 }
 
 /// A specialized Result type for API operations.

@@ -88,6 +88,29 @@ pub enum DeviceChange {
     DuidAssociated,
 }
 
+/// A wrapper for an event along with its metadata (timestamp, source module).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TimedEvent {
+    /// The actual event data.
+    pub event: LanforgeEvent,
+    /// When the event was created.
+    pub timestamp: std::time::SystemTime,
+    /// Optional identifier for the module that generated the event.
+    pub module: Option<String>,
+}
+
+impl TimedEvent {
+    /// Wraps a raw event with the current system time and an optional module label.
+    #[must_use]
+    pub fn new(event: LanforgeEvent, module: Option<String>) -> Self {
+        Self {
+            event,
+            timestamp: std::time::SystemTime::now(),
+            module,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // LanforgeEvent
 // ---------------------------------------------------------------------------
@@ -102,6 +125,8 @@ pub enum LanforgeEvent {
     DeviceUpdated { mac: MacAddr, change: DeviceChange },
     /// A device was removed (typically because it was inactive for too long).
     DeviceExpired { mac: MacAddr },
+    /// A device was explicitly purged from memory.
+    DevicePurged { mac: MacAddr },
 
     // -- Infrastructure --
     /// The global IPv6 prefix has changed.
@@ -145,33 +170,39 @@ pub enum LanforgeEvent {
     ServiceReady { name: String },
     /// Final signal indicating the entire system is operational.
     SystemReady,
+
+    // -- Diagnostic --
+    /// Request to send a Wake-on-LAN packet.
+    WolTriggered { mac: MacAddr },
 }
 
-impl LanforgeEvent {
+impl TimedEvent {
     /// Returns true if this event represents a user-facing system activity
     /// that should be recorded in the persistent log history.
     #[must_use]
     pub const fn is_loggable(&self) -> bool {
-        match self {
-            Self::DeviceDiscovered { .. }
-            | Self::DeviceUpdated { .. }
-            | Self::DeviceExpired { .. }
-            | Self::PrefixChanged { .. }
-            | Self::InterfaceUpdated { .. }
-            | Self::LeaseRelease { .. }
-            | Self::LeaseRenew { .. }
-            | Self::DbVacuum
-            | Self::ReloadConfig
-            | Self::ScanRequested => true,
+        match &self.event {
+            LanforgeEvent::DeviceDiscovered { .. }
+            | LanforgeEvent::DeviceUpdated { .. }
+            | LanforgeEvent::DeviceExpired { .. }
+            | LanforgeEvent::PrefixChanged { .. }
+            | LanforgeEvent::InterfaceUpdated { .. }
+            | LanforgeEvent::LeaseRelease { .. }
+            | LanforgeEvent::LeaseRenew { .. }
+            | LanforgeEvent::DbVacuum
+            | LanforgeEvent::DevicePurged { .. }
+            | LanforgeEvent::WolTriggered { .. }
+            | LanforgeEvent::ReloadConfig
+            | LanforgeEvent::ScanRequested => true,
 
             // Internal signals or very high-frequency events
-            Self::DeviceTableDirty
-            | Self::Shutdown
-            | Self::StateReady
-            | Self::DbReady
-            | Self::InterfaceReady
-            | Self::ServiceReady { .. }
-            | Self::SystemReady => false,
+            LanforgeEvent::DeviceTableDirty
+            | LanforgeEvent::Shutdown
+            | LanforgeEvent::StateReady
+            | LanforgeEvent::DbReady
+            | LanforgeEvent::InterfaceReady
+            | LanforgeEvent::ServiceReady { .. }
+            | LanforgeEvent::SystemReady => false,
         }
     }
 }
@@ -187,7 +218,7 @@ const BUS_CAPACITY: usize = 256;
 ///
 /// This is typically wrapped in an `Arc` and shared among protocol tasks.
 pub struct EventBus {
-    tx: broadcast::Sender<LanforgeEvent>,
+    tx: broadcast::Sender<TimedEvent>,
 }
 
 impl EventBus {
@@ -200,7 +231,7 @@ impl EventBus {
 
     /// Creates a new subscriber to receive events from the bus.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<LanforgeEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<TimedEvent> {
         self.tx.subscribe()
     }
 
@@ -209,7 +240,21 @@ impl EventBus {
     /// Returns the number of active subscribers who received the message.
     #[must_use]
     pub fn publish(&self, event: LanforgeEvent) -> usize {
+        self.tx.send(TimedEvent::new(event, None)).unwrap_or(0)
+    }
+
+    /// Publishes a timed event directly (useful if module info is already known).
+    #[must_use]
+    pub fn publish_timed(&self, event: TimedEvent) -> usize {
         self.tx.send(event).unwrap_or(0)
+    }
+
+    /// Publishes an event with a specific module source.
+    #[must_use]
+    pub fn publish_with_module(&self, event: LanforgeEvent, module: &str) -> usize {
+        self.tx
+            .send(TimedEvent::new(event, Some(module.to_string())))
+            .unwrap_or(0)
     }
 }
 

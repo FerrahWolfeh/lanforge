@@ -37,8 +37,9 @@ impl CliCommand for LogHandler {
 }
 
 impl LogHandler {
-    fn print_event(&self, event: &LanforgeEvent) {
+    fn print_event(&self, timed_event: &lanforge_core::bus::TimedEvent) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string().dimmed();
+        let event = &timed_event.event;
 
         match event {
             LanforgeEvent::DeviceDiscovered { mac } => {
@@ -67,6 +68,24 @@ impl LogHandler {
                     "EXP".red().bold(),
                     "Device expired:".dimmed(),
                     mac.to_string().red()
+                );
+            }
+            LanforgeEvent::DevicePurged { mac } => {
+                println!(
+                    "[{}] {} {} {}",
+                    now,
+                    "DEL".red().bold(),
+                    "Device purged:".red().bold(),
+                    mac.to_string().red()
+                );
+            }
+            LanforgeEvent::WolTriggered { mac } => {
+                println!(
+                    "[{}] {} {} {}",
+                    now,
+                    "WOL".bright_green().bold(),
+                    "Wake-on-LAN sent to:".white(),
+                    mac.to_string().bright_yellow()
                 );
             }
             LanforgeEvent::PrefixChanged {

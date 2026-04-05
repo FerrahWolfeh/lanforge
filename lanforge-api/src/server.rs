@@ -2,7 +2,7 @@ use crate::api::{Command, Response, SimpleSuccess};
 use lanforge_db::log_engine::LogDb;
 
 use crate::config::ApiConfig;
-use crate::error::Result;
+use crate::error::{ApiError, Result};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
@@ -103,19 +103,19 @@ impl AsyncService for ControlService {
             tokio::select! {
                 // Monitora mudanças de prefixo GUA para reportar no 'status'
                 msg = bus_rx.recv() => {
-                    match msg {
-                        Ok(LanforgeEvent::PrefixChanged {gua, .. }) => {
+                    if let Ok(event) = msg { match event.event {
+                        LanforgeEvent::PrefixChanged {gua, .. } => {
                             current_gua = gua.map(|ip| ip.to_string());
                         }
-                        Ok(LanforgeEvent::ReloadConfig) => {
+                        LanforgeEvent::ReloadConfig => {
                             last_scan = std::time::Instant::now();
                         }
-                        Ok(LanforgeEvent::Shutdown) => {
+                        LanforgeEvent::Shutdown => {
                             debug!("Control: shutdown received");
                             break;
                         }
                         _ => {}
-                    }
+                    } }
                 }
 
                 // Aceita novas conexões UDS
@@ -219,7 +219,12 @@ where
         let req: std::result::Result<Command, _> = serde_json::from_str(trim_line);
         let resp = match req {
             Ok(Command::Status) => ctx.handle_status().await,
-            Ok(Command::Devices { filter, .. }) => ctx.handle_devices(filter).await,
+            Ok(Command::Devices {
+                filter,
+                vendor,
+                method,
+                ..
+            }) => ctx.handle_devices(filter, vendor, method).await,
             Ok(Command::Reload) => {
                 let _ = LanforgeContext::bus().publish(LanforgeEvent::ReloadConfig);
                 Response::Success(SimpleSuccess {
@@ -237,6 +242,21 @@ where
                 Response::Success(SimpleSuccess {
                     message: "Desligando graciosa e instantaneamente".to_string(),
                 })
+            }
+            Ok(Command::Purge { mac }) => {
+                use std::str::FromStr;
+                let mac_addr = MacAddr::from_str(&mac).map_err(ApiError::Generic)?;
+                let _ =
+                    LanforgeContext::bus().publish(LanforgeEvent::DevicePurged { mac: mac_addr });
+                Response::Success(SimpleSuccess {
+                    message: format!("Device {mac} purged from memory"),
+                })
+            }
+            Ok(Command::Wol { target }) => ctx.handle_wol(target).await,
+            Ok(Command::Whois { target }) => ctx.handle_whois(target).await,
+            Ok(Command::DnsStats) => ctx.handle_dns_stats().await,
+            Ok(Command::DnsQuery { name, record_type }) => {
+                ctx.handle_dns_query(name, record_type).await
             }
             Ok(Command::Log { .. } | Command::Watch) => {
                 // Fetch history if it's a log command
@@ -427,19 +447,6 @@ where
                 Response::Success(SimpleSuccess {
                     message: "Iniciando vacuum do sqlite...".to_string(),
                 })
-            }
-            Ok(Command::Purge { mac }) => {
-                if let Some(mac_addr) = MacAddr::parse(&mac) {
-                    let _ = LanforgeContext::table()
-                        .update(&DeviceUpdate::HostRemoved { mac: mac_addr });
-                    Response::Success(SimpleSuccess {
-                        message: format!("Dispositivo expurgado da memória: {mac}"),
-                    })
-                } else {
-                    Response::Error {
-                        error: format!("MAC inválido: {mac}"),
-                    }
-                }
             }
             Err(e) => Response::Error {
                 error: format!("Comando inválido ou JSON malformado: {e}"),

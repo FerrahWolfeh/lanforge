@@ -92,7 +92,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     }
 
     // 5. handle_devices (called by Devices) should still return all 3
-    let resp = ctx.handle_devices(None).await;
+    let resp = ctx.handle_devices(None, None, None).await;
     if let Response::Devices(d) = resp {
         assert_eq!(
             d.devices.len(),

@@ -25,6 +25,10 @@ pub enum Command {
         #[arg(long)]
         filter: Option<String>,
         #[arg(long)]
+        vendor: Option<String>,
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long)]
         format: Option<String>,
     },
     /// Live view reativo via socket (sem polling)
@@ -59,6 +63,35 @@ pub enum Command {
     Purge {
         /// MAC address of the device to purge
         mac: String,
+    },
+    /// Wake-on-LAN magic packet
+    Wol {
+        /// Target device MAC or Hostname. Run without target for interactive menu.
+        target: Option<String>,
+    },
+    /// Detailed aggregated information for a device
+    Whois {
+        /// Target MAC, IP, or Hostname
+        target: String,
+    },
+    /// DNS resolver statistics and diagnostics
+    Dns {
+        #[command(subcommand)]
+        action: DnsCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DnsCommand {
+    /// Show resolver performance statistics
+    Stats,
+    /// Perform a diagnostic query
+    Query {
+        /// Name to resolve
+        name: String,
+        /// Optional record type (A, AAAA, etc.)
+        #[arg(short = 't', long)]
+        record_type: Option<String>,
     },
 }
 

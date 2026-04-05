@@ -198,7 +198,7 @@ impl SyncService for Dhcpv4Service {
 
             // 2. Process Bus events
             for event in bus_rx.try_recv_all() {
-                match event {
+                match event.event {
                     LanforgeEvent::LeaseRelease { mac } => {
                         info!("DHCPv4: Forcing release of {} via CLI", mac);
                         let ip = LanforgeContext::table()

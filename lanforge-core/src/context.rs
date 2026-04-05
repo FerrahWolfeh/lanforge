@@ -18,6 +18,7 @@ static INSTANCE: OnceLock<LanforgeContext> = OnceLock::new();
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static DB_READY: AtomicBool = AtomicBool::new(false);
 static IF_READY: AtomicBool = AtomicBool::new(false);
+static DNS_STATS: OnceLock<Arc<dyn std::any::Any + Send + Sync>> = OnceLock::new();
 
 impl LanforgeContext {
     /// Initializes the global context. MUST be called exactly once during system startup.
@@ -107,11 +108,13 @@ impl LanforgeContext {
             return Ok(());
         }
 
-        while let Ok(event) = rx.recv().await {
-            if !Self::is_running() || matches!(event, crate::bus::LanforgeEvent::Shutdown) {
+        while let Ok(timed_event) = rx.recv().await {
+            if !Self::is_running()
+                || matches!(timed_event.event, crate::bus::LanforgeEvent::Shutdown)
+            {
                 return Ok(());
             }
-            if matches!(event, crate::bus::LanforgeEvent::DbReady) {
+            if matches!(timed_event.event, crate::bus::LanforgeEvent::DbReady) {
                 break;
             }
         }
@@ -130,11 +133,13 @@ impl LanforgeContext {
             return Ok(());
         }
 
-        while let Ok(event) = rx.recv().await {
-            if !Self::is_running() || matches!(event, crate::bus::LanforgeEvent::Shutdown) {
+        while let Ok(timed_event) = rx.recv().await {
+            if !Self::is_running()
+                || matches!(timed_event.event, crate::bus::LanforgeEvent::Shutdown)
+            {
                 return Ok(());
             }
-            if matches!(event, crate::bus::LanforgeEvent::InterfaceReady) {
+            if matches!(timed_event.event, crate::bus::LanforgeEvent::InterfaceReady) {
                 break;
             }
         }
@@ -142,31 +147,43 @@ impl LanforgeContext {
     }
 
     /// Blocks the current THREAD (sync) until dependencies are ready.
-    pub fn wait_for_db_sync(rx: &std::sync::mpsc::Receiver<crate::bus::LanforgeEvent>) {
+    pub fn wait_for_db_sync(rx: &std::sync::mpsc::Receiver<crate::bus::TimedEvent>) {
         if Self::is_db_ready() {
             return;
         }
-        while let Ok(event) = rx.recv() {
-            if matches!(event, crate::bus::LanforgeEvent::DbReady) {
+        while let Ok(timed_event) = rx.recv() {
+            if matches!(timed_event.event, crate::bus::LanforgeEvent::DbReady) {
                 break;
             }
-            if matches!(event, crate::bus::LanforgeEvent::Shutdown) || !Self::is_running() {
+            if matches!(timed_event.event, crate::bus::LanforgeEvent::Shutdown)
+                || !Self::is_running()
+            {
                 break;
             }
         }
     }
 
-    pub fn wait_for_interfaces_sync(rx: &std::sync::mpsc::Receiver<crate::bus::LanforgeEvent>) {
+    pub fn wait_for_interfaces_sync(rx: &std::sync::mpsc::Receiver<crate::bus::TimedEvent>) {
         if Self::is_if_ready() {
             return;
         }
-        while let Ok(event) = rx.recv() {
-            if matches!(event, crate::bus::LanforgeEvent::InterfaceReady) {
+        while let Ok(timed_event) = rx.recv() {
+            if matches!(timed_event.event, crate::bus::LanforgeEvent::InterfaceReady) {
                 break;
             }
-            if matches!(event, crate::bus::LanforgeEvent::Shutdown) || !Self::is_running() {
+            if matches!(timed_event.event, crate::bus::LanforgeEvent::Shutdown)
+                || !Self::is_running()
+            {
                 break;
             }
         }
+    }
+
+    pub fn set_dns_stats<T: std::any::Any + Send + Sync>(stats: Arc<T>) {
+        let _ = DNS_STATS.set(stats);
+    }
+
+    pub fn get_dns_stats<T: std::any::Any + Send + Sync>() -> Option<Arc<T>> {
+        DNS_STATS.get().and_then(|a| a.clone().downcast::<T>().ok())
     }
 }

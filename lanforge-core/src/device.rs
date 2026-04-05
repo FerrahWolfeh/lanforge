@@ -507,12 +507,15 @@ pub struct Device {
 
     /// `DHCPv6` Unique Identifier (DUID), if tracked.
     pub duid: Option<Duid>,
+    /// The resolved vendor name from OUI.
+    pub vendor: Option<String>,
 }
 
 impl Device {
     /// Creates a new device with the given MAC and default values.
     #[must_use]
     pub fn new(mac: MacAddr) -> Self {
+        let vendor = crate::vendor::resolve_vendor(&mac);
         Self {
             mac,
             hostname: Hostname::default(),
@@ -524,6 +527,7 @@ impl Device {
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
             duid: None,
+            vendor,
         }
     }
 
@@ -531,6 +535,12 @@ impl Device {
     #[must_use]
     pub const fn is_static(&self) -> bool {
         self.origin.is_static()
+    }
+
+    /// Returns the vendor name as a string slice, if available.
+    #[must_use]
+    pub fn vendor(&self) -> Option<&str> {
+        self.vendor.as_deref()
     }
 
     /// Returns true if the device has enough "meaningful" information to be officially
@@ -683,6 +693,72 @@ impl Device {
 
         addrs
     }
+
+    /// Categorizes how this device was primarily learned or configured.
+    #[must_use]
+    pub fn learning_method(&self) -> LearningMethod {
+        if self.origin == Origin::Toml {
+            return LearningMethod::Static;
+        }
+        if self.origin == Origin::Cli {
+            return LearningMethod::Managed;
+        }
+
+        // Check DHCPv4
+        if matches!(self.v4, IPv4State::Dynamic(_)) {
+            return LearningMethod::DhcpV4;
+        }
+
+        // Check DHCPv6
+        if self.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))) {
+            return LearningMethod::DhcpV6;
+        }
+
+        // Check SLAAC
+        if self.v6.iter().any(|s| matches!(s, IPv6State::Slaac(_))) {
+            return LearningMethod::Slaac;
+        }
+
+        // Check ARP/Netlink
+        if !self.seen_v4.is_empty() {
+            return LearningMethod::NdpArp;
+        }
+
+        LearningMethod::Unknown
+    }
+}
+
+/// The protocol or method by which a device was discovered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LearningMethod {
+    /// Manually configured in `lanforge.toml`.
+    Static,
+    /// Manually configured or overridden via CLI.
+    Managed,
+    /// Discovered via `DHCPv4` lease.
+    DhcpV4,
+    /// Discovered via `DHCPv6` lease (`IA_NA`).
+    DhcpV6,
+    /// Discovered via Router Advertisement / SLAAC.
+    Slaac,
+    /// Discovered via ARP or Neighbor Discovery traffic.
+    NdpArp,
+    /// Discovery method could not be determined.
+    Unknown,
+}
+
+impl fmt::Display for LearningMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Static => write!(f, "Static"),
+            Self::Managed => write!(f, "Managed"),
+            Self::DhcpV4 => write!(f, "DHCPv4"),
+            Self::DhcpV6 => write!(f, "DHCPv6"),
+            Self::Slaac => write!(f, "SLAAC"),
+            Self::NdpArp => write!(f, "NDP/ARP"),
+            Self::Unknown => write!(f, "Unknown"),
+        }
+    }
 }
 
 /// Checks if an IPv6 address is a Unique Local Address (ULA).
@@ -741,6 +817,7 @@ mod tests {
             v6_prefixes: Vec::new(),
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
+            vendor: None,
         };
 
         let sorted = dev.all_addresses_sorted();

@@ -37,6 +37,7 @@ struct DeviceRow {
     managed_at: Option<i64>,
     v4_static: Option<String>,
     v6_suffix: Option<String>,
+    vendor: Option<String>,
 }
 
 /// A handle to the SQLite database for network leases and devices.
@@ -95,8 +96,9 @@ impl LeaseDb {
     }
 
     fn get_migrations() -> Migrations<'static> {
-        Migrations::new(vec![M::up(
-            "DROP TABLE IF EXISTS seen_v4;
+        Migrations::new(vec![
+            M::up(
+                "DROP TABLE IF EXISTS seen_v4;
              DROP TABLE IF EXISTS slaac_addrs;
              DROP TABLE IF EXISTS v6_prefixes;
              DROP TABLE IF EXISTS v6_leases;
@@ -150,7 +152,21 @@ impl LeaseDb {
                 ip      TEXT NOT NULL,
                 PRIMARY KEY (mac, ip)
              );",
-        )])
+            ),
+            M::up(
+                "CREATE TABLE lease_history (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                mac        TEXT NOT NULL,
+                ip         TEXT NOT NULL,
+                lease_type TEXT NOT NULL,
+                action     TEXT NOT NULL,
+                timestamp  INTEGER NOT NULL
+             );
+             CREATE INDEX idx_lease_history_mac ON lease_history(mac);
+             CREATE INDEX idx_lease_history_timestamp ON lease_history(timestamp);",
+            ),
+            M::up("ALTER TABLE devices ADD COLUMN vendor TEXT;"),
+        ])
     }
 
     // -----------------------------------------------------------------------
@@ -194,11 +210,12 @@ impl LeaseDb {
                         None
                     }
                 }),
+                vendor: device.vendor.clone(),
             };
 
             tx.execute(
-                "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, vendor)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(mac) DO UPDATE SET
                     hostname = excluded.hostname,
                     hostname_origin = excluded.hostname_origin,
@@ -208,7 +225,8 @@ impl LeaseDb {
                     origin = excluded.origin,
                     managed_at = excluded.managed_at,
                     v4_static = excluded.v4_static,
-                    v6_suffix = excluded.v6_suffix",
+                    v6_suffix = excluded.v6_suffix,
+                    vendor = excluded.vendor",
                 params![
                     row.mac,
                     row.hostname,
@@ -219,7 +237,8 @@ impl LeaseDb {
                     row.origin,
                     row.managed_at,
                     row.v4_static,
-                    row.v6_suffix
+                    row.v6_suffix,
+                    row.vendor
                 ],
             )?;
 
@@ -314,7 +333,7 @@ impl LeaseDb {
 
         // 1. Load base devices
         let mut stmt = self.conn.prepare(
-            "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix FROM devices"
+            "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, vendor FROM devices"
         )?;
 
         let rows: Vec<DeviceRow> = stmt
@@ -330,6 +349,7 @@ impl LeaseDb {
                     managed_at: row.get(7)?,
                     v4_static: row.get(8)?,
                     v6_suffix: row.get(9)?,
+                    vendor: row.get(10)?,
                 })
             })?
             .filter_map(std::result::Result::ok)
@@ -358,6 +378,7 @@ impl LeaseDb {
                 _ => Origin::Dynamic,
             };
             device.managed_at = row.managed_at.map(unix_to_system_time);
+            device.vendor = row.vendor;
 
             if let Some(v4) = &row.v4_static
                 && let Ok(ip) = v4.parse::<Ipv4Addr>()
@@ -528,6 +549,98 @@ impl LeaseDb {
             .map_err(LeaseDbError::VacuumFailed)?;
         Ok(())
     }
+
+    /// Records a lease-related event in the persistent history.
+    pub fn record_lease_event(
+        &self,
+        mac: MacAddr,
+        ip: &str,
+        lease_type: &str,
+        action: LeaseAction,
+    ) -> Result<()> {
+        let now = system_time_to_unix(SystemTime::now());
+        self.conn.execute(
+            "INSERT INTO lease_history (mac, ip, lease_type, action, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![mac.to_string(), ip, lease_type, action.as_str(), now],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieves the lease history for a specific device.
+    pub fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ip, lease_type, action, timestamp FROM lease_history WHERE mac = ?1 ORDER BY timestamp DESC LIMIT 100"
+        )?;
+
+        let rows = stmt.query_map(params![mac.to_string()], |row| {
+            Ok(LeaseHistoryEntry {
+                ip: row.get(0)?,
+                lease_type: row.get(1)?,
+                action: row
+                    .get::<_, String>(2)?
+                    .parse()
+                    .unwrap_or(LeaseAction::Assigned),
+                timestamp: unix_to_system_time(row.get(3)?),
+            })
+        })?;
+
+        let mut history = Vec::new();
+        for row in rows {
+            history.push(row?);
+        }
+        Ok(history)
+    }
+}
+
+/// Represents the type of action taken on a lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseAction {
+    /// A new lease was assigned.
+    Assigned,
+    /// An existing lease was renewed.
+    Renewed,
+    /// A lease was explicitly released.
+    Released,
+    /// A lease expired naturally.
+    Expired,
+}
+
+impl LeaseAction {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Assigned => "assigned",
+            Self::Renewed => "renewed",
+            Self::Released => "released",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+impl std::str::FromStr for LeaseAction {
+    type Err = ();
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "assigned" => Ok(Self::Assigned),
+            "renewed" => Ok(Self::Renewed),
+            "released" => Ok(Self::Released),
+            "expired" => Ok(Self::Expired),
+            _ => Err(()),
+        }
+    }
+}
+
+/// A single entry in the lease history.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LeaseHistoryEntry {
+    /// The IP address involved.
+    pub ip: String,
+    /// The type of lease (e.g., "DHCPv4", "DHCPv6", "PD").
+    pub lease_type: String,
+    /// The action performed.
+    pub action: LeaseAction,
+    /// When the event occurred.
+    pub timestamp: SystemTime,
 }
 
 // ---------------------------------------------------------------------------

@@ -51,18 +51,21 @@ where
 
         let mut bus_rx = LanforgeContext::bus().subscribe();
         tokio::select! {
-            _event = async {
+            shutdown = async {
                 while let Ok(e) = bus_rx.recv().await {
-                    if matches!(e, LanforgeEvent::Shutdown) {
-                        return;
+                    if matches!(e.event, LanforgeEvent::Shutdown) {
+                        return true;
                     }
                 }
+                false
             } => {
-                info!("▪ {} shutting down", description);
-                if let Err(e) = service.on_shutdown() {
-                    error!("Error during async service '{}' shutdown: {e}", name);
+                if shutdown {
+                    info!("▪ {} shutting down", description);
+                    if let Err(e) = service.on_shutdown() {
+                        error!("Error during async service '{}' shutdown: {e}", name);
+                    }
+                    return;
                 }
-                return;
             }
             res = service.run() => {
                 match res {
@@ -103,7 +106,7 @@ where
                         tokio::select! {
                             _ = async {
                                 while let Ok(e) = bus_rx.recv().await {
-                                    if matches!(e, LanforgeEvent::Shutdown) {
+                                    if matches!(e.event, LanforgeEvent::Shutdown) {
                                         return;
                                     }
                                 }
@@ -153,7 +156,7 @@ where
         let mut event_rx = bus.subscribe();
         rt_handle.spawn(async move {
             while let Ok(event) = event_rx.recv().await {
-                let is_shutdown = matches!(event, LanforgeEvent::Shutdown);
+                let is_shutdown = matches!(event.event, LanforgeEvent::Shutdown);
                 if tx.send(event).is_err() || is_shutdown {
                     break;
                 }
@@ -187,6 +190,7 @@ where
                             name, consecutive_failures
                         );
                         LanforgeContext::terminate();
+                        let _ = bus.publish(LanforgeEvent::Shutdown);
                         return;
                     } else {
                         warn!(
@@ -365,7 +369,7 @@ mod tests {
         // We might get multiple events, we want to see at least one ServiceReady
         for _ in 0..20 {
             if let Ok(event) = sub.recv().await
-                && let LanforgeEvent::ServiceReady { name } = event
+                && let LanforgeEvent::ServiceReady { name } = event.event
                 && name == "ref-service"
             {
                 ready = true;

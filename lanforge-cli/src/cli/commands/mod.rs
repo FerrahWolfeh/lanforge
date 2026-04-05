@@ -1,9 +1,12 @@
 pub mod db;
 pub mod devices;
+pub mod dns;
 pub mod host;
 pub mod lease;
 pub mod log;
 pub mod status;
+pub mod whois;
+pub mod wol;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;

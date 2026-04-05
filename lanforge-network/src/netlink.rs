@@ -290,7 +290,7 @@ impl AsyncService for NdpMonitor {
                 }
 
                 Ok(event) = bus_rx.recv() => {
-                    match event {
+                    match event.event {
                         LanforgeEvent::PrefixChanged { gua, ula, .. } => {
                             current_gua = gua;
                             current_ula = ula;
