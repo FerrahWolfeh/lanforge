@@ -14,10 +14,12 @@ pub struct ResponseBuilder<'a> {
 }
 
 impl<'a> ResponseBuilder<'a> {
-    pub fn new(query: &'a Message, cfg: &'a DnsConfig) -> Self {
+    #[must_use]
+    pub const fn new(query: &'a Message, cfg: &'a DnsConfig) -> Self {
         Self { query, cfg }
     }
 
+    #[must_use]
     pub fn base(&self) -> Message {
         let mut resp = Message::new();
         resp.set_id(self.query.id())
@@ -45,7 +47,7 @@ impl<'a> ResponseBuilder<'a> {
             .unwrap_or_else(|_| Name::root());
         let rname = Name::from_str(&format!("hostmaster.{}.", self.cfg.search_domain))
             .unwrap_or_else(|_| Name::root());
-        let soa = SOA::new(mname, rname, 1, 7200, 3600, 1209600, 3600);
+        let soa = SOA::new(mname, rname, 1, 7200, 3600, 1_209_600, 3600);
         resp.add_name_server(Record::from_rdata(name, 3600, RData::SOA(soa)));
     }
 

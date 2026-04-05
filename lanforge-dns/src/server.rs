@@ -9,8 +9,7 @@ use tokio::{
 use tracing::info;
 
 use crate::{
-    config::DnsConfig, resolver::LocalResolver, stats::DnsStats,
-    utils::extract_local_hostname_wire, wire::qtypes::QType,
+    config::DnsConfig, resolver::LocalResolver, stats::DnsStats, utils::extract_local_hostname_wire,
 };
 use crate::{
     upstream::{UpstreamManager, forward_to_upstream},
@@ -50,6 +49,7 @@ impl DnsService {
     }
 
     /// Returns a snapshot of the current DNS statistics.
+    #[must_use]
     pub fn stats_snapshot(&self) -> crate::stats::DnsStatsSnapshot {
         self.stats.snapshot()
     }
@@ -123,74 +123,77 @@ impl AsyncService for DnsService {
             name: "dns".to_string(),
         });
 
-        let udp_ctx = Arc::clone(&ctx);
-        let mut udp_rx = bus.subscribe();
-        let udp_task = tokio::spawn(async move {
-            let mut buf = vec![0u8; 4096];
-            loop {
-                if !LanforgeContext::is_running() {
-                    break;
-                }
-                tokio::select! {
-                    res = udp_sock.recv_from(&mut buf) => {
-                        let Ok((len, src)) = res else {
-                            continue;
-                        };
+        let mut rx = bus.subscribe();
 
+        // UDP Task
+        let udp_ctx = Arc::clone(&ctx);
+        let udp_sock_inner = Arc::clone(&udp_sock);
+        let udp_task = tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            loop {
+                tokio::select! {
+                    res = udp_sock_inner.recv_from(&mut buf) => {
+                        let Ok((len, src)) = res else { continue; };
                         if let Ok(Some(response)) = handle_query(&buf[..len], &udp_ctx).await {
-                            let _ = udp_sock.send_to(&response, src).await;
+                            let _ = udp_sock_inner.send_to(&response, src).await;
                         }
                     }
-                    Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = udp_rx.recv() => {
-                        info!("DNS UDP service: shutdown received");
-                        break;
+                    () = tokio::time::sleep(Duration::from_millis(100)) => {
+                         if !LanforgeContext::is_running() { break; }
                     }
                 }
             }
         });
 
+        // TCP Task
         let tcp_ctx = Arc::clone(&ctx);
-        let mut tcp_rx = bus.subscribe();
         let tcp_task = tokio::spawn(async move {
             loop {
-                if !LanforgeContext::is_running() {
-                    break;
-                }
                 tokio::select! {
                     res = tcp_listener.accept() => {
                         if let Ok((mut stream, _)) = res {
                             let c = Arc::clone(&tcp_ctx);
-
                             tokio::spawn(async move {
-                                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                                let _ = tokio::time::timeout(Duration::from_secs(5), async {
                                     let mut len_buf = [0u8; 2];
-                                    if stream.read_exact(&mut len_buf).await.is_err() {
-                                        return;
-                                    }
+                                    stream.read_exact(&mut len_buf).await?;
                                     let len = u16::from_be_bytes(len_buf) as usize;
-                                    let mut buf = vec![0u8; len];
-                                    if stream.read_exact(&mut buf).await.is_err() {
-                                        return;
-                                    }
+                                    let mut query_buf = vec![0u8; len];
+                                    stream.read_exact(&mut query_buf).await?;
 
-                                    if let Ok(Some(response)) = handle_query(&buf, &c).await {
-                                        let resp_len = (response.len() as u16).to_be_bytes();
-                                        let _ = stream.write_all(&resp_len).await;
-                                        let _ = stream.write_all(&response).await;
+                                    if let Ok(Some(response)) = handle_query(&query_buf, &c).await {
+                                        let resp_len = u16::try_from(response.len()).unwrap_or(u16::MAX).to_be_bytes();
+                                        stream.write_all(&resp_len).await?;
+                                        stream.write_all(&response).await?;
                                     }
+                                    Ok::<(), std::io::Error>(())
                                 }).await;
                             });
                         }
                     }
-                    Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = tcp_rx.recv() => {
-                        info!("DNS TCP service: shutdown received");
-                        break;
+                    () = tokio::time::sleep(Duration::from_millis(100)) => {
+                        if !LanforgeContext::is_running() { break; }
                     }
                 }
             }
         });
 
-        let _ = tokio::join!(udp_task, tcp_task);
+        // Wait for shutdown or tasks
+        loop {
+            tokio::select! {
+                Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = rx.recv() => {
+                    info!("DNS service: shutdown received");
+                    break;
+                }
+                () = tokio::time::sleep(Duration::from_millis(500)) => {
+                    if !LanforgeContext::is_running() { break; }
+                }
+            }
+        }
+
+        // Cancel tasks and exit
+        udp_task.abort();
+        tcp_task.abort();
         Ok(())
     }
 }
@@ -217,101 +220,91 @@ pub(crate) async fn handle_query(
     ctx: &DnsContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     ctx.stats.inc_requests();
-    // Phase 1: Zero-Alloc Wire Parsing
+
+    // PHASE 1: Zero-Alloc Triage
     let Some(header) = crate::wire::WireHeader::parse(data) else {
         return Ok(None);
     };
-
     if !header.is_query() {
         return Ok(None);
     }
 
     let Some(question) = crate::wire::WireQuestion::parse(data) else {
-        // Fallback to Hickory-DNS if the wire-parser finds something complex (e.g., pointers in the question)
         return handle_query_fallback(data, ctx).await;
     };
 
-    let raw_qtype = question.qtype(); // u16 — before conversion
-    let qtype = QType::from(raw_qtype);
-    let edns = crate::wire::WireOptScanner::scan(data, &header, &question);
-    let ra = ctx.cfg.upstream.is_some();
-
-    // Phase 2: Zero-Alloc Routing Decisions
-
-    // Phase 2: Local Resolution Attempt
-    let local_response: Option<Vec<u8>> = match qtype {
-        QType::A | QType::AAAA | QType::Any => {
-            let mut labels = question.labels();
-            let hostname_slice = if ctx.cfg.enabled
-                && matches!(question.qtype(), 1 | 28 | 255)
-                && (labels.clone().next().is_some())
-            {
-                extract_local_hostname_wire(&mut labels, &ctx.cfg.multi_search_labels)
-            } else {
-                None
-            };
-            if let Some(hostname_slice) = hostname_slice {
-                let safe_hostname = fast_lowercase(hostname_slice);
-                let Ok(query) = Message::from_bytes(data) else {
-                    return Ok(None);
-                };
-                let t = ctx.table.read();
-                Some(
-                    LocalResolver::new(&ctx.cfg, &t).resolve_ip(
-                        &query,
-                        &safe_hostname,
-                        RecordType::from(raw_qtype),
-                    )?, // raw u16 passed directly to hickory-dns
-                )
-            } else {
-                None
-            }
-        }
-
-        QType::PTR => {
-            if let Some(target_ip) = parse_arpa_wire(question.labels()) {
-                let t = ctx.table.read();
-                if t.get_by_ip(&target_ip).is_some() {
-                    let Ok(query) = Message::from_bytes(data) else {
-                        return Ok(None);
-                    };
-                    LocalResolver::new(&ctx.cfg, &t)
-                        .resolve_ptr(&query, query.queries()[0].name())?
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-
-        _ => None, // Any other type goes directly to upstream
-    };
-
-    if let Some(response) = local_response {
+    // PHASE 2: Local Resolution Attempt
+    if let Some(resp) = resolve_local_wire(data, &question, ctx)? {
         ctx.stats.inc_auth();
         ctx.stats.inc_cache_hit();
-        return Ok(Some(response));
+        return Ok(Some(resp));
     }
 
     ctx.stats.inc_cache_miss();
 
-    // Phase 3: Upstream or Refused — The single point for this decision
-    match (ctx.cfg.upstream, &ctx.upstream_mgr) {
-        (Some(upstream), Some(mgr)) => {
-            ctx.stats.inc_recursive();
-            forward_to_upstream(data, upstream, mgr).await.map(Some)
-        }
-        _ => Ok(Some(WireResponseWriter::write_error_response(
+    // PHASE 3: Recursive Forwarding
+    if let (Some(upstream), Some(mgr)) = (ctx.cfg.upstream, &ctx.upstream_mgr) {
+        ctx.stats.inc_recursive();
+        forward_to_upstream(data, upstream, mgr).await.map(Some)
+    } else {
+        let edns = crate::wire::WireOptScanner::scan(data, &header, &question);
+        let ra = ctx.cfg.upstream.is_some();
+        Ok(Some(WireResponseWriter::write_error_response(
             data,
             &question,
-            3, // NXDOMAIN (Changed from 5 REFUSED for authoritative conditional forwarding)
+            3,
             edns.as_ref(),
             ra,
-        ))),
+        )))
     }
+}
 
-    // Phase 3: Zero-Copy Upstream Forwarding
+/// Helper function for local resolution using wire-parsed data.
+fn resolve_local_wire(
+    data: &[u8],
+    question: &crate::wire::WireQuestion<'_>,
+    ctx: &DnsContext,
+) -> Result<Option<Vec<u8>>, DnsError> {
+    use crate::wire::qtypes::QType;
+    let raw_qtype = question.qtype();
+    let qtype = QType::from(raw_qtype);
+
+    match qtype {
+        QType::A | QType::AAAA | QType::Any => {
+            let mut labels = question.labels();
+            if let Some(hostname_slice) =
+                extract_local_hostname_wire(&mut labels, &ctx.cfg.multi_search_labels)
+            {
+                let safe_hostname = fast_lowercase(hostname_slice);
+                let query = Message::from_bytes(data)?;
+                let resp = {
+                    let t = ctx.table.read();
+                    LocalResolver::new(&ctx.cfg, &t).resolve_ip(
+                        &query,
+                        &safe_hostname,
+                        RecordType::from(raw_qtype),
+                    )?
+                };
+                return Ok(Some(resp));
+            }
+        }
+        QType::PTR => {
+            if let Some(target_ip) = parse_arpa_wire(question.labels()) {
+                let exists = ctx.table.read().get_by_ip(&target_ip).is_some();
+                if exists {
+                    let query = Message::from_bytes(data)?;
+                    let resp = {
+                        let t = ctx.table.read();
+                        LocalResolver::new(&ctx.cfg, &t)
+                            .resolve_ptr(&query, query.queries()[0].name())
+                    }?;
+                    return Ok(resp);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(None)
 }
 
 /// Fallback logic for queries that are too complex for the zero-alloc wire parser.
@@ -320,25 +313,30 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
         return Ok(None);
     };
     let rb = crate::response::ResponseBuilder::new(&query, &ctx.cfg);
-    let Some(question) = query.queries().first() else {
-        return Ok(Some(rb.formerr()?));
-    };
+    let question = query
+        .queries()
+        .first()
+        .ok_or(crate::error::DnsError::WireParseError)?;
     let qname = question.name();
     let qtype = question.query_type();
 
     if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
         if let Some(hostname_slice) = extract_local_hostname(qname, &ctx.cfg.multi_search_labels) {
             let safe_hostname = fast_lowercase(hostname_slice);
-            let t = ctx.table.read();
-            let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &t);
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();
-            return Ok(Some(resolver.resolve_ip(&query, &safe_hostname, qtype)?));
+            let resp = {
+                let t = ctx.table.read();
+                LocalResolver::new(&ctx.cfg, &t).resolve_ip(&query, &safe_hostname, qtype)?
+            };
+            return Ok(Some(resp));
         }
     } else if qtype == RecordType::PTR {
-        let t = ctx.table.read();
-        let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &t);
-        if let Some(response) = resolver.resolve_ptr(&query, qname)? {
+        let resp = {
+            let t = ctx.table.read();
+            LocalResolver::new(&ctx.cfg, &t).resolve_ptr(&query, qname)?
+        };
+        if let Some(response) = resp {
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();
             return Ok(Some(response));

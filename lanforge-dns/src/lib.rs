@@ -3,6 +3,8 @@
 //! Features a custom zero-allocation wire parser for internal routing and
 //! local resolution (A/AAAA/PTR), with a full-featured fallback to Hickory-DNS
 //! for complex queries. Forwards all non-local requests to an upstream resolver.
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
 pub mod cache;
 pub mod config;

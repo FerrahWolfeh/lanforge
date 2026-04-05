@@ -1,4 +1,4 @@
-/// Common DNS Query Types (QType) used for optimized hot-path routing.
+/// Common DNS Query Types (`QType`) used for optimized hot-path routing.
 ///
 /// This enum is non-exhaustive, falling back to `Other(u16)` for any
 /// types not explicitly handled in the fast path.
@@ -23,7 +23,7 @@ pub enum QType {
 }
 
 impl From<u16> for QType {
-    #[inline(always)]
+    #[inline]
     fn from(v: u16) -> Self {
         match v {
             1 => Self::A,

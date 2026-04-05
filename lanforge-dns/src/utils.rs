@@ -6,6 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use crate::wire::WireLabelIter;
 
 /// Optimized ARPA parser that operates directly on Name labels, avoiding allocations.
+#[must_use]
 pub fn parse_arpa(name: &Name) -> Option<IpAddr> {
     let labels = name.iter().rev();
 
@@ -14,7 +15,7 @@ pub fn parse_arpa(name: &Name) -> Option<IpAddr> {
 
 /// Parses a decimal octet directly from bytes without UTF-8 validation.
 /// Rejects empty strings, labels > 3 chars, non-digits, and values > 255.
-#[inline(always)]
+#[inline]
 fn parse_octet(label: &[u8]) -> Option<u8> {
     if label.is_empty() || label.len() > 3 {
         return None;
@@ -24,13 +25,17 @@ fn parse_octet(label: &[u8]) -> Option<u8> {
         if !b.is_ascii_digit() {
             return None;
         }
-        val = val * 10 + (b - b'0') as u16;
+        val = val * 10 + u16::from(b - b'0');
     }
-    if val > 255 { None } else { Some(val as u8) }
+    if val > 255 {
+        None
+    } else {
+        Some(u8::try_from(val).unwrap_or(u8::MAX))
+    }
 }
 
 /// Parses a single hex nibble (0-9, a-f, A-F) from a 1-byte label.
-#[inline(always)]
+#[inline]
 fn parse_nibble(label: &[u8]) -> Option<u8> {
     match label {
         [b] => match b {
@@ -65,7 +70,7 @@ fn byte_parse_arpa<'a>(mut labels: impl Iterator<Item = &'a [u8]>) -> Option<IpA
         let mut segments = [0u16; 8];
         for i in 0..32_usize {
             let nibble = parse_nibble(labels.next()?)?;
-            segments[i / 4] |= (nibble as u16) << (12 - (i % 4) * 4);
+            segments[i / 4] |= u16::from(nibble) << (12 - (i % 4) * 4);
         }
         return Some(IpAddr::V6(Ipv6Addr::from(segments)));
     }
@@ -73,6 +78,7 @@ fn byte_parse_arpa<'a>(mut labels: impl Iterator<Item = &'a [u8]>) -> Option<IpA
     None
 }
 
+#[must_use]
 pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &Ipv6AddrOrSuffix) -> Option<Ipv6Addr> {
     match suffix {
         Ipv6AddrOrSuffix::Full(ip) => Some(*ip),
@@ -106,7 +112,7 @@ pub fn extract_local_hostname_wire<'a>(
         Some(first_actual) => {
             // Case 2: "node-1.lan" (domain query)
             for search_labels in multi_search_labels {
-                let mut current_labels = *labels;
+                let mut current_labels = labels.clone();
                 let mut matched = true;
 
                 // Match against this specific domain's labels
@@ -135,6 +141,7 @@ pub fn extract_local_hostname_wire<'a>(
 }
 
 /// Parses an ARPA request directly from a wire label iterator.
+#[must_use]
 pub fn parse_arpa_wire(labels: WireLabelIter<'_>) -> Option<IpAddr> {
     // IPv6: 32 nibbles + "ip6" + "arpa" = 34 labels max
     let mut parts: [&[u8]; 34] = [b""; 34];
@@ -153,6 +160,7 @@ pub fn parse_arpa_wire(labels: WireLabelIter<'_>) -> Option<IpAddr> {
 
 /// Extracts the local hostname directly from a Hickory-DNS Name object.
 /// Allocation cost: 0 bytes.
+#[must_use]
 pub fn extract_local_hostname<'a>(
     qname: &'a Name,
     multi_search_labels: &[Vec<Vec<u8>>],
@@ -211,6 +219,7 @@ pub fn extract_local_hostname<'a>(
 ///
 /// In 99% of LAN queries, no allocation is performed (returns `Borrowed`).
 /// Only allocates on the heap (`Owned`) if the input contains uppercase ASCII characters.
+#[must_use]
 pub fn fast_lowercase(s: &str) -> Cow<'_, str> {
     if s.bytes().any(|b| b.is_ascii_uppercase()) {
         Cow::Owned(s.to_ascii_lowercase())

@@ -12,7 +12,8 @@ pub struct WireHeader<'a> {
 
 impl<'a> WireHeader<'a> {
     /// Parses the header from the start of the message.
-    pub fn parse(data: &'a [u8]) -> Option<Self> {
+    #[must_use]
+    pub const fn parse(data: &'a [u8]) -> Option<Self> {
         if data.len() < 12 {
             return None;
         }
@@ -20,28 +21,33 @@ impl<'a> WireHeader<'a> {
     }
 
     #[inline]
+    #[must_use]
     #[allow(dead_code)]
     pub fn id(&self) -> u16 {
         u16::from_be_bytes([self.data[0], self.data[1]])
     }
 
     #[inline]
+    #[must_use]
     pub fn is_query(&self) -> bool {
         (self.data[2] & 0x80) == 0
     }
 
     #[inline]
+    #[must_use]
     #[allow(dead_code)]
     pub fn rd(&self) -> bool {
         (self.data[2] & 0x01) != 0
     }
 
     #[inline]
+    #[must_use]
     pub fn qdcount(&self) -> u16 {
         u16::from_be_bytes([self.data[4], self.data[5]])
     }
 
     #[inline]
+    #[must_use]
     pub fn arcount(&self) -> u16 {
         u16::from_be_bytes([self.data[10], self.data[11]])
     }
@@ -60,6 +66,7 @@ pub struct WireQuestion<'a> {
 
 impl<'a> WireQuestion<'a> {
     /// Attempts to parse the first question in the message.
+    #[must_use]
     pub fn parse(data: &'a [u8]) -> Option<Self> {
         if data.len() < 12 {
             return None;
@@ -98,7 +105,8 @@ impl<'a> WireQuestion<'a> {
     }
 
     #[inline]
-    pub fn qtype(&self) -> u16 {
+    #[must_use]
+    pub const fn qtype(&self) -> u16 {
         self.qtype
     }
 
@@ -115,6 +123,7 @@ impl<'a> WireQuestion<'a> {
     /// let labels: Vec<&[u8]> = q.labels().collect();
     /// assert_eq!(labels, vec![b"host".as_ref(), b"lan".as_ref()]);
     /// ```
+    #[must_use]
     pub fn labels(&self) -> WireLabelIter<'a> {
         WireLabelIter {
             data: &self.data[12..self.qname_end],
@@ -123,7 +132,7 @@ impl<'a> WireQuestion<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct WireLabelIter<'a> {
     data: &'a [u8],
     pos: usize,
@@ -159,6 +168,7 @@ pub struct WireOptScanner {
 impl WireOptScanner {
     /// Attempts to locate an OPT record (EDNS) without the cost of a full parse.
     /// Optimized for the common case: 1 question and 0 other records.
+    #[must_use]
     pub fn scan(data: &[u8], header: &WireHeader, question: &WireQuestion) -> Option<Self> {
         if header.arcount() == 1 && header.qdcount() == 1 {
             let pos = question.data.len();
@@ -179,6 +189,7 @@ pub struct WireResponseWriter;
 
 impl WireResponseWriter {
     /// Constructs a minimal error response (REFUSED, FORMERR, etc) without a full parse.
+    #[must_use]
     pub fn write_error_response(
         query_data: &[u8],
         question: &WireQuestion,

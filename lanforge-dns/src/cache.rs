@@ -59,6 +59,7 @@ pub struct DnsCache {
 }
 
 impl DnsCache {
+    #[must_use]
     pub fn new(capacity: u64) -> Self {
         Self {
             cache: Cache::builder()
@@ -69,6 +70,7 @@ impl DnsCache {
     }
 
     // 3. get() passa a ser síncrono, removendo o overhead do .await
+    #[must_use]
     pub fn get(&self, query: &Message) -> Option<Vec<u8>> {
         let question = query.queries().first()?;
         let key = CacheKey {
@@ -79,7 +81,7 @@ impl DnsCache {
 
         // O clone aqui é inevitável pois precisamos mutar o ID,
         // mas clonar um Vec de 100 bytes é infinitamente mais rápido que fazer parsing.
-        let mut owned_data = self.cache.get(&key)?.data.clone();
+        let mut owned_data = self.cache.get(&key)?.data;
 
         if owned_data.len() >= 2 {
             let id_bytes = query.id().to_be_bytes();
@@ -92,9 +94,8 @@ impl DnsCache {
 
     // 4. O TTL é extraído FORA do cache, e passado pronto
     pub fn insert(&self, query: &Message, response_msg: &Message, response_data: Vec<u8>) {
-        let question = match query.queries().first() {
-            Some(q) => q,
-            None => return,
+        let Some(question) = query.queries().first() else {
+            return;
         };
 
         let mut min_ttl = 3600;
@@ -132,7 +133,7 @@ impl DnsCache {
 
         let cached_response = CachedResponse {
             data: response_data,
-            ttl: Duration::from_secs(min_ttl.clamp(5, 3600) as u64),
+            ttl: Duration::from_secs(u64::from(min_ttl.clamp(5, 3600))),
         };
 
         self.cache.insert(key, cached_response);

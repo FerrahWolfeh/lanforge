@@ -56,7 +56,7 @@ pub fn resolve_local(
 ) -> Result<Option<Vec<u8>>, DnsError> {
     let table = DeviceTable::new(); // Dummy
     let resolver = LocalResolver::new(cfg, &table);
-    if let Some(records) = resolver.resolve_local_with_device(query, device, qtype) {
+    if let Some(records) = resolver.resolve_local(query, device, qtype) {
         Ok(Some(ResponseBuilder::new(query, cfg).success(records)?))
     } else {
         Ok(Some(ResponseBuilder::new(query, cfg).empty_noerror()?))
@@ -239,7 +239,7 @@ fn test_local_resolver_direct_api() {
 fn test_dhcp_registration_creates_dns_record() {
     let cfg = mock_config();
     let bus = Arc::new(EventBus::new());
-    let table = Arc::new(ManagedTable::new(bus.clone(), None));
+    let table = Arc::new(ManagedTable::new(bus, None));
     let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
     let ip = Ipv4Addr::new(192, 168, 1, 50);
 
@@ -256,17 +256,16 @@ fn test_dhcp_registration_creates_dns_record() {
         hostname: "my-device".to_string(),
     });
 
-    // 3. Verify DNS resolution via LocalResolver
-    let t_read = table.read();
-    let resolver = LocalResolver::new(&cfg, &t_read);
-
     let mut query = Message::new();
     let name = Name::from_str("my-device.lan.").unwrap();
-    query.add_query(Query::query(name.clone(), RecordType::A));
+    query.add_query(Query::query(name, RecordType::A));
 
-    let resp_bytes = resolver
-        .resolve_ip(&query, "my-device", RecordType::A)
-        .unwrap();
+    let resp_bytes = {
+        let t = table.read();
+        LocalResolver::new(&cfg, &t)
+            .resolve_ip(&query, "my-device", RecordType::A)
+            .unwrap()
+    };
     let resp = Message::from_bytes(&resp_bytes).unwrap();
 
     assert_eq!(resp.response_code(), ResponseCode::NoError);

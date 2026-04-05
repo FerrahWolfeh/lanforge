@@ -103,8 +103,7 @@ impl UpstreamManager {
             }
             Ok(Err(_)) => return Err(DnsError::ChannelClosed),
             Err(_) => {
-                let mut map = self.pending.lock().unwrap();
-                map.remove(&internal_id);
+                self.pending.lock().unwrap().remove(&internal_id);
                 return Err(DnsError::UpstreamTimeout);
             }
         };
@@ -139,7 +138,7 @@ impl UpstreamManager {
 
         timeout(Duration::from_secs(5), async {
             // RFC 1035: In TCP, DNS data is prefixed by its 2-byte length (Big Endian).
-            let len = (data.len() as u16).to_be_bytes();
+            let len = u16::try_from(data.len()).unwrap_or(u16::MAX).to_be_bytes();
             stream.write_all(&len).await?;
             stream.write_all(data).await?;
 
