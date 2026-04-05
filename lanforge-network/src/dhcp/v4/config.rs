@@ -23,6 +23,8 @@ pub struct Dhcpv4Config {
     pub subnet_mask: Ipv4Addr,
     /// Domain name (optional).
     pub domain_name: Option<String>,
+    /// List of search domains (Option 119).
+    pub search_domains: Vec<String>,
     /// UDP port to listen on (default: 67).
     pub port: u16,
 }
@@ -39,6 +41,7 @@ impl Default for Dhcpv4Config {
             dns: vec![Ipv4Addr::new(192, 168, 0, 1)],
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             domain_name: None,
+            search_domains: Vec::new(),
             port: 67,
         }
     }

@@ -79,6 +79,7 @@ pub struct Config {
     // DNS
     pub dns_enabled: bool,
     pub dns_toml: DnsCfg,
+    pub search_domains: Vec<String>,
 
     // static devices
     pub devices: Vec<StaticDeviceCfg>,
@@ -98,6 +99,34 @@ impl Config {
 
         // toml::load_toml instead of local if we were explicit, but we imported `load_toml`
         let toml_cfg = load_toml(&cli.config);
+
+        let search_domains = {
+            let mut domains = Vec::new();
+            // 1. Unified search_domains from [general]
+            if let Some(ref d) = toml_cfg.general.search_domains {
+                for dom in d {
+                    if !domains.contains(dom) {
+                        domains.push(dom.clone());
+                    }
+                }
+            }
+            // 2. Legacy search_domain from [dns] (if not default "lan")
+            if toml_cfg.dns.search_domain != "lan" && !domains.contains(&toml_cfg.dns.search_domain)
+            {
+                domains.push(toml_cfg.dns.search_domain.clone());
+            }
+            // 3. Legacy domain_name from [dhcp.v4]
+            if let Some(ref d) = toml_cfg.dhcp.v4.domain_name
+                && !domains.contains(d)
+            {
+                domains.push(d.clone());
+            }
+            // 4. Default "lan" if completely empty
+            if domains.is_empty() {
+                domains.push(toml_cfg.dns.search_domain.clone());
+            }
+            domains
+        };
 
         Self {
             #[cfg(feature = "debug-commands")]
@@ -141,6 +170,7 @@ impl Config {
                 upstream: cli.dns_upstream.or(toml_cfg.dns.upstream),
                 ..toml_cfg.dns
             },
+            search_domains,
 
             devices: toml_cfg.devices,
             devices_file: cli.devices_file,
@@ -226,6 +256,10 @@ impl Config {
             mtu: self.ra_toml.mtu,
             prefixes,
             rdnss,
+            dnssl: vec![lanforge_network::ra::DnsslConfig {
+                domains: self.search_domains.clone(),
+                lifetime: None,
+            }],
             ..Default::default()
         }
     }
@@ -264,7 +298,8 @@ impl Config {
                 .map_or(Ipv4Addr::new(255, 255, 255, 0), |s| {
                     parse_ip(s, Ipv4Addr::new(255, 255, 255, 0))
                 }),
-            domain_name: self.dhcpv4_toml.domain_name.clone(),
+            domain_name: self.search_domains.first().cloned(),
+            search_domains: self.search_domains.clone(),
             port: self.dhcpv4_port,
         }
     }
@@ -342,6 +377,20 @@ impl Config {
             ula_prefix_len,
             port: self.dhcpv6_port,
             pools,
+            dns_servers: self
+                .dns_toml
+                .upstream
+                .as_deref()
+                .and_then(|s| s.parse::<SocketAddr>().ok())
+                .map(|sa| match sa {
+                    SocketAddr::V6(v6) => vec![*v6.ip()],
+                    _ => vec![],
+                })
+                .unwrap_or_else(|| {
+                    // If no upstream, we might want to suggest ourselves if we have a ULA
+                    ula_prefix.map(|ip| vec![ip]).unwrap_or_default()
+                }),
+            search_domains: self.search_domains.clone(),
         }
     }
 

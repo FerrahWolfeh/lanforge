@@ -27,6 +27,10 @@ pub struct Dhcpv6Config {
     pub port: u16,
     /// Multiple pools for address assignment (new).
     pub pools: Vec<Dhcpv6PoolConfig>,
+    /// DNS servers to announce (Option 23).
+    pub dns_servers: Vec<Ipv6Addr>,
+    /// Search domains to announce (Option 24).
+    pub search_domains: Vec<String>,
 }
 
 impl Default for Dhcpv6Config {
@@ -39,6 +43,8 @@ impl Default for Dhcpv6Config {
             ula_prefix_len: 64,
             port: 547,
             pools: Vec::new(),
+            dns_servers: Vec::new(),
+            search_domains: Vec::new(),
         }
     }
 }

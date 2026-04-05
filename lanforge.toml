@@ -13,6 +13,10 @@ leases_db = "/var/lib/lanforge/leases.db"
 # Useful to avoid multiple reconfigurations during rapid state changes.
 # debounce_secs = 2
 
+# Global search domains announced to clients (DHCPv4, DHCPv6, RA).
+# The first element is treated as the primary domain name for DHCPv4.
+# search_domains = ["lan", "home.arpa"]
+
 # Interval (in minutes) for the network fallback scan, ensuring consistency.
 # fallback_mins = 5
 
@@ -80,6 +84,7 @@ dns = ["192.168.254.1"]
 # subnet_mask = "255.255.255.0"
 
 # Local domain name advertised via DHCP (Option 15).
+# @deprecated use [general].search_domains instead.
 # domain_name = "lan"
 
 
@@ -120,6 +125,7 @@ upstream = "127.0.0.1:5335"
 
 # Local domain suffix for internal hostname resolution.
 # Host "archie" will be resolved as "archie.lan".
+# @deprecated use [general].search_domains instead.
 search_domain = "lan"
 
 # TTL (Time To Live) in seconds for local DNS responses.

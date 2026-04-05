@@ -18,11 +18,12 @@ use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,
     Status, StatusCode,
 };
-use dhcproto::{Encodable, Encoder};
+use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::utils::mac_from_eui64_link_local;
 use std::net::Ipv6Addr;
+use std::str::FromStr;
 use tracing::{debug, info, warn};
 
 use super::config::Dhcpv6Config;
@@ -320,7 +321,7 @@ impl Dhcpv6Server {
             }
         }
 
-        Self::add_dns_options(&mut reply);
+        self.add_dns_options(&mut reply);
         let mut ias = AssignedIAs::default();
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             ias.na.push(iana.id);
@@ -431,7 +432,7 @@ impl Dhcpv6Server {
             }));
         }
 
-        Self::add_dns_options(&mut reply);
+        self.add_dns_options(&mut reply);
         let mut ias = AssignedIAs::default();
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             ias.na.push(iana.id);
@@ -615,7 +616,7 @@ impl Dhcpv6Server {
         buf: &'a mut Vec<u8>,
     ) -> HandleResult<'a> {
         let mut reply = self.base_reply(msg, MessageType::Reply, client_duid);
-        Self::add_dns_options(&mut reply);
+        self.add_dns_options(&mut reply);
         HandleResult::Reply(
             encode_msg(&reply, buf),
             peer,
@@ -723,8 +724,21 @@ impl Dhcpv6Server {
         )
     }
 
-    const fn add_dns_options(_reply: &mut Message) {
-        // Typically handled via RDNSS in RA. If config provides DNS, add it here.
+    fn add_dns_options(&self, reply: &mut Message) {
+        if !self.cfg.dns_servers.is_empty() {
+            reply
+                .opts_mut()
+                .insert(DhcpOption::DomainNameServers(self.cfg.dns_servers.clone()));
+        }
+        if !self.cfg.search_domains.is_empty() {
+            let names: Vec<Name> = self
+                .cfg
+                .search_domains
+                .iter()
+                .filter_map(|d| Name::from_str(d).ok())
+                .collect();
+            reply.opts_mut().insert(DhcpOption::DomainSearchList(names));
+        }
     }
 
     pub fn last_assignment_for(&self, duid: &[u8], iaid: u32) -> Vec<Ipv6Addr> {
@@ -807,6 +821,8 @@ mod tests {
                 range_end: Some(Ipv6AddrOrSuffix::Full(end)),
                 address: None,
             }],
+            dns_servers: Vec::new(),
+            search_domains: Vec::new(),
         };
         let pool = Ipv6Pool::new(cfg.pools.clone(), cfg.ula_prefix, 64);
         let server_duid = Duid::new(vec![
@@ -860,6 +876,8 @@ mod tests {
             ula_prefix_len: 64,
             port: 547,
             pools: Vec::new(),
+            dns_servers: Vec::new(),
+            search_domains: Vec::new(),
         };
         let pool = Ipv6Pool::new(Vec::new(), None, 64);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
@@ -1103,6 +1121,8 @@ mod tests {
             ula_prefix_len: 48,
             port: 547,
             pools: Vec::new(),
+            dns_servers: Vec::new(),
+            search_domains: Vec::new(),
         };
         let pool = Ipv6Pool::new(Vec::new(), Some(ula), 48);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();

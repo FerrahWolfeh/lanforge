@@ -15,10 +15,11 @@
 //! | Inform      | Provide options (no IP)   | Ack      |
 
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode};
-use dhcproto::{Decodable, Decoder, Encodable, Encoder};
+use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::DeviceTable;
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
@@ -306,6 +307,17 @@ impl DhcpServer {
                 opts.insert(DhcpOption::DomainName(domain.clone()));
             }
 
+            if !self.cfg.search_domains.is_empty() {
+                // Option 119: Domain Search List (RFC 3397)
+                let names: Vec<Name> = self
+                    .cfg
+                    .search_domains
+                    .iter()
+                    .filter_map(|d| Name::from_str(d).ok())
+                    .collect();
+                opts.insert(DhcpOption::DomainSearch(names));
+            }
+
             // T1 = 50% of lease time, T2 = 87.5%
             opts.insert(DhcpOption::Renewal(self.cfg.lease_time / 2));
             opts.insert(DhcpOption::Rebinding(self.cfg.lease_time * 7 / 8));
@@ -403,6 +415,7 @@ mod tests {
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             server_id: Ipv4Addr::new(192, 168, 1, 1),
             domain_name: Some("lanforge.local".to_string()),
+            search_domains: vec!["lanforge.local".to_string()],
             port: 67,
         }
     }

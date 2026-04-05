@@ -32,6 +32,7 @@ pub struct DhcpV4Cfg {
     pub router: String,
     pub dns: Vec<String>,
     pub subnet_mask: Option<String>,
+    /// @deprecated use [general].search_domains instead. will be removed in the future.
     pub domain_name: Option<String>,
 }
 
@@ -98,6 +99,8 @@ pub struct GeneralCfg {
     pub control_socket: String,
     /// Endereço de escuta para a API REST HTTP (ex: "0.0.0.0:8080").
     pub http_listen: Option<String>,
+    /// Lista global de domínios de busca.
+    pub search_domains: Option<Vec<String>>,
 }
 
 impl Default for GeneralCfg {
@@ -110,6 +113,7 @@ impl Default for GeneralCfg {
             fallback_mins: 5,
             control_socket: "/run/lanforge/control.sock".into(),
             http_listen: None,
+            search_domains: None,
         }
     }
 }
@@ -164,7 +168,7 @@ pub struct DnsCfg {
     pub listen: String,
     /// Resolver upstream para queries não-LAN, normalmente o Unbound (ex: "127.0.0.1:5335")
     pub upstream: Option<String>,
-    /// Sufixo de domínio local — "lan" faz "archie.lan" resolver para o device "archie"
+    /// @deprecated use [general].search_domains instead. will be removed in the future.
     pub search_domain: String,
     /// TTL das respostas LAN em segundos
     pub ttl: u32,
