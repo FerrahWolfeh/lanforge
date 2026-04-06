@@ -23,15 +23,18 @@ pub struct IpPool {
 }
 
 impl IpPool {
+    #[must_use]
     pub fn new(start: Ipv4Addr, end: Ipv4Addr) -> Self {
         let s = u32::from(start);
         let e = u32::from(end);
-        let size = (u64::from(e) - u64::from(s) + 1) as usize;
+        let raw_size = u64::from(e) - u64::from(s) + 1;
+        let size = usize::try_from(raw_size).expect("Pool size exceeds usize capacity");
 
         let mut available_ips = Vec::with_capacity(size);
 
         for i in 0..size {
-            let ip = Ipv4Addr::from(s + i as u32);
+            let offset = u32::try_from(i).expect("Index exceeds u32 capacity");
+            let ip = Ipv4Addr::from(s + offset);
             available_ips.push(ip);
         }
 
@@ -113,12 +116,10 @@ impl IpPool {
             && self.is_available_in_pool(req)
         {
             if table.get_mac_by_ip(std::net::IpAddr::V4(req)).is_none() {
-                self.remove_from_available(req);
                 return Some(req);
-            } else {
-                // Not actually free according to single source of truth, sync
-                self.remove_from_available(req);
             }
+            // Not actually free according to single source of truth, sync
+            self.remove_from_available(req);
         }
 
         // 3. Fallback: Pick from available pool (O(1))
@@ -211,6 +212,7 @@ impl IpPool {
     }
 
     /// Check if an IP is within the dynamic range.
+    #[must_use]
     pub fn is_in_range(&self, ip: Ipv4Addr) -> bool {
         let raw = u32::from(ip);
         raw >= self.start && raw <= self.end

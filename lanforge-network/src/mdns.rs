@@ -1,4 +1,5 @@
 use lanforge_core::context::LanforgeContext;
+use std::fmt::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
@@ -6,7 +7,7 @@ use tracing::{debug, error, warn};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RData, RecordType};
 use lanforge_core::bus::ManagedTable;
-use lanforge_core::bus::{EventBus, LanforgeEvent, TimedEvent};
+use lanforge_core::bus::{EventBus, LanforgeEvent};
 use lanforge_core::state::update::DeviceUpdate;
 
 use crate::error::{NetworkError, Result};
@@ -65,6 +66,7 @@ impl Default for MdnsProber {
 }
 
 impl MdnsProber {
+    #[must_use]
     pub fn new() -> Self {
         let (tx, _) = mpsc::channel(32);
         Self { tx }
@@ -110,10 +112,7 @@ async fn run_mdns_worker(
                 }
                 Err(ref e)
                     if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    continue;
-                }
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => {
                     warn!("mDNS v4 listen error: {e}");
                     break;
@@ -140,10 +139,7 @@ async fn run_mdns_worker(
                 }
                 Err(ref e)
                     if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    continue;
-                }
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => {
                     warn!("mDNS v6 listen error: {e}");
                     break;
@@ -162,41 +158,50 @@ async fn run_mdns_worker(
 
         tokio::select! {
             event = bus_rx.recv() => {
-                match event {
-                    Ok(TimedEvent { event: LanforgeEvent::ScanRequested, .. }) => {
-                        let _ = tx.send(MdnsCommand::ProbeAll).await;
-                    }
-                    Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) => break,
-                    _ => {}
+                if let Ok(timed_event) = event {
+                    handle_lanforge_event(&timed_event.event, &tx);
                 }
             }
             cmd = rx.recv() => {
-                match cmd {
-                    Some(MdnsCommand::ProbeAll) => {
-                        let _ = broadcast_query(&socket_v4, &socket_v6);
-                    }
-                    Some(MdnsCommand::ProbeIp(ip)) => {
-                        let _ = send_unicast_query(&socket_v4, &socket_v6, ip);
-                    }
-                    None => break,
+                if let Some(c) = cmd {
+                    handle_command(&c, &socket_v4, &socket_v6);
+                } else {
+                    break;
                 }
             }
             resp = resp_rx.recv() => {
-                if let Some((data, addr)) = resp {
-                    let bus = bus.clone();
-                    let table = table.clone();
+                if let Some((data_vec, addr)) = resp {
+                    let bus_clone = bus.clone();
+                    let table_clone = table.clone();
                     tokio::spawn(async move {
-                        handle_mdns_packet(&bus, &table, &data, addr).await;
+                        handle_mdns_packet(&bus_clone, &table_clone, &data_vec, addr);
                     });
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+            () = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
                 // Periodic flag check if idle
             }
         }
     }
 
     Ok(())
+}
+
+fn handle_command(cmd: &MdnsCommand, socket_v4: &UdpSocket, socket_v6: &UdpSocket) {
+    match cmd {
+        MdnsCommand::ProbeAll => {
+            let _ = broadcast_query(socket_v4, socket_v6);
+        }
+        MdnsCommand::ProbeIp(ip) => {
+            let _ = send_unicast_query(socket_v4, socket_v6, *ip);
+        }
+    }
+}
+
+fn handle_lanforge_event(event: &LanforgeEvent, tx: &mpsc::Sender<MdnsCommand>) {
+    if matches!(event, LanforgeEvent::ScanRequested) {
+        let _ = tx.blocking_send(MdnsCommand::ProbeAll);
+    }
 }
 
 fn setup_multicast_socket_v4() -> Result<UdpSocket> {
@@ -305,7 +310,7 @@ fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) -> R
         IpAddr::V6(v6) => {
             let mut name_str = String::new();
             for seg in v6.octets().iter().rev() {
-                name_str.push_str(&format!("{:x}.{:x}.", seg & 0xf, seg >> 4));
+                let _ = write!(name_str, "{:x}.{:x}.", seg & 0xf, seg >> 4);
             }
             name_str.push_str("ip6.arpa.");
             Name::from_ascii(name_str).map_err(|e| NetworkError::Mdns(e.to_string()))?
@@ -332,7 +337,7 @@ fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) -> R
     Ok(())
 }
 
-async fn handle_mdns_packet(_bus: &EventBus, table: &ManagedTable, data: &[u8], from: SocketAddr) {
+fn handle_mdns_packet(_bus: &EventBus, table: &ManagedTable, data: &[u8], from: SocketAddr) {
     let Ok(msg) = Message::from_vec(data) else {
         return;
     };

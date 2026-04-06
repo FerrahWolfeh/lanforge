@@ -43,6 +43,7 @@ pub enum RouterPriority {
 
 impl RouterPriority {
     /// Priority bits in the RA flags byte (bits 3–4).
+    #[must_use]
     pub const fn bits(self) -> u8 {
         match self {
             Self::Low => 0b0001_1000,
@@ -60,6 +61,7 @@ pub enum PrefixLifetime {
 }
 
 impl PrefixLifetime {
+    #[must_use]
     pub const fn as_u32(self) -> u32 {
         match self {
             Self::Secs(s) => s,
@@ -97,6 +99,7 @@ pub struct PrefixConfig {
 
 impl PrefixConfig {
     /// ULA prefix with recommended defaults (valid=24h, preferred=4h).
+    #[must_use]
     pub fn ula(prefix: &str) -> Self {
         Self {
             source: PrefixSource::Static(prefix.parse().expect("Invalid ULA address")),
@@ -110,6 +113,7 @@ impl PrefixConfig {
     }
 
     /// GUA prefix detected dynamically from the interface.
+    #[must_use]
     pub const fn gua_dynamic() -> Self {
         Self {
             source: PrefixSource::AutoGua,
@@ -124,7 +128,7 @@ impl PrefixConfig {
 }
 
 /// DNS Servers via RDNSS (RFC 8106 §3.1, option type 25).
-/// Essential for clients that ignore `DHCPv6` (e.g., Android, many IoT devices).
+/// Essential for clients that ignore `DHCPv6` (e.g., Android, many `IoT` devices).
 #[derive(Debug, Clone)]
 pub struct RdnssConfig {
     pub servers: Vec<std::net::Ipv6Addr>,
@@ -134,12 +138,15 @@ pub struct RdnssConfig {
 }
 
 impl RdnssConfig {
+    #[must_use]
     pub const fn new(servers: Vec<std::net::Ipv6Addr>) -> Self {
         Self {
             servers,
             lifetime: None,
         }
     }
+
+    #[must_use]
     pub const fn with_lifetime(servers: Vec<std::net::Ipv6Addr>, secs: u32) -> Self {
         Self {
             servers,
@@ -216,14 +223,18 @@ impl Default for RaConfig {
 
 impl RaConfig {
     /// Calculates effective `MinRtrAdvInterval` respecting the limits of RFC 4861 §6.2.1.
+    #[must_use]
     pub fn effective_min_interval(&self) -> Duration {
         self.min_interval.unwrap_or_else(|| {
-            let secs = (self.max_interval.as_secs_f64() * DEFAULT_MIN_MAX_RATIO).max(3.0) as u64;
+            let float_secs = self.max_interval.as_secs_f64() * DEFAULT_MIN_MAX_RATIO;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let secs = float_secs.max(3.0).floor() as u64;
             Duration::from_secs(secs)
         })
     }
 
     /// Calculates effective `RouterLifetime`.
+    #[must_use]
     pub fn effective_router_lifetime(&self) -> Duration {
         self.router_lifetime.unwrap_or_else(|| {
             Duration::from_secs(self.max_interval.as_secs() * DEFAULT_ROUTER_LIFETIME_MULTIPLIER)
@@ -241,6 +252,11 @@ impl RaConfig {
     /// cfg.max_interval = Duration::from_secs(3); // Too low (RFC minimum is 4s)
     /// assert!(cfg.validate().is_err());
     /// ```
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     pub fn validate(&self) -> Result<()> {
         let max = self.max_interval.as_secs();
         if !(4..=1800).contains(&max) {
@@ -255,7 +271,10 @@ impl RaConfig {
                 "min_interval={min}s < 3s minimum (RFC 4861 §6.2.1)"
             )));
         }
-        if min > (max as f64 * 0.75) as u64 {
+
+        let max_float = max as f64;
+        let limit = (max_float * 0.75).floor() as u64;
+        if min > limit {
             return Err(NetworkError::Config(format!(
                 "min_interval={min}s > 0.75 * max_interval={max}s (RFC 4861 §6.2.1)"
             )));

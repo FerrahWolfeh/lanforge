@@ -36,7 +36,11 @@ pub struct InterfaceMonitor {
 
 impl InterfaceMonitor {
     #[must_use]
-    pub fn new(handle: Handle, messages: Arc<Mutex<NetlinkStream>>, target_ifindex: u32) -> Self {
+    pub const fn new(
+        handle: Handle,
+        messages: Arc<Mutex<NetlinkStream>>,
+        target_ifindex: u32,
+    ) -> Self {
         Self {
             handle,
             messages,
@@ -138,19 +142,19 @@ impl AsyncService for InterfaceMonitor {
     async fn run(&mut self) -> std::result::Result<(), CoreError> {
         let mut bus_rx = LanforgeContext::bus().subscribe();
 
-        let mut rx = self.messages.lock().await;
-
         loop {
             if !LanforgeContext::is_running() {
                 break;
             }
 
+            let mut rx = self.messages.lock().await;
             tokio::select! {
                 res = rx.next() => {
+                    drop(rx);
                     let Some((msg, _addr)) = res else { break };
 
-                    if let NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewAddress(addr))
-                    | NetlinkPayload::InnerMessage(RouteNetlinkMessage::DelAddress(addr)) = &msg.payload
+                    if let NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewAddress(addr) |
+                    RouteNetlinkMessage::DelAddress(addr)) = &msg.payload
                         && addr.header.index == self.target_ifindex {
                             debug!("InterfaceMonitor: Address event on ifindex {}, refreshing...", addr.header.index);
                             if let Err(e) = self.refresh_interface(addr.header.index).await {
@@ -160,6 +164,7 @@ impl AsyncService for InterfaceMonitor {
                 }
 
                 Ok(event) = bus_rx.recv() => {
+                    drop(rx);
                     if matches!(event.event, LanforgeEvent::Shutdown) {
                         break;
                     }

@@ -42,6 +42,7 @@ use tokio::sync::Mutex;
 
 /// Returns true if `msg` is a relevant NEW or DEL event for the target prefix.
 #[cfg(test)]
+#[must_use]
 pub fn is_relevant_neigh_event(
     msg: &NetlinkMessage<RouteNetlinkMessage>,
     target_prefix: &str,
@@ -81,6 +82,7 @@ fn neigh_matches_prefix(neigh: &NeighbourMessage, target_prefix: &str) -> bool {
 /// - The protocol is not IPv6/IPv4.
 /// - The state is incomplete or failed (MAC address unknown).
 /// - IP or MAC attributes are missing.
+#[must_use]
 pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<NeighborEvent> {
     let (neigh, is_delete) = match &msg.payload {
         NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(n)) => (n, false),
@@ -202,7 +204,7 @@ pub async fn get_ipv6_neighbors(
 
             let matches = match event.ip() {
                 IpAddr::V6(ip) => ip.to_string().starts_with(target_prefix),
-                _ => false,
+                IpAddr::V4(_) => false,
             };
             if matches {
                 neighbors.push(event);
@@ -217,7 +219,7 @@ pub async fn get_ipv6_neighbors(
 // NdpMonitor — The "Serviceable Struct" for Netlink
 // ---------------------------------------------------------------------------
 
-/// Monitor that reacts to Netlink neighbor events and keeps the ManagedTable updated.
+/// Monitor that reacts to Netlink neighbor events and keeps the `ManagedTable` updated.
 pub struct NdpMonitor {
     handle: Handle,
     messages: Arc<Mutex<NetlinkStream>>,
@@ -226,7 +228,11 @@ pub struct NdpMonitor {
 
 impl NdpMonitor {
     #[must_use]
-    pub fn new(handle: Handle, messages: Arc<Mutex<NetlinkStream>>, target_ifindex: u32) -> Self {
+    pub const fn new(
+        handle: Handle,
+        messages: Arc<Mutex<NetlinkStream>>,
+        target_ifindex: u32,
+    ) -> Self {
         Self {
             handle,
             messages,
@@ -265,20 +271,22 @@ impl AsyncService for NdpMonitor {
         let mut current_ula: Option<Ipv6Addr> = None;
 
         // 1. Initial Neighbor Scan (Bootstrap)
-        if let Err(e) =
-            bootstrap_table("", &self.handle, None, None, Some(self.target_ifindex)).await
         {
-            tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
+            if let Err(e) =
+                bootstrap_table("", &self.handle, None, None, Some(self.target_ifindex)).await
+            {
+                tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
+            }
         }
-
-        let mut rx = self.messages.lock().await;
 
         loop {
             if !LanforgeContext::is_running() {
                 break;
             }
+            let mut rx = self.messages.lock().await;
             tokio::select! {
                 res = rx.next() => {
+                    drop(rx);
                     let Some((msg, _addr)) = res else { break };
                     // A. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg)
@@ -290,13 +298,10 @@ impl AsyncService for NdpMonitor {
                 }
 
                 Ok(event) = bus_rx.recv() => {
-                    match event.event {
-                        LanforgeEvent::PrefixChanged { gua, ula, .. } => {
-                            current_gua = gua;
-                            current_ula = ula;
-                        }
-                        LanforgeEvent::Shutdown => break,
-                        _ => {}
+                    drop(rx);
+                    if let LanforgeEvent::PrefixChanged { gua, ula, .. } = event.event {
+                        current_gua = gua;
+                        current_ula = ula;
                     }
                 }
 

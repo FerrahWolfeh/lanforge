@@ -19,6 +19,9 @@ pub enum CoreError {
 
     #[error("Internal bus error: {0}")]
     BusError(String),
+
+    #[error("Shutdown requested")]
+    Shutdown,
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

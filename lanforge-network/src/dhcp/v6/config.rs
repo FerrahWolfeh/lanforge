@@ -2,7 +2,7 @@ use std::net::Ipv6Addr;
 
 use lanforge_core::device::Ipv6AddrOrSuffix;
 
-/// Configuration for a single DHCPv6 address pool.
+/// Configuration for a single `DHCPv6` address pool.
 #[derive(Clone, Debug)]
 pub struct Dhcpv6PoolConfig {
     pub range_start: Option<Ipv6AddrOrSuffix>,
@@ -13,7 +13,7 @@ pub struct Dhcpv6PoolConfig {
 /// `DHCPv6` server configuration — built from the `[dhcp.v6]` TOML section.
 #[derive(Clone, Debug)]
 pub struct Dhcpv6Config {
-    /// Whether the DHCPv6 service is enabled.
+    /// Whether the `DHCPv6` service is enabled.
     pub enabled: bool,
     /// Network interface to listen on.
     pub iface: String,

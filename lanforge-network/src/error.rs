@@ -36,8 +36,7 @@ pub enum NetworkError {
     #[error("Invalid or missing MAC address: {0}")]
     InvalidMac(String),
 
-    /// No IPv6 Link-Local address (fe80::) found on the interface.
-    /// No IPv6 Link-Local address (fe80::) found on the interface.
+    /// No IPv6 Link-Local address (`fe80::`) found on the interface.
     #[error("Missing link-local address on interface {0}")]
     NoLinkLocal(u32),
 

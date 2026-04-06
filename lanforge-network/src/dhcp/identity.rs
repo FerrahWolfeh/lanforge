@@ -14,6 +14,7 @@ pub struct DeviceIdentity {
 }
 
 impl DeviceIdentity {
+    #[must_use]
     pub const fn new(mac: MacAddr, hostname: Option<String>, vendor_class: Option<String>) -> Self {
         Self {
             mac,
@@ -23,6 +24,7 @@ impl DeviceIdentity {
     }
 
     /// Resolves the identity using packet-provided information and the device table.
+    #[must_use]
     pub fn resolve(
         mac: MacAddr,
         packet_hostname: Option<String>,

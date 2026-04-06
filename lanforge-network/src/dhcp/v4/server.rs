@@ -60,6 +60,7 @@ pub struct DhcpServer {
 }
 
 impl DhcpServer {
+    #[must_use]
     pub fn new(cfg: Dhcpv4Config) -> Self {
         let pool = IpPool::new(cfg.range_start, cfg.range_end);
         Self {
@@ -362,7 +363,7 @@ impl DhcpServer {
 
     /// Returns the MAC and assigned IP from the last successful allocation.
     /// Used by the service loop to publish events.
-    pub fn last_assignment_for(&mut self) -> Option<Ipv4Addr> {
+    pub const fn last_assignment_for(&mut self) -> Option<Ipv4Addr> {
         self.last_assigned_ip.take()
     }
 
@@ -371,6 +372,7 @@ impl DhcpServer {
     /// This follows the "best-effort" approach without RFC 3118 authentication,
     /// which is the standard behavior in environments where secrets aren't
     /// pre-provisioned to every device.
+    #[must_use]
     pub fn build_forcerenew(&self, mac: MacAddr, ip: Ipv4Addr) -> Vec<u8> {
         let mut msg = Message::default();
 

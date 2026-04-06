@@ -24,6 +24,7 @@ pub const ICMPV6_TYPE_RA: u8 = 134;
 // RA Packet Assembly (RFC 4861 §4.2)
 // ---------------------------------------------------------------------------
 
+#[must_use]
 pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Addr>) -> Vec<u8> {
     let mut p = Vec::with_capacity(256);
 
@@ -162,6 +163,7 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) 
 ///
 /// # Example
 /// `["home.arpa"]` → `b"\x04home\x04arpa\x00"`
+#[must_use]
 pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
     for domain in domains {
@@ -181,9 +183,10 @@ pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
 
 /// Calculates the `ICMPv6` checksum, including the IPv6 pseudo-header.
 ///
-/// Unlike ICMPv4, the checksum covers a pseudo-header that includes source/destination
+/// Unlike `ICMPv4`, the checksum covers a pseudo-header that includes source/destination
 /// IPv6 addresses, payload length, and next-header=58.
 /// Receivers detecting an incorrect checksum MUST discard the packet silently.
+#[must_use]
 pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
     let mut acc = 0u32;
 

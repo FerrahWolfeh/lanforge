@@ -72,11 +72,12 @@ pub struct Dhcpv6Server {
     pub server_duid: Duid,
     /// Learned lifetimes from the GUA prefix (preferred, valid).
     pub prefix_lifetimes: Option<(u32, u32)>,
-    /// Persistent socket for NDP pokes (saves socket() syscalls).
+    /// Persistent socket for NDP pokes (saves `socket()` syscalls).
     pub ndp_poke_sock: Arc<std::net::UdpSocket>,
 }
 
 impl Dhcpv6Server {
+    #[must_use]
     pub const fn new(
         cfg: Dhcpv6Config,
         pool: Ipv6Pool,
@@ -92,7 +93,7 @@ impl Dhcpv6Server {
         }
     }
 
-    fn get_lifetimes(&self) -> (u32, u32) {
+    const fn get_lifetimes(&self) -> (u32, u32) {
         let mut preferred = self.cfg.lease_time / 2;
         let mut valid = self.cfg.lease_time;
 
@@ -174,7 +175,7 @@ impl Dhcpv6Server {
 
         match msg.msg_type() {
             MessageType::Solicit => {
-                self.handle_solicit(msg, client_duid, identity.as_ref(), peer, buf)
+                self.handle_solicit(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Request => {
                 self.handle_request(msg, client_duid, identity.as_ref(), peer, buf)
@@ -187,7 +188,7 @@ impl Dhcpv6Server {
                 self.handle_release(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Decline => {
-                self.handle_decline(msg, client_duid, identity.as_ref(), peer, buf)
+                self.handle_decline(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::InformationRequest => {
                 self.handle_information_request(msg, &client_duid, peer, buf)
@@ -202,13 +203,12 @@ impl Dhcpv6Server {
     fn handle_solicit<'a>(
         &mut self,
         msg: &Message,
-        client_duid: Duid,
+        client_duid: &Duid,
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
         buf: &'a mut Vec<u8>,
     ) -> HandleResult<'a> {
         let mac = identity.map(|i| i.mac);
-
         let is_rapid_commit = msg.opts().get(OptionCode::RapidCommit).is_some();
         let reply_type = if is_rapid_commit {
             MessageType::Reply
@@ -216,109 +216,27 @@ impl Dhcpv6Server {
             MessageType::Advertise
         };
 
-        let mut reply = self.base_reply(msg, reply_type, &client_duid);
+        let mut reply = self.base_reply(msg, reply_type, client_duid);
         let mut learned_duid = None;
 
         reply.opts_mut().insert(DhcpOption::Preference(255));
-
         if is_rapid_commit {
             reply.opts_mut().insert(DhcpOption::RapidCommit);
         }
 
-        if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
-            let ips = self.pool.allocate(&client_duid.bytes, iana.id, mac, None);
-            if !ips.is_empty() {
-                let (pref, valid) = self.get_lifetimes();
-                let action = if is_rapid_commit {
-                    "REPLY (Rapid Commit)"
-                } else {
-                    "ADVERTISE"
-                };
-
-                let mut ia_opts = DhcpOptions::new();
-                let ip_list: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
-
-                if let Some(id) = identity {
-                    info!(
-                        "DHCPv6: {id} is soliciting -> {action} [{}]",
-                        ip_list.join(", ")
-                    );
-                } else {
-                    info!(
-                        "DHCPv6: Anonymous is soliciting -> {action} [{}]",
-                        ip_list.join(", ")
-                    );
-                }
-
-                for ip in &ips {
-                    ia_opts.insert(DhcpOption::IAAddr(IAAddr {
-                        addr: *ip,
-                        preferred_life: pref,
-                        valid_life: valid,
-                        opts: DhcpOptions::new(),
-                    }));
-                }
-
-                reply.opts_mut().insert(DhcpOption::IANA(IANA {
-                    id: iana.id,
-                    t1: pref / 2,
-                    t2: pref * 4 / 5,
-                    opts: ia_opts,
-                }));
-                learned_duid = Some(client_duid.clone());
-            } else {
-                // RFC 8415: NoAddrsAvail
-                let mut opts = DhcpOptions::new();
-                opts.insert(DhcpOption::StatusCode(StatusCode {
-                    status: Status::NoAddrsAvail,
-                    msg: "No addresses available in pool".to_string(),
-                }));
-                reply.opts_mut().insert(DhcpOption::IANA(IANA {
-                    id: iana.id,
-                    t1: 0,
-                    t2: 0,
-                    opts,
-                }));
-            }
+        // 1. Process IA_NA (Address Allocation)
+        if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
+            && let Some(duid) =
+                self.process_iana_solicit(&mut reply, iana, client_duid, identity, is_rapid_commit)
+        {
+            learned_duid = Some(duid);
         }
 
-        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD) {
-            if let Some((prefix, len)) =
-                self.pool.allocate_prefix(&client_duid.bytes, iapd.id, None)
-            {
-                let (pref, valid) = self.get_lifetimes();
-                info!("DHCPv6: Delegating prefix {prefix}/{len} to {identity:?}");
-
-                let mut ia_opts = DhcpOptions::new();
-                ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
-                    prefix_ip: prefix,
-                    prefix_len: len,
-                    preferred_lifetime: pref,
-                    valid_lifetime: valid,
-                    opts: DhcpOptions::new(),
-                }));
-
-                reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
-                    id: iapd.id,
-                    t1: pref / 2,
-                    t2: pref * 4 / 5,
-                    opts: ia_opts,
-                }));
-                learned_duid = Some(client_duid.clone());
-            } else {
-                // RFC 8415: NoPrefixAvail
-                let mut opts = DhcpOptions::new();
-                opts.insert(DhcpOption::StatusCode(StatusCode {
-                    status: Status::NoPrefixAvail,
-                    msg: "No prefixes available for delegation".to_string(),
-                }));
-                reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
-                    id: iapd.id,
-                    t1: 0,
-                    t2: 0,
-                    opts,
-                }));
-            }
+        // 2. Process IA_PD (Prefix Delegation)
+        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD)
+            && let Some(duid) = self.process_iapd_solicit(&mut reply, iapd, client_duid, identity)
+        {
+            learned_duid = Some(duid);
         }
 
         self.add_dns_options(&mut reply);
@@ -331,6 +249,114 @@ impl Dhcpv6Server {
         }
 
         HandleResult::Reply(encode_msg(&reply, buf), peer, learned_duid, mac, ias)
+    }
+
+    fn process_iana_solicit(
+        &mut self,
+        reply: &mut Message,
+        iana: &IANA,
+        client_duid: &Duid,
+        identity: Option<&DeviceIdentity>,
+        is_rapid_commit: bool,
+    ) -> Option<Duid> {
+        let mac = identity.map(|i| i.mac);
+        let ips = self.pool.allocate(&client_duid.bytes, iana.id, mac, None);
+
+        if ips.is_empty() {
+            let mut opts = DhcpOptions::new();
+            opts.insert(DhcpOption::StatusCode(StatusCode {
+                status: Status::NoAddrsAvail,
+                msg: "No addresses available in pool".to_string(),
+            }));
+            reply.opts_mut().insert(DhcpOption::IANA(IANA {
+                id: iana.id,
+                t1: 0,
+                t2: 0,
+                opts,
+            }));
+            return None;
+        }
+
+        let (pref, valid) = self.get_lifetimes();
+        let action = if is_rapid_commit {
+            "REPLY (RC)"
+        } else {
+            "ADVERTISE"
+        };
+        let mut ia_opts = DhcpOptions::new();
+        let ip_list: Vec<String> = ips.iter().map(std::string::ToString::to_string).collect();
+
+        if let Some(id) = identity {
+            info!(
+                "DHCPv6: {id} is soliciting -> {action} [{}]",
+                ip_list.join(", ")
+            );
+        } else {
+            info!(
+                "DHCPv6: Anonymous soliciting -> {action} [{}]",
+                ip_list.join(", ")
+            );
+        }
+
+        for ip in &ips {
+            ia_opts.insert(DhcpOption::IAAddr(IAAddr {
+                addr: *ip,
+                preferred_life: pref,
+                valid_life: valid,
+                opts: DhcpOptions::new(),
+            }));
+        }
+
+        reply.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: iana.id,
+            t1: pref / 2,
+            t2: pref * 4 / 5,
+            opts: ia_opts,
+        }));
+        Some(client_duid.clone())
+    }
+
+    fn process_iapd_solicit(
+        &mut self,
+        reply: &mut Message,
+        iapd: &IAPD,
+        client_duid: &Duid,
+        identity: Option<&DeviceIdentity>,
+    ) -> Option<Duid> {
+        if let Some((prefix, len)) = self.pool.allocate_prefix(&client_duid.bytes, iapd.id, None) {
+            let (pref, valid) = self.get_lifetimes();
+            info!("DHCPv6: Delegating prefix {prefix}/{len} to {identity:?}");
+
+            let mut ia_opts = DhcpOptions::new();
+            ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
+                prefix_ip: prefix,
+                prefix_len: len,
+                preferred_lifetime: pref,
+                valid_lifetime: valid,
+                opts: DhcpOptions::new(),
+            }));
+
+            reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
+                id: iapd.id,
+                t1: pref / 2,
+                t2: pref * 4 / 5,
+                opts: ia_opts,
+            }));
+            Some(client_duid.clone())
+        } else {
+            let mut opts = DhcpOptions::new();
+            opts.insert(DhcpOption::StatusCode(StatusCode {
+                status: Status::NoPrefixAvail,
+                msg: "No prefixes available for delegation".to_string(),
+            }));
+            reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
+                id: iapd.id,
+                t1: 0,
+                t2: 0,
+                opts,
+            }));
+            None
+        }
     }
 
     fn handle_request<'a>(
@@ -362,7 +388,7 @@ impl Dhcpv6Server {
                 && !self.pool.is_on_link(&ip)
             {
                 return self.send_ia_status(
-                    StatusContext {
+                    &StatusContext {
                         msg,
                         client_duid: &client_duid,
                         peer,
@@ -383,7 +409,8 @@ impl Dhcpv6Server {
             if !ips.is_empty() {
                 let (pref, valid) = self.get_lifetimes();
                 let mut ia_opts = DhcpOptions::new();
-                let ip_list: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+                let ip_list: Vec<String> =
+                    ips.iter().map(std::string::ToString::to_string).collect();
 
                 if let Some(id) = identity {
                     info!("DHCPv6: Assigning [{}] to {id}", ip_list.join(", "));
@@ -463,7 +490,7 @@ impl Dhcpv6Server {
             && !self.pool.has_binding(&client_duid.bytes, iana.id)
         {
             return self.send_ia_status(
-                StatusContext {
+                &StatusContext {
                     msg,
                     client_duid: &client_duid,
                     peer,
@@ -481,7 +508,7 @@ impl Dhcpv6Server {
             && !self.pool.has_prefix_binding(&client_duid.bytes, iapd.id)
         {
             return self.send_ia_status(
-                StatusContext {
+                &StatusContext {
                     msg,
                     client_duid: &client_duid,
                     peer,
@@ -549,7 +576,7 @@ impl Dhcpv6Server {
         }
 
         self.send_status(
-            StatusContext {
+            &StatusContext {
                 msg,
                 client_duid,
                 peer,
@@ -565,7 +592,7 @@ impl Dhcpv6Server {
     fn handle_decline<'a>(
         &mut self,
         msg: &Message,
-        client_duid: Duid,
+        client_duid: &Duid,
         identity: Option<&DeviceIdentity>,
         peer: Ipv6Addr,
         buf: &'a mut Vec<u8>,
@@ -595,9 +622,9 @@ impl Dhcpv6Server {
         }
 
         self.send_status(
-            StatusContext {
+            &StatusContext {
                 msg,
-                client_duid: &client_duid,
+                client_duid,
                 peer,
                 mac,
             },
@@ -656,7 +683,7 @@ impl Dhcpv6Server {
 
     fn send_status<'a>(
         &self,
-        ctx: StatusContext<'_>,
+        ctx: &StatusContext<'_>,
         msg_type: MessageType,
         status: Status,
         text: &str,
@@ -678,7 +705,7 @@ impl Dhcpv6Server {
 
     fn send_ia_status<'a>(
         &self,
-        ctx: StatusContext<'_>,
+        ctx: &StatusContext<'_>,
         status: Status,
         text: &str,
         iaid: u32,
@@ -741,6 +768,8 @@ impl Dhcpv6Server {
         }
     }
 
+    /// Returns the last assignment for a given DUID and IAID.
+    #[must_use]
     pub fn last_assignment_for(&self, duid: &[u8], iaid: u32) -> Vec<Ipv6Addr> {
         self.pool.lookup(duid, iaid)
     }
@@ -749,6 +778,7 @@ impl Dhcpv6Server {
     ///
     /// This tells the client to initiate a `Renew` or `Information-Request`
     /// to synchronization its state with the server.
+    #[must_use]
     pub fn build_reconfigure(&self, client_duid: &Duid, reconf_msg_type: MessageType) -> Vec<u8> {
         let mut msg = Message::new(MessageType::Reconfigure);
         msg.set_xid(rand::random::<[u8; 3]>());
@@ -824,7 +854,7 @@ mod tests {
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
         };
-        let pool = Ipv6Pool::new(cfg.pools.clone(), cfg.ula_prefix, 64);
+        let pool = Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, 64);
         let server_duid = Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
@@ -879,7 +909,7 @@ mod tests {
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
         };
-        let pool = Ipv6Pool::new(Vec::new(), None, 64);
+        let pool = Ipv6Pool::new(&Vec::new(), None, 64);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
         let ndp_poke_sock = Arc::new(sock);
         let mut srv = Dhcpv6Server::new(cfg, pool, Duid::new(vec![1, 2, 3]), ndp_poke_sock);
@@ -889,7 +919,7 @@ mod tests {
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_solicit(
             &msg,
-            dummy_client_duid(),
+            &dummy_client_duid(),
             Some(&identity),
             peer_ip(),
             &mut resp_vec,
@@ -910,7 +940,7 @@ mod tests {
                     panic!("Missing IANA in Reply");
                 }
             }
-            _ => panic!("Expected Reply"),
+            HandleResult::Ignore => panic!("Expected Reply"),
         }
     }
 
@@ -961,7 +991,7 @@ mod tests {
                     panic!("Missing IANA in Reply");
                 }
             }
-            _ => panic!("Expected Reply with NotOnLink"),
+            HandleResult::Ignore => panic!("Expected Reply with NotOnLink"),
         }
     }
 
@@ -1003,7 +1033,7 @@ mod tests {
                     panic!("Missing IANA in Reply");
                 }
             }
-            _ => panic!("Expected Reply with NoBinding"),
+            HandleResult::Ignore => panic!("Expected Reply with NoBinding"),
         }
     }
 
@@ -1036,13 +1066,7 @@ mod tests {
 
         let mut resp_vec = Vec::with_capacity(1024);
         let identity = DeviceIdentity::new(mac, None, None);
-        let res = srv.handle_decline(
-            &msg,
-            duid.clone(),
-            Some(&identity),
-            peer_ip(),
-            &mut resp_vec,
-        );
+        let res = srv.handle_decline(&msg, &duid, Some(&identity), peer_ip(), &mut resp_vec);
 
         match res {
             HandleResult::Reply(bytes, _, _, _, _) => {
@@ -1050,7 +1074,7 @@ mod tests {
                 assert_eq!(reply.msg_type(), MessageType::Reply);
                 assert!(reply.opts().get(OptionCode::StatusCode).is_some());
             }
-            _ => panic!("Expected Decline acknowledgment"),
+            HandleResult::Ignore => panic!("Expected Decline acknowledgment"),
         }
 
         // Verify blacklist (ip is no longer available)
@@ -1072,7 +1096,7 @@ mod tests {
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_solicit(
             &msg,
-            dummy_client_duid(),
+            &dummy_client_duid(),
             Some(&identity),
             peer_ip(),
             &mut resp_vec,
@@ -1088,7 +1112,7 @@ mod tests {
                     assert_eq!(ia_addr.valid_life, 3600);
                 }
             }
-            _ => panic!("Expected Reply"),
+            HandleResult::Ignore => panic!("Expected Reply"),
         }
     }
 
@@ -1124,7 +1148,7 @@ mod tests {
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
         };
-        let pool = Ipv6Pool::new(Vec::new(), Some(ula), 48);
+        let pool = Ipv6Pool::new(&Vec::new(), Some(ula), 48);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
         let ndp_poke_sock = Arc::new(sock);
         let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid(), ndp_poke_sock);
@@ -1141,7 +1165,7 @@ mod tests {
         let identity = DeviceIdentity::new(dummy_mac(), None, None);
         let res = srv.handle_solicit(
             &msg,
-            dummy_client_duid(),
+            &dummy_client_duid(),
             Some(&identity),
             peer_ip(),
             &mut resp_vec,
@@ -1162,7 +1186,7 @@ mod tests {
                     panic!("Missing IAPD in reply");
                 }
             }
-            _ => panic!("Expected Reply with IA_PD"),
+            HandleResult::Ignore => panic!("Expected Reply with IA_PD"),
         }
     }
 

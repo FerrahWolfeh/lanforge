@@ -58,15 +58,12 @@ pub async fn bootstrap_table(
 
         if let Some(mac) = event.mac() {
             let update = event.to_device_update(gua.as_ref(), ula.as_ref());
-            match update {
-                DeviceUpdate::SlaacObserved { addr, .. } => {
-                    mac_groups.entry(mac).or_default().push(addr);
-                }
-                _ => {
-                    // Outros eventos (como NdpSeen) processamos individualmente
-                    let t = LanforgeContext::table();
-                    let _ = t.update(&update);
-                }
+            if let DeviceUpdate::SlaacObserved { addr, .. } = update {
+                mac_groups.entry(mac).or_default().push(addr);
+            } else {
+                // Outros eventos (como NdpSeen) processamos individualmente
+                let t = LanforgeContext::table();
+                let _ = t.update(&update);
             }
         }
     }
