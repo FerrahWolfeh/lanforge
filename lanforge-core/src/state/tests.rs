@@ -1,9 +1,8 @@
 #![cfg(test)]
 
-use super::*;
-use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
+use crate::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget, State};
+use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
 use crate::identifiers::{Duid, MacAddr};
-use crate::state::update::{DeviceUpdate, FieldUpdate, LeaseTarget};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
@@ -41,7 +40,7 @@ fn mac_from_array_and_asref() {
 
 #[test]
 fn apply_update_v4_lease_granted() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
     let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
@@ -55,7 +54,7 @@ fn apply_update_v4_lease_granted() {
 
 #[test]
 fn apply_update_v4_idempotent() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
     let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
@@ -68,7 +67,7 @@ fn apply_update_v4_idempotent() {
 
 #[test]
 fn apply_update_hostname_hint_respects_static() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
     // Simula device estático via API correta
@@ -85,7 +84,7 @@ fn apply_update_hostname_hint_respects_static() {
 
 #[test]
 fn apply_update_hostname_hint_accepted_for_dynamic() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
     let changed = table.apply_update(DeviceUpdate::DhcpHostnameHint {
@@ -99,7 +98,7 @@ fn apply_update_hostname_hint_accepted_for_dynamic() {
 
 #[test]
 fn apply_update_slaac_deduplicates() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let addr: Ipv6Addr = "fd97::1234".parse().unwrap();
 
@@ -116,7 +115,7 @@ fn apply_update_slaac_deduplicates() {
 
 #[test]
 fn apply_update_slaac_excludes_managed_addr() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv6Addr = "fd00::101".parse().unwrap();
     let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
@@ -145,7 +144,7 @@ fn apply_update_slaac_excludes_managed_addr() {
 
 #[test]
 fn apply_update_slaac_synced() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("11:22:33:44:55:66").unwrap();
 
     let addr1: Ipv6Addr = "fd00::1".parse().unwrap();
@@ -194,7 +193,7 @@ fn apply_update_slaac_synced() {
 
 #[test]
 fn apply_update_slaac_cleared() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     table.apply_update(DeviceUpdate::SlaacObserved {
         mac,
@@ -208,7 +207,7 @@ fn apply_update_slaac_cleared() {
 
 #[test]
 fn apply_update_lease_released() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let now = SystemTime::now();
 
@@ -258,7 +257,7 @@ fn apply_update_lease_released() {
 
 #[test]
 fn apply_update_duid_associated() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let duid = Duid::new(vec![1, 2, 3, 4]);
 
@@ -287,7 +286,7 @@ fn apply_update_duid_associated() {
 
 #[test]
 fn apply_update_ndp_seen_not_dirty() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv6Addr = "fe80::1".parse().unwrap();
 
@@ -300,7 +299,7 @@ fn apply_update_ndp_seen_not_dirty() {
 
 #[test]
 fn expire_stale_removes_old_v4_keeps_fresh_v6() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
     let past = SystemTime::now() - std::time::Duration::from_secs(100);
@@ -331,7 +330,7 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
 
 #[test]
 fn test_orphaned_v6_promotion() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
     let ip = "fd97::dead:beef".parse().unwrap();
     let duid = Duid::new(vec![0xaa, 0xbb]);
@@ -363,7 +362,7 @@ fn test_orphaned_v6_promotion() {
 
 #[test]
 fn test_cli_host_updated_sync() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
 
     // 1. Initial discovery (Empty hostname)
@@ -418,7 +417,7 @@ fn test_cli_host_updated_sync() {
 
 #[test]
 fn test_ip_deleted_cleanup() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
     let ip: Ipv6Addr = "fd00::1".parse().unwrap();
 
@@ -450,7 +449,7 @@ fn test_ip_deleted_cleanup() {
 
 #[test]
 fn test_multiple_iaids_and_prefixes() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
     let duid = Duid::new(vec![1, 2, 3]);
     let now = SystemTime::now();
@@ -543,7 +542,7 @@ fn test_multiple_iaids_and_prefixes() {
 
 #[test]
 fn apply_update_duid_associated_resolves_orphan() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let duid = Duid::generate_ll_from_mac([1, 2, 3, 4, 5, 6]);
     let iaid = 42;
@@ -621,7 +620,7 @@ fn test_is_worthy_logic() {
 
 #[test]
 fn test_filtering_ndp_seen_worthy() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
     let ll_ip: Ipv6Addr = "fe80::1".parse().unwrap();
     let ula_ip: Ipv6Addr = "fd00::1".parse().unwrap();
@@ -707,7 +706,7 @@ fn test_primary_v6_priority() {
 
 #[test]
 fn test_static_registry_validation() {
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac1 = MacAddr([1, 1, 1, 1, 1, 1]);
     let mac2 = MacAddr([2, 2, 2, 2, 2, 2]);
 

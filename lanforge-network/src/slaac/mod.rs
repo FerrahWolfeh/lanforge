@@ -21,14 +21,13 @@
 //! The scan cycle clears known SLAAC addresses for a MAC before repopulating them,
 //! ensuring the internal state does not contain stale addresses.
 
-use crate::error::Result;
-use lanforge_core::state::update::DeviceUpdate;
-use rtnetlink::Handle;
-use std::net::Ipv6Addr;
-
+use crate::error::NetworkError;
 use crate::netlink;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::DeviceUpdate;
+use rtnetlink::Handle;
+use std::net::Ipv6Addr;
 
 /// Performs a full dump of the IPv6 neighbor table (State Synchronization).
 ///
@@ -44,7 +43,7 @@ pub async fn bootstrap_table(
     gua: Option<Ipv6Addr>,
     ula: Option<Ipv6Addr>,
     target_ifindex: Option<u32>,
-) -> Result<()> {
+) -> Result<(), NetworkError> {
     let neighbors = netlink::get_ipv6_neighbors(handle, target_prefix, target_ifindex).await?;
 
     let mut mac_groups: std::collections::HashMap<MacAddr, Vec<Ipv6Addr>> =

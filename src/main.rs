@@ -1,6 +1,10 @@
 //! `lanforge` — Gerenciador central de identidades de rede (IPv6/IPv4).
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
-#![allow(clippy::missing_docs_in_private_items, clippy::module_name_repetitions)]
+#![allow(
+    clippy::missing_docs_in_private_items,
+    clippy::module_name_repetitions,
+    clippy::similar_names
+)]
 mod app;
 mod bootstrap;
 mod config;
@@ -38,9 +42,9 @@ async fn async_main() -> Result<()> {
         .init();
 
     // 2. Run Bootstrap
-    let bootstrap = Bootstrapper::run().await?;
+    let (bootstrap, ctx) = Bootstrapper::run().await?;
 
     // 3. Initialize and run Daemon
-    let daemon = Daemon::new(bootstrap);
+    let daemon = Daemon::new(bootstrap, ctx);
     daemon.run().await
 }

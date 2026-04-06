@@ -45,7 +45,7 @@ impl DnsService {
     #[must_use]
     pub fn new(cfg: DnsConfig, ctx: lanforge_core::context::LanforgeContext) -> Self {
         let stats = Arc::new(DnsStats::new());
-        ctx.set_dns_stats_opt(Arc::clone(&stats));
+        ctx.set_dns_stats(Arc::clone(&stats));
         Self { cfg, stats, ctx }
     }
 
@@ -53,6 +53,114 @@ impl DnsService {
     #[must_use]
     pub fn stats_snapshot(&self) -> crate::stats::DnsStatsSnapshot {
         self.stats.snapshot()
+    }
+
+    async fn bind_sockets(&self) -> Result<(Arc<UdpSocket>, TcpListener), CoreError> {
+        let udp_sock = Arc::new(
+            UdpSocket::bind(self.cfg.listen)
+                .await
+                .map_err(|e| CoreError::Generic(format!("UDP Bind Error: {e}")))?,
+        );
+        let tcp_listener = TcpListener::bind(self.cfg.listen)
+            .await
+            .map_err(|e| CoreError::Generic(format!("TCP Bind Error: {e}")))?;
+        Ok((udp_sock, tcp_listener))
+    }
+
+    async fn init_dns_context(&self) -> Result<Arc<DnsContext>, CoreError> {
+        let upstream_mgr = if let Some(upstream) = self.cfg.upstream {
+            Some(
+                UpstreamManager::new(upstream)
+                    .await
+                    .map_err(|e| CoreError::Generic(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Arc::new(DnsContext {
+            cfg: self.cfg.clone(),
+            upstream_mgr,
+            stats: Arc::clone(&self.stats),
+            ctx: self.ctx.clone(),
+        }))
+    }
+
+    fn spawn_udp_handler(
+        &self,
+        dns_ctx: Arc<DnsContext>,
+        sock: Arc<UdpSocket>,
+    ) -> tokio::task::JoinHandle<()> {
+        let ctx_udp = self.ctx.clone();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            loop {
+                tokio::select! {
+                    res = sock.recv_from(&mut buf) => {
+                        let Ok((len, src)) = res else { continue; };
+                        if let Ok(Some(response)) = handle_query(&buf[..len], &dns_ctx).await {
+                            let _ = sock.send_to(&response, src).await;
+                        }
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(100)) => {
+                         if !ctx_udp.is_running() { break; }
+                    }
+                }
+            }
+        })
+    }
+
+    fn spawn_tcp_handler(
+        &self,
+        dns_ctx: Arc<DnsContext>,
+        listener: TcpListener,
+    ) -> tokio::task::JoinHandle<()> {
+        let ctx_tcp = self.ctx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    res = listener.accept() => {
+                        if let Ok((mut stream, _)) = res {
+                            let c = Arc::clone(&dns_ctx);
+                            tokio::spawn(async move {
+                                let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                                    let mut len_buf = [0u8; 2];
+                                    stream.read_exact(&mut len_buf).await?;
+                                    let len = u16::from_be_bytes(len_buf) as usize;
+                                    let mut query_buf = vec![0u8; len];
+                                    stream.read_exact(&mut query_buf).await?;
+
+                                    if let Ok(Some(response)) = handle_query(&query_buf, &c).await {
+                                        let resp_len = u16::try_from(response.len()).unwrap_or(u16::MAX).to_be_bytes();
+                                        stream.write_all(&resp_len).await?;
+                                        stream.write_all(&response).await?;
+                                    }
+                                    Ok::<(), std::io::Error>(())
+                                }).await;
+                            });
+                        }
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(100)) => {
+                        if !ctx_tcp.is_running() { break; }
+                    }
+                }
+            }
+        })
+    }
+
+    async fn wait_for_shutdown(&self, mut rx: tokio::sync::broadcast::Receiver<TimedEvent>) {
+        let ctx_main = self.ctx.clone();
+        loop {
+            tokio::select! {
+                Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = rx.recv() => {
+                    info!("DNS service: shutdown received");
+                    break;
+                }
+                () = tokio::time::sleep(Duration::from_millis(500)) => {
+                    if !ctx_main.is_running() { break; }
+                }
+            }
+        }
     }
 }
 
@@ -78,121 +186,36 @@ impl LanforgeService for DnsService {
 }
 
 impl AsyncService for DnsService {
-    async fn run(&mut self) -> std::result::Result<(), CoreError> {
+    async fn run(&mut self) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
             return Ok(());
         }
 
-        let bus = self.ctx.bus_opt();
+        let bus = self.ctx.bus();
 
-        // 1. Wait for DB Ready (Parallel optimization)
+        // 1. Synchronize dependencies
         info!("DNS: Waiting for database engine...");
-        self.ctx.wait_for_db_opt().await?;
+        self.ctx.wait_for_db().await?;
 
-        let udp_sock = Arc::new(
-            UdpSocket::bind(self.cfg.listen)
-                .await
-                .map_err(|e| CoreError::Generic(format!("UDP Bind Error: {e}")))?,
-        );
-        let tcp_listener = TcpListener::bind(self.cfg.listen)
-            .await
-            .map_err(|e| CoreError::Generic(format!("TCP Bind Error: {e}")))?;
+        // 2. Initialize networking and context
+        let (udp_sock, tcp_listener) = self.bind_sockets().await?;
+        let dns_ctx = self.init_dns_context().await?;
 
-        let upstream_mgr = if let Some(upstream) = self.cfg.upstream {
-            Some(
-                UpstreamManager::new(upstream)
-                    .await
-                    .map_err(|e| CoreError::Generic(e.to_string()))?,
-            )
-        } else {
-            None
-        };
-
-        let ctx = Arc::new(DnsContext {
-            cfg: self.cfg.clone(),
-            upstream_mgr,
-            stats: Arc::clone(&self.stats),
-            ctx: self.ctx.clone(),
-        });
-
-        // Signal readiness
+        // 3. Signal readiness
         let _ = bus.publish(LanforgeEvent::ServiceReady {
             name: "dns".to_string(),
         });
 
-        let mut rx = bus.subscribe();
+        // 4. Spawn protocol handlers
+        let rx = bus.subscribe();
+        let udp_task = self.spawn_udp_handler(Arc::clone(&dns_ctx), udp_sock);
+        let tcp_task = self.spawn_tcp_handler(Arc::clone(&dns_ctx), tcp_listener);
 
-        // UDP Task
-        let udp_ctx = Arc::clone(&ctx);
-        let udp_sock_inner = Arc::clone(&udp_sock);
-        let ctx_udp = self.ctx.clone();
-        let udp_task = tokio::spawn(async move {
-            let mut buf = [0u8; 4096];
-            loop {
-                tokio::select! {
-                    res = udp_sock_inner.recv_from(&mut buf) => {
-                        let Ok((len, src)) = res else { continue; };
-                        if let Ok(Some(response)) = handle_query(&buf[..len], &udp_ctx).await {
-                            let _ = udp_sock_inner.send_to(&response, src).await;
-                        }
-                    }
-                    () = tokio::time::sleep(Duration::from_millis(100)) => {
-                         if !ctx_udp.is_running_opt() { break; }
-                    }
-                }
-            }
-        });
+        // 5. Enter main process loop
+        self.wait_for_shutdown(rx).await;
 
-        // TCP Task
-        let tcp_ctx = Arc::clone(&ctx);
-        let ctx_tcp = self.ctx.clone();
-        let tcp_task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    res = tcp_listener.accept() => {
-                        if let Ok((mut stream, _)) = res {
-                            let c = Arc::clone(&tcp_ctx);
-                            tokio::spawn(async move {
-                                let _ = tokio::time::timeout(Duration::from_secs(5), async {
-                                    let mut len_buf = [0u8; 2];
-                                    stream.read_exact(&mut len_buf).await?;
-                                    let len = u16::from_be_bytes(len_buf) as usize;
-                                    let mut query_buf = vec![0u8; len];
-                                    stream.read_exact(&mut query_buf).await?;
-
-                                    if let Ok(Some(response)) = handle_query(&query_buf, &c).await {
-                                        let resp_len = u16::try_from(response.len()).unwrap_or(u16::MAX).to_be_bytes();
-                                        stream.write_all(&resp_len).await?;
-                                        stream.write_all(&response).await?;
-                                    }
-                                    Ok::<(), std::io::Error>(())
-                                }).await;
-                            });
-                        }
-                    }
-                    () = tokio::time::sleep(Duration::from_millis(100)) => {
-                        if !ctx_tcp.is_running_opt() { break; }
-                    }
-                }
-            }
-        });
-
-        // Wait for shutdown or tasks
-        let ctx_main = self.ctx.clone();
-        loop {
-            tokio::select! {
-                Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = rx.recv() => {
-                    info!("DNS service: shutdown received");
-                    break;
-                }
-                () = tokio::time::sleep(Duration::from_millis(500)) => {
-                    if !ctx_main.is_running_opt() { break; }
-                }
-            }
-        }
-
-        // Cancel tasks and exit
+        // Cleanup
         udp_task.abort();
         tcp_task.abort();
         Ok(())

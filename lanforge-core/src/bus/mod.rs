@@ -29,8 +29,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use tokio::sync::broadcast;
 
+use crate::context::state::LeaseTarget;
 use crate::identifiers::MacAddr;
-use crate::state::update::LeaseTarget;
 
 use serde::{Deserialize, Serialize};
 

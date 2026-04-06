@@ -3,7 +3,7 @@ use crate::log_engine::LogDb;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::{CoreError, Result};
-use lanforge_core::service::{LanforgeService, SyncService};
+use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, SyncService};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -12,21 +12,23 @@ use tracing::{debug, info, warn};
 pub struct DbWorker {
     db_path: PathBuf,
     log_db_path: PathBuf,
+    ctx: LanforgeContext,
 }
 
 impl DbWorker {
     #[must_use]
-    pub fn new(db_path: PathBuf, log_db_path: PathBuf) -> Self {
+    pub fn new(db_path: PathBuf, log_db_path: PathBuf, ctx: LanforgeContext) -> Self {
         Self {
             db_path,
             log_db_path,
+            ctx,
         }
     }
 }
 
 impl LanforgeService for DbWorker {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "db",
             display_name: "DB Worker",
             critical: true,
@@ -43,7 +45,7 @@ impl LanforgeService for DbWorker {
 }
 
 impl SyncService for DbWorker {
-    fn run(&mut self, bus_rx: &lanforge_core::service::SyncBusReceiver) -> Result<()> {
+    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<()> {
         let db = LeaseDb::open(&self.db_path).map_err(|e| CoreError::Generic(e.to_string()))?;
         let log_db =
             LogDb::open(&self.log_db_path).map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -51,8 +53,8 @@ impl SyncService for DbWorker {
         let db = Rc::new(db);
         let log_db = Rc::new(log_db);
 
-        lanforge_core::context::LanforgeContext::set_db_ready(true);
-        let _ = LanforgeContext::bus().publish(LanforgeEvent::DbReady);
+        self.ctx.set_db_ready(true);
+        let _ = self.ctx.bus().publish(LanforgeEvent::DbReady);
 
         loop {
             let event = bus_rx.recv_timeout(Duration::from_millis(500));
@@ -69,7 +71,7 @@ impl SyncService for DbWorker {
                 match event.event {
                     LanforgeEvent::DeviceUpdated { mac, .. }
                     | LanforgeEvent::DeviceDiscovered { mac } => {
-                        if let Some(device) = LanforgeContext::get_device(&mac) {
+                        if let Some(device) = self.ctx.get_device(&mac) {
                             if let Err(e) = db.upsert_device(&device) {
                                 warn!("DB worker: failed to upsert device {mac}: {e}");
                             } else {
@@ -86,7 +88,7 @@ impl SyncService for DbWorker {
                     }
                     LanforgeEvent::DeviceTableDirty => {
                         // Periodic full-sync fallback
-                        let snapshot = LanforgeContext::get_table_snapshot();
+                        let snapshot = self.ctx.read().clone();
                         if let Err(e) = db.save_table(&snapshot) {
                             warn!("DB worker: failed to save snapshot: {e}");
                         } else {
@@ -107,7 +109,7 @@ impl SyncService for DbWorker {
                 }
             }
 
-            if !LanforgeContext::is_running() {
+            if !self.ctx.is_running() {
                 break;
             }
         }

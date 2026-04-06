@@ -4,15 +4,14 @@
 //! assigned to the local network interfaces. It provides a synchronous bootstrap
 //! mechanism to ensure networking is ready before other services start.
 
-use crate::error::Result;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::TryStreamExt;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService};
-use lanforge_core::state::InterfaceState;
+use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+use lanforge_core::state::{DeviceUpdate, InterfaceState};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
@@ -24,6 +23,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use netlink_sys::SocketAddr;
+
+use crate::error::NetworkError;
 
 pub type NetlinkStream = UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
@@ -53,7 +54,7 @@ impl InterfaceMonitor {
     /// Performs a full refresh of all addresses for the target interface.
     ///
     /// This is typically called during bootstrap or in response to a netlink address event.
-    pub async fn refresh_interface(&self, ifindex: u32) -> Result<InterfaceState> {
+    pub async fn refresh_interface(&self, ifindex: u32) -> Result<InterfaceState, NetworkError> {
         let mut stream = self
             .handle
             .address()
@@ -91,16 +92,14 @@ impl InterfaceMonitor {
 
         // Update global table
         // Update table via injected context
-        let _ = self.ctx.apply(
-            &lanforge_core::state::update::DeviceUpdate::InterfaceIpsChanged {
-                ifindex,
-                link_local: state.link_local,
-                gua: state.gua,
-                ula: state.ula,
-                preferred: state.gua_preferred,
-                valid: state.gua_valid,
-            },
-        );
+        let _ = self.ctx.apply(&DeviceUpdate::InterfaceIpsChanged {
+            ifindex,
+            link_local: state.link_local,
+            gua: state.gua,
+            ula: state.ula,
+            preferred: state.gua_preferred,
+            valid: state.gua_valid,
+        });
 
         Ok(state)
     }
@@ -108,7 +107,7 @@ impl InterfaceMonitor {
     /// Synchronous bootstrap — queries all interfaces once.
     ///
     /// This ensures the global state is seeded before services like RA/DHCP start.
-    pub async fn initial_scan(&self) -> Result<InterfaceState> {
+    pub async fn initial_scan(&self) -> Result<InterfaceState, NetworkError> {
         info!("InterfaceMonitor: Starting initial interface scan...");
 
         // We focus on the target interface for the return value,
@@ -121,8 +120,8 @@ impl InterfaceMonitor {
 }
 
 impl LanforgeService for InterfaceMonitor {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "ifmon",
             display_name: "InterfaceMonitor",
             critical: true,
@@ -137,17 +136,17 @@ impl LanforgeService for InterfaceMonitor {
         format!("Interface Monitor (ifindex: {})", self.target_ifindex)
     }
 
-    fn on_shutdown(&mut self) -> std::result::Result<(), CoreError> {
+    fn on_shutdown(&mut self) -> Result<(), CoreError> {
         Ok(())
     }
 }
 
 impl AsyncService for InterfaceMonitor {
-    async fn run(&mut self) -> std::result::Result<(), CoreError> {
-        let mut bus_rx = self.ctx.bus_opt().subscribe();
+    async fn run(&mut self) -> Result<(), CoreError> {
+        let mut bus_rx = self.ctx.bus().subscribe();
 
         loop {
-            if !self.ctx.is_running_opt() {
+            if !self.ctx.is_running() {
                 break;
             }
 

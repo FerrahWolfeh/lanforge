@@ -26,7 +26,7 @@ use tracing::{error, info, warn};
 /// Publishes a `ServiceReady` event and logs the readiness signal.
 fn signal_ready(ctx: &LanforgeContext, meta: &ServiceMeta, description: &str) {
     info!("▸ {} ready ({})", description, meta.id);
-    let _ = ctx.bus_opt().publish(LanforgeEvent::ServiceReady {
+    let _ = ctx.bus().publish(LanforgeEvent::ServiceReady {
         name: meta.id.to_string(),
     });
 }
@@ -49,7 +49,7 @@ where
 
         signal_ready(ctx, &meta, &description);
 
-        let mut bus_rx = ctx.bus_opt().subscribe();
+        let mut bus_rx = ctx.bus().subscribe();
         tokio::select! {
             shutdown = async {
                 while let Ok(e) = bus_rx.recv().await {
@@ -70,7 +70,7 @@ where
             res = service.run() => {
                 match res {
                     Ok(()) => {
-                        if !ctx.is_running_opt() {
+                        if !ctx.is_running() {
                             info!("▪ {} exited (shutdown)", description);
                             return;
                         }
@@ -84,7 +84,7 @@ where
                         if meta.max_retries > 0 && consecutive_failures >= meta.max_retries {
                             if meta.critical {
                                 error!("FATAL: Critical service '{}' failed after {} retries. Shutting down.", name, consecutive_failures);
-                                ctx.terminate_opt();
+                                ctx.terminate();
                                 return;
                             }
                             warn!("Service '{}' exhausted {} retries — giving up", name, meta.max_retries);
@@ -134,7 +134,7 @@ where
     let mut consecutive_failures: u32 = 0;
 
     loop {
-        if !ctx.is_running_opt() {
+        if !ctx.is_running() {
             info!("Supervisor (sync) received shutdown, stopping before start");
             return;
         }
@@ -147,9 +147,9 @@ where
         info!("▸ Starting sync service: {}", description);
 
         // Create the event bus bridge for this sync service
-        let bus = ctx.bus_opt();
+        let bus = ctx.bus();
         let (tx, rx) = std::sync::mpsc::channel();
-        let bus_rx = SyncBusReceiver::new(rx);
+        let bus_rx = SyncBusReceiver::new(rx, ctx.clone());
 
         // Spawn the bridge task on the Tokio runtime (not this OS thread)
         let mut event_rx = bus.subscribe();
@@ -186,7 +186,7 @@ where
 
         match res {
             Ok(()) => {
-                if !ctx.is_running_opt() {
+                if !ctx.is_running() {
                     info!("▪ {} exited (shutdown)", description);
                     return;
                 }
@@ -202,11 +202,7 @@ where
 
                 if meta.max_retries > 0 && consecutive_failures >= meta.max_retries {
                     if meta.critical {
-                        error!(
-                            "FATAL: Critical service '{}' failed after {} retries. Shutting down.",
-                            name, consecutive_failures
-                        );
-                        LanforgeContext::terminate();
+                        ctx.terminate();
                         let _ = bus.publish(LanforgeEvent::Shutdown);
                         return;
                     }
@@ -238,7 +234,7 @@ where
                 // Verificamos o cancelamento antes e depois do sleep.
                 let start = std::time::Instant::now();
                 while start.elapsed() < backoff {
-                    if !ctx.is_running_opt() {
+                    if !ctx.is_running() {
                         info!(
                             "Supervisor (sync) '{}' received shutdown during backoff",
                             name
@@ -256,14 +252,13 @@ where
 mod tests {
     use super::*;
     use lanforge_core::bus::EventBus;
-    use lanforge_core::state::DeviceTable;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU32;
     use std::sync::atomic::Ordering;
 
     fn init_test_context() -> LanforgeContext {
         let bus = Arc::new(EventBus::new());
-        let table = DeviceTable::new();
+        let table = lanforge_core::state::State::new();
         LanforgeContext::new(bus, table, None)
     }
 
@@ -360,7 +355,7 @@ mod tests {
     #[tokio::test]
     async fn test_supervisor_reference_implementation() {
         let ctx = init_test_context();
-        let bus = ctx.bus_opt();
+        let bus = ctx.bus();
         let mut sub = bus.subscribe();
 
         let attempts = Arc::new(AtomicU32::new(0));
@@ -411,7 +406,7 @@ mod tests {
     async fn test_sync_service_bridge_resilience() {
         println!("INFO: Starting test_sync_service_bridge_resilience v5");
         let ctx = init_test_context();
-        let bus = ctx.bus_opt();
+        let bus = ctx.bus();
         let mut ready_sub = bus.subscribe();
         let rt_handle = tokio::runtime::Handle::current();
         let received_count = Arc::new(AtomicU32::new(0));
@@ -454,7 +449,7 @@ mod tests {
         // Dá um tempo para a task assíncrona do bridge rotear os eventos pro MPSC
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        ctx.terminate_opt();
+        ctx.terminate();
 
         // 3. Join thread - NÃO BLOQUEIE O RUNTIME, use spawn_blocking!
         let _ = tokio::task::spawn_blocking(move || {
@@ -503,7 +498,7 @@ mod tests {
                     if matches!(e.event, LanforgeEvent::DbVacuum) {
                         self.received.fetch_add(1, Ordering::SeqCst);
                     }
-                } else if !self.ctx.is_running_opt() {
+                } else if !self.ctx.is_running() {
                     // Sai apenas se o contexto geral foi finalizado
                     break;
                 }

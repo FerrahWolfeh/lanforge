@@ -4,7 +4,7 @@
 //! not yet configured on the client (when the client has an IP but the
 //! server's ARP table lacks the entry). This avoids L3 broadcast for unicast packets.
 
-use crate::error::{NetworkError, Result};
+use crate::error::NetworkError;
 use pnet::datalink::{self, Config, MacAddr as PnetMac};
 use pnet::packet::MutablePacket;
 use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
@@ -18,7 +18,7 @@ pub struct RawSender {
 }
 
 impl RawSender {
-    pub fn new(iface_name: &str) -> Result<Self> {
+    pub fn new(iface_name: &str) -> Result<Self, NetworkError> {
         let interface = datalink::interfaces()
             .into_iter()
             .find(|iface| iface.name == iface_name)
@@ -53,7 +53,7 @@ impl RawSender {
         src_ip: Ipv4Addr,
         dst_ip: Ipv4Addr,
         dst_mac_raw: [u8; 6],
-    ) -> Result<()> {
+    ) -> Result<(), NetworkError> {
         let dst_mac = PnetMac::new(
             dst_mac_raw[0],
             dst_mac_raw[1],

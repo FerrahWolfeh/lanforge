@@ -80,12 +80,16 @@ pub trait AsyncService: LanforgeService {
 /// patterns like shutdown detection and dependency waiting.
 pub struct SyncBusReceiver {
     rx: std::sync::mpsc::Receiver<TimedEvent>,
+    ctx: crate::context::LanforgeContext,
 }
 
 impl SyncBusReceiver {
     #[must_use]
-    pub const fn new(rx: std::sync::mpsc::Receiver<TimedEvent>) -> Self {
-        Self { rx }
+    pub const fn new(
+        rx: std::sync::mpsc::Receiver<TimedEvent>,
+        ctx: crate::context::LanforgeContext,
+    ) -> Self {
+        Self { rx, ctx }
     }
 
     /// Blocking receive with timeout.
@@ -104,14 +108,20 @@ impl SyncBusReceiver {
         events
     }
 
+    /// Provides access to the injected `LanforgeContext`.
+    #[must_use]
+    pub const fn ctx(&self) -> &crate::context::LanforgeContext {
+        &self.ctx
+    }
+
     /// Blocks until `InterfaceReady` is received (or shutdown).
     pub fn wait_for_interfaces(&self) {
-        crate::context::LanforgeContext::wait_for_interfaces_sync(&self.rx);
+        self.ctx.wait_for_interfaces_sync(&self.rx);
     }
 
     /// Blocks until `DbReady` is received (or shutdown).
     pub fn wait_for_db(&self) {
-        crate::context::LanforgeContext::wait_for_db_sync(&self.rx);
+        self.ctx.wait_for_db_sync(&self.rx);
     }
 }
 

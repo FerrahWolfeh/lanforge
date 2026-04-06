@@ -1,5 +1,5 @@
 use lanforge_core::bus::TimedEvent;
-use lanforge_core::state::update::LeaseTarget;
+use lanforge_core::context::state::LeaseTarget;
 use serde::{Deserialize, Serialize};
 
 /// Represents a command sent from a client to the Lanforge daemon.

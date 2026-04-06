@@ -11,8 +11,8 @@ use tracing::{debug, info};
 
 use lanforge_core::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::DeviceTable;
-use lanforge_core::state::update::{DeviceUpdate, StaticEntry};
+use lanforge_core::state::State;
+use lanforge_core::state::{DeviceUpdate, StaticEntry};
 
 use crate::{LeaseDbError, Result};
 
@@ -176,7 +176,7 @@ impl LeaseDb {
     /// Persists the current state of the `DeviceTable` using structured updates.
     ///
     /// Uses SQL UPSERT for devices and relies on `ON DELETE CASCADE` for child tables.
-    pub fn save_table(&self, table: &DeviceTable) -> Result<()> {
+    pub fn save_table(&self, table: &State) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
 
         // 1. Snapshot all MAC strings to detect removals later
@@ -200,7 +200,7 @@ impl LeaseDb {
         }
 
         tx.commit().map_err(LeaseDbError::TransactionFailed)?;
-        debug!("DeviceTable persisted successfully");
+        debug!("State persisted successfully");
         Ok(())
     }
 
@@ -337,12 +337,12 @@ impl LeaseDb {
     }
 
     // -----------------------------------------------------------------------
-    // Load — Reconstructs DeviceTable
+    // Load — Reconstructs State
     // -----------------------------------------------------------------------
 
-    /// Loads the persisted state and returns a fully populated `DeviceTable`.
-    pub fn load_table(&self) -> Result<DeviceTable> {
-        let mut table = DeviceTable::new();
+    /// Loads the persisted state and returns a fully populated `State`.
+    pub fn load_table(&self) -> Result<State> {
+        let mut table = State::new();
 
         // 1. Load base devices
         let mut stmt = self.conn.prepare(

@@ -13,13 +13,14 @@ use crate::bootstrap::BootstrapResult;
 
 pub async fn run_event_loop(
     bootstrap: BootstrapResult,
+    ctx: LanforgeContext,
     mut bus_rx: tokio::sync::broadcast::Receiver<lanforge_core::bus::TimedEvent>,
 ) -> Result<()> {
     let cfg = bootstrap.cfg;
     let handle = bootstrap.rt_handle;
     let target_ifindex = bootstrap.target_ifindex;
 
-    let bus = LanforgeContext::bus();
+    let bus = ctx.bus();
 
     let mut state = LoopState::new();
 
@@ -34,7 +35,14 @@ pub async fn run_event_loop(
     stale_timer.tick().await;
 
     // Initial scan
-    spawn_scan(cfg.clone(), handle.clone(), None, None, target_ifindex);
+    spawn_scan(
+        ctx.clone(),
+        cfg.clone(),
+        handle.clone(),
+        None,
+        None,
+        target_ifindex,
+    );
 
     let expected_services = determine_expected_services(&cfg);
     let mut ready_services = HashSet::new();
@@ -44,14 +52,13 @@ pub async fn run_event_loop(
         tokio::select! {
             _ = fallback.tick() => {
                 debug!("Sincronização periódica de SLAAC (Fallback)...");
-                spawn_scan(cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
             }
             _ = stale_timer.tick() => {
-                let _ = LanforgeContext::expire_stale();
+                ctx.expire_stale();
             }
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 recebido, forçando sincronização de estado...");
-                spawn_scan(cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
+                spawn_scan(ctx.clone(), cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
             }
             _ = sigterm.recv() => {
                 info!("SIGTERM recebido — iniciando encerramento gracioso...");
@@ -83,12 +90,12 @@ pub async fn run_event_loop(
                                     info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
                                     state.current_gua = gua;
                                     state.current_ula = ula;
-                                    spawn_scan(cfg.clone(), handle.clone(), gua, ula, target_ifindex);
+                                    spawn_scan(ctx.clone(), cfg.clone(), handle.clone(), gua, ula, target_ifindex);
                                 }
                             }
                             LanforgeEvent::ReloadConfig => {
                                 info!("ReloadConfig: Forçando sincronização em background...");
-                                spawn_scan(cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
+                                spawn_scan(ctx.clone(), cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
                             }
                             LanforgeEvent::Shutdown => {
                                 debug!("EventLoop: shutdown received via bus");
@@ -147,6 +154,7 @@ fn determine_expected_services(cfg: &crate::config::Config) -> HashSet<&'static 
 }
 
 fn spawn_scan(
+    ctx: LanforgeContext,
     cfg: Arc<crate::config::Config>,
     handle: rtnetlink::Handle,
     gua: Option<Ipv6Addr>,
@@ -154,7 +162,7 @@ fn spawn_scan(
     target_ifindex: u32,
 ) {
     tokio::spawn(async move {
-        if let Err(e) = run_scan(&cfg, &handle, gua, ula, target_ifindex).await {
+        if let Err(e) = run_scan(&ctx, &cfg, &handle, gua, ula, target_ifindex).await {
             error!("❌ Erro no scan: {e:#}");
         }
     });

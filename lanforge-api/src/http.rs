@@ -5,19 +5,25 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
-use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::update::DeviceUpdate;
-use lanforge_core::state::update::FieldUpdate;
+use lanforge_core::{
+    device::{Ipv6AddrOrSuffix, Origin},
+    service::ServiceMeta,
+    state::{DeviceUpdate, FieldUpdate},
+};
+use lanforge_core::{error::CoreError, identifiers::MacAddr};
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 use tracing::info;
 
 /// State shared across Axum handlers.
 #[derive(Clone)]
 struct AppState {
     cfg: Arc<ApiConfig>,
+    ctx: LanforgeContext,
 }
 
 /// Parameters for the /register endpoint (Query or JSON).
@@ -40,23 +46,24 @@ use crate::config::ApiConfig;
 
 pub struct HttpService {
     cfg: Arc<ApiConfig>,
+    ctx: LanforgeContext,
 }
 
 impl HttpService {
-    pub fn new(cfg: Arc<ApiConfig>) -> Self {
-        Self { cfg }
+    pub fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
+        Self { cfg, ctx }
     }
 }
 
 impl LanforgeService for HttpService {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "http",
             display_name: "HTTP API",
             critical: false,
             max_retries: 3,
-            base_backoff: std::time::Duration::from_secs(5),
-            max_backoff: std::time::Duration::from_secs(60),
+            base_backoff: Duration::from_secs(5),
+            max_backoff: Duration::from_secs(60),
             stack_kb: 512,
         }
     }
@@ -70,18 +77,21 @@ impl LanforgeService for HttpService {
 }
 
 impl AsyncService for HttpService {
-    async fn run(&mut self) -> lanforge_core::error::Result<()> {
+    async fn run(&mut self) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
 
         let listen_addr = cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080");
         let addr: SocketAddr = listen_addr.parse().map_err(|e| {
-            lanforge_core::error::CoreError::Generic(format!(
+            CoreError::Generic(format!(
                 "Invalid http_listen address '{}': {}",
                 listen_addr, e
             ))
         })?;
 
-        let state = AppState { cfg };
+        let state = AppState {
+            cfg,
+            ctx: self.ctx.clone(),
+        };
 
         let app = Router::new()
             .route(
@@ -96,11 +106,12 @@ impl AsyncService for HttpService {
             lanforge_core::error::CoreError::Generic(format!("Failed to bind to {}: {}", addr, e))
         })?;
 
+        let ctx_shutdown = self.ctx.clone();
         axum::serve(tcp_listener, app)
             .with_graceful_shutdown(async move {
-                let mut rx = LanforgeContext::bus().subscribe();
+                let mut rx = ctx_shutdown.bus().subscribe();
                 while let Ok(event) = rx.recv().await {
-                    if !LanforgeContext::is_running()
+                    if !ctx_shutdown.is_running()
                         || matches!(event.event, lanforge_core::bus::LanforgeEvent::Shutdown)
                     {
                         info!("HTTP: shutdown signal received");
@@ -122,20 +133,20 @@ impl AsyncService for HttpService {
 // ---------------------------------------------------------------------------
 
 async fn handle_register_get(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(payload): Query<RegisterRequest>,
 ) -> impl IntoResponse {
-    process_registration(payload).await
+    process_registration(state.ctx, payload).await
 }
 
 async fn handle_register_post(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> impl IntoResponse {
-    process_registration(payload).await
+    process_registration(state.ctx, payload).await
 }
 
-async fn process_registration(req: RegisterRequest) -> impl IntoResponse {
+async fn process_registration(ctx: LanforgeContext, req: RegisterRequest) -> impl IntoResponse {
     let mac_addr = match MacAddr::parse(&req.mac) {
         Some(m) => m,
         None => {
@@ -154,7 +165,7 @@ async fn process_registration(req: RegisterRequest) -> impl IntoResponse {
         mac_addr, req.hostname, v4_static, v6_suffix
     );
 
-    let _ = LanforgeContext::instance().apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
         mac: mac_addr,
         hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
         v4_static: FieldUpdate::from(v4_static),
@@ -172,16 +183,22 @@ async fn process_registration(req: RegisterRequest) -> impl IntoResponse {
     )
 }
 
-async fn handle_devices() -> impl IntoResponse {
-    let devices = LanforgeContext::devices();
+async fn handle_devices(State(state): State<AppState>) -> impl IntoResponse {
+    let devices = state.ctx.all_devices();
     Json(devices)
 }
 
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
-    let devices = LanforgeContext::devices();
+    let devices = state.ctx.all_devices();
     let total = devices.len();
-    let online = devices.iter().filter(|d| d.is_online()).count();
-    let static_ct = devices.iter().filter(|d| d.is_static()).count();
+    let online = devices
+        .iter()
+        .filter(|d: &&Arc<lanforge_core::device::Device>| d.is_online())
+        .count();
+    let static_ct = devices
+        .iter()
+        .filter(|d: &&Arc<lanforge_core::device::Device>| d.is_static())
+        .count();
 
     Json(serde_json::json!({
         "service": "lanforge",

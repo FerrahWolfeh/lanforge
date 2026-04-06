@@ -4,9 +4,9 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Origin;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::DeviceTable;
-use lanforge_core::state::update::{DeviceUpdate, FieldUpdate};
+use lanforge_core::state::{DeviceUpdate, FieldUpdate, State};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use crate::api::Response;
 use crate::config::ApiConfig;
@@ -16,16 +16,15 @@ fn make_dummy_config() -> ApiConfig {
     ApiConfig::dummy()
 }
 
-fn init_test_context() {
-    LanforgeContext::reset_instance_for_tests();
+fn init_test_context() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
-    let table = DeviceTable::new();
-    LanforgeContext::init(bus, table, None);
+    let table = State::new();
+    LanforgeContext::new(bus, table, None)
 }
 
 #[tokio::test]
 async fn test_host_list_returns_static_and_cli_only() {
-    init_test_context();
+    let ctx_handle = init_test_context();
     let cfg = Arc::new(make_dummy_config());
 
     let ctx = ClientContext {
@@ -33,11 +32,12 @@ async fn test_host_list_returns_static_and_cli_only() {
         uptime_secs: 10,
         last_scan_secs_ago: 5,
         cfg,
+        ctx: ctx_handle.clone(),
     };
 
     // 1. Add a CLI device
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
-    let _ = LanforgeContext::instance().apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
         mac: mac_cli,
         hostname: FieldUpdate::Set("cli-host".to_string()),
         v4_static: FieldUpdate::NoChange,
@@ -47,15 +47,15 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 2. Add a Dynamic device
     let mac_dyn = MacAddr::parse("00:00:00:00:00:02").unwrap();
-    let _ = LanforgeContext::allocate_v4_lease(
-        mac_dyn,
-        "192.168.1.10".parse().unwrap(),
-        std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
-    );
+    let _ = ctx_handle.apply(&DeviceUpdate::V4LeaseGranted {
+        mac: mac_dyn,
+        ip: "192.168.1.10".parse().unwrap(),
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
 
     // 3. Add a TOML device
     let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
-    let _ = LanforgeContext::instance().apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
         mac: mac_toml,
         hostname: FieldUpdate::Set("toml-host".to_string()),
         v4_static: FieldUpdate::Set("192.168.1.5".parse().unwrap()),
@@ -100,7 +100,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
 #[tokio::test]
 async fn test_api_status_reports_gua_and_ula() {
-    init_test_context();
+    let ctx_handle = init_test_context();
 
     let gua = "2001:db8::1".to_string();
     let ula = "fd00::".to_string();
@@ -113,6 +113,7 @@ async fn test_api_status_reports_gua_and_ula() {
         uptime_secs: 100,
         last_scan_secs_ago: 10,
         cfg: cfg.clone(),
+        ctx: ctx_handle,
     };
 
     let resp = ctx.handle_status().await;

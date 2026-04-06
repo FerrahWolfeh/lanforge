@@ -3,8 +3,9 @@ use hickory_proto::rr::rdata::opt::EdnsOption;
 use hickory_proto::rr::{Name, RData, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use lanforge_core::bus::EventBus;
-use lanforge_core::device::{Device, Ipv6AddrOrSuffix};
+use lanforge_core::device::{Device, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::{DeviceUpdate, FieldUpdate, State};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -22,7 +23,7 @@ use lanforge_core::context::LanforgeContext;
 
 fn init_test_context() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
-    let table = lanforge_core::state::DeviceTable::new();
+    let table = State::new();
     LanforgeContext::new(bus, table, None)
 }
 
@@ -37,20 +38,16 @@ fn mock_config() -> DnsConfig {
 
 // Helpers para testes que operam diretamente no DeviceTable (sem async)
 fn register_test_device(ctx: &LanforgeContext, hostname: &str, mac: MacAddr, ip: Ipv4Addr) {
-    let _ = ctx.apply(
-        &lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
-            mac,
-            ip,
-            expires: SystemTime::now() + Duration::from_secs(3600),
-        },
-    );
+    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip,
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
     if !hostname.is_empty() {
-        let _ = ctx.apply(
-            &lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
-                mac,
-                hostname: hostname.to_string(),
-            },
-        );
+        let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+            mac,
+            hostname: hostname.to_string(),
+        });
     }
 }
 
@@ -88,7 +85,7 @@ fn resolve_local_matches_question_name_exactly() {
     let name = Name::from_str("solarium.lan.").unwrap();
     query.add_query(hickory_proto::op::Query::query(name.clone(), RecordType::A));
 
-    let device = ctx.get_device_opt(&mac).unwrap();
+    let device = ctx.get_device(&mac).unwrap();
     let result = resolve_local(&query, &device, RecordType::A, &cfg, ctx).unwrap();
     let resp_bytes = result.unwrap();
     let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
@@ -107,36 +104,30 @@ fn test_resolve_local_v6_suffix_merging() {
 
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
 
-    let _ = ctx.apply(
-        &lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
-            mac,
-            hostname: "test".to_string(),
-        },
-    );
+    let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "test".to_string(),
+    });
 
-    let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
         addr: "2001:db8::1".parse().unwrap(),
     });
 
     // Directly setup static device via apply to ensure consistency
-    let _ = ctx.apply(
-        &lanforge_core::state::update::DeviceUpdate::CliHostUpdated {
-            mac,
-            hostname: lanforge_core::state::update::FieldUpdate::Set("test".to_string()),
-            v4_static: lanforge_core::state::update::FieldUpdate::NoChange,
-            v6_suffix: lanforge_core::state::update::FieldUpdate::Set(
-                Ipv6AddrOrSuffix::parse("::beef").unwrap(),
-            ),
-            origin: lanforge_core::device::Origin::Cli,
-        },
-    );
+    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+        mac,
+        hostname: FieldUpdate::Set("test".to_string()),
+        v4_static: FieldUpdate::NoChange,
+        v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::beef").unwrap()),
+        origin: Origin::Cli,
+    });
 
     let mut query = Message::new();
     let name = Name::from_str("test.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::AAAA));
 
-    let device_arc = ctx.get_device_opt(&mac).expect("Should resolve locally");
+    let device_arc = ctx.get_device(&mac).expect("Should resolve locally");
     let res_bytes = resolve_local(&query, &device_arc, RecordType::AAAA, &cfg, ctx)
         .unwrap()
         .expect("Should resolve locally");
@@ -168,24 +159,20 @@ fn test_resolve_local_priority_ordering() {
 
     let mac = MacAddr([1, 2, 3, 4, 5, 0x22]);
 
-    let _ = ctx.apply(
-        &lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
-            mac,
-            hostname: "priority-test".to_string(),
-        },
-    );
-    let _ = ctx.apply(
-        &lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
-            mac,
-            ip: "192.168.1.1".parse().unwrap(),
-            expires: SystemTime::now() + Duration::from_secs(3600),
-        },
-    );
-    let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "priority-test".to_string(),
+    });
+    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip: "192.168.1.1".parse().unwrap(),
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
         addr: "2001:db8::1".parse().unwrap(),
     });
-    let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
         addr: "fd00::1".parse().unwrap(),
     });
@@ -194,7 +181,7 @@ fn test_resolve_local_priority_ordering() {
     let name = Name::from_str("priority-test.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::ANY));
 
-    let device_arc = ctx.get_device_opt(&mac).unwrap();
+    let device_arc = ctx.get_device(&mac).unwrap();
     let res_bytes = resolve_local(&query, &device_arc, RecordType::ANY, &cfg, ctx)
         .unwrap()
         .expect("Should resolve locally");
@@ -276,21 +263,17 @@ fn test_dhcp_registration_creates_dns_record() {
     let ip = Ipv4Addr::new(192, 168, 1, 50);
 
     // 1. Simulate DHCPv4 Lease
-    let _ = ctx.apply(
-        &lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
-            mac,
-            ip,
-            expires: SystemTime::now() + Duration::from_secs(3600),
-        },
-    );
+    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip,
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
 
     // 2. Simulate Hostname Hint from DHCP
-    let _ = ctx.apply(
-        &lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
-            mac,
-            hostname: "my-device".to_string(),
-        },
-    );
+    let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "my-device".to_string(),
+    });
 
     let mut query = Message::new();
     let name = Name::from_str("my-device.lan.").unwrap();

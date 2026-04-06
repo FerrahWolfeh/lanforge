@@ -1,5 +1,6 @@
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::state::DeviceUpdate;
 use std::fmt::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use tokio::sync::mpsc;
@@ -8,7 +9,7 @@ use tracing::{debug, error, warn};
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RData, RecordType};
 
-use crate::error::{NetworkError, Result};
+use crate::error::NetworkError;
 
 const MDNS_PORT: u16 = 5353;
 const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
@@ -46,7 +47,7 @@ impl LanforgeService for MdnsProber {
 }
 
 impl AsyncService for MdnsProber {
-    async fn run(&mut self) -> lanforge_core::error::Result<()> {
+    async fn run(&mut self) -> Result<(), CoreError> {
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
 
@@ -55,12 +56,6 @@ impl AsyncService for MdnsProber {
             return Err(CoreError::Generic(e.to_string()));
         }
         Ok(())
-    }
-}
-
-impl Default for MdnsProber {
-    fn default() -> Self {
-        Self::new(LanforgeContext::instance())
     }
 }
 
@@ -84,8 +79,8 @@ async fn run_mdns_worker(
     ctx: LanforgeContext,
     mut rx: mpsc::Receiver<MdnsCommand>,
     tx: mpsc::Sender<MdnsCommand>,
-) -> Result<()> {
-    let bus = ctx.bus_opt();
+) -> Result<(), NetworkError> {
+    let bus = ctx.bus();
     // We bind to a random port to SEND queries, and a fixed port to LISTEN if we want passive,
     // but on Linux, to receive multicast, we usually bind to 5353 with REUSEPORT.
     let socket_v4 = setup_multicast_socket_v4()?;
@@ -105,7 +100,7 @@ async fn run_mdns_worker(
     let ctx_v4 = ctx.clone();
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
-        while ctx_v4.is_running_opt() {
+        while ctx_v4.is_running() {
             match socket_v4_clone.recv_from(&mut buf) {
                 Ok((n, addr)) => {
                     let _ = resp_tx_v4.blocking_send((buf[..n].to_vec(), addr));
@@ -133,7 +128,7 @@ async fn run_mdns_worker(
     let ctx_v6 = ctx.clone();
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
-        while ctx_v6.is_running_opt() {
+        while ctx_v6.is_running() {
             match socket_v6_clone.recv_from(&mut buf) {
                 Ok((n, addr)) => {
                     let _ = resp_tx_v6.blocking_send((buf[..n].to_vec(), addr));
@@ -153,7 +148,7 @@ async fn run_mdns_worker(
     let mut bus_rx = bus.subscribe();
 
     loop {
-        if !ctx.is_running_opt() {
+        if !ctx.is_running() {
             break;
         }
 
@@ -170,13 +165,11 @@ async fn run_mdns_worker(
                     break;
                 }
             }
-            resp = resp_rx.recv() => {
-                if let Some((data_vec, addr)) = resp {
-                    let ctx_clone = ctx.clone();
-                    tokio::spawn(async move {
-                        handle_mdns_packet(&ctx_clone, &data_vec, addr);
-                    });
-                }
+            Some((data_vec, addr)) = resp_rx.recv() => {
+                let ctx_clone = ctx.clone();
+                tokio::spawn(async move {
+                    handle_mdns_packet(&ctx_clone, &data_vec, addr);
+                });
             }
             () = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
                 // Periodic flag check if idle
@@ -204,7 +197,7 @@ fn handle_lanforge_event(event: &LanforgeEvent, tx: &mpsc::Sender<MdnsCommand>) 
     }
 }
 
-fn setup_multicast_socket_v4() -> Result<UdpSocket> {
+fn setup_multicast_socket_v4() -> Result<UdpSocket, NetworkError> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
@@ -238,7 +231,7 @@ fn setup_multicast_socket_v4() -> Result<UdpSocket> {
     Ok(socket.into())
 }
 
-fn setup_multicast_socket_v6() -> Result<UdpSocket> {
+fn setup_multicast_socket_v6() -> Result<UdpSocket, NetworkError> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
@@ -269,7 +262,7 @@ fn setup_multicast_socket_v6() -> Result<UdpSocket> {
     Ok(socket.into())
 }
 
-fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket) -> Result<()> {
+fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket) -> Result<(), NetworkError> {
     let mut msg = Message::new();
     msg.set_id(0); // mDNS standard
     msg.set_message_type(MessageType::Query);
@@ -291,7 +284,11 @@ fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket) -> Result<()> {
     Ok(())
 }
 
-fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) -> Result<()> {
+fn send_unicast_query(
+    sock4: &UdpSocket,
+    sock6: &UdpSocket,
+    target: IpAddr,
+) -> Result<(), NetworkError> {
     let mut msg = Message::new();
     msg.set_id(0);
     msg.set_message_type(MessageType::Query);
@@ -361,23 +358,21 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
             }
 
             // Try to find the MAC for the sender IP
-            let mac = ctx.get_mac_by_ip_opt(from.ip());
+            let mac = ctx.get_mac_by_ip(from.ip());
 
             if let Some(mac) = mac {
                 // If it already has a hostname, skip update to avoid useless noise
-                if let Some(dev) = ctx.get_device_opt(&mac)
+                if let Some(dev) = ctx.get_device(&mac)
                     && !dev.hostname.name.is_empty()
                 {
                     continue;
                 }
 
                 debug!("mDNS descoberta: {} -> {}", from.ip(), clean_host);
-                let _ = ctx.apply(
-                    &lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
-                        mac,
-                        hostname: clean_host.to_string(),
-                    },
-                );
+                let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+                    mac,
+                    hostname: clean_host.to_string(),
+                });
             }
         }
     }

@@ -17,14 +17,15 @@
 //!     E->>C: SlaacObserved (GUA) / NdpSeen (Other)
 //! ```
 
+use crate::error::NetworkError;
 use crate::ifmon::NetlinkStream;
-use crate::{error::Result, slaac::bootstrap_table};
+use crate::slaac::bootstrap_table;
 use futures::StreamExt;
 use futures::stream::TryStreamExt;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService};
+use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
 use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::packet_route::{
@@ -34,6 +35,7 @@ use rtnetlink::packet_route::{
 use rtnetlink::{Handle, IpVersion};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 // ---------------------------------------------------------------------------
@@ -187,7 +189,7 @@ pub async fn get_ipv6_neighbors(
     handle: &Handle,
     target_prefix: &str,
     target_ifindex: Option<u32>,
-) -> Result<Vec<NeighborEvent>> {
+) -> Result<Vec<NeighborEvent>, NetworkError> {
     let mut neighbors = Vec::new();
     let neighbours_get = handle.neighbours().get();
     let neighbours_get = neighbours_get.set_family(IpVersion::V6);
@@ -245,14 +247,14 @@ impl NdpMonitor {
 }
 
 impl LanforgeService for NdpMonitor {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "monitor",
             display_name: "NdpMonitor",
             critical: true,
             max_retries: 0,
-            base_backoff: std::time::Duration::from_secs(2),
-            max_backoff: std::time::Duration::from_secs(30),
+            base_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(30),
             stack_kb: 512,
         }
     }
@@ -261,28 +263,35 @@ impl LanforgeService for NdpMonitor {
         format!("NDP Monitor (ifindex: {})", self.target_ifindex)
     }
 
-    fn on_shutdown(&mut self) -> std::result::Result<(), CoreError> {
+    fn on_shutdown(&mut self) -> Result<(), CoreError> {
         Ok(())
     }
 }
 
 impl AsyncService for NdpMonitor {
-    async fn run(&mut self) -> std::result::Result<(), CoreError> {
-        let mut bus_rx = self.ctx.bus_opt().subscribe();
+    async fn run(&mut self) -> Result<(), CoreError> {
+        let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
 
         // 1. Initial Neighbor Scan (Bootstrap)
         {
-            if let Err(e) =
-                bootstrap_table(&self.ctx, "", &self.handle, None, None, Some(self.target_ifindex)).await
+            if let Err(e) = bootstrap_table(
+                &self.ctx,
+                "",
+                &self.handle,
+                None,
+                None,
+                Some(self.target_ifindex),
+            )
+            .await
             {
                 tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
             }
         }
 
         loop {
-            if !self.ctx.is_running_opt() {
+            if !self.ctx.is_running() {
                 break;
             }
             let mut rx = self.messages.lock().await;
@@ -369,7 +378,7 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
 mod tests {
     use super::*;
     use lanforge_core::{
-        state::update::DeviceUpdate,
+        state::DeviceUpdate,
         utils::{ip_matches_prefix, mac_from_eui64_link_local},
     };
     use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};

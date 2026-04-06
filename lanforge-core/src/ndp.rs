@@ -4,7 +4,7 @@
 
 use std::net::Ipv6Addr;
 
-use crate::{identifiers::MacAddr, state::update::DeviceUpdate, utils::ip_matches_prefix};
+use crate::{context::state::DeviceUpdate, identifiers::MacAddr, utils::ip_matches_prefix};
 
 /// A neighbor event (IPv4 or IPv6) observed via the kernel `RTM_NEWNEIGH` netlink signal.
 #[derive(Debug, Clone, PartialEq, Eq)]

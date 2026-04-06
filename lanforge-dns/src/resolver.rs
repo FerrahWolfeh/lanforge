@@ -29,7 +29,7 @@ impl<'a> LocalResolver<'a> {
     ) -> Result<Vec<u8>, crate::error::DnsError> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
-        if let Some(device) = self.ctx.get_by_hostname_opt(hostname) {
+        if let Some(device) = self.ctx.get_by_hostname(hostname) {
             if let Some(records) = self.resolve_local(query, &device, qtype) {
                 return rb.success(records);
             }
@@ -52,7 +52,7 @@ impl<'a> LocalResolver<'a> {
             return Ok(None);
         };
 
-        let Some(device) = self.ctx.get_by_ip_opt(&target_ip) else {
+        let Some(device) = self.ctx.get_by_ip(&target_ip) else {
             return Ok(None);
         };
 
@@ -137,7 +137,7 @@ impl<'a> LocalResolver<'a> {
     pub fn collect_device_ips(&self, device: &Device) -> Vec<IpAddr> {
         let (sys_gua, sys_ula) = self
             .ctx
-            .target_ifindex_opt()
+            .target_ifindex()
             .map_or((None, None), |idx| self.ctx.get_interface_prefixes_opt(idx));
 
         // Fallback to configured prefixes if system hasn't learned them yet (useful for tests)

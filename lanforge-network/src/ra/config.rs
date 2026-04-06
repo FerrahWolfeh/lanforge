@@ -5,7 +5,7 @@
 //! - RFC 4191 §2.1   — Router priority
 //! - RFC 8106         — RDNSS and DNSSL
 
-use crate::error::{NetworkError, Result};
+use crate::error::NetworkError;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -257,7 +257,7 @@ impl RaConfig {
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
     )]
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), NetworkError> {
         let max = self.max_interval.as_secs();
         if !(4..=1800).contains(&max) {
             return Err(NetworkError::Config(format!(

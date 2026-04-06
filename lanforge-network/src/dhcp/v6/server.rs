@@ -22,7 +22,7 @@ use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::utils::mac_from_eui64_link_local;
-use std::net::Ipv6Addr;
+use std::net::{Ipv6Addr, SocketAddrV6};
 use std::str::FromStr;
 use tracing::{debug, info, warn};
 
@@ -148,7 +148,7 @@ impl Dhcpv6Server {
 
         // 1. Try to recover MAC from NDP cache (synchronous lock)
         if mac.is_none() {
-            mac = self.ctx.get_mac_by_ip_opt(peer.into());
+            mac = self.ctx.get_mac_by_ip(peer.into());
         }
 
         // 2. Resolve identity (new synchronous lock)
@@ -157,7 +157,7 @@ impl Dhcpv6Server {
                 m,
                 None,
                 Self::get_vendor_class(msg),
-                self.ctx.get_device_opt(&m),
+                self.ctx.get_device(&m),
             )
         });
 
@@ -170,7 +170,7 @@ impl Dhcpv6Server {
             // Force the kernel to resolve the MAC by sending an empty packet.
             // Reusing the persistent poke socket!
             let poke_sock = self.ndp_poke_sock.clone();
-            let addr = std::net::SocketAddrV6::new(peer, 546, 0, 0);
+            let addr = SocketAddrV6::new(peer, 546, 0, 0);
             let _ = poke_sock.send_to(&[0], addr);
         }
 
@@ -840,7 +840,7 @@ mod tests {
         Decodable, Decoder,
         v6::{DhcpOptions, IANA, OptionCode},
     };
-    use lanforge_core::device::Ipv6AddrOrSuffix;
+    use lanforge_core::{device::Ipv6AddrOrSuffix, state::DeviceUpdate};
     use std::net::Ipv6Addr;
 
     fn dummy_server() -> Dhcpv6Server {
@@ -851,16 +851,14 @@ mod tests {
         let end = "fd97:f00d:cafe:3731::200".parse::<Ipv6Addr>().unwrap();
 
         // Use instance apply instead of global singleton
-        let _ = ctx.apply(
-            &lanforge_core::state::update::DeviceUpdate::InterfaceIpsChanged {
-                ifindex: 0,
-                link_local: None,
-                gua: None,
-                ula: Some(ula),
-                preferred: 3600,
-                valid: 3600,
-            },
-        );
+        let _ = ctx.apply(&DeviceUpdate::InterfaceIpsChanged {
+            ifindex: 0,
+            link_local: None,
+            gua: None,
+            ula: Some(ula),
+            preferred: 3600,
+            valid: 3600,
+        });
 
         let cfg = Dhcpv6Config {
             enabled: true,

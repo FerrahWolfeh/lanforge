@@ -44,6 +44,3 @@ pub enum NetworkError {
     #[error("mDNS failure: {0}")]
     Mdns(String),
 }
-
-/// A specialized Result type for network operations.
-pub type Result<T> = std::result::Result<T, NetworkError>;

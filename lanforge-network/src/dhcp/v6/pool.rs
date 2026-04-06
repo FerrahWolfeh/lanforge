@@ -240,7 +240,7 @@ impl Ipv6Pool {
         if dev_opt.is_none()
             && let Some(m) = mac
         {
-            dev_opt = ctx.get_device_opt(&m);
+            dev_opt = ctx.get_device(&m);
         }
 
         if let Some(dev) = dev_opt {
@@ -294,7 +294,7 @@ impl Ipv6Pool {
         if dev_opt.is_none()
             && let Some(m) = mac
         {
-            dev_opt = ctx.get_device_opt(&m);
+            dev_opt = ctx.get_device(&m);
         }
 
         if let Some(dev) = dev_opt {
@@ -434,8 +434,8 @@ impl Ipv6Pool {
         None
     }
 
-    pub fn lookup_by_mac_legacy(&self, mac: MacAddr) -> Vec<Ipv6Addr> {
-        LanforgeContext::get_device(&mac).map_or_else(Vec::new, |dev| {
+    pub fn lookup_by_mac_legacy(&self, ctx: &LanforgeContext, mac: MacAddr) -> Vec<Ipv6Addr> {
+        ctx.get_device(&mac).map_or_else(Vec::new, |dev| {
             dev.v6.iter().filter_map(IPv6State::ip).collect()
         })
     }
@@ -481,7 +481,7 @@ impl Ipv6Pool {
         ip: &Ipv6Addr,
         target_mac: Option<MacAddr>,
     ) -> bool {
-        if let Some(mac) = ctx.get_mac_by_ip_opt(std::net::IpAddr::V6(*ip))
+        if let Some(mac) = ctx.get_mac_by_ip(std::net::IpAddr::V6(*ip))
             && Some(mac) != target_mac
         {
             return false;
@@ -535,7 +535,7 @@ impl Ipv6Pool {
         let mut curr = start + step;
         while curr < end {
             let prefix_addr = Ipv6Addr::from(curr.to_be_bytes());
-            if !ctx.is_prefix_delegated_opt(prefix_addr, 64) {
+            if !ctx.is_prefix_delegated(prefix_addr, 64) {
                 return Some((prefix_addr, 64));
             }
             curr += step;
@@ -565,7 +565,10 @@ impl Ipv6Pool {
 #[cfg(test)]
 mod tests {
     use crate::test_utils::init_test_context;
-    use lanforge_core::device::Ipv6AddrOrSuffix;
+    use lanforge_core::{
+        device::{Ipv6AddrOrSuffix, Origin},
+        state::{DeviceUpdate, FieldUpdate},
+    };
 
     use super::*;
     use std::time::Duration;
@@ -586,19 +589,17 @@ mod tests {
         iaid: u32,
         ip: Ipv6Addr,
     ) {
-        let _ = ctx.apply(
-            &lanforge_core::state::update::DeviceUpdate::V6LeaseGranted {
-                mac,
-                duid: Duid::new(duid.to_vec()),
-                iaid,
-                ip,
-                expires: SystemTime::now() + Duration::from_secs(3600),
-            },
-        );
+        let _ = ctx.apply(&DeviceUpdate::V6LeaseGranted {
+            mac,
+            duid: Duid::new(duid.to_vec()),
+            iaid,
+            ip,
+            expires: SystemTime::now() + Duration::from_secs(3600),
+        });
     }
 
     fn release_mac(ctx: &LanforgeContext, mac: MacAddr) {
-        let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::HostRemoved { mac });
+        let _ = ctx.apply(&DeviceUpdate::HostRemoved { mac });
     }
 
     #[test]
@@ -778,15 +779,13 @@ mod tests {
         let mut pool = Ipv6Pool::new(&Vec::new(), Some(ula), 64);
 
         let static_suffix = Ipv6AddrOrSuffix::parse("::cafe").unwrap();
-        let _ = ctx.apply(
-            &lanforge_core::state::update::DeviceUpdate::CliHostUpdated {
-                mac: mac(1),
-                hostname: lanforge_core::state::update::FieldUpdate::Set("test".to_string()),
-                v4_static: lanforge_core::state::update::FieldUpdate::NoChange,
-                v6_suffix: lanforge_core::state::update::FieldUpdate::Set(static_suffix),
-                origin: lanforge_core::device::Origin::Cli,
-            },
-        );
+        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+            mac: mac(1),
+            hostname: FieldUpdate::Set("test".to_string()),
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::Set(static_suffix),
+            origin: Origin::Cli,
+        });
 
         let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
         assert!(ips.contains(&"fd00::cafe".parse().unwrap()));
@@ -829,15 +828,13 @@ mod tests {
         let static_ip: Ipv6Addr = "fd00::cafe".parse().unwrap();
 
         // 1. Setup static device
-        let _ = ctx.apply(
-            &lanforge_core::state::update::DeviceUpdate::CliHostUpdated {
-                mac: mac(1),
-                hostname: lanforge_core::state::update::FieldUpdate::Set("test".to_string()),
-                v4_static: lanforge_core::state::update::FieldUpdate::NoChange,
-                v6_suffix: lanforge_core::state::update::FieldUpdate::Set(static_suffix),
-                origin: lanforge_core::device::Origin::Cli,
-            },
-        );
+        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+            mac: mac(1),
+            hostname: FieldUpdate::Set("test".to_string()),
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::Set(static_suffix),
+            origin: Origin::Cli,
+        });
 
         // 2. Allocate first time
         let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);

@@ -32,18 +32,18 @@ pub use config::*;
 use lanforge_core::context::LanforgeContext;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
-use crate::error::{NetworkError, Result};
+use crate::error::NetworkError;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService};
+use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
 use rand::RngExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
 use std::io;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
-use tokio::io::unix::AsyncFd;
+use tokio::io::unix::{AsyncFd, AsyncFdReadyGuard};
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -151,21 +151,21 @@ impl RaService {
 }
 
 impl LanforgeService for RaService {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "ra",
             display_name: "RA Server",
             critical: true,
             max_retries: 0,
-            base_backoff: std::time::Duration::from_secs(2),
-            max_backoff: std::time::Duration::from_secs(30),
+            base_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(30),
             stack_kb: 512,
         }
     }
 }
 
 impl AsyncService for RaService {
-    async fn run(&mut self) -> std::result::Result<(), CoreError> {
+    async fn run(&mut self) -> Result<(), CoreError> {
         self.cfg
             .validate()
             .map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -179,7 +179,7 @@ impl AsyncService for RaService {
             self.cfg.effective_router_lifetime().as_secs(),
         );
 
-        let mut bus_rx = self.ctx.bus_opt().subscribe();
+        let mut bus_rx = self.ctx.bus().subscribe();
 
         let iface_index =
             get_iface_index(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -187,7 +187,7 @@ impl AsyncService for RaService {
         // Parallel optimization: Wait for interface data ONLY if not already present
         if self
             .ctx
-            .get_interface_state_opt(iface_index)
+            .get_interface_state(iface_index)
             .link_local
             .is_none()
         {
@@ -195,7 +195,7 @@ impl AsyncService for RaService {
                 "RA: Waiting for interface discovery on '{}'...",
                 self.cfg.iface
             );
-            self.ctx.wait_for_interfaces_opt().await?;
+            self.ctx.wait_for_interfaces().await?;
         }
 
         let mac = get_iface_mac(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -225,7 +225,7 @@ impl AsyncService for RaService {
         let mut buf = [0u8; 1500];
 
         loop {
-            if !self.ctx.is_running_opt() {
+            if !self.ctx.is_running() {
                 break;
             }
             let now = Instant::now();
@@ -302,7 +302,7 @@ impl RaService {
 
     async fn handle_rs_packet(
         &self,
-        res: io::Result<tokio::io::unix::AsyncFdReadyGuard<'_, Socket>>,
+        res: io::Result<AsyncFdReadyGuard<'_, Socket>>,
         buf: &mut [u8],
         ctx: RaContext<'_>,
         state: &mut RaState,
@@ -319,8 +319,8 @@ impl RaService {
                     let data = &buf[..n];
                     if data.first() == Some(&ICMPV6_TYPE_RS) {
                         let rs_src: Option<Ipv6Addr> = src_sa.as_socket().and_then(|s| match s {
-                            std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
-                            std::net::SocketAddr::V4(_) => None,
+                            SocketAddr::V6(v6) => Some(*v6.ip()),
+                            SocketAddr::V4(_) => None,
                         });
                         debug!("RS received from {rs_src:?}");
 
@@ -404,8 +404,8 @@ fn send_ra_internal(
     iface_index: u32,
     unicast_dst: Option<Ipv6Addr>,
     state: &mut RaState,
-) -> Result<()> {
-    let if_ips = lctx.get_interface_state_opt(iface_index);
+) -> Result<(), NetworkError> {
+    let if_ips = lctx.get_interface_state(iface_index);
 
     let src_ll = if_ips
         .link_local
@@ -442,7 +442,7 @@ fn send_ra_internal(
 // Raw ICMPv6 Socket Configuration
 // ---------------------------------------------------------------------------
 
-fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket> {
+fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket, NetworkError> {
     let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)).map_err(|e| {
         NetworkError::Socket(format!(
             "Failed to create raw ICMPv6 socket — CAP_NET_RAW required: {e}"
@@ -544,7 +544,7 @@ fn set_sockopt_raw(
 // Interface Helpers (sysfs — direct read without extra syscalls)
 // ---------------------------------------------------------------------------
 
-fn get_iface_index(iface: &str) -> Result<u32> {
+fn get_iface_index(iface: &str) -> Result<u32, NetworkError> {
     std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
         .map_err(|e| NetworkError::Generic(format!("ifindex de '{iface}': {e}")))?
         .trim()
@@ -552,14 +552,14 @@ fn get_iface_index(iface: &str) -> Result<u32> {
         .map_err(|e| NetworkError::Generic(format!("parse ifindex: {e}")))
 }
 
-fn get_iface_mac(iface: &str) -> Result<[u8; 6]> {
+fn get_iface_mac(iface: &str) -> Result<[u8; 6], NetworkError> {
     let s = std::fs::read_to_string(format!("/sys/class/net/{iface}/address"))
         .map_err(|e| NetworkError::Generic(format!("MAC de '{iface}': {e}")))?;
     let bytes: Vec<u8> = s
         .trim()
         .split(':')
         .map(|x| u8::from_str_radix(x, 16).map_err(|e| NetworkError::InvalidMac(e.to_string())))
-        .collect::<Result<Vec<u8>>>()?;
+        .collect::<Result<Vec<u8>, NetworkError>>()?;
     bytes
         .try_into()
         .map_err(|_| NetworkError::InvalidMac("MAC deve ter 6 bytes".to_string()))

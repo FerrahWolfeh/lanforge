@@ -34,7 +34,7 @@ use lanforge_core::bus::{DeviceChange, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::IPv6State;
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::update::LeaseTarget;
+use lanforge_core::state::{DeviceUpdate, LeaseTarget};
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -142,7 +142,7 @@ impl SyncService for Dhcpv6Service {
         );
 
         // Pre-allocate static reservations for ULA prefix
-        let registry = self.ctx.get_static_registry_opt();
+        let registry = self.ctx.get_static_registry();
         if let Some(ula) = self.config.ula_prefix {
             let ula_ips: Vec<_> = registry
                 .v6_reservations()
@@ -158,7 +158,7 @@ impl SyncService for Dhcpv6Service {
             .iter()
             .find(|i| i.name == self.config.iface)
             .map(|i| i.index)
-            && let Some((gua, pref, val)) = self.ctx.get_interface_gua_at_opt(ifindex)
+            && let Some((gua, pref, val)) = self.ctx.get_interface_gua_at(ifindex)
         {
             info!(
                 "DHCPv6: Resyncing GUA from global state: {} (pref={}, valid={})",
@@ -179,7 +179,7 @@ impl SyncService for Dhcpv6Service {
         info!("DHCPv6 state machine started");
 
         loop {
-            if !self.ctx.is_running_opt() {
+            if !self.ctx.is_running() {
                 break;
             }
 
@@ -307,7 +307,7 @@ impl Dhcpv6Service {
                 target: LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. },
             } => {
                 let (duid, target_ip) = {
-                    let device = self.ctx.get_device_opt(&mac);
+                    let device = self.ctx.get_device(&mac);
                     let duid = device.as_ref().and_then(|d| d.duid.clone());
                     let ll_ip = device.as_ref().and_then(|d| {
                         d.v6.iter()
@@ -357,14 +357,14 @@ impl Dhcpv6Service {
                 );
 
                 // Update static reservations for the new GUA prefix
-                let registry = self.ctx.get_static_registry_opt();
+                let registry = self.ctx.get_static_registry();
                 let gua_ips: Vec<_> = registry
                     .v6_reservations()
                     .map(|s| server.pool.construct_addr(g, &s))
                     .collect();
                 server.pool.reserve_statics(gua_ips);
 
-                for dev in self.ctx.all_devices_opt() {
+                for dev in self.ctx.all_devices() {
                     if let Some(duid) = &dev.duid {
                         let has_gua_lease = dev.v6.iter().any(|s| {
                             if let IPv6State::Dynamic(lease) = s {
@@ -415,48 +415,42 @@ fn apply_learned_state(
     // 1. Process IA_NA (Non-temporary Addresses)
     for &iaid in &ias.na {
         let assigned_ips = learned_duid.map_or_else(
-            || opt_mac.map_or_else(Vec::new, |mac| server.pool.lookup_by_mac_legacy(mac)),
+            || opt_mac.map_or_else(Vec::new, |mac| server.pool.lookup_by_mac_legacy(ctx, mac)),
             |duid| server.last_assignment_for(duid, iaid),
         );
 
         if assigned_ips.is_empty() {
             if let Some(duid) = learned_duid {
                 // No IPs assigned yet, but IAID is known
-                let _ = ctx.apply(
-                    &lanforge_core::state::update::DeviceUpdate::DuidAssociated {
-                        mac: opt_mac,
-                        duid: duid.clone(),
-                        iaid,
-                    },
-                );
+                let _ = ctx.apply(&DeviceUpdate::DuidAssociated {
+                    mac: opt_mac,
+                    duid: duid.clone(),
+                    iaid,
+                });
             }
         } else {
             // One or more IPs assigned
             for ip in assigned_ips {
                 if let Some(duid) = learned_duid {
-                    let _ = ctx.apply(
-                        &lanforge_core::state::update::DeviceUpdate::V6LeaseGranted {
-                            mac: opt_mac,
-                            duid: duid.clone(),
+                    let _ = ctx.apply(&DeviceUpdate::V6LeaseGranted {
+                        mac: opt_mac,
+                        duid: duid.clone(),
+                        iaid,
+                        ip,
+                        expires,
+                    });
+                } else if let Some(mac) = opt_mac {
+                    // Search for DUID in our table if not provided in packet
+                    if let Some(device) = ctx.get_device(&mac)
+                        && let Some(duid) = device.duid.clone()
+                    {
+                        let _ = ctx.apply(&DeviceUpdate::V6LeaseGranted {
+                            mac: Some(mac),
+                            duid,
                             iaid,
                             ip,
                             expires,
-                        },
-                    );
-                } else if let Some(mac) = opt_mac {
-                    // Search for DUID in our table if not provided in packet
-                    if let Some(device) = ctx.get_device_opt(&mac)
-                        && let Some(duid) = device.duid.clone()
-                    {
-                        let _ = ctx.apply(
-                            &lanforge_core::state::update::DeviceUpdate::V6LeaseGranted {
-                                mac: Some(mac),
-                                duid,
-                                iaid,
-                                ip,
-                                expires,
-                            },
-                        );
+                        });
                     }
                 }
             }
@@ -470,16 +464,14 @@ fn apply_learned_state(
             .and_then(|duid| server.pool.lookup_prefix(ctx, duid, iaid));
 
         if let (Some(duid), Some((prefix, len))) = (learned_duid, assigned_prefix) {
-            let _ = ctx.apply(
-                &lanforge_core::state::update::DeviceUpdate::V6PrefixAssigned {
-                    mac: opt_mac,
-                    duid: duid.clone(),
-                    iaid,
-                    prefix,
-                    len,
-                    expires,
-                },
-            );
+            let _ = ctx.apply(&DeviceUpdate::V6PrefixAssigned {
+                mac: opt_mac,
+                duid: duid.clone(),
+                iaid,
+                prefix,
+                len,
+                expires,
+            });
         }
     }
 }

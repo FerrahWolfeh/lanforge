@@ -16,6 +16,7 @@
 
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Device;
 use lanforge_core::identifiers::MacAddr;
 use std::net::Ipv4Addr;
@@ -58,12 +59,12 @@ pub struct DhcpServer {
     pub pool: IpPool,
     /// Temporarily stores the last allocated IP during packet processing.
     pub last_assigned_ip: Option<Ipv4Addr>,
-    pub ctx: lanforge_core::context::LanforgeContext,
+    pub ctx: LanforgeContext,
 }
 
 impl DhcpServer {
     #[must_use]
-    pub fn new(cfg: Dhcpv4Config, ctx: lanforge_core::context::LanforgeContext) -> Self {
+    pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
         let pool = IpPool::new(cfg.range_start, cfg.range_end);
         Self {
             cfg,
@@ -405,6 +406,7 @@ mod tests {
     use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode};
     use dhcproto::{Decodable, Decoder, Encodable, Encoder};
     use lanforge_core::context::LanforgeContext;
+    use lanforge_core::state::DeviceUpdate;
     use std::net::Ipv4Addr;
 
     // -----------------------------------------------------------------------
@@ -570,7 +572,7 @@ mod tests {
 
         // 1. MAC1 aloca o IP primeiro
         let expiry = SystemTime::now() + Duration::from_secs(3600);
-        let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
+        let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
             mac: mac1,
             ip: contested_ip,
             expires: expiry,

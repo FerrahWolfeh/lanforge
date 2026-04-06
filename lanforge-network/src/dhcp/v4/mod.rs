@@ -36,7 +36,7 @@ use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::update::LeaseTarget;
+use lanforge_core::state::{DeviceUpdate, LeaseTarget};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
@@ -48,7 +48,7 @@ use crate::dhcp::v4::config::Dhcpv4Config;
 use crate::error::NetworkError;
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{LanforgeService, SyncService};
+use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, SyncService};
 
 pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
@@ -63,8 +63,8 @@ impl Dhcpv4Service {
 }
 
 impl LanforgeService for Dhcpv4Service {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "dhcpv4",
             display_name: "DHCPv4 Server",
             critical: true,
@@ -84,10 +84,7 @@ impl LanforgeService for Dhcpv4Service {
 }
 
 impl SyncService for Dhcpv4Service {
-    fn run(
-        &mut self,
-        bus_rx: &lanforge_core::service::SyncBusReceiver,
-    ) -> std::result::Result<(), CoreError> {
+    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
         // 1. Wait for DB and Interface Ready
         info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
         bus_rx.wait_for_db();
@@ -96,7 +93,7 @@ impl SyncService for Dhcpv4Service {
         let mut server = DhcpServer::new(self.cfg.clone(), self.ctx.clone());
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
-        let registry = self.ctx.get_static_registry_opt();
+        let registry = self.ctx.get_static_registry();
         server.pool.reserve_statics(registry.v4_ips());
 
         let socket = bind_dhcp_socket_sync(&self.cfg.iface, self.cfg.port)
@@ -112,7 +109,7 @@ impl SyncService for Dhcpv4Service {
         let mut last_cleanup = Instant::now();
 
         loop {
-            if !self.ctx.is_running_opt() {
+            if !self.ctx.is_running() {
                 break;
             }
 
@@ -165,7 +162,7 @@ impl Dhcpv4Service {
                     chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
                 ]);
                 let handle_res = {
-                    let device = self.ctx.get_device_opt(&mac);
+                    let device = self.ctx.get_device(&mac);
                     server.handle_packet(data, device)
                 };
 
@@ -190,7 +187,7 @@ impl Dhcpv4Service {
                                 dst_mac_arr,
                             );
                         } else {
-                            let relay_addr = std::net::SocketAddrV4::new(giaddr, self.cfg.port);
+                            let relay_addr = SocketAddrV4::new(giaddr, self.cfg.port);
                             let _ = socket.send_to(&packet, relay_addr);
                         }
 
@@ -198,33 +195,26 @@ impl Dhcpv4Service {
                             let expires = SystemTime::now()
                                 + Duration::from_secs(u64::from(self.cfg.lease_time));
 
-                            let _ = self.ctx.apply(
-                                &lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
-                                    mac,
-                                    ip: assigned_ip,
-                                    expires,
-                                },
-                            );
+                            let _ = self.ctx.apply(&DeviceUpdate::V4LeaseGranted {
+                                mac,
+                                ip: assigned_ip,
+                                expires,
+                            });
 
                             if let Some(hostname) = req_hostname
                                 && !hostname.is_empty()
                             {
-                                let _ = self.ctx.apply(
-                                    &lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
-                                        mac,
-                                        hostname,
-                                    },
-                                );
+                                let _ = self
+                                    .ctx
+                                    .apply(&DeviceUpdate::DhcpHostnameHint { mac, hostname });
                             }
                         }
                     }
                     HandleResult::Release { ip: _ } => {
-                        let _ = self.ctx.apply(
-                            &lanforge_core::state::update::DeviceUpdate::LeaseReleased {
-                                mac,
-                                target: lanforge_core::state::update::LeaseTarget::V4,
-                            },
-                        );
+                        let _ = self.ctx.apply(&DeviceUpdate::LeaseReleased {
+                            mac,
+                            target: LeaseTarget::V4,
+                        });
                     }
                     HandleResult::Ignore => {}
                 }
@@ -245,7 +235,7 @@ impl Dhcpv4Service {
                 target: LeaseTarget::V4,
             } => {
                 info!("DHCPv4: Forcing release of {} via CLI", mac);
-                let ip = self.ctx.get_device_opt(mac).and_then(|d| d.v4.ip());
+                let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                 if let Some(i) = ip {
                     server.pool.release(i);
                 }
@@ -254,7 +244,7 @@ impl Dhcpv4Service {
                 mac,
                 target: LeaseTarget::V4,
             } => {
-                let ip = self.ctx.get_device_opt(mac).and_then(|d| d.v4.ip());
+                let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                 if let Some(ip) = ip {
                     let packet = server.build_forcerenew(*mac, ip);
                     let _ = raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref());

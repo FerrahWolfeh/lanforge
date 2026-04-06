@@ -3,8 +3,7 @@
 use crate::engine::LeaseDb;
 use lanforge_core::device::{Device, IPv4State, IPv6State, V4Lease};
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::DeviceTable;
-use lanforge_core::state::update::DeviceUpdate;
+use lanforge_core::state::{DeviceUpdate, State};
 use rusqlite::params;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -25,7 +24,7 @@ fn create_and_load_empty() {
 #[test]
 fn save_and_load_roundtrip() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
 
     let mac = make_mac(1);
     let mut dev = Device::new(mac);
@@ -47,7 +46,7 @@ fn save_and_load_roundtrip() {
 #[test]
 fn handles_slaac_multiple_addrs() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
 
     let mac = make_mac(2);
     table.apply_update(DeviceUpdate::SlaacObserved {
@@ -82,7 +81,7 @@ fn handles_slaac_multiple_addrs() {
 #[test]
 fn handles_duid_persistence() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
 
     let mac = make_mac(3);
     let duid = Duid::new(vec![
@@ -108,7 +107,7 @@ fn handles_duid_persistence() {
 #[test]
 fn handles_v6_lease() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
 
     let mac = make_mac(4);
     let duid = Duid::new(vec![
@@ -144,7 +143,7 @@ fn handles_v6_lease() {
 #[test]
 fn save_overwrites_previous() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = make_mac(1);
 
     let mut dev1 = Device::new(mac);
@@ -211,20 +210,18 @@ async fn db_worker_persists_on_dirty_event() {
     let db_path = dir.path().join("test.db");
     let log_db_path = dir.path().join("test_logs.db");
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let bus_rx = SyncBusReceiver::new(rx);
-
     let bus = Arc::new(lanforge_core::bus::EventBus::new());
-    let table = lanforge_core::state::DeviceTable::new();
+    let table = lanforge_core::state::State::new();
+    let ctx = LanforgeContext::new(bus.clone(), table, None);
 
-    LanforgeContext::reset_instance_for_tests();
-    LanforgeContext::init(bus.clone(), table, None);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let bus_rx = SyncBusReceiver::new(rx, ctx.clone());
 
-    let mut worker = crate::worker::DbWorker::new(db_path.clone(), log_db_path);
+    let mut worker = crate::worker::DbWorker::new(db_path.clone(), log_db_path, ctx.clone());
 
     // Prepare table and context
     let mac = make_mac(0xAB);
-    let _ = LanforgeContext::update_hostname(
+    let _ = ctx.update_hostname(
         mac,
         "worker-test".into(),
         lanforge_core::device::HostnameOrigin::Dhcp,
@@ -264,7 +261,7 @@ async fn db_worker_persists_on_dirty_event() {
 #[test]
 fn test_remove_device_cascades() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
 
     let mac = make_mac(5);
     let mut dev = Device::new(mac);
@@ -317,7 +314,7 @@ fn test_remove_device_cascades() {
 #[test]
 fn test_seen_v4_persistence() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = make_mac(10);
     let ip: Ipv4Addr = "1.2.3.4".parse().unwrap();
 
@@ -352,7 +349,7 @@ fn test_seen_v4_persistence() {
 #[test]
 fn test_slaac_persistence_integration() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = make_mac(11);
     let slaac1: Ipv6Addr = "fd00::1".parse().unwrap();
     let slaac2: Ipv6Addr = "fd00::2".parse().unwrap();
@@ -388,7 +385,7 @@ fn test_slaac_persistence_integration() {
 #[test]
 fn test_worthy_filtering_db_integration() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = make_mac(12);
     let ll_ip: Ipv6Addr = "fe80::dead:beef".parse().unwrap();
 
@@ -421,7 +418,7 @@ fn test_worthy_filtering_db_integration() {
 #[test]
 fn test_persistence_of_various_updates() {
     let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = DeviceTable::new();
+    let mut table = State::new();
     let mac = make_mac(20);
 
     // 1. Hostname Hint

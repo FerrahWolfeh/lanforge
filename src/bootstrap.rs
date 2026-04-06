@@ -4,7 +4,7 @@ use lanforge_core::bus::{EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::DeviceTable;
+use lanforge_core::state::State;
 use lanforge_db::engine::LeaseDb;
 use lanforge_network::ifmon::InterfaceMonitor;
 use netlink_sys::SocketAddr;
@@ -36,7 +36,7 @@ pub struct Bootstrapper;
 
 impl Bootstrapper {
     /// Executes the full bootstrap sequence.
-    pub async fn run() -> Result<BootstrapResult> {
+    pub async fn run() -> Result<(BootstrapResult, LanforgeContext)> {
         let cfg = Arc::new(Self::load_config());
 
         info!(
@@ -48,25 +48,27 @@ impl Bootstrapper {
         let initial_table = Self::init_device_table(&cfg)?;
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
-
-        LanforgeContext::init(bus.clone(), initial_table, Some(target_ifindex));
+        let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
         let _ = bus.publish(LanforgeEvent::StateReady);
 
         let (handle, messages) = Self::init_netlink()?;
         let messages = Arc::new(Mutex::new(messages));
 
-        let if_state = Self::perform_initial_scan(&handle, &messages, target_ifindex).await?;
+        let if_state = Self::perform_initial_scan(&handle, &messages, target_ifindex, &ctx).await?;
         Self::log_welcome_banner(&cfg, &if_state);
 
-        LanforgeContext::set_if_ready(true);
+        ctx.set_if_ready(true);
         let _ = bus.publish(LanforgeEvent::InterfaceReady);
 
-        Ok(BootstrapResult {
-            cfg,
-            rt_handle: handle,
-            messages,
-            target_ifindex,
-        })
+        Ok((
+            BootstrapResult {
+                cfg,
+                rt_handle: handle,
+                messages,
+                target_ifindex,
+            },
+            ctx,
+        ))
     }
 
     fn load_config() -> Config {
@@ -89,7 +91,7 @@ impl Bootstrapper {
         cfg
     }
 
-    fn init_device_table(cfg: &Config) -> Result<DeviceTable> {
+    fn init_device_table(cfg: &Config) -> Result<State> {
         let leases_db_path = std::path::PathBuf::from(&cfg.leases_db);
 
         let mut table = match LeaseDb::open(&leases_db_path) {
@@ -100,7 +102,7 @@ impl Bootstrapper {
                 }
                 Err(e) => {
                     warn!("Falha ao carregar DB ({e}), iniciando do zero");
-                    DeviceTable::new()
+                    State::new()
                 }
             },
             Err(e) => {
@@ -168,12 +170,13 @@ impl Bootstrapper {
         handle: &rtnetlink::Handle,
         messages: &Arc<Mutex<NetlinkMessages>>,
         target_ifindex: u32,
+        ctx: &LanforgeContext,
     ) -> Result<lanforge_core::state::InterfaceState> {
         let ifmon_init = InterfaceMonitor::new(
             handle.clone(),
             messages.clone(),
             target_ifindex,
-            LanforgeContext::instance(),
+            ctx.clone(),
         );
         ifmon_init
             .initial_scan()

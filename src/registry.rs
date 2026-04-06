@@ -25,7 +25,7 @@ impl ServiceRegistry {
     ///
     /// Each async service gets its own `current_thread` Tokio runtime and a named OS thread,
     /// making it visible in system monitoring tools like `htop`.
-    pub fn spawn_async<S, F>(&mut self, ctx: LanforgeContext, factory: F)
+    pub fn spawn_async<S, F>(&mut self, ctx: &LanforgeContext, factory: F)
     where
         S: AsyncService + 'static,
         F: Fn() -> S + Send + Sync + 'static,
@@ -56,7 +56,7 @@ impl ServiceRegistry {
     }
 
     /// Spawns a synchronous service in a dedicated, named OS thread.
-    pub fn spawn_sync<S, F>(&mut self, ctx: LanforgeContext, factory: F)
+    pub fn spawn_sync<S, F>(&mut self, ctx: &LanforgeContext, factory: F)
     where
         S: SyncService + 'static,
         F: Fn() -> S + Send + Sync + 'static,

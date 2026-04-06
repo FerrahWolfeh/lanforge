@@ -5,9 +5,9 @@ use crate::config::ApiConfig;
 use crate::error::{ApiError, Result};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget};
 use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::update::{DeviceUpdate, FieldUpdate, LeaseTarget};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -20,11 +20,12 @@ use lanforge_core::service::{AsyncService, LanforgeService};
 
 pub struct ControlService {
     cfg: Arc<ApiConfig>,
+    ctx: LanforgeContext,
 }
 
 impl ControlService {
-    pub fn new(cfg: Arc<ApiConfig>) -> Self {
-        Self { cfg }
+    pub fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
+        Self { cfg, ctx }
     }
 }
 
@@ -73,7 +74,7 @@ impl AsyncService for ControlService {
             debug!("Aviso: não foi possível setar permissões 0666 no socket: {e}");
         }
 
-        let mut bus_rx = LanforgeContext::bus().subscribe();
+        let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<String> = None;
 
         let startup_time = std::time::Instant::now();
@@ -97,7 +98,7 @@ impl AsyncService for ControlService {
         };
 
         loop {
-            if !LanforgeContext::is_running() {
+            if !self.ctx.is_running() {
                 break;
             }
             tokio::select! {
@@ -127,6 +128,7 @@ impl AsyncService for ControlService {
                                 uptime_secs: startup_time.elapsed().as_secs(),
                                 last_scan_secs_ago: last_scan.elapsed().as_secs(),
                                 cfg: cfg.clone(),
+                                ctx: self.ctx.clone(),
                             };
                             tokio::spawn(async move {
                                 if let Err(e) = handle_client(stream, ctx).await {
@@ -154,6 +156,7 @@ impl AsyncService for ControlService {
                             uptime_secs: startup_time.elapsed().as_secs(),
                             last_scan_secs_ago: last_scan.elapsed().as_secs(),
                             cfg: cfg.clone(),
+                            ctx: self.ctx.clone(),
                         };
                         tokio::spawn(async move {
                             if let Err(e) = handle_client(stream, ctx).await {
@@ -190,6 +193,8 @@ pub(crate) struct ClientContext {
     pub(crate) last_scan_secs_ago: u64,
     /// API server configuration.
     pub(crate) cfg: Arc<ApiConfig>,
+    /// Lanforge Context.
+    pub(crate) ctx: LanforgeContext,
 }
 
 // ---------------------------------------------------------------------------
@@ -226,19 +231,19 @@ where
                 ..
             }) => ctx.handle_devices(filter, vendor, method).await,
             Ok(Command::Reload) => {
-                let _ = LanforgeContext::bus().publish(LanforgeEvent::ReloadConfig);
+                let _ = ctx.ctx.bus().publish(LanforgeEvent::ReloadConfig);
                 Response::Success(SimpleSuccess {
                     message: "Reload signal sent successfully".to_string(),
                 })
             }
             Ok(Command::Scan) => {
-                let _ = LanforgeContext::bus().publish(LanforgeEvent::ScanRequested);
+                let _ = ctx.ctx.bus().publish(LanforgeEvent::ScanRequested);
                 Response::Success(SimpleSuccess {
                     message: "mDNS Discovery Scan disparado".to_string(),
                 })
             }
             Ok(Command::Shutdown) => {
-                let _ = LanforgeContext::bus().publish(LanforgeEvent::Shutdown);
+                let _ = ctx.ctx.bus().publish(LanforgeEvent::Shutdown);
                 Response::Success(SimpleSuccess {
                     message: "Desligando graciosa e instantaneamente".to_string(),
                 })
@@ -246,8 +251,10 @@ where
             Ok(Command::Purge { mac }) => {
                 use std::str::FromStr;
                 let mac_addr = MacAddr::from_str(&mac).map_err(ApiError::Generic)?;
-                let _ =
-                    LanforgeContext::bus().publish(LanforgeEvent::DevicePurged { mac: mac_addr });
+                let _ = ctx
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::DevicePurged { mac: mac_addr });
                 Response::Success(SimpleSuccess {
                     message: format!("Device {mac} purged from memory"),
                 })
@@ -293,9 +300,12 @@ where
                     }
                 }
 
-                let mut rx = LanforgeContext::bus().subscribe();
-                while let Ok(event) = rx.recv().await {
-                    if let Ok(json_resp) = serde_json::to_string(&Response::Event(event)) {
+                let mut rx = ctx.ctx.bus().subscribe();
+                while let Ok(msg) = rx.recv().await {
+                    if !ctx.ctx.is_running() || matches!(msg.event, LanforgeEvent::Shutdown) {
+                        break;
+                    }
+                    if let Ok(json_resp) = serde_json::to_string(&Response::Event(msg)) {
                         if writer.write_all(json_resp.as_bytes()).await.is_err() {
                             break;
                         }
@@ -315,7 +325,7 @@ where
             }) => {
                 if let Some(m) = mac {
                     if let Some(mac_addr) = MacAddr::parse(&m) {
-                        let _ = LanforgeContext::instance().apply(&DeviceUpdate::CliHostUpdated {
+                        let _ = ctx.ctx.apply(&DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
                             hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
                             v4_static: v4
@@ -382,7 +392,7 @@ where
                             error: e.to_string(),
                         }
                     } else {
-                        let _ = LanforgeContext::instance().apply(&DeviceUpdate::CliHostUpdated {
+                        let _ = ctx.ctx.apply(&DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
                             hostname: hn,
                             v4_static: v4s,
@@ -404,7 +414,7 @@ where
 
             Ok(Command::HostRemove { mac }) => {
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
-                    let _ = LanforgeContext::remove_host(mac_addr);
+                    let _ = ctx.ctx.remove_host(mac_addr);
                     Response::Success(SimpleSuccess {
                         message: format!("Host removido (MAC {mac})"),
                     })
@@ -418,7 +428,7 @@ where
                 if let Ok(mac_addr) = mac.parse::<MacAddr>() {
                     let targets = if let Some(t) = target {
                         vec![t]
-                    } else if let Some(dev) = LanforgeContext::get_device(&mac_addr) {
+                    } else if let Some(dev) = ctx.ctx.get_device(&mac_addr) {
                         let mut t = Vec::new();
                         if dev.v4.ip().is_some()
                             && !matches!(dev.v4, lanforge_core::device::IPv4State::Static(_))
@@ -439,7 +449,7 @@ where
                     };
 
                     for t in targets {
-                        let _ = LanforgeContext::bus().publish(LanforgeEvent::LeaseRenew {
+                        let _ = ctx.ctx.bus().publish(LanforgeEvent::LeaseRenew {
                             mac: mac_addr,
                             target: t,
                         });
@@ -458,7 +468,7 @@ where
                 if let Ok(mac_addr) = mac.parse::<MacAddr>() {
                     let targets = if let Some(t) = target {
                         vec![t]
-                    } else if let Some(dev) = LanforgeContext::get_device(&mac_addr) {
+                    } else if let Some(dev) = ctx.ctx.get_device(&mac_addr) {
                         let mut t = Vec::new();
                         if dev.v4.ip().is_some()
                             && !matches!(dev.v4, lanforge_core::device::IPv4State::Static(_))
@@ -479,11 +489,11 @@ where
                     };
 
                     for t in targets {
-                        let _ = LanforgeContext::instance().apply(&DeviceUpdate::LeaseReleased {
+                        let _ = ctx.ctx.apply(&DeviceUpdate::LeaseReleased {
                             mac: mac_addr,
                             target: t.clone(),
                         });
-                        let _ = LanforgeContext::bus().publish(LanforgeEvent::LeaseRelease {
+                        let _ = ctx.ctx.bus().publish(LanforgeEvent::LeaseRelease {
                             mac: mac_addr,
                             target: t,
                         });
@@ -499,7 +509,7 @@ where
                 }
             }
             Ok(Command::DbVacuum) => {
-                let _ = LanforgeContext::bus().publish(LanforgeEvent::DbVacuum);
+                let _ = ctx.ctx.bus().publish(LanforgeEvent::DbVacuum);
                 Response::Success(SimpleSuccess {
                     message: "Iniciando vacuum do sqlite...".to_string(),
                 })
