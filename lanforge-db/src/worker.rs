@@ -58,6 +58,14 @@ impl SyncService for DbWorker {
             let event = bus_rx.recv_timeout(Duration::from_millis(500));
 
             if let Some(event) = event {
+                // First, record as a system log if applicable
+                if event.is_loggable()
+                    && let Err(err) = log_db.record_log(&event)
+                {
+                    warn!("DB worker: failed to record log: {err}");
+                }
+
+                // Second, dispatch to specialized handlers
                 match event.event {
                     LanforgeEvent::DeviceTableDirty => {
                         let snapshot = Box::new((*LanforgeContext::table().read()).clone());
@@ -77,13 +85,7 @@ impl SyncService for DbWorker {
                     LanforgeEvent::Shutdown => {
                         break;
                     }
-                    _ => {
-                        if event.is_loggable()
-                            && let Err(err) = log_db.record_log(&event)
-                        {
-                            warn!("DB worker: failed to record log: {err}");
-                        }
-                    }
+                    _ => {}
                 }
             }
 

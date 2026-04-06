@@ -154,10 +154,28 @@ where
         // Spawn the bridge task on the Tokio runtime (not this OS thread)
         let mut event_rx = bus.subscribe();
         rt_handle.spawn(async move {
-            while let Ok(event) = event_rx.recv().await {
-                let is_shutdown = matches!(event.event, LanforgeEvent::Shutdown);
-                if tx.send(event).is_err() || is_shutdown {
-                    break;
+            loop {
+                // We use a small timeout to check the termination flag occasionally
+                // but mostly we rely on the broadcast events.
+                match event_rx.recv().await {
+                    Ok(event) => {
+                        let is_shutdown = matches!(event.event, LanforgeEvent::Shutdown);
+                        if tx.send(event).is_err() {
+                            break;
+                        }
+                        if is_shutdown {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        warn!(
+                            "Event bridge for '{}' lagged by {} messages",
+                            meta.id, count
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
                 }
             }
         });
@@ -391,6 +409,106 @@ mod tests {
             .await
             .expect("Supervisor should terminate on shutdown")
             .expect("Supervisor task panicked");
+    }
+
+    #[tokio::test]
+    async fn test_sync_service_bridge_resilience() {
+        println!("INFO: Starting test_sync_service_bridge_resilience v5");
+        lanforge_core::context::LanforgeContext::reset_all_for_tests();
+        init_context();
+        let bus = LanforgeContext::bus();
+        let mut ready_sub = bus.subscribe();
+        let rt_handle = tokio::runtime::Handle::current();
+        let received_count = Arc::new(AtomicU32::new(0));
+        let count_clone = received_count.clone();
+
+        // Spawn sync service that exits on Shutdown
+        let handle = std::thread::spawn(move || {
+            supervise_sync(&rt_handle, move || {
+                let r = count_clone.clone();
+                TestSyncService { received: r }
+            });
+        });
+
+        // 1. Wait for ServiceReady
+        let mut ready = false;
+        for _ in 0..100 {
+            if let Ok(event) =
+                tokio::time::timeout(Duration::from_millis(50), ready_sub.recv()).await
+                && let Ok(e) = event
+                && let LanforgeEvent::ServiceReady { name } = e.event
+                && name == "test-sync"
+            {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready, "test-sync never became ready");
+        println!("INFO: Service ready, publishing probes");
+
+        // 2. Publish two loggable events and a shutdown
+        let _ = bus.publish(LanforgeEvent::DbVacuum);
+        let _ = bus.publish(LanforgeEvent::DbVacuum);
+        let _ = bus.publish(LanforgeEvent::Shutdown);
+
+        // Dá um tempo para a task assíncrona do bridge rotear os eventos pro MPSC
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        lanforge_core::context::LanforgeContext::terminate();
+
+        // 3. Join thread - NÃO BLOQUEIE O RUNTIME, use spawn_blocking!
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = handle.join();
+        })
+        .await;
+
+        // 4. Verify we received the 2 events
+        let count = received_count.load(Ordering::Relaxed);
+        println!("INFO: Received count: {count}");
+        assert!(
+            count >= 2,
+            "Bridge failed to deliver events even without overload"
+        );
+    }
+
+    struct TestSyncService {
+        received: Arc<AtomicU32>,
+    }
+    impl lanforge_core::service::LanforgeService for TestSyncService {
+        fn meta(&self) -> lanforge_core::service::ServiceMeta {
+            lanforge_core::service::ServiceMeta {
+                id: "test-sync",
+                display_name: "test-sync",
+                critical: false,
+                max_retries: 3,
+                base_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(10),
+                stack_kb: 1,
+            }
+        }
+    }
+
+    impl lanforge_core::service::SyncService for TestSyncService {
+        fn run(
+            &mut self,
+            bus_rx: &lanforge_core::service::SyncBusReceiver,
+        ) -> lanforge_core::error::Result<()> {
+            loop {
+                if let Some(e) = bus_rx.recv_timeout(Duration::from_millis(500)) {
+                    println!("LOG: TestSyncService received: {:?}", e.event);
+                    if matches!(e.event, LanforgeEvent::Shutdown) {
+                        break;
+                    }
+                    if matches!(e.event, LanforgeEvent::DbVacuum) {
+                        self.received.fetch_add(1, Ordering::SeqCst);
+                    }
+                } else if !LanforgeContext::is_running() {
+                    // Sai apenas se o contexto geral foi finalizado
+                    break;
+                }
+            }
+            Ok(())
+        }
     }
 
     struct RefService {

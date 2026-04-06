@@ -67,6 +67,13 @@ impl LanforgeContext {
         RUNNING.store(false, Ordering::SeqCst);
     }
 
+    /// Resets all global states to their default values. Primarily for testing.
+    pub fn reset_all_for_tests() {
+        RUNNING.store(true, Ordering::SeqCst);
+        DB_READY.store(false, Ordering::SeqCst);
+        IF_READY.store(false, Ordering::SeqCst);
+    }
+
     /// Returns true if the system is currently running and hasn't been terminated.
     #[must_use]
     pub fn is_running() -> bool {
