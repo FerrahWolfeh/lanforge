@@ -44,7 +44,7 @@ impl Daemon {
     /// 3. Executes the main event loop.
     /// 4. Handles graceful shutdown.
     pub async fn run(mut self) -> Result<()> {
-        let bus = self.bootstrap.bus.clone();
+        let bus = LanforgeContext::bus();
 
         // 1. Subscribe to bus BEFORE spawning services to capture all ServiceReady events
         let bus_rx = bus.subscribe();
@@ -69,49 +69,76 @@ impl Daemon {
         let db_path = std::path::PathBuf::from(&cfg.leases_db);
         let log_db_path = std::path::PathBuf::from(&cfg.log_db);
         self.registry
-            .spawn_sync(move || DbWorker::new(db_path.clone(), log_db_path.clone()));
+            .spawn_sync(LanforgeContext::instance(), move || {
+                DbWorker::new(db_path.clone(), log_db_path.clone())
+            });
 
         // mDNS Prober (Async)
-        self.registry.spawn_async(MdnsProber::new);
+        self.registry
+            .spawn_async(LanforgeContext::instance(), move || {
+                MdnsProber::new(LanforgeContext::instance())
+            });
 
         // Interface Monitor (Async)
         let h1 = netlink_handle.clone();
         let m1 = messages.clone();
         self.registry
-            .spawn_async(move || InterfaceMonitor::new(h1.clone(), m1.clone(), target_ifindex));
+            .spawn_async(LanforgeContext::instance(), move || {
+                InterfaceMonitor::new(
+                    h1.clone(),
+                    m1.clone(),
+                    target_ifindex,
+                    LanforgeContext::instance(),
+                )
+            });
 
         // Ndp Monitor (Async)
         let h2 = netlink_handle.clone();
         let m2 = messages.clone();
         self.registry
-            .spawn_async(move || NdpMonitor::new(h2.clone(), m2.clone(), target_ifindex));
+            .spawn_async(LanforgeContext::instance(), move || {
+                NdpMonitor::new(
+                    h2.clone(),
+                    m2.clone(),
+                    target_ifindex,
+                    LanforgeContext::instance(),
+                )
+            });
 
         // RA Service (Async)
         if cfg.ra_enabled {
             let ra_cfg = cfg.to_ra_config();
             self.registry
-                .spawn_async(move || RaService::new(ra_cfg.clone()));
+                .spawn_async(LanforgeContext::instance(), move || {
+                    RaService::new(ra_cfg.clone(), LanforgeContext::instance())
+                });
         }
 
         // DHCPv4 Service (Sync)
         if cfg.dhcpv4_enabled {
             let d4_cfg = cfg.to_dhcpv4_config();
             self.registry
-                .spawn_sync(move || Dhcpv4Service::new(d4_cfg.clone()));
+                .spawn_sync(LanforgeContext::instance(), move || {
+                    Dhcpv4Service::new(d4_cfg.clone(), LanforgeContext::instance())
+                });
         }
 
         // DHCPv6 Service (Sync)
         if cfg.dhcpv6_enabled {
             let d6_cfg = cfg.to_dhcpv6_config();
             self.registry
-                .spawn_sync(move || Dhcpv6Service::new(d6_cfg.clone()));
+                .spawn_sync(LanforgeContext::instance(), move || {
+                    Dhcpv6Service::new(d6_cfg.clone(), LanforgeContext::instance())
+                });
         }
 
         // DNS Service (Async)
         if cfg.dns_enabled {
             let dns_cfg = cfg.to_dns_config();
             self.registry
-                .spawn_async(move || DnsService::new(dns_cfg.clone()));
+                .spawn_async(LanforgeContext::instance(), move || {
+                    DnsService::new(dns_cfg.clone(), LanforgeContext::instance())
+                });
         }
 
         // API & Control Services
@@ -119,19 +146,23 @@ impl Daemon {
 
         let api_cfg_ctrl = api_cfg.clone();
         self.registry
-            .spawn_async(move || ControlService::new(api_cfg_ctrl.clone()));
+            .spawn_async(LanforgeContext::instance(), move || {
+                ControlService::new(api_cfg_ctrl.clone())
+            });
 
         if cfg.http_listen.is_some() {
             let api_cfg_http = api_cfg;
             self.registry
-                .spawn_async(move || HttpService::new(api_cfg_http.clone()));
+                .spawn_async(LanforgeContext::instance(), move || {
+                    HttpService::new(api_cfg_http.clone())
+                });
         }
     }
 
     async fn shutdown(self) -> Result<()> {
         info!("🛑 Iniciando sequência de shutdown...");
         LanforgeContext::terminate();
-        let _ = self.bootstrap.bus.publish(LanforgeEvent::Shutdown);
+        let _ = LanforgeContext::bus().publish(LanforgeEvent::Shutdown);
 
         // Wait for all services to stop (with timeout)
         tokio::select! {
@@ -157,6 +188,7 @@ pub async fn run_scan(
     target_ifindex: u32,
 ) -> Result<()> {
     lanforge_network::slaac::bootstrap_table(
+        &LanforgeContext::instance(),
         &cfg.target_prefix,
         handle,
         gua,

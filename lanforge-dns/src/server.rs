@@ -1,6 +1,6 @@
 use crate::error::DnsError;
 use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
-use lanforge_core::bus::{ManagedTable, TimedEvent};
+use lanforge_core::bus::TimedEvent;
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -27,9 +27,9 @@ use lanforge_core::bus::LanforgeEvent;
 /// reducing atomic reference counting overhead in the fast path.
 pub(crate) struct DnsContext {
     pub cfg: DnsConfig,
-    pub table: Arc<ManagedTable>,
     pub upstream_mgr: Option<Arc<UpstreamManager>>,
     pub stats: Arc<DnsStats>,
+    pub ctx: lanforge_core::context::LanforgeContext,
 }
 
 use lanforge_core::error::CoreError;
@@ -38,14 +38,15 @@ use lanforge_core::service::{AsyncService, LanforgeService};
 pub struct DnsService {
     cfg: DnsConfig,
     stats: Arc<DnsStats>,
+    ctx: lanforge_core::context::LanforgeContext,
 }
 
 impl DnsService {
     #[must_use]
-    pub fn new(cfg: DnsConfig) -> Self {
+    pub fn new(cfg: DnsConfig, ctx: lanforge_core::context::LanforgeContext) -> Self {
         let stats = Arc::new(DnsStats::new());
-        lanforge_core::context::LanforgeContext::set_dns_stats(Arc::clone(&stats));
-        Self { cfg, stats }
+        ctx.set_dns_stats_opt(Arc::clone(&stats));
+        Self { cfg, stats, ctx }
     }
 
     /// Returns a snapshot of the current DNS statistics.
@@ -78,19 +79,16 @@ impl LanforgeService for DnsService {
 
 impl AsyncService for DnsService {
     async fn run(&mut self) -> std::result::Result<(), CoreError> {
-        use lanforge_core::context::LanforgeContext;
-
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
             return Ok(());
         }
 
-        let table = LanforgeContext::table();
-        let bus = LanforgeContext::bus();
+        let bus = self.ctx.bus_opt();
 
         // 1. Wait for DB Ready (Parallel optimization)
         info!("DNS: Waiting for database engine...");
-        LanforgeContext::wait_for_db().await?;
+        self.ctx.wait_for_db_opt().await?;
 
         let udp_sock = Arc::new(
             UdpSocket::bind(self.cfg.listen)
@@ -113,9 +111,9 @@ impl AsyncService for DnsService {
 
         let ctx = Arc::new(DnsContext {
             cfg: self.cfg.clone(),
-            table: Arc::clone(&table),
             upstream_mgr,
             stats: Arc::clone(&self.stats),
+            ctx: self.ctx.clone(),
         });
 
         // Signal readiness
@@ -128,6 +126,7 @@ impl AsyncService for DnsService {
         // UDP Task
         let udp_ctx = Arc::clone(&ctx);
         let udp_sock_inner = Arc::clone(&udp_sock);
+        let ctx_udp = self.ctx.clone();
         let udp_task = tokio::spawn(async move {
             let mut buf = [0u8; 4096];
             loop {
@@ -139,7 +138,7 @@ impl AsyncService for DnsService {
                         }
                     }
                     () = tokio::time::sleep(Duration::from_millis(100)) => {
-                         if !LanforgeContext::is_running() { break; }
+                         if !ctx_udp.is_running_opt() { break; }
                     }
                 }
             }
@@ -147,6 +146,7 @@ impl AsyncService for DnsService {
 
         // TCP Task
         let tcp_ctx = Arc::clone(&ctx);
+        let ctx_tcp = self.ctx.clone();
         let tcp_task = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -172,13 +172,14 @@ impl AsyncService for DnsService {
                         }
                     }
                     () = tokio::time::sleep(Duration::from_millis(100)) => {
-                        if !LanforgeContext::is_running() { break; }
+                        if !ctx_tcp.is_running_opt() { break; }
                     }
                 }
             }
         });
 
         // Wait for shutdown or tasks
+        let ctx_main = self.ctx.clone();
         loop {
             tokio::select! {
                 Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = rx.recv() => {
@@ -186,7 +187,7 @@ impl AsyncService for DnsService {
                     break;
                 }
                 () = tokio::time::sleep(Duration::from_millis(500)) => {
-                    if !LanforgeContext::is_running() { break; }
+                    if !ctx_main.is_running_opt() { break; }
                 }
             }
         }
@@ -277,28 +278,21 @@ fn resolve_local_wire(
             {
                 let safe_hostname = fast_lowercase(hostname_slice);
                 let query = Message::from_bytes(data)?;
-                let resp = {
-                    let t = ctx.table.read();
-                    LocalResolver::new(&ctx.cfg, &t).resolve_ip(
-                        &query,
-                        &safe_hostname,
-                        RecordType::from(raw_qtype),
-                    )?
-                };
+                let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ip(
+                    &query,
+                    &safe_hostname,
+                    RecordType::from(raw_qtype),
+                )?;
                 return Ok(Some(resp));
             }
         }
         QType::PTR => {
-            if let Some(target_ip) = parse_arpa_wire(question.labels()) {
-                let exists = ctx.table.read().get_by_ip(&target_ip).is_some();
-                if exists {
-                    let query = Message::from_bytes(data)?;
-                    let resp = {
-                        let t = ctx.table.read();
-                        LocalResolver::new(&ctx.cfg, &t)
-                            .resolve_ptr(&query, query.queries()[0].name())
-                    }?;
-                    return Ok(resp);
+            if let Some(_target_ip) = parse_arpa_wire(question.labels()) {
+                let query = Message::from_bytes(data)?;
+                let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone())
+                    .resolve_ptr(&query, query.queries()[0].name())?;
+                if let Some(r) = resp {
+                    return Ok(Some(r));
                 }
             }
         }
@@ -325,17 +319,15 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
             let safe_hostname = fast_lowercase(hostname_slice);
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();
-            let resp = {
-                let t = ctx.table.read();
-                LocalResolver::new(&ctx.cfg, &t).resolve_ip(&query, &safe_hostname, qtype)?
-            };
+            let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ip(
+                &query,
+                &safe_hostname,
+                qtype,
+            )?;
             return Ok(Some(resp));
         }
     } else if qtype == RecordType::PTR {
-        let resp = {
-            let t = ctx.table.read();
-            LocalResolver::new(&ctx.cfg, &t).resolve_ptr(&query, qname)?
-        };
+        let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ptr(&query, qname)?;
         if let Some(response) = resp {
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();

@@ -252,6 +252,16 @@ impl DeviceTable {
         }
     }
 
+    /// Checks if a specific prefix is already delegated to any device.
+    #[must_use]
+    pub fn is_prefix_delegated(&self, prefix: Ipv6Addr, len: u8) -> bool {
+        self.devices.values().any(|dev| {
+            dev.v6_prefixes
+                .iter()
+                .any(|p| p.prefix == prefix && p.len == len)
+        })
+    }
+
     /// Produz um registro validado das configurações estáticas.
     /// Realiza detecção de colisões e loga avisos para IPs duplicados.
     pub fn get_static_registry(&self) -> StaticRegistry {

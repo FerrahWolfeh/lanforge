@@ -1,4 +1,5 @@
 use lanforge_core::bus::TimedEvent;
+use lanforge_core::state::update::LeaseTarget;
 use serde::{Deserialize, Serialize};
 
 /// Represents a command sent from a client to the Lanforge daemon.
@@ -74,11 +75,15 @@ pub enum Command {
     LeaseRenew {
         /// Target device MAC address.
         mac: String,
+        /// Optional specific lease target (V4, V6, or V6Prefix with IAID).
+        target: Option<LeaseTarget>,
     },
     /// Manually release a DHCP lease.
     LeaseRelease {
         /// Target device MAC address.
         mac: String,
+        /// Optional specific lease target (V4, V6, or V6Prefix with IAID).
+        target: Option<LeaseTarget>,
     },
     /// Perform a VACUUM operation on the underlying SQLite database.
     DbVacuum,

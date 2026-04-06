@@ -88,15 +88,13 @@ impl IpPool {
     /// Allocates an IP for a MAC address.
     pub fn allocate(
         &mut self,
+        ctx: &LanforgeContext,
         mac: MacAddr,
         requested: Option<Ipv4Addr>,
         _expiry: SystemTime,
     ) -> Option<Ipv4Addr> {
-        let t = LanforgeContext::table();
-        let table = t.read();
-
         // 1. Sticky / Static: already has allocation in global table
-        if let Some(dev) = table.get_device(&mac) {
+        if let Some(dev) = ctx.get_device_opt(&mac) {
             match dev.v4 {
                 lanforge_core::device::IPv4State::Static(ip) => {
                     self.remove_from_available(ip);
@@ -115,7 +113,7 @@ impl IpPool {
             && self.is_in_range(req)
             && self.is_available_in_pool(req)
         {
-            if table.get_mac_by_ip(std::net::IpAddr::V4(req)).is_none() {
+            if ctx.get_mac_by_ip_opt(std::net::IpAddr::V4(req)).is_none() {
                 return Some(req);
             }
             // Not actually free according to single source of truth, sync
@@ -125,7 +123,7 @@ impl IpPool {
         // 3. Fallback: Pick from available pool (O(1))
         while let Some(ip) = self.available_ips.last().copied() {
             self.remove_from_available(ip);
-            if table.get_mac_by_ip(std::net::IpAddr::V4(ip)).is_none() {
+            if ctx.get_mac_by_ip_opt(std::net::IpAddr::V4(ip)).is_none() {
                 return Some(ip);
             }
         }
@@ -133,7 +131,7 @@ impl IpPool {
         // 3.5. Garbage Collection: If pool is empty, scan for naturally expired leases
         for i in self.start..=self.end {
             let ip = Ipv4Addr::from(i);
-            if table.get_mac_by_ip(std::net::IpAddr::V4(ip)).is_none()
+            if ctx.get_mac_by_ip_opt(std::net::IpAddr::V4(ip)).is_none()
                 && !self.declined.contains_key(&ip)
             {
                 self.add_to_available(ip);
@@ -143,7 +141,7 @@ impl IpPool {
         // Second pass after GC
         while let Some(ip) = self.available_ips.last().copied() {
             self.remove_from_available(ip);
-            if table.get_mac_by_ip(std::net::IpAddr::V4(ip)).is_none() {
+            if ctx.get_mac_by_ip_opt(std::net::IpAddr::V4(ip)).is_none() {
                 return Some(ip);
             }
         }
@@ -159,7 +157,7 @@ impl IpPool {
 
             while let Some(ip) = self.available_ips.last().copied() {
                 self.remove_from_available(ip);
-                if table.get_mac_by_ip(std::net::IpAddr::V4(ip)).is_none() {
+                if ctx.get_mac_by_ip_opt(std::net::IpAddr::V4(ip)).is_none() {
                     return Some(ip);
                 }
             }
@@ -224,34 +222,16 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use lanforge_core::bus::{EventBus, ManagedTable};
-    use std::sync::Arc;
+    use crate::test_utils::init_test_context;
 
-    static INIT: std::sync::Once = std::sync::Once::new();
-    fn init_context() {
-        INIT.call_once(|| {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let bus = Arc::new(EventBus::new());
-                let table = Arc::new(ManagedTable::from_table(
-                    bus.clone(),
-                    lanforge_core::state::DeviceTable::new(),
-                    None,
-                ));
-                LanforgeContext::init(bus, table);
-            }));
-        });
-
-        // Clear the state before each test runs to avoid cross-contamination
-        let binding = LanforgeContext::table();
-        let mut w = binding.write();
-        *w = lanforge_core::state::DeviceTable::new();
-    }
-
-    fn pool() -> IpPool {
-        init_context();
-        IpPool::new(
-            Ipv4Addr::new(192, 168, 0, 100),
-            Ipv4Addr::new(192, 168, 0, 105),
+    fn pool() -> (IpPool, LanforgeContext) {
+        let ctx = init_test_context();
+        (
+            IpPool::new(
+                Ipv4Addr::new(192, 168, 0, 100),
+                Ipv4Addr::new(192, 168, 0, 105),
+            ),
+            ctx,
         )
     }
 
@@ -261,10 +241,9 @@ mod tests {
 
     #[test]
     fn allocates_within_range() {
-        init_context();
-        let mut p = pool();
+        let (mut p, ctx) = pool();
         let expiry = SystemTime::now() + Duration::from_secs(3600);
-        let ip = p.allocate(mac(1), None, expiry).unwrap();
+        let ip = p.allocate(&ctx, mac(1), None, expiry).unwrap();
         assert!(
             p.is_in_range(ip),
             "O IP alocado randomicamente deve respeitar o range"
@@ -273,31 +252,27 @@ mod tests {
 
     #[test]
     fn sticky_returns_same_ip() {
-        init_context();
-        let mut p = pool();
+        let (mut p, ctx) = pool();
         let expiry = SystemTime::now() + Duration::from_secs(3600);
 
-        let ip1 = p.allocate(mac(1), None, expiry).unwrap();
+        let ip1 = p.allocate(&ctx, mac(1), None, expiry).unwrap();
         // Simular o LanforgeContext alocando
-        let _ = LanforgeContext::table().update(
-            &lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
-                mac: mac(1),
-                ip: ip1,
-                expires: expiry,
-            },
-        );
+        let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
+            mac: mac(1),
+            ip: ip1,
+            expires: expiry,
+        });
 
-        let ip2 = p.allocate(mac(1), None, expiry).unwrap();
+        let ip2 = p.allocate(&ctx, mac(1), None, expiry).unwrap();
         assert_eq!(ip1, ip2, "Mesmo MAC deve receber o mesmo IP (Sticky)");
     }
 
     #[test]
     fn respects_requested_ip() {
-        init_context();
-        let mut p = pool();
+        let (mut p, ctx) = pool();
         let requested = Ipv4Addr::new(192, 168, 0, 103);
         let expiry = SystemTime::now() + Duration::from_secs(3600);
-        let ip = p.allocate(mac(1), Some(requested), expiry).unwrap();
+        let ip = p.allocate(&ctx, mac(1), Some(requested), expiry).unwrap();
         assert_eq!(
             ip, requested,
             "Deve respeitar o Requested IP se estiver livre"
@@ -306,32 +281,32 @@ mod tests {
 
     #[test]
     fn skips_reserved_and_declined_ips() {
-        init_context();
-        let mut p = pool(); // Range de 6 IPs (.100 a .105)
+        let (mut p, ctx) = pool(); // Range de 6 IPs (.100 a .105)
 
         let reserved_ip = Ipv4Addr::new(192, 168, 0, 100);
         let declined_ip = Ipv4Addr::new(192, 168, 0, 101);
 
         // Simulamos IP reservado no contexto global
-        let binding = LanforgeContext::table();
-        let mut w = binding.write();
-        w.add_static_device(mac(99), "test".to_string(), Some(reserved_ip), None);
-        drop(w);
+        let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::CliHostUpdated {
+            mac: mac(99),
+            hostname: lanforge_core::state::update::FieldUpdate::Set("test".to_string()),
+            v4_static: lanforge_core::state::update::FieldUpdate::Set(reserved_ip),
+            v6_suffix: lanforge_core::state::update::FieldUpdate::NoChange,
+            origin: lanforge_core::device::Origin::Cli,
+        });
 
         p.mark_declined(declined_ip);
 
         // Pedimos IPs
         let expiry = SystemTime::now() + Duration::from_secs(3600);
         for i in 0..4 {
-            if let Some(ip) = p.allocate(mac(i), None, expiry) {
+            if let Some(ip) = p.allocate(&ctx, mac(i), None, expiry) {
                 // Registrar cada um para que NÂO seja pego de novo
-                let _ = LanforgeContext::table().update(
-                    &lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
-                        mac: mac(i),
-                        ip,
-                        expires: expiry,
-                    },
-                );
+                let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
+                    mac: mac(i),
+                    ip,
+                    expires: expiry,
+                });
                 assert_ne!(ip, reserved_ip, "Não deve alocar IP reservado");
                 assert_ne!(
                     ip, declined_ip,
@@ -343,8 +318,7 @@ mod tests {
 
     #[test]
     fn clears_quarantine_if_pool_exhausted() {
-        init_context();
-        let mut p = pool(); // Range de 6 IPs (.100 a .105)
+        let (mut p, ctx) = pool(); // Range de 6 IPs (.100 a .105)
 
         // Colocamos os 6 IPs em quarentena simulando uma rede problemática
         for i in 100..=105 {
@@ -352,7 +326,7 @@ mod tests {
         }
 
         let expiry = SystemTime::now() + Duration::from_secs(3600);
-        let rescued_ip = p.allocate(mac(1), None, expiry).unwrap();
+        let rescued_ip = p.allocate(&ctx, mac(1), None, expiry).unwrap();
         assert!(p.is_in_range(rescued_ip));
         assert!(
             p.declined.is_empty(),
@@ -362,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_declined_quarantine() {
-        init_context();
+        let _ctx = init_test_context();
         let mut p = IpPool::new(
             Ipv4Addr::new(192, 168, 1, 100),
             Ipv4Addr::new(192, 168, 1, 100),

@@ -1,24 +1,21 @@
-use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
 
 use crate::config::DnsConfig;
 use crate::response::ResponseBuilder;
-use crate::utils::{combine_prefix_suffix, parse_arpa};
-use lanforge_core::device::{
-    Device, IPv6State, IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ip,
-};
-use lanforge_core::state::DeviceTable;
+use crate::utils::parse_arpa;
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::device::Device;
 
 pub struct LocalResolver<'a> {
     cfg: &'a DnsConfig,
-    table: &'a DeviceTable,
+    ctx: LanforgeContext,
 }
 
 impl<'a> LocalResolver<'a> {
     #[must_use]
-    pub const fn new(cfg: &'a DnsConfig, table: &'a DeviceTable) -> Self {
-        Self { cfg, table }
+    pub const fn new(cfg: &'a DnsConfig, ctx: LanforgeContext) -> Self {
+        Self { cfg, ctx }
     }
 
     /// Resolves local A/AAAA/ANY queries.
@@ -32,7 +29,7 @@ impl<'a> LocalResolver<'a> {
     ) -> Result<Vec<u8>, crate::error::DnsError> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
-        if let Some(device) = self.table.get_by_hostname(hostname) {
+        if let Some(device) = self.ctx.get_by_hostname_opt(hostname) {
             if let Some(records) = self.resolve_local(query, &device, qtype) {
                 return rb.success(records);
             }
@@ -55,7 +52,7 @@ impl<'a> LocalResolver<'a> {
             return Ok(None);
         };
 
-        let Some(device) = self.table.get_by_ip(&target_ip) else {
+        let Some(device) = self.ctx.get_by_ip_opt(&target_ip) else {
             return Ok(None);
         };
 
@@ -138,54 +135,16 @@ impl<'a> LocalResolver<'a> {
     /// Data is tidied up in memory before being returned for DNS record generation.
     #[must_use]
     pub fn collect_device_ips(&self, device: &Device) -> Vec<IpAddr> {
-        let mut applied_prefixes = HashSet::<Ipv6Prefix>::new();
-        if let Some(ula) = self.cfg.ula_prefix {
-            applied_prefixes.insert(Ipv6Prefix::new(ula, IpClassification::Ula));
-        }
+        let (sys_gua, sys_ula) = self
+            .ctx
+            .target_ifindex_opt()
+            .map_or((None, None), |idx| self.ctx.get_interface_prefixes_opt(idx));
 
-        // 1. Collect all known absolute address prefixes
-        for state in &device.v6 {
-            if let Some(ip) = state.ip() {
-                applied_prefixes.insert(Ipv6Prefix::from_addr(ip));
-            }
-        }
+        // Fallback to configured prefixes if system hasn't learned them yet (useful for tests)
+        let gua = sys_gua.or(self.cfg.gua_prefix);
+        let ula = sys_ula.or(self.cfg.ula_prefix);
 
-        // 2. Gather all potential IPs
-        let mut all_ips = Vec::new();
-
-        // IPv4
-        if let Some(ip) = device.v4.ip() {
-            all_ips.push(IpAddr::V4(ip));
-        }
-        for ip in &device.seen_v4 {
-            all_ips.push(IpAddr::V4(*ip));
-        }
-
-        // IPv6
-        for state in &device.v6 {
-            match state {
-                IPv6State::Dynamic(lease) => all_ips.push(IpAddr::V6(lease.ip)),
-                IPv6State::Slaac(ip) => all_ips.push(IpAddr::V6(*ip)),
-                IPv6State::Static(suf) => match suf {
-                    Ipv6AddrOrSuffix::Full(ip) => all_ips.push(IpAddr::V6(*ip)),
-                    Ipv6AddrOrSuffix::Suffix(_) => {
-                        for prefix in &applied_prefixes {
-                            if matches!(prefix.group, IpClassification::Ula | IpClassification::Gua)
-                                && let Some(ip) = combine_prefix_suffix(&prefix.segments, suf)
-                            {
-                                all_ips.push(IpAddr::V6(ip));
-                            }
-                        }
-                    }
-                },
-            }
-        }
-
-        // 3. De-duplicate and Sort by Priority (ULA > IPv4 > GUA).
-        let mut unique = HashSet::new();
-        all_ips.retain(|ip| unique.insert(*ip));
-        all_ips.sort_by_cached_key(|ip| classify_ip(ip).score());
-
-        all_ips
+        // Use the core method which already handles sorting, deduplication and suffix resolution
+        device.all_addresses_sorted(gua, ula)
     }
 }

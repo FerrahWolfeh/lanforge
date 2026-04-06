@@ -1,3 +1,4 @@
+use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use std::fmt::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
@@ -6,9 +7,6 @@ use tracing::{debug, error, warn};
 
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RData, RecordType};
-use lanforge_core::bus::ManagedTable;
-use lanforge_core::bus::{EventBus, LanforgeEvent};
-use lanforge_core::state::update::DeviceUpdate;
 
 use crate::error::{NetworkError, Result};
 
@@ -26,6 +24,7 @@ enum MdnsCommand {
 
 pub struct MdnsProber {
     tx: mpsc::Sender<MdnsCommand>,
+    ctx: LanforgeContext,
 }
 
 impl LanforgeService for MdnsProber {
@@ -51,7 +50,7 @@ impl AsyncService for MdnsProber {
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
 
-        if let Err(e) = run_mdns_worker(rx, tx).await {
+        if let Err(e) = run_mdns_worker(self.ctx.clone(), rx, tx).await {
             error!("mDNS worker fatal error: {e}");
             return Err(CoreError::Generic(e.to_string()));
         }
@@ -61,15 +60,15 @@ impl AsyncService for MdnsProber {
 
 impl Default for MdnsProber {
     fn default() -> Self {
-        Self::new()
+        Self::new(LanforgeContext::instance())
     }
 }
 
 impl MdnsProber {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(ctx: LanforgeContext) -> Self {
         let (tx, _) = mpsc::channel(32);
-        Self { tx }
+        Self { tx, ctx }
     }
 
     pub async fn trigger_scan(&self) {
@@ -82,11 +81,11 @@ impl MdnsProber {
 }
 
 async fn run_mdns_worker(
+    ctx: LanforgeContext,
     mut rx: mpsc::Receiver<MdnsCommand>,
     tx: mpsc::Sender<MdnsCommand>,
 ) -> Result<()> {
-    let bus = LanforgeContext::bus();
-    let table = LanforgeContext::table();
+    let bus = ctx.bus_opt();
     // We bind to a random port to SEND queries, and a fixed port to LISTEN if we want passive,
     // but on Linux, to receive multicast, we usually bind to 5353 with REUSEPORT.
     let socket_v4 = setup_multicast_socket_v4()?;
@@ -103,9 +102,10 @@ async fn run_mdns_worker(
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
     let resp_tx_v4 = resp_tx.clone();
 
+    let ctx_v4 = ctx.clone();
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
-        while LanforgeContext::is_running() {
+        while ctx_v4.is_running_opt() {
             match socket_v4_clone.recv_from(&mut buf) {
                 Ok((n, addr)) => {
                     let _ = resp_tx_v4.blocking_send((buf[..n].to_vec(), addr));
@@ -130,9 +130,10 @@ async fn run_mdns_worker(
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
     let resp_tx_v6 = resp_tx.clone();
 
+    let ctx_v6 = ctx.clone();
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
-        while LanforgeContext::is_running() {
+        while ctx_v6.is_running_opt() {
             match socket_v6_clone.recv_from(&mut buf) {
                 Ok((n, addr)) => {
                     let _ = resp_tx_v6.blocking_send((buf[..n].to_vec(), addr));
@@ -152,7 +153,7 @@ async fn run_mdns_worker(
     let mut bus_rx = bus.subscribe();
 
     loop {
-        if !LanforgeContext::is_running() {
+        if !ctx.is_running_opt() {
             break;
         }
 
@@ -171,10 +172,9 @@ async fn run_mdns_worker(
             }
             resp = resp_rx.recv() => {
                 if let Some((data_vec, addr)) = resp {
-                    let bus_clone = bus.clone();
-                    let table_clone = table.clone();
+                    let ctx_clone = ctx.clone();
                     tokio::spawn(async move {
-                        handle_mdns_packet(&bus_clone, &table_clone, &data_vec, addr);
+                        handle_mdns_packet(&ctx_clone, &data_vec, addr);
                     });
                 }
             }
@@ -337,7 +337,7 @@ fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) -> R
     Ok(())
 }
 
-fn handle_mdns_packet(_bus: &EventBus, table: &ManagedTable, data: &[u8], from: SocketAddr) {
+fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
     let Ok(msg) = Message::from_vec(data) else {
         return;
     };
@@ -361,27 +361,23 @@ fn handle_mdns_packet(_bus: &EventBus, table: &ManagedTable, data: &[u8], from: 
             }
 
             // Try to find the MAC for the sender IP
-            let mac = {
-                let t = table.read();
-                t.get_mac_by_ip(from.ip())
-            };
+            let mac = ctx.get_mac_by_ip_opt(from.ip());
 
             if let Some(mac) = mac {
                 // If it already has a hostname, skip update to avoid useless noise
+                if let Some(dev) = ctx.get_device_opt(&mac)
+                    && !dev.hostname.name.is_empty()
                 {
-                    let t = table.read();
-                    if let Some(dev) = t.get_device(&mac)
-                        && !dev.hostname.name.is_empty()
-                    {
-                        continue;
-                    }
+                    continue;
                 }
 
                 debug!("mDNS descoberta: {} -> {}", from.ip(), clean_host);
-                let _ = table.update(&DeviceUpdate::MdnsHostnameHint {
-                    mac,
-                    hostname: clean_host.to_string(),
-                });
+                let _ = ctx.apply(
+                    &lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
+                        mac,
+                        hostname: clean_host.to_string(),
+                    },
+                );
             }
         }
     }

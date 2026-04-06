@@ -10,12 +10,12 @@
 //!     K[Kernel: IPv6 Neighbor Table]
 //!     N[netlink::get_ipv6_neighbors]
 //!     E[NeighborEvent]
-//!     T[ManagedTable]
+//!     C[LanforgeContext]
 //!
 //!     K -->|Dump| N
 //!     N -->|Map| E
-//!     E -->|SlaacCleared| T
-//!     E -->|SlaacObserved / NdpSeen| T
+//!     E -->|SlaacCleared| C
+//!     E -->|SlaacObserved / NdpSeen| C
 //! ```
 //!
 //! The scan cycle clears known SLAAC addresses for a MAC before repopulating them,
@@ -38,6 +38,7 @@ use lanforge_core::identifiers::MacAddr;
 /// 2. During dynamic GUA prefix changes (RA).
 /// 3. In long-interval fallback timers (Consistency guarantee).
 pub async fn bootstrap_table(
+    ctx: &LanforgeContext,
     target_prefix: &str,
     handle: &Handle,
     gua: Option<Ipv6Addr>,
@@ -58,19 +59,26 @@ pub async fn bootstrap_table(
 
         if let Some(mac) = event.mac() {
             let update = event.to_device_update(gua.as_ref(), ula.as_ref());
-            if let DeviceUpdate::SlaacObserved { addr, .. } = update {
-                mac_groups.entry(mac).or_default().push(addr);
-            } else {
-                // Outros eventos (como NdpSeen) processamos individualmente
-                let t = LanforgeContext::table();
-                let _ = t.update(&update);
+            match update {
+                DeviceUpdate::SlaacObserved { addr, .. } => {
+                    mac_groups.entry(mac).or_default().push(addr);
+                }
+                DeviceUpdate::NdpSeen { ip, .. } => {
+                    let _ = ctx.apply(&DeviceUpdate::NdpSeen { mac, ip });
+                }
+                DeviceUpdate::ArpSeen { ip, .. } => {
+                    let _ = ctx.apply(&DeviceUpdate::ArpSeen { mac, ip });
+                }
+                DeviceUpdate::IpDeleted { ip } => {
+                    let _ = ctx.apply(&DeviceUpdate::IpDeleted { ip });
+                }
+                _ => {}
             }
         }
     }
 
-    let t = LanforgeContext::table();
     for (mac, addresses) in mac_groups {
-        let _ = t.update(&DeviceUpdate::SlaacSynced { mac, addresses });
+        let _ = ctx.apply(&DeviceUpdate::SlaacSynced { mac, addresses });
     }
 
     Ok(())

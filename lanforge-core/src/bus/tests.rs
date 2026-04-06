@@ -1,8 +1,10 @@
 #![cfg(test)]
 
-use crate::bus::{DeviceChange, EventBus, LanforgeEvent, ManagedTable};
+use crate::bus::{DeviceChange, EventBus, LanforgeEvent};
+use crate::context::LanforgeContext;
 use crate::device::Origin;
 use crate::identifiers::MacAddr;
+use crate::state::DeviceTable;
 use crate::state::update::{DeviceUpdate, FieldUpdate};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -16,13 +18,13 @@ fn make_bus() -> Arc<EventBus> {
 async fn new_device_publishes_discovered_and_updated() {
     let bus = make_bus();
     let mut rx = bus.subscribe();
-    let table = ManagedTable::new(bus, None);
+    let ctx = LanforgeContext::new(bus, DeviceTable::new(), None);
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
     let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
 
-    let _ = table.update(&DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted { mac, ip, expires });
 
     let mut events = vec![];
     while let Ok(ev) = rx.try_recv() {
@@ -54,11 +56,11 @@ async fn new_device_publishes_discovered_and_updated() {
 #[tokio::test]
 async fn known_device_does_not_publish_discovered() {
     let bus = make_bus();
-    let table = ManagedTable::new(bus.clone(), None);
+    let ctx = LanforgeContext::new(bus.clone(), DeviceTable::new(), None);
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
 
-    let _ = table.update(&DeviceUpdate::V4LeaseGranted {
+    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
         mac,
         ip: "192.168.0.10".parse().unwrap(),
         expires,
@@ -66,7 +68,7 @@ async fn known_device_does_not_publish_discovered() {
 
     let mut rx = bus.subscribe();
 
-    let _ = table.update(&DeviceUpdate::V4LeaseGranted {
+    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
         mac,
         ip: "192.168.0.11".parse().unwrap(),
         expires,
@@ -89,13 +91,13 @@ async fn known_device_does_not_publish_discovered() {
 #[tokio::test]
 async fn ndp_seen_publishes_nothing() {
     let bus = make_bus();
-    let table = ManagedTable::new(bus.clone(), None);
+    let ctx = LanforgeContext::new(bus.clone(), DeviceTable::new(), None);
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: std::net::Ipv6Addr = "fe80::1".parse().unwrap();
 
-    let _ = table.update(&DeviceUpdate::NdpSeen { mac, ip });
+    let _ = ctx.apply(&DeviceUpdate::NdpSeen { mac, ip });
 
     let count = {
         let mut n = 0;
@@ -110,12 +112,12 @@ async fn ndp_seen_publishes_nothing() {
 #[tokio::test]
 async fn cli_host_update_publishes_events() {
     let bus = make_bus();
-    let table = ManagedTable::new(bus.clone(), None);
+    let ctx = LanforgeContext::new(bus.clone(), DeviceTable::new(), None);
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    let _ = table.update(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("cli-host".to_string()),
         v4_static: FieldUpdate::NoChange,
@@ -139,7 +141,7 @@ async fn cli_host_update_publishes_events() {
         "Deve publicar HostnameChanged"
     );
 
-    let _ = table.update(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::NoChange,
         v4_static: FieldUpdate::Set("1.2.3.4".parse().unwrap()),

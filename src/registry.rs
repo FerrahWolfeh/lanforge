@@ -1,5 +1,8 @@
 use crate::supervisor::{supervise_async, supervise_sync};
-use lanforge_core::service::{AsyncService, SyncService};
+use lanforge_core::{
+    context::LanforgeContext,
+    service::{AsyncService, SyncService},
+};
 use tracing::info;
 
 /// Centralized registry for Lanforge services.
@@ -22,7 +25,7 @@ impl ServiceRegistry {
     ///
     /// Each async service gets its own `current_thread` Tokio runtime and a named OS thread,
     /// making it visible in system monitoring tools like `htop`.
-    pub fn spawn_async<S, F>(&mut self, factory: F)
+    pub fn spawn_async<S, F>(&mut self, ctx: LanforgeContext, factory: F)
     where
         S: AsyncService + 'static,
         F: Fn() -> S + Send + Sync + 'static,
@@ -36,6 +39,7 @@ impl ServiceRegistry {
             name, meta.stack_kb
         );
 
+        let ctx_spawn = ctx.clone();
         let handle = std::thread::Builder::new()
             .name(name.clone())
             .stack_size(stack_size)
@@ -44,7 +48,7 @@ impl ServiceRegistry {
                     .enable_all()
                     .build()
                     .expect("Failed to build per-service runtime");
-                rt.block_on(supervise_async(factory));
+                rt.block_on(supervise_async(&ctx_spawn, factory));
             })
             .unwrap_or_else(|e| panic!("Failed to spawn async thread for {name}: {e}"));
 
@@ -52,7 +56,7 @@ impl ServiceRegistry {
     }
 
     /// Spawns a synchronous service in a dedicated, named OS thread.
-    pub fn spawn_sync<S, F>(&mut self, factory: F)
+    pub fn spawn_sync<S, F>(&mut self, ctx: LanforgeContext, factory: F)
     where
         S: SyncService + 'static,
         F: Fn() -> S + Send + Sync + 'static,
@@ -67,11 +71,12 @@ impl ServiceRegistry {
             name, meta.stack_kb
         );
 
+        let ctx_spawn = ctx.clone();
         let handle = std::thread::Builder::new()
             .name(name.clone())
             .stack_size(stack_size)
             .spawn(move || {
-                supervise_sync(&rt_handle, factory);
+                supervise_sync(&ctx_spawn, &rt_handle, factory);
             })
             .unwrap_or_else(|e| panic!("Failed to spawn sync thread for {name}: {e}"));
 

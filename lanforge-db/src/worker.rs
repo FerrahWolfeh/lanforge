@@ -67,12 +67,30 @@ impl SyncService for DbWorker {
 
                 // Second, dispatch to specialized handlers
                 match event.event {
+                    LanforgeEvent::DeviceUpdated { mac, .. }
+                    | LanforgeEvent::DeviceDiscovered { mac } => {
+                        if let Some(device) = LanforgeContext::get_device(&mac) {
+                            if let Err(e) = db.upsert_device(&device) {
+                                warn!("DB worker: failed to upsert device {mac}: {e}");
+                            } else {
+                                debug!("DB worker: device {mac} persisted (granular)");
+                            }
+                        }
+                    }
+                    LanforgeEvent::DeviceExpired { mac } | LanforgeEvent::DevicePurged { mac } => {
+                        if let Err(e) = db.remove_device(mac) {
+                            warn!("DB worker: failed to remove device {mac}: {e}");
+                        } else {
+                            debug!("DB worker: device {mac} removed from DB");
+                        }
+                    }
                     LanforgeEvent::DeviceTableDirty => {
-                        let snapshot = Box::new((*LanforgeContext::table().read()).clone());
+                        // Periodic full-sync fallback
+                        let snapshot = LanforgeContext::get_table_snapshot();
                         if let Err(e) = db.save_table(&snapshot) {
                             warn!("DB worker: failed to save snapshot: {e}");
                         } else {
-                            debug!("DB worker: snapshot persisted");
+                            debug!("DB worker: full snapshot persisted");
                         }
                     }
                     LanforgeEvent::DbVacuum => {

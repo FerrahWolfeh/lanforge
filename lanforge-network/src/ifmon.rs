@@ -13,7 +13,6 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, LanforgeService};
 use lanforge_core::state::InterfaceState;
-use lanforge_core::state::update::DeviceUpdate;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
@@ -32,6 +31,7 @@ pub struct InterfaceMonitor {
     handle: Handle,
     messages: Arc<Mutex<NetlinkStream>>,
     target_ifindex: u32,
+    ctx: LanforgeContext,
 }
 
 impl InterfaceMonitor {
@@ -40,11 +40,13 @@ impl InterfaceMonitor {
         handle: Handle,
         messages: Arc<Mutex<NetlinkStream>>,
         target_ifindex: u32,
+        ctx: LanforgeContext,
     ) -> Self {
         Self {
             handle,
             messages,
             target_ifindex,
+            ctx,
         }
     }
 
@@ -88,15 +90,17 @@ impl InterfaceMonitor {
         }
 
         // Update global table
-        let table = LanforgeContext::table();
-        let _ = table.update(&DeviceUpdate::InterfaceIpsChanged {
-            ifindex,
-            link_local: state.link_local,
-            gua: state.gua,
-            ula: state.ula,
-            preferred: state.gua_preferred,
-            valid: state.gua_valid,
-        });
+        // Update table via injected context
+        let _ = self.ctx.apply(
+            &lanforge_core::state::update::DeviceUpdate::InterfaceIpsChanged {
+                ifindex,
+                link_local: state.link_local,
+                gua: state.gua,
+                ula: state.ula,
+                preferred: state.gua_preferred,
+                valid: state.gua_valid,
+            },
+        );
 
         Ok(state)
     }
@@ -140,10 +144,10 @@ impl LanforgeService for InterfaceMonitor {
 
 impl AsyncService for InterfaceMonitor {
     async fn run(&mut self) -> std::result::Result<(), CoreError> {
-        let mut bus_rx = LanforgeContext::bus().subscribe();
+        let mut bus_rx = self.ctx.bus_opt().subscribe();
 
         loop {
-            if !LanforgeContext::is_running() {
+            if !self.ctx.is_running_opt() {
                 break;
             }
 

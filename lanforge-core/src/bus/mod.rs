@@ -12,27 +12,25 @@
 //! ```mermaid
 //! sequenceDiagram
 //!     participant Worker as Protocol Worker (DHCP/NDP)
-//!     participant Table as ManagedTable
+//!     participant Ctx as LanforgeContext
 //!     participant Bus as EventBus
 //!     participant Handler as UI / Control Handler
 //!
-//!     Worker->>Table: update(DeviceUpdate)
-//!     Table->>Bus: publish(LanforgeEvent)
+//!     Worker->>Ctx: apply(DeviceUpdate)
+//!     Ctx->>Bus: publish(LanforgeEvent)
 //!     Bus-->>Handler: Event Received
 //!     Note right of Handler: UI updates or CLI notification
 //! ```
 
-pub mod managed;
 #[cfg(test)]
 pub mod tests;
-
-pub use managed::ManagedTable;
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use tokio::sync::broadcast;
 
 use crate::identifiers::MacAddr;
+use crate::state::update::LeaseTarget;
 
 use serde::{Deserialize, Serialize};
 
@@ -48,14 +46,14 @@ pub enum DeviceChange {
     /// An IPv4 address was assigned or renewed via `DHCPv4`.
     V4Assigned { ip: Ipv4Addr },
 
-    /// The IPv4 lease expired and was removed from the device.
-    V4Expired,
+    /// A dynamic lease expired and was removed from the device.
+    LeaseExpired { target: LeaseTarget },
 
     /// An IPv6 address was assigned or renewed via `DHCPv6`.
     V6Assigned { ip: Ipv6Addr, iaid: u32 },
 
-    /// The `DHCPv6` lease expired and was removed.
-    V6Expired,
+    /// The device was entirely removed from the active table due to inactivity.
+    HostRemoved,
 
     /// An IPv6 prefix was delegated to the device via `DHCPv6 Prefix Delegation` (`IA_PD`).
     V6PrefixAssigned {
@@ -86,6 +84,12 @@ pub enum DeviceChange {
 
     /// A DUID was successfully associated with this device's MAC.
     DuidAssociated,
+
+    /// A neighbor was observed via NDP (IPv6) but no SLAAC address was extracted.
+    NdpObserved,
+
+    /// A neighbor was observed via ARP (IPv4).
+    ArpObserved,
 }
 
 /// A wrapper for an event along with its metadata (timestamp, source module).
@@ -153,9 +157,9 @@ pub enum LanforgeEvent {
     /// Signal to trigger a `SQLite` database vacuum.
     DbVacuum,
     /// Request to release a lease for a device.
-    LeaseRelease { mac: MacAddr },
+    LeaseRelease { mac: MacAddr, target: LeaseTarget },
     /// Request to force-renew a lease for a device.
-    LeaseRenew { mac: MacAddr },
+    LeaseRenew { mac: MacAddr, target: LeaseTarget },
     /// Signal the entire daemon to undergo a graceful shutdown.
     Shutdown,
 

@@ -62,7 +62,7 @@ pub trait LanforgeService: Send + Sync {
 /// which is required for spawning the service in a multi-threaded Tokio runtime.
 ///
 /// Services implementing this trait should:
-/// 1. Use the `LanforgeContext` to access the `EventBus` and `ManagedTable`.
+/// 1. Use the `LanforgeContext` to access the `EventBus` and global state.
 /// 2. Listen for the `LanforgeEvent::Shutdown` signal on the bus to exit `run`.
 /// 3. Prefer native async I/O (`tokio::net`) over synchronous blocking calls.
 pub trait AsyncService: LanforgeService {

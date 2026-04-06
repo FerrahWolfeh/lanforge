@@ -11,8 +11,8 @@ O programa nasceu como um tracker de SLAAC (`ipv6_namer`) e evoluiu para um ecos
 
 **Decisões de Design:**
 - **Single Process, Multi-Crate**: Organizado como um workspace Rust para separar preocupações (Core, Network, DB, DNS, API).
-- **ManagedTable**: Uma autoridade única de estado protegida por `RwLock` e alimentada por um barramento de eventos.
-- **Protocolos Reativos**: Serviços não mantêm estado próprio; eles consultam ou atualizam o `ManagedTable`.
+- **LanforgeContext**: Uma autoridade única de estado protegida por `RwLock` e alimentada por um barramento de eventos.
+- **Protocolos Reativos**: Serviços não mantêm estado próprio; eles consultam ou atualizam o `LanforgeContext`.
 - **Precedência de Identidade**: Configurações estáticas (TOML/CLI) sempre superam descobertas dinâmicas (DHCP/mDNS).
 
 ---
@@ -53,7 +53,7 @@ graph TD
 
 | Crate | Responsabilidade |
 | :--- | :--- |
-| `lanforge-core` | Tipos fundamentais (`Device`, `MacAddr`), `ManagedTable` e `EventBus`. |
+| `lanforge-core` | Tipos fundamentais (`Device`, `MacAddr`), `LanforgeContext` e `EventBus`. |
 | `lanforge-network` | Implementação de protocolos (`DHCPv4`, `DHCPv6`, `RA`, `SLAAC`, `mDNS`) e monitoramento `Netlink`. |
 | `lanforge-db` | Persistência em SQLite e motor de logs históricos (`LogEngine`). |
 | `lanforge-dns` | Servidor DNS autoritativo e recursivo (cache + upstream forwarding). |
@@ -63,7 +63,7 @@ graph TD
 
 ## Core Engine Deep-Dive (`lanforge-core`)
 
-A `lanforge-core` é o coração reativo do sistema. Ela não executa I/O de rede ou disco diretamente, mas orquestra como os dados fluem entre esses módulos usando um modelo de **Barramento de Eventos** e uma **Tabela de Estado Gerenciada**.
+A `lanforge-core` é o coração reativo do sistema. Ela não executa I/O de rede ou disco diretamente, mas orquestra como os dados fluem entre esses módulos usando um modelo de **Barramento de Eventos** e uma **Tabela de Estado Gerenciada** exposta via `LanforgeContext`.
 
 ### 1. O Modelo de Mutação Baseado em Intenção
 Nenhum módulo escreve diretamente nos campos de um dispositivo. O caminho único para alteração de estado é via o enum `DeviceUpdate`. Isso garante que todas as transações de estado passem pela mesma lógica de validação e precedência.
@@ -74,21 +74,21 @@ Este diagrama ilustra como o `ManagedTable` e o `EventBus` conectam todos os ser
 ```mermaid
 sequenceDiagram
     participant P as Protocol Services (DHCP/RA/Netlink)
-    participant MT as ManagedTable (RwLock)
+    participant LC as LanforgeContext (RwLock)
     participant EB as EventBus (Broadcast)
     participant DB as db_worker (SQLite)
     participant DNS as dns_service (Hot-path Indices)
     participant API as api_service (JSON-RPC)
 
-    P->>MT: update(DeviceUpdate)
-    MT->>MT: apply_update() (Atomic)
+    P->>LC: apply(DeviceUpdate)
+    LC->>LC: internal_apply() (Atomic)
     
     rect rgba(79, 79, 79, 1)
-    Note over MT: Se o estado mudou:
-    MT->>EB: publish(DeviceUpdated)
+    Note over LC: Se o estado mudou:
+    LC->>EB: publish(DeviceUpdated)
     EB-->>DNS: Atualiza índices O(1)
     EB-->>API: Notifica clientes UDS ativos
-    MT->>EB: publish(DeviceTableDirty)
+    LC->>EB: publish(DeviceTableDirty)
     EB->>DB: Escrita com Debounce (3s)
     end
 ```
@@ -129,7 +129,7 @@ O sistema implementa uma hierarquia rígida de origem para nomes de host:
 
 ## Serviços de Rede (`lanforge-network`)
 
-Os serviços de rede são os "sensores" e "atuadores" do sistema. Eles alimentam a `ManagedTable` com descobertas e reagem a mudanças globais (como a troca de um prefixo ISP).
+Os serviços de rede são os "sensores" e "atuadores" do sistema. Eles alimentam a `LanforgeContext` com descobertas e reagem a mudanças globais (como a troca de um prefixo ISP).
 
 ### 1. DHCPv4 (RFC 2131)
 Diferente de implementações padrão, o `lanforge` utiliza **Raw Sockets (`AF_PACKET`)** para a injeção de pacotes na Camada 2.
@@ -182,7 +182,7 @@ sequenceDiagram
     Note over W: Se novos eventos chegarem, reseta o timer
     end
 
-    W->>T: t.clone() (Snapshot em memória)
+    W->>T: ctx.snapshot() (Snapshot em memória)
     W->>S: Comando: Save(Snapshot)
     S->>S: Escrita Física (Atomic Commit)
     S-->>W: OK
@@ -202,7 +202,7 @@ O servidor utiliza um parser de rede customizado (`lanforge-dns/src/wire/`) que 
 - **Forwarding (Recursão)**: Consultas externas são encaminhadas via `UpstreamManager` para resolvers públicos (Google/Cloudflare).
 
 ### 2. Índices de Alta Performance (O(1))
-Para garantir que as queries DNS não sofram contenção, a `ManagedTable` reconstrói índices de busca rápida sempre que o estado atômico muda:
+Para garantir que as queries DNS não sofram contenção, a `LanforgeContext` reconstrói índices de busca rápida sempre que o estado atômico muda:
 - `dns_v4_index`: Mapa `Hostname -> Ipv4Addr`.
 - `dns_v6_index`: Mapa `Hostname -> Vec<Ipv6Addr>`.
 - `reverse_index`: Mapa `IpAddr -> Hostname`.
@@ -224,7 +224,7 @@ A interface suporta operações síncronas e streaming de eventos:
 | Comando | Descrição | Impacto no Sistema |
 | :--- | :--- | :--- |
 | `status` | Retorna o uptime, prefixo atual e saúde dos serviços. | Leitura simples. |
-| `devices` | Lista a tabela completa de dispositivos com filtros. | Leitura da `ManagedTable`. |
+| `devices` | Lista a tabela completa de dispositivos com filtros. | Leitura da `LanforgeContext`. |
 | `host-set` | Modifica hostname ou reserva IP de um dispositivo. | Dispara `DeviceUpdate::CliHostUpdated`. |
 | `watch` | Abre um stream persistente de eventos do `EventBus`. | Mantém conexão UDS aberta. |
 | `lease-renew` | Força um `FORCERENEW` (v4) ou `RECONFIGURE` (v6). | Atuação direta na rede. |

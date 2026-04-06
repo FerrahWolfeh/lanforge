@@ -204,13 +204,14 @@ impl Ipv6Pool {
     /// Returns a list of addresses (e.g. one ULA and one GUA).
     pub fn allocate(
         &mut self,
-        duid: &[u8],
+        ctx: &LanforgeContext,
+        duid: &Duid,
         iaid: u32,
         mac: Option<MacAddr>,
         requested: Option<Ipv6Addr>,
     ) -> Vec<Ipv6Addr> {
         // 1. Sticky IP check: if we already have addresses globally, return them.
-        let sticky = Self::get_sticky_ips(duid, iaid, mac);
+        let sticky = Self::get_sticky_ips(ctx, duid, iaid, mac);
         if !sticky.is_empty() {
             return sticky;
         }
@@ -219,7 +220,8 @@ impl Ipv6Pool {
         let prefixes = self.get_active_prefixes();
 
         for prefix in prefixes {
-            if let Some(ip) = self.allocate_for_prefix(prefix, duid, mac, requested, &assigned) {
+            if let Some(ip) = self.allocate_for_prefix(ctx, prefix, duid, mac, requested, &assigned)
+            {
                 assigned.push(ip);
             }
         }
@@ -228,15 +230,17 @@ impl Ipv6Pool {
     }
 
     /// Checks if a device already has an active lease for a specific IAID.
-    fn get_sticky_ips(duid: &[u8], iaid: u32, mac: Option<MacAddr>) -> Vec<Ipv6Addr> {
-        let t = LanforgeContext::table();
-        let table = t.read();
-
-        let mut dev_opt = table.get_by_duid(&Duid::new(duid.to_vec()));
+    fn get_sticky_ips(
+        ctx: &LanforgeContext,
+        duid: &Duid,
+        iaid: u32,
+        mac: Option<MacAddr>,
+    ) -> Vec<Ipv6Addr> {
+        let mut dev_opt = ctx.query(|t| t.get_by_duid(duid));
         if dev_opt.is_none()
             && let Some(m) = mac
         {
-            dev_opt = table.get_device(&m);
+            dev_opt = ctx.get_device_opt(&m);
         }
 
         if let Some(dev) = dev_opt {
@@ -248,10 +252,8 @@ impl Ipv6Pool {
                     sticky.push(lease.ip);
                 }
             }
-            drop(table);
             return sticky;
         }
-        drop(table);
         Vec::new()
     }
 
@@ -280,21 +282,19 @@ impl Ipv6Pool {
     /// Logic for a single prefix allocation attempt.
     fn allocate_for_prefix(
         &self,
+        ctx: &LanforgeContext,
         prefix: Ipv6Addr,
-        duid: &[u8],
+        duid: &Duid,
         mac: Option<MacAddr>,
         requested: Option<Ipv6Addr>,
         already_assigned: &[Ipv6Addr],
     ) -> Option<Ipv6Addr> {
-        let t = LanforgeContext::table();
-        let table = t.read();
-
         // 1. Static Reservation check
-        let mut dev_opt = table.get_by_duid(&Duid::new(duid.to_vec()));
+        let mut dev_opt = ctx.query(|t| t.get_by_duid(duid));
         if dev_opt.is_none()
             && let Some(m) = mac
         {
-            dev_opt = table.get_device(&m);
+            dev_opt = ctx.get_device_opt(&m);
         }
 
         if let Some(dev) = dev_opt {
@@ -302,7 +302,6 @@ impl Ipv6Pool {
                 if let lanforge_core::device::IPv6State::Static(suffix) = state {
                     let ip = self.construct_addr(prefix, suffix);
                     if Self::is_on_prefix(&ip, &prefix) && !already_assigned.contains(&ip) {
-                        drop(table);
                         return Some(ip);
                     }
                 }
@@ -312,9 +311,8 @@ impl Ipv6Pool {
         // 2. Requested IP check
         if let Some(req_ip) = requested
             && Self::is_on_prefix(&req_ip, &prefix)
-            && self.is_available(&req_ip, &table, mac)
+            && self.is_available(ctx, &req_ip, mac)
         {
-            drop(table);
             return Some(req_ip);
         }
 
@@ -330,8 +328,7 @@ impl Ipv6Pool {
                 let pref_segs = prefix.segments();
                 if pref_segs[0..4] == *p {
                     pool_attempted = true;
-                    if let Some(ip) = self.allocate_from_range(*start_u128, *end_u128, &table) {
-                        drop(table);
+                    if let Some(ip) = self.allocate_from_range(ctx, *start_u128, *end_u128) {
                         return Some(ip);
                     }
                 }
@@ -348,8 +345,7 @@ impl Ipv6Pool {
                 pool_attempted = true;
                 let start_u128 = Self::combine_pref_suf(&prefix, *start_suffix);
                 let end_u128 = Self::combine_pref_suf(&prefix, *end_suffix);
-                if let Some(ip) = self.allocate_from_range(start_u128, end_u128, &table) {
-                    drop(table);
+                if let Some(ip) = self.allocate_from_range(ctx, start_u128, end_u128) {
                     return Some(ip);
                 }
             }
@@ -363,22 +359,18 @@ impl Ipv6Pool {
             for _ in 0..20 {
                 let random_suffix: u128 = rand::random::<u128>() & mask;
                 let ip = Ipv6Addr::from((pref_int | random_suffix).to_be_bytes());
-                if self.is_available(&ip, &table, mac) {
-                    drop(table);
+                if self.is_available(ctx, &ip, mac) {
                     return Some(ip);
                 }
             }
         }
 
-        drop(table);
         None
     }
 
     #[must_use]
-    pub fn has_binding(&self, duid: &[u8], iaid: u32) -> bool {
-        let device_opt = LanforgeContext::table()
-            .read()
-            .get_by_duid(&Duid::new(duid.to_vec()));
+    pub fn has_binding(&self, ctx: &LanforgeContext, duid: &Duid, iaid: u32) -> bool {
+        let device_opt = ctx.query(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for state in &dev.v6 {
@@ -393,10 +385,8 @@ impl Ipv6Pool {
     }
 
     #[must_use]
-    pub fn has_prefix_binding(&self, duid: &[u8], iaid: u32) -> bool {
-        let device_opt = LanforgeContext::table()
-            .read()
-            .get_by_duid(&Duid::new(duid.to_vec()));
+    pub fn has_prefix_binding(&self, ctx: &LanforgeContext, duid: &Duid, iaid: u32) -> bool {
+        let device_opt = ctx.query(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for pref in &dev.v6_prefixes {
@@ -409,11 +399,9 @@ impl Ipv6Pool {
     }
 
     #[must_use]
-    pub fn lookup(&self, duid: &[u8], iaid: u32) -> Vec<Ipv6Addr> {
+    pub fn lookup(&self, ctx: &LanforgeContext, duid: &Duid, iaid: u32) -> Vec<Ipv6Addr> {
         let mut ips = Vec::new();
-        let device_opt = LanforgeContext::table()
-            .read()
-            .get_by_duid(&Duid::new(duid.to_vec()));
+        let device_opt = ctx.query(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for state in &dev.v6 {
@@ -428,10 +416,13 @@ impl Ipv6Pool {
     }
 
     #[must_use]
-    pub fn lookup_prefix(&self, duid: &[u8], iaid: u32) -> Option<(Ipv6Addr, u8)> {
-        let device_opt = LanforgeContext::table()
-            .read()
-            .get_by_duid(&Duid::new(duid.to_vec()));
+    pub fn lookup_prefix(
+        &self,
+        ctx: &LanforgeContext,
+        duid: &Duid,
+        iaid: u32,
+    ) -> Option<(Ipv6Addr, u8)> {
+        let device_opt = ctx.query(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for pref in &dev.v6_prefixes {
@@ -444,9 +435,7 @@ impl Ipv6Pool {
     }
 
     pub fn lookup_by_mac_legacy(&self, mac: MacAddr) -> Vec<Ipv6Addr> {
-        let t = LanforgeContext::table();
-        let table = t.read();
-        table.get_device(&mac).map_or_else(Vec::new, |dev| {
+        LanforgeContext::get_device(&mac).map_or_else(Vec::new, |dev| {
             dev.v6.iter().filter_map(IPv6State::ip).collect()
         })
     }
@@ -464,16 +453,16 @@ impl Ipv6Pool {
 
     fn allocate_from_range(
         &self,
+        ctx: &LanforgeContext,
         start: u128,
         end: u128,
-        table: &lanforge_core::state::DeviceTable,
     ) -> Option<Ipv6Addr> {
         let size = end - start + 1;
         let offset = rand::random::<u128>() % size;
         for i in 0..size {
             let raw = start + (offset + i) % size;
             let ip = Ipv6Addr::from(raw.to_be_bytes());
-            if self.is_available(&ip, table, None) {
+            if self.is_available(ctx, &ip, None) {
                 return Some(ip);
             }
         }
@@ -488,11 +477,11 @@ impl Ipv6Pool {
 
     fn is_available(
         &self,
+        ctx: &LanforgeContext,
         ip: &Ipv6Addr,
-        table: &lanforge_core::state::DeviceTable,
         target_mac: Option<MacAddr>,
     ) -> bool {
-        if let Some(mac) = table.get_mac_by_ip(std::net::IpAddr::V6(*ip))
+        if let Some(mac) = ctx.get_mac_by_ip_opt(std::net::IpAddr::V6(*ip))
             && Some(mac) != target_mac
         {
             return false;
@@ -513,17 +502,13 @@ impl Ipv6Pool {
     /// Allocates an IPv6 prefix for the given DUID+IAID (Prefix Delegation).
     pub fn allocate_prefix(
         &mut self,
-        duid: &[u8],
+        ctx: &LanforgeContext,
+        duid: &Duid,
         iaid: u32,
         _requested: Option<(Ipv6Addr, u8)>,
     ) -> Option<(Ipv6Addr, u8)> {
-        let t = LanforgeContext::table();
-        let table = t.read();
-
         // Sticky prefix check globally
-        let device_opt = LanforgeContext::table()
-            .read()
-            .get_by_duid(&Duid::new(duid.to_vec()));
+        let device_opt = ctx.query(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for pref in &dev.v6_prefixes {
@@ -550,7 +535,7 @@ impl Ipv6Pool {
         let mut curr = start + step;
         while curr < end {
             let prefix_addr = Ipv6Addr::from(curr.to_be_bytes());
-            if Self::is_prefix_available(&prefix_addr, 64, &table) {
+            if !ctx.is_prefix_delegated_opt(prefix_addr, 64) {
                 return Some((prefix_addr, 64));
             }
             curr += step;
@@ -571,24 +556,6 @@ impl Ipv6Pool {
         (ip_int & mask) == (ula_int & mask)
     }
 
-    fn is_prefix_available(
-        addr: &Ipv6Addr,
-        len: u8,
-        table: &lanforge_core::state::DeviceTable,
-    ) -> bool {
-        // Check for conflicts with delegated prefixes
-        for dev in table.devices() {
-            for p in &dev.v6_prefixes {
-                if p.prefix == *addr && p.len == len {
-                    return false;
-                }
-            }
-        }
-        // Check for conflicts with individual LAN IPs
-        // (Simplification: ideally prefixes and IPs reside in separate pools)
-        true
-    }
-
     pub fn decline(&mut self, ip: Ipv6Addr) {
         self.release(&ip);
         self.blacklisted.insert(ip, SystemTime::now());
@@ -597,35 +564,11 @@ impl Ipv6Pool {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_utils::init_test_context;
     use lanforge_core::device::Ipv6AddrOrSuffix;
 
     use super::*;
-    use lanforge_core::bus::{EventBus, ManagedTable};
-    use lanforge_core::state::update::DeviceUpdate;
-    use std::sync::Arc;
     use std::time::Duration;
-
-    use std::sync::Once;
-    static INIT: Once = Once::new();
-
-    fn init_context() {
-        INIT.call_once(|| {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let bus = Arc::new(EventBus::new());
-                let table = Arc::new(ManagedTable::from_table(
-                    bus.clone(),
-                    lanforge_core::state::DeviceTable::new(),
-                    None,
-                ));
-                LanforgeContext::init(bus, table);
-            }));
-        });
-
-        // Clear the state before each test runs to avoid cross-contamination
-        let binding = LanforgeContext::table();
-        let mut w = binding.write();
-        *w = lanforge_core::state::DeviceTable::new();
-    }
 
     // Função auxiliar para gerar MACs nos testes
     fn mac(last_byte: u8) -> MacAddr {
@@ -636,25 +579,31 @@ mod tests {
         vec![0, 3, 0, 1, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, last_byte]
     }
 
-    fn commit_lease(mac: Option<MacAddr>, duid: &[u8], iaid: u32, ip: Ipv6Addr) {
-        let table = LanforgeContext::table();
-        let _ = table.update(&DeviceUpdate::V6LeaseGranted {
-            mac,
-            duid: Duid::new(duid.to_vec()),
-            iaid,
-            ip,
-            expires: SystemTime::now() + Duration::from_secs(3600),
-        });
+    fn commit_lease(
+        ctx: &LanforgeContext,
+        mac: Option<MacAddr>,
+        duid: &[u8],
+        iaid: u32,
+        ip: Ipv6Addr,
+    ) {
+        let _ = ctx.apply(
+            &lanforge_core::state::update::DeviceUpdate::V6LeaseGranted {
+                mac,
+                duid: Duid::new(duid.to_vec()),
+                iaid,
+                ip,
+                expires: SystemTime::now() + Duration::from_secs(3600),
+            },
+        );
     }
 
-    fn release_mac(mac: MacAddr) {
-        let table = LanforgeContext::table();
-        let _ = table.update(&DeviceUpdate::HostRemoved { mac });
+    fn release_mac(ctx: &LanforgeContext, mac: MacAddr) {
+        let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::HostRemoved { mac });
     }
 
     #[test]
     fn test_construct_static_ula() {
-        init_context();
+        let _ctx = init_test_context();
         let ula = "fd12:3456:7890:abcd::".parse().ok();
         let pool = Ipv6Pool::new(&Vec::new(), ula, 64);
 
@@ -669,7 +618,7 @@ mod tests {
 
     #[test]
     fn test_dynamic_allocation_ranged() {
-        init_context();
+        let ctx = init_test_context();
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::102".parse().unwrap();
         let ula = "fd00::".parse().ok();
@@ -683,17 +632,17 @@ mod tests {
         let start_int = u128::from_be_bytes(start.octets());
         let end_int = u128::from_be_bytes(end.octets());
 
-        let ips1 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        let ips1 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
         let first_ip = ips1[0];
-        commit_lease(Some(mac(1)), &duid(1), 1, first_ip);
+        commit_lease(&ctx, Some(mac(1)), &duid(1), 1, first_ip);
 
-        let ips2 = pool.allocate(&duid(2), 1, Some(mac(2)), None);
+        let ips2 = pool.allocate(&ctx, &Duid::new(duid(2)), 1, Some(mac(2)), None);
         let second_ip = ips2[0];
-        commit_lease(Some(mac(2)), &duid(2), 1, second_ip);
+        commit_lease(&ctx, Some(mac(2)), &duid(2), 1, second_ip);
 
-        let ips3 = pool.allocate(&duid(3), 1, Some(mac(3)), None);
+        let ips3 = pool.allocate(&ctx, &Duid::new(duid(3)), 1, Some(mac(3)), None);
         let third_ip = ips3[0];
-        commit_lease(Some(mac(3)), &duid(3), 1, third_ip);
+        commit_lease(&ctx, Some(mac(3)), &duid(3), 1, third_ip);
 
         // All IPs must be within range
         for ip in [first_ip, second_ip, third_ip] {
@@ -707,12 +656,15 @@ mod tests {
         assert_ne!(first_ip, third_ip);
 
         // Pool esgotado
-        assert!(pool.allocate(&duid(4), 1, Some(mac(4)), None).is_empty());
+        assert!(
+            pool.allocate(&ctx, &Duid::new(duid(4)), 1, Some(mac(4)), None)
+                .is_empty()
+        );
     }
 
     #[test]
     fn test_multi_prefix_allocation() {
-        init_context();
+        let ctx = init_test_context();
         let ula = "fd00::".parse::<Ipv6Addr>().ok();
         let gua = "2001:db8::".parse::<Ipv6Addr>().unwrap();
 
@@ -725,7 +677,7 @@ mod tests {
         let mut pool = Ipv6Pool::new(&pools, ula, 64);
         pool.set_gua_prefix(gua);
 
-        let ips = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
 
         assert_eq!(ips.len(), 2, "Should allocate both ULA and GUA");
         assert!(
@@ -740,14 +692,14 @@ mod tests {
 
     #[test]
     fn test_dynamic_allocation_opaque_random() {
-        init_context();
+        let ctx = init_test_context();
         let ula: Ipv6Addr = "fd97:f00d:cafe:3731::".parse().unwrap();
         // No range limits, just the ULA prefix
         let mut pool = Ipv6Pool::new(&Vec::new(), Some(ula), 64);
 
-        let ips1 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        let ips1 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
         let first_ip = ips1[0];
-        let ips2 = pool.allocate(&duid(2), 1, Some(mac(2)), None);
+        let ips2 = pool.allocate(&ctx, &Duid::new(duid(2)), 1, Some(mac(2)), None);
         let second_ip = ips2[0];
 
         // Ensure the /64 network is correct
@@ -761,19 +713,19 @@ mod tests {
 
     #[test]
     fn test_requested_ip_honoring() {
-        init_context();
+        let ctx = init_test_context();
         let ula = "fd00::".parse::<Ipv6Addr>().ok();
         let mut pool = Ipv6Pool::new(&Vec::new(), ula, 64);
 
         let requested = "fd00::dead:beef".parse::<Ipv6Addr>().unwrap();
-        let ips = pool.allocate(&duid(1), 1, Some(mac(1)), Some(requested));
+        let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), Some(requested));
 
         assert!(ips.contains(&requested), "Must honor requested IP");
     }
 
     #[test]
     fn test_requested_ip_ranged() {
-        init_context();
+        let ctx = init_test_context();
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::200".parse().unwrap();
         let pools = vec![Dhcpv6PoolConfig {
@@ -788,13 +740,13 @@ mod tests {
 
         // Valid request within range (Note: allocate currently ignores requested IP for simplicity in multi-pool,
         // but it should still return a valid IP from the range)
-        let ips = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
         let ip = ips[0];
         let raw = u128::from_be_bytes(ip.octets());
         assert!(raw >= start_int && raw <= end_int, "IP {ip} out of range");
 
         // Second allocation
-        let ips2 = pool.allocate(&duid(2), 1, Some(mac(2)), None);
+        let ips2 = pool.allocate(&ctx, &Duid::new(duid(2)), 1, Some(mac(2)), None);
         let second = ips2[0];
         let raw2 = u128::from_be_bytes(second.octets());
         assert!(
@@ -806,14 +758,14 @@ mod tests {
 
     #[test]
     fn test_sticky_allocation() {
-        init_context();
+        let ctx = init_test_context();
         let ula = "fd00::".parse().unwrap();
         let mut pool = Ipv6Pool::new(&Vec::new(), Some(ula), 64);
 
-        let ips1 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
-        commit_lease(Some(mac(1)), &duid(1), 1, ips1[0]);
+        let ips1 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
+        commit_lease(&ctx, Some(mac(1)), &duid(1), 1, ips1[0]);
 
-        let ips2 = pool.allocate(&duid(1), 1, Some(mac(1)), None); // Same client asking again
+        let ips2 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None); // Same client asking again
 
         // Must return exactly the same list of IPs
         assert_eq!(ips1, ips2);
@@ -821,23 +773,28 @@ mod tests {
 
     #[test]
     fn test_static_reservation() {
-        init_context();
+        let ctx = init_test_context();
         let ula = "fd00::".parse().unwrap();
         let mut pool = Ipv6Pool::new(&Vec::new(), Some(ula), 64);
 
         let static_suffix = Ipv6AddrOrSuffix::parse("::cafe").unwrap();
-        let binding = LanforgeContext::table();
-        let mut w = binding.write();
-        w.add_static_device(mac(1), "test".to_string(), None, Some(static_suffix));
-        drop(w);
+        let _ = ctx.apply(
+            &lanforge_core::state::update::DeviceUpdate::CliHostUpdated {
+                mac: mac(1),
+                hostname: lanforge_core::state::update::FieldUpdate::Set("test".to_string()),
+                v4_static: lanforge_core::state::update::FieldUpdate::NoChange,
+                v6_suffix: lanforge_core::state::update::FieldUpdate::Set(static_suffix),
+                origin: lanforge_core::device::Origin::Cli,
+            },
+        );
 
-        let ips = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
         assert!(ips.contains(&"fd00::cafe".parse().unwrap()));
     }
 
     #[test]
     fn test_release() {
-        init_context();
+        let ctx = init_test_context();
         let start = "fd00::100".parse().unwrap();
         let end = "fd00::100".parse().unwrap();
         let pools = vec![Dhcpv6PoolConfig {
@@ -847,21 +804,24 @@ mod tests {
         }];
         let mut pool = Ipv6Pool::new(&pools, None, 64);
 
-        let ips1 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        let ips1 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
         let first_ip = ips1[0];
-        commit_lease(Some(mac(1)), &duid(1), 1, first_ip);
+        commit_lease(&ctx, Some(mac(1)), &duid(1), 1, first_ip);
 
-        assert!(pool.allocate(&duid(2), 1, Some(mac(2)), None).is_empty()); // Exhausted
+        assert!(
+            pool.allocate(&ctx, &Duid::new(duid(2)), 1, Some(mac(2)), None)
+                .is_empty()
+        ); // Exhausted
 
-        release_mac(mac(1));
+        release_mac(&ctx, mac(1));
 
-        let ips2 = pool.allocate(&duid(2), 1, Some(mac(2)), None); // Released, Mac 2 can take it
+        let ips2 = pool.allocate(&ctx, &Duid::new(duid(2)), 1, Some(mac(2)), None); // Released, Mac 2 can take it
         assert_eq!(first_ip, ips2[0]);
     }
 
     #[test]
     fn test_static_reservation_reconnect() {
-        init_context();
+        let ctx = init_test_context();
         let ula = "fd00::".parse().unwrap();
         let mut pool = Ipv6Pool::new(&Vec::new(), Some(ula), 64);
 
@@ -869,21 +829,26 @@ mod tests {
         let static_ip: Ipv6Addr = "fd00::cafe".parse().unwrap();
 
         // 1. Setup static device
-        let binding = LanforgeContext::table();
-        let mut w = binding.write();
-        w.add_static_device(mac(1), "test".to_string(), None, Some(static_suffix));
-        drop(w);
+        let _ = ctx.apply(
+            &lanforge_core::state::update::DeviceUpdate::CliHostUpdated {
+                mac: mac(1),
+                hostname: lanforge_core::state::update::FieldUpdate::Set("test".to_string()),
+                v4_static: lanforge_core::state::update::FieldUpdate::NoChange,
+                v6_suffix: lanforge_core::state::update::FieldUpdate::Set(static_suffix),
+                origin: lanforge_core::device::Origin::Cli,
+            },
+        );
 
         // 2. Allocate first time
-        let ips = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
         assert!(ips.contains(&static_ip));
 
         // 3. Commit lease (this puts it in the ip_index)
-        commit_lease(Some(mac(1)), &duid(1), 1, static_ip);
+        commit_lease(&ctx, Some(mac(1)), &duid(1), 1, static_ip);
 
         // 4. Allocate again (simulated reconnect)
         // Even though fd00::cafe is in the index, it should still be assigned because it's static
-        let ips2 = pool.allocate(&duid(1), 1, Some(mac(1)), None);
+        let ips2 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
         assert!(
             ips2.contains(&static_ip),
             "Should still return static IP on reconnect"
@@ -892,7 +857,7 @@ mod tests {
 
     #[test]
     fn test_random_allocation_fills_and_releases() {
-        init_context();
+        let ctx = init_test_context();
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::102".parse().unwrap();
         let pools = vec![Dhcpv6PoolConfig {
@@ -906,14 +871,14 @@ mod tests {
         let end_int = u128::from_be_bytes(end.octets());
 
         // Fill the pool (3 IPs)
-        let ip1 = pool.allocate(&duid(1), 1, Some(mac(1)), None)[0];
-        commit_lease(Some(mac(1)), &duid(1), 1, ip1);
+        let ip1 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None)[0];
+        commit_lease(&ctx, Some(mac(1)), &duid(1), 1, ip1);
 
-        let ip2 = pool.allocate(&duid(2), 1, Some(mac(2)), None)[0];
-        commit_lease(Some(mac(2)), &duid(2), 1, ip2);
+        let ip2 = pool.allocate(&ctx, &Duid::new(duid(2)), 1, Some(mac(2)), None)[0];
+        commit_lease(&ctx, Some(mac(2)), &duid(2), 1, ip2);
 
-        let ip3 = pool.allocate(&duid(3), 1, Some(mac(3)), None)[0];
-        commit_lease(Some(mac(3)), &duid(3), 1, ip3);
+        let ip3 = pool.allocate(&ctx, &Duid::new(duid(3)), 1, Some(mac(3)), None)[0];
+        commit_lease(&ctx, Some(mac(3)), &duid(3), 1, ip3);
 
         // All must be unique and in range
         let ips = [ip1, ip2, ip3];
@@ -926,21 +891,21 @@ mod tests {
         assert_ne!(ip1, ip3);
 
         // Pool exhausted
-        assert!(pool.allocate(&duid(4), 1, None, None).is_empty());
+        assert!(
+            pool.allocate(&ctx, &Duid::new(duid(4)), 1, None, None)
+                .is_empty()
+        );
 
         // Release one and allocate again — the freed IP should be reused
         // Since we don't have MACs in this test, we use DuidAssociated which might be tricky,
-        // but HostRemoved by MAC won't work.
-        // Let's use a simpler way: just clear the table for this test's contet.
-        let binding = LanforgeContext::table();
-        let mut w = binding.write();
-        *w = lanforge_core::state::DeviceTable::new();
-        // Re-filling with 2 and 3 so 1 is free
-        drop(w);
-        commit_lease(Some(mac(2)), &duid(2), 1, ip2);
-        commit_lease(Some(mac(3)), &duid(3), 1, ip3);
+        // Clear the table by getting a fresh context
+        let ctx = init_test_context();
 
-        let ip4 = pool.allocate(&duid(4), 1, Some(mac(4)), None)[0];
+        // Re-filling with 2 and 3 so 1 is free
+        commit_lease(&ctx, Some(mac(2)), &duid(2), 1, ip2);
+        commit_lease(&ctx, Some(mac(3)), &duid(3), 1, ip3);
+
+        let ip4 = pool.allocate(&ctx, &Duid::new(duid(4)), 1, Some(mac(4)), None)[0];
         assert_eq!(ip4, ip1, "Released IP should be reusable");
     }
 

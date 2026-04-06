@@ -9,6 +9,7 @@ pub struct DnsConfig {
     pub upstream: Option<SocketAddr>,
     pub search_domain: String,
     pub ula_prefix: Option<Ipv6Addr>,
+    pub gua_prefix: Option<Ipv6Addr>,
     pub ttl: u32,
     pub multi_search_labels: Vec<Vec<Vec<u8>>>,
 }
@@ -21,6 +22,7 @@ impl Default for DnsConfig {
             upstream: None,
             search_domain: "lan".into(),
             ula_prefix: None,
+            gua_prefix: None,
             ttl: 60,
             multi_search_labels: vec![vec![b"lan".to_vec()]],
         }

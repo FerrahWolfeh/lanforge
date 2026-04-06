@@ -9,20 +9,20 @@
 //! sequenceDiagram
 //!     participant C as Client
 //!     participant S as Dhcpv6Server (Lanforge)
-//!     participant T as ManagedTable
+//!     participant Ctx as LanforgeContext
 //!
 //!     C->>S: 1. Solicit (Multicast ff02::1:2)
 //!     S->>C: 2. Advertise (Unicast)
 //!
 //!     C->>S: 3. Request
-//!     S->>T: 4. update(DeviceUpdate::V6LeaseGranted / V6PrefixAssigned)
-//!     T-->>S: 5. EventBus Signal
+//!     S->>Ctx: 4. apply(DeviceUpdate::V6LeaseGranted / V6PrefixAssigned)
+//!     Ctx-->>S: 5. EventBus Signal
 //!     S->>C: 6. Reply
 //! ```
 //!
 //! ## Manager Integration
 //!
-//! The `dhcpv6_service` reports DUIDs and IP leases to the `ManagedTable`.
+//! The `dhcpv6_service` reports DUIDs and IP leases to the `LanforgeContext`.
 //! Unlike v4, `DHCPv6` relies heavily on DUIDs for persistent client
 //! identification, even if the MAC address changes or is unavailable.
 
@@ -34,7 +34,7 @@ use lanforge_core::bus::{DeviceChange, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::IPv6State;
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::update::DeviceUpdate;
+use lanforge_core::state::update::LeaseTarget;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -54,12 +54,13 @@ use lanforge_core::service::{LanforgeService, SyncService};
 
 pub struct Dhcpv6Service {
     config: Dhcpv6Config,
+    ctx: LanforgeContext,
 }
 
 impl Dhcpv6Service {
     #[must_use]
-    pub const fn new(config: Dhcpv6Config) -> Self {
-        Self { config }
+    pub const fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
+        Self { config, ctx }
     }
 }
 
@@ -137,10 +138,11 @@ impl SyncService for Dhcpv6Service {
             ),
             Duid::generate_ll_from_mac(server_mac),
             ndp_poke_sock,
+            self.ctx.clone(),
         );
 
         // Pre-allocate static reservations for ULA prefix
-        let registry = LanforgeContext::table().read().get_static_registry();
+        let registry = self.ctx.get_static_registry_opt();
         if let Some(ula) = self.config.ula_prefix {
             let ula_ips: Vec<_> = registry
                 .v6_reservations()
@@ -156,9 +158,7 @@ impl SyncService for Dhcpv6Service {
             .iter()
             .find(|i| i.name == self.config.iface)
             .map(|i| i.index)
-            && let Some((gua, pref, val)) = LanforgeContext::table()
-                .read()
-                .get_interface_gua_at(ifindex)
+            && let Some((gua, pref, val)) = self.ctx.get_interface_gua_at_opt(ifindex)
         {
             info!(
                 "DHCPv6: Resyncing GUA from global state: {} (pref={}, valid={})",
@@ -179,7 +179,7 @@ impl SyncService for Dhcpv6Service {
         info!("DHCPv6 state machine started");
 
         loop {
-            if !LanforgeContext::is_running() {
+            if !self.ctx.is_running_opt() {
                 break;
             }
 
@@ -250,7 +250,14 @@ impl Dhcpv6Service {
                 };
                 let dest_addr = std::net::SocketAddrV6::new(dest_ip, client_port, 0, scope_id);
                 let _ = socket.send_to(reply_bytes, dest_addr);
-                apply_learned_state(opt_mac, learned_duid, &ias, server, &self.config);
+                apply_learned_state(
+                    &self.ctx,
+                    opt_mac,
+                    learned_duid.as_ref(),
+                    &ias,
+                    server,
+                    &self.config,
+                );
             }
         }
     }
@@ -262,10 +269,20 @@ impl Dhcpv6Service {
         socket: &std::net::UdpSocket,
     ) -> Result<(), CoreError> {
         match event {
-            LanforgeEvent::LeaseRelease { mac } => {
-                info!("DHCPv6: Forcing release of {} via CLI", mac);
-                // Currently no easy way to release specific IPv6 lease from here
-                // but apply_learned_state handles this via DeviceUpdates.
+            LanforgeEvent::LeaseRelease {
+                mac,
+                target: LeaseTarget::V6 { iaid },
+            } => {
+                info!("DHCPv6: Forcing release of {} (IAID {}) via CLI", mac, iaid);
+            }
+            LanforgeEvent::LeaseRelease {
+                mac,
+                target: LeaseTarget::V6Prefix { iaid },
+            } => {
+                info!(
+                    "DHCPv6: Forcing release of prefix for {} (IAID {}) via CLI",
+                    mac, iaid
+                );
             }
             LanforgeEvent::DeviceUpdated {
                 mac,
@@ -285,10 +302,12 @@ impl Dhcpv6Service {
             } => {
                 self.handle_prefix_change(server, socket, gua, preferred, valid);
             }
-            LanforgeEvent::LeaseRenew { mac } => {
+            LanforgeEvent::LeaseRenew {
+                mac,
+                target: LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. },
+            } => {
                 let (duid, target_ip) = {
-                    let table = LanforgeContext::table();
-                    let device = table.read().get_device(&mac);
+                    let device = self.ctx.get_device_opt(&mac);
                     let duid = device.as_ref().and_then(|d| d.duid.clone());
                     let ll_ip = device.as_ref().and_then(|d| {
                         d.v6.iter()
@@ -338,16 +357,14 @@ impl Dhcpv6Service {
                 );
 
                 // Update static reservations for the new GUA prefix
-                let registry = LanforgeContext::table().read().get_static_registry();
+                let registry = self.ctx.get_static_registry_opt();
                 let gua_ips: Vec<_> = registry
                     .v6_reservations()
                     .map(|s| server.pool.construct_addr(g, &s))
                     .collect();
                 server.pool.reserve_statics(gua_ips);
 
-                let table = LanforgeContext::table();
-                let table_read = table.read();
-                for dev in table_read.devices() {
+                for dev in self.ctx.all_devices_opt() {
                     if let Some(duid) = &dev.duid {
                         let has_gua_lease = dev.v6.iter().any(|s| {
                             if let IPv6State::Dynamic(lease) = s {
@@ -386,88 +403,83 @@ impl Dhcpv6Service {
 /// Separated from the main loop for clarity — all logic regarding "what we
 /// learned from this packet" lives here, without mixing with network I/O.
 fn apply_learned_state(
+    ctx: &LanforgeContext,
     opt_mac: Option<MacAddr>,
-    learned_duid: Option<Duid>,
+    learned_duid: Option<&Duid>,
     ias: &server::AssignedIAs,
     server: &Dhcpv6Server,
     config: &Dhcpv6Config,
 ) {
     let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
-    let table = LanforgeContext::table();
 
     // 1. Process IA_NA (Non-temporary Addresses)
-    for iaid in &ias.na {
-        let iaid = *iaid;
-        let assigned_ips = learned_duid.as_ref().map_or_else(
+    for &iaid in &ias.na {
+        let assigned_ips = learned_duid.map_or_else(
             || opt_mac.map_or_else(Vec::new, |mac| server.pool.lookup_by_mac_legacy(mac)),
-            |duid| server.last_assignment_for(&duid.bytes, iaid),
+            |duid| server.last_assignment_for(duid, iaid),
         );
 
-        if let Some(duid) = learned_duid.clone() {
-            if assigned_ips.is_empty() {
+        if assigned_ips.is_empty() {
+            if let Some(duid) = learned_duid {
                 // No IPs assigned yet, but IAID is known
-                let _ = table.update(&DeviceUpdate::DuidAssociated {
-                    mac: opt_mac,
-                    duid,
-                    iaid,
-                });
-            } else {
-                // One or more IPs assigned
-                for ip in assigned_ips {
-                    let _ = table.update(&DeviceUpdate::V6LeaseGranted {
+                let _ = ctx.apply(
+                    &lanforge_core::state::update::DeviceUpdate::DuidAssociated {
                         mac: opt_mac,
                         duid: duid.clone(),
                         iaid,
-                        ip,
-                        expires,
-                    });
-                }
+                    },
+                );
             }
-        } else if !assigned_ips.is_empty()
-            && let Some(mac) = opt_mac
-        {
-            let existing_duid = table.read().get_duid_by_mac(mac).cloned();
-            if let Some(duid) = existing_duid {
-                for ip in assigned_ips {
-                    let _ = table.update(&DeviceUpdate::V6LeaseGranted {
-                        mac: Some(mac),
-                        duid: duid.clone(),
-                        iaid,
-                        ip,
-                        expires,
-                    });
+        } else {
+            // One or more IPs assigned
+            for ip in assigned_ips {
+                if let Some(duid) = learned_duid {
+                    let _ = ctx.apply(
+                        &lanforge_core::state::update::DeviceUpdate::V6LeaseGranted {
+                            mac: opt_mac,
+                            duid: duid.clone(),
+                            iaid,
+                            ip,
+                            expires,
+                        },
+                    );
+                } else if let Some(mac) = opt_mac {
+                    // Search for DUID in our table if not provided in packet
+                    if let Some(device) = ctx.get_device_opt(&mac)
+                        && let Some(duid) = device.duid.clone()
+                    {
+                        let _ = ctx.apply(
+                            &lanforge_core::state::update::DeviceUpdate::V6LeaseGranted {
+                                mac: Some(mac),
+                                duid,
+                                iaid,
+                                ip,
+                                expires,
+                            },
+                        );
+                    }
                 }
             }
         }
     }
 
     // 2. Process IA_PD (Prefix Delegation)
-    for iaid in &ias.pd {
-        let iaid = *iaid;
+    for &iaid in &ias.pd {
         let assigned_prefix = learned_duid
             .as_ref()
-            .and_then(|duid| server.pool.lookup_prefix(&duid.bytes, iaid));
+            .and_then(|duid| server.pool.lookup_prefix(ctx, duid, iaid));
 
-        if let (Some(duid), Some((prefix, len))) = (learned_duid.clone(), assigned_prefix) {
-            let _ = table.update(&DeviceUpdate::V6PrefixAssigned {
-                mac: opt_mac,
-                duid,
-                iaid,
-                prefix,
-                len,
-                expires,
-            });
+        if let (Some(duid), Some((prefix, len))) = (learned_duid, assigned_prefix) {
+            let _ = ctx.apply(
+                &lanforge_core::state::update::DeviceUpdate::V6PrefixAssigned {
+                    mac: opt_mac,
+                    duid: duid.clone(),
+                    iaid,
+                    prefix,
+                    len,
+                    expires,
+                },
+            );
         }
-    }
-
-    if ias.na.is_empty()
-        && ias.pd.is_empty()
-        && let Some(duid) = learned_duid
-    {
-        let _ = table.update(&DeviceUpdate::DuidAssociated {
-            mac: opt_mac,
-            duid,
-            iaid: 0,
-        });
     }
 }

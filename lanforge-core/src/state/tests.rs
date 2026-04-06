@@ -3,7 +3,7 @@
 use super::*;
 use crate::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
 use crate::identifiers::{Duid, MacAddr};
-use crate::state::update::{DeviceUpdate, FieldUpdate};
+use crate::state::update::{DeviceUpdate, FieldUpdate, LeaseTarget};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
@@ -229,13 +229,31 @@ fn apply_update_lease_released() {
     assert!(matches!(dev.v4, IPv4State::Dynamic(_)));
     assert_eq!(dev.v6.len(), 1);
 
-    assert!(table.apply_update(DeviceUpdate::LeaseReleased { mac }));
+    // 1. Release only V4
+    assert!(table.apply_update(DeviceUpdate::LeaseReleased {
+        mac,
+        target: LeaseTarget::V4
+    }));
     let dev = table.get_device(&mac).unwrap();
     assert!(matches!(dev.v4, IPv4State::None));
-    assert!(dev.v6.is_empty());
+    assert_eq!(dev.v6.len(), 1, "V6 should be preserved");
 
-    // Repeated release should not be dirty
-    assert!(!table.apply_update(DeviceUpdate::LeaseReleased { mac }));
+    // 2. Release V6 IAID 1
+    assert!(table.apply_update(DeviceUpdate::LeaseReleased {
+        mac,
+        target: LeaseTarget::V6 { iaid: 1 }
+    }));
+    let dev = table.get_device(&mac).unwrap();
+    assert!(
+        dev.v6.is_empty(),
+        "V6 should be cleared after IAID 1 release"
+    );
+
+    // 3. Repeated release should not be dirty
+    assert!(!table.apply_update(DeviceUpdate::LeaseReleased {
+        mac,
+        target: LeaseTarget::V4
+    }));
 }
 
 #[test]
@@ -301,7 +319,7 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
         expires: future,
     });
 
-    assert!(table.expire_stale());
+    assert!(!table.expire_stale().is_empty());
 
     let dev_after = table.devices().next().unwrap();
     assert!(
@@ -513,7 +531,7 @@ fn test_multiple_iaids_and_prefixes() {
         expires: past,
     });
 
-    assert!(table.expire_stale());
+    assert!(!table.expire_stale().is_empty());
     let dev = table.get_device(&mac).unwrap();
     assert_eq!(
         dev.v6_prefixes.len(),

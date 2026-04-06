@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 /// Represents a DHCP Unique Identifier (DUID).
@@ -7,8 +8,11 @@ use std::{fmt, str::FromStr};
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Duid {
     /// The raw bytes of the DUID.
-    #[serde(serialize_with = "serialize_duid")]
-    pub bytes: Vec<u8>,
+    #[serde(
+        serialize_with = "serialize_duid",
+        deserialize_with = "deserialize_duid"
+    )]
+    pub bytes: Arc<[u8]>,
 }
 
 /// Serializes a DUID as a colon-separated hex string.
@@ -32,8 +36,10 @@ where
 impl Duid {
     /// Creates a new DUID from a vector of bytes.
     #[must_use]
-    pub const fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes: Arc::from(bytes),
+        }
     }
 
     /// Returns the raw bytes of the DUID.
@@ -138,6 +144,19 @@ impl fmt::Display for Duid {
             .join(":");
         write!(f, "{hex}")
     }
+}
+
+/// Deserializes a DUID from a colon-separated hex string.
+fn deserialize_duid<'de, D>(deserializer: D) -> Result<Arc<[u8]>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let bytes: Vec<u8> = s
+        .split(':')
+        .filter_map(|x| u8::from_str_radix(x, 16).ok())
+        .collect();
+    Ok(Arc::from(bytes))
 }
 
 // ---------------------------------------------------------------------------

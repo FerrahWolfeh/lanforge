@@ -43,8 +43,7 @@ impl ClientContext {
     /// Generates a full `StatusResponse` by gathering data from the configuration
     /// and the active device table.
     pub(crate) async fn handle_status(&self) -> Response {
-        let t = LanforgeContext::table();
-        let table_guard = t.read();
+        let devices = LanforgeContext::devices();
 
         let mut status = api::StatusResponse {
             uptime_secs: self.uptime_secs,
@@ -71,7 +70,7 @@ impl ClientContext {
         status.services.ra.ula.clone_from(&status.network.ula);
 
         // Devices + Leases
-        let dev_ct = table_guard.devices().count();
+        let dev_ct = devices.len();
         let mut online_ct = 0;
         let mut static_toml = 0;
         let mut dynamic = 0;
@@ -80,7 +79,7 @@ impl ClientContext {
         let mut v6_dynamic_count = 0;
         let mut slaac_addrs = 0;
 
-        for dev in table_guard.devices() {
+        for dev in &devices {
             let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
             if is_online {
                 online_ct += 1;
@@ -149,13 +148,8 @@ impl ClientContext {
         status.devices.total = dev_ct;
         status.devices.online = online_ct;
         status.devices.static_toml = static_toml;
-        status.devices.managed_cli = table_guard
-            .devices()
-            .filter(|d| d.origin == Origin::Cli)
-            .count();
+        status.devices.managed_cli = devices.iter().filter(|d| d.origin == Origin::Cli).count();
         status.devices.dynamic = dynamic;
-
-        drop(table_guard);
 
         status.services.slaac.addrs_tracked = slaac_addrs;
 
@@ -172,13 +166,12 @@ impl ClientContext {
         vendor: Option<String>,
         method: Option<String>,
     ) -> Response {
-        let t = LanforgeContext::table();
-        let table_guard = t.read();
+        let devices = LanforgeContext::devices();
 
         let mut api_devices = Vec::new();
         let mut online = 0;
 
-        for dev in table_guard.devices() {
+        for dev in &devices {
             let matches_filter = filter.as_ref().is_none_or(|f| {
                 let f_lower = f.to_lowercase();
                 dev.hostname.name.to_lowercase().contains(&f_lower)
@@ -311,7 +304,7 @@ impl ClientContext {
         Response::Devices(api::DevicesResponse {
             devices: api_devices,
             meta: api::DevicesMeta {
-                total: table_guard.devices().count(),
+                total: devices.len(),
                 online,
                 last_scan_secs_ago: self.last_scan_secs_ago,
             },
@@ -322,11 +315,10 @@ impl ClientContext {
     ///
     /// Devices with `Origin::Dynamic` are excluded from this list.
     pub(crate) async fn handle_hosts(&self) -> Response {
-        let t = LanforgeContext::table();
-        let table_guard = t.read();
+        let devices = LanforgeContext::devices();
         let mut hosts = Vec::new();
 
-        for dev in table_guard.devices() {
+        for dev in &devices {
             if dev.origin == Origin::Dynamic {
                 continue;
             }
@@ -358,10 +350,9 @@ impl ClientContext {
             m
         } else {
             // Search by hostname
-            let t = LanforgeContext::table();
-            let table = t.read();
-            let found = table
-                .devices()
+            let devices = LanforgeContext::devices();
+            let found = devices
+                .iter()
                 .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase());
             match found {
                 Some(d) => d.mac,
@@ -384,19 +375,14 @@ impl ClientContext {
 
     /// Gathers detailed information and history for a device.
     pub(crate) async fn handle_whois(&self, target: String) -> Response {
-        let device = {
-            let t = LanforgeContext::table();
-            let table = t.read();
-
-            if let Some(m) = lanforge_core::identifiers::MacAddr::parse(&target) {
-                table.get_device(&m)
-            } else if let Ok(ip) = target.parse::<std::net::IpAddr>() {
-                table.get_mac_by_ip(ip).and_then(|m| table.get_device(&m))
-            } else {
-                table
-                    .devices()
-                    .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
-            }
+        let device = if let Some(m) = lanforge_core::identifiers::MacAddr::parse(&target) {
+            LanforgeContext::get_device(&m)
+        } else if let Ok(ip) = target.parse::<std::net::IpAddr>() {
+            LanforgeContext::get_mac_by_ip(ip).and_then(|m| LanforgeContext::get_device(&m))
+        } else {
+            LanforgeContext::devices()
+                .into_iter()
+                .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
         };
 
         if let Some(dev) = device {

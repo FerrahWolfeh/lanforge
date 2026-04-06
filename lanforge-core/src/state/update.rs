@@ -62,6 +62,21 @@ pub struct StaticEntry {
 }
 
 // ---------------------------------------------------------------------------
+// LeaseTarget
+// ---------------------------------------------------------------------------
+
+/// Identifies the specific protocol or logical component of a lease.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Hash)]
+pub enum LeaseTarget {
+    /// `DHCPv4` lease.
+    V4,
+    /// `DHCPv6` `IA_NA` (Identity Association for Non-Temporary Addresses).
+    V6 { iaid: u32 },
+    /// `DHCPv6` `IA_PD` (Identity Association for Prefix Delegation).
+    V6Prefix { iaid: u32 },
+}
+
+// ---------------------------------------------------------------------------
 // DeviceUpdate
 // ---------------------------------------------------------------------------
 
@@ -105,10 +120,7 @@ pub enum DeviceUpdate {
     },
 
     /// A SLAAC address was observed active via Neighbor Discovery (NDP).
-    SlaacObserved {
-        mac: MacAddr,
-        addr: Ipv6Addr,
-    },
+    SlaacObserved { mac: MacAddr, addr: Ipv6Addr },
 
     /// A generic IPv6 neighbor event was observed.
     NdpSeen { mac: MacAddr, ip: Ipv6Addr },
@@ -143,8 +155,8 @@ pub enum DeviceUpdate {
     /// Completely remove a host and its indices.
     HostRemoved { mac: MacAddr },
 
-    /// Formally release all dynamic leases for a device.
-    LeaseReleased { mac: MacAddr },
+    /// Formally release a specific dynamic lease for a device.
+    LeaseReleased { mac: MacAddr, target: LeaseTarget },
 
     /// An IP address was explicitly removed from the system neighbor cache.
     IpDeleted { ip: std::net::IpAddr },
@@ -634,20 +646,34 @@ impl DeviceTable {
         changed_dev || changed_static
     }
 
-    fn handle_lease_released(&mut self, mac: MacAddr) -> bool {
+    fn handle_lease_released(&mut self, mac: MacAddr, target: &LeaseTarget) -> bool {
         if let Some(dev_arc) = self.devices.get(&mac) {
             let mut dev = (**dev_arc).clone();
-            let changed_v4 = if matches!(dev.v4, IPv4State::None) {
-                false
-            } else {
-                dev.v4 = IPv4State::None;
-                true
-            };
-            let initial_v6_len = dev.v6.len();
-            dev.v6.retain(|s| !matches!(s, IPv6State::Dynamic(_)));
-            let changed_v6 = dev.v6.len() != initial_v6_len;
+            let mut changed = false;
 
-            if changed_v4 || changed_v6 {
+            match target {
+                LeaseTarget::V4 => {
+                    // Only release if dynamic (don't clear static IPs)
+                    if !matches!(dev.v4, IPv4State::None) && !matches!(dev.v4, IPv4State::Static(_))
+                    {
+                        dev.v4 = IPv4State::None;
+                        changed = true;
+                    }
+                }
+                LeaseTarget::V6 { iaid } => {
+                    let initial_v6_len = dev.v6.len();
+                    dev.v6
+                        .retain(|s| !matches!(s, IPv6State::Dynamic(l) if l.iaid == *iaid));
+                    changed = dev.v6.len() != initial_v6_len;
+                }
+                LeaseTarget::V6Prefix { iaid } => {
+                    let initial_len = dev.v6_prefixes.len();
+                    dev.v6_prefixes.retain(|p| p.iaid != *iaid);
+                    changed = dev.v6_prefixes.len() != initial_len;
+                }
+            }
+
+            if changed {
                 self.devices.insert(mac, Arc::new(dev));
                 return true;
             }
@@ -804,7 +830,7 @@ impl DeviceTable {
             } => self.handle_cli_host_updated(mac, hostname, v4_static, v6_suffix, origin),
             DeviceUpdate::SlaacCleared { mac } => self.handle_slaac_cleared(mac),
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
-            DeviceUpdate::LeaseReleased { mac } => self.handle_lease_released(mac),
+            DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, &target),
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
             DeviceUpdate::InterfaceIpsChanged {
                 ifindex,

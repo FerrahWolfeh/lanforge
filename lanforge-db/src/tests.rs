@@ -215,28 +215,20 @@ async fn db_worker_persists_on_dirty_event() {
     let bus_rx = SyncBusReceiver::new(rx);
 
     let bus = Arc::new(lanforge_core::bus::EventBus::new());
-    let table = Arc::new(lanforge_core::bus::ManagedTable::from_table(
-        bus.clone(),
-        lanforge_core::state::DeviceTable::new(),
-        None,
-    ));
+    let table = lanforge_core::state::DeviceTable::new();
 
-    // Ensure LanforgeContext is initialized for tests without panicking if another test did it.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        LanforgeContext::init(bus.clone(), table.clone());
-    }));
+    LanforgeContext::reset_instance_for_tests();
+    LanforgeContext::init(bus.clone(), table, None);
 
     let mut worker = crate::worker::DbWorker::new(db_path.clone(), log_db_path);
 
     // Prepare table and context
     let mac = make_mac(0xAB);
-    {
-        let t_ref = LanforgeContext::table();
-        let _ = t_ref.update(&DeviceUpdate::DhcpHostnameHint {
-            mac,
-            hostname: "worker-test".into(),
-        });
-    }
+    let _ = LanforgeContext::update_hostname(
+        mac,
+        "worker-test".into(),
+        lanforge_core::device::HostnameOrigin::Dhcp,
+    );
 
     std::thread::spawn(move || {
         let _ = worker.run(&bus_rx);

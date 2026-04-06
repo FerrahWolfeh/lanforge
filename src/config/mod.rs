@@ -436,6 +436,7 @@ impl Config {
                 .map(|s| parse_addr(s, "127.0.0.1:5335")),
             search_domain: self.dns_toml.search_domain.clone(),
             ula_prefix,
+            gua_prefix: None,
             ttl: self.dns_toml.ttl,
             multi_search_labels,
         }

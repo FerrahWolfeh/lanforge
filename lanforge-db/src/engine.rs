@@ -189,118 +189,7 @@ impl LeaseDb {
 
         // 2. Upsert current devices from memory
         for device in table.devices() {
-            let mac_str = device.mac.to_string();
-            let row = DeviceRow {
-                mac: mac_str.clone(),
-                hostname: device.hostname.name.clone(),
-                hostname_origin: device.hostname.origin as i32,
-                is_static: device.is_static(),
-                duid: device.duid.as_ref().map(|d| d.bytes.clone()),
-                last_seen: system_time_to_unix(device.last_seen),
-                origin: device.origin.as_str().to_string(),
-                managed_at: device.managed_at.map(system_time_to_unix),
-                v4_static: match &device.v4 {
-                    IPv4State::Static(ip) => Some(ip.to_string()),
-                    _ => None,
-                },
-                v6_suffix: device.v6.iter().find_map(|s| {
-                    if let IPv6State::Static(suf) = s {
-                        Some(suf.to_string())
-                    } else {
-                        None
-                    }
-                }),
-                vendor: device.vendor.clone(),
-            };
-
-            tx.execute(
-                "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, vendor)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-                 ON CONFLICT(mac) DO UPDATE SET
-                    hostname = excluded.hostname,
-                    hostname_origin = excluded.hostname_origin,
-                    is_static = excluded.is_static,
-                    duid = excluded.duid,
-                    last_seen = excluded.last_seen,
-                    origin = excluded.origin,
-                    managed_at = excluded.managed_at,
-                    v4_static = excluded.v4_static,
-                    v6_suffix = excluded.v6_suffix,
-                    vendor = excluded.vendor",
-                params![
-                    row.mac,
-                    row.hostname,
-                    row.hostname_origin,
-                    i32::from(row.is_static),
-                    row.duid,
-                    row.last_seen,
-                    row.origin,
-                    row.managed_at,
-                    row.v4_static,
-                    row.v6_suffix,
-                    row.vendor
-                ],
-            )?;
-
-            // Atomic clear and re-populate child tables for this MAC
-            tx.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&mac_str])?;
-            if let IPv4State::Dynamic(lease) = &device.v4 {
-                tx.execute(
-                    "INSERT INTO v4_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
-                    params![
-                        mac_str,
-                        lease.ip.to_string(),
-                        system_time_to_unix(lease.expires)
-                    ],
-                )?;
-            }
-
-            tx.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&mac_str])?;
-            for state in &device.v6 {
-                if let IPv6State::Dynamic(lease) = state {
-                    tx.execute(
-                        "INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES (?1, ?2, ?3, ?4)",
-                        params![
-                            mac_str,
-                            lease.iaid,
-                            lease.ip.to_string(),
-                            system_time_to_unix(lease.expires)
-                        ],
-                    )?;
-                }
-            }
-
-            tx.execute("DELETE FROM v6_prefixes WHERE mac = ?1", params![&mac_str])?;
-            for prefix in &device.v6_prefixes {
-                tx.execute(
-                    "INSERT INTO v6_prefixes (mac, iaid, prefix, len, expires) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        mac_str,
-                        prefix.iaid,
-                        prefix.prefix.to_string(),
-                        prefix.len,
-                        system_time_to_unix(prefix.expires)
-                    ],
-                )?;
-            }
-
-            tx.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&mac_str])?;
-            for state in &device.v6 {
-                if let IPv6State::Slaac(ip) = state {
-                    tx.execute(
-                        "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
-                        params![mac_str, ip.to_string()],
-                    )?;
-                }
-            }
-
-            tx.execute("DELETE FROM seen_v4 WHERE mac = ?1", params![&mac_str])?;
-            for ip in &device.seen_v4 {
-                tx.execute(
-                    "INSERT INTO seen_v4 (mac, ip) VALUES (?1, ?2)",
-                    params![mac_str, ip.to_string()],
-                )?;
-            }
+            Self::upsert_device_internal(&tx, &device)?;
         }
 
         // 3. Remove devices that no longer exist in memory (Cascades automatically)
@@ -312,6 +201,130 @@ impl LeaseDb {
 
         tx.commit().map_err(LeaseDbError::TransactionFailed)?;
         debug!("DeviceTable persisted successfully");
+        Ok(())
+    }
+
+    /// Persists a single device's state to the database atomically.
+    pub fn upsert_device(&self, device: &Device) -> Result<()> {
+        Self::upsert_device_internal(&self.conn, device)
+    }
+
+    /// Shared internal logic for upserting a device.
+    /// Works with both raw Connections and Transactions.
+    fn upsert_device_internal(conn: &Connection, device: &Device) -> Result<()> {
+        let mac_str = device.mac.to_string();
+        let row = DeviceRow {
+            mac: mac_str.clone(),
+            hostname: device.hostname.name.clone(),
+            hostname_origin: device.hostname.origin as i32,
+            is_static: device.is_static(),
+            duid: device.duid.as_ref().map(|d| d.bytes.to_vec()),
+            last_seen: system_time_to_unix(device.last_seen),
+            origin: device.origin.as_str().to_string(),
+            managed_at: device.managed_at.map(system_time_to_unix),
+            v4_static: match &device.v4 {
+                IPv4State::Static(ip) => Some(ip.to_string()),
+                _ => None,
+            },
+            v6_suffix: device.v6.iter().find_map(|s| {
+                if let IPv6State::Static(suf) = s {
+                    Some(suf.to_string())
+                } else {
+                    None
+                }
+            }),
+            vendor: device.vendor.clone(),
+        };
+
+        conn.execute(
+            "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, vendor)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(mac) DO UPDATE SET
+                hostname = excluded.hostname,
+                hostname_origin = excluded.hostname_origin,
+                is_static = excluded.is_static,
+                duid = excluded.duid,
+                last_seen = excluded.last_seen,
+                origin = excluded.origin,
+                managed_at = excluded.managed_at,
+                v4_static = excluded.v4_static,
+                v6_suffix = excluded.v6_suffix,
+                vendor = excluded.vendor",
+            params![
+                row.mac,
+                row.hostname,
+                row.hostname_origin,
+                i32::from(row.is_static),
+                row.duid,
+                row.last_seen,
+                row.origin,
+                row.managed_at,
+                row.v4_static,
+                row.v6_suffix,
+                row.vendor
+            ],
+        )?;
+
+        // Atomic clear and re-populate child tables for this MAC
+        conn.execute("DELETE FROM v4_leases WHERE mac = ?1", params![&mac_str])?;
+        if let IPv4State::Dynamic(lease) = &device.v4 {
+            conn.execute(
+                "INSERT INTO v4_leases (mac, ip, expires) VALUES (?1, ?2, ?3)",
+                params![
+                    mac_str,
+                    lease.ip.to_string(),
+                    system_time_to_unix(lease.expires)
+                ],
+            )?;
+        }
+
+        conn.execute("DELETE FROM v6_leases WHERE mac = ?1", params![&mac_str])?;
+        for state in &device.v6 {
+            if let IPv6State::Dynamic(lease) = state {
+                conn.execute(
+                    "INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        mac_str,
+                        lease.iaid,
+                        lease.ip.to_string(),
+                        system_time_to_unix(lease.expires)
+                    ],
+                )?;
+            }
+        }
+
+        conn.execute("DELETE FROM v6_prefixes WHERE mac = ?1", params![&mac_str])?;
+        for prefix in &device.v6_prefixes {
+            conn.execute(
+                "INSERT INTO v6_prefixes (mac, iaid, prefix, len, expires) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    mac_str,
+                    prefix.iaid,
+                    prefix.prefix.to_string(),
+                    prefix.len,
+                    system_time_to_unix(prefix.expires)
+                ],
+            )?;
+        }
+
+        conn.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&mac_str])?;
+        for state in &device.v6 {
+            if let IPv6State::Slaac(ip) = state {
+                conn.execute(
+                    "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
+                    params![mac_str, ip.to_string()],
+                )?;
+            }
+        }
+
+        conn.execute("DELETE FROM seen_v4 WHERE mac = ?1", params![&mac_str])?;
+        for ip in &device.seen_v4 {
+            conn.execute(
+                "INSERT INTO seen_v4 (mac, ip) VALUES (?1, ?2)",
+                params![mac_str, ip.to_string()],
+            )?;
+        }
+
         Ok(())
     }
 

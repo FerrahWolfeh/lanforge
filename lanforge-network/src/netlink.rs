@@ -9,12 +9,12 @@
 //!     participant K as Kernel (RTM_NEWNEIGH)
 //!     participant N as netlink::extract_neigh_info()
 //!     participant E as NeighborEvent
-//!     participant T as ManagedTable (apply_update)
+//!     participant C as LanforgeContext (apply)
 //!
 //!     K->>N: Inbound Message
 //!     N->>E: Option<NeighborEvent>
 //!     Note over E: to_device_update(prefix)
-//!     E->>T: SlaacObserved (GUA) / NdpSeen (Other)
+//!     E->>C: SlaacObserved (GUA) / NdpSeen (Other)
 //! ```
 
 use crate::ifmon::NetlinkStream;
@@ -224,6 +224,7 @@ pub struct NdpMonitor {
     handle: Handle,
     messages: Arc<Mutex<NetlinkStream>>,
     target_ifindex: u32,
+    ctx: LanforgeContext,
 }
 
 impl NdpMonitor {
@@ -232,11 +233,13 @@ impl NdpMonitor {
         handle: Handle,
         messages: Arc<Mutex<NetlinkStream>>,
         target_ifindex: u32,
+        ctx: LanforgeContext,
     ) -> Self {
         Self {
             handle,
             messages,
             target_ifindex,
+            ctx,
         }
     }
 }
@@ -265,22 +268,21 @@ impl LanforgeService for NdpMonitor {
 
 impl AsyncService for NdpMonitor {
     async fn run(&mut self) -> std::result::Result<(), CoreError> {
-        let table = LanforgeContext::table();
-        let mut bus_rx = LanforgeContext::bus().subscribe();
+        let mut bus_rx = self.ctx.bus_opt().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
 
         // 1. Initial Neighbor Scan (Bootstrap)
         {
             if let Err(e) =
-                bootstrap_table("", &self.handle, None, None, Some(self.target_ifindex)).await
+                bootstrap_table(&self.ctx, "", &self.handle, None, None, Some(self.target_ifindex)).await
             {
                 tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
             }
         }
 
         loop {
-            if !LanforgeContext::is_running() {
+            if !self.ctx.is_running_opt() {
                 break;
             }
             let mut rx = self.messages.lock().await;
@@ -291,9 +293,10 @@ impl AsyncService for NdpMonitor {
                     // A. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg)
                         && event.ifindex() == self.target_ifindex {
-                            let update =
-                                event.to_device_update(current_gua.as_ref(), current_ula.as_ref());
-                            let _ = table.update(&update);
+                            let update = event.to_device_update(current_gua.as_ref(), current_ula.as_ref());
+                            if !self.ctx.apply(&update) {
+                                // No change or error
+                            }
                         }
                 }
 

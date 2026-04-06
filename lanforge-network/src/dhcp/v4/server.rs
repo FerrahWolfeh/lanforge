@@ -16,10 +16,11 @@
 
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
+use lanforge_core::device::Device;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::DeviceTable;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
@@ -57,21 +58,23 @@ pub struct DhcpServer {
     pub pool: IpPool,
     /// Temporarily stores the last allocated IP during packet processing.
     pub last_assigned_ip: Option<Ipv4Addr>,
+    pub ctx: lanforge_core::context::LanforgeContext,
 }
 
 impl DhcpServer {
     #[must_use]
-    pub fn new(cfg: Dhcpv4Config) -> Self {
+    pub fn new(cfg: Dhcpv4Config, ctx: lanforge_core::context::LanforgeContext) -> Self {
         let pool = IpPool::new(cfg.range_start, cfg.range_end);
         Self {
             cfg,
             pool,
             last_assigned_ip: None,
+            ctx,
         }
     }
 
     /// Processes a raw DHCP packet and returns a response (if any).
-    pub fn handle_packet(&mut self, data: &[u8], table: Option<&DeviceTable>) -> HandleResult {
+    pub fn handle_packet(&mut self, data: &[u8], device: Option<Arc<Device>>) -> HandleResult {
         self.last_assigned_ip = None;
         let msg = match Message::decode(&mut Decoder::new(data)) {
             Ok(m) => m,
@@ -109,7 +112,7 @@ impl DhcpServer {
             mac,
             Self::get_hostname(&msg),
             Self::get_vendor_class(&msg),
-            table,
+            device,
         );
 
         match msg_type {
@@ -137,7 +140,7 @@ impl DhcpServer {
         let requested = Self::get_requested_ip(msg);
         let expiry = SystemTime::now() + Duration::from_secs(u64::from(self.cfg.lease_time));
 
-        let Some(offered_ip) = self.pool.allocate(mac, requested, expiry) else {
+        let Some(offered_ip) = self.pool.allocate(&self.ctx, mac, requested, expiry) else {
             warn!("DHCPv4: Pool exhausted, no IP available for {identity}");
             return HandleResult::Ignore;
         };
@@ -193,7 +196,7 @@ impl DhcpServer {
 
         // Try to allocate
         let expiry = SystemTime::now() + Duration::from_secs(u64::from(self.cfg.lease_time));
-        let Some(assigned_ip) = self.pool.allocate(mac, Some(wanted), expiry) else {
+        let Some(assigned_ip) = self.pool.allocate(&self.ctx, mac, Some(wanted), expiry) else {
             warn!("DHCPv4: {identity} requested {wanted} but it is not available");
             return self.send_nak(msg, "Requested IP not available");
         };
@@ -398,8 +401,10 @@ impl DhcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::init_test_context;
     use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode};
     use dhcproto::{Decodable, Decoder, Encodable, Encoder};
+    use lanforge_core::context::LanforgeContext;
     use std::net::Ipv4Addr;
 
     // -----------------------------------------------------------------------
@@ -422,8 +427,9 @@ mod tests {
         }
     }
 
-    fn dummy_server() -> DhcpServer {
-        DhcpServer::new(dummy_config())
+    fn dummy_server() -> (DhcpServer, LanforgeContext) {
+        let ctx = init_test_context();
+        (DhcpServer::new(dummy_config(), ctx.clone()), ctx)
     }
 
     fn dummy_mac() -> MacAddr {
@@ -470,7 +476,7 @@ mod tests {
 
     #[test]
     fn invalid_packet_is_ignored() {
-        let mut srv = dummy_server();
+        let (mut srv, _ctx) = dummy_server();
         let junk_data = vec![0x00, 0xFF, 0xAA, 0xBB]; // Lixo puro
 
         let res = srv.handle_packet(&junk_data, None);
@@ -479,7 +485,7 @@ mod tests {
 
     #[test]
     fn discover_yields_offer() {
-        let mut srv = dummy_server();
+        let (mut srv, _ctx) = dummy_server();
         let mac = dummy_mac();
         let raw_msg = build_raw_msg(MessageType::Discover, mac, None, None, None);
 
@@ -507,7 +513,7 @@ mod tests {
 
     #[test]
     fn request_valid_yields_ack() {
-        let mut srv = dummy_server();
+        let (mut srv, _ctx) = dummy_server();
         let mac = dummy_mac();
         let requested_ip = Ipv4Addr::new(192, 168, 1, 150);
 
@@ -537,7 +543,7 @@ mod tests {
 
     #[test]
     fn request_for_different_server_is_ignored() {
-        let mut srv = dummy_server();
+        let (mut srv, _ctx) = dummy_server();
         let mac = dummy_mac();
 
         // Simula o cliente escolhendo um servidor concorrente (ServerID = 10.0.0.1)
@@ -557,14 +563,18 @@ mod tests {
 
     #[test]
     fn request_unavailable_ip_yields_nak() {
-        let mut srv = dummy_server();
+        let (mut srv, ctx) = dummy_server();
         let mac1 = MacAddr([0x11, 0x11, 0x11, 0x11, 0x11, 0x11]);
         let mac2 = MacAddr([0x22, 0x22, 0x22, 0x22, 0x22, 0x22]);
         let contested_ip = Ipv4Addr::new(192, 168, 1, 105);
 
         // 1. MAC1 aloca o IP primeiro
         let expiry = SystemTime::now() + Duration::from_secs(3600);
-        srv.pool.allocate(mac1, Some(contested_ip), expiry);
+        let _ = ctx.apply(&lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
+            mac: mac1,
+            ip: contested_ip,
+            expires: expiry,
+        });
 
         // 2. MAC2 tenta pedir o IP que já é do MAC1
         let raw_msg = build_raw_msg(MessageType::Request, mac2, Some(contested_ip), None, None);
@@ -592,12 +602,12 @@ mod tests {
 
     #[test]
     fn release_frees_allocated_ip() {
-        let mut srv = dummy_server();
+        let (mut srv, ctx) = dummy_server();
         let mac = dummy_mac();
         let ip = Ipv4Addr::new(192, 168, 1, 100);
         let expiry = SystemTime::now() + Duration::from_secs(3600);
 
-        srv.pool.allocate(mac, Some(ip), expiry);
+        srv.pool.allocate(&ctx, mac, Some(ip), expiry);
         srv.last_assigned_ip = Some(ip);
         assert_eq!(srv.last_assignment_for(), Some(ip));
 
@@ -618,12 +628,12 @@ mod tests {
 
     #[test]
     fn decline_clears_mac_assignment() {
-        let mut srv = dummy_server();
+        let (mut srv, ctx) = dummy_server();
         let mac = dummy_mac();
         let ip = Ipv4Addr::new(192, 168, 1, 100);
         let expiry = SystemTime::now() + Duration::from_secs(3600);
 
-        srv.pool.allocate(mac, Some(ip), expiry);
+        srv.pool.allocate(&ctx, mac, Some(ip), expiry);
 
         // Cliente detectou conflito de ARP e enviou DECLINE
         let raw_msg = build_raw_msg(MessageType::Decline, mac, None, Some(ip), None);
@@ -639,7 +649,7 @@ mod tests {
 
     #[test]
     fn inform_yields_ack_without_allocating_ip() {
-        let mut srv = dummy_server();
+        let (mut srv, _ctx) = dummy_server();
         let mac = dummy_mac();
         let client_static_ip = Ipv4Addr::new(192, 168, 1, 50); // Fora do range dinâmico
 
@@ -670,7 +680,7 @@ mod tests {
 
     #[test]
     fn test_build_forcerenew() {
-        let srv = dummy_server();
+        let (srv, _ctx) = dummy_server();
         let mac = dummy_mac();
         let ip = Ipv4Addr::new(192, 168, 1, 50);
 

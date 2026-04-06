@@ -1,6 +1,7 @@
 use crate::app::{run_scan, sd_notify_ready};
 use anyhow::Result;
 use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::context::LanforgeContext;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
@@ -15,10 +16,10 @@ pub async fn run_event_loop(
     mut bus_rx: tokio::sync::broadcast::Receiver<lanforge_core::bus::TimedEvent>,
 ) -> Result<()> {
     let cfg = bootstrap.cfg;
-    let bus = bootstrap.bus;
-    let table = bootstrap.table;
     let handle = bootstrap.rt_handle;
     let target_ifindex = bootstrap.target_ifindex;
+
+    let bus = LanforgeContext::bus();
 
     let mut state = LoopState::new();
 
@@ -46,9 +47,7 @@ pub async fn run_event_loop(
                 spawn_scan(cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
             }
             _ = stale_timer.tick() => {
-                if table.write().expire_stale() {
-                    let _ = bus.publish(LanforgeEvent::DeviceTableDirty);
-                }
+                let _ = LanforgeContext::expire_stale();
             }
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 recebido, forçando sincronização de estado...");

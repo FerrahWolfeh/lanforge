@@ -1,6 +1,6 @@
 use std::fmt;
 
-use lanforge_core::{identifiers::MacAddr, state::DeviceTable};
+use lanforge_core::identifiers::MacAddr;
 
 /// Device identity — "Who am I?" (WTFAI) representation.
 #[derive(Debug, Clone)]
@@ -23,19 +23,17 @@ impl DeviceIdentity {
         }
     }
 
-    /// Resolves the identity using packet-provided information and the device table.
+    /// Resolves the identity using packet-provided information and an optional device snapshot.
     #[must_use]
     pub fn resolve(
         mac: MacAddr,
         packet_hostname: Option<String>,
         packet_vendor: Option<String>,
-        table: Option<&DeviceTable>,
+        device: Option<std::sync::Arc<lanforge_core::device::Device>>,
     ) -> Self {
         let mut identity = Self::new(mac, packet_hostname, packet_vendor);
 
-        if let Some(t) = table
-            && let Some(dev) = t.get_device(&mac)
-        {
+        if let Some(dev) = device {
             // If the packet didn't provide a hostname but the table has one
             // (e.g., static or previously learned), use the table's version.
             if identity.hostname.is_none() && !dev.hostname.name.is_empty() {

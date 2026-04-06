@@ -116,22 +116,24 @@ impl LogHandler {
                     );
                 }
             }
-            LanforgeEvent::LeaseRelease { mac } => {
+            LanforgeEvent::LeaseRelease { mac, target } => {
                 println!(
-                    "[{}] {} {} {}",
+                    "[{}] {} {} {} ({:?})",
                     now,
                     "CMD".cyan().bold(),
                     "Forced Release:".white(),
-                    mac
+                    mac,
+                    target
                 );
             }
-            LanforgeEvent::LeaseRenew { mac } => {
+            LanforgeEvent::LeaseRenew { mac, target } => {
                 println!(
-                    "[{}] {} {} {}",
+                    "[{}] {} {} {} ({:?})",
                     now,
                     "CMD".cyan().bold(),
                     "Force Renew:".white(),
-                    mac
+                    mac,
+                    target
                 );
             }
             LanforgeEvent::DbVacuum => {
@@ -219,11 +221,9 @@ impl LogHandler {
             DeviceChange::V4Assigned { ip } => {
                 format!("IPv4 assigned: {}", ip.to_string().bright_cyan())
             }
-            DeviceChange::V4Expired => "IPv4 lease expired".dimmed().to_string(),
-            DeviceChange::V6Assigned { ip, .. } => {
-                format!("IPv6 assigned: {}", ip.to_string().bright_cyan())
+            DeviceChange::LeaseExpired { target } => {
+                format!("Lease expired ({:?})", target).dimmed().to_string()
             }
-            DeviceChange::V6Expired => "IPv6 lease expired".dimmed().to_string(),
             DeviceChange::SlaacObserved { addr } => {
                 format!("SLAAC observed: {}", addr.to_string().bright_magenta())
             }
@@ -237,6 +237,9 @@ impl LogHandler {
                 None => "Static IPv6 suffix removed".dimmed().to_string(),
             },
             DeviceChange::DuidAssociated => "DUID associated".to_string(),
+            DeviceChange::V6Assigned { ip, .. } => {
+                format!("IPv6 assigned: {}", ip.to_string().bright_cyan())
+            }
             DeviceChange::V6PrefixAssigned { prefix, len, .. } => {
                 format!(
                     "IA_PD assigned: {}/{}",
@@ -250,6 +253,9 @@ impl LogHandler {
                     addresses.len().to_string().bright_magenta()
                 )
             }
+            DeviceChange::HostRemoved => "Host removed".red().to_string(),
+            DeviceChange::NdpObserved => "NDP activity observed".dimmed().to_string(),
+            DeviceChange::ArpObserved => "ARP activity observed".dimmed().to_string(),
         }
     }
 }

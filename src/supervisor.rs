@@ -24,15 +24,15 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 /// Publishes a `ServiceReady` event and logs the readiness signal.
-fn signal_ready(meta: &ServiceMeta, description: &str) {
+fn signal_ready(ctx: &LanforgeContext, meta: &ServiceMeta, description: &str) {
     info!("▸ {} ready ({})", description, meta.id);
-    let _ = LanforgeContext::bus().publish(LanforgeEvent::ServiceReady {
+    let _ = ctx.bus_opt().publish(LanforgeEvent::ServiceReady {
         name: meta.id.to_string(),
     });
 }
 
 /// Executa uma task supervisionada que implementa `AsyncService`.
-pub async fn supervise_async<S, F>(factory: F)
+pub async fn supervise_async<S, F>(ctx: &LanforgeContext, factory: F)
 where
     S: AsyncService,
     F: Fn() -> S,
@@ -47,9 +47,9 @@ where
 
         info!("▸ Starting async service: {}", description);
 
-        signal_ready(&meta, &description);
+        signal_ready(ctx, &meta, &description);
 
-        let mut bus_rx = LanforgeContext::bus().subscribe();
+        let mut bus_rx = ctx.bus_opt().subscribe();
         tokio::select! {
             shutdown = async {
                 while let Ok(e) = bus_rx.recv().await {
@@ -70,7 +70,7 @@ where
             res = service.run() => {
                 match res {
                     Ok(()) => {
-                        if !LanforgeContext::is_running() {
+                        if !ctx.is_running_opt() {
                             info!("▪ {} exited (shutdown)", description);
                             return;
                         }
@@ -84,7 +84,7 @@ where
                         if meta.max_retries > 0 && consecutive_failures >= meta.max_retries {
                             if meta.critical {
                                 error!("FATAL: Critical service '{}' failed after {} retries. Shutting down.", name, consecutive_failures);
-                                LanforgeContext::terminate();
+                                ctx.terminate_opt();
                                 return;
                             }
                             warn!("Service '{}' exhausted {} retries — giving up", name, meta.max_retries);
@@ -126,7 +126,7 @@ where
 ///
 /// Esta função é SÍNCRONA e deve ser chamada dentro de uma OS thread dedicada
 /// (ex: via `spawn_sync_service_thread`). Ela não requer um executor Tokio.
-pub fn supervise_sync<S, F>(rt_handle: &tokio::runtime::Handle, factory: F)
+pub fn supervise_sync<S, F>(ctx: &LanforgeContext, rt_handle: &tokio::runtime::Handle, factory: F)
 where
     S: SyncService,
     F: Fn() -> S,
@@ -134,7 +134,7 @@ where
     let mut consecutive_failures: u32 = 0;
 
     loop {
-        if !LanforgeContext::is_running() {
+        if !ctx.is_running_opt() {
             info!("Supervisor (sync) received shutdown, stopping before start");
             return;
         }
@@ -147,7 +147,7 @@ where
         info!("▸ Starting sync service: {}", description);
 
         // Create the event bus bridge for this sync service
-        let bus = LanforgeContext::bus();
+        let bus = ctx.bus_opt();
         let (tx, rx) = std::sync::mpsc::channel();
         let bus_rx = SyncBusReceiver::new(rx);
 
@@ -180,13 +180,13 @@ where
             }
         });
 
-        signal_ready(&meta, &description);
+        signal_ready(ctx, &meta, &description);
 
         let res = service.run(&bus_rx);
 
         match res {
             Ok(()) => {
-                if !LanforgeContext::is_running() {
+                if !ctx.is_running_opt() {
                     info!("▪ {} exited (shutdown)", description);
                     return;
                 }
@@ -238,7 +238,7 @@ where
                 // Verificamos o cancelamento antes e depois do sleep.
                 let start = std::time::Instant::now();
                 while start.elapsed() < backoff {
-                    if !LanforgeContext::is_running() {
+                    if !ctx.is_running_opt() {
                         info!(
                             "Supervisor (sync) '{}' received shutdown during backoff",
                             name
@@ -256,29 +256,24 @@ where
 mod tests {
     use super::*;
     use lanforge_core::bus::EventBus;
-    use lanforge_core::bus::ManagedTable;
+    use lanforge_core::state::DeviceTable;
     use std::sync::Arc;
-    use std::sync::Once;
     use std::sync::atomic::AtomicU32;
     use std::sync::atomic::Ordering;
 
-    static INIT: Once = Once::new();
-
-    fn init_context() {
-        INIT.call_once(|| {
-            let bus = Arc::new(EventBus::new());
-            let table = Arc::new(ManagedTable::new(bus.clone(), None));
-            LanforgeContext::init(bus, table);
-        });
+    fn init_test_context() -> LanforgeContext {
+        let bus = Arc::new(EventBus::new());
+        let table = DeviceTable::new();
+        LanforgeContext::new(bus, table, None)
     }
 
     #[tokio::test]
     async fn gives_up_after_max_retries_non_critical() {
-        init_context();
+        let ctx = init_test_context();
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
-        supervise_async(move || {
+        supervise_async(&ctx, move || {
             let a = attempts_clone.clone();
             TestAsyncService { attempts: a }
         })
@@ -318,11 +313,11 @@ mod tests {
 
     #[tokio::test]
     async fn resets_failure_counter_on_success() {
-        init_context();
+        let ctx = init_test_context();
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
-        supervise_async(move || {
+        supervise_async(&ctx, move || {
             let a = attempts_clone.clone();
             TestResetService { attempts: a }
         })
@@ -364,16 +359,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_supervisor_reference_implementation() {
-        init_context();
-        let bus = LanforgeContext::bus();
+        let ctx = init_test_context();
+        let bus = ctx.bus_opt();
         let mut sub = bus.subscribe();
 
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
         // Spawn supervisor in background
+        let ctx_clone = ctx.clone();
         let handle = tokio::spawn(async move {
-            supervise_async(move || {
+            supervise_async(&ctx_clone, move || {
                 let a = attempts_clone.clone();
                 RefService { attempts: a }
             })
@@ -414,19 +410,23 @@ mod tests {
     #[tokio::test]
     async fn test_sync_service_bridge_resilience() {
         println!("INFO: Starting test_sync_service_bridge_resilience v5");
-        lanforge_core::context::LanforgeContext::reset_all_for_tests();
-        init_context();
-        let bus = LanforgeContext::bus();
+        let ctx = init_test_context();
+        let bus = ctx.bus_opt();
         let mut ready_sub = bus.subscribe();
         let rt_handle = tokio::runtime::Handle::current();
         let received_count = Arc::new(AtomicU32::new(0));
         let count_clone = received_count.clone();
 
         // Spawn sync service that exits on Shutdown
+        let ctx_spawn = ctx.clone();
         let handle = std::thread::spawn(move || {
-            supervise_sync(&rt_handle, move || {
+            let ctx_2 = ctx_spawn.clone();
+            supervise_sync(&ctx_spawn, &rt_handle, move || {
                 let r = count_clone.clone();
-                TestSyncService { received: r }
+                TestSyncService {
+                    received: r,
+                    ctx: ctx_2.clone(),
+                }
             });
         });
 
@@ -454,7 +454,7 @@ mod tests {
         // Dá um tempo para a task assíncrona do bridge rotear os eventos pro MPSC
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        lanforge_core::context::LanforgeContext::terminate();
+        ctx.terminate_opt();
 
         // 3. Join thread - NÃO BLOQUEIE O RUNTIME, use spawn_blocking!
         let _ = tokio::task::spawn_blocking(move || {
@@ -473,6 +473,7 @@ mod tests {
 
     struct TestSyncService {
         received: Arc<AtomicU32>,
+        ctx: LanforgeContext,
     }
     impl lanforge_core::service::LanforgeService for TestSyncService {
         fn meta(&self) -> lanforge_core::service::ServiceMeta {
@@ -502,7 +503,7 @@ mod tests {
                     if matches!(e.event, LanforgeEvent::DbVacuum) {
                         self.received.fetch_add(1, Ordering::SeqCst);
                     }
-                } else if !LanforgeContext::is_running() {
+                } else if !self.ctx.is_running_opt() {
                     // Sai apenas se o contexto geral foi finalizado
                     break;
                 }

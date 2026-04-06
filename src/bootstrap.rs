@@ -1,6 +1,6 @@
 use anyhow::Result;
 use futures::channel::mpsc::UnboundedReceiver;
-use lanforge_core::bus::{EventBus, LanforgeEvent, ManagedTable};
+use lanforge_core::bus::{EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
@@ -26,8 +26,6 @@ type NetlinkMessages = UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, S
 #[derive(Clone)]
 pub struct BootstrapResult {
     pub cfg: Arc<Config>,
-    pub bus: Arc<EventBus>,
-    pub table: Arc<ManagedTable>,
     pub rt_handle: rtnetlink::Handle,
     pub messages: Arc<Mutex<NetlinkMessages>>,
     pub target_ifindex: u32,
@@ -51,13 +49,7 @@ impl Bootstrapper {
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
 
-        let table = Arc::new(ManagedTable::from_table(
-            bus.clone(),
-            initial_table,
-            Some(target_ifindex),
-        ));
-
-        LanforgeContext::init(bus.clone(), table.clone());
+        LanforgeContext::init(bus.clone(), initial_table, Some(target_ifindex));
         let _ = bus.publish(LanforgeEvent::StateReady);
 
         let (handle, messages) = Self::init_netlink()?;
@@ -71,8 +63,6 @@ impl Bootstrapper {
 
         Ok(BootstrapResult {
             cfg,
-            bus,
-            table,
             rt_handle: handle,
             messages,
             target_ifindex,
@@ -179,7 +169,12 @@ impl Bootstrapper {
         messages: &Arc<Mutex<NetlinkMessages>>,
         target_ifindex: u32,
     ) -> Result<lanforge_core::state::InterfaceState> {
-        let ifmon_init = InterfaceMonitor::new(handle.clone(), messages.clone(), target_ifindex);
+        let ifmon_init = InterfaceMonitor::new(
+            handle.clone(),
+            messages.clone(),
+            target_ifindex,
+            LanforgeContext::instance(),
+        );
         ifmon_init
             .initial_scan()
             .await

@@ -1,25 +1,28 @@
-//! Periodic maintenance and high-performance DNS lookup indexing.
-
+use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::SystemTime;
-use std::{net::IpAddr, sync::Arc};
+use tracing::{debug, info};
 
-use tracing::debug;
-
+use crate::bus::DeviceChange;
 use crate::device::{IPv4State, IPv6State};
+use crate::identifiers::MacAddr;
+use crate::state::update::LeaseTarget;
 
 use super::DeviceTable;
 
 impl DeviceTable {
     /// Removes expired leases and inactive dynamic devices from the table.
     ///
-    /// Returns `true` if any changes were made, signalling that a
-    /// `DeviceTableDirty` event should be dispatched.
-    pub fn expire_stale(&mut self) -> bool {
+    /// Returns a list of changes made during the expiration process, for notification
+    /// via the event bus.
+    pub fn expire_stale(&mut self) -> Vec<(MacAddr, DeviceChange)> {
         let now = SystemTime::now();
         let max_age = std::time::Duration::from_secs(7 * 24 * 3600);
         let ndp_max_age = std::time::Duration::from_secs(24 * 3600);
         let mut changed = false;
+        let mut events = Vec::new();
 
+        // Limpa cache NDP
         let initial_ndp_len = self.ndp_cache.len();
         self.ndp_cache
             .retain(|_, (_, ts)| ts.elapsed().unwrap_or(std::time::Duration::ZERO) <= ndp_max_age);
@@ -46,26 +49,49 @@ impl DeviceTable {
                     false
                 };
 
-                let v6_expired = dev_arc.v6.iter().any(|s| match s {
-                    IPv6State::Dynamic(lease) => lease.expires < now,
-                    _ => false,
-                });
+                let v6_expired_iaids: Vec<u32> = dev_arc
+                    .v6
+                    .iter()
+                    .filter_map(|s| match s {
+                        IPv6State::Dynamic(lease) if lease.expires < now => Some(lease.iaid),
+                        _ => None,
+                    })
+                    .collect();
 
-                let prefix_expired = dev_arc.v6_prefixes.iter().any(|p| p.expires < now);
+                let prefix_expired_iaids: Vec<u32> = dev_arc
+                    .v6_prefixes
+                    .iter()
+                    .filter_map(|p| if p.expires < now { Some(p.iaid) } else { None })
+                    .collect();
 
-                if v4_expired || v6_expired || prefix_expired {
+                if v4_expired || !v6_expired_iaids.is_empty() || !prefix_expired_iaids.is_empty() {
                     let mut dev = (**dev_arc).clone();
                     if v4_expired {
                         dev.v4 = IPv4State::None;
+                        events.push((
+                            mac,
+                            DeviceChange::LeaseExpired {
+                                target: LeaseTarget::V4,
+                            },
+                        ));
                     }
-                    if v6_expired {
-                        dev.v6.retain(|state| match state {
-                            IPv6State::Dynamic(lease) => lease.expires > now,
-                            _ => true,
-                        });
+                    for iaid in v6_expired_iaids {
+                        dev.v6.retain(|state| !matches!(state, IPv6State::Dynamic(lease) if lease.iaid == iaid));
+                        events.push((
+                            mac,
+                            DeviceChange::LeaseExpired {
+                                target: LeaseTarget::V6 { iaid },
+                            },
+                        ));
                     }
-                    if prefix_expired {
-                        dev.v6_prefixes.retain(|p| p.expires > now);
+                    for iaid in prefix_expired_iaids {
+                        dev.v6_prefixes.retain(|p| p.iaid != iaid);
+                        events.push((
+                            mac,
+                            DeviceChange::LeaseExpired {
+                                target: LeaseTarget::V6Prefix { iaid },
+                            },
+                        ));
                     }
                     self.devices.insert(mac, Arc::new(dev));
                     changed = true;
@@ -89,8 +115,9 @@ impl DeviceTable {
                 {
                     self.duid_index.remove(duid);
                 }
+                events.push((mac, DeviceChange::HostRemoved));
                 changed = true;
-                debug!("[state] Removed stale dynamic device {}", mac);
+                info!("[state] Removed stale dynamic device {}", mac);
             }
         }
 
@@ -98,7 +125,7 @@ impl DeviceTable {
             self.rebuild_dns_indices();
         }
 
-        changed
+        events
     }
 
     // -----------------------------------------------------------------------

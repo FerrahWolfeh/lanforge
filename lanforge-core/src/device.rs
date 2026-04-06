@@ -663,9 +663,14 @@ impl Device {
 
     /// Returns all available IP addresses (v4 and v6) sorted by priority:
     /// ULA (0) > IPv4 (1) > GUA (2) > others.
-    #[cfg(test)]
+    ///
+    /// Suffixes are resolved using the provided `gua_prefix` and `ula_prefix`.
     #[must_use]
-    pub fn all_addresses_sorted(&self) -> Vec<IpAddr> {
+    pub fn all_addresses_sorted(
+        &self,
+        gua_prefix: Option<Ipv6Addr>,
+        ula_prefix: Option<Ipv6Addr>,
+    ) -> Vec<IpAddr> {
         let mut addrs = Vec::new();
 
         // IPv4
@@ -678,18 +683,28 @@ impl Device {
 
         // IPv6
         for state in &self.v6 {
-            if let Some(ip) = state.ip() {
+            if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_)) = state {
+                if let Some(gua) = gua_prefix
+                    && let Some(ip) = state.ip_with_prefix(Some(gua))
+                {
+                    addrs.push(IpAddr::V6(ip));
+                }
+                if let Some(ula) = ula_prefix
+                    && let Some(ip) = state.ip_with_prefix(Some(ula))
+                {
+                    addrs.push(IpAddr::V6(ip));
+                }
+            } else if let Some(ip) = state.ip() {
                 addrs.push(IpAddr::V6(ip));
             }
         }
 
-        // De-duplicate while preserving some form of "original" order before sorting
-        // (Actually, HashSet would be faster but we might want to keep it simple first)
+        // De-duplicate while preserving prioritization order
         let mut unique = std::collections::HashSet::new();
         addrs.retain(|ip| unique.insert(*ip));
 
         // Sort by classification score
-        addrs.sort_by_cached_key(|ip| classify_ip(ip).score());
+        addrs.sort_by_key(|ip| classify_ip(ip).score());
 
         addrs
     }
@@ -820,7 +835,7 @@ mod tests {
             vendor: None,
         };
 
-        let sorted = dev.all_addresses_sorted();
+        let sorted = dev.all_addresses_sorted(None, None);
         // Priority: ULA (fd00::1) > IPv4 (192.168.1.1) > GUA (2001:db8::1)
         assert_eq!(sorted[0], "fd00::1".parse::<IpAddr>().unwrap());
         assert_eq!(sorted[1], "192.168.1.1".parse::<IpAddr>().unwrap());

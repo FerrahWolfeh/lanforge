@@ -7,7 +7,7 @@ use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::update::{DeviceUpdate, FieldUpdate};
+use lanforge_core::state::update::{DeviceUpdate, FieldUpdate, LeaseTarget};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -315,13 +315,14 @@ where
             }) => {
                 if let Some(m) = mac {
                     if let Some(mac_addr) = MacAddr::parse(&m) {
-                        let v4_static = v4.and_then(|s| s.parse().ok());
-                        let v6_suffix_parsed = v6_suffix.and_then(|s| Ipv6AddrOrSuffix::parse(&s));
-                        let _ = LanforgeContext::table().update(&DeviceUpdate::CliHostUpdated {
+                        let _ = LanforgeContext::instance().apply(&DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
                             hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-                            v4_static: v4_static.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-                            v6_suffix: v6_suffix_parsed
+                            v4_static: v4
+                                .and_then(|s| s.parse().ok())
+                                .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                            v6_suffix: v6_suffix
+                                .and_then(|s| Ipv6AddrOrSuffix::parse(&s))
                                 .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
                             origin: Origin::Cli,
                         });
@@ -381,7 +382,7 @@ where
                             error: e.to_string(),
                         }
                     } else {
-                        let _ = LanforgeContext::table().update(&DeviceUpdate::CliHostUpdated {
+                        let _ = LanforgeContext::instance().apply(&DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
                             hostname: hn,
                             v4_static: v4s,
@@ -403,8 +404,7 @@ where
 
             Ok(Command::HostRemove { mac }) => {
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
-                    let _ = LanforgeContext::table()
-                        .update(&DeviceUpdate::HostRemoved { mac: mac_addr });
+                    let _ = LanforgeContext::remove_host(mac_addr);
                     Response::Success(SimpleSuccess {
                         message: format!("Host removido (MAC {mac})"),
                     })
@@ -414,10 +414,37 @@ where
                     }
                 }
             }
-            Ok(Command::LeaseRenew { mac }) => {
+            Ok(Command::LeaseRenew { mac, target }) => {
                 if let Ok(mac_addr) = mac.parse::<MacAddr>() {
-                    let _ =
-                        LanforgeContext::bus().publish(LanforgeEvent::LeaseRenew { mac: mac_addr });
+                    let targets = if let Some(t) = target {
+                        vec![t]
+                    } else if let Some(dev) = LanforgeContext::get_device(&mac_addr) {
+                        let mut t = Vec::new();
+                        if dev.v4.ip().is_some()
+                            && !matches!(dev.v4, lanforge_core::device::IPv4State::Static(_))
+                        {
+                            t.push(LeaseTarget::V4);
+                        }
+                        for v6 in &dev.v6 {
+                            if let lanforge_core::device::IPv6State::Dynamic(lease) = v6 {
+                                t.push(LeaseTarget::V6 { iaid: lease.iaid });
+                            }
+                        }
+                        for prefix in &dev.v6_prefixes {
+                            t.push(LeaseTarget::V6Prefix { iaid: prefix.iaid });
+                        }
+                        t
+                    } else {
+                        Vec::new()
+                    };
+
+                    for t in targets {
+                        let _ = LanforgeContext::bus().publish(LanforgeEvent::LeaseRenew {
+                            mac: mac_addr,
+                            target: t,
+                        });
+                    }
+
                     Response::Success(SimpleSuccess {
                         message: format!("Solicitando renovação (forcerenew) para {mac}"),
                     })
@@ -427,12 +454,41 @@ where
                     }
                 }
             }
-            Ok(Command::LeaseRelease { mac }) => {
+            Ok(Command::LeaseRelease { mac, target }) => {
                 if let Ok(mac_addr) = mac.parse::<MacAddr>() {
-                    let _ = LanforgeContext::table()
-                        .update(&DeviceUpdate::LeaseReleased { mac: mac_addr });
-                    let _ = LanforgeContext::bus()
-                        .publish(LanforgeEvent::LeaseRelease { mac: mac_addr });
+                    let targets = if let Some(t) = target {
+                        vec![t]
+                    } else if let Some(dev) = LanforgeContext::get_device(&mac_addr) {
+                        let mut t = Vec::new();
+                        if dev.v4.ip().is_some()
+                            && !matches!(dev.v4, lanforge_core::device::IPv4State::Static(_))
+                        {
+                            t.push(LeaseTarget::V4);
+                        }
+                        for v6 in &dev.v6 {
+                            if let lanforge_core::device::IPv6State::Dynamic(lease) = v6 {
+                                t.push(LeaseTarget::V6 { iaid: lease.iaid });
+                            }
+                        }
+                        for prefix in &dev.v6_prefixes {
+                            t.push(LeaseTarget::V6Prefix { iaid: prefix.iaid });
+                        }
+                        t
+                    } else {
+                        Vec::new()
+                    };
+
+                    for t in targets {
+                        let _ = LanforgeContext::instance().apply(&DeviceUpdate::LeaseReleased {
+                            mac: mac_addr,
+                            target: t.clone(),
+                        });
+                        let _ = LanforgeContext::bus().publish(LanforgeEvent::LeaseRelease {
+                            mac: mac_addr,
+                            target: t,
+                        });
+                    }
+
                     Response::Success(SimpleSuccess {
                         message: format!("Liberando lease para {mac}"),
                     })

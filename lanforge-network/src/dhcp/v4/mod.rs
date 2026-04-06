@@ -9,22 +9,22 @@
 //! sequenceDiagram
 //!     participant C as Client
 //!     participant S as DhcpServer (Lanforge)
-//!     participant T as ManagedTable
+//!     participant Ctx as LanforgeContext
 //!
 //!     C->>S: 1. DHCP Discover (Broadcast)
 //!     S->>C: 2. DHCP Offer (Unicast/Broadcast)
 //!
 //!     C->>S: 3. DHCP Request
-//!     S->>T: 4. update(DeviceUpdate::V4LeaseGranted)
-//!     T-->>S: 5. EventBus Signal
+//!     S->>Ctx: 4. apply(DeviceUpdate::V4LeaseGranted)
+//!     Ctx-->>S: 5. EventBus Signal
 //!     S->>C: 6. DHCP Ack
 //! ```
 //!
 //! ## Manager Integration
 //!
-//! The `dhcpv4_service` uses the `ManagedTable` to persist leases and suggest
+//! The `dhcpv4_service` uses the `LanforgeContext` to persist leases and suggest
 //! hostnames learned via Option 12. State merging and `EventBus` signaling
-//! are handled automatically by the `ManagedTable`.
+//! are handled automatically by the `LanforgeContext`.
 
 pub mod config;
 pub mod pool;
@@ -36,6 +36,7 @@ use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
+use lanforge_core::state::update::LeaseTarget;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
@@ -51,12 +52,13 @@ use lanforge_core::service::{LanforgeService, SyncService};
 
 pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
+    ctx: LanforgeContext,
 }
 
 impl Dhcpv4Service {
     #[must_use]
-    pub const fn new(cfg: Dhcpv4Config) -> Self {
-        Self { cfg }
+    pub const fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
+        Self { cfg, ctx }
     }
 }
 
@@ -91,10 +93,10 @@ impl SyncService for Dhcpv4Service {
         bus_rx.wait_for_db();
         bus_rx.wait_for_interfaces();
 
-        let mut server = DhcpServer::new(self.cfg.clone());
+        let mut server = DhcpServer::new(self.cfg.clone(), self.ctx.clone());
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
-        let registry = LanforgeContext::table().read().get_static_registry();
+        let registry = self.ctx.get_static_registry_opt();
         server.pool.reserve_statics(registry.v4_ips());
 
         let socket = bind_dhcp_socket_sync(&self.cfg.iface, self.cfg.port)
@@ -110,7 +112,7 @@ impl SyncService for Dhcpv4Service {
         let mut last_cleanup = Instant::now();
 
         loop {
-            if !LanforgeContext::is_running() {
+            if !self.ctx.is_running_opt() {
                 break;
             }
 
@@ -163,9 +165,8 @@ impl Dhcpv4Service {
                     chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
                 ]);
                 let handle_res = {
-                    let t = LanforgeContext::table();
-                    let table_read = t.read();
-                    server.handle_packet(data, Some(&table_read))
+                    let device = self.ctx.get_device_opt(&mac);
+                    server.handle_packet(data, device)
                 };
 
                 match handle_res {
@@ -196,18 +197,19 @@ impl Dhcpv4Service {
                         if let Some(assigned_ip) = server.last_assignment_for() {
                             let expires = SystemTime::now()
                                 + Duration::from_secs(u64::from(self.cfg.lease_time));
-                            let t = LanforgeContext::table();
-                            let _ = t.update(
+
+                            let _ = self.ctx.apply(
                                 &lanforge_core::state::update::DeviceUpdate::V4LeaseGranted {
                                     mac,
                                     ip: assigned_ip,
                                     expires,
                                 },
                             );
+
                             if let Some(hostname) = req_hostname
                                 && !hostname.is_empty()
                             {
-                                let _ = t.update(
+                                let _ = self.ctx.apply(
                                     &lanforge_core::state::update::DeviceUpdate::DhcpHostnameHint {
                                         mac,
                                         hostname,
@@ -216,12 +218,13 @@ impl Dhcpv4Service {
                             }
                         }
                     }
-                    HandleResult::Release { .. } => {
-                        let t = LanforgeContext::table();
-                        let _ =
-                            t.update(&lanforge_core::state::update::DeviceUpdate::LeaseReleased {
+                    HandleResult::Release { ip: _ } => {
+                        let _ = self.ctx.apply(
+                            &lanforge_core::state::update::DeviceUpdate::LeaseReleased {
                                 mac,
-                            });
+                                target: lanforge_core::state::update::LeaseTarget::V4,
+                            },
+                        );
                     }
                     HandleResult::Ignore => {}
                 }
@@ -237,22 +240,21 @@ impl Dhcpv4Service {
     ) -> Result<(), CoreError> {
         use lanforge_core::bus::DeviceChange;
         match event {
-            LanforgeEvent::LeaseRelease { mac } => {
+            LanforgeEvent::LeaseRelease {
+                mac,
+                target: LeaseTarget::V4,
+            } => {
                 info!("DHCPv4: Forcing release of {} via CLI", mac);
-                let ip = LanforgeContext::table()
-                    .read()
-                    .get_device(mac)
-                    .and_then(|d| d.v4.ip());
+                let ip = self.ctx.get_device_opt(mac).and_then(|d| d.v4.ip());
                 if let Some(i) = ip {
                     server.pool.release(i);
                 }
             }
-            LanforgeEvent::LeaseRenew { mac } => {
-                let ip = {
-                    let t = LanforgeContext::table();
-                    let table_read = t.read();
-                    table_read.get_device(mac).and_then(|d| d.v4.ip())
-                };
+            LanforgeEvent::LeaseRenew {
+                mac,
+                target: LeaseTarget::V4,
+            } => {
+                let ip = self.ctx.get_device_opt(mac).and_then(|d| d.v4.ip());
                 if let Some(ip) = ip {
                     let packet = server.build_forcerenew(*mac, ip);
                     let _ = raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref());

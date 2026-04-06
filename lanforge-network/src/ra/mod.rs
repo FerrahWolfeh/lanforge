@@ -33,7 +33,7 @@ use lanforge_core::context::LanforgeContext;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::{NetworkError, Result};
-use lanforge_core::bus::{LanforgeEvent, ManagedTable};
+use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, LanforgeService};
 use rand::RngExt;
@@ -140,12 +140,13 @@ impl RaState {
 
 pub struct RaService {
     cfg: RaConfig,
+    ctx: LanforgeContext,
 }
 
 impl RaService {
     #[must_use]
-    pub const fn new(cfg: RaConfig) -> Self {
-        Self { cfg }
+    pub const fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
+        Self { cfg, ctx }
     }
 }
 
@@ -178,17 +179,15 @@ impl AsyncService for RaService {
             self.cfg.effective_router_lifetime().as_secs(),
         );
 
-        let table = LanforgeContext::table();
-        let bus = LanforgeContext::bus();
-        let mut bus_rx = bus.subscribe();
+        let mut bus_rx = self.ctx.bus_opt().subscribe();
 
         let iface_index =
             get_iface_index(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
 
         // Parallel optimization: Wait for interface data ONLY if not already present
-        if table
-            .read()
-            .get_interface_ips(iface_index)
+        if self
+            .ctx
+            .get_interface_state_opt(iface_index)
             .link_local
             .is_none()
         {
@@ -196,7 +195,7 @@ impl AsyncService for RaService {
                 "RA: Waiting for interface discovery on '{}'...",
                 self.cfg.iface
             );
-            LanforgeContext::wait_for_interfaces().await?;
+            self.ctx.wait_for_interfaces_opt().await?;
         }
 
         let mac = get_iface_mac(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -210,9 +209,9 @@ impl AsyncService for RaService {
 
         // Immediate RA on startup
         send_ra_internal(
+            &self.ctx,
             &async_socket,
             &self.cfg,
-            &table,
             mac,
             iface_index,
             None,
@@ -226,7 +225,7 @@ impl AsyncService for RaService {
         let mut buf = [0u8; 1500];
 
         loop {
-            if !LanforgeContext::is_running() {
+            if !self.ctx.is_running_opt() {
                 break;
             }
             let now = Instant::now();
@@ -239,16 +238,16 @@ impl AsyncService for RaService {
             tokio::select! {
                 // 1. Periodic Advertisement & Timers
                 () = tokio::time::sleep(sleep_duration) => {
-                    self.perform_periodic_ra(&async_socket, &table, mac, iface_index, &mut state, &mut next_ra_at);
+                    self.perform_periodic_ra(&self.ctx, &async_socket, mac, iface_index, &mut state, &mut next_ra_at);
                 }
 
                 // 2. Packet processing (RS)
                 res = async_socket.readable() => {
                     let ctx = RaContext {
                         socket: &async_socket,
-                        table: &table,
                         mac,
                         iface_index,
+                        lctx: &self.ctx,
                     };
                     self.handle_rs_packet(res, &mut buf, ctx, &mut state).await?;
                 }
@@ -276,22 +275,22 @@ impl AsyncService for RaService {
 #[derive(Clone, Copy)]
 struct RaContext<'a> {
     socket: &'a AsyncFd<Socket>,
-    table: &'a ManagedTable,
     mac: [u8; 6],
     iface_index: u32,
+    lctx: &'a LanforgeContext,
 }
 
 impl RaService {
     fn perform_periodic_ra(
         &self,
+        lctx: &LanforgeContext,
         socket: &AsyncFd<Socket>,
-        table: &ManagedTable,
         mac: [u8; 6],
         iface_index: u32,
         state: &mut RaState,
         next_ra_at: &mut Instant,
     ) {
-        if let Err(e) = send_ra_internal(socket, &self.cfg, table, mac, iface_index, None, state) {
+        if let Err(e) = send_ra_internal(lctx, socket, &self.cfg, mac, iface_index, None, state) {
             warn!("RA periodic error: {e:?}");
         } else {
             state.record_multicast();
@@ -333,9 +332,9 @@ impl RaService {
                         match dst {
                             Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
                                 if let Err(e) = send_ra_internal(
+                                    ctx.lctx,
                                     ctx.socket,
                                     &self.cfg,
-                                    ctx.table,
                                     ctx.mac,
                                     ctx.iface_index,
                                     Some(unicast_dst),
@@ -349,9 +348,9 @@ impl RaService {
                             }
                             None if state.can_multicast_now() => {
                                 if let Err(e) = send_ra_internal(
+                                    ctx.lctx,
                                     ctx.socket,
                                     &self.cfg,
-                                    ctx.table,
                                     ctx.mac,
                                     ctx.iface_index,
                                     None,
@@ -398,15 +397,15 @@ impl RaService {
 }
 
 fn send_ra_internal(
+    lctx: &LanforgeContext,
     socket: &AsyncFd<Socket>,
     cfg: &RaConfig,
-    table: &ManagedTable,
     mac: [u8; 6],
     iface_index: u32,
     unicast_dst: Option<Ipv6Addr>,
     state: &mut RaState,
 ) -> Result<()> {
-    let if_ips = table.read().get_interface_ips(iface_index);
+    let if_ips = lctx.get_interface_state_opt(iface_index);
 
     let src_ll = if_ips
         .link_local

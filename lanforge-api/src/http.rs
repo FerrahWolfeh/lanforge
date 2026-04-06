@@ -154,7 +154,7 @@ async fn process_registration(req: RegisterRequest) -> impl IntoResponse {
         mac_addr, req.hostname, v4_static, v6_suffix
     );
 
-    let _ = LanforgeContext::table().update(&DeviceUpdate::CliHostUpdated {
+    let _ = LanforgeContext::instance().apply(&DeviceUpdate::CliHostUpdated {
         mac: mac_addr,
         hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
         v4_static: FieldUpdate::from(v4_static),
@@ -173,23 +173,24 @@ async fn process_registration(req: RegisterRequest) -> impl IntoResponse {
 }
 
 async fn handle_devices() -> impl IntoResponse {
-    let devices: Vec<_> = LanforgeContext::table().read().devices().collect();
+    let devices = LanforgeContext::devices();
     Json(devices)
 }
 
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
-    let t = LanforgeContext::table();
-    let table_read = t.read();
-    let stats = table_read.stats();
+    let devices = LanforgeContext::devices();
+    let total = devices.len();
+    let online = devices.iter().filter(|d| d.is_online()).count();
+    let static_ct = devices.iter().filter(|d| d.is_static()).count();
 
     Json(serde_json::json!({
         "service": "lanforge",
         "status": "running",
         "interface": state.cfg.lan_iface,
         "counts": {
-            "total_devices": stats.total_devices,
-            "online": stats.online_devices,
-            "static": stats.static_entries,
+            "total_devices": total,
+            "online": online,
+            "static": static_ct,
         },
         "capabilities": {
             "ra": state.cfg.ra_enabled,

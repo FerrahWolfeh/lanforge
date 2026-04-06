@@ -74,6 +74,7 @@ pub struct Dhcpv6Server {
     pub prefix_lifetimes: Option<(u32, u32)>,
     /// Persistent socket for NDP pokes (saves `socket()` syscalls).
     pub ndp_poke_sock: Arc<std::net::UdpSocket>,
+    pub ctx: LanforgeContext,
 }
 
 impl Dhcpv6Server {
@@ -83,6 +84,7 @@ impl Dhcpv6Server {
         pool: Ipv6Pool,
         server_duid: Duid,
         ndp_poke_sock: Arc<std::net::UdpSocket>,
+        ctx: LanforgeContext,
     ) -> Self {
         Self {
             cfg,
@@ -90,6 +92,7 @@ impl Dhcpv6Server {
             server_duid,
             prefix_lifetimes: None,
             ndp_poke_sock,
+            ctx,
         }
     }
 
@@ -145,19 +148,17 @@ impl Dhcpv6Server {
 
         // 1. Try to recover MAC from NDP cache (synchronous lock)
         if mac.is_none() {
-            let t = LanforgeContext::table();
-            let table_read = t.read();
-            if let Some(cached) = table_read.get_mac_from_ndp_cache(&peer) {
-                debug!("MAC recovered from NDP cache for {peer}");
-                mac = Some(cached);
-            }
+            mac = self.ctx.get_mac_by_ip_opt(peer.into());
         }
 
         // 2. Resolve identity (new synchronous lock)
         let identity = mac.map(|m| {
-            let t = LanforgeContext::table();
-            let table_read = t.read();
-            DeviceIdentity::resolve(m, None, Self::get_vendor_class(msg), Some(&table_read))
+            DeviceIdentity::resolve(
+                m,
+                None,
+                Self::get_vendor_class(msg),
+                self.ctx.get_device_opt(&m),
+            )
         });
 
         if mac.is_none() {
@@ -260,7 +261,9 @@ impl Dhcpv6Server {
         is_rapid_commit: bool,
     ) -> Option<Duid> {
         let mac = identity.map(|i| i.mac);
-        let ips = self.pool.allocate(&client_duid.bytes, iana.id, mac, None);
+        let ips = self
+            .pool
+            .allocate(&self.ctx, client_duid, iana.id, mac, None);
 
         if ips.is_empty() {
             let mut opts = DhcpOptions::new();
@@ -323,7 +326,10 @@ impl Dhcpv6Server {
         client_duid: &Duid,
         identity: Option<&DeviceIdentity>,
     ) -> Option<Duid> {
-        if let Some((prefix, len)) = self.pool.allocate_prefix(&client_duid.bytes, iapd.id, None) {
+        if let Some((prefix, len)) =
+            self.pool
+                .allocate_prefix(&self.ctx, client_duid, iapd.id, None)
+        {
             let (pref, valid) = self.get_lifetimes();
             info!("DHCPv6: Delegating prefix {prefix}/{len} to {identity:?}");
 
@@ -404,7 +410,7 @@ impl Dhcpv6Server {
 
             let ips = self
                 .pool
-                .allocate(&client_duid.bytes, iana.id, mac, requested_ip);
+                .allocate(&self.ctx, &client_duid, iana.id, mac, requested_ip);
 
             if !ips.is_empty() {
                 let (pref, valid) = self.get_lifetimes();
@@ -437,10 +443,10 @@ impl Dhcpv6Server {
                 }));
             }
         }
-
         if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD)
             && let Some((prefix, len)) =
-                self.pool.allocate_prefix(&client_duid.bytes, iapd.id, None)
+                self.pool
+                    .allocate_prefix(&self.ctx, &client_duid, iapd.id, None)
         {
             let (pref, valid) = self.get_lifetimes();
             let mut ia_opts = DhcpOptions::new();
@@ -487,7 +493,7 @@ impl Dhcpv6Server {
         // RFC 8415 §18.2.3: If the server cannot find a binding for IA_NA/IA_PD,
         // it must respond with a Reply containing a NoBinding status.
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
-            && !self.pool.has_binding(&client_duid.bytes, iana.id)
+            && !self.pool.has_binding(&self.ctx, &client_duid, iana.id)
         {
             return self.send_ia_status(
                 &StatusContext {
@@ -505,7 +511,9 @@ impl Dhcpv6Server {
         }
 
         if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD)
-            && !self.pool.has_prefix_binding(&client_duid.bytes, iapd.id)
+            && !self
+                .pool
+                .has_prefix_binding(&self.ctx, &client_duid, iapd.id)
         {
             return self.send_ia_status(
                 &StatusContext {
@@ -536,7 +544,7 @@ impl Dhcpv6Server {
         // Rebind does not have a ServerId (multicast).
         // Same NoBinding logic as Renew (§18.2.4).
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
-            && !self.pool.has_binding(&client_duid.bytes, iana.id)
+            && !self.pool.has_binding(&self.ctx, &client_duid, iana.id)
         {
             // In Rebind, if we don't have a binding, do we ignore or respond NoBinding?
             // RFC 8415 §18.2.4 says the server must respond if it has a binding.
@@ -660,12 +668,12 @@ impl Dhcpv6Server {
         if !client_duid.bytes.is_empty() {
             reply
                 .opts_mut()
-                .insert(DhcpOption::ClientId(client_duid.bytes.clone()));
+                .insert(DhcpOption::ClientId(client_duid.bytes.to_vec()));
         }
 
         reply
             .opts_mut()
-            .insert(DhcpOption::ServerId(self.server_duid.bytes.clone()));
+            .insert(DhcpOption::ServerId(self.server_duid.bytes.to_vec()));
 
         reply
     }
@@ -676,7 +684,7 @@ impl Dhcpv6Server {
             return true;
         }
         match msg.opts().get(OptionCode::ServerId) {
-            Some(DhcpOption::ServerId(sid)) => *sid == self.server_duid.bytes,
+            Some(DhcpOption::ServerId(sid)) => sid.as_slice() == self.server_duid.bytes.as_ref(),
             _ => false,
         }
     }
@@ -770,8 +778,8 @@ impl Dhcpv6Server {
 
     /// Returns the last assignment for a given DUID and IAID.
     #[must_use]
-    pub fn last_assignment_for(&self, duid: &[u8], iaid: u32) -> Vec<Ipv6Addr> {
-        self.pool.lookup(duid, iaid)
+    pub fn last_assignment_for(&self, duid: &Duid, iaid: u32) -> Vec<Ipv6Addr> {
+        self.pool.lookup(&self.ctx, duid, iaid)
     }
 
     /// Constructs a `RECONFIGURE` (RFC 3315/8415) message.
@@ -784,8 +792,8 @@ impl Dhcpv6Server {
         msg.set_xid(rand::random::<[u8; 3]>());
 
         let opts = msg.opts_mut();
-        opts.insert(DhcpOption::ClientId(client_duid.bytes.clone()));
-        opts.insert(DhcpOption::ServerId(self.server_duid.bytes.clone()));
+        opts.insert(DhcpOption::ClientId(client_duid.bytes.to_vec()));
+        opts.insert(DhcpOption::ServerId(self.server_duid.bytes.to_vec()));
         opts.insert(DhcpOption::ReconfMsg(reconf_msg_type));
 
         let mut buf = Vec::with_capacity(512);
@@ -827,6 +835,7 @@ mod tests {
     use crate::dhcp::v6::config::Dhcpv6PoolConfig;
 
     use super::*;
+    use crate::test_utils::init_test_context;
     use dhcproto::{
         Decodable, Decoder,
         v6::{DhcpOptions, IANA, OptionCode},
@@ -835,9 +844,23 @@ mod tests {
     use std::net::Ipv6Addr;
 
     fn dummy_server() -> Dhcpv6Server {
+        let ctx = init_test_context();
+
         let ula = "fd97:f00d:cafe:3731::".parse::<Ipv6Addr>().unwrap();
         let start = "fd97:f00d:cafe:3731::100".parse::<Ipv6Addr>().unwrap();
         let end = "fd97:f00d:cafe:3731::200".parse::<Ipv6Addr>().unwrap();
+
+        // Use instance apply instead of global singleton
+        let _ = ctx.apply(
+            &lanforge_core::state::update::DeviceUpdate::InterfaceIpsChanged {
+                ifindex: 0,
+                link_local: None,
+                gua: None,
+                ula: Some(ula),
+                preferred: 3600,
+                valid: 3600,
+            },
+        );
 
         let cfg = Dhcpv6Config {
             enabled: true,
@@ -858,10 +881,8 @@ mod tests {
         let server_duid = Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
-        let sock = std::net::UdpSocket::bind("::0:0").unwrap();
-        let ndp_poke_sock = Arc::new(sock);
-
-        Dhcpv6Server::new(cfg, pool, server_duid, ndp_poke_sock)
+        let ndp_poke_sock = Arc::new(std::net::UdpSocket::bind("[::1]:0").unwrap());
+        Dhcpv6Server::new(cfg, pool, server_duid, ndp_poke_sock, ctx)
     }
 
     fn dummy_client_duid() -> Duid {
@@ -912,7 +933,13 @@ mod tests {
         let pool = Ipv6Pool::new(&Vec::new(), None, 64);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
         let ndp_poke_sock = Arc::new(sock);
-        let mut srv = Dhcpv6Server::new(cfg, pool, Duid::new(vec![1, 2, 3]), ndp_poke_sock);
+        let mut srv = Dhcpv6Server::new(
+            cfg,
+            pool,
+            Duid::new(vec![1, 2, 3]),
+            ndp_poke_sock,
+            init_test_context(),
+        );
 
         let msg = build_solicit(true);
         let mut resp_vec = Vec::with_capacity(1024);
@@ -949,7 +976,7 @@ mod tests {
         let mut srv = dummy_server();
         let mut msg = Message::new(MessageType::Request);
         msg.opts_mut()
-            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.to_vec()));
 
         let wrong_ip: Ipv6Addr = "2001:db8::1".parse().unwrap();
         let mut ia_opts = DhcpOptions::new();
@@ -1000,7 +1027,7 @@ mod tests {
         let mut srv = dummy_server();
         let mut msg = Message::new(MessageType::Renew);
         msg.opts_mut()
-            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.to_vec()));
         msg.opts_mut().insert(DhcpOption::IANA(IANA {
             id: 9991,
             t1: 0,
@@ -1045,11 +1072,11 @@ mod tests {
         let mac = dummy_mac();
 
         // Simulate allocation
-        srv.pool.allocate(&duid.bytes, 1, Some(mac), None);
+        srv.pool.allocate(&srv.ctx, &duid, 1, Some(mac), None);
 
         let mut msg = Message::new(MessageType::Decline);
         msg.opts_mut()
-            .insert(DhcpOption::ServerId(srv.server_duid.bytes.clone()));
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.to_vec()));
         let mut ia_opts = DhcpOptions::new();
         ia_opts.insert(DhcpOption::IAAddr(IAAddr {
             addr: ip,
@@ -1081,7 +1108,7 @@ mod tests {
         srv.pool.decline(ip);
         let ips = srv
             .pool
-            .allocate(&dummy_client_duid().bytes, 2, Some(mac), None);
+            .allocate(&srv.ctx, &dummy_client_duid(), 2, Some(mac), None);
         assert!(!ips.contains(&ip));
     }
 
@@ -1151,7 +1178,13 @@ mod tests {
         let pool = Ipv6Pool::new(&Vec::new(), Some(ula), 48);
         let sock = std::net::UdpSocket::bind("::0:0").unwrap();
         let ndp_poke_sock = Arc::new(sock);
-        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid(), ndp_poke_sock);
+        let mut srv = Dhcpv6Server::new(
+            cfg,
+            pool,
+            dummy_client_duid(),
+            ndp_poke_sock,
+            init_test_context(),
+        );
 
         let mut msg = Message::new(MessageType::Solicit);
         msg.opts_mut().insert(DhcpOption::IAPD(IAPD {
@@ -1203,11 +1236,11 @@ mod tests {
         let opts = msg.opts();
         assert_eq!(
             opts.get(OptionCode::ClientId),
-            Some(&DhcpOption::ClientId(duid.bytes))
+            Some(&DhcpOption::ClientId(duid.bytes.to_vec()))
         );
         assert_eq!(
             opts.get(OptionCode::ServerId),
-            Some(&DhcpOption::ServerId(srv.server_duid.bytes))
+            Some(&DhcpOption::ServerId(srv.server_duid.bytes.to_vec()))
         );
         assert_eq!(
             opts.get(OptionCode::ReconfMsg),
