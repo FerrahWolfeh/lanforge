@@ -24,7 +24,7 @@ impl CliCommand for DnsCommand {
                 element! {
                     View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
                         View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                            Text(content: " DNS RESOLVER STATS ", color: Color::Black, weight: Weight::Bold)
+                            Text(content: " DNS RESOLVER STATS ", color: Color::White, weight: Weight::Bold)
                         }
                         View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
                             StatLine(label: "Total Requests", value: stats.total_requests)
@@ -41,7 +41,7 @@ impl CliCommand for DnsCommand {
                 element! {
                     View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
                         View(flex_direction: FlexDirection::Row) {
-                            Text(content: " QUERY RESULT ", color: Color::Black, weight: Weight::Bold)
+                            Text(content: " QUERY RESULT ", color: Color::White, weight: Weight::Bold)
                             Text(content: format!("  latency: {}ms", query.latency_ms), color: Color::DarkGrey)
                             #(query.authoritative.then(|| element! {
                                 Text(content: "  (Authoritative)", color: Color::Cyan)

@@ -58,7 +58,7 @@ pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
-                Text(content: " DEVICES ", color: Color::Black, weight: Weight::Bold)
+                Text(content: " DEVICES ", color: Color::White, weight: Weight::Bold)
                 Text(content: "  ·  ", color: Color::DarkGrey)
                 Text(content: format!("{} total", resp.meta.total))
                 Text(content: "  ·  ", color: Color::DarkGrey)

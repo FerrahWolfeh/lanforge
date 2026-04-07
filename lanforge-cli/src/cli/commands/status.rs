@@ -40,7 +40,7 @@ pub fn render_status(st: &StatusResponse) {
     element! {
         View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
-                Text(content: " LANFORGE ", color: Color::Black, weight: Weight::Bold)
+                Text(content: " LANFORGE ", color: Color::White, weight: Weight::Bold)
                 Text(content: "  ·  ", color: Color::DarkGrey)
                 Text(content: format!("v{}", st.version), color: Color::White)
                 Text(content: "  ·  ", color: Color::DarkGrey)
