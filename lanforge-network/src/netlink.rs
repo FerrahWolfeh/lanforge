@@ -18,9 +18,9 @@
 //! ```
 
 use crate::error::NetworkError;
-use crate::ifmon::NetlinkStream;
 use crate::slaac::bootstrap_table;
 use futures::StreamExt;
+use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::TryStreamExt;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
@@ -28,13 +28,15 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
 use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
+use netlink_sys::SocketAddr;
 use rtnetlink::packet_route::{
     RouteNetlinkMessage,
     neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState},
 };
 use rtnetlink::{Handle, IpVersion};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -115,9 +117,7 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
 
     // We only block Incomplete states when discovering a new host.
     // Failed is now handled to detect offline status.
-    if !is_delete
-        && matches!(neigh.header.state, NeighbourState::Incomplete)
-    {
+    if !is_delete && matches!(neigh.header.state, NeighbourState::Incomplete) {
         return None;
     }
 
@@ -220,6 +220,31 @@ pub async fn get_ipv6_neighbors(
     Ok(neighbors)
 }
 
+/// Retrieves all IPv4 neighbors (ARP table) as `NeighborEvent`s.
+pub async fn get_ipv4_neighbors(
+    handle: &Handle,
+    target_ifindex: Option<u32>,
+) -> Result<Vec<NeighborEvent>, NetworkError> {
+    let mut neighbors = Vec::new();
+    let neighbours_get = handle.neighbours().get();
+    let neighbours_get = neighbours_get.set_family(IpVersion::V4);
+
+    let mut stream = neighbours_get.execute();
+
+    while let Some(msg) = stream.try_next().await? {
+        if let Some(event) = parse_neighbor_msg(msg) {
+            if let Some(target) = target_ifindex
+                && event.ifindex() != target
+            {
+                continue;
+            }
+            neighbors.push(event);
+        }
+    }
+
+    Ok(neighbors)
+}
+
 /// Triggers a NUD probe for a specific neighbor via Netlink.
 ///
 /// This forces the kernel to send a Neighbor Solicitation (IPv6) or ARP Request (IPv4)
@@ -237,31 +262,141 @@ pub async fn probe_neighbor(
         .await
 }
 
+/// Returns an iterator over all usable IPv4 addresses in a given subnet.
+///
+/// Skips the network address (.0) and the broadcast address (.255 for /24).
+#[must_use]
+pub fn get_ipv4_subnet_iterable(ip: Ipv4Addr, prefix_len: u8) -> Vec<Ipv4Addr> {
+    if prefix_len >= 31 {
+        return Vec::new();
+    }
+
+    let mask = !u32::MAX.checked_shr(u32::from(prefix_len)).unwrap_or(0);
+    let ip_u32 = u32::from_be_bytes(ip.octets());
+    let network = ip_u32 & mask;
+    let broadcast = network | !mask;
+
+    ((network + 1)..broadcast)
+        .map(|addr| Ipv4Addr::from(addr.to_be_bytes()))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // NdpMonitor — The "Serviceable Struct" for Netlink
 // ---------------------------------------------------------------------------
 
+type NetlinkMessageStream = UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
+
 /// Monitor that reacts to Netlink neighbor events and keeps the `ManagedTable` updated.
 pub struct NdpMonitor {
     handle: Handle,
-    messages: Arc<Mutex<NetlinkStream>>,
+    messages: Arc<Mutex<NetlinkMessageStream>>,
     target_ifindex: u32,
     ctx: LanforgeContext,
+    scan_interval: Duration,
+    scan_in_progress: Arc<AtomicBool>,
 }
 
 impl NdpMonitor {
-    #[must_use]
-    pub const fn new(
+    pub fn new(
         handle: Handle,
-        messages: Arc<Mutex<NetlinkStream>>,
+        messages: Arc<Mutex<NetlinkMessageStream>>,
         target_ifindex: u32,
         ctx: LanforgeContext,
+        scan_interval: Duration,
     ) -> Self {
         Self {
             handle,
             messages,
             target_ifindex,
             ctx,
+            scan_interval,
+            scan_in_progress: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn spawn_subnet_scan(&self) {
+        if self.scan_in_progress.load(Ordering::SeqCst) {
+            tracing::warn!("NeighborMonitor: Subnet scan already in progress, ignoring request.");
+            return;
+        }
+
+        let handle = self.handle.clone();
+        let ctx = self.ctx.clone();
+        let ifindex = self.target_ifindex;
+        let in_progress = self.scan_in_progress.clone();
+
+        tokio::spawn(async move {
+            in_progress.store(true, Ordering::SeqCst);
+            run_subnet_scan_task(handle, ctx, ifindex).await;
+            in_progress.store(false, Ordering::SeqCst);
+        });
+    }
+
+    fn spawn_periodic_probes(&self, gua: Option<Ipv6Addr>, ula: Option<Ipv6Addr>) {
+        let handle = self.handle.clone();
+        let ctx = self.ctx.clone();
+        let ifindex = self.target_ifindex;
+
+        tokio::spawn(async move {
+            run_periodic_probes_task(handle, ctx, ifindex, gua, ula).await;
+        });
+    }
+}
+
+async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32) {
+    let interface_state = ctx.get_interface_state(ifindex);
+    if let Some((ip, prefix_len)) = interface_state.v4 {
+        let range = get_ipv4_subnet_iterable(ip, prefix_len);
+        if !range.is_empty() {
+            tracing::info!(
+                "NeighborMonitor: Unleashing massive ARP scan for {}/{} ({} addresses)",
+                ip,
+                prefix_len,
+                range.len()
+            );
+            // Notification via event bus
+            let _ = ctx.bus().publish(LanforgeEvent::SubnetScanStarted {
+                subnet: format!("{ip}/{prefix_len}"),
+            });
+
+            for target_ip in range {
+                if let Err(e) = probe_neighbor(&handle, ifindex, IpAddr::V4(target_ip)).await {
+                    tracing::debug!("NeighborMonitor: ARP probe failed for {target_ip}: {e}");
+                }
+                // Pacing for manual scan: 10ms between addresses to avoid CPU spikes
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    }
+}
+
+async fn run_periodic_probes_task(
+    handle: Handle,
+    ctx: LanforgeContext,
+    ifindex: u32,
+    current_gua: Option<Ipv6Addr>,
+    current_ula: Option<Ipv6Addr>,
+) {
+    let devices = ctx.all_devices();
+    let now = std::time::SystemTime::now();
+
+    for dev in devices {
+        // Surgical Probing Rule: Only probe devices that are ALREADY online but quiet.
+        // If they are offline/failed, we stop poking them.
+        if !dev.is_online() {
+            continue;
+        }
+
+        let elapsed = now.duration_since(dev.last_seen).unwrap_or_default();
+        if elapsed.as_secs() > 60 {
+            for ip in dev.all_addresses_sorted(current_gua, current_ula) {
+                if let Err(e) = probe_neighbor(&handle, ifindex, ip).await {
+                    tracing::debug!("NeighborMonitor: Scheduled probe failed for {ip}: {e}");
+                }
+                // Pacing: 50ms between individual IP probes to keep network load negligible.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         }
     }
 }
@@ -270,7 +405,7 @@ impl LanforgeService for NdpMonitor {
     fn meta(&self) -> ServiceMeta {
         ServiceMeta {
             id: "monitor",
-            display_name: "NDP Monitor",
+            display_name: "Neighbor Monitor",
             critical: true,
             max_retries: 0,
             base_backoff: Duration::from_secs(2),
@@ -280,7 +415,7 @@ impl LanforgeService for NdpMonitor {
     }
 
     fn describe(&self) -> String {
-        format!("NDP Monitor (ifindex: {})", self.target_ifindex)
+        format!("Neighbor Monitor (ifindex: {})", self.target_ifindex)
     }
 
     fn on_shutdown(&mut self) -> Result<(), CoreError> {
@@ -294,6 +429,9 @@ impl AsyncService for NdpMonitor {
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
         let mut probe_interval = tokio::time::interval(Duration::from_secs(60));
+        let mut subnet_scan_interval = tokio::time::interval(self.scan_interval);
+        // Ensure the first periodic scan happens after the first interval, not immediately.
+        subnet_scan_interval.reset();
 
         // 1. Initial Neighbor Scan (Bootstrap)
         {
@@ -307,21 +445,19 @@ impl AsyncService for NdpMonitor {
             )
             .await
             {
-                tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
+                tracing::error!("NeighborMonitor: Initial bootstrap scan failed: {e}");
             }
         }
 
-        // 2. Initial network-wide probe (Boot Probe)
+        // 2. Initial network-wide probe (Boot Probe on known devices)
         {
             let devices = self.ctx.all_devices();
-            tracing::info!("NdpMonitor: Triggering boot probe for {} devices", devices.len());
-            for dev in devices {
-                for ip in dev.all_addresses_sorted(current_gua, current_ula) {
-                    if let Err(e) = probe_neighbor(&self.handle, self.target_ifindex, ip).await {
-                        tracing::debug!("NdpMonitor: Boot probe failed for {ip}: {e}");
-                    }
-                }
-            }
+            tracing::info!(
+                "NeighborMonitor: Triggering boot probe for {} known devices",
+                devices.len()
+            );
+            // Non-blocking surgical probe
+            self.spawn_periodic_probes(current_gua, current_ula);
         }
 
         loop {
@@ -345,27 +481,29 @@ impl AsyncService for NdpMonitor {
 
                 Ok(event) = bus_rx.recv() => {
                     drop(rx);
-                    if let LanforgeEvent::PrefixChanged { gua, ula, .. } = event.event {
-                        current_gua = gua;
-                        current_ula = ula;
+                    match event.event {
+                        LanforgeEvent::PrefixChanged { gua, ula, .. } => {
+                            current_gua = gua;
+                            current_ula = ula;
+                        }
+                        LanforgeEvent::NeighborScanRequested => {
+                            self.spawn_subnet_scan();
+                        }
+                        _ => {}
                     }
                 }
 
                 _ = probe_interval.tick() => {
                     drop(rx);
-                    // B. Periodic NUD Probes for silent devices
-                    let devices = self.ctx.all_devices();
-                    let now = std::time::SystemTime::now();
-                    for dev in devices {
-                        let elapsed = now.duration_since(dev.last_seen).unwrap_or_default();
-                        // Probe if silent for > 60s
-                        if elapsed.as_secs() > 60 {
-                            for ip in dev.all_addresses_sorted(current_gua, current_ula) {
-                                if let Err(e) = probe_neighbor(&self.handle, self.target_ifindex, ip).await {
-                                    tracing::debug!("NdpMonitor: Scheduled probe failed for {ip}: {e}");
-                                }
-                            }
-                        }
+                    // B. Periodic Surgical Probes for silent online devices
+                    self.spawn_periodic_probes(current_gua, current_ula);
+                }
+
+                _ = subnet_scan_interval.tick() => {
+                    drop(rx);
+                    // C. Periodic full subnet discovery (if configured)
+                    if self.scan_interval.as_secs() > 0 {
+                        self.spawn_subnet_scan();
                     }
                 }
 
@@ -373,7 +511,7 @@ impl AsyncService for NdpMonitor {
             }
         }
 
-        tracing::info!("NdpMonitor: Service stopped");
+        tracing::info!("NeighborMonitor: Service stopped");
         Ok(())
     }
 }
@@ -659,5 +797,27 @@ mod tests {
         let event = extract_neigh_info(&msg).expect("deve extrair delete");
 
         assert_eq!(event, NeighborEvent::Deleted { ip, ifindex: 2 });
+    }
+
+    #[test]
+    fn test_ipv4_subnet_iterable_24() {
+        let ip: Ipv4Addr = "192.168.1.100".parse().unwrap();
+        let range = get_ipv4_subnet_iterable(ip, 24);
+
+        assert_eq!(range.len(), 254);
+        assert_eq!(range[0], "192.168.1.1".parse::<Ipv4Addr>().unwrap());
+        assert_eq!(range[253], "192.168.1.254".parse::<Ipv4Addr>().unwrap());
+    }
+
+    #[test]
+    fn test_ipv4_subnet_iterable_30() {
+        let ip: Ipv4Addr = "10.0.0.1".parse().unwrap();
+        let range = get_ipv4_subnet_iterable(ip, 30);
+
+        // /30 has 4 addresses: .0 (net), .1, .2, .3 (broadcast)
+        // Usable: .1, .2
+        assert_eq!(range.len(), 2);
+        assert_eq!(range[0], "10.0.0.1".parse::<Ipv4Addr>().unwrap());
+        assert_eq!(range[1], "10.0.0.2".parse::<Ipv4Addr>().unwrap());
     }
 }

@@ -44,7 +44,8 @@ pub async fn bootstrap_table(
     ula: Option<Ipv6Addr>,
     target_ifindex: Option<u32>,
 ) -> Result<(), NetworkError> {
-    let neighbors = netlink::get_ipv6_neighbors(handle, target_prefix, target_ifindex).await?;
+    let mut neighbors = netlink::get_ipv6_neighbors(handle, target_prefix, target_ifindex).await?;
+    neighbors.extend(netlink::get_ipv4_neighbors(handle, target_ifindex).await?);
 
     let mut mac_groups: std::collections::HashMap<MacAddr, Vec<Ipv6Addr>> =
         std::collections::HashMap::new();

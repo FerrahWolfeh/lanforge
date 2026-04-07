@@ -45,24 +45,43 @@ impl LogHandler {
         let event = &timed_event.event;
 
         match event {
-            LanforgeEvent::DeviceDiscovered { mac } => {
+            LanforgeEvent::DeviceDiscovered { mac, hostname } => {
+                let name = hostname.as_deref().unwrap_or("unknown");
                 println!(
-                    "[{}] {} {} {}",
+                    "[{}] {} {} {} ({})",
                     now,
                     "NEW".green().bold(),
                     "Device discovered:".white(),
-                    mac.to_string().bright_yellow()
+                    mac.to_string().bright_yellow(),
+                    name.bold()
                 );
             }
             LanforgeEvent::DeviceUpdated { mac, change } => {
-                let change_str = self.format_change(change);
-                println!(
-                    "[{}] {} {} -> {}",
-                    now,
-                    "UPD".blue().bold(),
-                    mac.to_string().bright_yellow(),
-                    change_str
-                );
+                if let DeviceChange::StatusChanged { online, hostname } = change {
+                    let name = hostname.as_deref().unwrap_or("unknown");
+                    let status = if *online {
+                        "ONLINE".bright_green().bold()
+                    } else {
+                        "OFFLINE".red().bold()
+                    };
+                    println!(
+                        "[{}] {} Device {} ({}) is now {}",
+                        now,
+                        "UPD".blue().bold(),
+                        name.bright_yellow(),
+                        mac.to_string().dimmed(),
+                        status
+                    );
+                } else {
+                    let change_str = self.format_change(change);
+                    println!(
+                        "[{}] {} {} -> {}",
+                        now,
+                        "UPD".blue().bold(),
+                        mac.to_string().bright_yellow(),
+                        change_str
+                    );
+                }
             }
             LanforgeEvent::DeviceExpired { mac } => {
                 println!(
@@ -161,6 +180,23 @@ impl LogHandler {
                     now,
                     "SYS".yellow().bold(),
                     "mDNS Scan requested".dimmed()
+                );
+            }
+            LanforgeEvent::SubnetScanStarted { subnet } => {
+                println!(
+                    "[{}] {} {} {}",
+                    now,
+                    "ARP".bright_yellow().bold(),
+                    "Unleashing massive ARP scan for:".white(),
+                    subnet.bright_cyan().bold()
+                );
+            }
+            LanforgeEvent::NeighborScanRequested => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "Manual Neighbor Scan (ARP) requested".dimmed()
                 );
             }
             LanforgeEvent::InterfaceUpdated { ifindex } => {
@@ -263,11 +299,12 @@ impl LogHandler {
             DeviceChange::ArpActivity { ip } => {
                 format!("ARP Activity: {}", ip.to_string().bright_cyan())
             }
-            DeviceChange::StatusChanged { online } => {
+            DeviceChange::StatusChanged { online, hostname } => {
+                let name = hostname.as_deref().unwrap_or("unknown");
                 if *online {
-                    "Online".bright_green().bold().to_string()
+                    format!("{} is {}", name.bold(), "Online".bright_green().bold())
                 } else {
-                    "Offline".red().bold().to_string()
+                    format!("{} has gone {}", name.bold(), "Offline".red().bold())
                 }
             }
         }

@@ -64,6 +64,7 @@ pub struct Config {
     pub fallback_mins: u64,
     pub control_socket: String,
     pub log_db: String,
+    pub neighbor_scan_mins: u64,
 
     // RA
     pub ra_enabled: bool,
@@ -140,6 +141,9 @@ impl Config {
                 .control_socket
                 .unwrap_or(toml_cfg.general.control_socket),
             log_db: cli.log_db,
+            neighbor_scan_mins: cli
+                .neighbor_scan_mins
+                .unwrap_or(toml_cfg.general.neighbor_scan_mins),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: RaCfg {

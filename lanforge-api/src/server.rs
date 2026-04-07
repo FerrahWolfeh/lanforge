@@ -238,8 +238,9 @@ where
             }
             Ok(Command::Scan) => {
                 let _ = ctx.ctx.bus().publish(LanforgeEvent::ScanRequested);
+                let _ = ctx.ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
                 Response::Success(SimpleSuccess {
-                    message: "mDNS Discovery Scan triggered".to_string(),
+                    message: "Active network scans (mDNS and ARP) triggered".to_string(),
                 })
             }
             Ok(Command::Shutdown) => {
@@ -288,10 +289,7 @@ where
 
                 // Return immediate success first, then stream events
                 let ok_resp = Response::Success(SimpleSuccess {
-                    message: format!(
-                        "Starting event stream ({} historical)...",
-                        history.len()
-                    ),
+                    message: format!("Starting event stream ({} historical)...", history.len()),
                 });
                 if let Ok(json_resp) = serde_json::to_string(&ok_resp) {
                     writer.write_all(json_resp.as_bytes()).await?;

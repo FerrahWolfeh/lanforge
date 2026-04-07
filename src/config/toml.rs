@@ -101,6 +101,8 @@ pub struct GeneralCfg {
     pub http_listen: Option<String>,
     /// Lista global de domínios de busca.
     pub search_domains: Option<Vec<String>>,
+    /// Intervalo de scan de vizinhos (ARP/NDP) em minutos.
+    pub neighbor_scan_mins: u64,
 }
 
 impl Default for GeneralCfg {
@@ -114,6 +116,7 @@ impl Default for GeneralCfg {
             control_socket: "/run/lanforge/control.sock".into(),
             http_listen: None,
             search_domains: None,
+            neighbor_scan_mins: 30,
         }
     }
 }

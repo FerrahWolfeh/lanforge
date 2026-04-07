@@ -57,6 +57,9 @@ pub struct CliArgs {
     /// Intervalo de scan periódico (fallback) em minutos.
     #[arg(long, env = "LANFORGE_FALLBACK_MINS")]
     pub fallback_mins: Option<u64>,
+    /// Intervalo de scan de vizinhos (ARP/NDP) em minutos.
+    #[arg(long, env = "LANFORGE_NEIGHBOR_SCAN_MINS")]
+    pub neighbor_scan_mins: Option<u64>,
 
     // ── Router Advertisements (RA) ────────────────────────────────────────
     /// Habilita ou desabilita o serviço de Router Advertisements.

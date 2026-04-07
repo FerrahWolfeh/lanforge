@@ -76,12 +76,26 @@ impl LanforgeContext {
 
         let mut events = Vec::new();
         if let Some(mac) = opt_mac {
-            let now_online = state.get_device(&mac).is_some_and(|d| d.is_online());
+            let dev = state.get_device(&mac);
+            let now_online = dev.as_ref().is_some_and(|d| d.is_online());
+            let hostname = dev.as_ref().map(|d| d.hostname.name.clone());
 
             if is_new {
-                events.push(LanforgeEvent::DeviceDiscovered { mac });
+                events.push(LanforgeEvent::DeviceDiscovered {
+                    mac,
+                    hostname: hostname.clone(),
+                });
             }
-            if let Some(change) = change {
+            if let Some(mut change) = change {
+                // If the update itself generated a StatusChanged (e.g., from IpOffline),
+                // ensure it has the hostname.
+                if let DeviceChange::StatusChanged {
+                    ref mut hostname, ..
+                } = change
+                {
+                    *hostname = dev.as_ref().map(|d| d.hostname.name.clone());
+                }
+
                 events.push(LanforgeEvent::DeviceUpdated { mac, change });
             }
             if let Some(was) = was_online
@@ -89,7 +103,10 @@ impl LanforgeContext {
             {
                 events.push(LanforgeEvent::DeviceUpdated {
                     mac,
-                    change: DeviceChange::StatusChanged { online: now_online },
+                    change: DeviceChange::StatusChanged {
+                        online: now_online,
+                        hostname,
+                    },
                 });
             }
             if let DeviceUpdate::HostRemoved { .. } = update {

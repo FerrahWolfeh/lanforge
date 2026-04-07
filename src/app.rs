@@ -4,6 +4,7 @@ use lanforge_core::context::LanforgeContext;
 use std::net::Ipv6Addr;
 use std::os::unix::net::UnixDatagram;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::bootstrap::BootstrapResult;
@@ -92,8 +93,16 @@ impl Daemon {
         let h2 = netlink_handle.clone();
         let m2 = messages.clone();
         let ctx_ndp = self.ctx.clone();
+        let scan_interval = Duration::from_secs(cfg.neighbor_scan_mins * 60);
+
         self.registry.spawn_async(&self.ctx, move || {
-            NdpMonitor::new(h2.clone(), m2.clone(), target_ifindex, ctx_ndp.clone())
+            NdpMonitor::new(
+                h2.clone(),
+                m2.clone(),
+                target_ifindex,
+                ctx_ndp.clone(),
+                scan_interval,
+            )
         });
 
         // RA Service (Async)

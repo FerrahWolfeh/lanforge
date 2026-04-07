@@ -70,7 +70,7 @@ impl SyncService for DbWorker {
                 // Second, dispatch to specialized handlers
                 match event.event {
                     LanforgeEvent::DeviceUpdated { mac, .. }
-                    | LanforgeEvent::DeviceDiscovered { mac } => {
+                    | LanforgeEvent::DeviceDiscovered { mac, .. } => {
                         if let Some(device) = self.ctx.get_device(&mac) {
                             if let Err(e) = db.upsert_device(&device) {
                                 warn!("DB worker: failed to upsert device {mac}: {e}");

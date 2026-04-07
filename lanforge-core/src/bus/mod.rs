@@ -92,7 +92,10 @@ pub enum DeviceChange {
     ArpActivity { ip: Ipv4Addr },
 
     /// The device's reachability status has changed.
-    StatusChanged { online: bool },
+    StatusChanged {
+        online: bool,
+        hostname: Option<String>,
+    },
 }
 
 /// A wrapper for an event along with its metadata (timestamp, source module).
@@ -127,7 +130,10 @@ impl TimedEvent {
 pub enum LanforgeEvent {
     // -- Device lifecycle --
     /// A new device was discovered for the first time.
-    DeviceDiscovered { mac: MacAddr },
+    DeviceDiscovered {
+        mac: MacAddr,
+        hostname: Option<String>,
+    },
     /// An existing device's state was modified.
     DeviceUpdated { mac: MacAddr, change: DeviceChange },
     /// A device was removed (typically because it was inactive for too long).
@@ -151,6 +157,10 @@ pub enum LanforgeEvent {
     InterfaceUpdated { ifindex: u32 },
     /// Request an active mDNS network scan.
     ScanRequested,
+    /// Request an active Neighbor Monitor subnet scan.
+    NeighborScanRequested,
+    /// A massive ARP subnet scan was started.
+    SubnetScanStarted { subnet: String },
 
     // -- System Control --
     /// Notification that the underlying persistent table has changes that need flushing.
@@ -206,7 +216,9 @@ impl TimedEvent {
             | LanforgeEvent::ReloadConfig
             | LanforgeEvent::ServiceReady { .. }
             | LanforgeEvent::SystemReady
-            | LanforgeEvent::ScanRequested => true,
+            | LanforgeEvent::ScanRequested
+            | LanforgeEvent::NeighborScanRequested
+            | LanforgeEvent::SubnetScanStarted { .. } => true,
 
             // Internal signals or very high-frequency events
             LanforgeEvent::DeviceTableDirty
