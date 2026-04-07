@@ -1,5 +1,5 @@
 use hickory_proto::op::Message;
-use hickory_proto::rr::{DNSClass, Name, RecordType};
+use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
 use moka::Expiry;
 use moka::sync::Cache; // DICA: Use a versão sync! (Explicação abaixo)
 use std::time::{Duration, Instant};
@@ -118,7 +118,7 @@ impl DnsCache {
 
             // RFC 2308: Negative caching TTL comes from the minimum of the SOA's TTL and the SOA's MINIMUM field
             for record in response_msg.name_servers() {
-                if let hickory_proto::rr::RData::SOA(soa) = record.data() {
+                if let RData::SOA(soa) = record.data() {
                     min_ttl = std::cmp::min(record.ttl(), soa.minimum());
                     break;
                 }

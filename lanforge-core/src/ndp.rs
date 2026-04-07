@@ -2,7 +2,7 @@
 // NeighborEvent — Typed structure for kernel neighbor events
 // ---------------------------------------------------------------------------
 
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 
 use crate::{context::state::DeviceUpdate, identifiers::MacAddr, utils::ip_matches_prefix};
 
@@ -11,19 +11,19 @@ use crate::{context::state::DeviceUpdate, identifiers::MacAddr, utils::ip_matche
 pub enum NeighborEvent {
     /// A neighbor entry was added or updated.
     Added {
-        ip: std::net::IpAddr,
+        ip: IpAddr,
         mac: MacAddr,
         ifindex: u32,
     },
     /// A neighbor entry was deleted from the kernel table.
-    Deleted { ip: std::net::IpAddr, ifindex: u32 },
+    Deleted { ip: IpAddr, ifindex: u32 },
     /// A neighbor entry reached a FAILED state (`NUD_FAILED`).
-    Failed { ip: std::net::IpAddr, ifindex: u32 },
+    Failed { ip: IpAddr, ifindex: u32 },
 }
 
 impl NeighborEvent {
     #[must_use]
-    pub const fn ip(&self) -> &std::net::IpAddr {
+    pub const fn ip(&self) -> &IpAddr {
         match self {
             Self::Added { ip, .. } | Self::Deleted { ip, .. } | Self::Failed { ip, .. } => ip,
         }
@@ -55,7 +55,7 @@ impl NeighborEvent {
     ) -> DeviceUpdate {
         match self {
             Self::Added { ip, mac, .. } => match ip {
-                std::net::IpAddr::V6(ip6) => {
+                IpAddr::V6(ip6) => {
                     let matches_gua =
                         gua_prefix.is_some_and(|prefix| ip_matches_prefix(ip6, prefix));
                     let matches_ula =
@@ -73,7 +73,7 @@ impl NeighborEvent {
                         }
                     }
                 }
-                std::net::IpAddr::V4(ip4) => DeviceUpdate::ArpSeen {
+                IpAddr::V4(ip4) => DeviceUpdate::ArpSeen {
                     mac: *mac,
                     ip: *ip4,
                 },

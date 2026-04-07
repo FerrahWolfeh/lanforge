@@ -14,7 +14,7 @@ use crate::{
         LanforgeContext,
         utils::{device_change_of, mac_of},
     },
-    device::{HostnameOrigin, Ipv6AddrOrSuffix},
+    device::{HostnameOrigin, Ipv6AddrOrSuffix, Origin},
     identifiers::{Duid, MacAddr},
     state::{DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget},
 };
@@ -235,11 +235,7 @@ impl LanforgeContext {
 
     /// Signals a change in interface IP configuration.
     #[must_use]
-    pub fn signal_interface_update(
-        &self,
-        ifindex: u32,
-        state: crate::state::InterfaceState,
-    ) -> bool {
+    pub fn signal_interface_update(&self, ifindex: u32, state: InterfaceState) -> bool {
         self.apply(&DeviceUpdate::InterfaceIpsChanged { ifindex, state })
     }
 
@@ -332,8 +328,6 @@ impl LanforgeContext {
         v4_static: Option<Ipv4Addr>,
         v6_suffix: Option<Ipv6AddrOrSuffix>,
     ) -> bool {
-        use crate::device::Origin;
-
         self.apply(&DeviceUpdate::CliHostUpdated {
             mac,
             hostname: FieldUpdate::Set(hostname),

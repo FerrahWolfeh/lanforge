@@ -92,10 +92,7 @@ impl LanforgeContext {
 
     /// Returns GUA and ULA prefixes for an interface (Legacy API).
     #[must_use]
-    pub fn get_interface_prefixes_opt(
-        &self,
-        ifindex: u32,
-    ) -> (Option<std::net::Ipv6Addr>, Option<std::net::Ipv6Addr>) {
+    pub fn get_interface_prefixes_opt(&self, ifindex: u32) -> (Option<Ipv6Addr>, Option<Ipv6Addr>) {
         let state = self.read().get_interface_ips(ifindex);
         (state.gua, state.ula)
     }

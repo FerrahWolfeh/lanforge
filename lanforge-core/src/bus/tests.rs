@@ -7,7 +7,7 @@ use crate::device::Origin;
 use crate::identifiers::MacAddr;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 fn make_bus() -> Arc<EventBus> {
     Arc::new(EventBus::new())
@@ -21,7 +21,7 @@ async fn new_device_publishes_discovered_and_updated() {
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
 
     let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted { mac, ip, expires });
 
@@ -57,7 +57,7 @@ async fn known_device_does_not_publish_discovered() {
     let bus = make_bus();
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
 
     let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
         mac,

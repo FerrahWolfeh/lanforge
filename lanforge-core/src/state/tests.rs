@@ -5,7 +5,7 @@ use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Le
 use crate::identifiers::{Duid, MacAddr};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 // --- MacAddr ---
 
@@ -44,7 +44,7 @@ fn apply_update_v4_lease_granted() {
     let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
 
     let changed = table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
     assert!(changed);
@@ -58,7 +58,7 @@ fn apply_update_v4_idempotent() {
     let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
 
     table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
     // Mesma info novamente — não deve ser dirty
@@ -119,7 +119,7 @@ fn apply_update_slaac_excludes_managed_addr() {
     let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv6Addr = "fd00::101".parse().unwrap();
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
 
     // 1. Grant a DHCPv6 lease
     table.apply_update(DeviceUpdate::V6LeaseGranted {
@@ -303,8 +303,8 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
     let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    let past = SystemTime::now() - std::time::Duration::from_secs(100);
-    let future = SystemTime::now() + std::time::Duration::from_secs(100);
+    let past = SystemTime::now() - Duration::from_secs(100);
+    let future = SystemTime::now() + Duration::from_secs(100);
 
     table.apply_update(DeviceUpdate::V4LeaseGranted {
         mac,
@@ -335,7 +335,7 @@ fn test_orphaned_v6_promotion() {
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
     let ip = "fd97::dead:beef".parse().unwrap();
     let duid = Duid::new(vec![0xaa, 0xbb]);
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
 
     // 1. Lease concedido sem MAC (órfão)
     table.apply_update(DeviceUpdate::V6LeaseGranted {
@@ -454,7 +454,7 @@ fn test_multiple_iaids_and_prefixes() {
     let mac = MacAddr([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
     let duid = Duid::new(vec![1, 2, 3]);
     let now = SystemTime::now();
-    let future = now + std::time::Duration::from_secs(3600);
+    let future = now + Duration::from_secs(3600);
 
     // 1. Atribui primeiro IP (IAID 10)
     table.apply_update(DeviceUpdate::V6LeaseGranted {
@@ -521,7 +521,7 @@ fn test_multiple_iaids_and_prefixes() {
     ));
 
     // 6. Expiração parcial
-    let past = now - std::time::Duration::from_secs(10);
+    let past = now - Duration::from_secs(10);
     table.apply_update(DeviceUpdate::V6PrefixAssigned {
         mac: Some(mac),
         duid,
@@ -548,7 +548,7 @@ fn apply_update_duid_associated_resolves_orphan() {
     let duid = Duid::generate_ll_from_mac([1, 2, 3, 4, 5, 6]);
     let iaid = 42;
     let ip: Ipv6Addr = "fd00::dead:beef".parse().unwrap();
-    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let expires = SystemTime::now() + Duration::from_secs(3600);
 
     // 1. Recebe um lease sem MAC (órfão)
     table.apply_update(DeviceUpdate::V6LeaseGranted {

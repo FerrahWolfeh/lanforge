@@ -25,9 +25,12 @@
 #[cfg(test)]
 pub mod tests;
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    time::SystemTime,
+};
 
-use tokio::sync::broadcast;
+use tokio::sync::broadcast::{self, Receiver};
 
 use crate::context::state::LeaseTarget;
 use crate::identifiers::MacAddr;
@@ -104,7 +107,7 @@ pub struct TimedEvent {
     /// The actual event data.
     pub event: LanforgeEvent,
     /// When the event was created.
-    pub timestamp: std::time::SystemTime,
+    pub timestamp: SystemTime,
     /// Optional identifier for the module that generated the event.
     pub module: Option<String>,
 }
@@ -115,7 +118,7 @@ impl TimedEvent {
     pub fn new(event: LanforgeEvent, module: Option<String>) -> Self {
         Self {
             event,
-            timestamp: std::time::SystemTime::now(),
+            timestamp: SystemTime::now(),
             module,
         }
     }
@@ -261,7 +264,7 @@ impl EventBus {
 
     /// Creates a new subscriber to receive events from the bus.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<TimedEvent> {
+    pub fn subscribe(&self) -> Receiver<TimedEvent> {
         self.tx.subscribe()
     }
 

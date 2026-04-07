@@ -5,10 +5,13 @@
 
 use rusqlite::{Connection, params};
 use serde_json;
-use std::path::Path;
+use std::{
+    path::Path,
+    time::{Duration, UNIX_EPOCH},
+};
 use tracing::info;
 
-use crate::{LeaseDbError, Result};
+use crate::LeaseDbError;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 
 pub struct LogDb {
@@ -17,7 +20,7 @@ pub struct LogDb {
 
 impl LogDb {
     /// Opens (or creates) the log database.
-    pub fn open(path: &Path) -> Result<Self> {
+    pub fn open(path: &Path) -> Result<Self, LeaseDbError> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -46,13 +49,13 @@ impl LogDb {
     }
 
     /// Records a new event in the log history.
-    pub fn record_log(&self, timed_event: &TimedEvent) -> Result<()> {
+    pub fn record_log(&self, timed_event: &TimedEvent) -> Result<(), LeaseDbError> {
         let json = serde_json::to_string(&timed_event.event)
             .map_err(|e| LeaseDbError::Migration("event serialization".into(), e.to_string()))?;
 
         let now_secs = timed_event
             .timestamp
-            .duration_since(std::time::UNIX_EPOCH)
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
@@ -79,14 +82,15 @@ impl LogDb {
     }
 
     /// Wipes all logged events from the database.
-    pub fn clear_logs(&self) -> Result<()> {
+    pub fn clear_logs(&self) -> Result<(), LeaseDbError> {
         self.conn.execute("DELETE FROM system_logs", [])?;
-        self.conn.execute("DELETE FROM sqlite_sequence WHERE name='system_logs'", [])?;
+        self.conn
+            .execute("DELETE FROM sqlite_sequence WHERE name='system_logs'", [])?;
         Ok(())
     }
 
     /// Retrieves the most recent log entries.
-    pub fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>> {
+    pub fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, LeaseDbError> {
         let mut stmt = self.conn.prepare(
             "SELECT timestamp, module, event_json FROM system_logs ORDER BY id DESC LIMIT ?1",
         )?;
@@ -104,7 +108,7 @@ impl LogDb {
             if let Ok(event) = serde_json::from_str::<LanforgeEvent>(&json) {
                 entries.push(TimedEvent {
                     event,
-                    timestamp: std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts as u64),
+                    timestamp: UNIX_EPOCH + Duration::from_secs(ts as u64),
                     module,
                 });
             }

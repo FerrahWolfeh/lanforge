@@ -402,11 +402,11 @@ impl State {
     }
 
     fn handle_slaac_observed(&mut self, mac: MacAddr, addr: Ipv6Addr) -> bool {
-        if let Some(owner_mac) = self.ip_index.get(&std::net::IpAddr::V6(addr)) {
+        if let Some(owner_mac) = self.ip_index.get(&IpAddr::V6(addr)) {
             let owner = self.get_device_or_new(*owner_mac);
             let is_managed = owner.v6.iter().any(|s| match s {
                 IPv6State::Dynamic(lease) if lease.ip == addr => true,
-                IPv6State::Static(crate::device::Ipv6AddrOrSuffix::Full(ip)) if *ip == addr => true,
+                IPv6State::Static(Ipv6AddrOrSuffix::Full(ip)) if *ip == addr => true,
                 _ => false,
             });
             if is_managed {

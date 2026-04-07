@@ -23,5 +23,3 @@ pub enum CoreError {
     #[error("Shutdown requested")]
     Shutdown,
 }
-
-pub type Result<T> = std::result::Result<T, CoreError>;

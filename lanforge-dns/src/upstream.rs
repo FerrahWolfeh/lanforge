@@ -2,6 +2,7 @@ use crate::error::DnsError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use std::collections::HashMap;
+use std::io::Error;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
@@ -150,7 +151,7 @@ impl UpstreamManager {
             let mut resp_buf = vec![0u8; resp_len];
             stream.read_exact(&mut resp_buf).await?;
 
-            Ok::<Vec<u8>, std::io::Error>(resp_buf)
+            Ok::<Vec<u8>, Error>(resp_buf)
         })
         .await
         .map_err(|_| DnsError::UpstreamTimeout)?

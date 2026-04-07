@@ -2,8 +2,12 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use crate::config::DnsConfig;
+use crate::error::DnsError;
 use crate::response::ResponseBuilder;
 use crate::utils::parse_arpa;
+use hickory_proto::op::Message;
+use hickory_proto::rr::rdata::PTR;
+use hickory_proto::rr::{Name, RData, Record, RecordType};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Device;
 
@@ -23,10 +27,10 @@ impl<'a> LocalResolver<'a> {
     /// Returns a full DNS response (either `NoError` with records or `NXDomain`).
     pub fn resolve_ip(
         &self,
-        query: &hickory_proto::op::Message,
+        query: &Message,
         hostname: &str,
-        qtype: hickory_proto::rr::RecordType,
-    ) -> Result<Vec<u8>, crate::error::DnsError> {
+        qtype: RecordType,
+    ) -> Result<Vec<u8>, DnsError> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
         if let Some(device) = self.ctx.get_by_hostname(hostname) {
@@ -41,11 +45,7 @@ impl<'a> LocalResolver<'a> {
     }
 
     /// Resolves reverse DNS queries (PTR).
-    pub fn resolve_ptr(
-        &self,
-        query: &hickory_proto::op::Message,
-        qname: &hickory_proto::rr::Name,
-    ) -> Result<Option<Vec<u8>>, crate::error::DnsError> {
+    pub fn resolve_ptr(&self, query: &Message, qname: &Name) -> Result<Option<Vec<u8>>, DnsError> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
         let Some(target_ip) = parse_arpa(qname) else {
@@ -56,10 +56,7 @@ impl<'a> LocalResolver<'a> {
             return Ok(None);
         };
 
-        let question = query
-            .queries()
-            .first()
-            .ok_or(crate::error::DnsError::WireParseError)?;
+        let question = query.queries().first().ok_or(DnsError::WireParseError)?;
         let name = question.name().clone();
 
         let host = if device.hostname.name.is_empty() {
@@ -72,14 +69,9 @@ impl<'a> LocalResolver<'a> {
         };
 
         let fqdn = format!("{}.{}.", host, self.cfg.search_domain);
-        let ptr_name = hickory_proto::rr::Name::from_str(&fqdn)
-            .unwrap_or_else(|_| hickory_proto::rr::Name::root());
+        let ptr_name = Name::from_str(&fqdn).unwrap_or_else(|_| Name::root());
 
-        let record = hickory_proto::rr::Record::from_rdata(
-            name,
-            self.cfg.ttl,
-            hickory_proto::rr::RData::PTR(hickory_proto::rr::rdata::PTR(ptr_name)),
-        );
+        let record = Record::from_rdata(name, self.cfg.ttl, RData::PTR(PTR(ptr_name)));
 
         Ok(Some(rb.success(vec![record])?))
     }
@@ -88,10 +80,10 @@ impl<'a> LocalResolver<'a> {
     #[must_use]
     pub fn resolve_local(
         &self,
-        query: &hickory_proto::op::Message,
+        query: &Message,
         device: &Device,
-        qtype: hickory_proto::rr::RecordType,
-    ) -> Option<Vec<hickory_proto::rr::Record>> {
+        qtype: RecordType,
+    ) -> Option<Vec<Record>> {
         use hickory_proto::rr::{RData, Record, RecordType};
 
         let question = query.queries().first()?;

@@ -1,7 +1,9 @@
 use hickory_proto::rr::Name;
 use lanforge_core::device::Ipv6AddrOrSuffix;
+use std::array::from_fn;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::from_utf8;
 
 use crate::wire::WireLabelIter;
 
@@ -57,7 +59,7 @@ fn byte_parse_arpa<'a>(mut labels: impl Iterator<Item = &'a [u8]>) -> Option<IpA
     let second = labels.next()?;
 
     if second.eq_ignore_ascii_case(b"in-addr") {
-        let [a, b, c, d] = std::array::from_fn(|_| labels.next());
+        let [a, b, c, d] = from_fn(|_| labels.next());
         return Some(IpAddr::V4(Ipv4Addr::new(
             parse_octet(a?)?,
             parse_octet(b?)?,
@@ -107,7 +109,7 @@ pub fn extract_local_hostname_wire<'a>(
     match labels.next() {
         None => {
             // Case 1: "node-1" (single label query)
-            std::str::from_utf8(host_bytes).ok()
+            from_utf8(host_bytes).ok()
         }
         Some(first_actual) => {
             // Case 2: "node-1.lan" (domain query)
@@ -131,7 +133,7 @@ pub fn extract_local_hostname_wire<'a>(
                 }
 
                 if matched && current_labels.next().is_none() {
-                    return std::str::from_utf8(host_bytes).ok();
+                    return from_utf8(host_bytes).ok();
                 }
             }
 
@@ -174,7 +176,7 @@ pub fn extract_local_hostname<'a>(
     match iter.next() {
         None => {
             // Short name: "node-1"
-            std::str::from_utf8(host_bytes).ok()
+            from_utf8(host_bytes).ok()
         }
         Some(first_actual) => {
             // Collect the remaining labels of the query once for efficient multi-pass matching.
@@ -206,7 +208,7 @@ pub fn extract_local_hostname<'a>(
                 }
 
                 if matched {
-                    return std::str::from_utf8(host_bytes).ok();
+                    return from_utf8(host_bytes).ok();
                 }
             }
 

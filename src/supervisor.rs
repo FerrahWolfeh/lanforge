@@ -303,7 +303,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for TestAsyncService {
-        async fn run(&mut self) -> lanforge_core::error::Result<()> {
+        async fn run(&mut self) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             Err(CoreError::Generic("always fails".into()))
         }
@@ -489,7 +489,7 @@ mod tests {
         fn run(
             &mut self,
             bus_rx: &lanforge_core::service::SyncBusReceiver,
-        ) -> lanforge_core::error::Result<()> {
+        ) -> Result<(), CoreError> {
             loop {
                 if let Some(e) = bus_rx.recv_timeout(Duration::from_millis(500)) {
                     println!("LOG: TestSyncService received: {:?}", e.event);
@@ -528,7 +528,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for RefService {
-        async fn run(&mut self) -> lanforge_core::error::Result<()> {
+        async fn run(&mut self) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             // Simulate work then failure
             tokio::time::sleep(Duration::from_millis(2)).await;

@@ -733,7 +733,7 @@ impl Device {
         }
 
         // De-duplicate while preserving prioritization order
-        let mut unique = std::collections::HashSet::new();
+        let mut unique = HashSet::new();
         addrs.retain(|ip| unique.insert(*ip));
 
         // Sort by classification score

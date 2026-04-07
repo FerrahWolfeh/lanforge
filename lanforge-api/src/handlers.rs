@@ -3,14 +3,18 @@
 //! Implementation of `ClientContext` methods that build the detailed
 //! JSON responses for `Status`, `Devices`, and `HostList` commands.
 
+use std::fs::metadata;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::time::SystemTime;
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
+use tokio::task::spawn_blocking;
 
 use crate::api::{
     DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DnsQueryResponse,
@@ -24,7 +28,7 @@ use crate::server::ClientContext;
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn format_iso8601(time: std::time::SystemTime) -> String {
+pub(crate) fn format_iso8601(time: SystemTime) -> String {
     let dt: DateTime<Utc> = time.into();
     dt.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -65,7 +69,7 @@ impl ClientContext {
 
         // DB stats
         status.db.path.clone_from(&self.cfg.db_path);
-        if let Ok(meta) = std::fs::metadata(&self.cfg.db_path) {
+        if let Ok(meta) = metadata(&self.cfg.db_path) {
             status.db.size_bytes = meta.len();
         }
         if let Some(last_flush) = self.ctx.last_db_flush() {
@@ -281,10 +285,7 @@ impl ClientContext {
                 online: is_online,
                 last_seen: format_iso8601(dev.last_seen),
                 learning_method: dev.learning_method().to_string(),
-                duid: dev
-                    .duid
-                    .as_ref()
-                    .map(|d: &lanforge_core::identifiers::Duid| hex::encode(d.as_bytes())),
+                duid: dev.duid.as_ref().map(|d: &Duid| hex::encode(d.as_bytes())),
                 display_v4: dev.display_v4(),
                 display_v6: dev.display_v6(gua_prefix, ula_prefix),
                 v4: match &dev.v4 {
@@ -416,7 +417,10 @@ impl ClientContext {
         let ip_hint = self.ctx.get_device(&mac).and_then(|d| d.v4.ip());
 
         // Emit WoL event
-        let _ = self.ctx.bus().publish(lanforge_core::bus::LanforgeEvent::WolTriggered { mac, ip_hint });
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::WolTriggered { mac, ip_hint });
 
         Response::Success(SimpleSuccess {
             message: format!("Wake-on-LAN magic packet queued for {mac}"),
@@ -442,14 +446,13 @@ impl ClientContext {
             let mac = dev.mac;
 
             // Fetch history from DB
-            let history: Vec<LeaseHistoryEntry> = tokio::task::spawn_blocking(move || {
-                match LeaseDb::open(Path::new("lanforge.db")) {
+            let history: Vec<LeaseHistoryEntry> =
+                spawn_blocking(move || match LeaseDb::open(Path::new("lanforge.db")) {
                     Ok(db) => db.get_lease_history(mac).unwrap_or_default(),
                     Err(_) => Vec::new(),
-                }
-            })
-            .await
-            .unwrap_or_default();
+                })
+                .await
+                .unwrap_or_default();
 
             // Build DeviceEntry (reusing implementation from handle_devices)
             let gua_prefix = self

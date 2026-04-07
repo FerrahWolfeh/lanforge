@@ -1,13 +1,15 @@
 #![cfg(test)]
 
 use crate::engine::LeaseDb;
-use lanforge_core::device::{Device, IPv4State, IPv6State, V4Lease};
+use crate::worker::DbWorker;
+use lanforge_core::bus::{EventBus, TimedEvent};
+use lanforge_core::device::{Device, HostnameOrigin, IPv4State, IPv6State, V4Lease};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::{DeviceUpdate, State};
 use rusqlite::params;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
 
 fn make_mac(last: u8) -> MacAddr {
@@ -210,43 +212,33 @@ async fn db_worker_persists_on_dirty_event() {
     let db_path = dir.path().join("test.db");
     let log_db_path = dir.path().join("test_logs.db");
 
-    let bus = Arc::new(lanforge_core::bus::EventBus::new());
-    let table = lanforge_core::state::State::new();
+    let bus = Arc::new(EventBus::new());
+    let table = State::new();
     let ctx = LanforgeContext::new(bus.clone(), table, None);
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     let bus_rx = SyncBusReceiver::new(rx, ctx.clone());
 
-    let mut worker = crate::worker::DbWorker::new(db_path.clone(), log_db_path, ctx.clone());
+    let mut worker = DbWorker::new(db_path.clone(), log_db_path, ctx.clone());
 
     // Prepare table and context
     let mac = make_mac(0xAB);
-    let _ = ctx.update_hostname(
-        mac,
-        "worker-test".into(),
-        lanforge_core::device::HostnameOrigin::Dhcp,
-    );
+    let _ = ctx.update_hostname(mac, "worker-test".into(), HostnameOrigin::Dhcp);
 
     std::thread::spawn(move || {
         let _ = worker.run(&bus_rx);
     });
 
     // Send Dirty event to trigger save
-    tx.send(lanforge_core::bus::TimedEvent::new(
-        LanforgeEvent::DeviceTableDirty,
-        None,
-    ))
-    .unwrap();
+    tx.send(TimedEvent::new(LanforgeEvent::DeviceTableDirty, None))
+        .unwrap();
 
     // Small wait for the sync thread to process
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Shutdown worker
-    tx.send(lanforge_core::bus::TimedEvent::new(
-        LanforgeEvent::Shutdown,
-        None,
-    ))
-    .unwrap();
+    tx.send(TimedEvent::new(LanforgeEvent::Shutdown, None))
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let db = LeaseDb::open(&db_path).unwrap();
@@ -438,7 +430,7 @@ fn test_persistence_of_various_updates() {
     table.apply_update(DeviceUpdate::V4LeaseGranted {
         mac,
         ip: ip_v4,
-        expires: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
+        expires: SystemTime::now() + Duration::from_secs(3600),
     });
 
     // 4. SLAAC Probe (Observed)

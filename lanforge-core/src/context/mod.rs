@@ -10,6 +10,7 @@ use crate::state::State;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
 
 pub mod read;
@@ -82,7 +83,7 @@ impl LanforgeContext {
 
 impl LanforgeContext {
     /// Blocks the current THREAD (sync) until the database is ready.
-    pub fn wait_for_db_sync(&self, rx: &std::sync::mpsc::Receiver<TimedEvent>) {
+    pub fn wait_for_db_sync(&self, rx: &Receiver<TimedEvent>) {
         if self.is_db_ready() {
             return;
         }
@@ -97,7 +98,7 @@ impl LanforgeContext {
     }
 
     /// Blocks the current THREAD (sync) until network interfaces are ready.
-    pub fn wait_for_interfaces_sync(&self, rx: &std::sync::mpsc::Receiver<TimedEvent>) {
+    pub fn wait_for_interfaces_sync(&self, rx: &Receiver<TimedEvent>) {
         if self.is_if_ready() {
             return;
         }

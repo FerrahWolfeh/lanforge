@@ -2,7 +2,7 @@ use crate::engine::LeaseDb;
 use crate::log_engine::LogDb;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::error::{CoreError, Result};
+use lanforge_core::error::CoreError;
 use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, SyncService};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -45,7 +45,7 @@ impl LanforgeService for DbWorker {
 }
 
 impl SyncService for DbWorker {
-    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<()> {
+    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
         let db = LeaseDb::open(&self.db_path).map_err(|e| CoreError::Generic(e.to_string()))?;
         let log_db =
             LogDb::open(&self.log_db_path).map_err(|e| CoreError::Generic(e.to_string()))?;

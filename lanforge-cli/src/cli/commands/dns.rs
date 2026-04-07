@@ -1,17 +1,17 @@
-use crate::cli::commands::CliCommand;
+use crate::{args, cli::commands::CliCommand};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{Command as ControlCommand, DnsQueryResponse, Response};
 
 pub struct DnsCommand {
-    pub action: crate::args::DnsCommand,
+    pub action: args::DnsCommand,
 }
 
 impl CliCommand for DnsCommand {
     fn prepare(&mut self) -> Result<ControlCommand> {
         match &self.action {
-            crate::args::DnsCommand::Stats => Ok(ControlCommand::DnsStats),
-            crate::args::DnsCommand::Query { name, record_type } => Ok(ControlCommand::DnsQuery {
+            args::DnsCommand::Stats => Ok(ControlCommand::DnsStats),
+            args::DnsCommand::Query { name, record_type } => Ok(ControlCommand::DnsQuery {
                 name: name.clone(),
                 record_type: record_type.clone(),
             }),

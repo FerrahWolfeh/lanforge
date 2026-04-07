@@ -12,4 +12,3 @@ mod tests;
 pub mod worker;
 
 pub use error::LeaseDbError;
-pub type Result<T> = std::result::Result<T, LeaseDbError>;

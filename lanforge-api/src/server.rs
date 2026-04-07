@@ -1,22 +1,26 @@
 use crate::api::{Command, Response, SimpleSuccess};
+use lanforge_core::error::CoreError;
 use lanforge_db::log_engine::LogDb;
+use tokio::task::spawn_blocking;
 
 use crate::config::ApiConfig;
-use crate::error::{ApiError, Result};
+use crate::error::ApiError;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget};
-use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
+use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
-use std::fs;
+use std::fs::{self, Permissions};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, split};
 use tokio::net::{TcpListener, UnixListener};
 use tracing::{debug, error, info};
 
-use lanforge_core::service::{AsyncService, LanforgeService};
+use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
 
 pub struct ControlService {
     cfg: Arc<ApiConfig>,
@@ -30,14 +34,14 @@ impl ControlService {
 }
 
 impl LanforgeService for ControlService {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "control",
             display_name: "Control API",
             critical: true,
             max_retries: 0,
-            base_backoff: std::time::Duration::from_secs(1),
-            max_backoff: std::time::Duration::from_secs(30),
+            base_backoff: Duration::from_secs(1),
+            max_backoff: Duration::from_secs(30),
             stack_kb: 512,
         }
     }
@@ -48,7 +52,7 @@ impl LanforgeService for ControlService {
 }
 
 impl AsyncService for ControlService {
-    async fn run(&mut self) -> lanforge_core::error::Result<()> {
+    async fn run(&mut self) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
 
         let path_ref = Path::new(&cfg.socket_path);
@@ -56,7 +60,7 @@ impl AsyncService for ControlService {
         // Old socket cleanup
         if path_ref.exists() {
             debug!("Cleaning up old socket: {}", path_ref.display());
-            fs::remove_file(path_ref).map_err(lanforge_core::error::CoreError::Io)?;
+            fs::remove_file(path_ref).map_err(CoreError::Io)?;
         }
 
         // Ensure parent directory exists
@@ -64,21 +68,21 @@ impl AsyncService for ControlService {
             && !parent.exists()
         {
             debug!("Creating socket directory: {}", parent.display());
-            fs::create_dir_all(parent).map_err(lanforge_core::error::CoreError::Io)?;
+            fs::create_dir_all(parent).map_err(CoreError::Io)?;
         }
 
-        let listener = UnixListener::bind(path_ref).map_err(lanforge_core::error::CoreError::Io)?;
+        let listener = UnixListener::bind(path_ref).map_err(CoreError::Io)?;
 
         // Set 0666 permissions for easy local access during development.
-        if let Err(e) = fs::set_permissions(path_ref, fs::Permissions::from_mode(0o666)) {
+        if let Err(e) = fs::set_permissions(path_ref, Permissions::from_mode(0o666)) {
             debug!("Warning: could not set 0666 permissions on socket: {e}");
         }
 
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<String> = None;
 
-        let startup_time = std::time::Instant::now();
-        let mut last_scan = std::time::Instant::now();
+        let startup_time = Instant::now();
+        let mut last_scan = Instant::now();
 
         // TCP Listener opcional para debug
         let tcp_listener = if let Some(port) = cfg.tcp_port {
@@ -109,7 +113,7 @@ impl AsyncService for ControlService {
                             current_gua = gua.map(|ip| ip.to_string());
                         }
                         LanforgeEvent::ReloadConfig => {
-                            last_scan = std::time::Instant::now();
+                            last_scan = Instant::now();
                         }
                         LanforgeEvent::Shutdown => {
                             debug!("Control: shutdown received");
@@ -205,11 +209,11 @@ pub(crate) struct ClientContext {
 ///
 /// Reads JSON lines from the stream, dispatches them to the appropriate
 /// handler in `ClientContext`, and writes back the JSON response.
-async fn handle_client<S>(stream: S, ctx: ClientContext) -> Result<()>
+async fn handle_client<S>(stream: S, ctx: ClientContext) -> Result<(), ApiError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let (reader, mut writer) = tokio::io::split(stream);
+    let (reader, mut writer) = split(stream);
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
 
@@ -221,7 +225,7 @@ where
             continue;
         }
 
-        let req: std::result::Result<Command, _> = serde_json::from_str(trim_line);
+        let req: Result<Command, _> = serde_json::from_str(trim_line);
         let resp = match req {
             Ok(Command::Status) => ctx.handle_status().await,
             Ok(Command::Devices {
@@ -250,7 +254,6 @@ where
                 })
             }
             Ok(Command::Purge { mac }) => {
-                use std::str::FromStr;
                 let mac_addr = MacAddr::from_str(&mac).map_err(ApiError::Generic)?;
                 let _ = ctx
                     .ctx
@@ -276,7 +279,7 @@ where
                 // Fetch history if it's a log command
                 let history = if let Command::Log { .. } = req_cmd {
                     let log_db_path = ctx.cfg.log_db_path.clone();
-                    tokio::task::spawn_blocking(move || {
+                    spawn_blocking(move || {
                         LogDb::open(Path::new(&log_db_path))
                             .and_then(|db| db.get_history(100))
                             .unwrap_or_default()
@@ -438,13 +441,11 @@ where
                         vec![t]
                     } else if let Some(dev) = ctx.ctx.get_device(&mac_addr) {
                         let mut t = Vec::new();
-                        if dev.v4.ip().is_some()
-                            && !matches!(dev.v4, lanforge_core::device::IPv4State::Static(_))
-                        {
+                        if dev.v4.ip().is_some() && !matches!(dev.v4, IPv4State::Static(_)) {
                             t.push(LeaseTarget::V4);
                         }
                         for v6 in &dev.v6 {
-                            if let lanforge_core::device::IPv6State::Dynamic(lease) = v6 {
+                            if let IPv6State::Dynamic(lease) = v6 {
                                 t.push(LeaseTarget::V6 { iaid: lease.iaid });
                             }
                         }
@@ -478,13 +479,11 @@ where
                         vec![t]
                     } else if let Some(dev) = ctx.ctx.get_device(&mac_addr) {
                         let mut t = Vec::new();
-                        if dev.v4.ip().is_some()
-                            && !matches!(dev.v4, lanforge_core::device::IPv4State::Static(_))
-                        {
+                        if dev.v4.ip().is_some() && !matches!(dev.v4, IPv4State::Static(_)) {
                             t.push(LeaseTarget::V4);
                         }
                         for v6 in &dev.v6 {
-                            if let lanforge_core::device::IPv6State::Dynamic(lease) = v6 {
+                            if let IPv6State::Dynamic(lease) = v6 {
                                 t.push(LeaseTarget::V6 { iaid: lease.iaid });
                             }
                         }

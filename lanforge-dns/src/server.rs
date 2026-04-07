@@ -1,10 +1,17 @@
-use crate::error::DnsError;
+use crate::{
+    error::DnsError,
+    response::ResponseBuilder,
+    stats::DnsStatsSnapshot,
+    wire::{WireHeader, WireOptScanner, WireQuestion, qtypes::QType},
+};
 use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
-use lanforge_core::bus::TimedEvent;
+use lanforge_core::{bus::TimedEvent, service::ServiceMeta};
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UdpSocket},
+    sync::broadcast::Receiver,
+    task::JoinHandle,
 };
 use tracing::info;
 
@@ -51,7 +58,7 @@ impl DnsService {
 
     /// Returns a snapshot of the current DNS statistics.
     #[must_use]
-    pub fn stats_snapshot(&self) -> crate::stats::DnsStatsSnapshot {
+    pub fn stats_snapshot(&self) -> DnsStatsSnapshot {
         self.stats.snapshot()
     }
 
@@ -86,11 +93,7 @@ impl DnsService {
         }))
     }
 
-    fn spawn_udp_handler(
-        &self,
-        dns_ctx: Arc<DnsContext>,
-        sock: Arc<UdpSocket>,
-    ) -> tokio::task::JoinHandle<()> {
+    fn spawn_udp_handler(&self, dns_ctx: Arc<DnsContext>, sock: Arc<UdpSocket>) -> JoinHandle<()> {
         let ctx_udp = self.ctx.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 4096];
@@ -110,11 +113,7 @@ impl DnsService {
         })
     }
 
-    fn spawn_tcp_handler(
-        &self,
-        dns_ctx: Arc<DnsContext>,
-        listener: TcpListener,
-    ) -> tokio::task::JoinHandle<()> {
+    fn spawn_tcp_handler(&self, dns_ctx: Arc<DnsContext>, listener: TcpListener) -> JoinHandle<()> {
         let ctx_tcp = self.ctx.clone();
         tokio::spawn(async move {
             loop {
@@ -148,7 +147,7 @@ impl DnsService {
         })
     }
 
-    async fn wait_for_shutdown(&self, mut rx: tokio::sync::broadcast::Receiver<TimedEvent>) {
+    async fn wait_for_shutdown(&self, mut rx: Receiver<TimedEvent>) {
         let ctx_main = self.ctx.clone();
         loop {
             tokio::select! {
@@ -165,8 +164,8 @@ impl DnsService {
 }
 
 impl LanforgeService for DnsService {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "dns",
             display_name: "DNS Server",
             critical: true,
@@ -246,14 +245,14 @@ pub(crate) async fn handle_query(
     ctx.stats.inc_requests();
 
     // PHASE 1: Zero-Alloc Triage
-    let Some(header) = crate::wire::WireHeader::parse(data) else {
+    let Some(header) = WireHeader::parse(data) else {
         return Ok(None);
     };
     if !header.is_query() {
         return Ok(None);
     }
 
-    let Some(question) = crate::wire::WireQuestion::parse(data) else {
+    let Some(question) = WireQuestion::parse(data) else {
         return handle_query_fallback(data, ctx).await;
     };
 
@@ -271,7 +270,7 @@ pub(crate) async fn handle_query(
         ctx.stats.inc_recursive();
         forward_to_upstream(data, upstream, mgr).await.map(Some)
     } else {
-        let edns = crate::wire::WireOptScanner::scan(data, &header, &question);
+        let edns = WireOptScanner::scan(data, &header, &question);
         let ra = ctx.cfg.upstream.is_some();
         Ok(Some(WireResponseWriter::write_error_response(
             data,
@@ -286,10 +285,9 @@ pub(crate) async fn handle_query(
 /// Helper function for local resolution using wire-parsed data.
 fn resolve_local_wire(
     data: &[u8],
-    question: &crate::wire::WireQuestion<'_>,
+    question: &WireQuestion<'_>,
     ctx: &DnsContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
-    use crate::wire::qtypes::QType;
     let raw_qtype = question.qtype();
     let qtype = QType::from(raw_qtype);
 
@@ -329,11 +327,8 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
     let Ok(query) = Message::from_bytes(data) else {
         return Ok(None);
     };
-    let rb = crate::response::ResponseBuilder::new(&query, &ctx.cfg);
-    let question = query
-        .queries()
-        .first()
-        .ok_or(crate::error::DnsError::WireParseError)?;
+    let rb = ResponseBuilder::new(&query, &ctx.cfg);
+    let question = query.queries().first().ok_or(DnsError::WireParseError)?;
     let qname = question.name();
     let qtype = question.query_type();
 

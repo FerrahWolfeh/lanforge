@@ -1,5 +1,8 @@
 use crate::bus::TimedEvent;
-use crate::error::Result;
+use crate::context::LanforgeContext;
+use crate::error::CoreError;
+use std::future::Future;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 /// Supervision metadata for a service.
@@ -51,7 +54,7 @@ pub trait LanforgeService: Send + Sync {
     ///
     /// # Errors
     /// Returns `CoreError` if the shutdown procedure fails.
-    fn on_shutdown(&mut self) -> Result<()> {
+    fn on_shutdown(&mut self) -> Result<(), CoreError> {
         Ok(())
     }
 }
@@ -70,7 +73,7 @@ pub trait AsyncService: LanforgeService {
     ///
     /// # Errors
     /// Returns `CoreError` if the service execution fails and cannot be recovered.
-    fn run(&mut self) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn run(&mut self) -> impl Future<Output = Result<(), CoreError>> + Send;
 }
 
 /// A thread-safe receiver for `EventBus` events in synchronous contexts.
@@ -79,16 +82,13 @@ pub trait AsyncService: LanforgeService {
 /// from the async `EventBus`. Provides convenience methods for common
 /// patterns like shutdown detection and dependency waiting.
 pub struct SyncBusReceiver {
-    rx: std::sync::mpsc::Receiver<TimedEvent>,
-    ctx: crate::context::LanforgeContext,
+    rx: Receiver<TimedEvent>,
+    ctx: LanforgeContext,
 }
 
 impl SyncBusReceiver {
     #[must_use]
-    pub const fn new(
-        rx: std::sync::mpsc::Receiver<TimedEvent>,
-        ctx: crate::context::LanforgeContext,
-    ) -> Self {
+    pub const fn new(rx: Receiver<TimedEvent>, ctx: LanforgeContext) -> Self {
         Self { rx, ctx }
     }
 
@@ -110,7 +110,7 @@ impl SyncBusReceiver {
 
     /// Provides access to the injected `LanforgeContext`.
     #[must_use]
-    pub const fn ctx(&self) -> &crate::context::LanforgeContext {
+    pub const fn ctx(&self) -> &LanforgeContext {
         &self.ctx
     }
 
@@ -141,5 +141,5 @@ pub trait SyncService: LanforgeService {
     ///
     /// # Errors
     /// Returns `CoreError` if the service execution fails.
-    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<()>;
+    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError>;
 }

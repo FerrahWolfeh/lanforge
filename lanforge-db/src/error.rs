@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{io::Error, path::PathBuf};
 use thiserror::Error;
 
 /// Specific error types for the Lanforge database engine.
@@ -6,11 +6,11 @@ use thiserror::Error;
 pub enum LeaseDbError {
     /// Failed to access the database file or directory on disk.
     #[error("I/O failure at {0}: {1}")]
-    PathAccess(PathBuf, #[source] std::io::Error),
+    PathAccess(PathBuf, #[source] Error),
 
     /// Generic I/O error not directly tied to a specific path.
     #[error("Generic I/O failure: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] Error),
 
     /// Failed to open or create the SQLite connection at the specified path.
     #[error("Failed to open SQLite at {0}: {1}")]

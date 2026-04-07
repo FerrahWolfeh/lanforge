@@ -6,15 +6,18 @@
 use rusqlite::{Connection, params};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
+use std::result::Result;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
-use lanforge_core::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
+use lanforge_core::device::{
+    Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
+};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::State;
 use lanforge_core::state::{DeviceUpdate, StaticEntry};
 
-use crate::{LeaseDbError, Result};
+use crate::LeaseDbError;
 
 // ---------------------------------------------------------------------------
 // LeaseDb
@@ -52,7 +55,7 @@ pub struct LeaseDb {
 /// Opens (or creates) the SQLite database at the specified path and runs migrations.
 impl LeaseDb {
     /// Opens (or creates) the SQLite database at the specified path and runs migrations.
-    pub fn open(path: &Path) -> Result<Self> {
+    pub fn open(path: &Path) -> Result<Self, LeaseDbError> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -82,7 +85,7 @@ impl LeaseDb {
 
     /// Creates an in-memory database — exclusively for unit tests.
     #[cfg(test)]
-    pub fn open_in_memory() -> Result<Self> {
+    pub fn open_in_memory() -> Result<Self, LeaseDbError> {
         let mut conn = Connection::open_in_memory()?;
         conn.execute("PRAGMA foreign_keys=ON;", [])?;
 
@@ -175,14 +178,14 @@ impl LeaseDb {
     /// Persists the current state of the `DeviceTable` using structured updates.
     ///
     /// Uses SQL UPSERT for devices and relies on `ON DELETE CASCADE` for child tables.
-    pub fn save_table(&self, table: &State) -> Result<()> {
+    pub fn save_table(&self, table: &State) -> Result<(), LeaseDbError> {
         let tx = self.conn.unchecked_transaction()?;
 
         // 1. Snapshot all MAC strings to detect removals later
         let mut stmt = tx.prepare("SELECT mac FROM devices")?;
         let db_macs: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(Result::ok)
             .collect();
         drop(stmt);
 
@@ -204,13 +207,13 @@ impl LeaseDb {
     }
 
     /// Persists a single device's state to the database atomically.
-    pub fn upsert_device(&self, device: &Device) -> Result<()> {
+    pub fn upsert_device(&self, device: &Device) -> Result<(), LeaseDbError> {
         Self::upsert_device_internal(&self.conn, device)
     }
 
     /// Shared internal logic for upserting a device.
     /// Works with both raw Connections and Transactions.
-    fn upsert_device_internal(conn: &Connection, device: &Device) -> Result<()> {
+    fn upsert_device_internal(conn: &Connection, device: &Device) -> Result<(), LeaseDbError> {
         let mac_str = device.mac.to_string();
         let row = DeviceRow {
             mac: mac_str.clone(),
@@ -325,7 +328,7 @@ impl LeaseDb {
     }
 
     /// Explicitly removes a device from the database by its MAC address.
-    pub fn remove_device(&self, mac: MacAddr) -> Result<()> {
+    pub fn remove_device(&self, mac: MacAddr) -> Result<(), LeaseDbError> {
         let mac_str = mac.to_string();
         self.conn
             .execute("DELETE FROM devices WHERE mac = ?1", params![mac_str])?;
@@ -337,7 +340,7 @@ impl LeaseDb {
     // -----------------------------------------------------------------------
 
     /// Loads the persisted state and returns a fully populated `State`.
-    pub fn load_table(&self) -> Result<State> {
+    pub fn load_table(&self) -> Result<State, LeaseDbError> {
         let mut table = State::new();
 
         // 1. Load base devices
@@ -360,7 +363,7 @@ impl LeaseDb {
                     v6_suffix: row.get(9)?,
                 })
             })?
-            .filter_map(std::result::Result::ok)
+            .filter_map(Result::ok)
             .collect();
         drop(stmt);
 
@@ -370,13 +373,13 @@ impl LeaseDb {
             };
 
             let mut device = Device::new(mac);
-            device.hostname = lanforge_core::device::Hostname {
+            device.hostname = Hostname {
                 name: row.hostname.clone(),
                 origin: match row.hostname_origin {
-                    1 => lanforge_core::device::HostnameOrigin::Mdns,
-                    2 => lanforge_core::device::HostnameOrigin::Dhcp,
-                    3 => lanforge_core::device::HostnameOrigin::Static,
-                    _ => lanforge_core::device::HostnameOrigin::None,
+                    1 => HostnameOrigin::Mdns,
+                    2 => HostnameOrigin::Dhcp,
+                    3 => HostnameOrigin::Static,
+                    _ => HostnameOrigin::None,
                 },
             };
             device.last_seen = unix_to_system_time(row.last_seen);
@@ -437,7 +440,7 @@ impl LeaseDb {
             .prepare("SELECT mac, ip, expires FROM v4_leases")?;
         let v4_rows: Vec<(String, String, i64)> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(Result::ok)
             .collect();
 
         for (mac_str, ip_str, expires_unix) in v4_rows {
@@ -460,7 +463,7 @@ impl LeaseDb {
             .query_map([], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })?
-            .filter_map(std::result::Result::ok)
+            .filter_map(Result::ok)
             .collect();
 
         for (mac_str, iaid, ip_str, expires_unix) in v6_rows {
@@ -495,7 +498,7 @@ impl LeaseDb {
                     row.get(4)?,
                 ))
             })?
-            .filter_map(std::result::Result::ok)
+            .filter_map(Result::ok)
             .collect();
 
         for (mac_str, iaid, prefix_str, len, expires_unix) in px_rows {
@@ -521,7 +524,7 @@ impl LeaseDb {
         let mut stmt = self.conn.prepare("SELECT mac, ip FROM slaac_addrs")?;
         let rows: Vec<(String, String)> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(Result::ok)
             .collect();
         for (m, i) in rows {
             if let Some(mac) = MacAddr::parse(&m)
@@ -534,7 +537,7 @@ impl LeaseDb {
         let mut stmt = self.conn.prepare("SELECT mac, ip FROM seen_v4")?;
         let rows: Vec<(String, String)> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(Result::ok)
             .collect();
         for (m, i) in rows {
             if let Some(mac) = MacAddr::parse(&m)
@@ -549,7 +552,7 @@ impl LeaseDb {
     }
 
     /// Executes the VACUUM command to optimize the database file on disk.
-    pub fn vacuum(&self) -> Result<()> {
+    pub fn vacuum(&self) -> Result<(), LeaseDbError> {
         debug!("Executando VACUUM no SQLite...");
         self.conn
             .execute("VACUUM", [])
@@ -564,7 +567,7 @@ impl LeaseDb {
         ip: &str,
         lease_type: &str,
         action: LeaseAction,
-    ) -> Result<()> {
+    ) -> Result<(), LeaseDbError> {
         let now = system_time_to_unix(SystemTime::now());
         self.conn.execute(
             "INSERT INTO lease_history (mac, ip, lease_type, action, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -574,7 +577,7 @@ impl LeaseDb {
     }
 
     /// Retrieves the lease history for a specific device.
-    pub fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>> {
+    pub fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>, LeaseDbError> {
         let mut stmt = self.conn.prepare(
             "SELECT ip, lease_type, action, timestamp FROM lease_history WHERE mac = ?1 ORDER BY timestamp DESC LIMIT 100"
         )?;
@@ -627,7 +630,7 @@ impl LeaseAction {
 
 impl std::str::FromStr for LeaseAction {
     type Err = ();
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "assigned" => Ok(Self::Assigned),
             "renewed" => Ok(Self::Renewed),

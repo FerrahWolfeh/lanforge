@@ -5,18 +5,21 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use lanforge_core::identifiers::MacAddr;
 use lanforge_core::{
-    device::{Ipv6AddrOrSuffix, Origin},
+    bus::LanforgeEvent,
+    device::{Device, Ipv6AddrOrSuffix, Origin},
+    error::CoreError,
     service::ServiceMeta,
     state::{DeviceUpdate, FieldUpdate},
 };
-use lanforge_core::{error::CoreError, identifiers::MacAddr};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     time::Duration,
 };
+use tokio::net::TcpListener;
 use tracing::info;
 
 /// State shared across Axum handlers.
@@ -102,17 +105,16 @@ impl AsyncService for HttpService {
             .route("/status", get(handle_status))
             .with_state(state);
 
-        let tcp_listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
-            lanforge_core::error::CoreError::Generic(format!("Failed to bind to {}: {}", addr, e))
-        })?;
+        let tcp_listener = TcpListener::bind(&addr)
+            .await
+            .map_err(|e| CoreError::Generic(format!("Failed to bind to {}: {}", addr, e)))?;
 
         let ctx_shutdown = self.ctx.clone();
         axum::serve(tcp_listener, app)
             .with_graceful_shutdown(async move {
                 let mut rx = ctx_shutdown.bus().subscribe();
                 while let Ok(event) = rx.recv().await {
-                    if !ctx_shutdown.is_running()
-                        || matches!(event.event, lanforge_core::bus::LanforgeEvent::Shutdown)
+                    if !ctx_shutdown.is_running() || matches!(event.event, LanforgeEvent::Shutdown)
                     {
                         info!("HTTP: shutdown signal received");
                         break;
@@ -120,9 +122,7 @@ impl AsyncService for HttpService {
                 }
             })
             .await
-            .map_err(|e| {
-                lanforge_core::error::CoreError::Generic(format!("Axum server error: {}", e))
-            })?;
+            .map_err(|e| CoreError::Generic(format!("Axum server error: {}", e)))?;
 
         Ok(())
     }
@@ -193,11 +193,11 @@ async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     let total = devices.len();
     let online = devices
         .iter()
-        .filter(|d: &&Arc<lanforge_core::device::Device>| d.is_online())
+        .filter(|d: &&Arc<Device>| d.is_online())
         .count();
     let static_ct = devices
         .iter()
-        .filter(|d: &&Arc<lanforge_core::device::Device>| d.is_static())
+        .filter(|d: &&Arc<Device>| d.is_static())
         .count();
 
     Json(serde_json::json!({

@@ -5,6 +5,15 @@ use tokio::net::UnixStream;
 use crate::args::Command;
 use crate::cli::commands::CliCommand;
 use crate::cli::commands::GenericHandler;
+use crate::cli::commands::db::DbHandler;
+use crate::cli::commands::devices::DevicesHandler;
+use crate::cli::commands::dns::DnsCommand;
+use crate::cli::commands::host::HostHandler;
+use crate::cli::commands::lease::LeaseHandler;
+use crate::cli::commands::log::LogHandler;
+use crate::cli::commands::status::StatusHandler;
+use crate::cli::commands::whois::WhoisHandler;
+use crate::cli::commands::wol::WolCommand;
 use lanforge_api::api::Response;
 
 pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
@@ -16,7 +25,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
     let mut reader = BufReader::new(reader);
 
     let mut handler: Box<dyn CliCommand> = match command {
-        Command::Status => Box::new(crate::cli::commands::status::StatusHandler),
+        Command::Status => Box::new(StatusHandler),
         Command::Devices {
             verbose,
             filter,
@@ -24,7 +33,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             method,
             format,
             sort,
-        } => Box::new(crate::cli::commands::devices::DevicesHandler {
+        } => Box::new(DevicesHandler {
             verbose,
             filter,
             vendor,
@@ -32,12 +41,10 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             format,
             sort,
         }),
-        Command::Host { action } => Box::new(crate::cli::commands::host::HostHandler { action }),
-        Command::Lease { action } => Box::new(crate::cli::commands::lease::LeaseHandler { action }),
-        Command::Db { action } => Box::new(crate::cli::commands::db::DbHandler { action }),
-        Command::Log { follow, verbose } => {
-            Box::new(crate::cli::commands::log::LogHandler { follow, verbose })
-        }
+        Command::Host { action } => Box::new(HostHandler { action }),
+        Command::Lease { action } => Box::new(LeaseHandler { action }),
+        Command::Db { action } => Box::new(DbHandler { action }),
+        Command::Log { follow, verbose } => Box::new(LogHandler { follow, verbose }),
         Command::Reload => Box::new(GenericHandler {
             cmd: lanforge_api::api::Command::Reload,
             streaming: false,
@@ -54,9 +61,9 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             cmd: lanforge_api::api::Command::Purge { mac },
             streaming: false,
         }),
-        Command::Wol { target } => Box::new(crate::cli::commands::wol::WolCommand { target }),
-        Command::Whois { target } => Box::new(crate::cli::commands::whois::WhoisHandler { target }),
-        Command::Dns { action } => Box::new(crate::cli::commands::dns::DnsCommand { action }),
+        Command::Wol { target } => Box::new(WolCommand { target }),
+        Command::Whois { target } => Box::new(WhoisHandler { target }),
+        Command::Dns { action } => Box::new(DnsCommand { action }),
     };
 
     let mut control_cmd = match handler.prepare() {
@@ -81,9 +88,8 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             break;
         }
 
-        let response: Response = serde_json::from_str(&response_line).with_context(|| {
-            format!("Failed to parse response from daemon: {response_line}")
-        })?;
+        let response: Response = serde_json::from_str(&response_line)
+            .with_context(|| format!("Failed to parse response from daemon: {response_line}"))?;
 
         if let Some(next_cmd) = handler.on_response(&response)? {
             control_cmd = next_cmd;

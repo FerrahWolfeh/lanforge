@@ -33,12 +33,12 @@ pub mod server;
 
 use dhcproto::v4::{Message, Opcode};
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{DeviceChange, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::{DeviceUpdate, LeaseTarget};
 use socket2::{Domain, Protocol, Socket, Type};
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
 
@@ -152,7 +152,7 @@ impl Dhcpv4Service {
         data: &[u8],
         server: &mut DhcpServer,
         raw_tx: &mut RawSender,
-        socket: &std::net::UdpSocket,
+        socket: &UdpSocket,
     ) {
         if let Ok(msg) = Message::decode(&mut Decoder::new(data))
             && msg.opcode() == Opcode::BootRequest
@@ -229,7 +229,6 @@ impl Dhcpv4Service {
         server: &mut DhcpServer,
         raw_tx: &mut RawSender,
     ) -> Result<(), CoreError> {
-        use lanforge_core::bus::DeviceChange;
         match event {
             LanforgeEvent::LeaseRelease {
                 mac,
@@ -276,7 +275,7 @@ impl Dhcpv4Service {
 }
 
 /// Binds UDP with `SO_BROADCAST` and `SO_BINDTODEVICE`. (Sync version)
-fn bind_dhcp_socket_sync(iface: &str, port: u16) -> Result<std::net::UdpSocket, NetworkError> {
+fn bind_dhcp_socket_sync(iface: &str, port: u16) -> Result<UdpSocket, NetworkError> {
     let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
 
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))

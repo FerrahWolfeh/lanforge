@@ -1,9 +1,12 @@
 use super::CliCommand;
+use chrono::DateTime;
+use chrono::Local;
 use color_eyre::eyre::Result;
 use colored::*;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
 use lanforge_api::api::SimpleSuccess;
+use lanforge_core::bus::TimedEvent;
 use lanforge_core::bus::{DeviceChange, LanforgeEvent};
 use lanforge_core::state::LeaseTarget;
 
@@ -39,8 +42,8 @@ impl CliCommand for LogHandler {
 }
 
 impl LogHandler {
-    fn print_event(&self, timed_event: &lanforge_core::bus::TimedEvent) {
-        let now = chrono::DateTime::<chrono::Local>::from(timed_event.timestamp)
+    fn print_event(&self, timed_event: &TimedEvent) {
+        let now = DateTime::<Local>::from(timed_event.timestamp)
             .format("%H:%M:%S")
             .to_string()
             .dimmed();
