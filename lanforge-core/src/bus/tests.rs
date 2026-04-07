@@ -131,10 +131,11 @@ async fn cli_host_update_publishes_events() {
 
     assert!(
         events.iter().any(|e| matches!(
-            e.event,
+            &e.event,
             LanforgeEvent::DeviceUpdated {
                 mac: _,
-                change: DeviceChange::HostnameChanged { .. }
+                change: DeviceChange::HostnameChanged { .. },
+                hostname: _
             }
         )),
         "Deve publicar HostnameChanged"
@@ -155,10 +156,11 @@ async fn cli_host_update_publishes_events() {
 
     assert!(
         events.iter().any(|e| matches!(
-            e.event,
+            &e.event,
             LanforgeEvent::DeviceUpdated {
                 mac: _,
-                change: DeviceChange::V4StaticChanged { .. }
+                change: DeviceChange::V4StaticChanged { .. },
+                hostname: _
             }
         )),
         "Deve publicar V4StaticChanged"

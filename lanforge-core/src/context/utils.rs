@@ -57,7 +57,9 @@ pub(crate) fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         | DeviceUpdate::MdnsHostnameHint { hostname, .. } => Some(DeviceChange::HostnameChanged {
             hostname: hostname.clone(),
         }),
-        DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),
+        DeviceUpdate::DuidAssociated { duid, .. } => {
+            Some(DeviceChange::DuidAssociated { duid: duid.clone() })
+        }
         DeviceUpdate::NdpSeen { ip, .. } => Some(DeviceChange::NdpActivity { ip: *ip }),
         DeviceUpdate::ArpSeen { ip, .. } => Some(DeviceChange::ArpActivity { ip: *ip }),
         DeviceUpdate::IpOffline { .. } => Some(DeviceChange::StatusChanged {

@@ -843,7 +843,7 @@ impl State {
         );
     }
 
-    pub fn expire_stale(&mut self) -> Vec<(MacAddr, DeviceChange)> {
+    pub fn expire_stale(&mut self) -> Vec<(MacAddr, Option<String>, DeviceChange)> {
         let now = SystemTime::now();
         let max_age = Duration::from_secs(7 * 24 * 3600);
         let ndp_max_age = Duration::from_secs(24 * 3600);
@@ -856,7 +856,7 @@ impl State {
 
         let macs: Vec<_> = self.devices.keys().copied().collect();
         for mac in macs {
-            if let Some(dev_arc) = self.devices.get(&mac) {
+            if let Some(dev_arc) = self.devices.get(&mac).cloned() {
                 let v4_expired = if let IPv4State::Dynamic(lease) = &dev_arc.v4 {
                     lease.expires < now
                 } else {
@@ -876,21 +876,30 @@ impl State {
                     .filter_map(|p| if p.expires < now { Some(p.iaid) } else { None })
                     .collect();
 
-                if v4_expired || !v6_expired_iaids.is_empty() || !prefix_expired_iaids.is_empty() {
-                    let mut dev = (**dev_arc).clone();
+                let (v4_updated, v6_updated, prefix_updated) = (
+                    v4_expired,
+                    !v6_expired_iaids.is_empty(),
+                    !prefix_expired_iaids.is_empty(),
+                );
+
+                let final_dev = if v4_updated || v6_updated || prefix_updated {
+                    let mut dev = (*dev_arc).clone();
                     if v4_expired {
                         dev.v4 = IPv4State::None;
                         events.push((
                             mac,
+                            dev_arc.hostname.name.clone().into(),
                             DeviceChange::LeaseExpired {
                                 target: LeaseTarget::V4,
                             },
                         ));
                     }
                     for iaid in v6_expired_iaids {
-                        dev.v6.retain(|state| !matches!(state, IPv6State::Dynamic(lease) if lease.iaid == iaid));
+                        dev.v6
+                            .retain(|state| !matches!(state, IPv6State::Dynamic(lease) if lease.iaid == iaid));
                         events.push((
                             mac,
+                            dev_arc.hostname.name.clone().into(),
                             DeviceChange::LeaseExpired {
                                 target: LeaseTarget::V6 { iaid },
                             },
@@ -900,28 +909,35 @@ impl State {
                         dev.v6_prefixes.retain(|p| p.iaid != iaid);
                         events.push((
                             mac,
+                            dev_arc.hostname.name.clone().into(),
                             DeviceChange::LeaseExpired {
                                 target: LeaseTarget::V6Prefix { iaid },
                             },
                         ));
                     }
-                    self.devices.insert(mac, Arc::new(dev));
+                    let new_arc = Arc::new(dev);
+                    self.devices.insert(mac, new_arc.clone());
                     changed = true;
-                }
+                    new_arc
+                } else {
+                    dev_arc
+                };
 
-                if let Some(dev) = self.devices.get(&mac)
-                    && !dev.is_static()
-                    && matches!(dev.v4, IPv4State::None)
-                    && dev.v6.is_empty()
-                    && dev.v6_prefixes.is_empty()
-                    && dev.last_seen.elapsed().unwrap_or(Duration::ZERO) > max_age
+                if !final_dev.is_static()
+                    && matches!(final_dev.v4, IPv4State::None)
+                    && final_dev.v6.is_empty()
+                    && final_dev.v6_prefixes.is_empty()
+                    && final_dev.last_seen.elapsed().unwrap_or(Duration::ZERO) > max_age
+                    && let Some(removed_dev) = self.devices.remove(&mac)
                 {
-                    if let Some(dev) = self.devices.remove(&mac)
-                        && let Some(duid) = &dev.duid
-                    {
+                    if let Some(duid) = &removed_dev.duid {
                         self.duid_index.remove(duid);
                     }
-                    events.push((mac, DeviceChange::HostRemoved));
+                    events.push((
+                        mac,
+                        Some(removed_dev.hostname.name.clone()),
+                        DeviceChange::HostRemoved,
+                    ));
                     changed = true;
                 }
             }

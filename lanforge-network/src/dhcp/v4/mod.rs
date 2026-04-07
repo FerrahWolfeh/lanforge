@@ -37,6 +37,7 @@ use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::{DeviceUpdate, LeaseTarget};
+use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
@@ -253,6 +254,7 @@ impl Dhcpv4Service {
             LanforgeEvent::DeviceUpdated {
                 mac,
                 change: DeviceChange::V4StaticChanged { ip },
+                ..
             } => match ip {
                 Some(v) => {
                     info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
@@ -277,12 +279,8 @@ impl Dhcpv4Service {
 fn bind_dhcp_socket_sync(iface: &str, port: u16) -> Result<std::net::UdpSocket, NetworkError> {
     let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
 
-    let sock = socket2::Socket::new(
-        socket2::Domain::IPV4,
-        socket2::Type::DGRAM,
-        Some(socket2::Protocol::UDP),
-    )
-    .map_err(|e| NetworkError::Socket(format!("socket(AF_INET, SOCK_DGRAM): {e}")))?;
+    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
+        .map_err(|e| NetworkError::Socket(format!("socket(AF_INET, SOCK_DGRAM): {e}")))?;
 
     sock.set_reuse_address(true)?;
     sock.set_broadcast(true)?;

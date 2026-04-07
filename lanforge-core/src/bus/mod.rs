@@ -83,7 +83,7 @@ pub enum DeviceChange {
     },
 
     /// A DUID was successfully associated with this device's MAC.
-    DuidAssociated,
+    DuidAssociated { duid: crate::identifiers::Duid },
 
     /// A neighbor was observed via NDP (IPv6) but no SLAAC address was extracted.
     NdpActivity { ip: Ipv6Addr },
@@ -135,7 +135,11 @@ pub enum LanforgeEvent {
         hostname: Option<String>,
     },
     /// An existing device's state was modified.
-    DeviceUpdated { mac: MacAddr, change: DeviceChange },
+    DeviceUpdated {
+        mac: MacAddr,
+        hostname: Option<String>,
+        change: DeviceChange,
+    },
     /// A device was removed (typically because it was inactive for too long).
     DeviceExpired { mac: MacAddr },
     /// A device was explicitly purged from memory.

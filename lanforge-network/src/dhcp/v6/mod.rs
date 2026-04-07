@@ -287,6 +287,7 @@ impl Dhcpv6Service {
             LanforgeEvent::DeviceUpdated {
                 mac,
                 change: DeviceChange::V6SuffixChanged { suffix },
+                ..
             } => {
                 if let Some(s) = suffix {
                     info!("DHCPv6: New static reservation handled globally for {mac} -> {s}");

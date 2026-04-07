@@ -96,7 +96,11 @@ impl LanforgeContext {
                     *hostname = dev.as_ref().map(|d| d.hostname.name.clone());
                 }
 
-                events.push(LanforgeEvent::DeviceUpdated { mac, change });
+                events.push(LanforgeEvent::DeviceUpdated {
+                    mac,
+                    change,
+                    hostname: hostname.clone(),
+                });
             }
             if let Some(was) = was_online
                 && was != now_online
@@ -105,8 +109,9 @@ impl LanforgeContext {
                     mac,
                     change: DeviceChange::StatusChanged {
                         online: now_online,
-                        hostname,
+                        hostname: hostname.clone(),
                     },
+                    hostname,
                 });
             }
             if let DeviceUpdate::HostRemoved { .. } = update {
@@ -307,11 +312,12 @@ impl LanforgeContext {
         };
 
         if !dead_leases.is_empty() {
-            for (mac, change) in dead_leases {
-                let _ = self
-                    .inner
-                    .bus
-                    .publish(LanforgeEvent::DeviceUpdated { mac, change });
+            for (mac, hostname, change) in dead_leases {
+                let _ = self.inner.bus.publish(LanforgeEvent::DeviceUpdated {
+                    mac,
+                    hostname,
+                    change,
+                });
             }
             let _ = self.inner.bus.publish(LanforgeEvent::DeviceTableDirty);
         }

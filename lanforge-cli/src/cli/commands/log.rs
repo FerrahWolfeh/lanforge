@@ -5,6 +5,7 @@ use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
 use lanforge_api::api::SimpleSuccess;
 use lanforge_core::bus::{DeviceChange, LanforgeEvent};
+use lanforge_core::state::LeaseTarget;
 
 pub struct LogHandler {
     pub follow: bool,
@@ -46,19 +47,30 @@ impl LogHandler {
 
         match event {
             LanforgeEvent::DeviceDiscovered { mac, hostname } => {
-                let name = hostname.as_deref().unwrap_or("unknown");
+                let name = hostname
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("unknown");
                 println!(
                     "[{}] {} {} {} ({})",
                     now,
                     "NEW".green().bold(),
                     "Device discovered:".white(),
-                    mac.to_string().bright_yellow(),
-                    name.bold()
+                    name.bold().bright_yellow(),
+                    mac.to_string().dimmed()
                 );
             }
-            LanforgeEvent::DeviceUpdated { mac, change } => {
-                if let DeviceChange::StatusChanged { online, hostname } = change {
-                    let name = hostname.as_deref().unwrap_or("unknown");
+            LanforgeEvent::DeviceUpdated {
+                mac,
+                hostname,
+                change,
+            } => {
+                let name = hostname
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("unknown");
+
+                if let DeviceChange::StatusChanged { online, .. } = change {
                     let status = if *online {
                         "ONLINE".bright_green().bold()
                     } else {
@@ -75,10 +87,11 @@ impl LogHandler {
                 } else {
                     let change_str = self.format_change(change);
                     println!(
-                        "[{}] {} {} -> {}",
+                        "[{}] {} {} ({}) -> {}",
                         now,
                         "UPD".blue().bold(),
-                        mac.to_string().bright_yellow(),
+                        name.bright_yellow(),
+                        mac.to_string().dimmed(),
                         change_str
                     );
                 }
@@ -261,7 +274,16 @@ impl LogHandler {
                 format!("IPv4 assigned: {}", ip.to_string().bright_cyan())
             }
             DeviceChange::LeaseExpired { target } => {
-                format!("Lease expired ({:?})", target).dimmed().to_string()
+                let target_str = match target {
+                    LeaseTarget::V4 => "IPv4 lease".to_string(),
+                    LeaseTarget::V6 { iaid } => {
+                        format!("IPv6 lease (IAID: {iaid})")
+                    }
+                    LeaseTarget::V6Prefix { iaid } => {
+                        format!("IPv6 Prefix (IAID: {iaid})")
+                    }
+                };
+                format!("{} expired", target_str).dimmed().to_string()
             }
             DeviceChange::SlaacObserved { addr } => {
                 format!("SLAAC observed: {}", addr.to_string().bright_magenta())
@@ -275,7 +297,9 @@ impl LogHandler {
                 Some(s) => format!("Static IPv6 suffix set: {}", s.to_string().bold()),
                 None => "Static IPv6 suffix removed".dimmed().to_string(),
             },
-            DeviceChange::DuidAssociated => "DUID associated".to_string(),
+            DeviceChange::DuidAssociated { duid } => {
+                format!("DUID associated: {}", duid.to_string().cyan())
+            }
             DeviceChange::V6Assigned { ip, .. } => {
                 format!("IPv6 assigned: {}", ip.to_string().bright_cyan())
             }
@@ -294,17 +318,16 @@ impl LogHandler {
             }
             DeviceChange::HostRemoved => "Host removed".red().to_string(),
             DeviceChange::NdpActivity { ip } => {
-                format!("NDP Activity: {}", ip.to_string().bright_magenta())
+                format!("Neighbor seen at {}", ip.to_string().bright_magenta())
             }
             DeviceChange::ArpActivity { ip } => {
-                format!("ARP Activity: {}", ip.to_string().bright_cyan())
+                format!("Neighbor seen at {}", ip.to_string().bright_cyan())
             }
-            DeviceChange::StatusChanged { online, hostname } => {
-                let name = hostname.as_deref().unwrap_or("unknown");
+            DeviceChange::StatusChanged { online, .. } => {
                 if *online {
-                    format!("{} is {}", name.bold(), "Online".bright_green().bold())
+                    format!("is now {}", "Online".bright_green().bold())
                 } else {
-                    format!("{} has gone {}", name.bold(), "Offline".red().bold())
+                    format!("has gone {}", "Offline".red().bold())
                 }
             }
         }
