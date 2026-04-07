@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(name = "lanforge-cli", version, about = "Lanforge Control CLI", long_about = None)]
@@ -30,6 +30,8 @@ pub enum Command {
         method: Option<String>,
         #[arg(long)]
         format: Option<String>,
+        #[arg(short, long, value_enum, default_value_t = SortMode::LastSeen)]
+        sort: SortMode,
     },
     /// Live view reativo via socket (sem polling)
     Watch,
@@ -127,4 +129,20 @@ pub enum HostCommand {
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DbCommand {
     Vacuum,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    /// Sort by MAC address
+    Mac,
+    /// Sort by hostname
+    Host,
+    /// Sort by last seen timestamp
+    LastSeen,
+    /// Sort by IPv4 address
+    Ip,
+    /// Sort by IPv6 address
+    Ipv6,
+    /// Sort by online status
+    Online,
 }

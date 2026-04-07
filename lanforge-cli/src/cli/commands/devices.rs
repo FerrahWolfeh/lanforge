@@ -1,4 +1,5 @@
 use super::{CliCommand, format_relative_iso8601};
+use crate::args::SortMode;
 use crate::cli::vendor::resolve_vendor;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
@@ -13,6 +14,7 @@ pub struct DevicesHandler {
     pub vendor: Option<String>,
     pub method: Option<String>,
     pub format: Option<String>,
+    pub sort: SortMode,
 }
 
 impl CliCommand for DevicesHandler {
@@ -28,17 +30,16 @@ impl CliCommand for DevicesHandler {
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::Devices(resp) => {
+                let mut owned_resp = resp.clone();
                 if let Some(v) = &self.vendor {
                     let v_lower = v.to_lowercase();
-                    let mut owned_resp = resp.clone();
                     owned_resp.devices.retain(|d| {
                         resolve_vendor(&d.mac)
                             .is_some_and(|name| name.to_lowercase().contains(&v_lower))
                     });
-                    render_devices(&owned_resp, self.verbose);
-                } else {
-                    render_devices(resp, self.verbose);
                 }
+                sort_devices(&mut owned_resp.devices, self.sort);
+                render_devices(&owned_resp, self.verbose);
             }
             Response::Error { error } => {
                 println!("Error: {error}");
@@ -79,14 +80,14 @@ pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
             View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
                 // Header
                 View(flex_direction: FlexDirection::Row, border_style: BorderStyle::None, padding_bottom: 0) {
-                    Text(content: format!("  {:<20}", "HOST"), color: Color::DarkGrey)
+                    Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
                     Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
                     Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
-                    Text(content: format!("{:<30}", "IPv6 / SLAAC"), color: Color::DarkGrey)
+                    Text(content: format!("{:<41}", "IPv6 / SLAAC"), color: Color::DarkGrey)
                     Text(content: "VENDOR", color: Color::DarkGrey)
                 }
                 // Separator
-                Text(content: "─".repeat(100), color: Color::DarkGrey)
+                Text(content: "─".repeat(124), color: Color::DarkGrey)
 
                 // Rows
                 View(flex_direction: FlexDirection::Column) {
@@ -123,7 +124,7 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
     element! {
         View(flex_direction: FlexDirection::Row) {
             Text(content: "● ", color: status_color)
-            Text(content: format!("{:<20}", truncate(&host, 20)))
+            Text(content: format!("{:<23}", truncate(&host, 20)))
             Text(content: format!("{:<20}", dev.mac), color: Color::Cyan)
             Text(content: format!("{:<18}", dev.display_v4), color: Color::Green)
             Text(content: format!("{:<41}", dev.display_v6), color: Color::Yellow)
@@ -201,6 +202,29 @@ fn truncate(s: &str, max_width: usize) -> String {
     } else {
         s.to_string()
     }
+}
+
+fn sort_devices(devices: &mut [DeviceEntry], mode: SortMode) {
+    devices.sort_by(|a, b| match mode {
+        SortMode::Mac => a.mac.cmp(&b.mac),
+        SortMode::Host => {
+            if a.hostname.is_empty() && !b.hostname.is_empty() {
+                std::cmp::Ordering::Greater
+            } else if !a.hostname.is_empty() && b.hostname.is_empty() {
+                std::cmp::Ordering::Less
+            } else {
+                a.hostname.to_lowercase().cmp(&b.hostname.to_lowercase())
+            }
+        }
+        SortMode::LastSeen => b.last_seen.cmp(&a.last_seen).then(b.online.cmp(&a.online)),
+        SortMode::Ip => a.display_v4.cmp(&b.display_v4),
+        SortMode::Ipv6 => a.display_v6.cmp(&b.display_v6),
+        SortMode::Online => b
+            .online
+            .cmp(&a.online)
+            .then(b.last_seen.cmp(&a.last_seen))
+            .then(a.hostname.cmp(&b.hostname)),
+    });
 }
 
 #[derive(Props, Clone, Default)]
