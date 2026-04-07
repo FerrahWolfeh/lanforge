@@ -3,6 +3,7 @@ use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{Command as ControlCommand, Response, WhoisResponse};
 use lanforge_core::device::Origin;
+use crate::cli::vendor::resolve_vendor;
 
 pub struct WhoisHandler {
     pub target: String,
@@ -54,7 +55,7 @@ pub fn render_whois(resp: &WhoisResponse) {
         View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Vendor:    ", color: Color::DarkGrey)
-                Text(content: dev.vendor.as_deref().unwrap_or("Unknown"))
+                Text(content: resolve_vendor(&dev.mac).unwrap_or_else(|| "Unknown".to_string()))
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Method:    ", color: Color::DarkGrey)

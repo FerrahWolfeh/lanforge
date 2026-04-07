@@ -29,4 +29,3 @@ pub mod ndp;
 pub mod service;
 pub mod state;
 pub mod utils;
-pub mod vendor;

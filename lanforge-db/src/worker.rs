@@ -76,6 +76,7 @@ impl SyncService for DbWorker {
                                 warn!("DB worker: failed to upsert device {mac}: {e}");
                             } else {
                                 debug!("DB worker: device {mac} persisted (granular)");
+                                self.ctx.record_db_flush();
                             }
                         }
                     }
@@ -84,6 +85,7 @@ impl SyncService for DbWorker {
                             warn!("DB worker: failed to remove device {mac}: {e}");
                         } else {
                             debug!("DB worker: device {mac} removed from DB");
+                            self.ctx.record_db_flush();
                         }
                     }
                     LanforgeEvent::DeviceTableDirty => {
@@ -93,6 +95,7 @@ impl SyncService for DbWorker {
                             warn!("DB worker: failed to save snapshot: {e}");
                         } else {
                             debug!("DB worker: full snapshot persisted");
+                            self.ctx.record_db_flush();
                         }
                     }
                     LanforgeEvent::DbVacuum => {
@@ -100,6 +103,7 @@ impl SyncService for DbWorker {
                             warn!("DB worker: failed to execute VACUUM: {e}");
                         } else {
                             info!("DB worker: VACUUM completed");
+                            self.ctx.record_db_flush();
                         }
                     }
                     LanforgeEvent::Shutdown => {

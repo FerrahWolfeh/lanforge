@@ -858,6 +858,7 @@ mod tests {
             ula: Some(ula),
             preferred: 3600,
             valid: 3600,
+            v4: None,
         });
 
         let cfg = Dhcpv6Config {

@@ -507,15 +507,11 @@ pub struct Device {
 
     /// `DHCPv6` Unique Identifier (DUID), if tracked.
     pub duid: Option<Duid>,
-    /// The resolved vendor name from OUI.
-    pub vendor: Option<String>,
 }
 
 impl Device {
-    /// Creates a new device with the given MAC and default values.
     #[must_use]
     pub fn new(mac: MacAddr) -> Self {
-        let vendor = crate::vendor::resolve_vendor(&mac);
         Self {
             mac,
             hostname: Hostname::default(),
@@ -527,20 +523,12 @@ impl Device {
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
             duid: None,
-            vendor,
         }
     }
 
-    /// Returns true if the device's configuration is persistent (Toml or Cli).
     #[must_use]
     pub const fn is_static(&self) -> bool {
         self.origin.is_static()
-    }
-
-    /// Returns the vendor name as a string slice, if available.
-    #[must_use]
-    pub fn vendor(&self) -> Option<&str> {
-        self.vendor.as_deref()
     }
 
     /// Returns true if the device has enough "meaningful" information to be officially
@@ -832,7 +820,6 @@ mod tests {
             v6_prefixes: Vec::new(),
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
-            vendor: None,
         };
 
         let sorted = dev.all_addresses_sorted(None, None);

@@ -10,6 +10,7 @@ use crate::state::State;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 
 pub mod read;
 pub mod state;
@@ -29,6 +30,7 @@ struct LanforgeContextInner {
     db_ready: AtomicBool,
     if_ready: AtomicBool,
     dns_stats: RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
+    last_db_flush: RwLock<Option<SystemTime>>,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -45,6 +47,7 @@ impl LanforgeContext {
                 db_ready: AtomicBool::new(false),
                 if_ready: AtomicBool::new(false),
                 dns_stats: RwLock::new(None),
+                last_db_flush: RwLock::new(None),
             }),
         }
     }
@@ -59,6 +62,17 @@ impl LanforgeContext {
     #[must_use]
     pub fn bus(&self) -> Arc<EventBus> {
         self.inner.bus.clone()
+    }
+
+    /// Records a new database flush timestamp.
+    pub fn record_db_flush(&self) {
+        *self.inner.last_db_flush.write() = Some(SystemTime::now());
+    }
+
+    /// Returns the last database flush time, if any.
+    #[must_use]
+    pub fn last_db_flush(&self) -> Option<SystemTime> {
+        *self.inner.last_db_flush.read()
     }
 }
 

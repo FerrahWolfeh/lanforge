@@ -78,6 +78,7 @@ impl LanforgeContext {
 
         if let DeviceUpdate::InterfaceIpsChanged {
             ifindex,
+            v4: _,
             gua,
             ula,
             preferred,
@@ -198,6 +199,7 @@ impl LanforgeContext {
     pub fn signal_interface_update(
         &self,
         ifindex: u32,
+        v4: Option<(Ipv4Addr, u8)>,
         link_local: Option<Ipv6Addr>,
         gua: Option<Ipv6Addr>,
         ula: Option<Ipv6Addr>,
@@ -206,6 +208,7 @@ impl LanforgeContext {
     ) -> bool {
         self.apply(&DeviceUpdate::InterfaceIpsChanged {
             ifindex,
+            v4,
             link_local,
             gua,
             ula,
@@ -225,6 +228,7 @@ impl LanforgeContext {
     ) -> bool {
         self.apply(&DeviceUpdate::InterfaceIpsChanged {
             ifindex,
+            v4: None,
             link_local: None,
             gua: Some(gua),
             ula: None,

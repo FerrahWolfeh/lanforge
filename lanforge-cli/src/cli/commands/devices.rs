@@ -1,4 +1,5 @@
 use super::{CliCommand, format_relative_iso8601};
+use crate::cli::vendor::resolve_vendor;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::Command as ControlCommand;
@@ -29,7 +30,17 @@ impl CliCommand for DevicesHandler {
     fn on_response(&self, response: &Response) -> Result<()> {
         match response {
             Response::Devices(resp) => {
-                render_devices(resp, self.verbose);
+                if let Some(v) = &self.vendor {
+                    let v_lower = v.to_lowercase();
+                    let mut owned_resp = resp.clone();
+                    owned_resp.devices.retain(|d| {
+                        resolve_vendor(&d.mac)
+                            .is_some_and(|name| name.to_lowercase().contains(&v_lower))
+                    });
+                    render_devices(&owned_resp, self.verbose);
+                } else {
+                    render_devices(resp, self.verbose);
+                }
             }
             Response::Error { error } => {
                 println!("Erro: {error}");
@@ -169,7 +180,7 @@ fn build_device_row(dev: &DeviceEntry) -> DeviceRow {
         mac: dev.mac.clone(),
         v4: dev.display_v4.clone(),
         v6: dev.display_v6.clone(),
-        vendor: dev.vendor.as_deref().unwrap_or("—").to_string(),
+        vendor: resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string()),
         status,
     }
 }
@@ -244,7 +255,7 @@ fn render_verbose_device(dev: &DeviceEntry) {
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "Vendor     ", color: Color::DarkGrey)
-                    Text(content: dev.vendor.as_deref().unwrap_or("—"))
+                    Text(content: resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string()))
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "Method     ", color: Color::DarkGrey)

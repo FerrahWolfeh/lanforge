@@ -250,7 +250,7 @@ impl LanforgeService for NdpMonitor {
     fn meta(&self) -> ServiceMeta {
         ServiceMeta {
             id: "monitor",
-            display_name: "NdpMonitor",
+            display_name: "NDP Monitor",
             critical: true,
             max_retries: 0,
             base_backoff: Duration::from_secs(2),

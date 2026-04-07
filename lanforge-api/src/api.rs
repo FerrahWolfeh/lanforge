@@ -157,7 +157,7 @@ pub struct Interfaces {
 }
 
 /// A response containing a list of devices and metadata.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DevicesResponse {
     /// The list of device entries.
     pub devices: Vec<DeviceEntry>,
@@ -166,14 +166,14 @@ pub struct DevicesResponse {
 }
 
 /// A response containing a list of manually configured hosts.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HostsResponse {
     /// The list of host configurations.
     pub hosts: Vec<HostConfigEntry>,
 }
 
 /// A single entry in the host configuration list.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HostConfigEntry {
     /// MAC address identifying the device.
     pub mac: String,
@@ -188,7 +188,7 @@ pub struct HostConfigEntry {
 }
 
 /// A single device discovered on the network.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DeviceEntry {
     /// Device MAC address.
     pub mac: String,
@@ -214,10 +214,7 @@ pub struct DeviceEntry {
     pub v6: Option<LeaseInfo>,
     /// List of IPv6 addresses (SLAAC, GUA, etc.) tracked for this device.
     pub ipv6_addrs: Vec<Ipv6Entry>,
-    /// The primary method used to discover this device.
     pub learning_method: String,
-    /// The resolved vendor name from OUI, if available.
-    pub vendor: Option<String>,
 }
 
 /// A single IPv6 address entry with its type category.
@@ -230,7 +227,7 @@ pub struct Ipv6Entry {
 }
 
 /// Details about a DHCP lease.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LeaseInfo {
     /// Assigned IP address.
     pub ip: String,
@@ -241,7 +238,7 @@ pub struct LeaseInfo {
 }
 
 /// Statistical metadata for a devices list response.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DevicesMeta {
     /// Total number of devices in the database.
     pub total: usize,
@@ -264,6 +261,8 @@ pub struct StatusResponse {
     pub db: DbStatus,
     /// Local network interface and prefix status.
     pub network: NetworkStatus,
+    /// Usage of system resources (CPU, Memory).
+    pub resources: ResourcesStatus,
     /// General device counting statistics.
     pub devices: DevicesStats,
 }
@@ -271,6 +270,21 @@ pub struct StatusResponse {
 /// Aggregated status for all major daemon services.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServicesStatus {
+    // --- Core Services ---
+    /// Database worker status.
+    pub db_worker: ServiceStatusInfo,
+    /// mDNS prober status.
+    pub mdns_prober: ServiceStatusInfo,
+    /// Interface monitoring service.
+    pub iface_monitor: ServiceStatusInfo,
+    /// NDP Monitor (neighbor discovery and address tracking).
+    pub ndp_monitor: ServiceNdp,
+    /// Control API (Unix Domain Socket).
+    pub control_api: ServiceStatusInfo,
+    /// Optional HTTP REST API.
+    pub http_api: Option<ServiceStatusInfo>,
+
+    // --- Protocol Services ---
     /// Router Advertisement service (NDP).
     pub ra: ServiceRa,
     /// DHCPv4 server.
@@ -279,8 +293,6 @@ pub struct ServicesStatus {
     pub dhcp_v6: ServiceDhcpV6,
     /// Authoritative/Caching DNS server.
     pub dns: ServiceDns,
-    /// SLAAC address tracker and network scanner.
-    pub slaac: ServiceSlaac,
 }
 
 /// Status of the Router Advertisement (RA) service.
@@ -337,9 +349,16 @@ pub struct ServiceDns {
     pub upstream: Option<String>,
 }
 
-/// Status of the SLAAC tracking and scanner service.
+/// Generic status information for auxiliary services.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct ServiceStatusInfo {
+    /// Current state (e.g., "online", "ativo").
+    pub state: String,
+}
+
+/// Status of the NDP Monitor service.
 #[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceSlaac {
+pub struct ServiceNdp {
     /// Current state (e.g., "online", "offline").
     pub state: String,
     /// Seconds since the scanner service started.
@@ -361,13 +380,26 @@ pub struct DbStatus {
     pub last_flush_secs_ago: u64,
 }
 
+/// Statistics about daemon resource consumption.
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct ResourcesStatus {
+    /// Resident Set Size (RSS) in bytes.
+    pub memory_rss_bytes: u64,
+    /// Virtual Memory Size (VMS) in bytes.
+    pub memory_vms_bytes: u64,
+}
+
 /// Information about the host's current network configuration.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct NetworkStatus {
     /// Primary LAN interface being managed (e.g., "eth0").
     pub lan_iface: String,
-    /// WAN/Upstream interface, if applicable.
-    pub wan_iface: String,
+    /// Primary IPv4 address of the LAN interface.
+    pub lan_ipv4: Option<String>,
+    /// Primary IPv4 address with CIDR (e.g., "192.168.1.1/24").
+    pub lan_ipv4_cidr: Option<String>,
+    /// Primary IPv6 address of the LAN interface.
+    pub lan_ipv6: Option<String>,
     /// Primary GUA prefix.
     pub gua: Option<String>,
     /// Primary ULA prefix.
@@ -390,7 +422,7 @@ pub struct DevicesStats {
 }
 
 /// Detailed aggregated information for a single device.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WhoisResponse {
     /// Current device state.
     pub entry: DeviceEntry,
@@ -399,7 +431,7 @@ pub struct WhoisResponse {
 }
 
 /// A snapshot of DNS resolver statistics.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsStatsResponse {
     /// Total requests received.
     pub total_requests: u64,
@@ -416,7 +448,7 @@ pub struct DnsStatsResponse {
 }
 
 /// Results of a DNS diagnostic query.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsQueryResponse {
     /// The resolved records.
     pub records: Vec<DnsRecordEntry>,
@@ -427,7 +459,7 @@ pub struct DnsQueryResponse {
 }
 
 /// A single DNS record in a query response.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsRecordEntry {
     /// Record name.
     pub name: String,

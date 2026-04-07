@@ -1,4 +1,5 @@
 use crate::cli::commands::CliCommand;
+use crate::cli::vendor::resolve_vendor;
 use color_eyre::eyre::Result;
 use inquire::Select;
 use lanforge_api::api::{Command as ControlCommand, Response};
@@ -47,7 +48,7 @@ impl CliCommand for WolCommand {
                             "{} - {} ({})",
                             d.mac,
                             d.hostname,
-                            d.vendor.as_deref().unwrap_or("Unknown")
+                            resolve_vendor(&d.mac).unwrap_or_else(|| "Unknown".to_string())
                         )
                     })
                     .collect();

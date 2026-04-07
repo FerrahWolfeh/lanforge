@@ -67,6 +67,7 @@ pub enum LeaseTarget {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InterfaceState {
+    pub v4: Option<(Ipv4Addr, u8)>,
     pub link_local: Option<Ipv6Addr>,
     pub gua: Option<Ipv6Addr>,
     pub ula: Option<Ipv6Addr>,
@@ -151,6 +152,7 @@ pub enum DeviceUpdate {
     },
     InterfaceIpsChanged {
         ifindex: u32,
+        v4: Option<(Ipv4Addr, u8)>,
         link_local: Option<Ipv6Addr>,
         gua: Option<Ipv6Addr>,
         ula: Option<Ipv6Addr>,
@@ -230,12 +232,13 @@ impl State {
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
             DeviceUpdate::InterfaceIpsChanged {
                 ifindex,
+                v4,
                 link_local,
                 gua,
                 ula,
                 preferred,
                 valid,
-            } => self.handle_interface_ips_changed(ifindex, link_local, gua, ula, preferred, valid),
+            } => self.handle_interface_ips_changed(ifindex, v4, link_local, gua, ula, preferred, valid),
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 true
@@ -739,6 +742,7 @@ impl State {
     fn handle_interface_ips_changed(
         &mut self,
         ifindex: u32,
+        v4: Option<(Ipv4Addr, u8)>,
         link_local: Option<Ipv6Addr>,
         gua: Option<Ipv6Addr>,
         ula: Option<Ipv6Addr>,
@@ -746,7 +750,8 @@ impl State {
         valid: u32,
     ) -> bool {
         let entry = self.interface_ips.entry(ifindex).or_default();
-        if entry.link_local == link_local
+        if entry.v4 == v4
+            && entry.link_local == link_local
             && entry.gua == gua
             && entry.ula == ula
             && entry.gua_preferred == preferred
@@ -755,6 +760,7 @@ impl State {
             false
         } else {
             *entry = InterfaceState {
+                v4,
                 link_local,
                 gua,
                 ula,
@@ -762,8 +768,8 @@ impl State {
                 gua_valid: valid,
             };
             debug!(
-                "[state] Interface {} IPs updated: LL={:?}, GUA={:?}, ULA={:?} (pref={}, valid={})",
-                ifindex, link_local, gua, ula, preferred, valid
+                "[state] Interface {} IPs updated: V4={:?}, LL={:?}, GUA={:?}, ULA={:?} (pref={}, valid={})",
+                ifindex, v4, link_local, gua, ula, preferred, valid
             );
             true
         }

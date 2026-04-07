@@ -25,3 +25,4 @@ tabled = "0.20.0"
 tokio = { version = "1.50.0", features = ["full"] }
 lanforge-api = { path = "../lanforge-api" }
 lanforge-core = { path = "../lanforge-core" }
+mac_oui = { version = "0.4.11", features = ["with-db"] }

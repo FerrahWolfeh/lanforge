@@ -40,7 +40,7 @@ futures = { version = "0.3.32", default-features = false, features = ["std"] }
 # CLI e config
 clap = { version = "4.6.0", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
-toml = "1.1.0"
+toml = "1.1.2"
 
 # Networking / netlink
 netlink-sys = "0.8"

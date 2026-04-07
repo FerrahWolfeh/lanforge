@@ -15,7 +15,8 @@ use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
 use crate::api::{
     DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DnsQueryResponse,
     DnsStatsResponse, HostConfigEntry, HostsResponse, Ipv6Entry, LeaseInfo, NetworkStatus,
-    Response, ServicesStatus, SimpleSuccess, StatusResponse, WhoisResponse,
+    ResourcesStatus, Response, ServiceStatusInfo, ServicesStatus, SimpleSuccess, StatusResponse,
+    WhoisResponse,
 };
 use crate::server::ClientContext;
 
@@ -58,13 +59,52 @@ impl ClientContext {
             services: ServicesStatus::default(),
             db: DbStatus::default(),
             network: NetworkStatus::default(),
+            resources: ResourcesStatus::default(),
             devices: DevicesStats::default(),
         };
 
+        // DB stats
+        status.db.path.clone_from(&self.cfg.db_path);
+        if let Ok(meta) = std::fs::metadata(&self.cfg.db_path) {
+            status.db.size_bytes = meta.len();
+        }
+        if let Some(last_flush) = self.ctx.last_db_flush() {
+            status.db.last_flush_secs_ago = last_flush.elapsed().unwrap_or_default().as_secs();
+        }
+
+        // Resources (RSS/VMS)
+        if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
+            let mut parts = statm.split_whitespace();
+            if let (Some(vms_pages), Some(rss_pages)) = (parts.next(), parts.next()) {
+                let page_size = 4096; // Traditional conservative page size
+                status.resources.memory_vms_bytes =
+                    vms_pages.parse::<u64>().unwrap_or(0) * page_size;
+                status.resources.memory_rss_bytes =
+                    rss_pages.parse::<u64>().unwrap_or(0) * page_size;
+            }
+        }
+
         // Network
         status.network.lan_iface.clone_from(&self.cfg.lan_iface);
-        status.network.gua.clone_from(&self.current_gua);
-        status.network.ula.clone_from(&self.cfg.ula_prefix);
+        if let Some(ifindex) = self.ctx.target_ifindex() {
+            let state = self.ctx.read();
+            if let Some(if_ips) = state.interface_ips.get(&ifindex) {
+                if let Some((ip, prefix)) = if_ips.v4 {
+                    status.network.lan_ipv4 = Some(ip.to_string());
+                    status.network.lan_ipv4_cidr = Some(format!("{}/{}", ip, prefix));
+                }
+                status.network.gua = if_ips.gua.map(|ip| ip.to_string());
+                status.network.ula = if_ips.ula.map(|ip| ip.to_string());
+                status.network.lan_ipv6 = if_ips.link_local.map(|ip| ip.to_string());
+            }
+        }
+        // Fallback to config if state is missing prefix info
+        if status.network.gua.is_none() {
+            status.network.gua.clone_from(&self.current_gua);
+        }
+        if status.network.ula.is_none() {
+            status.network.ula.clone_from(&self.cfg.ula_prefix);
+        }
 
         // Services -> RA
         status.services.ra.state = if self.cfg.ra_enabled {
@@ -152,13 +192,25 @@ impl ClientContext {
             .upstream
             .clone_from(&self.cfg.dns_upstream);
 
+        // --- Core Services ---
+        status.services.db_worker.state = "online".to_string();
+        status.services.mdns_prober.state = "ativo".to_string();
+        status.services.iface_monitor.state = "online".to_string();
+        status.services.control_api.state = "online".to_string();
+        if self.cfg.http_listen.is_some() {
+            status.services.http_api = Some(ServiceStatusInfo {
+                state: "online".to_string(),
+            });
+        }
+
         status.devices.total = dev_ct;
         status.devices.online = online_ct;
         status.devices.static_toml = static_toml;
         status.devices.managed_cli = devices.iter().filter(|d| d.origin == Origin::Cli).count();
         status.devices.dynamic = dynamic;
-
-        status.services.slaac.addrs_tracked = slaac_addrs;
+        status.services.ndp_monitor.addrs_tracked = slaac_addrs;
+        status.services.ndp_monitor.state = "online".to_string();
+        status.services.ndp_monitor.uptime_secs = self.uptime_secs;
 
         Response::Status(Box::new(status))
     }
@@ -170,7 +222,7 @@ impl ClientContext {
     pub(crate) async fn handle_devices(
         &self,
         filter: Option<String>,
-        vendor: Option<String>,
+        _vendor: Option<String>,
         method: Option<String>,
     ) -> Response {
         let devices = self.ctx.all_devices();
@@ -194,16 +246,6 @@ impl ClientContext {
                             .is_some_and(|s| s.contains(&f_lower))
                     })
             });
-
-            if let Some(v) = vendor.as_deref() {
-                let v_lower = v.to_lowercase();
-                if !dev
-                    .vendor()
-                    .is_some_and(|name: &str| name.to_lowercase().contains(&v_lower))
-                {
-                    continue;
-                }
-            }
 
             let matches_method = method.as_ref().is_none_or(|m| {
                 let m_lower = m.to_lowercase();
@@ -239,7 +281,6 @@ impl ClientContext {
                 online: is_online,
                 last_seen: format_iso8601(dev.last_seen),
                 learning_method: dev.learning_method().to_string(),
-                vendor: dev.vendor().map(|s: &str| s.to_string()),
                 duid: dev
                     .duid
                     .as_ref()
@@ -428,7 +469,6 @@ impl ClientContext {
                 online: dev.is_online(),
                 last_seen: format_iso8601(dev.last_seen),
                 learning_method: dev.learning_method().to_string(),
-                vendor: dev.vendor().map(|s: &str| s.to_string()),
                 duid: dev.duid.as_ref().map(|d: &Duid| hex::encode(d.as_bytes())),
                 display_v4: dev.display_v4(),
                 display_v6: dev.display_v6(gua_prefix, ula_prefix),

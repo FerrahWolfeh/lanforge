@@ -67,6 +67,9 @@ impl InterfaceMonitor {
         while let Some(msg) = stream.try_next().await? {
             for attr in &msg.attributes {
                 match attr {
+                    AddressAttribute::Address(IpAddr::V4(v4)) => {
+                        state.v4 = Some((*v4, msg.header.prefix_len));
+                    }
                     AddressAttribute::Address(IpAddr::V6(v6)) => {
                         let o = v6.octets();
                         if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
@@ -94,6 +97,7 @@ impl InterfaceMonitor {
         // Update table via injected context
         let _ = self.ctx.apply(&DeviceUpdate::InterfaceIpsChanged {
             ifindex,
+            v4: state.v4,
             link_local: state.link_local,
             gua: state.gua,
             ula: state.ula,
@@ -123,7 +127,7 @@ impl LanforgeService for InterfaceMonitor {
     fn meta(&self) -> ServiceMeta {
         ServiceMeta {
             id: "ifmon",
-            display_name: "InterfaceMonitor",
+            display_name: "Interface Monitor",
             critical: true,
             max_retries: 0,
             base_backoff: Duration::from_secs(2),

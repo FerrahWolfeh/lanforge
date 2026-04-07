@@ -37,7 +37,6 @@ struct DeviceRow {
     managed_at: Option<i64>,
     v4_static: Option<String>,
     v6_suffix: Option<String>,
-    vendor: Option<String>,
 }
 
 /// A handle to the SQLite database for network leases and devices.
@@ -233,12 +232,11 @@ impl LeaseDb {
                     None
                 }
             }),
-            vendor: device.vendor.clone(),
         };
 
         conn.execute(
-            "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, vendor)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(mac) DO UPDATE SET
                 hostname = excluded.hostname,
                 hostname_origin = excluded.hostname_origin,
@@ -248,8 +246,7 @@ impl LeaseDb {
                 origin = excluded.origin,
                 managed_at = excluded.managed_at,
                 v4_static = excluded.v4_static,
-                v6_suffix = excluded.v6_suffix,
-                vendor = excluded.vendor",
+                v6_suffix = excluded.v6_suffix",
             params![
                 row.mac,
                 row.hostname,
@@ -261,7 +258,6 @@ impl LeaseDb {
                 row.managed_at,
                 row.v4_static,
                 row.v6_suffix,
-                row.vendor
             ],
         )?;
 
@@ -346,7 +342,7 @@ impl LeaseDb {
 
         // 1. Load base devices
         let mut stmt = self.conn.prepare(
-            "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, vendor FROM devices"
+            "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix FROM devices"
         )?;
 
         let rows: Vec<DeviceRow> = stmt
@@ -362,7 +358,6 @@ impl LeaseDb {
                     managed_at: row.get(7)?,
                     v4_static: row.get(8)?,
                     v6_suffix: row.get(9)?,
-                    vendor: row.get(10)?,
                 })
             })?
             .filter_map(std::result::Result::ok)
@@ -391,7 +386,6 @@ impl LeaseDb {
                 _ => Origin::Dynamic,
             };
             device.managed_at = row.managed_at.map(unix_to_system_time);
-            device.vendor = row.vendor;
 
             if let Some(v4) = &row.v4_static
                 && let Ok(ip) = v4.parse::<Ipv4Addr>()
