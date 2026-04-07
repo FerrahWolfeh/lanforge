@@ -315,12 +315,15 @@ impl NeighborMonitor {
         }
     }
 
-    fn spawn_subnet_scan(&self) {
+    fn spawn_subnet_scan(&self, source: &str) {
         if self.scan_in_progress.load(Ordering::SeqCst) {
-            tracing::warn!("NeighborMonitor: Subnet scan already in progress, ignoring request.");
+            tracing::warn!(
+                "NeighborMonitor: Subnet scan already in progress (source: {source}), ignoring request."
+            );
             return;
         }
 
+        tracing::info!("NeighborMonitor: Spawning subnet scan task (source: {source})");
         let handle = self.handle.clone();
         let ctx = self.ctx.clone();
         let ifindex = self.target_ifindex;
@@ -333,13 +336,22 @@ impl NeighborMonitor {
         });
     }
 
-    fn spawn_periodic_probes(&self, gua: Option<Ipv6Addr>, ula: Option<Ipv6Addr>) {
+    fn spawn_periodic_probes(
+        &self,
+        source: &str,
+        gua: Option<Ipv6Addr>,
+        ula: Option<Ipv6Addr>,
+        force_all: bool,
+    ) {
+        tracing::debug!(
+            "NeighborMonitor: Spawning periodic probes task (source: {source}, force_all: {force_all})"
+        );
         let handle = self.handle.clone();
         let ctx = self.ctx.clone();
         let ifindex = self.target_ifindex;
 
         tokio::spawn(async move {
-            run_periodic_probes_task(handle, ctx, ifindex, gua, ula).await;
+            run_periodic_probes_task(handle, ctx, ifindex, gua, ula, force_all).await;
         });
     }
 }
@@ -377,6 +389,7 @@ async fn run_periodic_probes_task(
     ifindex: u32,
     current_gua: Option<Ipv6Addr>,
     current_ula: Option<Ipv6Addr>,
+    force_all: bool,
 ) {
     let devices = ctx.all_devices();
     let now = std::time::SystemTime::now();
@@ -384,12 +397,13 @@ async fn run_periodic_probes_task(
     for dev in devices {
         // Surgical Probing Rule: Only probe devices that are ALREADY online but quiet.
         // If they are offline/failed, we stop poking them.
-        if !dev.is_online() {
+        // Exception: During 'force_all' (Boot Discovery), we probe everyone exactly once.
+        if !force_all && !dev.is_online() {
             continue;
         }
 
         let elapsed = now.duration_since(dev.last_seen).unwrap_or_default();
-        if elapsed.as_secs() > 60 {
+        if force_all || elapsed.as_secs() > 60 {
             for ip in dev.all_addresses_sorted(current_gua, current_ula) {
                 if let Err(e) = probe_neighbor(&handle, ifindex, ip).await {
                     tracing::debug!("NeighborMonitor: Scheduled probe failed for {ip}: {e}");
@@ -429,9 +443,14 @@ impl AsyncService for NeighborMonitor {
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
         let mut probe_interval = tokio::time::interval(Duration::from_secs(60));
-        let mut subnet_scan_interval = tokio::time::interval(self.scan_interval);
-        // Ensure the first periodic scan happens after the first interval, not immediately.
-        subnet_scan_interval.reset();
+        let mut subnet_scan_interval = if self.scan_interval.as_secs() > 0 {
+            let mut interval = tokio::time::interval(self.scan_interval);
+            // Ensure the first periodic scan happens after the first interval, not immediately.
+            interval.reset();
+            Some(interval)
+        } else {
+            None
+        };
 
         // 1. Initial Neighbor Scan (Bootstrap)
         {
@@ -449,15 +468,15 @@ impl AsyncService for NeighborMonitor {
             }
         }
 
-        // 2. Initial network-wide probe (Boot Probe on known devices)
+        // 2. Initial network-wide probe (Boot Discovery on all known devices)
         {
             let devices = self.ctx.all_devices();
             tracing::info!(
-                "NeighborMonitor: Triggering boot probe for {} known devices",
+                "NeighborMonitor: Triggering initial discovery probe for {} devices",
                 devices.len()
             );
-            // Non-blocking surgical probe
-            self.spawn_periodic_probes(current_gua, current_ula);
+            // Non-blocking discovery probe (force_all = true)
+            self.spawn_periodic_probes("Boot Discovery", current_gua, current_ula, true);
         }
 
         loop {
@@ -487,7 +506,7 @@ impl AsyncService for NeighborMonitor {
                             current_ula = ula;
                         }
                         LanforgeEvent::NeighborScanRequested => {
-                            self.spawn_subnet_scan();
+                            self.spawn_subnet_scan("Manual CLI Request");
                         }
                         _ => {}
                     }
@@ -496,15 +515,19 @@ impl AsyncService for NeighborMonitor {
                 _ = probe_interval.tick() => {
                     drop(rx);
                     // B. Periodic Surgical Probes for silent online devices
-                    self.spawn_periodic_probes(current_gua, current_ula);
+                    self.spawn_periodic_probes("Periodic Timer", current_gua, current_ula, false);
                 }
 
-                _ = subnet_scan_interval.tick() => {
-                    drop(rx);
-                    // C. Periodic full subnet discovery (if configured)
-                    if self.scan_interval.as_secs() > 0 {
-                        self.spawn_subnet_scan();
+                () = async {
+                    if let Some(i) = subnet_scan_interval.as_mut() {
+                        i.tick().await;
+                    } else {
+                        std::future::pending::<()>().await;
                     }
+                } => {
+                    drop(rx);
+                    // C. Periodic full subnet discovery
+                    self.spawn_subnet_scan("Periodic Subnet Timer");
                 }
 
                 else => break,
