@@ -14,22 +14,22 @@ impl CliCommand for StatusHandler {
         Ok(ControlCommand::Status)
     }
 
-    fn on_response(&self, response: &Response) -> Result<()> {
+    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::Status(st) => {
                 render_status(st);
             }
             Response::Error { error } => {
-                println!("Erro: {error}");
+                println!("Error: {error}");
             }
             Response::Event(e) => {
                 println!("Event: {e:?}");
             }
             _ => {
-                println!("Resposta inesperada para status: {response:?}");
+                println!("Unexpected response for status: {response:?}");
             }
         }
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -135,7 +135,7 @@ pub fn render_status(st: &StatusResponse) {
                 ServiceLine(
                     name: "mDNS",
                     state: st.services.mdns_prober.state.as_str(),
-                    online_val: "ativo",
+                    online_val: "active",
                     meta: "Device Discovery Prober"
                 )
                 ServiceLine(
@@ -172,13 +172,13 @@ pub fn render_status(st: &StatusResponse) {
                 ServiceLine(
                     name: "DHCPv4",
                     state: dhcp_v4_state,
-                    online_val: "ativo",
+                    online_val: "active",
                     meta: dhcp_v4_meta
                 )
                 ServiceLine(
                     name: "DHCPv6",
                     state: dhcp_v6_state,
-                    online_val: "ativo",
+                    online_val: "active",
                     meta: dhcp_v6_meta
                 )
                 ServiceLine(

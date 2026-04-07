@@ -153,9 +153,9 @@ impl ClientContext {
 
         status.services.dhcp_v4.leases_active = v4_dynamic_count as usize;
         status.services.dhcp_v4.state = if self.cfg.dhcp_v4_enabled {
-            "ativo"
+            "active"
         } else {
-            "inativo"
+            "inactive"
         }
         .to_string();
         status.services.dhcp_v4.pool_free =
@@ -165,9 +165,9 @@ impl ClientContext {
 
         status.services.dhcp_v6.leases_active = v6_dynamic_count as usize;
         status.services.dhcp_v6.state = if self.cfg.dhcp_v6_enabled {
-            "ativo"
+            "active"
         } else {
-            "inativo"
+            "inactive"
         }
         .to_string();
         status.services.dhcp_v6.pool_free = self
@@ -194,7 +194,7 @@ impl ClientContext {
 
         // --- Core Services ---
         status.services.db_worker.state = "online".to_string();
-        status.services.mdns_prober.state = "ativo".to_string();
+        status.services.mdns_prober.state = "active".to_string();
         status.services.iface_monitor.state = "online".to_string();
         status.services.control_api.state = "online".to_string();
         if self.cfg.http_listen.is_some() {
@@ -412,11 +412,11 @@ impl ClientContext {
             }
         };
 
+        // Get the device's main IPv4 for use as a hint (directed broadcast/unicast)
+        let ip_hint = self.ctx.get_device(&mac).and_then(|d| d.v4.ip());
+
         // Emit WoL event
-        let _ = self
-            .ctx
-            .bus()
-            .publish(lanforge_core::bus::LanforgeEvent::WolTriggered { mac });
+        let _ = self.ctx.bus().publish(lanforge_core::bus::LanforgeEvent::WolTriggered { mac, ip_hint });
 
         Response::Success(SimpleSuccess {
             message: format!("Wake-on-LAN magic packet queued for {mac}"),

@@ -18,7 +18,7 @@ impl CliCommand for DnsCommand {
         }
     }
 
-    fn on_response(&self, response: &Response) -> Result<()> {
+    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::DnsStats(stats) => {
                 element! {
@@ -54,13 +54,13 @@ impl CliCommand for DnsCommand {
                 }.print();
             }
             Response::Error { error } => {
-                println!("Erro: {}", error);
+                println!("Error: {}", error);
             }
             _ => {
-                println!("Resposta inesperada: {:?}", response);
+                println!("Unexpected response: {:?}", response);
             }
         }
-        Ok(())
+        Ok(None)
     }
 }
 

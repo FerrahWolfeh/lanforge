@@ -19,5 +19,6 @@ pub mod mdns;
 pub mod netlink;
 pub mod ra;
 pub mod slaac;
+pub mod wol;
 #[cfg(test)]
 pub(crate) mod test_utils;

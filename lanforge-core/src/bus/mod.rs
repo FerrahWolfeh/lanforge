@@ -177,7 +177,11 @@ pub enum LanforgeEvent {
 
     // -- Diagnostic --
     /// Request to send a Wake-on-LAN packet.
-    WolTriggered { mac: MacAddr },
+    WolTriggered {
+        mac: MacAddr,
+        /// Optional IP hint for unicast or directed broadcast.
+        ip_hint: Option<Ipv4Addr>,
+    },
 }
 
 impl TimedEvent {

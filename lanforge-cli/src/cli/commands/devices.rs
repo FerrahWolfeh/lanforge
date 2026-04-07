@@ -25,7 +25,7 @@ impl CliCommand for DevicesHandler {
         })
     }
 
-    fn on_response(&self, response: &Response) -> Result<()> {
+    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::Devices(resp) => {
                 if let Some(v) = &self.vendor {
@@ -41,16 +41,16 @@ impl CliCommand for DevicesHandler {
                 }
             }
             Response::Error { error } => {
-                println!("Erro: {error}");
+                println!("Error: {error}");
             }
             Response::Event(e) => {
                 println!("Event: {e:?}");
             }
             _ => {
-                println!("Resposta inesperada para devices: {response:?}");
+                println!("Unexpected response for devices: {response:?}");
             }
         }
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -297,7 +297,7 @@ fn render_verbose_device(dev: &DeviceEntry) {
                     Text(content: last_seen_str)
                 }
                 View(flex_direction: FlexDirection::Row, padding_bottom: 1) {
-                    Text(content: "origem     ", color: Color::DarkGrey)
+                    Text(content: "origin     ", color: Color::DarkGrey)
                     Text(content: origin_str)
                 }
                 View(flex_direction: FlexDirection::Row) {

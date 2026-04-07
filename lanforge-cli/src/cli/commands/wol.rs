@@ -1,5 +1,4 @@
 use crate::cli::commands::CliCommand;
-use crate::cli::vendor::resolve_vendor;
 use color_eyre::eyre::Result;
 use inquire::Select;
 use lanforge_api::api::{Command as ControlCommand, Response};
@@ -15,12 +14,7 @@ impl CliCommand for WolCommand {
                 target: target.clone(),
             })
         } else {
-            // Interactive mode: we need to fetch devices first.
-            // BUT: CliCommand::prepare is currently expected to return a single command.
-            // We'll return a "Devices" command first, and then in on_response, if we get Devices,
-            // we'll run the interactive menu and send a SECOND command?
-            // Actually, the current CLI architecture in lanforge seems to expect one request-response.
-            // Let's check how 'Host Add' works if it's interactive.
+            // Interactive mode: fetch devices first
             Ok(ControlCommand::Devices {
                 filter: None,
                 vendor: None,
@@ -30,52 +24,43 @@ impl CliCommand for WolCommand {
         }
     }
 
-    fn on_response(&self, response: &Response) -> Result<()> {
+    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::Devices(resp) if self.target.is_none() => {
                 if resp.devices.is_empty() {
-                    println!(
-                        "Nenhum dispositivo encontrado na tabela para Wake-on-LAN interativo."
-                    );
-                    return Ok(());
+                    println!("No devices found in the table for interactive Wake-on-LAN.");
+                    return Ok(None);
                 }
 
                 let options: Vec<String> = resp
                     .devices
                     .iter()
                     .map(|d| {
-                        format!(
-                            "{} - {} ({})",
-                            d.mac,
-                            d.hostname,
-                            resolve_vendor(&d.mac).unwrap_or_else(|| "Unknown".to_string())
-                        )
+                        // Skip OUI resolution for speed as requested
+                        format!("{} - {}", d.mac, d.hostname)
                     })
                     .collect();
 
-                let selection =
-                    Select::new("Selecione o dispositivo para acordar:", options.clone())
-                        .prompt()?;
+                let selection = Select::new("Select a device to wake up:", options.clone()).prompt()?;
                 let index = options.iter().position(|s| s == &selection).unwrap();
                 let mac = &resp.devices[index].mac;
 
-                println!("Enviando comando WoL para {}...", mac);
-                // Since CliCommand doesn't support multi-step naturally here without a loop in main,
-                // we'll just advise the user to run with the MAC for now, OR we need to modify main.rs.
-                // Actually, let's see if we can just publish directly if we have the bus?
-                // No, CLI talks to daemon via UDS.
-                println!("DICA: Execute 'lanforge wol {}' para disparar.", mac);
+                println!("Triggering Wake-on-LAN for {}...", mac);
+
+                return Ok(Some(ControlCommand::Wol {
+                    target: mac.clone(),
+                }));
             }
             Response::Success(s) => {
                 println!("✓ {}", s.message);
             }
             Response::Error { error } => {
-                println!("Erro: {}", error);
+                println!("Error: {}", error);
             }
             _ => {
-                println!("Resposta inesperada: {:?}", response);
+                println!("Unexpected response: {:?}", response);
             }
         }
-        Ok(())
+        Ok(None)
     }
 }

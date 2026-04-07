@@ -18,10 +18,11 @@ pub trait CliCommand {
     fn prepare(&mut self) -> Result<ControlCommand>;
 
     /// Handles the response from the daemon.
-    fn on_response(&self, response: &Response) -> Result<()> {
+    /// Returns `Ok(Some(Command))` if another command should be sent immediately.
+    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::Error { error } => {
-                println!("Erro: {error}");
+                println!("Error: {error}");
             }
             Response::Success(success) => {
                 println!("✓ {}", success.message);
@@ -30,10 +31,10 @@ pub trait CliCommand {
                 println!("Event: {e:?}");
             }
             _ => {
-                println!("Resposta inesperada: {response:?}");
+                println!("Unexpected response: {response:?}");
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Indicates if this command expects a stream of responses (e.g. watch, log).
@@ -88,24 +89,24 @@ pub fn format_relative_iso8601(iso: &str) -> String {
 
         if is_future {
             if d > 0 {
-                return "até amanhã".to_string(); // Simplification
+                return "until tomorrow".to_string(); // Simplification
             }
             if h > 0 {
-                return format!("expira em {h}h");
+                return format!("expires in {h}h");
             }
-            return format!("expira em {}m", (secs % 3600) / 60);
+            return format!("expires in {}m", (secs % 3600) / 60);
         }
         if d > 0 {
-            return format!("há {d} dias");
+            return format!("{d} days ago");
         }
         if h > 0 {
-            return format!("há {h}h");
+            return format!("{h}h ago");
         }
         let m = (secs % 3600) / 60;
         if m > 0 {
-            return format!("há {m}m");
+            return format!("{m}m ago");
         }
-        return format!("há {secs}s");
+        return format!("{secs}s ago");
     }
     iso.to_string()
 }

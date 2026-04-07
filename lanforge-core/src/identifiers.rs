@@ -250,6 +250,11 @@ impl MacAddr {
         let b = self.0;
         b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0 && b[4] == 0 && b[5] == 0
     }
+
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 impl From<[u8; 6]> for MacAddr {

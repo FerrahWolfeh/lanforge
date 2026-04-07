@@ -3,7 +3,7 @@ use anyhow::Result;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use std::collections::HashSet;
-use std::net::Ipv6Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{Duration, interval};
@@ -19,8 +19,6 @@ pub async fn run_event_loop(
     let cfg = bootstrap.cfg;
     let handle = bootstrap.rt_handle;
     let target_ifindex = bootstrap.target_ifindex;
-
-    let bus = ctx.bus();
 
     let mut state = LoopState::new();
 
@@ -51,64 +49,45 @@ pub async fn run_event_loop(
     loop {
         tokio::select! {
             _ = fallback.tick() => {
-                debug!("Sincronização periódica de SLAAC (Fallback)...");
+                debug!("Periodic SLAAC synchronization (Fallback)...");
             }
             _ = stale_timer.tick() => {
                 ctx.expire_stale();
             }
             _ = sigusr1.recv() => {
-                info!("SIGUSR1 recebido, forçando sincronização de estado...");
+                info!("SIGUSR1 received, forcing state synchronization...");
                 spawn_scan(ctx.clone(), cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
             }
             _ = sigterm.recv() => {
-                info!("SIGTERM recebido — iniciando encerramento gracioso...");
+                info!("SIGTERM received — starting graceful shutdown...");
                 break;
             }
             _ = sigint.recv() => {
-                info!("SIGINT recebido — iniciando encerramento gracioso...");
+                info!("SIGINT received — starting graceful shutdown...");
                 break;
             }
             event = bus_rx.recv() => {
                 match event {
                     Ok(timed_event) => {
-                        match timed_event.event {
-                            LanforgeEvent::ServiceReady { name } => {
-                                if expected_services.contains(name.as_str()) {
-                                    ready_services.insert(name.clone());
-                                    debug!("ServiceReady: {} ({}/{})", name, ready_services.len(), expected_services.len());
-
-                                    if !system_ready_sent && ready_services.len() >= expected_services.len() {
-                                        info!("✅ All internal services ready. System fully operational.");
-                                        let _ = bus.publish(LanforgeEvent::SystemReady);
-                                        sd_notify_ready();
-                                        system_ready_sent = true;
-                                    }
-                                }
-                            }
-                            LanforgeEvent::PrefixChanged { gua, ula, .. } => {
-                                if state.current_gua != gua || state.current_ula != ula {
-                                    info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
-                                    state.current_gua = gua;
-                                    state.current_ula = ula;
-                                    spawn_scan(ctx.clone(), cfg.clone(), handle.clone(), gua, ula, target_ifindex);
-                                }
-                            }
-                            LanforgeEvent::ReloadConfig => {
-                                info!("ReloadConfig: Forçando sincronização em background...");
-                                spawn_scan(ctx.clone(), cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
-                            }
-                            LanforgeEvent::Shutdown => {
-                                debug!("EventLoop: shutdown received via bus");
-                                break;
-                            }
-                            _ => {}
+                        if !handle_bus_event(
+                            timed_event.event,
+                            &ctx,
+                            &cfg,
+                            &handle,
+                            &mut state,
+                            target_ifindex,
+                            &expected_services,
+                            &mut ready_services,
+                            &mut system_ready_sent
+                        ) {
+                            break;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("EventBus: consumer atrasado, perdeu {n} eventos");
+                        warn!("EventBus: consumer lagged, lost {n} events");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        error!("EventBus: canal fechado inesperadamente");
+                        error!("EventBus: channel closed unexpectedly");
                         break;
                     }
                 }
@@ -117,6 +96,102 @@ pub async fn run_event_loop(
     }
 
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_bus_event(
+    event: LanforgeEvent,
+    ctx: &LanforgeContext,
+    cfg: &Arc<crate::config::Config>,
+    handle: &rtnetlink::Handle,
+    state: &mut LoopState,
+    target_ifindex: u32,
+    expected_services: &HashSet<&'static str>,
+    ready_services: &mut HashSet<String>,
+    system_ready_sent: &mut bool,
+) -> bool {
+    match event {
+        LanforgeEvent::ServiceReady { name } => {
+            if expected_services.contains(name.as_str()) {
+                ready_services.insert(name.clone());
+                debug!(
+                    "ServiceReady: {} ({}/{})",
+                    name,
+                    ready_services.len(),
+                    expected_services.len()
+                );
+
+                if !*system_ready_sent && ready_services.len() >= expected_services.len() {
+                    info!("✅ All internal services ready. System fully operational.");
+                    let _ = ctx.bus().publish(LanforgeEvent::SystemReady);
+                    sd_notify_ready();
+                    *system_ready_sent = true;
+                }
+            }
+        }
+        LanforgeEvent::PrefixChanged { gua, ula, .. } => {
+            if state.current_gua != gua || state.current_ula != ula {
+                info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
+                state.current_gua = gua;
+                state.current_ula = ula;
+                spawn_scan(
+                    ctx.clone(),
+                    cfg.clone(),
+                    handle.clone(),
+                    gua,
+                    ula,
+                    target_ifindex,
+                );
+            }
+        }
+        LanforgeEvent::ReloadConfig => {
+            info!("ReloadConfig: Forcing background synchronization...");
+            spawn_scan(
+                ctx.clone(),
+                cfg.clone(),
+                handle.clone(),
+                state.current_gua,
+                state.current_ula,
+                target_ifindex,
+            );
+        }
+        LanforgeEvent::WolTriggered { mac, ip_hint } => {
+            info!("WOL: Triggering for {mac} (hint: {ip_hint:?})");
+            let mut directed_broadcast = None;
+
+            {
+                let ctx_read = ctx.read();
+                if let Some(if_ips) = ctx_read.interface_ips.get(&target_ifindex)
+                    && let Some((ip, prefix)) = if_ips.v4
+                {
+                    let ip_u32 = u32::from_be_bytes(ip.octets());
+                    // Fix truncation warning by using u32::MAX >> prefix
+                    let mask = !((1u32.checked_shl(32 - u32::from(prefix))).map_or(0, |v| v - 1));
+                    let broadcast = ip_u32 | !mask;
+                    directed_broadcast = Some(Ipv4Addr::from(broadcast.to_be_bytes()));
+                }
+            }
+
+            if let Err(e) = lanforge_network::wol::send_wol_magic_packet(
+                mac,
+                &cfg.iface_lan,
+                directed_broadcast,
+                ip_hint,
+            ) {
+                error!("❌ Error sending WOL packet: {e}");
+            } else {
+                info!(
+                    "✅ Magic packet sent (targets: 255.255.255.255, {directed_broadcast:?}, {ip_hint:?})"
+                );
+            }
+        }
+        LanforgeEvent::Shutdown => {
+            debug!("EventLoop: shutdown received via bus");
+            return false;
+        }
+        _ => {}
+    }
+    true
 }
 
 struct LoopState {
@@ -163,7 +238,7 @@ fn spawn_scan(
 ) {
     tokio::spawn(async move {
         if let Err(e) = run_scan(&ctx, &cfg, &handle, gua, ula, target_ifindex).await {
-            error!("❌ Erro no scan: {e:#}");
+            error!("❌ Scan error: {e:#}");
         }
     });
 }

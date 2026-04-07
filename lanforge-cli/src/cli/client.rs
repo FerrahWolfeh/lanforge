@@ -9,7 +9,7 @@ use lanforge_api::api::Response;
 
 pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
     let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
-        format!("Falha ao conectar no daemon em '{socket_path}'. O daemon está rodando?")
+        format!("Failed to connect to daemon at '{socket_path}'. Is the daemon running?")
     })?;
 
     let (reader, mut writer) = stream.split();
@@ -55,49 +55,56 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
         Command::Dns { action } => Box::new(crate::cli::commands::dns::DnsCommand { action }),
     };
 
-    let control_cmd = match handler.prepare() {
+    let mut control_cmd = match handler.prepare() {
         Ok(cmd) => cmd,
         Err(e) => {
             // If the user aborts an interactive prompt, we just exit gracefully
-            if e.to_string() == "Cancelado." || e.to_string().contains("is required") {
+            if e.to_string() == "Cancelled." || e.to_string().contains("is required") {
                 return Ok(());
             }
             return Err(e);
         }
     };
 
-    let json_req = serde_json::to_string(&control_cmd)?;
-    writer.write_all(json_req.as_bytes()).await?;
-    writer.write_all(b"\n").await?;
+    loop {
+        let json_req = serde_json::to_string(&control_cmd)?;
+        writer.write_all(json_req.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
 
-    let mut response_line = String::new();
-    let chars_read = reader.read_line(&mut response_line).await?;
-    if chars_read == 0 {
-        return Ok(());
-    }
+        let mut response_line = String::new();
+        let chars_read = reader.read_line(&mut response_line).await?;
+        if chars_read == 0 {
+            break;
+        }
 
-    let response: Response = serde_json::from_str(&response_line)
-        .with_context(|| format!("Falha ao analisar a resposta do daemon: {response_line}"))?;
+        let response: Response = serde_json::from_str(&response_line).with_context(|| {
+            format!("Failed to parse response from daemon: {response_line}")
+        })?;
 
-    handler.on_response(&response)?;
+        if let Some(next_cmd) = handler.on_response(&response)? {
+            control_cmd = next_cmd;
+            continue;
+        }
 
-    if handler.is_streaming() {
-        loop {
-            response_line.clear();
-            if reader.read_line(&mut response_line).await? == 0 {
-                break;
-            }
-            if response_line.trim().is_empty() {
-                continue;
-            }
-            let resp: Result<Response, _> = serde_json::from_str(&response_line);
-            match resp {
-                Ok(r) => {
-                    handler.on_response(&r)?;
+        if handler.is_streaming() {
+            loop {
+                response_line.clear();
+                if reader.read_line(&mut response_line).await? == 0 {
+                    break;
                 }
-                Err(_) => println!("JSON malformado no stream: {response_line}"),
+                if response_line.trim().is_empty() {
+                    continue;
+                }
+                let resp: Result<Response, _> = serde_json::from_str(&response_line);
+                match resp {
+                    Ok(r) => {
+                        let _ = handler.on_response(&r)?;
+                    }
+                    Err(_) => println!("Malformed JSON in stream: {response_line}"),
+                }
             }
         }
+        break;
     }
 
     Ok(())

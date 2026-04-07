@@ -46,40 +46,40 @@ impl CliCommand for HostHandler {
 
                 if v4.is_none() && v6_suffix.is_none() {
                     let opts = vec![
-                        "[1] Só hostname (IP dinâmico do pool)",
-                        "[2] Hostname + IPv4 fixo",
-                        "[3] Hostname + IPv4 fixo + sufixo ULA",
+                        "[1] Hostname only (dynamic IP from pool)",
+                        "[2] Hostname + Fixed IPv4",
+                        "[3] Hostname + Fixed IPv4 + ULA suffix",
                     ];
-                    let choice = Select::new("Nível de configuração:", opts).prompt()?;
+                    let choice = Select::new("Configuration level:", opts).prompt()?;
                     if choice.starts_with("[2]") || choice.starts_with("[3]") {
-                        let ans = InquireText::new("IPv4 fixo:").prompt()?;
+                        let ans = InquireText::new("Fixed IPv4:").prompt()?;
                         if !ans.trim().is_empty() {
                             final_v4 = Some(ans.trim().to_string());
                         }
                     }
                     if choice.starts_with("[3]") {
-                        let ans = InquireText::new("Sufixo ULA (ex: ::1234):").prompt()?;
+                        let ans = InquireText::new("ULA Suffix (ex: ::1234):").prompt()?;
                         if !ans.trim().is_empty() {
                             final_v6 = Some(ans.trim().to_string());
                         }
                     }
 
-                    println!("\nConfirmar?");
+                    println!("\nConfirm?");
                     println!("  MAC       {final_mac}");
                     println!("  hostname  {final_hostname}");
                     if let Some(ref v) = final_v4 {
-                        println!("  V4 fixo   {v}");
+                        println!("  Fixed V4  {v}");
                     }
                     if let Some(ref v) = final_v6 {
-                        println!("  V6 sufixo {v}");
+                        println!("  V6 suffix {v}");
                     }
                     println!();
 
-                    let confirm = Confirm::new("Confirmar adição?")
+                    let confirm = Confirm::new("Confirm addition?")
                         .with_default(true)
                         .prompt()?;
                     if !confirm {
-                        bail!("Cancelado.");
+                        bail!("Cancelled.");
                     }
                 }
 
@@ -100,30 +100,24 @@ impl CliCommand for HostHandler {
         }
     }
 
-    fn on_response(&self, response: &Response) -> Result<()> {
+    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::Hosts(resp) => {
                 super::devices::render_hosts(resp);
-                Ok(())
+            }
+            Response::Error { error } => {
+                println!("Error: {error}");
+            }
+            Response::Success(success) => {
+                println!("✓ {}", success.message);
+            }
+            Response::Event(e) => {
+                println!("Event: {e:?}");
             }
             _ => {
-                // Delegate to default implementation? We can't easily, so we duplicate the basic ones.
-                match response {
-                    Response::Error { error } => {
-                        println!("Erro: {error}");
-                    }
-                    Response::Success(success) => {
-                        println!("✓ {}", success.message);
-                    }
-                    Response::Event(e) => {
-                        println!("Event: {e:?}");
-                    }
-                    _ => {
-                        println!("Resposta inesperada: {response:?}");
-                    }
-                }
-                Ok(())
+                println!("Unexpected response: {response:?}");
             }
         }
+        Ok(None)
     }
 }

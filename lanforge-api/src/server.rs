@@ -53,25 +53,25 @@ impl AsyncService for ControlService {
 
         let path_ref = Path::new(&cfg.socket_path);
 
-        // Limpeza prévia do socket
+        // Old socket cleanup
         if path_ref.exists() {
-            debug!("Limpando socket antigo: {}", path_ref.display());
+            debug!("Cleaning up old socket: {}", path_ref.display());
             fs::remove_file(path_ref).map_err(lanforge_core::error::CoreError::Io)?;
         }
 
-        // Garante que o diretório pai existe
+        // Ensure parent directory exists
         if let Some(parent) = path_ref.parent()
             && !parent.exists()
         {
-            debug!("Criando diretório do socket: {}", parent.display());
+            debug!("Creating socket directory: {}", parent.display());
             fs::create_dir_all(parent).map_err(lanforge_core::error::CoreError::Io)?;
         }
 
         let listener = UnixListener::bind(path_ref).map_err(lanforge_core::error::CoreError::Io)?;
 
-        // Define permissões 0666 para facilitar acesso local durante desenvolvimento.
+        // Set 0666 permissions for easy local access during development.
         if let Err(e) = fs::set_permissions(path_ref, fs::Permissions::from_mode(0o666)) {
-            debug!("Aviso: não foi possível setar permissões 0666 no socket: {e}");
+            debug!("Warning: could not set 0666 permissions on socket: {e}");
         }
 
         let mut bus_rx = self.ctx.bus().subscribe();
@@ -239,13 +239,13 @@ where
             Ok(Command::Scan) => {
                 let _ = ctx.ctx.bus().publish(LanforgeEvent::ScanRequested);
                 Response::Success(SimpleSuccess {
-                    message: "mDNS Discovery Scan disparado".to_string(),
+                    message: "mDNS Discovery Scan triggered".to_string(),
                 })
             }
             Ok(Command::Shutdown) => {
                 let _ = ctx.ctx.bus().publish(LanforgeEvent::Shutdown);
                 Response::Success(SimpleSuccess {
-                    message: "Desligando graciosa e instantaneamente".to_string(),
+                    message: "Shutting down gracefully and instantly".to_string(),
                 })
             }
             Ok(Command::Purge { mac }) => {
@@ -289,7 +289,7 @@ where
                 // Return immediate success first, then stream events
                 let ok_resp = Response::Success(SimpleSuccess {
                     message: format!(
-                        "Iniciando stream de eventos ({} históricos)...",
+                        "Starting event stream ({} historical)...",
                         history.len()
                     ),
                 });
@@ -348,16 +348,16 @@ where
                         });
 
                         Response::Success(SimpleSuccess {
-                            message: "Host adicionado e persistido.".to_string(),
+                            message: "Host added and persisted.".to_string(),
                         })
                     } else {
                         Response::Error {
-                            error: "MAC inválido".to_string(),
+                            error: "Invalid MAC".to_string(),
                         }
                     }
                 } else {
                     Response::Error {
-                        error: "Sem fallback iterativo. Especifique o MAC via args.".to_string(),
+                        error: "No interactive fallback. Specify MAC via args.".to_string(),
                     }
                 }
             }
@@ -380,7 +380,7 @@ where
                                 v4s = FieldUpdate::Set(ip);
                                 None
                             } else {
-                                Some("IPv4 inválido")
+                                Some("Invalid IPv4")
                             }
                         }
                         "v6_suffix" | "v6" => {
@@ -391,10 +391,10 @@ where
                                 v6s = FieldUpdate::Set(suf);
                                 None
                             } else {
-                                Some("Interface ID (sufixo) ou IPv6 inválido")
+                                Some("Invalid IPv6 interface ID (suffix) or address")
                             }
                         }
-                        _ => Some("Campo desconhecido"),
+                        _ => Some("Unknown field"),
                     };
 
                     if let Some(e) = err_msg {
@@ -411,12 +411,12 @@ where
                         });
 
                         Response::Success(SimpleSuccess {
-                            message: format!("Host {mac} atualizado: {field}={value}"),
+                            message: format!("Host {mac} updated: {field}={value}"),
                         })
                     }
                 } else {
                     Response::Error {
-                        error: "MAC inválido".to_string(),
+                        error: "Invalid MAC".to_string(),
                     }
                 }
             }
@@ -426,11 +426,11 @@ where
                 if let Some(mac_addr) = MacAddr::parse(&mac) {
                     let _ = ctx.ctx.remove_host(mac_addr);
                     Response::Success(SimpleSuccess {
-                        message: format!("Host removido (MAC {mac})"),
+                        message: format!("Host removed (MAC {mac})"),
                     })
                 } else {
                     Response::Error {
-                        error: "MAC inválido".to_string(),
+                        error: "Invalid MAC".to_string(),
                     }
                 }
             }
@@ -466,11 +466,11 @@ where
                     }
 
                     Response::Success(SimpleSuccess {
-                        message: format!("Solicitando renovação (forcerenew) para {mac}"),
+                        message: format!("Requesting renewal (forcerenew) for {mac}"),
                     })
                 } else {
                     Response::Error {
-                        error: format!("MAC inválido: {mac}"),
+                        error: format!("Invalid MAC: {mac}"),
                     }
                 }
             }
@@ -510,22 +510,22 @@ where
                     }
 
                     Response::Success(SimpleSuccess {
-                        message: format!("Liberando lease para {mac}"),
+                        message: format!("Releasing lease for {mac}"),
                     })
                 } else {
                     Response::Error {
-                        error: format!("MAC inválido: {mac}"),
+                        error: format!("Invalid MAC: {mac}"),
                     }
                 }
             }
             Ok(Command::DbVacuum) => {
                 let _ = ctx.ctx.bus().publish(LanforgeEvent::DbVacuum);
                 Response::Success(SimpleSuccess {
-                    message: "Iniciando vacuum do sqlite...".to_string(),
+                    message: "Starting sqlite vacuum...".to_string(),
                 })
             }
             Err(e) => Response::Error {
-                error: format!("Comando inválido ou JSON malformado: {e}"),
+                error: format!("Invalid command or malformed JSON: {e}"),
             },
         };
 

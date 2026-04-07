@@ -17,19 +17,19 @@ impl CliCommand for WhoisHandler {
         })
     }
 
-    fn on_response(&self, response: &Response) -> Result<()> {
+    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::Whois(resp) => {
                 render_whois(resp);
             }
             Response::Error { error } => {
-                println!("Erro: {error}");
+                println!("Error: {error}");
             }
             _ => {
-                println!("Resposta inesperada para whois: {response:?}");
+                println!("Unexpected response for whois: {response:?}");
             }
         }
-        Ok(())
+        Ok(None)
     }
 }
 

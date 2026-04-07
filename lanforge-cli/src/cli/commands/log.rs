@@ -17,7 +17,7 @@ impl CliCommand for LogHandler {
         })
     }
 
-    fn on_response(&self, response: &Response) -> Result<()> {
+    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
             Response::Success(SimpleSuccess { message }) => {
                 println!("{} {}", "i".blue(), message.italic());
@@ -28,7 +28,7 @@ impl CliCommand for LogHandler {
             Response::Event(event) => self.print_event(event),
             _ => {} // Ignore other responses in log stream
         }
-        Ok(())
+        Ok(None)
     }
 
     fn is_streaming(&self) -> bool {
@@ -82,7 +82,7 @@ impl LogHandler {
                     mac.to_string().red()
                 );
             }
-            LanforgeEvent::WolTriggered { mac } => {
+            LanforgeEvent::WolTriggered { mac, .. } => {
                 println!(
                     "[{}] {} {} {}",
                     now,
