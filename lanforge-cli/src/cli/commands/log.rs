@@ -20,7 +20,7 @@ impl CliCommand for LogHandler {
     fn on_response(&self, response: &Response) -> Result<()> {
         match response {
             Response::Success(SimpleSuccess { message }) => {
-                println!("{} {}", "ℹ".blue(), message.italic());
+                println!("{} {}", "i".blue(), message.italic());
             }
             Response::Error { error } => {
                 eprintln!("{} {}", "✘".red().bold(), error);
