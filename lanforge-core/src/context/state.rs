@@ -238,7 +238,8 @@ impl State {
                 ula,
                 preferred,
                 valid,
-            } => self.handle_interface_ips_changed(ifindex, v4, link_local, gua, ula, preferred, valid),
+            } => self
+                .handle_interface_ips_changed(ifindex, v4, link_local, gua, ula, preferred, valid),
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 true
@@ -453,28 +454,45 @@ impl State {
             });
             return true;
         }
+
         let dev_arc = self.get_device_or_new(mac);
+        let old_seen = dev_arc.last_seen;
+
         let mut dev = (*dev_arc).clone();
         dev.last_seen = SystemTime::now();
+
         let exists = self.devices.contains_key(&mac);
         if dev.is_worthy() || exists {
-            self.devices.insert(mac, Arc::new(dev));
-            return true;
+            self.devices.insert(mac, Arc::new(dev.clone()));
+
+            let elapsed = dev.last_seen.duration_since(old_seen).unwrap_or_default();
+            // Prune activity logs: only return true (triggering BUS/DB) if it's been a while
+            return elapsed.as_secs() > 300;
         }
         false
     }
 
     fn handle_arp_seen(&mut self, mac: MacAddr, ip: Ipv4Addr) -> bool {
         let dev_arc = self.get_device_or_new(mac);
+        let old_seen = dev_arc.last_seen;
+
         let mut dev = (*dev_arc).clone();
         dev.last_seen = SystemTime::now();
-        if !dev.seen_v4.contains(&ip) {
+
+        let is_new_ip = if dev.seen_v4.contains(&ip) {
+            false
+        } else {
             dev.seen_v4.push(ip);
-        }
+            true
+        };
+
         let exists = self.devices.contains_key(&mac);
         if dev.is_worthy() || exists {
-            self.devices.insert(mac, Arc::new(dev));
-            return true;
+            self.devices.insert(mac, Arc::new(dev.clone()));
+
+            let elapsed = dev.last_seen.duration_since(old_seen).unwrap_or_default();
+            // Prune activity logs: only return true (triggering BUS/DB) if significant
+            return is_new_ip || elapsed.as_secs() > 300;
         }
         false
     }

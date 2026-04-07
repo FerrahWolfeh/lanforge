@@ -38,7 +38,10 @@ impl CliCommand for LogHandler {
 
 impl LogHandler {
     fn print_event(&self, timed_event: &lanforge_core::bus::TimedEvent) {
-        let now = chrono::Local::now().format("%H:%M:%S").to_string().dimmed();
+        let now = chrono::DateTime::<chrono::Local>::from(timed_event.timestamp)
+            .format("%H:%M:%S")
+            .to_string()
+            .dimmed();
         let event = &timed_event.event;
 
         match event {
@@ -254,8 +257,12 @@ impl LogHandler {
                 )
             }
             DeviceChange::HostRemoved => "Host removed".red().to_string(),
-            DeviceChange::NdpObserved => "NDP activity observed".dimmed().to_string(),
-            DeviceChange::ArpObserved => "ARP activity observed".dimmed().to_string(),
+            DeviceChange::NdpActivity { ip } => {
+                format!("NDP Activity: {}", ip.to_string().bright_magenta())
+            }
+            DeviceChange::ArpActivity { ip } => {
+                format!("ARP Activity: {}", ip.to_string().bright_cyan())
+            }
         }
     }
 }

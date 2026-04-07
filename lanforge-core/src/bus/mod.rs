@@ -86,10 +86,10 @@ pub enum DeviceChange {
     DuidAssociated,
 
     /// A neighbor was observed via NDP (IPv6) but no SLAAC address was extracted.
-    NdpObserved,
+    NdpActivity { ip: Ipv6Addr },
 
-    /// A neighbor was observed via ARP (IPv4).
-    ArpObserved,
+    /// An IPv4 neighbor event (ARP) was observed.
+    ArpActivity { ip: Ipv4Addr },
 }
 
 /// A wrapper for an event along with its metadata (timestamp, source module).
@@ -197,6 +197,8 @@ impl TimedEvent {
             | LanforgeEvent::DevicePurged { .. }
             | LanforgeEvent::WolTriggered { .. }
             | LanforgeEvent::ReloadConfig
+            | LanforgeEvent::ServiceReady { .. }
+            | LanforgeEvent::SystemReady
             | LanforgeEvent::ScanRequested => true,
 
             // Internal signals or very high-frequency events
@@ -204,9 +206,7 @@ impl TimedEvent {
             | LanforgeEvent::Shutdown
             | LanforgeEvent::StateReady
             | LanforgeEvent::DbReady
-            | LanforgeEvent::InterfaceReady
-            | LanforgeEvent::ServiceReady { .. }
-            | LanforgeEvent::SystemReady => false,
+            | LanforgeEvent::InterfaceReady => false,
         }
     }
 }

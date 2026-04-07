@@ -57,8 +57,8 @@ pub(crate) fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
             hostname: hostname.clone(),
         }),
         DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),
-        DeviceUpdate::NdpSeen { .. } => Some(DeviceChange::NdpObserved),
-        DeviceUpdate::ArpSeen { .. } => Some(DeviceChange::ArpObserved),
+        DeviceUpdate::NdpSeen { ip, .. } => Some(DeviceChange::NdpActivity { ip: *ip }),
+        DeviceUpdate::ArpSeen { ip, .. } => Some(DeviceChange::ArpActivity { ip: *ip }),
         DeviceUpdate::LeaseReleased { target, .. } => Some(DeviceChange::LeaseExpired {
             target: target.clone(),
         }),

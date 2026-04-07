@@ -265,9 +265,15 @@ where
             Ok(Command::DnsQuery { name, record_type }) => {
                 ctx.handle_dns_query(name, record_type).await
             }
-            Ok(Command::Log { .. } | Command::Watch) => {
+            Ok(req_cmd @ (Command::Log { follow: _ } | Command::Watch)) => {
+                let is_follow = match req_cmd {
+                    Command::Log { follow } => follow,
+                    Command::Watch => true,
+                    _ => unreachable!(),
+                };
+
                 // Fetch history if it's a log command
-                let history = if matches!(req, Ok(Command::Log { .. })) {
+                let history = if let Command::Log { .. } = req_cmd {
                     let log_db_path = ctx.cfg.log_db_path.clone();
                     tokio::task::spawn_blocking(move || {
                         LogDb::open(Path::new(&log_db_path))
@@ -298,6 +304,10 @@ where
                         let _ = writer.write_all(json_resp.as_bytes()).await;
                         let _ = writer.write_all(b"\n").await;
                     }
+                }
+
+                if !is_follow {
+                    break;
                 }
 
                 let mut rx = ctx.ctx.bus().subscribe();
