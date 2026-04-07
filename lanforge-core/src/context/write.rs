@@ -16,7 +16,7 @@ use crate::{
     },
     device::{HostnameOrigin, Ipv6AddrOrSuffix},
     identifiers::{Duid, MacAddr},
-    state::{DeviceUpdate, FieldUpdate, LeaseTarget},
+    state::{DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget},
 };
 
 impl LanforgeContext {
@@ -78,23 +78,19 @@ impl LanforgeContext {
 
         if let DeviceUpdate::InterfaceIpsChanged {
             ifindex,
-            v4: _,
-            gua,
-            ula,
-            preferred,
-            valid,
-            ..
+            state: update_state,
         } = update
         {
             events.push(LanforgeEvent::InterfaceUpdated { ifindex: *ifindex });
             if let Some((prev_gua, prev_ula)) = prev_prefix
-                && ((gua.is_some() && *gua != prev_gua) || (ula.is_some() && *ula != prev_ula))
+                && ((update_state.gua.is_some() && update_state.gua != prev_gua)
+                    || (update_state.ula.is_some() && update_state.ula != prev_ula))
             {
                 events.push(LanforgeEvent::PrefixChanged {
-                    gua: *gua,
-                    ula: *ula,
-                    preferred: *preferred,
-                    valid: *valid,
+                    gua: update_state.gua,
+                    ula: update_state.ula,
+                    preferred: update_state.gua_preferred,
+                    valid: update_state.gua_valid,
                 });
             }
         }
@@ -199,22 +195,9 @@ impl LanforgeContext {
     pub fn signal_interface_update(
         &self,
         ifindex: u32,
-        v4: Option<(Ipv4Addr, u8)>,
-        link_local: Option<Ipv6Addr>,
-        gua: Option<Ipv6Addr>,
-        ula: Option<Ipv6Addr>,
-        preferred: u32,
-        valid: u32,
+        state: crate::state::InterfaceState,
     ) -> bool {
-        self.apply(&DeviceUpdate::InterfaceIpsChanged {
-            ifindex,
-            v4,
-            link_local,
-            gua,
-            ula,
-            preferred,
-            valid,
-        })
+        self.apply(&DeviceUpdate::InterfaceIpsChanged { ifindex, state })
     }
 
     /// Signals a global IPv6 GUA change for an interface.
@@ -226,15 +209,13 @@ impl LanforgeContext {
         preferred: u32,
         valid: u32,
     ) -> bool {
-        self.apply(&DeviceUpdate::InterfaceIpsChanged {
-            ifindex,
-            v4: None,
-            link_local: None,
+        let state = InterfaceState {
             gua: Some(gua),
-            ula: None,
-            preferred,
-            valid,
-        })
+            gua_preferred: preferred,
+            gua_valid: valid,
+            ..Default::default()
+        };
+        self.apply(&DeviceUpdate::InterfaceIpsChanged { ifindex, state })
     }
 
     /// Explicitly removes a host from the system.

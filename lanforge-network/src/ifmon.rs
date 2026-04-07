@@ -97,12 +97,7 @@ impl InterfaceMonitor {
         // Update table via injected context
         let _ = self.ctx.apply(&DeviceUpdate::InterfaceIpsChanged {
             ifindex,
-            v4: state.v4,
-            link_local: state.link_local,
-            gua: state.gua,
-            ula: state.ula,
-            preferred: state.gua_preferred,
-            valid: state.gua_valid,
+            state: state.clone(),
         });
 
         Ok(state)

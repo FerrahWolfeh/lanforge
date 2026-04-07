@@ -262,7 +262,7 @@ impl IPv6State {
 ///
 /// Suffixes are useful when the global prefix changes but the device's
 /// identifier remains constant.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Ipv6AddrOrSuffix {
     /// A complete 128-bit IPv6 address.
     Full(Ipv6Addr),

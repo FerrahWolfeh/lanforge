@@ -42,7 +42,7 @@ impl<T> From<Option<T>> for FieldUpdate<T> {
 // StaticEntry
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StaticEntry {
     pub mac: MacAddr,
     pub hostname: String,
@@ -65,7 +65,7 @@ pub enum LeaseTarget {
 // InterfaceState
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InterfaceState {
     pub v4: Option<(Ipv4Addr, u8)>,
     pub link_local: Option<Ipv6Addr>,
@@ -152,12 +152,7 @@ pub enum DeviceUpdate {
     },
     InterfaceIpsChanged {
         ifindex: u32,
-        v4: Option<(Ipv4Addr, u8)>,
-        link_local: Option<Ipv6Addr>,
-        gua: Option<Ipv6Addr>,
-        ula: Option<Ipv6Addr>,
-        preferred: u32,
-        valid: u32,
+        state: InterfaceState,
     },
     RebuildDnsIndices,
 }
@@ -230,16 +225,9 @@ impl State {
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
             DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, &target),
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
-            DeviceUpdate::InterfaceIpsChanged {
-                ifindex,
-                v4,
-                link_local,
-                gua,
-                ula,
-                preferred,
-                valid,
-            } => self
-                .handle_interface_ips_changed(ifindex, v4, link_local, gua, ula, preferred, valid),
+            DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
+                self.handle_interface_ips_changed(ifindex, &state)
+            }
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 true
@@ -757,64 +745,69 @@ impl State {
         changed_ndp || changed_devices
     }
 
-    fn handle_interface_ips_changed(
-        &mut self,
-        ifindex: u32,
-        v4: Option<(Ipv4Addr, u8)>,
-        link_local: Option<Ipv6Addr>,
-        gua: Option<Ipv6Addr>,
-        ula: Option<Ipv6Addr>,
-        preferred: u32,
-        valid: u32,
-    ) -> bool {
+    fn handle_interface_ips_changed(&mut self, ifindex: u32, state: &InterfaceState) -> bool {
         let entry = self.interface_ips.entry(ifindex).or_default();
-        if entry.v4 == v4
-            && entry.link_local == link_local
-            && entry.gua == gua
-            && entry.ula == ula
-            && entry.gua_preferred == preferred
-            && entry.gua_valid == valid
-        {
+        if *entry == *state {
             false
         } else {
-            *entry = InterfaceState {
-                v4,
-                link_local,
-                gua,
-                ula,
-                gua_preferred: preferred,
-                gua_valid: valid,
-            };
+            *entry = state.clone();
             debug!(
                 "[state] Interface {} IPs updated: V4={:?}, LL={:?}, GUA={:?}, ULA={:?} (pref={}, valid={})",
-                ifindex, v4, link_local, gua, ula, preferred, valid
+                ifindex,
+                state.v4,
+                state.link_local,
+                state.gua,
+                state.ula,
+                state.gua_preferred,
+                state.gua_valid
             );
             true
         }
     }
 
-    pub fn rebuild_dns_indices(&mut self) {
+    // -----------------------------------------------------------------------
+    // High-Performance DNS Hot-Path Indices
+    // -----------------------------------------------------------------------
+
+    /// Rebuilds the O(1) DNS lookup indices from scratch.
+    ///
+    /// This ensures that no "ghost" Hostnames or IPs remain in the cache after
+    /// leases expire or SLAAC addresses rotate.
+    pub(crate) fn rebuild_dns_indices(&mut self) {
         self.name_index.clear();
         self.ip_index.clear();
+
         for (&mac, device) in &self.devices {
+            // 1. Index the explicit hostname (always lowercase)
             if !device.hostname.name.is_empty() {
                 self.name_index
                     .insert(device.hostname.name.to_ascii_lowercase(), mac);
             }
+
+            // 2. Index the mandatory fallback (host-<mac_no_colons>)
             let fallback =
                 format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase();
             self.name_index.insert(fallback, mac);
+
+            // 3. Index IPv4 (Dynamic and Static)
             if let Some(ip) = device.v4.ip() {
                 self.ip_index.insert(IpAddr::V4(ip), mac);
             }
+
+            // 4. Index IPv6 (DHCPv6, SLAAC, and Full Static)
             for state in &device.v6 {
                 if let Some(ip) = state.ip() {
                     self.ip_index.insert(IpAddr::V6(ip), mac);
                 }
             }
+
+            // Note: IPs using static suffixes (e.g., ::1) composed with ULA/GUA
+            // are not indexed here yet, as they depend on the runtime prefix.
         }
+
         self.name_index.shrink_to_fit();
         self.ip_index.shrink_to_fit();
+
         debug!(
             "[state] DNS indices rebuilt: {} names, {} IPs",
             self.name_index.len(),

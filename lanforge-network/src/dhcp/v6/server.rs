@@ -840,7 +840,10 @@ mod tests {
         Decodable, Decoder,
         v6::{DhcpOptions, IANA, OptionCode},
     };
-    use lanforge_core::{device::Ipv6AddrOrSuffix, state::DeviceUpdate};
+    use lanforge_core::{
+        device::Ipv6AddrOrSuffix,
+        state::{DeviceUpdate, InterfaceState},
+    };
     use std::net::Ipv6Addr;
 
     fn dummy_server() -> Dhcpv6Server {
@@ -850,16 +853,17 @@ mod tests {
         let start = "fd97:f00d:cafe:3731::100".parse::<Ipv6Addr>().unwrap();
         let end = "fd97:f00d:cafe:3731::200".parse::<Ipv6Addr>().unwrap();
 
-        // Use instance apply instead of global singleton
-        let _ = ctx.apply(&DeviceUpdate::InterfaceIpsChanged {
-            ifindex: 0,
+        let state = InterfaceState {
+            v4: None,
             link_local: None,
             gua: None,
             ula: Some(ula),
-            preferred: 3600,
-            valid: 3600,
-            v4: None,
-        });
+            gua_preferred: 3600,
+            gua_valid: 3600,
+        };
+
+        // Use instance apply instead of global singleton
+        let _ = ctx.apply(&DeviceUpdate::InterfaceIpsChanged { ifindex: 0, state });
 
         let cfg = Dhcpv6Config {
             enabled: true,
