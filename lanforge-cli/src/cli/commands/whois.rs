@@ -3,6 +3,7 @@ use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{Command as ControlCommand, Response, WhoisResponse};
 use lanforge_core::device::Origin;
+use lanforge_db::engine::LeaseHistoryEntry;
 use crate::cli::vendor::resolve_vendor;
 
 pub struct WhoisHandler {
@@ -92,39 +93,47 @@ pub fn render_whois(resp: &WhoisResponse) {
     if !resp.history.is_empty() {
         element! {
             View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
-                Text(content: "LEASE HISTORY", color: Color::Cyan)
-                View(margin_top: 1) { }
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " LEASE HISTORY ", color: Color::Black, weight: Weight::Bold)
+                }
+                
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                    // Header
+                    View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
+                        Text(content: format!("{:<20}", "TIME"), color: Color::DarkGrey)
+                        Text(content: format!("{:<20}", "IP ADDRESS"), color: Color::DarkGrey)
+                        Text(content: format!("{:<15}", "TYPE"), color: Color::DarkGrey)
+                        Text(content: "ACTION", color: Color::DarkGrey)
+                    }
+                    Text(content: "─".repeat(70), color: Color::DarkGrey)
+                    
+                    #(resp.history.iter().map(|h| element! {
+                        HistoryRow(history: h.clone())
+                    }))
+                }
             }
         }.print();
-
-        use tabled::{Table, Tabled};
-        
-        use chrono::{DateTime, Utc};
-
-        #[derive(Tabled)]
-        struct HistoryRow {
-            #[tabled(rename = "TIME")]
-            time: String,
-            #[tabled(rename = "IP")]
-            ip: String,
-            #[tabled(rename = "TYPE")]
-            lease_type: String,
-            #[tabled(rename = "ACTION")]
-            action: String,
-        }
-
-        let rows: Vec<_> = resp.history.iter().map(|h| {
-            let dt: DateTime<Utc> = h.timestamp.into();
-            HistoryRow {
-                time: format_relative_iso8601(&dt.to_rfc3339()),
-                ip: h.ip.to_string(),
-                lease_type: h.lease_type.clone(),
-                action: format!("{:?}", h.action),
-            }
-        }).collect();
-
-        let mut table = Table::new(rows);
-        table.with(tabled::settings::Style::rounded());
-        println!("{table}");
     }
+}
+
+#[component]
+fn HistoryRow(props: &HistoryRowProps) -> impl Into<AnyElement<'_>> {
+    use chrono::{DateTime, Utc};
+    let h = &props.history;
+    let dt: DateTime<Utc> = h.timestamp.into();
+    let time = format_relative_iso8601(&dt.to_rfc3339());
+    
+    element! {
+        View(flex_direction: FlexDirection::Row) {
+            Text(content: format!("{:<20}", time), color: Color::DarkGrey)
+            Text(content: format!("{:<20}", h.ip.to_string()), color: Color::Green)
+            Text(content: format!("{:<15}", h.lease_type), color: Color::Yellow)
+            Text(content: format!("{:?}", h.action), color: Color::Cyan)
+        }
+    }
+}
+
+#[derive(Props, Clone, Default)]
+struct HistoryRowProps {
+    pub history: LeaseHistoryEntry,
 }

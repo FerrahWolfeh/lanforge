@@ -600,10 +600,11 @@ impl LeaseDb {
 }
 
 /// Represents the type of action taken on a lease.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LeaseAction {
     /// A new lease was assigned.
+    #[default]
     Assigned,
     /// An existing lease was renewed.
     Renewed,
@@ -648,6 +649,17 @@ pub struct LeaseHistoryEntry {
     pub action: LeaseAction,
     /// When the event occurred.
     pub timestamp: SystemTime,
+}
+
+impl Default for LeaseHistoryEntry {
+    fn default() -> Self {
+        Self {
+            ip: String::new(),
+            lease_type: String::new(),
+            action: LeaseAction::Assigned,
+            timestamp: UNIX_EPOCH,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

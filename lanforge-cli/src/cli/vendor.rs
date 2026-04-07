@@ -10,8 +10,8 @@ static OUI_DB: OnceLock<Oui> = OnceLock::new();
 /// one-time memory spike is acceptable.
 pub fn resolve_vendor(mac: &str) -> Option<String> {
     let db = OUI_DB.get_or_init(|| Oui::default().expect("Failed to load OUI database"));
-    // lookup_by_mac returns a Result<&Entry, String> in this version of mac-oui
     db.lookup_by_mac(mac)
         .ok()
-        .map(|entry| entry.unwrap().company_name.to_string())
+        .flatten()
+        .map(|entry| entry.company_name.to_string())
 }

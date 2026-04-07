@@ -173,7 +173,7 @@ pub struct HostsResponse {
 }
 
 /// A single entry in the host configuration list.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct HostConfigEntry {
     /// MAC address identifying the device.
     pub mac: String,
@@ -188,7 +188,7 @@ pub struct HostConfigEntry {
 }
 
 /// A single device discovered on the network.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DeviceEntry {
     /// Device MAC address.
     pub mac: String,
@@ -448,7 +448,7 @@ pub struct DnsStatsResponse {
 }
 
 /// Results of a DNS diagnostic query.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DnsQueryResponse {
     /// The resolved records.
     pub records: Vec<DnsRecordEntry>,
@@ -459,7 +459,7 @@ pub struct DnsQueryResponse {
 }
 
 /// A single DNS record in a query response.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DnsRecordEntry {
     /// Record name.
     pub name: String,

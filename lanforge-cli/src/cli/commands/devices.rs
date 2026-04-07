@@ -4,10 +4,8 @@ use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
-use lanforge_api::api::{DeviceEntry, DevicesResponse, HostsResponse};
+use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
 use lanforge_core::device::Origin;
-use tabled::settings::Style;
-use tabled::{Table, Tabled};
 
 pub struct DevicesHandler {
     pub verbose: bool,
@@ -56,133 +54,158 @@ impl CliCommand for DevicesHandler {
     }
 }
 
-#[derive(Tabled)]
-struct DeviceRow {
-    #[tabled(rename = "HOST")]
-    host: String,
-    #[tabled(rename = "MAC")]
-    mac: String,
-    #[tabled(rename = "V4")]
-    v4: String,
-    #[tabled(rename = "V6 / SLAAC")]
-    v6: String,
-    #[tabled(rename = "VENDOR")]
-    vendor: String,
-    #[tabled(rename = "STATUS")]
-    status: String,
-}
-
-#[derive(Tabled)]
-struct HostRow {
-    #[tabled(rename = "HOST")]
-    host: String,
-    #[tabled(rename = "MAC")]
-    mac: String,
-    #[tabled(rename = "FIXED IPv4")]
-    v4: String,
-    #[tabled(rename = "V6 SUFFIX")]
-    v6: String,
-}
-
 pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
-                Text(content: "DEVICES  ·  ", color: Color::DarkGrey)
-                Text(content: format!("{} known", resp.meta.total))
+                Text(content: " DEVICES ", color: Color::Black, weight: Weight::Bold)
                 Text(content: "  ·  ", color: Color::DarkGrey)
-                Text(content: format!("{} online", resp.meta.online))
+                Text(content: format!("{} total", resp.meta.total))
                 Text(content: "  ·  ", color: Color::DarkGrey)
-                Text(content: format!("last scan {}s ago", resp.meta.last_scan_secs_ago))
+                Text(content: format!("{} online", resp.meta.online), color: Color::Green)
+                Text(content: "  ·  ", color: Color::DarkGrey)
+                Text(content: format!("last scan {}s ago", resp.meta.last_scan_secs_ago), color: Color::DarkGrey)
             }
-            View(margin_top: 1) { }
         }
     }
     .print();
 
-    let mut rows = Vec::new();
-
-    for dev in &resp.devices {
-        if verbose {
+    if verbose {
+        for dev in &resp.devices {
             render_verbose_device(dev);
-        } else {
-            rows.push(build_device_row(dev));
         }
-    }
+    } else {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+                // Header
+                View(flex_direction: FlexDirection::Row, border_style: BorderStyle::None, padding_bottom: 0) {
+                    Text(content: format!("  {:<20}", "HOST"), color: Color::DarkGrey)
+                    Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
+                    Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
+                    Text(content: format!("{:<30}", "IPv6 / SLAAC"), color: Color::DarkGrey)
+                    Text(content: "VENDOR", color: Color::DarkGrey)
+                }
+                // Separator
+                Text(content: "─".repeat(100), color: Color::DarkGrey)
 
-    if !verbose && !rows.is_empty() {
-        let mut table = Table::new(rows);
-        table.with(Style::rounded());
-        println!("{table}");
+                // Rows
+                View(flex_direction: FlexDirection::Column) {
+                    #(resp.devices.iter().cloned().map(|dev| element! { DeviceRow(device: dev) }))
+                }
+            }
+        }.print();
     }
 
     element! {
-        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_top: 1) {
-            Text(content: "★ TOML estático   · gerenciado via CLI   – dinâmico   ↑ SLAAC ativo", color: Color::DarkGrey)
+        View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+            Text(content: "★ TOML static   · CLI managed   – dynamic   ↑ SLAAC active", color: Color::DarkGrey)
             View(padding_bottom: 1) { }
         }
     }.print();
+}
+
+#[component]
+fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
+    let dev = &props.device;
+    let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
+    let status_color = if dev.online {
+        Color::Green
+    } else {
+        Color::DarkGrey
+    };
+    let host = if dev.hostname.is_empty() {
+        "—".to_string()
+    } else {
+        format!("{} {}", dev.hostname, symbol)
+    };
+    let vendor = resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string());
+
+    element! {
+        View(flex_direction: FlexDirection::Row) {
+            Text(content: "● ", color: status_color)
+            Text(content: format!("{:<20}", truncate(&host, 20)))
+            Text(content: format!("{:<20}", dev.mac), color: Color::Cyan)
+            Text(content: format!("{:<18}", dev.display_v4), color: Color::Green)
+            Text(content: format!("{:<41}", dev.display_v6), color: Color::Yellow)
+            Text(content: truncate(&vendor, 25), color: Color::White)
+        }
+    }
+}
+
+#[derive(Props, Clone, Default)]
+struct DeviceRowProps {
+    pub device: DeviceEntry,
 }
 
 pub fn render_hosts(resp: &HostsResponse) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
-                Text(content: "CONFIGURED HOSTS  ·  ", color: Color::DarkGrey)
+                Text(content: " CONFIGURED HOSTS ", color: Color::Black, weight: Weight::Bold)
+                Text(content: "  ·  ", color: Color::DarkGrey)
                 Text(content: format!("{} entries", resp.hosts.len()))
             }
-            View(margin_top: 1) { }
         }
     }
     .print();
 
-    let rows: Vec<_> = resp
-        .hosts
-        .iter()
-        .map(|h| {
-            let symbol = h.origin.parse::<Origin>().unwrap_or_default().symbol();
-            HostRow {
-                host: format!("{} {}", h.hostname, symbol),
-                mac: h.mac.clone(),
-                v4: h.v4_fixed.clone().unwrap_or_else(|| "—".to_string()),
-                v6: h.v6_suffix.clone().unwrap_or_else(|| "—".to_string()),
+    element! {
+        View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+            // Header
+            View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
+                Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
+                Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
+                Text(content: format!("{:<18}", "FIXED IPv4"), color: Color::DarkGrey)
+                Text(content: "IPv6 SUFFIX", color: Color::DarkGrey)
             }
-        })
-        .collect();
+            // Separator
+            Text(content: "─".repeat(80), color: Color::DarkGrey)
 
-    if !rows.is_empty() {
-        let mut table = Table::new(rows);
-        table.with(Style::rounded());
-        println!("{table}");
+            // Rows
+            View(flex_direction: FlexDirection::Column) {
+                #(resp.hosts.iter().cloned().map(|host| element! { HostRow(host: host) }))
+            }
+        }
     }
+    .print();
 
     element! {
-        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_top: 1) {
-            Text(content: "★ TOML estático   · gerenciado via CLI", color: Color::DarkGrey)
+        View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+            Text(content: "★ TOML static   · CLI managed", color: Color::DarkGrey)
             View(padding_bottom: 1) { }
         }
     }
     .print();
 }
 
-fn build_device_row(dev: &DeviceEntry) -> DeviceRow {
-    let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
-    let host = format!("{} {}", dev.hostname, symbol);
+#[component]
+fn HostRow(props: &HostRowProps) -> impl Into<AnyElement<'_>> {
+    let host = &props.host;
+    let symbol = host.origin.parse::<Origin>().unwrap_or_default().symbol();
 
-    let status = if dev.online {
-        "Online".to_string()
-    } else {
-        "Offline".to_string()
-    };
-
-    DeviceRow {
-        host,
-        mac: dev.mac.clone(),
-        v4: dev.display_v4.clone(),
-        v6: dev.display_v6.clone(),
-        vendor: resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string()),
-        status,
+    element! {
+        View(flex_direction: FlexDirection::Row) {
+            Text(content: "  ")
+            Text(content: format!("{:<23}", truncate(&format!("{} {}", host.hostname, symbol), 23)))
+            Text(content: format!("{:<20}", host.mac), color: Color::Cyan)
+            Text(content: format!("{:<18}", host.v4_fixed.as_deref().unwrap_or("—")), color: Color::Green)
+            Text(content: truncate(host.v6_suffix.as_deref().unwrap_or("—"), 20), color: Color::Yellow)
+        }
     }
+}
+
+fn truncate(s: &str, max_width: usize) -> String {
+    if s.chars().count() > max_width {
+        let truncated: String = s.chars().take(max_width - 1).collect();
+        format!("{}…", truncated)
+    } else {
+        s.to_string()
+    }
+}
+
+#[derive(Props, Clone, Default)]
+struct HostRowProps {
+    pub host: HostConfigEntry,
 }
 
 fn render_verbose_device(dev: &DeviceEntry) {
@@ -192,6 +215,13 @@ fn render_verbose_device(dev: &DeviceEntry) {
     }
     let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
     let host_display = format!(" {host} {symbol} ");
+
+    // Ensure host_display doesn't break the layout if too long
+    let host_display = if host_display.len() > 60 {
+        format!(" {}… ", &host_display[..57])
+    } else {
+        host_display
+    };
 
     // V4 Section
     let mut v4_lines = Vec::new();
@@ -238,16 +268,17 @@ fn render_verbose_device(dev: &DeviceEntry) {
     let mac_str = dev.mac.clone();
     let origin_str = dev.origin.clone();
     let last_seen_str = format_relative_iso8601(&dev.last_seen);
+    let vendor = resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string());
 
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_bottom: 1) {
             View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
                 View(flex_direction: FlexDirection::Row, padding_bottom: 1, margin_top: -1) {
-                    Text(content: host_display, color: Color::Cyan)
+                    Text(content: host_display, color: Color::Cyan, weight: Weight::Bold)
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "MAC        ", color: Color::DarkGrey)
-                    Text(content: mac_str)
+                    Text(content: mac_str, color: Color::Cyan)
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "DUID       ", color: Color::DarkGrey)
@@ -255,7 +286,7 @@ fn render_verbose_device(dev: &DeviceEntry) {
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "Vendor     ", color: Color::DarkGrey)
-                    Text(content: resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string()))
+                    Text(content: vendor, color: Color::White)
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "Method     ", color: Color::DarkGrey)
@@ -270,10 +301,10 @@ fn render_verbose_device(dev: &DeviceEntry) {
                     Text(content: origin_str)
                 }
                 View(flex_direction: FlexDirection::Row) {
-                    Text(content: v4_join)
+                    Text(content: v4_join, color: Color::Green)
                 }
                 View(flex_direction: FlexDirection::Row) {
-                    Text(content: v6_join)
+                    Text(content: v6_join, color: Color::Yellow)
                 }
                 View(padding_bottom: 1) { }
             }

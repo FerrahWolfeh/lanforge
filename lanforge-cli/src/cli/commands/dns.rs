@@ -1,18 +1,10 @@
 use crate::cli::commands::CliCommand;
 use color_eyre::eyre::Result;
-use lanforge_api::api::{Command as ControlCommand, Response};
-use tabled::{Table, Tabled};
+use iocraft::prelude::*;
+use lanforge_api::api::{Command as ControlCommand, DnsQueryResponse, Response};
 
 pub struct DnsCommand {
     pub action: crate::args::DnsCommand,
-}
-
-#[derive(Tabled)]
-struct DnsStatsRow {
-    #[tabled(rename = "Metric")]
-    metric: &'static str,
-    #[tabled(rename = "Value")]
-    value: u64,
 }
 
 impl CliCommand for DnsCommand {
@@ -29,46 +21,37 @@ impl CliCommand for DnsCommand {
     fn on_response(&self, response: &Response) -> Result<()> {
         match response {
             Response::DnsStats(stats) => {
-                let rows = vec![
-                    DnsStatsRow {
-                        metric: "Total Requests",
-                        value: stats.total_requests,
-                    },
-                    DnsStatsRow {
-                        metric: "Cache Hits",
-                        value: stats.cache_hits,
-                    },
-                    DnsStatsRow {
-                        metric: "Cache Misses",
-                        value: stats.cache_misses,
-                    },
-                    DnsStatsRow {
-                        metric: "Upstream Errors",
-                        value: stats.upstream_errors,
-                    },
-                    DnsStatsRow {
-                        metric: "Auth Queries",
-                        value: stats.auth_queries,
-                    },
-                    DnsStatsRow {
-                        metric: "Recursions",
-                        value: stats.recursions,
-                    },
-                ];
-                println!("{}", Table::new(rows));
+                element! {
+                    View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                        View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                            Text(content: " DNS RESOLVER STATS ", color: Color::Black, weight: Weight::Bold)
+                        }
+                        View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                            StatLine(label: "Total Requests", value: stats.total_requests)
+                            StatLine(label: "Cache Hits", value: stats.cache_hits, color: Color::Green)
+                            StatLine(label: "Cache Misses", value: stats.cache_misses, color: Color::Yellow)
+                            StatLine(label: "Upstream Errors", value: stats.upstream_errors, color: Color::Red)
+                            StatLine(label: "Auth Queries", value: stats.auth_queries)
+                            StatLine(label: "Recursions", value: stats.recursions)
+                        }
+                    }
+                }.print();
             }
             Response::DnsQuery(query) => {
-                println!("Dns Query Result ({}ms):", query.latency_ms);
-                if query.authoritative {
-                    println!("(Authoritative)");
-                }
-                if query.records.is_empty() {
-                    println!("No records found.");
-                } else {
-                    for r in &query.records {
-                        println!("- {}", r);
+                element! {
+                    View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+                        View(flex_direction: FlexDirection::Row) {
+                            Text(content: " QUERY RESULT ", color: Color::Black, weight: Weight::Bold)
+                            Text(content: format!("  latency: {}ms", query.latency_ms), color: Color::DarkGrey)
+                            #(query.authoritative.then(|| element! {
+                                Text(content: "  (Authoritative)", color: Color::Cyan)
+                            }))
+                        }
+                        View(margin_top: 1) {
+                            QueryResults(query: query.clone())
+                        }
                     }
-                }
+                }.print();
             }
             Response::Error { error } => {
                 println!("Erro: {}", error);
@@ -79,4 +62,46 @@ impl CliCommand for DnsCommand {
         }
         Ok(())
     }
+}
+
+#[component]
+fn StatLine(props: &StatLineProps) -> impl Into<AnyElement<'_>> {
+    let color = props.color.unwrap_or(Color::White);
+    element! {
+        View(flex_direction: FlexDirection::Row) {
+            Text(content: format!("{:<20}", props.label), color: Color::DarkGrey)
+            Text(content: props.value.to_string(), color: color)
+        }
+    }
+}
+
+#[derive(Props, Default)]
+struct StatLineProps {
+    pub label: String,
+    pub value: u64,
+    pub color: Option<Color>,
+}
+#[component]
+fn QueryResults(props: &QueryResultsProps) -> impl Into<AnyElement<'_>> {
+    let query = &props.query;
+    if query.records.is_empty() {
+        element! { Text(content: "No records found.", color: Color::Red) }.into_any()
+    } else {
+        element! {
+            View(flex_direction: FlexDirection::Column) {
+                #(query.records.iter().map(|r| element! {
+                    View(flex_direction: FlexDirection::Row) {
+                        Text(content: "● ", color: Color::Green)
+                        Text(content: r.to_string())
+                    }
+                }))
+            }
+        }
+        .into_any()
+    }
+}
+
+#[derive(Props, Clone, Default)]
+struct QueryResultsProps {
+    pub query: DnsQueryResponse,
 }
