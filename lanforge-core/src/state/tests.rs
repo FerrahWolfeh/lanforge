@@ -633,8 +633,8 @@ fn test_filtering_ndp_seen_worthy() {
     assert!(table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ula_ip }));
     assert!(table.get_device(&mac).is_some());
 
-    // 3. Agora que existe, NDP Seen com Link-Local deve marcar dirty (para persistence de last_seen)
-    assert!(table.apply_update(DeviceUpdate::NdpSeen { mac, ip: ll_ip }));
+    // 3. Agora que existe, NDP Seen com Link-Local não deve marcar dirty imediatamente (throttle de 300s)
+    assert!(!table.apply_update(DeviceUpdate::NdpSeen { mac, ip: ll_ip }));
 }
 
 #[test]

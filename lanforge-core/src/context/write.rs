@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    bus::LanforgeEvent,
+    bus::{DeviceChange, LanforgeEvent},
     context::{
         LanforgeContext,
         utils::{device_change_of, mac_of},
@@ -41,7 +41,18 @@ impl LanforgeContext {
     pub fn apply(&self, update: &DeviceUpdate) -> bool {
         let mut state = self.inner.state.write();
 
-        let opt_mac = mac_of(update);
+        let mut opt_mac = mac_of(update);
+
+        // Special case: IpOffline/IpDeleted don't have MAC in the update, but we can resolve it from state
+        if opt_mac.is_none()
+            && let DeviceUpdate::IpOffline { ip } | DeviceUpdate::IpDeleted { ip } = update
+        {
+            opt_mac = state.get_mac_by_ip(*ip);
+        }
+
+        let was_online = opt_mac
+            .and_then(|mac| state.get_device(&mac))
+            .map(|d| d.is_online());
         let is_new = opt_mac.is_some_and(|mac| state.get_device(&mac).is_none());
         let change = device_change_of(update);
 
@@ -58,18 +69,28 @@ impl LanforgeContext {
             }
         }
 
-        let changed = state.apply_update(update.clone());
-        if !changed {
+        let changed_in_state = state.apply_update(update.clone());
+        if !changed_in_state {
             return false;
         }
 
         let mut events = Vec::new();
         if let Some(mac) = opt_mac {
+            let now_online = state.get_device(&mac).is_some_and(|d| d.is_online());
+
             if is_new {
                 events.push(LanforgeEvent::DeviceDiscovered { mac });
             }
             if let Some(change) = change {
                 events.push(LanforgeEvent::DeviceUpdated { mac, change });
+            }
+            if let Some(was) = was_online
+                && was != now_online
+            {
+                events.push(LanforgeEvent::DeviceUpdated {
+                    mac,
+                    change: DeviceChange::StatusChanged { online: now_online },
+                });
             }
             if let DeviceUpdate::HostRemoved { .. } = update {
                 events.push(LanforgeEvent::DevicePurged { mac });

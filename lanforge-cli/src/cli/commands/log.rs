@@ -263,6 +263,13 @@ impl LogHandler {
             DeviceChange::ArpActivity { ip } => {
                 format!("ARP Activity: {}", ip.to_string().bright_cyan())
             }
+            DeviceChange::StatusChanged { online } => {
+                if *online {
+                    "Online".bright_green().bold().to_string()
+                } else {
+                    "Offline".red().bold().to_string()
+                }
+            }
         }
     }
 }

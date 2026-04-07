@@ -17,13 +17,15 @@ pub enum NeighborEvent {
     },
     /// A neighbor entry was deleted from the kernel table.
     Deleted { ip: std::net::IpAddr, ifindex: u32 },
+    /// A neighbor entry reached a FAILED state (`NUD_FAILED`).
+    Failed { ip: std::net::IpAddr, ifindex: u32 },
 }
 
 impl NeighborEvent {
     #[must_use]
     pub const fn ip(&self) -> &std::net::IpAddr {
         match self {
-            Self::Added { ip, .. } | Self::Deleted { ip, .. } => ip,
+            Self::Added { ip, .. } | Self::Deleted { ip, .. } | Self::Failed { ip, .. } => ip,
         }
     }
 
@@ -31,14 +33,16 @@ impl NeighborEvent {
     pub const fn mac(&self) -> Option<MacAddr> {
         match self {
             Self::Added { mac, .. } => Some(*mac),
-            Self::Deleted { .. } => None,
+            Self::Deleted { .. } | Self::Failed { .. } => None,
         }
     }
 
     #[must_use]
     pub const fn ifindex(&self) -> u32 {
         match self {
-            Self::Added { ifindex, .. } | Self::Deleted { ifindex, .. } => *ifindex,
+            Self::Added { ifindex, .. }
+            | Self::Deleted { ifindex, .. }
+            | Self::Failed { ifindex, .. } => *ifindex,
         }
     }
 
@@ -75,6 +79,7 @@ impl NeighborEvent {
                 },
             },
             Self::Deleted { ip, .. } => DeviceUpdate::IpDeleted { ip: *ip },
+            Self::Failed { ip, .. } => DeviceUpdate::IpOffline { ip: *ip },
         }
     }
 }

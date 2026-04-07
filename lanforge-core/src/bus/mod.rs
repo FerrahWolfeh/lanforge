@@ -90,6 +90,9 @@ pub enum DeviceChange {
 
     /// An IPv4 neighbor event (ARP) was observed.
     ArpActivity { ip: Ipv4Addr },
+
+    /// The device's reachability status has changed.
+    StatusChanged { online: bool },
 }
 
 /// A wrapper for an event along with its metadata (timestamp, source module).

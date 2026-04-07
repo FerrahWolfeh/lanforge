@@ -26,6 +26,7 @@ pub(crate) const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         | DeviceUpdate::LeaseReleased { mac, .. } => Some(*mac),
 
         DeviceUpdate::IpDeleted { .. }
+        | DeviceUpdate::IpOffline { .. }
         | DeviceUpdate::InterfaceIpsChanged { .. }
         | DeviceUpdate::RebuildDnsIndices => None,
     }
@@ -59,6 +60,7 @@ pub(crate) fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         DeviceUpdate::DuidAssociated { .. } => Some(DeviceChange::DuidAssociated),
         DeviceUpdate::NdpSeen { ip, .. } => Some(DeviceChange::NdpActivity { ip: *ip }),
         DeviceUpdate::ArpSeen { ip, .. } => Some(DeviceChange::ArpActivity { ip: *ip }),
+        DeviceUpdate::IpOffline { .. } => Some(DeviceChange::StatusChanged { online: false }),
         DeviceUpdate::LeaseReleased { target, .. } => Some(DeviceChange::LeaseExpired {
             target: target.clone(),
         }),

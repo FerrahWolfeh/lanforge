@@ -113,18 +113,21 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
         _ => return None,
     };
 
-    // We only block Incomplete/Failed states when discovering a new host.
+    // We only block Incomplete states when discovering a new host.
+    // Failed is now handled to detect offline status.
     if !is_delete
-        && matches!(
-            neigh.header.state,
-            NeighbourState::Incomplete | NeighbourState::Failed
-        )
+        && matches!(neigh.header.state, NeighbourState::Incomplete)
     {
         return None;
     }
 
     if is_delete {
         Some(NeighborEvent::Deleted {
+            ip,
+            ifindex: neigh.header.ifindex,
+        })
+    } else if neigh.header.state == NeighbourState::Failed {
+        Some(NeighborEvent::Failed {
             ip,
             ifindex: neigh.header.ifindex,
         })
@@ -217,6 +220,23 @@ pub async fn get_ipv6_neighbors(
     Ok(neighbors)
 }
 
+/// Triggers a NUD probe for a specific neighbor via Netlink.
+///
+/// This forces the kernel to send a Neighbor Solicitation (IPv6) or ARP Request (IPv4)
+/// to verify the reachability of the given IP address.
+pub async fn probe_neighbor(
+    handle: &Handle,
+    ifindex: u32,
+    ip: IpAddr,
+) -> Result<(), rtnetlink::Error> {
+    handle
+        .neighbours()
+        .add(ifindex, ip)
+        .state(NeighbourState::Probe)
+        .execute()
+        .await
+}
+
 // ---------------------------------------------------------------------------
 // NdpMonitor — The "Serviceable Struct" for Netlink
 // ---------------------------------------------------------------------------
@@ -273,6 +293,7 @@ impl AsyncService for NdpMonitor {
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
+        let mut probe_interval = tokio::time::interval(Duration::from_secs(60));
 
         // 1. Initial Neighbor Scan (Bootstrap)
         {
@@ -287,6 +308,19 @@ impl AsyncService for NdpMonitor {
             .await
             {
                 tracing::error!("NdpMonitor: Initial bootstrap scan failed: {e}");
+            }
+        }
+
+        // 2. Initial network-wide probe (Boot Probe)
+        {
+            let devices = self.ctx.all_devices();
+            tracing::info!("NdpMonitor: Triggering boot probe for {} devices", devices.len());
+            for dev in devices {
+                for ip in dev.all_addresses_sorted(current_gua, current_ula) {
+                    if let Err(e) = probe_neighbor(&self.handle, self.target_ifindex, ip).await {
+                        tracing::debug!("NdpMonitor: Boot probe failed for {ip}: {e}");
+                    }
+                }
             }
         }
 
@@ -314,6 +348,24 @@ impl AsyncService for NdpMonitor {
                     if let LanforgeEvent::PrefixChanged { gua, ula, .. } = event.event {
                         current_gua = gua;
                         current_ula = ula;
+                    }
+                }
+
+                _ = probe_interval.tick() => {
+                    drop(rx);
+                    // B. Periodic NUD Probes for silent devices
+                    let devices = self.ctx.all_devices();
+                    let now = std::time::SystemTime::now();
+                    for dev in devices {
+                        let elapsed = now.duration_since(dev.last_seen).unwrap_or_default();
+                        // Probe if silent for > 60s
+                        if elapsed.as_secs() > 60 {
+                            for ip in dev.all_addresses_sorted(current_gua, current_ula) {
+                                if let Err(e) = probe_neighbor(&self.handle, self.target_ifindex, ip).await {
+                                    tracing::debug!("NdpMonitor: Scheduled probe failed for {ip}: {e}");
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -442,15 +494,23 @@ mod tests {
     }
 
     #[test]
-    fn extract_neigh_info_ignores_incomplete_and_failed() {
+    fn extract_neigh_info_ignores_incomplete() {
         let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
         let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
         let msg_incomplete = mock_neigh_msg(NeighbourState::Incomplete, ip, Some(mac), false);
-        let msg_failed = mock_neigh_msg(NeighbourState::Failed, ip, Some(mac), false);
 
         assert!(extract_neigh_info(&msg_incomplete).is_none());
-        assert!(extract_neigh_info(&msg_failed).is_none());
+    }
+
+    #[test]
+    fn extract_neigh_info_handles_failed() {
+        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+
+        let msg_failed = mock_neigh_msg(NeighbourState::Failed, ip, Some(mac), false);
+        let event = extract_neigh_info(&msg_failed).expect("should extract Failed");
+        assert!(matches!(event, NeighborEvent::Failed { .. }));
     }
 
     #[test]

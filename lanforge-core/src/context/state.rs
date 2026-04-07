@@ -150,6 +150,9 @@ pub enum DeviceUpdate {
     IpDeleted {
         ip: IpAddr,
     },
+    IpOffline {
+        ip: IpAddr,
+    },
     InterfaceIpsChanged {
         ifindex: u32,
         state: InterfaceState,
@@ -225,6 +228,7 @@ impl State {
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
             DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, &target),
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
+            DeviceUpdate::IpOffline { ip } => self.handle_ip_offline(ip),
             DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
                 self.handle_interface_ips_changed(ifindex, &state)
             }
@@ -743,6 +747,30 @@ impl State {
             self.devices.insert(mac, new_dev);
         }
         changed_ndp || changed_devices
+    }
+
+    fn handle_ip_offline(&mut self, ip: IpAddr) -> bool {
+        let mac = if let Some(mac) = self.ip_index.get(&ip) {
+            *mac
+        } else if let IpAddr::V6(ip6) = ip
+            && let Some((mac, _)) = self.ndp_cache.get(&ip6)
+        {
+            *mac
+        } else {
+            return false;
+        };
+
+        if let Some(dev_arc) = self.devices.get(&mac) {
+            let was_online = dev_arc.is_online();
+            if was_online {
+                let mut dev = (**dev_arc).clone();
+                // Force it to be "offline" by setting last_seen to 6 minutes ago
+                dev.last_seen = SystemTime::now() - Duration::from_secs(360);
+                self.devices.insert(mac, Arc::new(dev));
+                return true;
+            }
+        }
+        false
     }
 
     fn handle_interface_ips_changed(&mut self, ifindex: u32, state: &InterfaceState) -> bool {
