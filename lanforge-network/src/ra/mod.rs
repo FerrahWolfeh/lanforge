@@ -39,9 +39,11 @@ use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
 use rand::RngExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, ErrorKind};
+use std::mem::{MaybeUninit, size_of};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
+use std::ptr::{from_mut, from_ref};
 use std::time::{Duration, Instant};
 use tokio::io::unix::{AsyncFd, AsyncFdReadyGuard};
 use tracing::{debug, info, warn};
@@ -308,9 +310,9 @@ impl RaService {
         state: &mut RaState,
     ) -> std::result::Result<(), CoreError> {
         let mut guard = res.map_err(CoreError::Io)?;
-        let res = guard.get_inner().recv_from(unsafe {
-            &mut *std::ptr::from_mut(buf).cast::<[std::mem::MaybeUninit<u8>; 1500]>()
-        });
+        let res = guard
+            .get_inner()
+            .recv_from(unsafe { &mut *from_mut(buf).cast::<[MaybeUninit<u8>; 1500]>() });
 
         match res {
             Ok((n, src_sa)) => {
@@ -367,7 +369,7 @@ impl RaService {
                     }
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 guard.clear_ready();
             }
             Err(e) => warn!("RA socket error: {e}"),
@@ -379,7 +381,7 @@ impl RaService {
         event: &LanforgeEvent,
         state: &mut RaState,
         next_ra_at: &mut Instant,
-    ) -> std::result::Result<(), CoreError> {
+    ) -> Result<(), CoreError> {
         match event {
             LanforgeEvent::PrefixChanged { .. } => {
                 info!("RA: Prefix change detected — sending immediate RA burst");
@@ -507,8 +509,8 @@ fn set_sockopt_int(
             sock.as_raw_fd(),
             level,
             opt,
-            std::ptr::from_ref(&v).cast::<libc::c_void>(),
-            libc::socklen_t::try_from(std::mem::size_of::<libc::c_int>()).unwrap_or_default(),
+            from_ref(&v).cast::<libc::c_void>(),
+            libc::socklen_t::try_from(size_of::<libc::c_int>()).unwrap_or_default(),
         )
     };
     if ret == 0 {

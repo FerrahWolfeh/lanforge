@@ -37,8 +37,10 @@ use rtnetlink::{Handle, IpVersion};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
+use tokio::time::{interval, sleep};
+use tracing::{error, info};
 
 // ---------------------------------------------------------------------------
 // Neighbor event filter (Netlink stream events)
@@ -110,8 +112,8 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
     }
 
     let ip = match neigh.header.family {
-        rtnetlink::packet_route::AddressFamily::Inet6 => std::net::IpAddr::V6(ip_v6?),
-        rtnetlink::packet_route::AddressFamily::Inet => std::net::IpAddr::V4(ip_v4?),
+        rtnetlink::packet_route::AddressFamily::Inet6 => IpAddr::V6(ip_v6?),
+        rtnetlink::packet_route::AddressFamily::Inet => IpAddr::V4(ip_v4?),
         _ => return None,
     };
 
@@ -249,17 +251,26 @@ pub async fn get_ipv4_neighbors(
 ///
 /// This forces the kernel to send a Neighbor Solicitation (IPv6) or ARP Request (IPv4)
 /// to verify the reachability of the given IP address.
+///
+/// Se `mac` for fornecido, o kernel envia um Unicast Probe (bypassa deep sleep).
+/// Se `mac` for None, o kernel envia um Broadcast Probe (usado para discovery).
 pub async fn probe_neighbor(
     handle: &Handle,
     ifindex: u32,
     ip: IpAddr,
+    mac: Option<MacAddr>, // Aceitando o MAC opcionalmente
 ) -> Result<(), rtnetlink::Error> {
-    handle
+    let mut req = handle
         .neighbours()
         .add(ifindex, ip)
-        .state(NeighbourState::Probe)
-        .execute()
-        .await
+        .state(NeighbourState::Probe);
+
+    // Se temos a identidade do hardware, preservamos no cache do kernel!
+    if let Some(m) = mac {
+        req = req.link_local_address(m.as_bytes());
+    }
+
+    req.execute().await
 }
 
 /// Returns an iterator over all usable IPv4 addresses in a given subnet.
@@ -323,7 +334,7 @@ impl NeighborMonitor {
             return;
         }
 
-        tracing::info!("NeighborMonitor: Spawning subnet scan task (source: {source})");
+        info!("NeighborMonitor: Spawning subnet scan task (source: {source})");
         let handle = self.handle.clone();
         let ctx = self.ctx.clone();
         let ifindex = self.target_ifindex;
@@ -361,7 +372,7 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
     if let Some((ip, prefix_len)) = interface_state.v4 {
         let range = get_ipv4_subnet_iterable(ip, prefix_len);
         if !range.is_empty() {
-            tracing::info!(
+            info!(
                 "NeighborMonitor: Unleashing massive ARP scan for {}/{} ({} addresses)",
                 ip,
                 prefix_len,
@@ -373,11 +384,12 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
             });
 
             for target_ip in range {
-                if let Err(e) = probe_neighbor(&handle, ifindex, IpAddr::V4(target_ip)).await {
+                if let Err(e) = probe_neighbor(&handle, ifindex, IpAddr::V4(target_ip), None).await
+                {
                     tracing::debug!("NeighborMonitor: ARP probe failed for {target_ip}: {e}");
                 }
                 // Pacing for manual scan: 10ms between addresses to avoid CPU spikes
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                sleep(Duration::from_millis(10)).await;
             }
         }
     }
@@ -392,7 +404,7 @@ async fn run_periodic_probes_task(
     force_all: bool,
 ) {
     let devices = ctx.all_devices();
-    let now = std::time::SystemTime::now();
+    let now = SystemTime::now();
 
     for dev in devices {
         // Surgical Probing Rule: Only probe devices that are ALREADY online but quiet.
@@ -405,11 +417,11 @@ async fn run_periodic_probes_task(
         let elapsed = now.duration_since(dev.last_seen).unwrap_or_default();
         if force_all || elapsed.as_secs() > 60 {
             for ip in dev.all_addresses_sorted(current_gua, current_ula) {
-                if let Err(e) = probe_neighbor(&handle, ifindex, ip).await {
+                if let Err(e) = probe_neighbor(&handle, ifindex, ip, Some(dev.mac)).await {
                     tracing::debug!("NeighborMonitor: Scheduled probe failed for {ip}: {e}");
                 }
                 // Pacing: 50ms between individual IP probes to keep network load negligible.
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                sleep(Duration::from_millis(50)).await;
             }
         }
     }
@@ -442,9 +454,9 @@ impl AsyncService for NeighborMonitor {
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
-        let mut probe_interval = tokio::time::interval(Duration::from_secs(60));
+        let mut probe_interval = interval(Duration::from_secs(60));
         let mut subnet_scan_interval = if self.scan_interval.as_secs() > 0 {
-            let mut interval = tokio::time::interval(self.scan_interval);
+            let mut interval = interval(self.scan_interval);
             // Ensure the first periodic scan happens after the first interval, not immediately.
             interval.reset();
             Some(interval)
@@ -464,14 +476,14 @@ impl AsyncService for NeighborMonitor {
             )
             .await
             {
-                tracing::error!("NeighborMonitor: Initial bootstrap scan failed: {e}");
+                error!("NeighborMonitor: Initial bootstrap scan failed: {e}");
             }
         }
 
         // 2. Initial network-wide probe (Boot Discovery on all known devices)
         {
             let devices = self.ctx.all_devices();
-            tracing::info!(
+            info!(
                 "NeighborMonitor: Triggering initial discovery probe for {} devices",
                 devices.len()
             );
@@ -534,7 +546,7 @@ impl AsyncService for NeighborMonitor {
             }
         }
 
-        tracing::info!("NeighborMonitor: Service stopped");
+        info!("NeighborMonitor: Service stopped");
         Ok(())
     }
 }
@@ -589,6 +601,8 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
 
 #[cfg(test)]
 mod tests {
+    use std::net::IpAddr;
+
     use super::*;
     use lanforge_core::{
         state::DeviceUpdate,
@@ -599,13 +613,13 @@ mod tests {
 
     fn mock_neigh_msg(
         state: NeighbourState,
-        ip: std::net::IpAddr,
+        ip: IpAddr,
         mac: Option<[u8; 6]>,
         is_delete: bool,
     ) -> NetlinkMessage<RouteNetlinkMessage> {
         let addr = match ip {
-            std::net::IpAddr::V6(a) => NeighbourAddress::Inet6(a),
-            std::net::IpAddr::V4(a) => NeighbourAddress::Inet(a),
+            IpAddr::V6(a) => NeighbourAddress::Inet6(a),
+            IpAddr::V4(a) => NeighbourAddress::Inet(a),
         };
         let mut attributes = vec![NeighbourAttribute::Destination(addr)];
         if let Some(m) = mac {
@@ -639,7 +653,7 @@ mod tests {
 
     #[test]
     fn extract_neigh_info_returns_typed_event() {
-        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        let ip: IpAddr = "fe80::1".parse().unwrap();
         let mac_bytes = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
         let msg = mock_neigh_msg(NeighbourState::Reachable, ip, Some(mac_bytes), false);
@@ -656,7 +670,7 @@ mod tests {
 
     #[test]
     fn extract_neigh_info_ignores_incomplete() {
-        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        let ip: IpAddr = "fe80::1".parse().unwrap();
         let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
         let msg_incomplete = mock_neigh_msg(NeighbourState::Incomplete, ip, Some(mac), false);
@@ -666,7 +680,7 @@ mod tests {
 
     #[test]
     fn extract_neigh_info_handles_failed() {
-        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        let ip: IpAddr = "fe80::1".parse().unwrap();
         let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
         let msg_failed = mock_neigh_msg(NeighbourState::Failed, ip, Some(mac), false);
@@ -676,7 +690,7 @@ mod tests {
 
     #[test]
     fn extract_neigh_info_requires_both_ip_and_mac() {
-        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        let ip: IpAddr = "fe80::1".parse().unwrap();
         // MAC ausente
         let msg = mock_neigh_msg(NeighbourState::Reachable, ip, None, false);
         assert!(extract_neigh_info(&msg).is_none());
@@ -814,7 +828,7 @@ mod tests {
 
     #[test]
     fn extract_neigh_info_handles_delete() {
-        let ip: std::net::IpAddr = "fe80::1".parse().unwrap();
+        let ip: IpAddr = "fe80::1".parse().unwrap();
         // No RTM_DELNEIGH o MAC pode estar ausente
         let msg = mock_neigh_msg(NeighbourState::Failed, ip, None, true);
         let event = extract_neigh_info(&msg).expect("deve extrair delete");

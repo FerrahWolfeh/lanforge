@@ -22,8 +22,9 @@ use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::utils::mac_from_eui64_link_local;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::{Ipv6Addr, SocketAddrV6, UdpSocket};
 use std::str::FromStr;
+use std::string::ToString;
 use tracing::{debug, info, warn};
 
 use super::config::Dhcpv6Config;
@@ -73,7 +74,7 @@ pub struct Dhcpv6Server {
     /// Learned lifetimes from the GUA prefix (preferred, valid).
     pub prefix_lifetimes: Option<(u32, u32)>,
     /// Persistent socket for NDP pokes (saves `socket()` syscalls).
-    pub ndp_poke_sock: Arc<std::net::UdpSocket>,
+    pub ndp_poke_sock: Arc<UdpSocket>,
     pub ctx: LanforgeContext,
 }
 
@@ -83,7 +84,7 @@ impl Dhcpv6Server {
         cfg: Dhcpv6Config,
         pool: Ipv6Pool,
         server_duid: Duid,
-        ndp_poke_sock: Arc<std::net::UdpSocket>,
+        ndp_poke_sock: Arc<UdpSocket>,
         ctx: LanforgeContext,
     ) -> Self {
         Self {
@@ -287,7 +288,7 @@ impl Dhcpv6Server {
             "ADVERTISE"
         };
         let mut ia_opts = DhcpOptions::new();
-        let ip_list: Vec<String> = ips.iter().map(std::string::ToString::to_string).collect();
+        let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
 
         if let Some(id) = identity {
             info!(
@@ -415,8 +416,7 @@ impl Dhcpv6Server {
             if !ips.is_empty() {
                 let (pref, valid) = self.get_lifetimes();
                 let mut ia_opts = DhcpOptions::new();
-                let ip_list: Vec<String> =
-                    ips.iter().map(std::string::ToString::to_string).collect();
+                let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
 
                 if let Some(id) = identity {
                     info!("DHCPv6: Assigning [{}] to {id}", ip_list.join(", "));
@@ -844,7 +844,7 @@ mod tests {
         device::Ipv6AddrOrSuffix,
         state::{DeviceUpdate, InterfaceState},
     };
-    use std::net::Ipv6Addr;
+    use std::net::{Ipv6Addr, UdpSocket};
 
     fn dummy_server() -> Dhcpv6Server {
         let ctx = init_test_context();
@@ -884,7 +884,7 @@ mod tests {
         let server_duid = Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
-        let ndp_poke_sock = Arc::new(std::net::UdpSocket::bind("[::1]:0").unwrap());
+        let ndp_poke_sock = Arc::new(UdpSocket::bind("[::1]:0").unwrap());
         Dhcpv6Server::new(cfg, pool, server_duid, ndp_poke_sock, ctx)
     }
 
@@ -934,7 +934,7 @@ mod tests {
             search_domains: Vec::new(),
         };
         let pool = Ipv6Pool::new(&Vec::new(), None, 64);
-        let sock = std::net::UdpSocket::bind("::0:0").unwrap();
+        let sock = UdpSocket::bind("::0:0").unwrap();
         let ndp_poke_sock = Arc::new(sock);
         let mut srv = Dhcpv6Server::new(
             cfg,
@@ -1179,7 +1179,7 @@ mod tests {
             search_domains: Vec::new(),
         };
         let pool = Ipv6Pool::new(&Vec::new(), Some(ula), 48);
-        let sock = std::net::UdpSocket::bind("::0:0").unwrap();
+        let sock = UdpSocket::bind("::0:0").unwrap();
         let ndp_poke_sock = Arc::new(sock);
         let mut srv = Dhcpv6Server::new(
             cfg,

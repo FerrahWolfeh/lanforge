@@ -6,7 +6,7 @@
 //! - RFC 8106         — RDNSS and DNSSL
 
 use crate::error::NetworkError;
-use std::time::Duration;
+use std::{net::Ipv6Addr, time::Duration};
 
 // ---------------------------------------------------------------------------
 // RFC 4861 §6.2.1 Constants
@@ -74,7 +74,7 @@ impl PrefixLifetime {
 #[derive(Debug, Clone)]
 pub enum PrefixSource {
     /// Static prefix — explicit address (e.g., a fixed ULA).
-    Static(std::net::Ipv6Addr),
+    Static(Ipv6Addr),
     /// Automatically detects the GUA (`2000::/3`) assigned to the interface.
     /// Equivalent to `prefix ::/64` in radvd with dynamic resolution.
     /// If no GUA is assigned, the option is silently omitted.
@@ -131,7 +131,7 @@ impl PrefixConfig {
 /// Essential for clients that ignore `DHCPv6` (e.g., Android, many `IoT` devices).
 #[derive(Debug, Clone)]
 pub struct RdnssConfig {
-    pub servers: Vec<std::net::Ipv6Addr>,
+    pub servers: Vec<Ipv6Addr>,
     /// None → 2 × `MaxRtrAdvInterval` (RFC 8106 §5.1: recommended minimum to
     /// survive lost RAs; in practice, use >= 6 × `MaxRtrAdvInterval`).
     pub lifetime: Option<Duration>,
@@ -139,7 +139,7 @@ pub struct RdnssConfig {
 
 impl RdnssConfig {
     #[must_use]
-    pub const fn new(servers: Vec<std::net::Ipv6Addr>) -> Self {
+    pub const fn new(servers: Vec<Ipv6Addr>) -> Self {
         Self {
             servers,
             lifetime: None,
@@ -147,7 +147,7 @@ impl RdnssConfig {
     }
 
     #[must_use]
-    pub const fn with_lifetime(servers: Vec<std::net::Ipv6Addr>, secs: u32) -> Self {
+    pub const fn with_lifetime(servers: Vec<Ipv6Addr>, secs: u32) -> Self {
         Self {
             servers,
             lifetime: Some(Duration::from_secs(secs as u64)),

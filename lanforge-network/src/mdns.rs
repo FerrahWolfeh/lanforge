@@ -1,9 +1,12 @@
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::state::DeviceUpdate;
+use pnet::datalink::interfaces;
 use std::fmt::Write;
+use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
-use tokio::sync::mpsc;
+use std::time::Duration;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{debug, error, warn};
 
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
@@ -16,7 +19,7 @@ const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const MDNS_IPV6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService};
+use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
 
 enum MdnsCommand {
     ProbeAll,
@@ -24,19 +27,19 @@ enum MdnsCommand {
 }
 
 pub struct MdnsProber {
-    tx: mpsc::Sender<MdnsCommand>,
+    tx: Sender<MdnsCommand>,
     ctx: LanforgeContext,
 }
 
 impl LanforgeService for MdnsProber {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "mdns",
             display_name: "mDNS Prober",
             critical: false,
             max_retries: 0,
-            base_backoff: std::time::Duration::from_secs(2),
-            max_backoff: std::time::Duration::from_secs(30),
+            base_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(30),
             stack_kb: 256,
         }
     }
@@ -77,8 +80,8 @@ impl MdnsProber {
 
 async fn run_mdns_worker(
     ctx: LanforgeContext,
-    mut rx: mpsc::Receiver<MdnsCommand>,
-    tx: mpsc::Sender<MdnsCommand>,
+    mut rx: Receiver<MdnsCommand>,
+    tx: Sender<MdnsCommand>,
 ) -> Result<(), NetworkError> {
     let bus = ctx.bus();
     // We bind to a random port to SEND queries, and a fixed port to LISTEN if we want passive,
@@ -93,7 +96,7 @@ async fn run_mdns_worker(
         .try_clone()
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
     socket_v4_clone
-        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .set_read_timeout(Some(Duration::from_millis(500)))
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
     let resp_tx_v4 = resp_tx.clone();
 
@@ -106,8 +109,7 @@ async fn run_mdns_worker(
                     let _ = resp_tx_v4.blocking_send((buf[..n].to_vec(), addr));
                 }
                 Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
                 Err(e) => {
                     warn!("mDNS v4 listen error: {e}");
                     break;
@@ -121,7 +123,7 @@ async fn run_mdns_worker(
         .try_clone()
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
     socket_v6_clone
-        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .set_read_timeout(Some(Duration::from_millis(500)))
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
     let resp_tx_v6 = resp_tx.clone();
 
@@ -134,8 +136,7 @@ async fn run_mdns_worker(
                     let _ = resp_tx_v6.blocking_send((buf[..n].to_vec(), addr));
                 }
                 Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
                 Err(e) => {
                     warn!("mDNS v6 listen error: {e}");
                     break;
@@ -171,7 +172,7 @@ async fn run_mdns_worker(
                     handle_mdns_packet(&ctx_clone, &data_vec, addr);
                 });
             }
-            () = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+            () = tokio::time::sleep(Duration::from_millis(500)) => {
                 // Periodic flag check if idle
             }
         }
@@ -191,7 +192,7 @@ fn handle_command(cmd: &MdnsCommand, socket_v4: &UdpSocket, socket_v6: &UdpSocke
     }
 }
 
-fn handle_lanforge_event(event: &LanforgeEvent, tx: &mpsc::Sender<MdnsCommand>) {
+fn handle_lanforge_event(event: &LanforgeEvent, tx: &Sender<MdnsCommand>) {
     if matches!(event, LanforgeEvent::ScanRequested) {
         let _ = tx.blocking_send(MdnsCommand::ProbeAll);
     }
@@ -216,7 +217,7 @@ fn setup_multicast_socket_v4() -> Result<UdpSocket, NetworkError> {
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
 
     // Join multicast on all interfaces
-    let interfaces = pnet::datalink::interfaces();
+    let interfaces = interfaces();
     for iface in interfaces {
         if !iface.is_up() || iface.is_loopback() {
             continue;
@@ -251,7 +252,7 @@ fn setup_multicast_socket_v6() -> Result<UdpSocket, NetworkError> {
         .bind(&SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), MDNS_PORT).into())
         .map_err(|e| NetworkError::Socket(e.to_string()))?;
 
-    let interfaces = pnet::datalink::interfaces();
+    let interfaces = interfaces();
     for iface in interfaces {
         if !iface.is_up() || iface.is_loopback() {
             continue;

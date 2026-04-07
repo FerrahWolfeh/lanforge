@@ -260,6 +260,7 @@ impl State {
             let mut dev = (*dev_arc).clone();
             dev.v4 = IPv4State::Dynamic(new_lease);
             dev.last_seen = SystemTime::now();
+            dev.reset_failures();
             self.devices.insert(mac, Arc::new(dev));
             return true;
         }
@@ -312,6 +313,7 @@ impl State {
         }
         dev.duid = Some(duid);
         dev.last_seen = SystemTime::now();
+        dev.reset_failures();
         self.devices.insert(m, Arc::new(dev));
         true
     }
@@ -362,6 +364,7 @@ impl State {
         }
         dev.duid = Some(duid);
         dev.last_seen = SystemTime::now();
+        dev.reset_failures();
         self.devices.insert(m, Arc::new(dev));
         true
     }
@@ -391,6 +394,7 @@ impl State {
         }
         let exists = self.devices.contains_key(&mac);
         if dev.is_worthy() || exists {
+            dev.reset_failures();
             self.devices.insert(mac, Arc::new(dev));
             return true;
         }
@@ -428,6 +432,7 @@ impl State {
             debug!("[state] SLAAC {} → {}", mac, addr);
         }
         if dev.is_worthy() || exists {
+            dev.reset_failures();
             self.devices.insert(mac, Arc::new(dev));
             return changed || !exists;
         }
@@ -455,6 +460,7 @@ impl State {
 
         let exists = self.devices.contains_key(&mac);
         if dev.is_worthy() || exists {
+            dev.reset_failures();
             self.devices.insert(mac, Arc::new(dev.clone()));
 
             let elapsed = dev.last_seen.duration_since(old_seen).unwrap_or_default();
@@ -480,6 +486,7 @@ impl State {
 
         let exists = self.devices.contains_key(&mac);
         if dev.is_worthy() || exists {
+            dev.reset_failures();
             self.devices.insert(mac, Arc::new(dev.clone()));
 
             let elapsed = dev.last_seen.duration_since(old_seen).unwrap_or_default();
@@ -761,11 +768,66 @@ impl State {
         };
 
         if let Some(dev_arc) = self.devices.get(&mac) {
-            let was_online = dev_arc.is_online();
-            if was_online {
-                let mut dev = (**dev_arc).clone();
+            let mut dev = (**dev_arc).clone();
+            let mut changed = false;
+
+            // 1. Classification & Action
+            match ip {
+                IpAddr::V6(ip6) => {
+                    let is_slaac = dev
+                        .v6
+                        .iter()
+                        .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip6));
+                    if is_slaac {
+                        // Dynamic SLAAC: Remove completely (Privacy Extension ghost)
+                        if dev.remove_ip(&ip) {
+                            debug!(
+                                "[state] Removing failing SLAAC IP {} from device {}",
+                                ip, mac
+                            );
+                            changed = true;
+                        }
+                    } else {
+                        // Static/DHCPv6: Mark as failed
+                        if dev.mark_ip_failed(ip) {
+                            changed = true;
+                        }
+                    }
+                }
+                IpAddr::V4(ip4) => {
+                    let is_seen = dev.seen_v4.contains(&ip4);
+                    if is_seen {
+                        // Dynamic V4 Discovery: Remove
+                        if dev.remove_ip(&ip) {
+                            debug!(
+                                "[state] Removing failing seen V4 IP {} from device {}",
+                                ip, mac
+                            );
+                            changed = true;
+                        }
+                    } else {
+                        // Static/DHCPv4: Mark as failed
+                        if dev.mark_ip_failed(ip) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            // 2. Offline evaluation
+            // A device is truly offline if ALL its known addresses are in the failed_ips set
+            // (or if it has no addresses left).
+            let all_known_ips = dev.all_addresses_sorted(None, None);
+            let all_failed = all_known_ips.iter().all(|i| dev.failed_ips.contains(i));
+
+            if all_failed && dev.is_online() {
+                debug!("[state] Device {} is now OFFLINE (all IPs failed)", mac);
                 // Force it to be "offline" by setting last_seen to 6 minutes ago
                 dev.last_seen = SystemTime::now() - Duration::from_secs(360);
+                changed = true;
+            }
+
+            if changed {
                 self.devices.insert(mac, Arc::new(dev));
                 return true;
             }

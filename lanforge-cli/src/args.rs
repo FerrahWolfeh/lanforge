@@ -41,6 +41,9 @@ pub enum Command {
     Log {
         #[arg(long)]
         follow: bool,
+        /// Show more detailed events (like ARP/NDP activity)
+        #[arg(short, long)]
+        verbose: bool,
     },
     /// Gerenciamento de leases (renew/release)
     Lease {
@@ -128,7 +131,10 @@ pub enum HostCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DbCommand {
+    /// Perform a SQLite VACUUM operation
     Vacuum,
+    /// Clear the transient system log database
+    LogClean,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]

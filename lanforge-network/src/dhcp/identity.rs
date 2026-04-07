@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{fmt, sync::Arc};
 
-use lanforge_core::identifiers::MacAddr;
+use lanforge_core::{device::Device, identifiers::MacAddr};
 
 /// Device identity — "Who am I?" (WTFAI) representation.
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ impl DeviceIdentity {
         mac: MacAddr,
         packet_hostname: Option<String>,
         packet_vendor: Option<String>,
-        device: Option<std::sync::Arc<lanforge_core::device::Device>>,
+        device: Option<Arc<Device>>,
     ) -> Self {
         let mut identity = Self::new(mac, packet_hostname, packet_vendor);
 

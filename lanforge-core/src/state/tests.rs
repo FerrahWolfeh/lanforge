@@ -3,7 +3,8 @@
 use crate::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget, State};
 use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
 use crate::identifiers::{Duid, MacAddr};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 use std::time::SystemTime;
 
 // --- MacAddr ---
@@ -732,4 +733,121 @@ fn test_static_registry_validation() {
 
     assert_eq!(registry.v4.len(), 1);
     assert_eq!(registry.v6.len(), 1);
+}
+
+#[test]
+fn test_handle_ip_offline_slaac_removal() {
+    let mut state = State::new();
+    let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    let ip1 = IpAddr::from_str("fd00::1").unwrap();
+    let ip2 = IpAddr::from_str("fd00::2").unwrap();
+
+    // 1. Add device with two SLAAC IPs
+    state.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: match ip1 {
+            IpAddr::V6(a) => a,
+            IpAddr::V4(_) => unreachable!(),
+        },
+    });
+    state.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: match ip2 {
+            IpAddr::V6(a) => a,
+            IpAddr::V4(_) => unreachable!(),
+        },
+    });
+    let dev = state.get_device(&mac).unwrap();
+    assert_eq!(dev.v6.len(), 2);
+    assert!(dev.is_online());
+    // 2. Report ip1 as offline
+    // We need to ensure ip_index or ndp_cache is populated for handle_ip_offline to find the MAC
+    state.ip_index.insert(ip1, mac);
+    state.apply_update(DeviceUpdate::IpOffline { ip: ip1 });
+    let dev = state.get_device(&mac).unwrap();
+    assert_eq!(dev.v6.len(), 1, "SLAAC IP should be removed");
+    assert!(dev.is_online(), "Device should still be online via ip2");
+    // 3. Report ip2 as offline
+    state.ip_index.insert(ip2, mac);
+    state.apply_update(DeviceUpdate::IpOffline { ip: ip2 });
+    let dev = state.get_device(&mac).unwrap();
+    assert_eq!(dev.v6.len(), 0, "All SLAAC IPs should be removed");
+    assert!(!dev.is_online(), "Device should be offline now");
+}
+#[test]
+fn test_handle_ip_offline_static_ula_persistence() {
+    let mut state = State::new();
+    let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    let static_ip = IpAddr::from_str("fd00::beef").unwrap();
+    let slaac_ip = IpAddr::from_str("fd00::1").unwrap();
+
+    // 1. Add device with Static ULA and SLAAC
+    state.apply_update(DeviceUpdate::CliHostUpdated {
+        mac,
+        hostname: FieldUpdate::NoChange,
+        v4_static: FieldUpdate::NoChange,
+        v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::Full(match static_ip {
+            IpAddr::V6(a) => a,
+            IpAddr::V4(_) => unreachable!(),
+        })),
+        origin: Origin::Cli,
+    });
+
+    state.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: match slaac_ip {
+            IpAddr::V6(a) => a,
+            IpAddr::V4(_) => unreachable!(),
+        },
+    });
+
+    state.ip_index.insert(static_ip, mac);
+
+    state.ip_index.insert(slaac_ip, mac);
+
+    let dev = state.get_device(&mac).unwrap();
+
+    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(_))));
+    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(_))));
+
+    // 2. Report static IP as offline
+    state.apply_update(DeviceUpdate::IpOffline { ip: static_ip });
+    let dev = state.get_device(&mac).unwrap();
+
+    assert!(
+        dev.v6.iter().any(|s| matches!(s, IPv6State::Static(_))),
+        "Static IP must NOT be removed"
+    );
+
+    assert!(dev.failed_ips.contains(&static_ip));
+    assert!(dev.is_online(), "Still online via SLAAC");
+
+    // 3. Report SLAAC as offline
+    state.apply_update(DeviceUpdate::IpOffline { ip: slaac_ip });
+    let dev = state.get_device(&mac).unwrap();
+
+    assert!(
+        !dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(_))),
+        "SLAAC should be removed"
+    );
+
+    assert!(
+        !dev.is_online(),
+        "Now offline because Static also failed and SLAAC is gone"
+    );
+
+    // 4. Device marks as online again on activity
+
+    state.apply_update(DeviceUpdate::NdpSeen {
+        mac,
+        ip: match static_ip {
+            IpAddr::V6(a) => a,
+            IpAddr::V4(_) => unreachable!(),
+        },
+    });
+
+    let dev = state.get_device(&mac).unwrap();
+
+    assert!(dev.is_online());
+    assert!(dev.failed_ips.is_empty(), "Failures should be reset");
 }

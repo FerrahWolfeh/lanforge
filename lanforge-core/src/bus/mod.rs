@@ -173,6 +173,8 @@ pub enum LanforgeEvent {
     ReloadConfig,
     /// Signal to trigger a `SQLite` database vacuum.
     DbVacuum,
+    /// Request to clear all transient system logs.
+    DbLogClean,
     /// Request to release a lease for a device.
     LeaseRelease { mac: MacAddr, target: LeaseTarget },
     /// Request to force-renew a lease for a device.
@@ -215,6 +217,7 @@ impl TimedEvent {
             | LanforgeEvent::LeaseRelease { .. }
             | LanforgeEvent::LeaseRenew { .. }
             | LanforgeEvent::DbVacuum
+            | LanforgeEvent::DbLogClean
             | LanforgeEvent::DevicePurged { .. }
             | LanforgeEvent::WolTriggered { .. }
             | LanforgeEvent::ReloadConfig

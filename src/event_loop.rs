@@ -1,11 +1,16 @@
 use crate::app::{run_scan, sd_notify_ready};
+use crate::config::Config;
 use anyhow::Result;
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_network::wol::send_wol_magic_packet;
+use rtnetlink::Handle;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Duration, interval};
 use tracing::{debug, error, info, warn};
 
@@ -14,7 +19,7 @@ use crate::bootstrap::BootstrapResult;
 pub async fn run_event_loop(
     bootstrap: BootstrapResult,
     ctx: LanforgeContext,
-    mut bus_rx: tokio::sync::broadcast::Receiver<lanforge_core::bus::TimedEvent>,
+    mut bus_rx: Receiver<TimedEvent>,
 ) -> Result<()> {
     let cfg = bootstrap.cfg;
     let handle = bootstrap.rt_handle;
@@ -83,10 +88,10 @@ pub async fn run_event_loop(
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    Err(RecvError::Lagged(n)) => {
                         warn!("EventBus: consumer lagged, lost {n} events");
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    Err(RecvError::Closed) => {
                         error!("EventBus: channel closed unexpectedly");
                         break;
                     }
@@ -102,8 +107,8 @@ pub async fn run_event_loop(
 fn handle_bus_event(
     event: LanforgeEvent,
     ctx: &LanforgeContext,
-    cfg: &Arc<crate::config::Config>,
-    handle: &rtnetlink::Handle,
+    cfg: &Arc<Config>,
+    handle: &Handle,
     state: &mut LoopState,
     target_ifindex: u32,
     expected_services: &HashSet<&'static str>,
@@ -172,12 +177,8 @@ fn handle_bus_event(
                 }
             }
 
-            if let Err(e) = lanforge_network::wol::send_wol_magic_packet(
-                mac,
-                &cfg.iface_lan,
-                directed_broadcast,
-                ip_hint,
-            ) {
+            if let Err(e) = send_wol_magic_packet(mac, &cfg.iface_lan, directed_broadcast, ip_hint)
+            {
                 error!("❌ Error sending WOL packet: {e}");
             } else {
                 info!(
@@ -208,7 +209,7 @@ impl LoopState {
     }
 }
 
-fn determine_expected_services(cfg: &crate::config::Config) -> HashSet<&'static str> {
+fn determine_expected_services(cfg: &Config) -> HashSet<&'static str> {
     let mut services = HashSet::from(["db", "mdns", "monitor", "ifmon", "control"]);
     if cfg.ra_enabled {
         services.insert("ra");
@@ -230,8 +231,8 @@ fn determine_expected_services(cfg: &crate::config::Config) -> HashSet<&'static 
 
 fn spawn_scan(
     ctx: LanforgeContext,
-    cfg: Arc<crate::config::Config>,
-    handle: rtnetlink::Handle,
+    cfg: Arc<Config>,
+    handle: Handle,
     gua: Option<Ipv6Addr>,
     ula: Option<Ipv6Addr>,
     target_ifindex: u32,

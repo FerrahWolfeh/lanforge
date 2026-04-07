@@ -98,6 +98,14 @@ impl SyncService for DbWorker {
                             self.ctx.record_db_flush();
                         }
                     }
+                    LanforgeEvent::DbLogClean => {
+                        if let Err(e) = log_db.clear_logs() {
+                            warn!("DB worker: failed to clear logs: {e}");
+                        } else {
+                            info!("DB worker: system logs cleared manually");
+                            self.ctx.record_db_flush();
+                        }
+                    }
                     LanforgeEvent::DbVacuum => {
                         if let Err(e) = db.vacuum() {
                             warn!("DB worker: failed to execute VACUUM: {e}");

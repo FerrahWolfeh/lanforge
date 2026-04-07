@@ -15,9 +15,11 @@ mod supervisor;
 use crate::app::Daemon;
 use crate::bootstrap::Bootstrapper;
 use anyhow::Result;
+use tokio::runtime::Builder;
+use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = Builder::new_current_thread()
         .enable_all()
         .thread_name("lanforge-main")
         .build()?;
@@ -36,8 +38,7 @@ async fn async_main() -> Result<()> {
     tracing_subscriber::fmt()
         .without_time()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 

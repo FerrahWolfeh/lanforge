@@ -516,6 +516,12 @@ where
                     }
                 }
             }
+            Ok(Command::DbLogClean) => {
+                let _ = ctx.ctx.bus().publish(LanforgeEvent::DbLogClean);
+                Response::Success(SimpleSuccess {
+                    message: "Clearing transient log database...".to_string(),
+                })
+            }
             Ok(Command::DbVacuum) => {
                 let _ = ctx.ctx.bus().publish(LanforgeEvent::DbVacuum);
                 Response::Success(SimpleSuccess {

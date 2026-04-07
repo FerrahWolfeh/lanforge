@@ -22,11 +22,12 @@
 //! ensuring the internal state does not contain stale addresses.
 
 use crate::error::NetworkError;
-use crate::netlink;
+use crate::netlink::{get_ipv4_neighbors, get_ipv6_neighbors};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::DeviceUpdate;
 use rtnetlink::Handle;
+use std::collections::HashMap;
 use std::net::Ipv6Addr;
 
 /// Performs a full dump of the IPv6 neighbor table (State Synchronization).
@@ -44,11 +45,10 @@ pub async fn bootstrap_table(
     ula: Option<Ipv6Addr>,
     target_ifindex: Option<u32>,
 ) -> Result<(), NetworkError> {
-    let mut neighbors = netlink::get_ipv6_neighbors(handle, target_prefix, target_ifindex).await?;
-    neighbors.extend(netlink::get_ipv4_neighbors(handle, target_ifindex).await?);
+    let mut neighbors = get_ipv6_neighbors(handle, target_prefix, target_ifindex).await?;
+    neighbors.extend(get_ipv4_neighbors(handle, target_ifindex).await?);
 
-    let mut mac_groups: std::collections::HashMap<MacAddr, Vec<Ipv6Addr>> =
-        std::collections::HashMap::new();
+    let mut mac_groups: HashMap<MacAddr, Vec<Ipv6Addr>> = HashMap::new();
 
     for event in neighbors {
         if let Some(target) = target_ifindex

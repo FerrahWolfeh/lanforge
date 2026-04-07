@@ -4,14 +4,16 @@ use lanforge_core::bus::{EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::State;
+use lanforge_core::state::{InterfaceState, State};
 use lanforge_db::engine::LeaseDb;
 use lanforge_network::ifmon::InterfaceMonitor;
 use netlink_sys::SocketAddr;
+use pnet::datalink::interfaces;
 use rtnetlink::constants::RTMGRP_NEIGH;
 use rtnetlink::new_connection;
 use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
@@ -92,7 +94,7 @@ impl Bootstrapper {
     }
 
     fn init_device_table(cfg: &Config) -> Result<State> {
-        let leases_db_path = std::path::PathBuf::from(&cfg.leases_db);
+        let leases_db_path = PathBuf::from(&cfg.leases_db);
 
         let mut table = match LeaseDb::open(&leases_db_path) {
             Ok(db) => match db.load_table() {
@@ -137,7 +139,7 @@ impl Bootstrapper {
     }
 
     fn find_target_interface(cfg: &Config) -> Result<u32> {
-        let interfaces = pnet::datalink::interfaces();
+        let interfaces = interfaces();
         interfaces
             .iter()
             .find(|iface| iface.name == cfg.iface_lan)
@@ -171,7 +173,7 @@ impl Bootstrapper {
         messages: &Arc<Mutex<NetlinkMessages>>,
         target_ifindex: u32,
         ctx: &LanforgeContext,
-    ) -> Result<lanforge_core::state::InterfaceState> {
+    ) -> Result<InterfaceState> {
         let ifmon_init = InterfaceMonitor::new(
             handle.clone(),
             messages.clone(),
@@ -184,7 +186,7 @@ impl Bootstrapper {
             .map_err(|e| anyhow::anyhow!("Initial interface scan failed: {e}"))
     }
 
-    fn log_welcome_banner(cfg: &Config, if_state: &lanforge_core::state::InterfaceState) {
+    fn log_welcome_banner(cfg: &Config, if_state: &InterfaceState) {
         info!("╔══════════════════════════════════════════╗");
         info!("║         Lanforge Network Daemon          ║");
         info!("╠══════════════════════════════════════════╣");

@@ -9,6 +9,7 @@ use lanforge_core::state::LeaseTarget;
 
 pub struct LogHandler {
     pub follow: bool,
+    pub verbose: bool,
 }
 
 impl CliCommand for LogHandler {
@@ -70,30 +71,46 @@ impl LogHandler {
                     .filter(|s| !s.is_empty())
                     .unwrap_or("unknown");
 
-                if let DeviceChange::StatusChanged { online, .. } = change {
-                    let status = if *online {
-                        "ONLINE".bright_green().bold()
-                    } else {
-                        "OFFLINE".red().bold()
-                    };
-                    println!(
-                        "[{}] {} Device {} ({}) is now {}",
-                        now,
-                        "UPD".blue().bold(),
-                        name.bright_yellow(),
-                        mac.to_string().dimmed(),
-                        status
-                    );
-                } else {
-                    let change_str = self.format_change(change);
-                    println!(
-                        "[{}] {} {} ({}) -> {}",
-                        now,
-                        "UPD".blue().bold(),
-                        name.bright_yellow(),
-                        mac.to_string().dimmed(),
-                        change_str
-                    );
+                match change {
+                    DeviceChange::StatusChanged { online, .. } => {
+                        let status = if *online {
+                            "ONLINE".bright_green().bold()
+                        } else {
+                            "OFFLINE".red().bold()
+                        };
+                        println!(
+                            "[{}] {} Device {} ({}) is now {}",
+                            now,
+                            "UPD".blue().bold(),
+                            name.bright_yellow(),
+                            mac.to_string().dimmed(),
+                            status
+                        );
+                    }
+                    DeviceChange::ArpActivity { .. } | DeviceChange::NdpActivity { .. } => {
+                        if self.verbose {
+                            let change_str = self.format_change(change);
+                            println!(
+                                "[{}] {} {} ({}) -> {}",
+                                now,
+                                "TRC".dimmed(),
+                                name.bright_yellow(),
+                                mac.to_string().dimmed(),
+                                change_str.dimmed()
+                            );
+                        }
+                    }
+                    _ => {
+                        let change_str = self.format_change(change);
+                        println!(
+                            "[{}] {} {} ({}) -> {}",
+                            now,
+                            "UPD".blue().bold(),
+                            name.bright_yellow(),
+                            mac.to_string().dimmed(),
+                            change_str
+                        );
+                    }
                 }
             }
             LanforgeEvent::DeviceExpired { mac } => {
@@ -260,6 +277,14 @@ impl LogHandler {
                     now,
                     "SYS".green().bold(),
                     "System fully operational!".bright_green().bold()
+                );
+            }
+            LanforgeEvent::DbLogClean => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "Transient logs cleared manually".dimmed()
                 );
             }
             LanforgeEvent::DeviceTableDirty | LanforgeEvent::Shutdown => {

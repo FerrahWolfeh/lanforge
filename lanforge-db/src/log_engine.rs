@@ -50,7 +50,7 @@ impl LogDb {
         let json = serde_json::to_string(&timed_event.event)
             .map_err(|e| LeaseDbError::Migration("event serialization".into(), e.to_string()))?;
 
-        let timestamp = timed_event
+        let now_secs = timed_event
             .timestamp
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -58,15 +58,30 @@ impl LogDb {
 
         self.conn.execute(
             "INSERT INTO system_logs (timestamp, module, event_json) VALUES (?1, ?2, ?3)",
-            params![timestamp, timed_event.module, json],
+            params![now_secs, timed_event.module, json],
         )?;
 
-        // Pruning: Keep only the last 1000 entries
+        // Pruning: Keep only logs from the last 24 hours
+        // Safety cap: also delete entries if we exceed 50,000 logs to prevent RAM bloat
+        let cutoff = now_secs - (24 * 3600);
         self.conn.execute(
-            "DELETE FROM system_logs WHERE id <= (SELECT MAX(id) FROM system_logs) - 1000",
-            &[] as &[&dyn rusqlite::ToSql],
+            "DELETE FROM system_logs WHERE timestamp < ?1",
+            params![cutoff],
         )?;
 
+        // Safety cap: keep at most 50,000 entries
+        self.conn.execute(
+            "DELETE FROM system_logs WHERE id <= (SELECT MAX(id) FROM system_logs) - 50000",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    /// Wipes all logged events from the database.
+    pub fn clear_logs(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM system_logs", [])?;
+        self.conn.execute("DELETE FROM sqlite_sequence WHERE name='system_logs'", [])?;
         Ok(())
     }
 

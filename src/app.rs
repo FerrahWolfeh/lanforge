@@ -1,8 +1,10 @@
 use anyhow::Result;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
+use lanforge_network::slaac::bootstrap_table;
 use std::net::Ipv6Addr;
 use std::os::unix::net::UnixDatagram;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -69,8 +71,8 @@ impl Daemon {
         let messages = &self.bootstrap.messages;
 
         // DB Worker (Sync)
-        let db_path = std::path::PathBuf::from(&cfg.leases_db);
-        let log_db_path = std::path::PathBuf::from(&cfg.log_db);
+        let db_path = PathBuf::from(&cfg.leases_db);
+        let log_db_path = PathBuf::from(&cfg.log_db);
         let ctx_db = self.ctx.clone();
         self.registry.spawn_sync(&self.ctx, move || {
             DbWorker::new(db_path.clone(), log_db_path.clone(), ctx_db.clone())
@@ -170,7 +172,7 @@ impl Daemon {
             _ = tokio::task::spawn_blocking(move || self.registry.wait_all()) => {
                 info!("All services shut down cleanly.");
             }
-            () = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+            () = tokio::time::sleep(Duration::from_secs(5)) => {
                 info!("Shutdown timeout reached, exiting.");
             }
         }
@@ -189,7 +191,7 @@ pub async fn run_scan(
     ula: Option<Ipv6Addr>,
     target_ifindex: u32,
 ) -> Result<()> {
-    lanforge_network::slaac::bootstrap_table(
+    bootstrap_table(
         ctx,
         &cfg.target_prefix,
         handle,

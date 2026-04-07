@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -507,6 +508,9 @@ pub struct Device {
 
     /// `DHCPv6` Unique Identifier (DUID), if tracked.
     pub duid: Option<Duid>,
+    /// IPs that have failed connectivity probes since the last successful activity.
+    #[serde(skip)]
+    pub failed_ips: HashSet<IpAddr>,
 }
 
 impl Device {
@@ -523,6 +527,7 @@ impl Device {
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
             duid: None,
+            failed_ips: HashSet::new(),
         }
     }
 
@@ -558,6 +563,46 @@ impl Device {
                 },
             )
         })
+    }
+
+    /// Removes a specific IP from the device record.
+    /// Returns true if something was actually removed.
+    pub fn remove_ip(&mut self, ip: &IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(ip4) => {
+                let initial_seen = self.seen_v4.len();
+                self.seen_v4.retain(|i| i != ip4);
+                let changed = self.seen_v4.len() != initial_seen;
+
+                if matches!(&self.v4, IPv4State::Dynamic(lease) if lease.ip == *ip4) {
+                    self.v4 = IPv4State::None;
+                    return true;
+                }
+                changed
+            }
+            IpAddr::V6(ip6) => {
+                let initial_v6 = self.v6.len();
+                self.v6
+                    .retain(|s| !matches!(s, IPv6State::Slaac(a) if a == ip6));
+                self.v6.len() != initial_v6
+            }
+        }
+    }
+
+    /// Marks an IP as failed. This is transient and cleared on the next seen event.
+    /// Returns true if it was not already marked.
+    pub fn mark_ip_failed(&mut self, ip: IpAddr) -> bool {
+        self.failed_ips.insert(ip)
+    }
+
+    /// Clears all transient failure tracking. Called when a device is seen active.
+    /// Returns true if something was actually cleared.
+    pub fn reset_failures(&mut self) -> bool {
+        if self.failed_ips.is_empty() {
+            return false;
+        }
+        self.failed_ips.clear();
+        true
     }
 }
 
@@ -820,6 +865,7 @@ mod tests {
             v6_prefixes: Vec::new(),
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
+            failed_ips: HashSet::new(),
         };
 
         let sorted = dev.all_addresses_sorted(None, None);

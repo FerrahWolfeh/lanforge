@@ -35,7 +35,9 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::IPv6State;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::{DeviceUpdate, LeaseTarget};
-use std::net::Ipv6Addr;
+use lanforge_core::utils::mac_from_eui64_link_local;
+use std::io::ErrorKind;
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
@@ -46,11 +48,11 @@ use server::{Dhcpv6Server, HandleResult};
 
 const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2);
 
-use dhcproto::v6::{DhcpOption, Message, OptionCode};
+use dhcproto::v6::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{LanforgeService, SyncService};
+use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, SyncService};
 
 pub struct Dhcpv6Service {
     config: Dhcpv6Config,
@@ -65,8 +67,8 @@ impl Dhcpv6Service {
 }
 
 impl LanforgeService for Dhcpv6Service {
-    fn meta(&self) -> lanforge_core::service::ServiceMeta {
-        lanforge_core::service::ServiceMeta {
+    fn meta(&self) -> ServiceMeta {
+        ServiceMeta {
             id: "dhcpv6",
             display_name: "DHCPv6 Server",
             critical: true,
@@ -86,16 +88,13 @@ impl LanforgeService for Dhcpv6Service {
 }
 
 impl SyncService for Dhcpv6Service {
-    fn run(
-        &mut self,
-        bus_rx: &lanforge_core::service::SyncBusReceiver,
-    ) -> std::result::Result<(), CoreError> {
+    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
         if !self.config.enabled {
             info!("DHCPv6 is disabled in config.");
             return Ok(());
         }
 
-        let socket = std::net::UdpSocket::bind(("::", self.config.port))
+        let socket = UdpSocket::bind(("::", self.config.port))
             .map_err(|e| CoreError::Generic(format!("Failed to bind DHCPv6 socket: {e}")))?;
         socket
             .set_read_timeout(Some(Duration::from_millis(200)))
@@ -125,7 +124,7 @@ impl SyncService for Dhcpv6Service {
         }
 
         // Persistent socket for NDP pokes
-        let std_poke_sock = std::net::UdpSocket::bind("::0:0")
+        let std_poke_sock = UdpSocket::bind("::0:0")
             .map_err(|e| CoreError::Generic(format!("Failed to bind NDP poke socket: {e}")))?;
         let ndp_poke_sock = Arc::new(std_poke_sock);
 
@@ -189,8 +188,7 @@ impl SyncService for Dhcpv6Service {
                     self.handle_incoming_packet(&buf[..len], peer, &mut server, &socket);
                 }
                 Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
                 Err(e) => warn!("DHCPv6 socket error: {e}"),
             }
 
@@ -212,13 +210,13 @@ impl Dhcpv6Service {
     fn handle_incoming_packet(
         &self,
         payload: &[u8],
-        peer: std::net::SocketAddr,
+        peer: SocketAddr,
         server: &mut Dhcpv6Server,
-        socket: &std::net::UdpSocket,
+        socket: &UdpSocket,
     ) {
         let (peer_ip, scope_id) = match peer {
-            std::net::SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
-            std::net::SocketAddr::V4(_) => return,
+            SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
+            SocketAddr::V4(_) => return,
         };
 
         let mut resp_vec = Vec::with_capacity(1024);
@@ -236,7 +234,7 @@ impl Dhcpv6Service {
                 .and_then(|d| d.extract_mac());
 
             if resolved_mac.is_none() {
-                resolved_mac = lanforge_core::utils::mac_from_eui64_link_local(&peer_ip);
+                resolved_mac = mac_from_eui64_link_local(&peer_ip);
             }
 
             let handle_res = server.handle_packet(&msg, peer_ip, resolved_mac, &mut resp_vec);
@@ -248,7 +246,7 @@ impl Dhcpv6Service {
                 } else {
                     self.config.port - 1
                 };
-                let dest_addr = std::net::SocketAddrV6::new(dest_ip, client_port, 0, scope_id);
+                let dest_addr = SocketAddrV6::new(dest_ip, client_port, 0, scope_id);
                 let _ = socket.send_to(reply_bytes, dest_addr);
                 apply_learned_state(
                     &self.ctx,
@@ -266,7 +264,7 @@ impl Dhcpv6Service {
         &self,
         event: LanforgeEvent,
         server: &mut Dhcpv6Server,
-        socket: &std::net::UdpSocket,
+        socket: &UdpSocket,
     ) -> Result<(), CoreError> {
         match event {
             LanforgeEvent::LeaseRelease {
@@ -319,13 +317,13 @@ impl Dhcpv6Service {
 
                 if let (Some(duid), Some(ip)) = (duid, target_ip) {
                     info!("DHCPv6: Sending manual RECONFIGURE to {} ({})", ip, mac);
-                    let packet = server.build_reconfigure(&duid, dhcproto::v6::MessageType::Renew);
+                    let packet = server.build_reconfigure(&duid, MessageType::Renew);
                     let client_port = if self.config.port == 547 {
                         546
                     } else {
                         self.config.port - 1
                     };
-                    let dest_addr = std::net::SocketAddrV6::new(ip, client_port, 0, 0);
+                    let dest_addr = SocketAddrV6::new(ip, client_port, 0, 0);
                     let _ = socket.send_to(&packet, dest_addr);
                 }
             }
@@ -341,7 +339,7 @@ impl Dhcpv6Service {
     fn handle_prefix_change(
         &self,
         server: &mut Dhcpv6Server,
-        socket: &std::net::UdpSocket,
+        socket: &UdpSocket,
         gua: Option<Ipv6Addr>,
         preferred: u32,
         valid: u32,
@@ -380,15 +378,13 @@ impl Dhcpv6Service {
                             if let Some(ll_ip) = dev.v6.iter().find_map(|s| {
                                 s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
                             }) {
-                                let packet = server
-                                    .build_reconfigure(duid, dhcproto::v6::MessageType::Renew);
+                                let packet = server.build_reconfigure(duid, MessageType::Renew);
                                 let client_port = if self.config.port == 547 {
                                     546
                                 } else {
                                     self.config.port - 1
                                 };
-                                let dest_addr =
-                                    std::net::SocketAddrV6::new(ll_ip, client_port, 0, 0);
+                                let dest_addr = SocketAddrV6::new(ll_ip, client_port, 0, 0);
                                 let _ = socket.send_to(&packet, dest_addr);
                             }
                         }

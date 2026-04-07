@@ -20,7 +20,9 @@
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceMeta, SyncBusReceiver, SyncService};
+use std::thread::sleep;
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 use tracing::{error, info, warn};
 
 /// Publishes a `ServiceReady` event and logs the readiness signal.
@@ -167,13 +169,13 @@ where
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                    Err(RecvError::Lagged(count)) => {
                         warn!(
                             "Event bridge for '{}' lagged by {} messages",
                             meta.id, count
                         );
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    Err(RecvError::Closed) => {
                         break;
                     }
                 }
@@ -241,7 +243,7 @@ where
                         );
                         return;
                     }
-                    std::thread::sleep(Duration::from_millis(100));
+                    sleep(Duration::from_millis(100));
                 }
             }
         }
@@ -252,6 +254,9 @@ where
 mod tests {
     use super::*;
     use lanforge_core::bus::EventBus;
+    use lanforge_core::error::CoreError;
+    use lanforge_core::service::LanforgeService;
+    use lanforge_core::service::ServiceMeta;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU32;
     use std::sync::atomic::Ordering;
@@ -284,9 +289,9 @@ mod tests {
     struct TestAsyncService {
         attempts: Arc<AtomicU32>,
     }
-    impl lanforge_core::service::LanforgeService for TestAsyncService {
-        fn meta(&self) -> lanforge_core::service::ServiceMeta {
-            lanforge_core::service::ServiceMeta {
+    impl LanforgeService for TestAsyncService {
+        fn meta(&self) -> ServiceMeta {
+            ServiceMeta {
                 id: "test",
                 display_name: "test",
                 critical: false,
@@ -300,9 +305,7 @@ mod tests {
     impl lanforge_core::service::AsyncService for TestAsyncService {
         async fn run(&mut self) -> lanforge_core::error::Result<()> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
-            Err(lanforge_core::error::CoreError::Generic(
-                "always fails".into(),
-            ))
+            Err(CoreError::Generic("always fails".into()))
         }
     }
 
@@ -324,9 +327,9 @@ mod tests {
     struct TestResetService {
         attempts: Arc<AtomicU32>,
     }
-    impl lanforge_core::service::LanforgeService for TestResetService {
-        fn meta(&self) -> lanforge_core::service::ServiceMeta {
-            lanforge_core::service::ServiceMeta {
+    impl LanforgeService for TestResetService {
+        fn meta(&self) -> ServiceMeta {
+            ServiceMeta {
                 id: "test-reset",
                 display_name: "test-reset",
                 critical: false,
@@ -338,14 +341,12 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for TestResetService {
-        async fn run(&mut self) -> lanforge_core::error::Result<()> {
+        async fn run(&mut self) -> Result<(), CoreError> {
             let n = self.attempts.fetch_add(1, Ordering::Relaxed);
             if n == 0 {
                 Ok(())
             } else if n < 4 {
-                Err(lanforge_core::error::CoreError::Generic(
-                    "fails after success".into(),
-                ))
+                Err(CoreError::Generic("fails after success".into()))
             } else {
                 Ok(())
             }
@@ -470,9 +471,9 @@ mod tests {
         received: Arc<AtomicU32>,
         ctx: LanforgeContext,
     }
-    impl lanforge_core::service::LanforgeService for TestSyncService {
-        fn meta(&self) -> lanforge_core::service::ServiceMeta {
-            lanforge_core::service::ServiceMeta {
+    impl LanforgeService for TestSyncService {
+        fn meta(&self) -> ServiceMeta {
+            ServiceMeta {
                 id: "test-sync",
                 display_name: "test-sync",
                 critical: false,
@@ -510,9 +511,9 @@ mod tests {
     struct RefService {
         attempts: Arc<AtomicU32>,
     }
-    impl lanforge_core::service::LanforgeService for RefService {
-        fn meta(&self) -> lanforge_core::service::ServiceMeta {
-            lanforge_core::service::ServiceMeta {
+    impl LanforgeService for RefService {
+        fn meta(&self) -> ServiceMeta {
+            ServiceMeta {
                 id: "ref-service",
                 display_name: "Reference Service",
                 critical: false,
@@ -531,9 +532,7 @@ mod tests {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             // Simulate work then failure
             tokio::time::sleep(Duration::from_millis(2)).await;
-            Err(lanforge_core::error::CoreError::Generic(
-                "simulated error".into(),
-            ))
+            Err(CoreError::Generic("simulated error".into()))
         }
     }
 }

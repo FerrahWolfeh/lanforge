@@ -1,8 +1,11 @@
+use std::thread::JoinHandle;
+
 use crate::supervisor::{supervise_async, supervise_sync};
 use lanforge_core::{
     context::LanforgeContext,
     service::{AsyncService, SyncService},
 };
+use tokio::runtime::{Builder, Handle};
 use tracing::info;
 
 /// Centralized registry for Lanforge services.
@@ -10,7 +13,7 @@ use tracing::info;
 /// Handles the lifecycle of both asynchronous (Tokio) and synchronous (OS thread)
 /// services, providing a unified interface for spawning and supervision.
 pub struct ServiceRegistry {
-    handles: Vec<std::thread::JoinHandle<()>>,
+    handles: Vec<JoinHandle<()>>,
 }
 
 impl ServiceRegistry {
@@ -44,7 +47,7 @@ impl ServiceRegistry {
             .name(name.clone())
             .stack_size(stack_size)
             .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
+                let rt = Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .expect("Failed to build per-service runtime");
@@ -64,7 +67,7 @@ impl ServiceRegistry {
         let meta = factory().meta();
         let name = meta.display_name.to_string();
         let stack_size = meta.stack_kb * 1024;
-        let rt_handle = tokio::runtime::Handle::current();
+        let rt_handle = Handle::current();
 
         info!(
             "Spawning sync service thread: {} (stack: {}KB)",

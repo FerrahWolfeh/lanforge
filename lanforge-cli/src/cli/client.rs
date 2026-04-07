@@ -35,7 +35,9 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
         Command::Host { action } => Box::new(crate::cli::commands::host::HostHandler { action }),
         Command::Lease { action } => Box::new(crate::cli::commands::lease::LeaseHandler { action }),
         Command::Db { action } => Box::new(crate::cli::commands::db::DbHandler { action }),
-        Command::Log { follow } => Box::new(crate::cli::commands::log::LogHandler { follow }),
+        Command::Log { follow, verbose } => {
+            Box::new(crate::cli::commands::log::LogHandler { follow, verbose })
+        }
         Command::Reload => Box::new(GenericHandler {
             cmd: lanforge_api::api::Command::Reload,
             streaming: false,

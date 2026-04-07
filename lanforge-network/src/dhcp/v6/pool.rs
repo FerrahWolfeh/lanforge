@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::time::SystemTime;
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::{IPv6State, Ipv6AddrOrSuffix};
 use lanforge_core::identifiers::{Duid, MacAddr};
+use rand::random;
 
 use crate::dhcp::v6::config::Dhcpv6PoolConfig;
 
@@ -246,7 +247,7 @@ impl Ipv6Pool {
         if let Some(dev) = dev_opt {
             let mut sticky = Vec::new();
             for state in &dev.v6 {
-                if let lanforge_core::device::IPv6State::Dynamic(lease) = state
+                if let IPv6State::Dynamic(lease) = state
                     && lease.iaid == iaid
                 {
                     sticky.push(lease.ip);
@@ -299,7 +300,7 @@ impl Ipv6Pool {
 
         if let Some(dev) = dev_opt {
             for state in &dev.v6 {
-                if let lanforge_core::device::IPv6State::Static(suffix) = state {
+                if let IPv6State::Static(suffix) = state {
                     let ip = self.construct_addr(prefix, suffix);
                     if Self::is_on_prefix(&ip, &prefix) && !already_assigned.contains(&ip) {
                         return Some(ip);
@@ -357,7 +358,7 @@ impl Ipv6Pool {
             let mask = !0u128 >> 64;
 
             for _ in 0..20 {
-                let random_suffix: u128 = rand::random::<u128>() & mask;
+                let random_suffix: u128 = random::<u128>() & mask;
                 let ip = Ipv6Addr::from((pref_int | random_suffix).to_be_bytes());
                 if self.is_available(ctx, &ip, mac) {
                     return Some(ip);
@@ -374,7 +375,7 @@ impl Ipv6Pool {
 
         if let Some(dev) = device_opt {
             for state in &dev.v6 {
-                if let lanforge_core::device::IPv6State::Dynamic(lease) = state
+                if let IPv6State::Dynamic(lease) = state
                     && lease.iaid == iaid
                 {
                     return true;
@@ -405,7 +406,7 @@ impl Ipv6Pool {
 
         if let Some(dev) = device_opt {
             for state in &dev.v6 {
-                if let lanforge_core::device::IPv6State::Dynamic(lease) = state
+                if let IPv6State::Dynamic(lease) = state
                     && lease.iaid == iaid
                 {
                     ips.push(lease.ip);
@@ -458,7 +459,7 @@ impl Ipv6Pool {
         end: u128,
     ) -> Option<Ipv6Addr> {
         let size = end - start + 1;
-        let offset = rand::random::<u128>() % size;
+        let offset = random::<u128>() % size;
         for i in 0..size {
             let raw = start + (offset + i) % size;
             let ip = Ipv6Addr::from(raw.to_be_bytes());
@@ -481,7 +482,7 @@ impl Ipv6Pool {
         ip: &Ipv6Addr,
         target_mac: Option<MacAddr>,
     ) -> bool {
-        if let Some(mac) = ctx.get_mac_by_ip(std::net::IpAddr::V6(*ip))
+        if let Some(mac) = ctx.get_mac_by_ip(IpAddr::V6(*ip))
             && Some(mac) != target_mac
         {
             return false;

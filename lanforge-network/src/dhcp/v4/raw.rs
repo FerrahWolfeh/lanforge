@@ -5,9 +5,10 @@
 //! server's ARP table lacks the entry). This avoids L3 broadcast for unicast packets.
 
 use crate::error::NetworkError;
-use pnet::datalink::{self, Config, MacAddr as PnetMac};
+use pnet::datalink::{self, Channel, Config, MacAddr as PnetMac};
 use pnet::packet::MutablePacket;
 use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
+use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::ipv4::{self, Ipv4Flags, MutableIpv4Packet};
 use pnet::packet::udp::{self, MutableUdpPacket};
 use std::net::Ipv4Addr;
@@ -29,7 +30,7 @@ impl RawSender {
         })?;
 
         let (tx, _) = match datalink::channel(&interface, Config::default()) {
-            Ok(datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
+            Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
             Ok(_) => {
                 return Err(NetworkError::RawSocket(
                     "Unsupported AF_PACKET channel type".to_string(),
@@ -81,7 +82,7 @@ impl RawSender {
         ip.set_header_length(5);
         ip.set_total_length(u16::try_from(ipv4_len).unwrap_or(u16::MAX));
         ip.set_ttl(64);
-        ip.set_next_level_protocol(pnet::packet::ip::IpNextHeaderProtocols::Udp);
+        ip.set_next_level_protocol(IpNextHeaderProtocols::Udp);
         ip.set_source(src_ip);
         ip.set_destination(dst_ip);
         ip.set_flags(Ipv4Flags::DontFragment); // Typical for DHCP
