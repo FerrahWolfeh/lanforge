@@ -19,7 +19,7 @@ use lanforge_network::dhcp::v4::Dhcpv4Service;
 use lanforge_network::dhcp::v6::Dhcpv6Service;
 use lanforge_network::ifmon::InterfaceMonitor;
 use lanforge_network::mdns::MdnsProber;
-use lanforge_network::netlink::NdpMonitor;
+use lanforge_network::netlink::NeighborMonitor;
 use lanforge_network::ra::RaService;
 
 /// The central application controller for the Lanforge daemon.
@@ -96,7 +96,7 @@ impl Daemon {
         let scan_interval = Duration::from_secs(cfg.neighbor_scan_mins * 60);
 
         self.registry.spawn_async(&self.ctx, move || {
-            NdpMonitor::new(
+            NeighborMonitor::new(
                 h2.clone(),
                 m2.clone(),
                 target_ifindex,

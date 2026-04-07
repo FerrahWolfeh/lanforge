@@ -288,7 +288,7 @@ pub fn get_ipv4_subnet_iterable(ip: Ipv4Addr, prefix_len: u8) -> Vec<Ipv4Addr> {
 type NetlinkMessageStream = UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
 /// Monitor that reacts to Netlink neighbor events and keeps the `ManagedTable` updated.
-pub struct NdpMonitor {
+pub struct NeighborMonitor {
     handle: Handle,
     messages: Arc<Mutex<NetlinkMessageStream>>,
     target_ifindex: u32,
@@ -297,7 +297,7 @@ pub struct NdpMonitor {
     scan_in_progress: Arc<AtomicBool>,
 }
 
-impl NdpMonitor {
+impl NeighborMonitor {
     pub fn new(
         handle: Handle,
         messages: Arc<Mutex<NetlinkMessageStream>>,
@@ -401,7 +401,7 @@ async fn run_periodic_probes_task(
     }
 }
 
-impl LanforgeService for NdpMonitor {
+impl LanforgeService for NeighborMonitor {
     fn meta(&self) -> ServiceMeta {
         ServiceMeta {
             id: "monitor",
@@ -423,7 +423,7 @@ impl LanforgeService for NdpMonitor {
     }
 }
 
-impl AsyncService for NdpMonitor {
+impl AsyncService for NeighborMonitor {
     async fn run(&mut self) -> Result<(), CoreError> {
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
