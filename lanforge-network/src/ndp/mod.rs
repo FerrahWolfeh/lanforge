@@ -25,8 +25,6 @@ use crate::ndp::utils::{
     extract_neigh_info, get_ipv4_subnet_iterable, probe_neighbor, run_periodic_probes_task,
 };
 use crate::slaac::bootstrap_table;
-use futures::StreamExt;
-use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
@@ -39,20 +37,20 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tokio::time::{interval, sleep};
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
 // NdpMonitor — The "Serviceable Struct" for Netlink
 // ---------------------------------------------------------------------------
 
-type NetlinkMessageStream = UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
+type NetlinkMessageStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
 /// Monitor that reacts to Netlink neighbor events and keeps the `ManagedTable` updated.
 pub struct NeighborMonitor {
     handle: Handle,
-    messages: Arc<Mutex<NetlinkMessageStream>>,
+    messages: NetlinkMessageStream,
     target_ifindex: u32,
     ctx: LanforgeContext,
     scan_interval: Duration,
@@ -60,9 +58,10 @@ pub struct NeighborMonitor {
 }
 
 impl NeighborMonitor {
+    #[must_use]
     pub fn new(
         handle: Handle,
-        messages: Arc<Mutex<NetlinkMessageStream>>,
+        messages: NetlinkMessageStream,
         target_ifindex: u32,
         ctx: LanforgeContext,
         scan_interval: Duration,
@@ -105,7 +104,7 @@ impl NeighborMonitor {
         ula: Option<Ipv6Addr>,
         force_all: bool,
     ) {
-        tracing::debug!(
+        debug!(
             "NeighborMonitor: Spawning periodic probes task (source: {source}, force_all: {force_all})"
         );
         let handle = self.handle.clone();
@@ -122,12 +121,11 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
     let interface_state = ctx.get_interface_state(ifindex);
     if let Some((ip, prefix_len)) = interface_state.v4 {
         let range = get_ipv4_subnet_iterable(ip, prefix_len);
-        if !range.is_empty() {
+        let count = range.size_hint().1.unwrap_or(0);
+        if count > 0 {
             info!(
                 "NeighborMonitor: Unleashing massive ARP scan for {}/{} ({} addresses)",
-                ip,
-                prefix_len,
-                range.len()
+                ip, prefix_len, count
             );
             // Notification via event bus
             let _ = ctx.bus().publish(LanforgeEvent::SubnetScanStarted {
@@ -137,7 +135,7 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
             for target_ip in range {
                 if let Err(e) = probe_neighbor(&handle, ifindex, IpAddr::V4(target_ip), None).await
                 {
-                    tracing::debug!("NeighborMonitor: ARP probe failed for {target_ip}: {e}");
+                    debug!("NeighborMonitor: ARP probe failed for {target_ip}: {e}");
                 }
                 // Pacing for manual scan: 10ms between addresses to avoid CPU spikes
                 sleep(Duration::from_millis(10)).await;
@@ -173,7 +171,7 @@ impl AsyncService for NeighborMonitor {
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
-        let mut probe_interval = interval(Duration::from_secs(60));
+        let mut probe_interval = interval(Duration::from_secs(30)); // Checked every 30s for Suspects
         let mut subnet_scan_interval = if self.scan_interval.as_secs() > 0 {
             let mut interval = interval(self.scan_interval);
             // Ensure the first periodic scan happens after the first interval, not immediately.
@@ -214,11 +212,15 @@ impl AsyncService for NeighborMonitor {
             if !self.ctx.is_running() {
                 break;
             }
-            let mut rx = self.messages.lock().await;
             tokio::select! {
-                res = rx.next() => {
-                    drop(rx);
-                    let Some((msg, _addr)) = res else { break };
+                res = self.messages.recv() => {
+                    let Ok((msg, _addr)) = res else {
+                        if matches!(res, Err(broadcast::error::RecvError::Lagged(_))) {
+                            warn!("NeighborMonitor: Netlink broadcast lagged");
+                            continue;
+                        }
+                        break;
+                    };
                     // A. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg)
                         && event.ifindex() == self.target_ifindex {
@@ -230,7 +232,6 @@ impl AsyncService for NeighborMonitor {
                 }
 
                 Ok(event) = bus_rx.recv() => {
-                    drop(rx);
                     match event.event {
                         LanforgeEvent::PrefixChanged { gua, ula, .. } => {
                             current_gua = gua;
@@ -244,8 +245,8 @@ impl AsyncService for NeighborMonitor {
                 }
 
                 _ = probe_interval.tick() => {
-                    drop(rx);
                     // B. Periodic Surgical Probes for silent online devices
+                    // force_all = false, but it will check is_online() or is_suspect()
                     self.spawn_periodic_probes("Periodic Timer", current_gua, current_ula, false);
                 }
 
@@ -256,7 +257,6 @@ impl AsyncService for NeighborMonitor {
                         std::future::pending::<()>().await;
                     }
                 } => {
-                    drop(rx);
                     // C. Periodic full subnet discovery
                     self.spawn_subnet_scan("Periodic Subnet Timer");
                 }

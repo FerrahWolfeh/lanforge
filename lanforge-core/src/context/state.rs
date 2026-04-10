@@ -834,16 +834,20 @@ impl State {
                 }
             }
 
+            // Always track failures for Suspect logic
+            if dev.failed_ips.insert(ip) {
+                changed = true;
+            }
+
             // 2. Offline evaluation
-            // A device is truly offline if ALL its known addresses are in the failed_ips set
-            // (or if it has no addresses left).
             let all_known_ips = dev.all_addresses_sorted(None, None);
             let all_failed = all_known_ips.iter().all(|i| dev.failed_ips.contains(i));
 
             if all_failed && dev.is_online() {
-                debug!("[state] Device {} is now OFFLINE (all IPs failed)", mac);
-                // Force it to be "offline" by setting last_seen to 6 minutes ago
-                dev.last_seen = SystemTime::now() - Duration::from_secs(360);
+                debug!(
+                    "[state] Device {} marked as SUSPECT (all IPs failed probes)",
+                    mac
+                );
                 changed = true;
             }
 

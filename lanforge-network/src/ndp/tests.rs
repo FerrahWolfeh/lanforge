@@ -268,21 +268,26 @@ fn extract_neigh_info_handles_delete() {
 #[test]
 fn test_ipv4_subnet_iterable_24() {
     let ip: Ipv4Addr = "192.168.1.100".parse().unwrap();
-    let range = get_ipv4_subnet_iterable(ip, 24);
+    let mut range = get_ipv4_subnet_iterable(ip, 24);
 
-    assert_eq!(range.len(), 254);
-    assert_eq!(range[0], "192.168.1.1".parse::<Ipv4Addr>().unwrap());
-    assert_eq!(range[253], "192.168.1.254".parse::<Ipv4Addr>().unwrap());
+    assert_eq!(
+        range.next(),
+        Some("192.168.1.1".parse::<Ipv4Addr>().unwrap())
+    );
+    assert_eq!(
+        range.last(),
+        Some("192.168.1.254".parse::<Ipv4Addr>().unwrap())
+    );
 }
 
 #[test]
 fn test_ipv4_subnet_iterable_30() {
     let ip: Ipv4Addr = "10.0.0.1".parse().unwrap();
-    let range = get_ipv4_subnet_iterable(ip, 30);
+    let mut range = get_ipv4_subnet_iterable(ip, 30);
 
     // /30 has 4 addresses: .0 (net), .1, .2, .3 (broadcast)
     // Usable: .1, .2
-    assert_eq!(range.len(), 2);
-    assert_eq!(range[0], "10.0.0.1".parse::<Ipv4Addr>().unwrap());
-    assert_eq!(range[1], "10.0.0.2".parse::<Ipv4Addr>().unwrap());
+    assert_eq!(range.next(), Some("10.0.0.1".parse::<Ipv4Addr>().unwrap()));
+    assert_eq!(range.next(), Some("10.0.0.2".parse::<Ipv4Addr>().unwrap()));
+    assert_eq!(range.next(), None);
 }

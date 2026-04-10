@@ -18,11 +18,7 @@ use tokio::time::sleep;
 use crate::error::NetworkError;
 
 /// Looks up the MAC address for a specific IPv6 neighbor in the kernel's NDP table.
-///
-/// Used as a fallback in `DHCPv6` when the DUID does not contain a MAC (DUID-EN,
-/// DUID-UUID) and the peer's link-local address is not EUI-64.
 pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAddr> {
-    let target = ip.to_string();
     let mut stream = handle
         .neighbours()
         .get()
@@ -42,9 +38,8 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
 
         for attr in &msg.attributes {
             match attr {
-                NeighbourAttribute::Destination(NeighbourAddress::Inet6(addr))
-                    if addr.to_string() == target =>
-                {
+                // OPTIMIZATION: Comparação direta de structs, zero alocação de string!
+                NeighbourAttribute::Destination(NeighbourAddress::Inet6(addr)) if addr == ip => {
                     found_ip = true;
                 }
                 NeighbourAttribute::LinkLocalAddress(b) => {
@@ -73,20 +68,18 @@ pub async fn run_periodic_probes_task(
     let now = SystemTime::now();
 
     for dev in devices {
-        // Surgical Probing Rule: Only probe devices that are ALREADY online but quiet.
-        // If they are offline/failed, we stop poking them.
-        // Exception: During 'force_all' (Boot Discovery), we probe everyone exactly once.
-        if !force_all && !dev.is_online() {
+        if !force_all && !dev.is_online() && !dev.is_suspect() {
             continue;
         }
 
         let elapsed = now.duration_since(dev.last_seen).unwrap_or_default();
-        if force_all || elapsed.as_secs() > 60 {
+        let interval_secs = if dev.is_suspect() { 30 } else { 60 };
+
+        if force_all || elapsed.as_secs() > interval_secs {
             for ip in dev.all_addresses_sorted(current_gua, current_ula) {
                 if let Err(e) = probe_neighbor(&handle, ifindex, ip, Some(dev.mac)).await {
                     tracing::debug!("NeighborMonitor: Scheduled probe failed for {ip}: {e}");
                 }
-                // Pacing: 50ms between individual IP probes to keep network load negligible.
                 sleep(Duration::from_millis(50)).await;
             }
         }
@@ -121,8 +114,10 @@ pub fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
         }
     }
 
-    let ip = ip?;
-    let mac = mac?;
+    // CLEANUP: let-else para early returns mais legíveis
+    let (Some(ip), Some(mac)) = (ip, mac) else {
+        return None;
+    };
 
     if mac.is_zero() || (mac.0[0] & 1) == 1 {
         return None;
@@ -131,16 +126,6 @@ pub fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
     Some(NeighborEvent::Added { ip, mac, ifindex })
 }
 
-// ---------------------------------------------------------------------------
-// Extraction of events from the Netlink stream
-// ---------------------------------------------------------------------------
-
-/// Extracts a `NeighborEvent` from an `RTM_NEWNEIGH` (or DELNEIGH) message.
-///
-/// Returns `None` if:
-/// - The protocol is not IPv6/IPv4.
-/// - The state is incomplete or failed (MAC address unknown).
-/// - IP or MAC attributes are missing.
 #[must_use]
 pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<NeighborEvent> {
     let (neigh, is_delete) = match &msg.payload {
@@ -149,29 +134,24 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
         _ => return None,
     };
 
-    let mut ip_v4: Option<std::net::Ipv4Addr> = None;
-    let mut ip_v6: Option<Ipv6Addr> = None;
+    let mut ip_addr: Option<IpAddr> = None;
     let mut mac: Option<MacAddr> = None;
 
     for attr in &neigh.attributes {
         match attr {
-            NeighbourAttribute::Destination(NeighbourAddress::Inet6(i)) => ip_v6 = Some(*i),
-            NeighbourAttribute::Destination(NeighbourAddress::Inet(i)) => ip_v4 = Some(*i),
-            NeighbourAttribute::LinkLocalAddress(m) => {
-                mac = MacAddr::from_slice(m);
+            NeighbourAttribute::Destination(NeighbourAddress::Inet6(i)) => {
+                ip_addr = Some(IpAddr::V6(*i));
             }
+            NeighbourAttribute::Destination(NeighbourAddress::Inet(i)) => {
+                ip_addr = Some(IpAddr::V4(*i));
+            }
+            NeighbourAttribute::LinkLocalAddress(m) => mac = MacAddr::from_slice(m),
             _ => {}
         }
     }
 
-    let ip = match neigh.header.family {
-        rtnetlink::packet_route::AddressFamily::Inet6 => IpAddr::V6(ip_v6?),
-        rtnetlink::packet_route::AddressFamily::Inet => IpAddr::V4(ip_v4?),
-        _ => return None,
-    };
+    let ip = ip_addr?;
 
-    // We only block Incomplete states when discovering a new host.
-    // Failed is now handled to detect offline status.
     if !is_delete && matches!(neigh.header.state, NeighbourState::Incomplete) {
         return None;
     }
@@ -192,7 +172,6 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
             return None;
         }
 
-        // For additions, the MAC address is strictly required. Returns None if missing.
         Some(NeighborEvent::Added {
             ip,
             mac,
@@ -201,21 +180,17 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
     }
 }
 
-// ---------------------------------------------------------------------------
-// Kernel Queries (Uses the shared Handle)
-// ---------------------------------------------------------------------------
-
-/// Retrieves all IPv6 neighbors within the target prefix as `NeighborEvent`s.
 pub async fn get_ipv6_neighbors(
     handle: &Handle,
     target_prefix: &str,
     target_ifindex: Option<u32>,
 ) -> Result<Vec<NeighborEvent>, NetworkError> {
     let mut neighbors = Vec::new();
-    let neighbours_get = handle.neighbours().get();
-    let neighbours_get = neighbours_get.set_family(IpVersion::V6);
-
-    let mut stream = neighbours_get.execute();
+    let mut stream = handle
+        .neighbours()
+        .get()
+        .set_family(IpVersion::V6)
+        .execute();
 
     while let Some(msg) = stream.try_next().await? {
         if let Some(event) = parse_neighbor_msg(msg) {
@@ -225,10 +200,13 @@ pub async fn get_ipv6_neighbors(
                 continue;
             }
 
+            // NOTE: Isso ainda usa alocação de string. Idealmente, parse o `target_prefix`
+            // para um tipo `Ipv6Net` (usando crate ipnet) no começo da função e use o método `contains()`.
             let matches = match event.ip() {
                 IpAddr::V6(ip) => ip.to_string().starts_with(target_prefix),
                 IpAddr::V4(_) => false,
             };
+
             if matches {
                 neighbors.push(event);
             }
@@ -238,16 +216,16 @@ pub async fn get_ipv6_neighbors(
     Ok(neighbors)
 }
 
-/// Retrieves all IPv4 neighbors (ARP table) as `NeighborEvent`s.
 pub async fn get_ipv4_neighbors(
     handle: &Handle,
     target_ifindex: Option<u32>,
 ) -> Result<Vec<NeighborEvent>, NetworkError> {
     let mut neighbors = Vec::new();
-    let neighbours_get = handle.neighbours().get();
-    let neighbours_get = neighbours_get.set_family(IpVersion::V4);
-
-    let mut stream = neighbours_get.execute();
+    let mut stream = handle
+        .neighbours()
+        .get()
+        .set_family(IpVersion::V4)
+        .execute();
 
     while let Some(msg) = stream.try_next().await? {
         if let Some(event) = parse_neighbor_msg(msg) {
@@ -263,25 +241,17 @@ pub async fn get_ipv4_neighbors(
     Ok(neighbors)
 }
 
-/// Triggers a NUD probe for a specific neighbor via Netlink.
-///
-/// This forces the kernel to send a Neighbor Solicitation (IPv6) or ARP Request (IPv4)
-/// to verify the reachability of the given IP address.
-///
-/// Se `mac` for fornecido, o kernel envia um Unicast Probe (bypassa deep sleep).
-/// Se `mac` for None, o kernel envia um Broadcast Probe (usado para discovery).
 pub async fn probe_neighbor(
     handle: &Handle,
     ifindex: u32,
     ip: IpAddr,
-    mac: Option<MacAddr>, // Aceitando o MAC opcionalmente
+    mac: Option<MacAddr>,
 ) -> Result<(), rtnetlink::Error> {
     let mut req = handle
         .neighbours()
         .add(ifindex, ip)
         .state(NeighbourState::Probe);
 
-    // Se temos a identidade do hardware, preservamos no cache do kernel!
     if let Some(m) = mac {
         req = req.link_local_address(m.as_bytes());
     }
@@ -290,20 +260,19 @@ pub async fn probe_neighbor(
 }
 
 /// Returns an iterator over all usable IPv4 addresses in a given subnet.
-///
 /// Skips the network address (.0) and the broadcast address (.255 for /24).
-#[must_use]
-pub fn get_ipv4_subnet_iterable(ip: Ipv4Addr, prefix_len: u8) -> Vec<Ipv4Addr> {
-    if prefix_len >= 31 {
-        return Vec::new();
-    }
+pub fn get_ipv4_subnet_iterable(ip: Ipv4Addr, prefix_len: u8) -> impl Iterator<Item = Ipv4Addr> {
+    let (start, end) = if prefix_len >= 31 {
+        // Intervalo vazio se o prefixo for 31 ou 32 (sem IPs hosts usáveis para scan padrão)
+        (1, 1)
+    } else {
+        let mask = !u32::MAX.checked_shr(u32::from(prefix_len)).unwrap_or(0);
+        let ip_u32 = u32::from_be_bytes(ip.octets());
+        let network = ip_u32 & mask;
+        let broadcast = network | !mask;
+        (network + 1, broadcast)
+    };
 
-    let mask = !u32::MAX.checked_shr(u32::from(prefix_len)).unwrap_or(0);
-    let ip_u32 = u32::from_be_bytes(ip.octets());
-    let network = ip_u32 & mask;
-    let broadcast = network | !mask;
-
-    ((network + 1)..broadcast)
-        .map(|addr| Ipv4Addr::from(addr.to_be_bytes()))
-        .collect()
+    // OPTIMIZATION: Retorna um iterador ao invés de alocar um Vec gigante na memória.
+    (start..end).map(|addr| Ipv4Addr::from(addr.to_be_bytes()))
 }

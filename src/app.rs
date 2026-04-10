@@ -88,7 +88,12 @@ impl Daemon {
         let m1 = messages.clone();
         let ctx_ifmon = self.ctx.clone();
         self.registry.spawn_async(&self.ctx, move || {
-            InterfaceMonitor::new(h1.clone(), m1.clone(), target_ifindex, ctx_ifmon.clone())
+            InterfaceMonitor::new(
+                h1.clone(),
+                m1.subscribe(),
+                target_ifindex,
+                ctx_ifmon.clone(),
+            )
         });
 
         // Ndp Monitor (Async)
@@ -100,7 +105,7 @@ impl Daemon {
         self.registry.spawn_async(&self.ctx, move || {
             NeighborMonitor::new(
                 h2.clone(),
-                m2.clone(),
+                m2.subscribe(),
                 target_ifindex,
                 ctx_ndp.clone(),
                 scan_interval,

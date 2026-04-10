@@ -772,7 +772,11 @@ fn test_handle_ip_offline_slaac_removal() {
     state.apply_update(DeviceUpdate::IpOffline { ip: ip2 });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 0, "All SLAAC IPs should be removed");
-    assert!(!dev.is_online(), "Device should be offline now");
+    assert!(dev.is_suspect(), "Device should be SUSPECT now");
+    assert!(
+        dev.is_online(),
+        "Device should still be ONLINE during grace period"
+    );
 }
 #[test]
 fn test_handle_ip_offline_static_ula_persistence() {
@@ -832,9 +836,10 @@ fn test_handle_ip_offline_static_ula_persistence() {
     );
 
     assert!(
-        !dev.is_online(),
-        "Now offline because Static also failed and SLAAC is gone"
+        dev.is_suspect(),
+        "Now suspect because Static also failed and SLAAC is gone"
     );
+    assert!(dev.is_online(), "Still online during grace period");
 
     // 4. Device marks as online again on activity
 

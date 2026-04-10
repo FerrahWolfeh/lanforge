@@ -4,8 +4,6 @@
 //! assigned to the local network interfaces. It provides a synchronous bootstrap
 //! mechanism to ensure networking is ready before other services start.
 
-use futures::StreamExt;
-use futures::channel::mpsc::UnboundedReceiver;
 use futures::stream::TryStreamExt;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
@@ -17,20 +15,19 @@ use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::packet_route::address::AddressAttribute;
 use std::net::{IpAddr, Ipv6Addr};
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use netlink_sys::SocketAddr;
 
 use crate::error::NetworkError;
 
-pub type NetlinkStream = UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
+pub type NetlinkStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
 pub struct InterfaceMonitor {
     handle: Handle,
-    messages: Arc<Mutex<NetlinkStream>>,
+    messages: NetlinkStream,
     target_ifindex: u32,
     ctx: LanforgeContext,
 }
@@ -39,7 +36,7 @@ impl InterfaceMonitor {
     #[must_use]
     pub const fn new(
         handle: Handle,
-        messages: Arc<Mutex<NetlinkStream>>,
+        messages: NetlinkStream,
         target_ifindex: u32,
         ctx: LanforgeContext,
     ) -> Self {
@@ -149,11 +146,15 @@ impl AsyncService for InterfaceMonitor {
                 break;
             }
 
-            let mut rx = self.messages.lock().await;
             tokio::select! {
-                res = rx.next() => {
-                    drop(rx);
-                    let Some((msg, _addr)) = res else { break };
+                res = self.messages.recv() => {
+                    let Ok((msg, _addr)) = res else {
+                        if matches!(res, Err(broadcast::error::RecvError::Lagged(_))) {
+                            warn!("InterfaceMonitor: Netlink broadcast lagged, skipping catch-up");
+                            continue;
+                        }
+                        break;
+                    };
 
                     if let NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewAddress(addr) |
                     RouteNetlinkMessage::DelAddress(addr)) = &msg.payload
@@ -166,7 +167,6 @@ impl AsyncService for InterfaceMonitor {
                 }
 
                 Ok(event) = bus_rx.recv() => {
-                    drop(rx);
                     if matches!(event.event, LanforgeEvent::Shutdown) {
                         break;
                     }

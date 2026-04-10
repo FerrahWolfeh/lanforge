@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
@@ -15,7 +16,7 @@ use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
 use crate::config::{Config, load_devices_only};
@@ -23,13 +24,17 @@ use crate::config::{Config, load_devices_only};
 const RTNLGRP_IPV4_IFADDR: u32 = 5;
 const RTNLGRP_IPV6_IFADDR: u32 = 9;
 
-type NetlinkMessages = UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
+type NetlinkRawMessage = (NetlinkMessage<RouteNetlinkMessage>, SocketAddr);
+type NetlinkMessages = broadcast::Sender<NetlinkRawMessage>;
+type NetlinkRawReceiver = UnboundedReceiver<NetlinkRawMessage>;
+
+const NETLINK_BROADCAST_CAPACITY: usize = 256;
 
 #[derive(Clone)]
 pub struct BootstrapResult {
     pub cfg: Arc<Config>,
     pub rt_handle: rtnetlink::Handle,
-    pub messages: Arc<Mutex<NetlinkMessages>>,
+    pub messages: NetlinkMessages,
     pub target_ifindex: u32,
 }
 
@@ -53,8 +58,21 @@ impl Bootstrapper {
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
         let _ = bus.publish(LanforgeEvent::StateReady);
 
-        let (handle, messages) = Self::init_netlink()?;
-        let messages = Arc::new(Mutex::new(messages));
+        let (handle, messages_rx) = Self::init_netlink()?;
+        let (tx, _rx) = broadcast::channel(NETLINK_BROADCAST_CAPACITY);
+        let messages = tx.clone();
+
+        // Netlink Dispatcher Task
+        let dispatcher_tx = tx.clone();
+        tokio::spawn(async move {
+            let mut rx = messages_rx;
+            while let Some(msg) = rx.next().await {
+                if dispatcher_tx.send(msg).is_err() {
+                    // All receivers dropped, but keep dispatcher alive if possible?
+                    // Actually, if all dropped, nothing to do.
+                }
+            }
+        });
 
         let if_state = Self::perform_initial_scan(&handle, &messages, target_ifindex, &ctx).await?;
         Self::log_welcome_banner(&cfg, &if_state);
@@ -147,7 +165,7 @@ impl Bootstrapper {
             .ok_or_else(|| anyhow::anyhow!("Interface '{}' not found", cfg.iface_lan))
     }
 
-    fn init_netlink() -> Result<(rtnetlink::Handle, NetlinkMessages)> {
+    fn init_netlink() -> Result<(rtnetlink::Handle, NetlinkRawReceiver)> {
         use netlink_sys::AsyncSocket;
 
         let (mut connection, handle, messages) = new_connection()?;
@@ -170,13 +188,13 @@ impl Bootstrapper {
 
     async fn perform_initial_scan(
         handle: &rtnetlink::Handle,
-        messages: &Arc<Mutex<NetlinkMessages>>,
+        messages: &NetlinkMessages,
         target_ifindex: u32,
         ctx: &LanforgeContext,
     ) -> Result<InterfaceState> {
         let ifmon_init = InterfaceMonitor::new(
             handle.clone(),
-            messages.clone(),
+            messages.subscribe(),
             target_ifindex,
             ctx.clone(),
         );
