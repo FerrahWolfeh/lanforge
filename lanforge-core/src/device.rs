@@ -508,9 +508,8 @@ pub struct Device {
 
     /// `DHCPv6` Unique Identifier (DUID), if tracked.
     pub duid: Option<Duid>,
-    /// IPs that have failed connectivity probes since the last successful activity.
-    #[serde(skip)]
-    pub failed_ips: HashSet<IpAddr>,
+    /// Pre-calculated DNS fallback name (e.g., "host-abcdef123456").
+    pub dns_fallback: String,
 }
 
 impl Device {
@@ -527,7 +526,7 @@ impl Device {
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
             duid: None,
-            failed_ips: HashSet::new(),
+            dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
         }
     }
 
@@ -588,22 +587,6 @@ impl Device {
             }
         }
     }
-
-    /// Marks an IP as failed. This is transient and cleared on the next seen event.
-    /// Returns true if it was not already marked.
-    pub fn mark_ip_failed(&mut self, ip: IpAddr) -> bool {
-        self.failed_ips.insert(ip)
-    }
-
-    /// Clears all transient failure tracking. Called when a device is seen active.
-    /// Returns true if something was actually cleared.
-    pub fn reset_failures(&mut self) -> bool {
-        if self.failed_ips.is_empty() {
-            return false;
-        }
-        self.failed_ips.clear();
-        true
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -612,9 +595,9 @@ impl Device {
 
 impl Device {
     /// Defines the threshold for a device to be considered "definitely online".
+    /// Returns true if the device was seen within the last 5 minutes.
+    /// Defines the threshold for a device to be considered "definitely online".
     pub const ONLINE_THRESHOLD_SECS: u64 = 300; // 5 minutes
-    /// Defines the grace period threshold for a device to be "suspect" before being marked offline.
-    pub const SUSPECT_THRESHOLD_SECS: u64 = 900; // 15 minutes (grace period of 10m)
 
     /// Returns the device's hostname, or "?" if not available.
     #[must_use]
@@ -629,26 +612,6 @@ impl Device {
             .elapsed()
             .map(|d| d.as_secs() < Self::ONLINE_THRESHOLD_SECS)
             .unwrap_or(false)
-    }
-
-    /// Returns true if the device is in the "grace period" (Suspect state).
-    /// A device is suspect if it hasn't been seen for 5-15 minutes,
-    /// OR if it has actively failing IPs but was seen recently.
-    #[must_use]
-    pub fn is_suspect(&self) -> bool {
-        let elapsed = self.last_seen.elapsed().map(|d| d.as_secs()).unwrap_or(0);
-
-        // 1. Time-based suspicion (5 to 15 minutes)
-        if (Self::ONLINE_THRESHOLD_SECS..Self::SUSPECT_THRESHOLD_SECS).contains(&elapsed) {
-            return true;
-        }
-
-        // 2. Failure-based suspicion (Seen < 5 min but some IPs are failing)
-        if elapsed < Self::ONLINE_THRESHOLD_SECS && !self.failed_ips.is_empty() {
-            return true;
-        }
-
-        false
     }
 
     /// Returns a human-readable primary IPv4 address or "—".
@@ -890,7 +853,7 @@ mod tests {
             v6_prefixes: Vec::new(),
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
-            failed_ips: HashSet::new(),
+            dns_fallback: "host-010203040506".to_string(),
         };
 
         let sorted = dev.all_addresses_sorted(None, None);

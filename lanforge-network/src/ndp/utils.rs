@@ -1,10 +1,7 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    time::{Duration, SystemTime},
-};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use futures::TryStreamExt;
-use lanforge_core::{context::LanforgeContext, identifiers::MacAddr, ndp::NeighborEvent};
+use lanforge_core::{identifiers::MacAddr, ndp::NeighborEvent};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::{
     Handle, IpVersion,
@@ -13,7 +10,6 @@ use rtnetlink::{
         neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState},
     },
 };
-use tokio::time::sleep;
 
 use crate::error::NetworkError;
 
@@ -54,36 +50,6 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
         }
     }
     None
-}
-
-pub async fn run_periodic_probes_task(
-    handle: Handle,
-    ctx: LanforgeContext,
-    ifindex: u32,
-    current_gua: Option<Ipv6Addr>,
-    current_ula: Option<Ipv6Addr>,
-    force_all: bool,
-) {
-    let devices = ctx.all_devices();
-    let now = SystemTime::now();
-
-    for dev in devices {
-        if !force_all && !dev.is_online() && !dev.is_suspect() {
-            continue;
-        }
-
-        let elapsed = now.duration_since(dev.last_seen).unwrap_or_default();
-        let interval_secs = if dev.is_suspect() { 30 } else { 60 };
-
-        if force_all || elapsed.as_secs() > interval_secs {
-            for ip in dev.all_addresses_sorted(current_gua, current_ula) {
-                if let Err(e) = probe_neighbor(&handle, ifindex, ip, Some(dev.mac)).await {
-                    tracing::debug!("NeighborMonitor: Scheduled probe failed for {ip}: {e}");
-                }
-                sleep(Duration::from_millis(50)).await;
-            }
-        }
-    }
 }
 
 #[must_use]

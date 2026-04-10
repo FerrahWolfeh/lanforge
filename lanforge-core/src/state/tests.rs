@@ -761,21 +761,20 @@ fn test_handle_ip_offline_slaac_removal() {
     assert_eq!(dev.v6.len(), 2);
     assert!(dev.is_online());
     // 2. Report ip1 as offline
-    // We need to ensure ip_index or ndp_cache is populated for handle_ip_offline to find the MAC
     state.ip_index.insert(ip1, mac);
     state.apply_update(DeviceUpdate::IpOffline { ip: ip1 });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 1, "SLAAC IP should be removed");
     assert!(dev.is_online(), "Device should still be online via ip2");
+
     // 3. Report ip2 as offline
     state.ip_index.insert(ip2, mac);
     state.apply_update(DeviceUpdate::IpOffline { ip: ip2 });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 0, "All SLAAC IPs should be removed");
-    assert!(dev.is_suspect(), "Device should be SUSPECT now");
     assert!(
         dev.is_online(),
-        "Device should still be ONLINE during grace period"
+        "Device should still be online via recent activity"
     );
 }
 #[test]
@@ -823,7 +822,6 @@ fn test_handle_ip_offline_static_ula_persistence() {
         "Static IP must NOT be removed"
     );
 
-    assert!(dev.failed_ips.contains(&static_ip));
     assert!(dev.is_online(), "Still online via SLAAC");
 
     // 3. Report SLAAC as offline
@@ -836,13 +834,11 @@ fn test_handle_ip_offline_static_ula_persistence() {
     );
 
     assert!(
-        dev.is_suspect(),
-        "Now suspect because Static also failed and SLAAC is gone"
+        dev.is_online(),
+        "Still online because Static is persistent and we are within 5min window"
     );
-    assert!(dev.is_online(), "Still online during grace period");
 
     // 4. Device marks as online again on activity
-
     state.apply_update(DeviceUpdate::NdpSeen {
         mac,
         ip: match static_ip {
@@ -852,7 +848,5 @@ fn test_handle_ip_offline_static_ula_persistence() {
     });
 
     let dev = state.get_device(&mac).unwrap();
-
     assert!(dev.is_online());
-    assert!(dev.failed_ips.is_empty(), "Failures should be reset");
 }

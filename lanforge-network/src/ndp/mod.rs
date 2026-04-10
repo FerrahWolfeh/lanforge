@@ -22,7 +22,7 @@ pub mod tests;
 pub mod utils;
 
 use crate::ndp::utils::{
-    extract_neigh_info, get_ipv4_subnet_iterable, probe_neighbor, run_periodic_probes_task,
+    extract_neigh_info, get_ipv4_subnet_iterable, probe_neighbor,
 };
 use crate::slaac::bootstrap_table;
 use lanforge_core::bus::LanforgeEvent;
@@ -96,25 +96,6 @@ impl NeighborMonitor {
             in_progress.store(false, Ordering::SeqCst);
         });
     }
-
-    fn spawn_periodic_probes(
-        &self,
-        source: &str,
-        gua: Option<Ipv6Addr>,
-        ula: Option<Ipv6Addr>,
-        force_all: bool,
-    ) {
-        debug!(
-            "NeighborMonitor: Spawning periodic probes task (source: {source}, force_all: {force_all})"
-        );
-        let handle = self.handle.clone();
-        let ctx = self.ctx.clone();
-        let ifindex = self.target_ifindex;
-
-        tokio::spawn(async move {
-            run_periodic_probes_task(handle, ctx, ifindex, gua, ula, force_all).await;
-        });
-    }
 }
 
 async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32) {
@@ -171,7 +152,6 @@ impl AsyncService for NeighborMonitor {
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
-        let mut probe_interval = interval(Duration::from_secs(30)); // Checked every 30s for Suspects
         let mut subnet_scan_interval = if self.scan_interval.as_secs() > 0 {
             let mut interval = interval(self.scan_interval);
             // Ensure the first periodic scan happens after the first interval, not immediately.
@@ -197,16 +177,6 @@ impl AsyncService for NeighborMonitor {
             }
         }
 
-        // 2. Initial network-wide probe (Boot Discovery on all known devices)
-        {
-            let devices = self.ctx.all_devices();
-            info!(
-                "NeighborMonitor: Triggering initial discovery probe for {} devices",
-                devices.len()
-            );
-            // Non-blocking discovery probe (force_all = true)
-            self.spawn_periodic_probes("Boot Discovery", current_gua, current_ula, true);
-        }
 
         loop {
             if !self.ctx.is_running() {
@@ -244,11 +214,6 @@ impl AsyncService for NeighborMonitor {
                     }
                 }
 
-                _ = probe_interval.tick() => {
-                    // B. Periodic Surgical Probes for silent online devices
-                    // force_all = false, but it will check is_online() or is_suspect()
-                    self.spawn_periodic_probes("Periodic Timer", current_gua, current_ula, false);
-                }
 
                 () = async {
                     if let Some(i) = subnet_scan_interval.as_mut() {
