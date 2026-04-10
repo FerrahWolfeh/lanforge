@@ -41,7 +41,8 @@ impl CliCommand for WolCommand {
                     })
                     .collect();
 
-                let selection = Select::new("Select a device to wake up:", options.clone()).prompt()?;
+                let selection =
+                    Select::new("Select a device to wake up:", options.clone()).prompt()?;
                 let index = options.iter().position(|s| s == &selection).unwrap();
                 let mac = &resp.devices[index].mac;
 

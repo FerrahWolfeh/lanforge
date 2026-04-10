@@ -1,10 +1,10 @@
 use super::{CliCommand, format_relative_iso8601};
+use crate::cli::vendor::resolve_vendor;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{Command as ControlCommand, Response, WhoisResponse};
 use lanforge_core::device::Origin;
 use lanforge_db::engine::LeaseHistoryEntry;
-use crate::cli::vendor::resolve_vendor;
 
 pub struct WhoisHandler {
     pub target: String,
@@ -35,7 +35,7 @@ impl CliCommand for WhoisHandler {
 
 pub fn render_whois(resp: &WhoisResponse) {
     let dev = &resp.entry;
-    
+
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -45,7 +45,8 @@ pub fn render_whois(resp: &WhoisResponse) {
             }
             View(margin_top: 1) { }
         }
-    }.print();
+    }
+    .print();
 
     // Device Info Card
     let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
@@ -74,7 +75,7 @@ pub fn render_whois(resp: &WhoisResponse) {
                 Text(content: "Last Seen: ", color: Color::DarkGrey)
                 Text(content: format_relative_iso8601(&dev.last_seen))
             }
-            
+
             View(margin_top: 1, flex_direction: FlexDirection::Column) {
                 Text(content: "NETWORK", color: Color::Cyan)
                 View(flex_direction: FlexDirection::Row) {
@@ -96,7 +97,6 @@ pub fn render_whois(resp: &WhoisResponse) {
                 View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
                     Text(content: " LEASE HISTORY ", color: Color::Black, weight: Weight::Bold)
                 }
-                
                 View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
                     // Header
                     View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
@@ -105,8 +105,7 @@ pub fn render_whois(resp: &WhoisResponse) {
                         Text(content: format!("{:<15}", "TYPE"), color: Color::DarkGrey)
                         Text(content: "ACTION", color: Color::DarkGrey)
                     }
-                    Text(content: "─".repeat(70), color: Color::DarkGrey)
-                    
+                    Text(content: "─".repeat(70), color: Color::DarkGrey)   
                     #(resp.history.iter().map(|h| element! {
                         HistoryRow(history: h.clone())
                     }))
@@ -122,7 +121,7 @@ fn HistoryRow(props: &HistoryRowProps) -> impl Into<AnyElement<'_>> {
     let h = &props.history;
     let dt: DateTime<Utc> = h.timestamp.into();
     let time = format_relative_iso8601(&dt.to_rfc3339());
-    
+
     element! {
         View(flex_direction: FlexDirection::Row) {
             Text(content: format!("{:<20}", time), color: Color::DarkGrey)

@@ -10,8 +10,14 @@ pub struct LeaseHandler {
 impl CliCommand for LeaseHandler {
     fn prepare(&mut self) -> Result<ControlCommand> {
         match &self.action {
-            LeaseCommand::Renew { mac } => Ok(ControlCommand::LeaseRenew { mac: mac.clone(), target: None }),
-            LeaseCommand::Release { mac } => Ok(ControlCommand::LeaseRelease { mac: mac.clone(), target: None }),
+            LeaseCommand::Renew { mac } => Ok(ControlCommand::LeaseRenew {
+                mac: mac.clone(),
+                target: None,
+            }),
+            LeaseCommand::Release { mac } => Ok(ControlCommand::LeaseRelease {
+                mac: mac.clone(),
+                target: None,
+            }),
         }
     }
 }
