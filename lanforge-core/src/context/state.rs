@@ -157,6 +157,7 @@ pub enum DeviceUpdate {
         ifindex: u32,
         state: InterfaceState,
     },
+    PruneZombies,
     RebuildDnsIndices,
 }
 
@@ -232,6 +233,7 @@ impl State {
             DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
                 self.handle_interface_ips_changed(ifindex, &state)
             }
+            DeviceUpdate::PruneZombies => self.handle_prune_zombies(),
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 true
@@ -682,6 +684,24 @@ impl State {
         };
         let changed_static = self.static_entries.remove(&mac).is_some();
         changed_dev || changed_static
+    }
+
+    fn handle_prune_zombies(&mut self) -> bool {
+        let initial_count = self.devices.len();
+        let mut to_remove = Vec::new();
+
+        for (mac, dev) in &self.devices {
+            if !dev.is_worthy() {
+                debug!("[state] Candidate for pruning: {} (not worthy)", mac);
+                to_remove.push(*mac);
+            }
+        }
+
+        for mac in to_remove {
+            self.handle_host_removed(mac);
+        }
+
+        self.devices.len() != initial_count
     }
 
     fn handle_lease_released(&mut self, mac: MacAddr, target: &LeaseTarget) -> bool {

@@ -89,6 +89,8 @@ pub enum Command {
     DbVacuum,
     /// Clear all transient system logs.
     DbLogClean,
+    /// Remove 'zombie' entries from the database (dynamic devices with no IPs/Hostname).
+    DbPrune,
     /// Forcefully purge a device from memory and database by its MAC.
     Purge {
         /// Target device MAC address.

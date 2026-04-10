@@ -178,6 +178,8 @@ pub enum LanforgeEvent {
     DbVacuum,
     /// Request to clear all transient system logs.
     DbLogClean,
+    /// Request to remove zombie entries from the database.
+    DbPrune,
     /// Request to release a lease for a device.
     LeaseRelease { mac: MacAddr, target: LeaseTarget },
     /// Request to force-renew a lease for a device.
@@ -221,6 +223,7 @@ impl TimedEvent {
             | LanforgeEvent::LeaseRenew { .. }
             | LanforgeEvent::DbVacuum
             | LanforgeEvent::DbLogClean
+            | LanforgeEvent::DbPrune
             | LanforgeEvent::DevicePurged { .. }
             | LanforgeEvent::WolTriggered { .. }
             | LanforgeEvent::ReloadConfig

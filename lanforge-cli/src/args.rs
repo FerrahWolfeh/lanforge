@@ -135,6 +135,8 @@ pub enum DbCommand {
     Vacuum,
     /// Clear the transient system log database
     LogClean,
+    /// Remove 'zombie' entries (dynamic devices with no IP nor hostname)
+    Prune,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]

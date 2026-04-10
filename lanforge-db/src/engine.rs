@@ -560,6 +560,26 @@ impl LeaseDb {
         Ok(())
     }
 
+    /// Removes 'zombie' entries from the database.
+    ///
+    /// Zombies are defined as dynamic devices with no hostname, no active leases,
+    /// no static configurations, and no observed traffic.
+    pub fn prune_zombies(&self) -> Result<usize, LeaseDbError> {
+        debug!("[db] Pruning zombie entries...");
+        let rows = self.conn.execute(
+            "DELETE FROM devices
+             WHERE origin = 'dynamic'
+               AND hostname = ''
+               AND mac NOT IN (SELECT mac FROM v4_leases)
+               AND mac NOT IN (SELECT mac FROM v6_leases)
+               AND mac NOT IN (SELECT mac FROM v6_prefixes)
+               AND mac NOT IN (SELECT mac FROM slaac_addrs)
+               AND mac NOT IN (SELECT mac FROM seen_v4)",
+            [],
+        )?;
+        Ok(rows)
+    }
+
     /// Records a lease-related event in the persistent history.
     pub fn record_lease_event(
         &self,

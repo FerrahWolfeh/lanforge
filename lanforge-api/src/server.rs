@@ -527,6 +527,13 @@ where
                     message: "Starting sqlite vacuum...".to_string(),
                 })
             }
+            Ok(Command::DbPrune) => {
+                let _ = ctx.ctx.apply(&DeviceUpdate::PruneZombies);
+                let _ = ctx.ctx.bus().publish(LanforgeEvent::DbPrune);
+                Response::Success(SimpleSuccess {
+                    message: "Pruning zombie entries from memory and database...".to_string(),
+                })
+            }
             Err(e) => Response::Error {
                 error: format!("Invalid command or malformed JSON: {e}"),
             },

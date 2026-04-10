@@ -114,6 +114,13 @@ impl SyncService for DbWorker {
                             self.ctx.record_db_flush();
                         }
                     }
+                    LanforgeEvent::DbPrune => match db.prune_zombies() {
+                        Ok(count) => {
+                            info!("DB worker: pruned {count} zombie entries");
+                            self.ctx.record_db_flush();
+                        }
+                        Err(e) => warn!("DB worker: failed to prune zombies: {e}"),
+                    },
                     LanforgeEvent::Shutdown => {
                         break;
                     }

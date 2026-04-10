@@ -293,6 +293,14 @@ impl LogHandler {
             LanforgeEvent::DeviceTableDirty | LanforgeEvent::Shutdown => {
                 // Ignore these or print subtly if needed
             }
+            LanforgeEvent::DbPrune => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "Zombie devices manually pruned from DB".dimmed()
+                );
+            }
         }
     }
 

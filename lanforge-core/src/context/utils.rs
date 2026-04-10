@@ -28,6 +28,7 @@ pub(crate) const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         DeviceUpdate::IpDeleted { .. }
         | DeviceUpdate::IpOffline { .. }
         | DeviceUpdate::InterfaceIpsChanged { .. }
+        | DeviceUpdate::PruneZombies
         | DeviceUpdate::RebuildDnsIndices => None,
     }
 }
@@ -73,6 +74,7 @@ pub(crate) fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
         | DeviceUpdate::IpDeleted { .. }
         | DeviceUpdate::SlaacCleared { .. }
         | DeviceUpdate::InterfaceIpsChanged { .. }
+        | DeviceUpdate::PruneZombies
         | DeviceUpdate::RebuildDnsIndices => None,
         DeviceUpdate::CliHostUpdated {
             hostname,

@@ -12,6 +12,7 @@ impl CliCommand for DbHandler {
         match self.action {
             DbCommand::Vacuum => Ok(ControlCommand::DbVacuum),
             DbCommand::LogClean => Ok(ControlCommand::DbLogClean),
+            DbCommand::Prune => Ok(ControlCommand::DbPrune),
         }
     }
 }
