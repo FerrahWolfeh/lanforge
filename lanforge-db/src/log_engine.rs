@@ -6,8 +6,9 @@
 use rusqlite::{Connection, params};
 use serde_json;
 use std::{
+    cell::Cell,
     path::Path,
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use tracing::info;
 
@@ -16,6 +17,7 @@ use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 
 pub struct LogDb {
     conn: Connection,
+    last_prune: Cell<Instant>,
 }
 
 impl LogDb {
@@ -45,7 +47,10 @@ impl LogDb {
         )?;
 
         info!("Log database opened at {}", path.display());
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            last_prune: Cell::new(Instant::now()),
+        })
     }
 
     /// Records a new event in the log history.
@@ -64,19 +69,23 @@ impl LogDb {
             params![now_secs, timed_event.module, json],
         )?;
 
-        // Pruning: Keep only logs from the last 24 hours
+        // Pruning: Keep only logs from the last 24 hours at most once every 60 seconds
         // Safety cap: also delete entries if we exceed 50,000 logs to prevent RAM bloat
-        let cutoff = now_secs - (24 * 3600);
-        self.conn.execute(
-            "DELETE FROM system_logs WHERE timestamp < ?1",
-            params![cutoff],
-        )?;
+        if self.last_prune.get().elapsed() >= Duration::from_secs(60) {
+            let cutoff = now_secs - (24 * 3600);
+            self.conn.execute(
+                "DELETE FROM system_logs WHERE timestamp < ?1",
+                params![cutoff],
+            )?;
 
-        // Safety cap: keep at most 50,000 entries
-        self.conn.execute(
-            "DELETE FROM system_logs WHERE id <= (SELECT MAX(id) FROM system_logs) - 50000",
-            [],
-        )?;
+            // Safety cap: keep at most 50,000 entries
+            self.conn.execute(
+                "DELETE FROM system_logs WHERE id <= (SELECT MAX(id) FROM system_logs) - 50000",
+                [],
+            )?;
+
+            self.last_prune.set(Instant::now());
+        }
 
         Ok(())
     }
