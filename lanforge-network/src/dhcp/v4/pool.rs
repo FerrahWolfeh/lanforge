@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use lanforge_core::device::IPv4State;
 
@@ -17,7 +17,7 @@ pub struct IpPool {
     /// Range end (inclusive).
     end: u32,
     /// IPs rejected via DECLINE (Quarantine with timestamp).
-    declined: HashMap<Ipv4Addr, SystemTime>,
+    declined: HashMap<Ipv4Addr, Instant>,
     /// Bitmap of free IPs for efficient storage and allocation.
     available: RoaringBitmap,
 }
@@ -42,19 +42,17 @@ impl IpPool {
     /// Isolates a problematic IP reported via DECLINE.
     pub fn mark_declined(&mut self, ip: Ipv4Addr) {
         self.remove_from_available(ip);
-        self.declined.insert(ip, SystemTime::now());
+        self.declined.insert(ip, Instant::now());
     }
 
     /// Cleans up quarantine IPs.
-    pub fn cleanup_quarantine(&mut self, now: SystemTime) {
+    pub fn cleanup_quarantine(&mut self, now: Instant) {
         // Cleanup Quarantine (DECLINEs) - Recover IPs after 2 hours
-        let quarantine_timeout = std::time::Duration::from_secs(7200);
+        let quarantine_timeout = Duration::from_secs(7200);
         let recovered_ips: Vec<Ipv4Addr> = self
             .declined
             .iter()
-            .filter(|(_, time)| {
-                now.duration_since(**time).unwrap_or_default() >= quarantine_timeout
-            })
+            .filter(|(_, time)| now.duration_since(**time) >= quarantine_timeout)
             .map(|(&ip, _)| ip)
             .collect();
 
@@ -336,11 +334,11 @@ mod tests {
         assert_eq!(p.declined.len(), 1);
 
         // 2. Tenta limpar agora (não deve recuperar pois o timeout é 2h)
-        p.cleanup_quarantine(SystemTime::now());
+        p.cleanup_quarantine(Instant::now());
         assert!(p.available.is_empty());
 
         // 3. Simula 3 horas no futuro
-        let three_hours_later = SystemTime::now() + Duration::from_secs(3 * 3600);
+        let three_hours_later = Instant::now() + Duration::from_secs(3 * 3600);
         p.cleanup_quarantine(three_hours_later);
 
         // 4. Deve ter recuperado o IP

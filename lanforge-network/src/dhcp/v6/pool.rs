@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr};
-use std::time::SystemTime;
+use std::time::Instant;
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::{IPv6State, Ipv6AddrOrSuffix};
@@ -139,7 +139,7 @@ pub struct Ipv6Pool {
     pub gua_prefix: Option<Ipv6Addr>,
     pub ula_prefix_len: u8,
     /// IPs in quarantine.
-    blacklisted: HashMap<Ipv6Addr, SystemTime>,
+    blacklisted: HashMap<Ipv6Addr, Instant>,
     /// Static IP reservations to avoid dynamic pool collisions.
     reserved_static: Vec<Ipv6Addr>,
 }
@@ -610,7 +610,7 @@ impl Ipv6Pool {
 
     pub fn decline(&mut self, ip: Ipv6Addr) {
         self.release(&ip);
-        self.blacklisted.insert(ip, SystemTime::now());
+        self.blacklisted.insert(ip, Instant::now());
     }
 }
 
@@ -623,7 +623,7 @@ mod tests {
     };
 
     use super::*;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     // Função auxiliar para gerar MACs nos testes
     fn mac(last_byte: u8) -> MacAddr {

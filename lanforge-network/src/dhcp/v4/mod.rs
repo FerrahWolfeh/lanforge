@@ -138,7 +138,7 @@ impl SyncService for Dhcpv4Service {
 
             // 3. Periodic Cleanup
             if last_cleanup.elapsed() >= Duration::from_secs(60) {
-                server.pool.cleanup_quarantine(SystemTime::now());
+                server.pool.cleanup_quarantine(Instant::now());
                 last_cleanup = Instant::now();
             }
         }
