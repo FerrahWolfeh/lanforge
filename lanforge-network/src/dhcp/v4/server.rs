@@ -22,7 +22,6 @@ use lanforge_core::identifiers::MacAddr;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
 use super::config::Dhcpv4Config;
@@ -139,9 +138,8 @@ impl DhcpServer {
     ) -> HandleResult {
         let mac = identity.mac;
         let requested = Self::get_requested_ip(msg);
-        let expiry = SystemTime::now() + Duration::from_secs(u64::from(self.cfg.lease_time));
 
-        let Some(offered_ip) = self.pool.allocate(&self.ctx, mac, requested, expiry) else {
+        let Some(offered_ip) = self.pool.allocate(&self.ctx, mac, requested) else {
             warn!("DHCPv4: Pool exhausted, no IP available for {identity}");
             return HandleResult::Ignore;
         };
@@ -196,8 +194,7 @@ impl DhcpServer {
         };
 
         // Try to allocate
-        let expiry = SystemTime::now() + Duration::from_secs(u64::from(self.cfg.lease_time));
-        let Some(assigned_ip) = self.pool.allocate(&self.ctx, mac, Some(wanted), expiry) else {
+        let Some(assigned_ip) = self.pool.allocate(&self.ctx, mac, Some(wanted)) else {
             warn!("DHCPv4: {identity} requested {wanted} but it is not available");
             return self.send_nak(msg, "Requested IP not available");
         };
@@ -408,6 +405,7 @@ mod tests {
     use lanforge_core::context::LanforgeContext;
     use lanforge_core::state::DeviceUpdate;
     use std::net::Ipv4Addr;
+    use std::time::{Duration, SystemTime};
 
     // -----------------------------------------------------------------------
     // Helpers e Factories para os Testes
@@ -571,11 +569,10 @@ mod tests {
         let contested_ip = Ipv4Addr::new(192, 168, 1, 105);
 
         // 1. MAC1 aloca o IP primeiro
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
         let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
             mac: mac1,
             ip: contested_ip,
-            expires: expiry,
+            expires: SystemTime::now() + Duration::from_secs(3600),
         });
 
         // 2. MAC2 tenta pedir o IP que já é do MAC1
@@ -607,9 +604,8 @@ mod tests {
         let (mut srv, ctx) = dummy_server();
         let mac = dummy_mac();
         let ip = Ipv4Addr::new(192, 168, 1, 100);
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
 
-        srv.pool.allocate(&ctx, mac, Some(ip), expiry);
+        srv.pool.allocate(&ctx, mac, Some(ip));
         srv.last_assigned_ip = Some(ip);
         assert_eq!(srv.last_assignment_for(), Some(ip));
 
@@ -633,9 +629,8 @@ mod tests {
         let (mut srv, ctx) = dummy_server();
         let mac = dummy_mac();
         let ip = Ipv4Addr::new(192, 168, 1, 100);
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
 
-        srv.pool.allocate(&ctx, mac, Some(ip), expiry);
+        srv.pool.allocate(&ctx, mac, Some(ip));
 
         // Cliente detectou conflito de ARP e enviou DECLINE
         let raw_msg = build_raw_msg(MessageType::Decline, mac, None, Some(ip), None);

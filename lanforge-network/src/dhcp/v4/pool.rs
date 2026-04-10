@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use lanforge_core::device::IPv4State;
 
@@ -71,7 +71,6 @@ impl IpPool {
         ctx: &LanforgeContext,
         mac: MacAddr,
         requested: Option<Ipv4Addr>,
-        _expiry: SystemTime,
     ) -> Option<Ipv4Addr> {
         // 1. Sticky / Static: already has allocation in global table
         if let Some(dev) = ctx.get_device(&mac) {
@@ -205,7 +204,7 @@ mod tests {
     };
 
     use super::*;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     use crate::test_utils::init_test_context;
 
@@ -227,8 +226,7 @@ mod tests {
     #[test]
     fn allocates_within_range() {
         let (mut p, ctx) = pool();
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
-        let ip = p.allocate(&ctx, mac(1), None, expiry).unwrap();
+        let ip = p.allocate(&ctx, mac(1), None).unwrap();
         assert!(
             p.is_in_range(ip),
             "O IP alocado randomicamente deve respeitar o range"
@@ -238,17 +236,16 @@ mod tests {
     #[test]
     fn sticky_returns_same_ip() {
         let (mut p, ctx) = pool();
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
 
-        let ip1 = p.allocate(&ctx, mac(1), None, expiry).unwrap();
+        let ip1 = p.allocate(&ctx, mac(1), None).unwrap();
         // Simular o LanforgeContext alocando
         let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
             mac: mac(1),
             ip: ip1,
-            expires: expiry,
+            expires: SystemTime::now() + Duration::from_secs(3600),
         });
 
-        let ip2 = p.allocate(&ctx, mac(1), None, expiry).unwrap();
+        let ip2 = p.allocate(&ctx, mac(1), None).unwrap();
         assert_eq!(ip1, ip2, "Mesmo MAC deve receber o mesmo IP (Sticky)");
     }
 
@@ -256,8 +253,7 @@ mod tests {
     fn respects_requested_ip() {
         let (mut p, ctx) = pool();
         let requested = Ipv4Addr::new(192, 168, 0, 103);
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
-        let ip = p.allocate(&ctx, mac(1), Some(requested), expiry).unwrap();
+        let ip = p.allocate(&ctx, mac(1), Some(requested)).unwrap();
         assert_eq!(
             ip, requested,
             "Deve respeitar o Requested IP se estiver livre"
@@ -285,7 +281,7 @@ mod tests {
         // Pedimos IPs
         let expiry = SystemTime::now() + Duration::from_secs(3600);
         for i in 0..4 {
-            if let Some(ip) = p.allocate(&ctx, mac(i), None, expiry) {
+            if let Some(ip) = p.allocate(&ctx, mac(i), None) {
                 // Registrar cada um para que NÂO seja pego de novo
                 let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
                     mac: mac(i),
@@ -310,8 +306,7 @@ mod tests {
             p.mark_declined(Ipv4Addr::new(192, 168, 0, i));
         }
 
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
-        let rescued_ip = p.allocate(&ctx, mac(1), None, expiry).unwrap();
+        let rescued_ip = p.allocate(&ctx, mac(1), None).unwrap();
         assert!(p.is_in_range(rescued_ip));
         assert!(
             p.declined.is_empty(),
