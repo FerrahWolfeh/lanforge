@@ -142,7 +142,7 @@ pub fn render_hosts(resp: &HostsResponse) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
-                Text(content: " CONFIGURED HOSTS ", color: Color::Black, weight: Weight::Bold)
+                Text(content: " CONFIGURED HOSTS ", color: Color::White, weight: Weight::Bold)
                 Text(content: "  ·  ", color: Color::DarkGrey)
                 Text(content: format!("{} entries", resp.hosts.len()))
             }

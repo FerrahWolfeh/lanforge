@@ -3,6 +3,7 @@ use crate::args::HostCommand;
 use color_eyre::Result;
 use color_eyre::eyre::bail;
 use inquire::{Confirm, Select, Text as InquireText};
+use iocraft::prelude::*;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
 
@@ -64,18 +65,25 @@ impl CliCommand for HostHandler {
                         }
                     }
 
-                    println!("\nConfirm?");
-                    println!("  MAC       {final_mac}");
-                    println!("  hostname  {final_hostname}");
-                    if let Some(ref v) = final_v4 {
-                        println!("  Fixed V4  {v}");
-                    }
-                    if let Some(ref v) = final_v6 {
-                        println!("  V6 suffix {v}");
-                    }
-                    println!();
+                    element! {
+                        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+                            View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                                Text(content: " CONFIRM ADDITION ", color: Color::White, weight: Weight::Bold)
+                            }
+                            View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                                SummaryLine(label: "MAC", value: final_mac.clone(), color: Color::Cyan)
+                                SummaryLine(label: "Hostname", value: final_hostname.clone(), color: Color::Cyan)
+                                #(final_v4.as_ref().map(|v| element! {
+                                    SummaryLine(label: "Fixed IPv4", value: v.clone(), color: Color::Green)
+                                }))
+                                #(final_v6.as_ref().map(|v| element! {
+                                    SummaryLine(label: "V6 Suffix", value: v.clone(), color: Color::Yellow)
+                                }))
+                            }
+                        }
+                    }.print();
 
-                    let confirm = Confirm::new("Confirm addition?")
+                    let confirm = Confirm::new("Save host configuration?")
                         .with_default(true)
                         .prompt()?;
                     if !confirm {
@@ -106,18 +114,61 @@ impl CliCommand for HostHandler {
                 super::devices::render_hosts(resp);
             }
             Response::Error { error } => {
-                println!("Error: {error}");
+                element! {
+                    View(padding_left: 2, margin_top: 1) {
+                        Text(content: "✘ ", color: Color::Red)
+                        Text(content: format!("Error: {error}"), color: Color::Red, weight: Weight::Bold)
+                    }
+                }.print();
             }
             Response::Success(success) => {
-                println!("✓ {}", success.message);
+                element! {
+                    View(padding_left: 2, margin_top: 1) {
+                        Text(content: "✓ ", color: Color::Green)
+                        Text(content: success.message.clone(), color: Color::Green, weight: Weight::Bold)
+                    }
+                }.print();
             }
             Response::Event(e) => {
-                println!("Event: {e:?}");
+                element! {
+                    View(padding_left: 2, margin_top: 1) {
+                        Text(content: "● ", color: Color::Yellow)
+                        Text(content: format!("Event: {e:?}"), color: Color::Yellow)
+                    }
+                }
+                .print();
             }
             _ => {
                 println!("Unexpected response: {response:?}");
             }
         }
         Ok(None)
+    }
+}
+
+#[component]
+fn SummaryLine(props: &SummaryLineProps) -> impl Into<AnyElement<'_>> {
+    element! {
+        View(flex_direction: FlexDirection::Row) {
+            Text(content: format!("{:<12}", props.label), color: Color::DarkGrey)
+            Text(content: props.value.clone(), color: props.color)
+        }
+    }
+}
+
+#[derive(Props)]
+struct SummaryLineProps {
+    pub label: String,
+    pub value: String,
+    pub color: Color,
+}
+
+impl Default for SummaryLineProps {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            value: String::new(),
+            color: Color::White,
+        }
     }
 }
