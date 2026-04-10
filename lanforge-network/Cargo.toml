@@ -26,6 +26,7 @@ libc = "0.2.183"
 hickory-proto = { version = "0.25.2", features = [
     "mdns",
 ], default-features = false }
+roaring = "0.11.3"
 
 [dev-dependencies]
 tokio = { version = "1.51.0", features = ["full"] }

@@ -3,11 +3,12 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::SystemTime;
 
 use lanforge_core::device::IPv4State;
-use rand::seq::SliceRandom;
 
 use lanforge_core::identifiers::MacAddr;
 
 use lanforge_core::context::LanforgeContext;
+
+use roaring::RoaringBitmap;
 
 /// IPv4 address pool with dynamic allocation.
 pub struct IpPool {
@@ -17,10 +18,8 @@ pub struct IpPool {
     end: u32,
     /// IPs rejected via DECLINE (Quarantine with timestamp).
     declined: HashMap<Ipv4Addr, SystemTime>,
-    /// Pool of free IPs for circular/fast O(1) allocation.
-    available_ips: Vec<Ipv4Addr>,
-    /// Maps IP to its position in `available_ips` for O(1) removal.
-    ip_to_index: HashMap<Ipv4Addr, usize>,
+    /// Bitmap of free IPs for efficient storage and allocation.
+    available: RoaringBitmap,
 }
 
 impl IpPool {
@@ -28,33 +27,15 @@ impl IpPool {
     pub fn new(start: Ipv4Addr, end: Ipv4Addr) -> Self {
         let s = u32::from(start);
         let e = u32::from(end);
-        let raw_size = u64::from(e) - u64::from(s) + 1;
-        let size = usize::try_from(raw_size).expect("Pool size exceeds usize capacity");
 
-        let mut available_ips = Vec::with_capacity(size);
-
-        for i in 0..size {
-            let offset = u32::try_from(i).expect("Index exceeds u32 capacity");
-            let ip = Ipv4Addr::from(s + offset);
-            available_ips.push(ip);
-        }
-
-        // Shuffle so allocation order is random (Fisher-Yates)
-        available_ips.shuffle(&mut rand::rng());
-
-        // Build index AFTER shuffle so positions match
-        let ip_to_index: HashMap<Ipv4Addr, usize> = available_ips
-            .iter()
-            .enumerate()
-            .map(|(i, &ip)| (ip, i))
-            .collect();
+        let mut available = RoaringBitmap::new();
+        available.insert_range(s..=e);
 
         Self {
             start: s,
             end: e,
             declined: HashMap::new(),
-            available_ips,
-            ip_to_index,
+            available,
         }
     }
 
@@ -121,8 +102,13 @@ impl IpPool {
             self.remove_from_available(req);
         }
 
-        // 3. Fallback: Pick from available pool (O(1))
-        while let Some(ip) = self.available_ips.last().copied() {
+        // 3. Fallback: Pick from available pool (O(log n))
+        while !self.available.is_empty() {
+            let rank =
+                rand::random_range(0..u32::try_from(self.available.len()).unwrap_or(u32::MAX));
+            let ip_u32 = self.available.select(rank).unwrap(); // Safe due to rank check
+            let ip = Ipv4Addr::from(ip_u32);
+
             self.remove_from_available(ip);
             if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() {
                 return Some(ip);
@@ -138,7 +124,12 @@ impl IpPool {
         }
 
         // Second pass after GC
-        while let Some(ip) = self.available_ips.last().copied() {
+        while !self.available.is_empty() {
+            let rank =
+                rand::random_range(0..u32::try_from(self.available.len()).unwrap_or(u32::MAX));
+            let ip_u32 = self.available.select(rank).unwrap();
+            let ip = Ipv4Addr::from(ip_u32);
+
             self.remove_from_available(ip);
             if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() {
                 return Some(ip);
@@ -154,7 +145,12 @@ impl IpPool {
                 self.add_to_available(ip);
             }
 
-            while let Some(ip) = self.available_ips.last().copied() {
+            while !self.available.is_empty() {
+                let rank =
+                    rand::random_range(0..u32::try_from(self.available.len()).unwrap_or(u32::MAX));
+                let ip_u32 = self.available.select(rank).unwrap();
+                let ip = Ipv4Addr::from(ip_u32);
+
                 self.remove_from_available(ip);
                 if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() {
                     return Some(ip);
@@ -173,24 +169,11 @@ impl IpPool {
     }
 
     fn add_to_available(&mut self, ip: Ipv4Addr) {
-        if !self.ip_to_index.contains_key(&ip) {
-            let idx = self.available_ips.len();
-            self.available_ips.push(ip);
-            self.ip_to_index.insert(ip, idx);
-        }
+        self.available.insert(u32::from(ip));
     }
 
     fn remove_from_available(&mut self, ip: Ipv4Addr) {
-        if let Some(idx) = self.ip_to_index.remove(&ip) {
-            // Swap-remove to maintain O(1) performance
-            let last_idx = self.available_ips.len() - 1;
-            if idx != last_idx {
-                let swapped_ip = self.available_ips[last_idx];
-                self.available_ips.swap(idx, last_idx);
-                self.ip_to_index.insert(swapped_ip, idx);
-            }
-            self.available_ips.pop();
-        }
+        self.available.remove(u32::from(ip));
     }
 
     /// Reserves a batch of static addresses by removing them from the available pool.
@@ -205,7 +188,7 @@ impl IpPool {
 
     /// Check if an IP is in the dynamic available pool.
     fn is_available_in_pool(&self, ip: Ipv4Addr) -> bool {
-        self.ip_to_index.contains_key(&ip)
+        self.available.contains(u32::from(ip))
     }
 
     /// Check if an IP is within the dynamic range.
@@ -349,20 +332,20 @@ mod tests {
 
         // 1. Marca como declined
         p.mark_declined(ip);
-        assert!(p.available_ips.is_empty());
+        assert!(p.available.is_empty());
         assert_eq!(p.declined.len(), 1);
 
         // 2. Tenta limpar agora (não deve recuperar pois o timeout é 2h)
         p.cleanup_quarantine(SystemTime::now());
-        assert!(p.available_ips.is_empty());
+        assert!(p.available.is_empty());
 
         // 3. Simula 3 horas no futuro
         let three_hours_later = SystemTime::now() + Duration::from_secs(3 * 3600);
         p.cleanup_quarantine(three_hours_later);
 
         // 4. Deve ter recuperado o IP
-        assert_eq!(p.available_ips.len(), 1);
-        assert_eq!(p.available_ips[0], ip);
+        assert_eq!(p.available.len(), 1);
+        assert_eq!(Ipv4Addr::from(p.available.select(0).unwrap()), ip);
         assert!(p.declined.is_empty());
     }
 }

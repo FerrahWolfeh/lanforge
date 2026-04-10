@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr};
 use std::time::SystemTime;
 
@@ -329,7 +330,14 @@ impl Ipv6Pool {
                 let pref_segs = prefix.segments();
                 if pref_segs[0..4] == *p {
                     pool_attempted = true;
-                    if let Some(ip) = self.allocate_from_range(ctx, *start_u128, *end_u128) {
+                    if let Some(ip) = self.allocate_from_range(
+                        ctx,
+                        prefix,
+                        duid.as_bytes(),
+                        *start_u128,
+                        *end_u128,
+                        mac,
+                    ) {
                         return Some(ip);
                     }
                 }
@@ -346,7 +354,14 @@ impl Ipv6Pool {
                 pool_attempted = true;
                 let start_u128 = Self::combine_pref_suf(&prefix, *start_suffix);
                 let end_u128 = Self::combine_pref_suf(&prefix, *end_suffix);
-                if let Some(ip) = self.allocate_from_range(ctx, start_u128, end_u128) {
+                if let Some(ip) = self.allocate_from_range(
+                    ctx,
+                    prefix,
+                    duid.as_bytes(),
+                    start_u128,
+                    end_u128,
+                    mac,
+                ) {
                     return Some(ip);
                 }
             }
@@ -357,7 +372,15 @@ impl Ipv6Pool {
             let pref_int = u128::from_be_bytes(prefix.octets());
             let mask = !0u128 >> 64;
 
-            for _ in 0..20 {
+            // Step 1: Deterministic IID
+            let det_suffix = Self::generate_deterministic_u128(&prefix, duid.as_bytes(), mask);
+            let ip = Ipv6Addr::from((pref_int | (det_suffix & mask)).to_be_bytes());
+            if self.is_available(ctx, &ip, mac) {
+                return Some(ip);
+            }
+
+            // Step 2: Limited random attempts
+            for _ in 0..10 {
                 let random_suffix: u128 = random::<u128>() & mask;
                 let ip = Ipv6Addr::from((pref_int | random_suffix).to_be_bytes());
                 if self.is_available(ctx, &ip, mac) {
@@ -455,19 +478,47 @@ impl Ipv6Pool {
     fn allocate_from_range(
         &self,
         ctx: &LanforgeContext,
+        prefix: Ipv6Addr,
+        identifier: &[u8],
         start: u128,
         end: u128,
+        target_mac: Option<MacAddr>,
     ) -> Option<Ipv6Addr> {
         let size = end - start + 1;
-        let offset = random::<u128>() % size;
-        for i in 0..size {
-            let raw = start + (offset + i) % size;
-            let ip = Ipv6Addr::from(raw.to_be_bytes());
-            if self.is_available(ctx, &ip, None) {
+
+        // 1. Deterministic Candidate (Stability)
+        let det_offset = Self::generate_deterministic_u128(&prefix, identifier, size);
+        let det_ip = Ipv6Addr::from((start + (det_offset % size)).to_be_bytes());
+        if self.is_available(ctx, &det_ip, target_mac) {
+            return Some(det_ip);
+        }
+
+        // 2. Limited Probabilistic Retries (Safety)
+        for _ in 0..10 {
+            let offset = random::<u128>() % size;
+            let ip = Ipv6Addr::from((start + offset).to_be_bytes());
+            if self.is_available(ctx, &ip, target_mac) {
                 return Some(ip);
             }
         }
         None
+    }
+
+    fn generate_deterministic_u128(prefix: &Ipv6Addr, identifier: &[u8], range_size: u128) -> u128 {
+        let mut hasher = DefaultHasher::new();
+        prefix.hash(&mut hasher);
+        identifier.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        if range_size > u128::from(u64::MAX) {
+            // If range is huge, mix in more random-ish deterministic bits
+            let mut hasher2 = DefaultHasher::new();
+            hash.hash(&mut hasher2);
+            let hash2 = hasher2.finish();
+            (u128::from(hash) << 64) | u128::from(hash2)
+        } else {
+            u128::from(hash)
+        }
     }
 
     fn is_on_prefix(ip: &Ipv6Addr, prefix: &Ipv6Addr) -> bool {
