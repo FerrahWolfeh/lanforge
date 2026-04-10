@@ -2,11 +2,15 @@ use crate::engine::LeaseDb;
 use crate::log_engine::LogDb;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::device::Device;
 use lanforge_core::error::CoreError;
+use lanforge_core::identifiers::MacAddr;
 use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, SyncService};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 pub struct DbWorker {
@@ -56,15 +60,26 @@ impl SyncService for DbWorker {
         self.ctx.set_db_ready(true);
         let _ = self.ctx.bus().publish(LanforgeEvent::DbReady);
 
-        loop {
-            let event = bus_rx.recv_timeout(Duration::from_millis(500));
+        let mut pending_upserts: HashMap<MacAddr, Arc<Device>> = HashMap::new();
+        let mut last_flush = Instant::now();
 
-            if let Some(event) = event {
+        loop {
+            let event = bus_rx.recv_timeout(Duration::from_millis(200));
+
+            if let Some(ref event) = event {
                 // First, record as a system log if applicable
                 if event.is_loggable()
-                    && let Err(err) = log_db.record_log(&event)
+                    && let Err(err) = log_db.record_log(event)
                 {
                     warn!("DB worker: failed to record log: {err}");
+                }
+
+                // If we have a non-upsert event, flush pending upserts first to ensure consistency
+                if !matches!(
+                    event.event,
+                    LanforgeEvent::DeviceUpdated { .. } | LanforgeEvent::DeviceDiscovered { .. }
+                ) {
+                    Self::flush_batch(&db, &self.ctx, &mut pending_upserts, &mut last_flush);
                 }
 
                 // Second, dispatch to specialized handlers
@@ -72,12 +87,7 @@ impl SyncService for DbWorker {
                     LanforgeEvent::DeviceUpdated { mac, .. }
                     | LanforgeEvent::DeviceDiscovered { mac, .. } => {
                         if let Some(device) = self.ctx.get_device(&mac) {
-                            if let Err(e) = db.upsert_device(&device) {
-                                warn!("DB worker: failed to upsert device {mac}: {e}");
-                            } else {
-                                debug!("DB worker: device {mac} persisted (granular)");
-                                self.ctx.record_db_flush();
-                            }
+                            pending_upserts.insert(mac, device);
                         }
                     }
                     LanforgeEvent::DeviceExpired { mac } | LanforgeEvent::DevicePurged { mac } => {
@@ -128,11 +138,45 @@ impl SyncService for DbWorker {
                 }
             }
 
+            // Periodic flush or flush when idle
+            if !pending_upserts.is_empty()
+                && (event.is_none() || last_flush.elapsed() >= Duration::from_secs(2))
+            {
+                Self::flush_batch(&db, &self.ctx, &mut pending_upserts, &mut last_flush);
+            }
+
             if !self.ctx.is_running() {
                 break;
             }
         }
 
+        // Final flush on exit
+        Self::flush_batch(&db, &self.ctx, &mut pending_upserts, &mut last_flush);
+
         Ok(())
+    }
+}
+
+impl DbWorker {
+    fn flush_batch(
+        db: &LeaseDb,
+        ctx: &LanforgeContext,
+        pending: &mut HashMap<MacAddr, Arc<Device>>,
+        last_flush: &mut Instant,
+    ) {
+        if pending.is_empty() {
+            return;
+        }
+
+        let count = pending.len();
+        if let Err(e) = db.upsert_many(pending.values().map(|a| &**a)) {
+            warn!("DB worker: failed to execute batch upsert of {count} devices: {e}");
+        } else {
+            debug!("DB worker: persisted {count} devices (batch)");
+            ctx.record_db_flush();
+        }
+
+        pending.clear();
+        *last_flush = Instant::now();
     }
 }

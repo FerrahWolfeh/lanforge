@@ -211,6 +211,19 @@ impl LeaseDb {
         Self::upsert_device_internal(&self.conn, device)
     }
 
+    /// Batches multiple device upserts into a single transaction.
+    pub fn upsert_many<'a, I>(&self, devices: I) -> Result<(), LeaseDbError>
+    where
+        I: IntoIterator<Item = &'a Device>,
+    {
+        let tx = self.conn.unchecked_transaction()?;
+        for device in devices {
+            Self::upsert_device_internal(&tx, device)?;
+        }
+        tx.commit().map_err(LeaseDbError::TransactionFailed)?;
+        Ok(())
+    }
+
     /// Shared internal logic for upserting a device.
     /// Works with both raw Connections and Transactions.
     fn upsert_device_internal(conn: &Connection, device: &Device) -> Result<(), LeaseDbError> {
