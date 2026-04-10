@@ -21,7 +21,7 @@ use lanforge_network::dhcp::v4::Dhcpv4Service;
 use lanforge_network::dhcp::v6::Dhcpv6Service;
 use lanforge_network::ifmon::InterfaceMonitor;
 use lanforge_network::mdns::MdnsProber;
-use lanforge_network::netlink::NeighborMonitor;
+use lanforge_network::ndp::NeighborMonitor;
 use lanforge_network::ra::RaService;
 
 /// The central application controller for the Lanforge daemon.

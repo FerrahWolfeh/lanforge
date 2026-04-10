@@ -22,7 +22,7 @@
 //! ensuring the internal state does not contain stale addresses.
 
 use crate::error::NetworkError;
-use crate::netlink::{get_ipv4_neighbors, get_ipv6_neighbors};
+use crate::ndp::utils::{get_ipv4_neighbors, get_ipv6_neighbors};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::DeviceUpdate;

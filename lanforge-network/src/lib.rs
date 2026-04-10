@@ -16,9 +16,9 @@ pub mod dhcp;
 pub mod error;
 pub mod ifmon;
 pub mod mdns;
-pub mod netlink;
+pub mod ndp;
 pub mod ra;
 pub mod slaac;
-pub mod wol;
 #[cfg(test)]
 pub(crate) mod test_utils;
+pub mod wol;
