@@ -3,7 +3,7 @@ use std::net::Ipv6Addr;
 use std::path::Path;
 use tracing::{info, warn};
 
-/// Estrutura raiz do arquivo TOML.
+/// Root structure of the TOML file.
 #[derive(Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct TomlConfig {
@@ -81,28 +81,26 @@ impl Default for DhcpV6Cfg {
     }
 }
 
-/// Configurações gerais do sistema.
+/// General system configuration.
 #[derive(Deserialize, Debug)]
 #[serde(default)]
 pub struct GeneralCfg {
-    /// Interface LAN onde o daemon escuta.
+    /// LAN interface where the daemon listens.
     pub iface_lan: String,
-    /// Caminho para o arquivo de banco de dados `SQLite`.
+    /// Path to the `SQLite` database file (leases).
     pub leases_db: String,
-    /// Prefixo IPv6 "alvo" para identificar dispositivos locais (SLAAC).
+    /// "Target" IPv6 prefix to identify local devices (SLAAC).
     pub target_prefix: String,
-    /// Tempo de espera antes de processar eventos de rede.
+    /// Wait time before processing network events.
     pub debounce_secs: u64,
-    /// Intervalo do scan de fallback.
+    /// Fallback scan interval.
     pub fallback_mins: u64,
-    /// Caminho do socket para a CLI.
+    /// Socket path for the CLI.
     pub control_socket: String,
-    /// Endereço de escuta para a API REST HTTP (ex: "0.0.0.0:8080").
+    /// HTTP REST API listen address (e.g. "0.0.0.0:8080").
     pub http_listen: Option<String>,
-    /// Lista global de domínios de busca.
+    /// Global list of search domains.
     pub search_domains: Option<Vec<String>>,
-    /// Intervalo de scan de vizinhos (ARP/NDP) em minutos.
-    pub neighbor_scan_mins: u64,
 }
 
 impl Default for GeneralCfg {
@@ -116,7 +114,6 @@ impl Default for GeneralCfg {
             control_socket: "/run/lanforge/control.sock".into(),
             http_listen: None,
             search_domains: None,
-            neighbor_scan_mins: 30,
         }
     }
 }
@@ -167,13 +164,13 @@ pub struct RaRdnssCfg {
 #[serde(default)]
 pub struct DnsCfg {
     pub enabled: bool,
-    /// Endereço e porta onde o servidor DNS escuta (ex: "0.0.0.0:5300")
+    /// Address and port where the DNS server listens (e.g. "0.0.0.0:5300")
     pub listen: String,
-    /// Resolver upstream para queries não-LAN, normalmente o Unbound (ex: "127.0.0.1:5335")
+    /// Upstream resolver for non-LAN queries, typically Unbound (e.g. "127.0.0.1:5335")
     pub upstream: Option<String>,
     /// @deprecated use `[general].search_domains` instead. will be removed in the future.
     pub search_domain: String,
-    /// TTL das respostas LAN em segundos
+    /// LAN responses TTL in seconds
     pub ttl: u32,
 }
 
@@ -189,7 +186,7 @@ impl Default for DnsCfg {
     }
 }
 
-/// Dispositivo estático — lido de `[[devices]]` no TOML.
+/// Static device — read from `[[devices]]` in the TOML.
 #[derive(Deserialize, Debug, Clone)]
 pub struct StaticDeviceCfg {
     pub mac: String,
@@ -244,7 +241,7 @@ pub fn load_devices_only(path: &str) -> Vec<StaticDeviceCfg> {
 
     match std::fs::read_to_string(path) {
         Ok(content) => {
-            // Tenta como uma lista direta de devices primeiro (mais comum em debug rápido)
+            // Try as a direct list of devices first (common in quick debug)
             #[derive(Deserialize)]
             struct DeviceList {
                 devices: Vec<StaticDeviceCfg>,
@@ -252,7 +249,7 @@ pub fn load_devices_only(path: &str) -> Vec<StaticDeviceCfg> {
             if let Ok(list) = toml::from_str::<DeviceList>(&content) {
                 return list.devices;
             }
-            // Se falhar, tenta como um TomlConfig completo e pega apenas o campo devices
+            // If it fails, try as a full TomlConfig and get only the devices field
             match toml::from_str::<TomlConfig>(&content) {
                 Ok(cfg) => cfg.devices,
                 Err(e) => {

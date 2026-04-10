@@ -87,14 +87,14 @@ fn extract_neigh_info_returns_typed_event() {
     let mac_bytes = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
     let msg = mock_neigh_msg(NeighbourState::Reachable, ip, Some(mac_bytes), false);
-    let event = extract_neigh_info(&msg).expect("deve extrair evento");
+    let event = extract_neigh_info(&msg).expect("should extract event");
 
     assert_eq!(*event.ip(), ip);
     assert_eq!(event.mac(), Some(MacAddr(mac_bytes)));
     if let NeighborEvent::Added { ifindex, .. } = event {
         assert_eq!(ifindex, 2);
     } else {
-        panic!("esperava NeighborEvent::Added");
+        panic!("expected NeighborEvent::Added");
     }
 }
 
@@ -143,7 +143,7 @@ fn to_device_update_gua_becomes_slaac_observed() {
 
     assert!(
         matches!(update, DeviceUpdate::SlaacObserved { addr, .. } if addr == slaac_ip),
-        "IP no prefixo GUA deve virar SlaacObserved"
+        "IP in GUA prefix should become SlaacObserved"
     );
 }
 
@@ -162,7 +162,7 @@ fn to_device_update_link_local_becomes_ndp_seen() {
 
     assert!(
         matches!(update, DeviceUpdate::NdpSeen { .. }),
-        "Link-local deve virar NdpSeen"
+        "Link-local should become NdpSeen"
     );
 }
 
@@ -176,7 +176,7 @@ fn to_device_update_no_prefix_always_ndp_seen() {
         mac,
         ifindex: 2,
     };
-    // Sem prefixo configurado — nunca assume SLAAC
+    // No prefix configured — never assume SLAAC
     let update = event.to_device_update(None, None);
 
     assert!(matches!(update, DeviceUpdate::NdpSeen { .. }));
@@ -203,7 +203,7 @@ fn is_relevant_event_matches_prefix_and_state() {
 
 #[test]
 fn mac_from_eui64_valid() {
-    // MAC: 3c:0a:7a:d8:11:78  →  bit U/L invertido: 0x3C ^ 0x02 = 0x3E
+    // MAC: 3c:0a:7a:d8:11:78  →  U/L bit inverted: 0x3C ^ 0x02 = 0x3E
     let ip: Ipv6Addr = "fe80::3e0a:7aff:fed8:1178".parse().unwrap();
     let mac = mac_from_eui64_link_local(&ip);
     assert_eq!(mac, Some(MacAddr([0x3c, 0x0a, 0x7a, 0xd8, 0x11, 0x78])));
@@ -258,9 +258,9 @@ fn parse_neighbor_msg_only_active() {
 #[test]
 fn extract_neigh_info_handles_delete() {
     let ip: IpAddr = "fe80::1".parse().unwrap();
-    // No RTM_DELNEIGH o MAC pode estar ausente
+    // In RTM_DELNEIGH, MAC may be absent
     let msg = mock_neigh_msg(NeighbourState::Failed, ip, None, true);
-    let event = extract_neigh_info(&msg).expect("deve extrair delete");
+    let event = extract_neigh_info(&msg).expect("should extract delete");
 
     assert_eq!(event, NeighborEvent::Deleted { ip, ifindex: 2 });
 }

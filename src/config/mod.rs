@@ -1,11 +1,11 @@
-//! Configuração do lanforge — Gerenciamento unificado de CLI, TOML e Environment.
+//! lanforge configuration — Unified management of CLI, TOML, and Environment.
 //!
-//! O sistema de configuração utiliza três camadas em ordem de precedência:
-//! 1. **Default**: Valores fixos no código (fail-safe).
-//! 2. **TOML**: Fonte principal localizada em `/etc/lanforge/lanforge.toml`.
-//! 3. **CLI/Env**: Overrides manuais passados via linha de comando ou variáveis `LANFORGE_*`.
+//! The configuration system uses three layers in order of precedence:
+//! 1. **Default**: Fixed values in code (fail-safe).
+//! 2. **TOML**: Main source located at `/etc/lanforge/lanforge.toml`.
+//! 3. **CLI/Env**: Manual overrides passed via command line or `LANFORGE_*` variables.
 //!
-//! ## Fluxo de Configuração
+//! ## Configuration Flow
 //!
 //! ```text
 //!    [ CliArgs ]       [ TomlConfig ]      [ Default ]
@@ -20,7 +20,7 @@
 //!         ▼             ▼             ▼
 //!    [ RaConfig ] [ DhcpConfig ] [ DnsConfig ] ...
 //!         │             │             │
-//!    (Serviços iniciados com config especializada)
+//!    (Services started with specialized config)
 //! ```
 
 pub mod args;
@@ -48,10 +48,10 @@ use tracing::warn;
 // Config unificada (resultado do merge TOML + CLI overrides)
 // ---------------------------------------------------------------------------
 
-/// Configuração consolidada e final do sistema.
+/// Consolidated and final system configuration.
 ///
-/// Criada através de `Config::load()`, esta struct contém todos os parâmetros
-/// necessários para inicializar os subsistemas do lanforge.
+/// Created via `Config::load()`, this struct contains all parameters
+/// needed to initialize the lanforge subsystems.
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Config {
@@ -64,7 +64,6 @@ pub struct Config {
     pub fallback_mins: u64,
     pub control_socket: String,
     pub log_db: String,
-    pub neighbor_scan_mins: u64,
 
     // RA
     pub ra_enabled: bool,
@@ -141,9 +140,6 @@ impl Config {
                 .control_socket
                 .unwrap_or(toml_cfg.general.control_socket),
             log_db: cli.log_db,
-            neighbor_scan_mins: cli
-                .neighbor_scan_mins
-                .unwrap_or(toml_cfg.general.neighbor_scan_mins),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: RaCfg {
@@ -402,7 +398,7 @@ impl Config {
     pub fn to_dns_config(&self) -> DnsConfig {
         let parse_addr = |s: &str, default: &str| -> SocketAddr {
             s.parse().unwrap_or_else(|_| {
-                warn!("[config] Endereço DNS inválido '{s}', usando {default}");
+                warn!("[config] Invalid DNS address '{s}', using {default}");
                 default.parse().unwrap()
             })
         };

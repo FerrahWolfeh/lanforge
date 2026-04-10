@@ -20,7 +20,7 @@ pub struct CliArgs {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// Caminho para o arquivo de configuração TOML.
+    /// Path to the TOML configuration file.
     #[arg(
         short,
         long,
@@ -29,111 +29,108 @@ pub struct CliArgs {
     )]
     pub config: String,
 
-    /// Caminho para o banco de dados `SQLite` (leases).
+    /// Path to the `SQLite` database (leases).
     #[arg(short = 'd', long, env = "LANFORGE_DB_PATH")]
     pub db_path: Option<String>,
 
-    /// Caminho para o banco de dados `SQLite` de logs (history).
+    /// Path to the `SQLite` database for logs (history).
     #[arg(long, env = "LANFORGE_LOG_DB", default_value = "/tmp/lanforge_logs.db")]
     pub log_db: String,
 
-    /// Caminho para um arquivo TOML/JSON adicional contendo apenas devices estáticos (debug).
+    /// Path to an additional TOML/JSON file containing only static devices (debug).
     #[arg(long, env = "LANFORGE_DEVICES_FILE")]
     pub devices_file: Option<String>,
 
-    // ── Overrides Gerais ──────────────────────────────────────────────────
-    /// Interface LAN principal (ex: end0, eth0).
+    // ── General Overrides ─────────────────────────────────────────────────
+    /// Main LAN interface (e.g. end0, eth0).
     #[arg(short = 'i', long, env = "LANFORGE_IFACE_LAN")]
     pub iface_lan: Option<String>,
 
-    /// Prefixo IPv6 local para rastreamento SLAAC.
+    /// Local IPv6 prefix for SLAAC tracking.
     #[arg(long, env = "LANFORGE_TARGET_PREFIX")]
     pub target_prefix: Option<String>,
 
-    /// Janela de debounce em segundos para scans após eventos de rede.
+    /// Debounce window in seconds for scans after network events.
     #[arg(long, env = "LANFORGE_DEBOUNCE_SECS")]
     pub debounce_secs: Option<u64>,
 
-    /// Intervalo de scan periódico (fallback) em minutos.
+    /// Periodic scan interval (fallback) in minutes.
     #[arg(long, env = "LANFORGE_FALLBACK_MINS")]
     pub fallback_mins: Option<u64>,
-    /// Intervalo de scan de vizinhos (ARP/NDP) em minutos.
-    #[arg(long, env = "LANFORGE_NEIGHBOR_SCAN_MINS")]
-    pub neighbor_scan_mins: Option<u64>,
 
     // ── Router Advertisements (RA) ────────────────────────────────────────
-    /// Habilita ou desabilita o serviço de Router Advertisements.
+    /// Enable or disable the Router Advertisement service.
     #[arg(long, env = "LANFORGE_RA_ENABLED")]
     pub ra_enabled: Option<bool>,
 
-    /// Define o flag 'Managed Address Configuration' (M) no RA.
+    /// Sets the 'Managed Address Configuration' (M) flag in RA.
     #[arg(long, env = "LANFORGE_RA_MANAGED")]
     pub ra_managed: Option<bool>,
 
-    /// Define o flag 'Other Configuration' (O) no RA.
+    /// Sets the 'Other Configuration' (O) flag in RA.
     #[arg(long, env = "LANFORGE_RA_OTHER")]
     pub ra_other_config: Option<bool>,
 
-    /// Intervalo máximo entre RAs periódicos (segundos).
+    /// Maximum interval between periodic RAs (seconds).
     #[arg(long, env = "LANFORGE_RA_MAX_INTERVAL")]
     pub ra_max_interval: Option<u64>,
 
     // ── DHCPv4 ────────────────────────────────────────────────────────────
-    /// Habilita o servidor `DHCPv4`.
+    /// Enables the `DHCPv4` server.
     #[arg(long, env = "LANFORGE_DHCPV4_ENABLED")]
     pub dhcpv4_enabled: Option<bool>,
 
-    /// Primeiro IP do pool `DHCPv4`.
+    /// First IP of the `DHCPv4` pool.
     #[arg(long, env = "LANFORGE_DHCPV4_START")]
     pub dhcpv4_range_start: Option<String>,
 
-    /// Último IP do pool `DHCPv4`.
+    /// Last IP of the `DHCPv4` pool.
     #[arg(long, env = "LANFORGE_DHCPV4_END")]
     pub dhcpv4_range_end: Option<String>,
 
-    /// Tempo de lease padrão (segundos).
+    /// Default lease time (seconds).
     #[arg(long, env = "LANFORGE_DHCPV4_LEASE")]
     pub dhcpv4_lease_time: Option<u32>,
 
-    /// Porta UDP do servidor `DHCPv4` (default 67).
+    /// UDP port for the `DHCPv4` server (default 67).
     #[arg(long, env = "LANFORGE_DHCPV4_PORT")]
     pub dhcpv4_port: Option<u16>,
 
     // ── DHCPv6 ────────────────────────────────────────────────────────────
-    /// Habilita o servidor `DHCPv6`.
+    /// Enables the `DHCPv6` server.
     #[arg(long, env = "LANFORGE_DHCPV6_ENABLED")]
     pub dhcpv6_enabled: Option<bool>,
 
-    /// Porta UDP do servidor `DHCPv6` (default 547).
+    /// UDP port for the `DHCPv6` server (default 547).
     #[arg(long, env = "LANFORGE_DHCPV6_PORT")]
     pub dhcpv6_port: Option<u16>,
 
     // ── DNS ───────────────────────────────────────────────────────────────
-    /// Habilita o servidor DNS autoritativo/recursivo.
+    /// Enables the authoritative/recursive DNS server.
     #[arg(long, env = "LANFORGE_DNS_ENABLED")]
     pub dns_enabled: Option<bool>,
 
-    /// Endereço de escuta DNS (ex: 0.0.0.0:5353).
+    /// DNS listen address (e.g. 0.0.0.0:5353).
     #[arg(long, env = "LANFORGE_DNS_LISTEN")]
     pub dns_listen: Option<String>,
 
-    /// Resolver upstream (ex: 8.8.8.8:53).
+    /// Upstream resolver (e.g. 8.8.8.8:53).
     #[arg(short = 'u', long, env = "LANFORGE_DNS_UPSTREAM")]
     pub dns_upstream: Option<String>,
 
-    /// Porta de escuta DNS (override de porta no listen).
+    /// DNS listen port (listen address port override).
     #[arg(short = 'p', long, env = "LANFORGE_DNS_PORT")]
     pub dns_port: Option<u16>,
 
     // ── API / Control ─────────────────────────────────────────────────────
-    /// Caminho para o socket de controle UDS.
+    /// Path to the UDS control socket.
     #[arg(long, env = "LANFORGE_CONTROL_SOCKET")]
     pub control_socket: Option<String>,
 
-    /// Porta TCP para a API de controle (opcional para debug remoto).
+    /// TCP port for the control API (optional for remote debug).
     #[arg(long, env = "LANFORGE_CONTROL_PORT")]
     pub control_port: Option<u16>,
-    /// Endereço de escuta para a API REST HTTP (ex: 0.0.0.0:8080).
+    /// Listen address for the HTTP REST API (e.g. 0.0.0.0:8080).
     #[arg(long, env = "LANFORGE_HTTP_LISTEN")]
     pub http_listen: Option<String>,
 }

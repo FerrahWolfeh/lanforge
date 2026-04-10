@@ -146,6 +146,21 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
     }
 }
 
+/// Parses a CIDR string (e.g., "`2001:db8::/64`") into an `Ipv6Addr` and a prefix length.
+/// Supports zero-allocation math by avoiding string formatting in the loop.
+fn split_prefix_and_length(target_prefix: &str) -> Option<(Ipv6Addr, u8)> {
+    if target_prefix.is_empty() {
+        return None;
+    }
+    let mut parts = target_prefix.split('/');
+    let ip = parts.next()?.parse::<Ipv6Addr>().ok()?;
+    let len = parts
+        .next()
+        .and_then(|s| s.parse::<u8>().ok())
+        .unwrap_or(64);
+    Some((ip, len))
+}
+
 pub async fn get_ipv6_neighbors(
     handle: &Handle,
     target_prefix: &str,
@@ -158,6 +173,21 @@ pub async fn get_ipv6_neighbors(
         .set_family(IpVersion::V6)
         .execute();
 
+    let prefix_data = split_prefix_and_length(target_prefix);
+    let (mask, expected_network) = if let Some((prefix_ip, prefix_len)) = prefix_data {
+        let prefix_u128 = u128::from_be_bytes(prefix_ip.octets());
+        let mask = if prefix_len == 0 {
+            0
+        } else if prefix_len >= 128 {
+            u128::MAX
+        } else {
+            u128::MAX << (128 - prefix_len)
+        };
+        (mask, prefix_u128 & mask)
+    } else {
+        (0, 0)
+    };
+
     while let Some(msg) = stream.try_next().await? {
         if let Some(event) = parse_neighbor_msg(msg) {
             if let Some(target) = target_ifindex
@@ -166,11 +196,16 @@ pub async fn get_ipv6_neighbors(
                 continue;
             }
 
-            // NOTE: Isso ainda usa alocação de string. Idealmente, parse o `target_prefix`
-            // para um tipo `Ipv6Net` (usando crate ipnet) no começo da função e use o método `contains()`.
-            let matches = match event.ip() {
-                IpAddr::V6(ip) => ip.to_string().starts_with(target_prefix),
-                IpAddr::V4(_) => false,
+            let matches = if prefix_data.is_some() {
+                match event.ip() {
+                    IpAddr::V6(ip) => {
+                        let ip_u128 = u128::from_be_bytes(ip.octets());
+                        (ip_u128 & mask) == expected_network
+                    }
+                    IpAddr::V4(_) => false,
+                }
+            } else {
+                true // Empty prefix matches everything
             };
 
             if matches {

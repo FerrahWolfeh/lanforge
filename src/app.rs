@@ -100,16 +100,9 @@ impl Daemon {
         let h2 = netlink_handle.clone();
         let m2 = messages.clone();
         let ctx_ndp = self.ctx.clone();
-        let scan_interval = Duration::from_secs(cfg.neighbor_scan_mins * 60);
 
         self.registry.spawn_async(&self.ctx, move || {
-            NeighborMonitor::new(
-                h2.clone(),
-                m2.subscribe(),
-                target_ifindex,
-                ctx_ndp.clone(),
-                scan_interval,
-            )
+            NeighborMonitor::new(h2.clone(), m2.subscribe(), target_ifindex, ctx_ndp.clone())
         });
 
         // RA Service (Async)
@@ -167,7 +160,7 @@ impl Daemon {
     }
 
     async fn shutdown(self) -> Result<()> {
-        info!("🛑 Iniciando sequência de shutdown...");
+        info!("🛑 Starting shutdown sequence...");
         self.ctx.terminate();
         let _ = self.ctx.bus().publish(LanforgeEvent::Shutdown);
         let _ = self.ctx.bus().publish(LanforgeEvent::Shutdown);
@@ -182,7 +175,7 @@ impl Daemon {
             }
         }
 
-        info!("👋 Lanforge encerrado.");
+        info!("👋 Lanforge terminated.");
         Ok(())
     }
 }
@@ -210,7 +203,7 @@ pub async fn run_scan(
 
 pub fn sd_notify_ready() {
     if let Ok(path) = std::env::var("NOTIFY_SOCKET") {
-        debug!("systemd: Notificando READY=1 via {}", path);
+        debug!("systemd: Notifying READY=1 via {}", path);
         if let Ok(sock) = UnixDatagram::unbound()
             && sock.connect(path).is_ok()
         {

@@ -21,9 +21,7 @@
 pub mod tests;
 pub mod utils;
 
-use crate::ndp::utils::{
-    extract_neigh_info, get_ipv4_subnet_iterable, probe_neighbor,
-};
+use crate::ndp::utils::{extract_neigh_info, get_ipv4_subnet_iterable, probe_neighbor};
 use crate::slaac::bootstrap_table;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
@@ -38,7 +36,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tokio::time::{interval, sleep};
+use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -53,7 +51,6 @@ pub struct NeighborMonitor {
     messages: NetlinkMessageStream,
     target_ifindex: u32,
     ctx: LanforgeContext,
-    scan_interval: Duration,
     scan_in_progress: Arc<AtomicBool>,
 }
 
@@ -64,14 +61,12 @@ impl NeighborMonitor {
         messages: NetlinkMessageStream,
         target_ifindex: u32,
         ctx: LanforgeContext,
-        scan_interval: Duration,
     ) -> Self {
         Self {
             handle,
             messages,
             target_ifindex,
             ctx,
-            scan_interval,
             scan_in_progress: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -152,14 +147,6 @@ impl AsyncService for NeighborMonitor {
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
         let mut current_ula: Option<Ipv6Addr> = None;
-        let mut subnet_scan_interval = if self.scan_interval.as_secs() > 0 {
-            let mut interval = interval(self.scan_interval);
-            // Ensure the first periodic scan happens after the first interval, not immediately.
-            interval.reset();
-            Some(interval)
-        } else {
-            None
-        };
 
         // 1. Initial Neighbor Scan (Bootstrap)
         {
@@ -176,7 +163,6 @@ impl AsyncService for NeighborMonitor {
                 error!("NeighborMonitor: Initial bootstrap scan failed: {e}");
             }
         }
-
 
         loop {
             if !self.ctx.is_running() {
@@ -215,16 +201,6 @@ impl AsyncService for NeighborMonitor {
                 }
 
 
-                () = async {
-                    if let Some(i) = subnet_scan_interval.as_mut() {
-                        i.tick().await;
-                    } else {
-                        std::future::pending::<()>().await;
-                    }
-                } => {
-                    // C. Periodic full subnet discovery
-                    self.spawn_subnet_scan("Periodic Subnet Timer");
-                }
 
                 else => break,
             }
