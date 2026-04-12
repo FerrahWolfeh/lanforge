@@ -287,11 +287,11 @@ flowchart TD
     NEW --> LD1["SELECT * FROM devices"]
     LD1 --> LD2{"Iterate rows"}
 
-    LD2 -->|Each row| PARSE["Parse MAC, Hostname,\nOrigin, timestamps"]
+    LD2 -->|Each row| PARSE["Parse MAC, Hostname, Origin, timestamps"]
     PARSE --> VALID{"Valid MAC?"}
     VALID -->|No| SKIP1["Skip row"]
-    VALID -->|Yes| MKDEV["Device::new + fields"]
-    MKDEV --> CLI{origin == "cli"?}
+    VALID -->|Yes| MKDEV["Device::new plus fields"]
+    MKDEV --> CLI{origin is cli?}
     CLI -->|Yes| ADDS["add_static_entry"]
     CLI -->|No| SKIP2
     ADDS --> INS
@@ -377,26 +377,26 @@ pub enum LeaseAction {
 
 ```mermaid
 stateDiagram-v2
-    [*] --> New: DbWorker::new()
-    New --> Starting: run() called
-    Starting --> Ready: LeaseDb + LogDb opened
-    Ready --> SignalReady: set_db_ready(true)
-    SignalReady --> PublishDbReady: publish(DbReady)
+    [*] --> New
+    New --> Starting
+    Starting --> Ready
+    Ready --> SignalReady
+    SignalReady --> PublishDbReady
     PublishDbReady --> Loop
 
     state Loop {
-        [*] --> Wait: recv_timeout 200ms
-        Wait --> Log: loggable event?
+        [*] --> Wait
+        Wait --> Log
         Log --> Wait
-        Wait --> Accum: DeviceUpdated/Discovered
+        Wait --> Accum
         Accum --> Wait
-        Wait --> Flush: other event\nor 2s timeout
+        Wait --> Flush
         Flush --> Wait
-        Wait --> Shutdown: LanforgeEvent::Shutdown
+        Wait --> Shutdown
     }
 
-    Loop --> FinalFlush: break
-    FinalFlush --> [*]: Ok(())
+    Loop --> FinalFlush
+    FinalFlush --> [*]
 ```
 
 ### Event Dispatch
@@ -420,8 +420,8 @@ flowchart TD
     EVT["DeviceUpdated received"] --> ACC["Accumulate in pending_upserts HashMap"]
     ACC --> CHECK{"Flush condition?"}
 
-    CHECK -->|Non-DeviceUpdated event| FLUSH_NOW
-    CHECK -->|No event\n(timeout)| IDLE{"> 2s since\nlast flush?"}
+    CHECK -->|Non-Device<br>Updated event| FLUSH_NOW
+    CHECK -->|No event timeout| IDLE{"> 2s since last flush?"}
     CHECK -->|DeviceUpdated| WAIT
 
     IDLE -->|Yes| FLUSH_NOW
