@@ -1,24 +1,26 @@
+//! Common DNS query types for hot-path routing.
+
 /// Common DNS Query Types (`QType`) used for optimized hot-path routing.
 ///
-/// This enum is non-exhaustive, falling back to `Other(u16)` for any
-/// types not explicitly handled in the fast path.
+/// Only the most frequently encountered types are enumerated explicitly.
+/// All other types fall into `Other(u16)` and are routed to the slow path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum QType {
-    /// Host address (IPv4)
+    /// Host address (IPv4) — type 1
     A = 1,
-    /// Name server
+    /// Authoritative name server — type 2
     NS = 2,
-    /// Domain name pointer (Reverse DNS)
+    /// Domain name pointer (Reverse DNS) — type 12
     PTR = 12,
-    /// Mail exchange
+    /// Mail exchange — type 15
     MX = 15,
-    /// IPv6 address
+    /// Host address (IPv6) — type 28
     AAAA = 28,
-    /// Request for all records
+    /// Request for all available records — type 255
     Any = 255,
-    /// Any other DNS record type (as u16)
+    /// Any other DNS record type not explicitly handled.
     Other(u16),
 }
 

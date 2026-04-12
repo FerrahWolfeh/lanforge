@@ -1,3 +1,9 @@
+//! Local DNS resolver backed by the `LanforgeContext`.
+//!
+//! Resolves A, AAAA, ANY, and PTR queries by looking up devices in the
+//! shared `LanforgeContext`. No network I/O is performed — all data comes
+//! from the in-memory device state.
+
 use std::net::IpAddr;
 use std::str::FromStr;
 
@@ -11,20 +17,28 @@ use hickory_proto::rr::{Name, RData, Record, RecordType};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Device;
 
+/// Resolves local DNS queries (A/AAAA/PTR) using the `LanforgeContext`.
+///
+/// This resolver performs authoritative resolution for hostnames in the
+/// configured search domain. It aggregates all known IP addresses for a
+/// device (IPv4, SLAAC, static V6 suffixes) into DNS records.
 pub struct LocalResolver<'a> {
     cfg: &'a DnsConfig,
     ctx: LanforgeContext,
 }
 
 impl<'a> LocalResolver<'a> {
+    /// Creates a new resolver bound to the given config and context.
     #[must_use]
     pub const fn new(cfg: &'a DnsConfig, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
 
-    /// Resolves local A/AAAA/ANY queries.
+    /// Resolves an A or AAAA query for the given hostname.
     ///
-    /// Returns a full DNS response (either `NoError` with records or `NXDomain`).
+    /// Looks up the device by hostname and returns all matching IP records
+    /// (A for IPv4, AAAA for IPv6). Returns a full DNS response with
+    /// `NoError` (records or NODATA) or `NXDomain` if the host is unknown.
     pub fn resolve_ip(
         &self,
         query: &Message,
@@ -44,7 +58,14 @@ impl<'a> LocalResolver<'a> {
         rb.nxdomain()
     }
 
-    /// Resolves reverse DNS queries (PTR).
+    /// Resolves a reverse DNS (PTR) query for an IP address.
+    ///
+    /// Parses the ARPA-formatted query name (e.g., `4.3.2.1.in-addr.arpa.`
+    /// or `b.a.9.8...ip6.arpa.`), looks up the owning device, and returns
+    /// a PTR record pointing to the device's hostname.
+    ///
+    /// Returns `Ok(None)` if the IP is not in the ARPA format or not found
+    /// in the context.
     pub fn resolve_ptr(&self, query: &Message, qname: &Name) -> Result<Option<Vec<u8>>, DnsError> {
         let rb = ResponseBuilder::new(query, self.cfg);
 
@@ -76,7 +97,9 @@ impl<'a> LocalResolver<'a> {
         Ok(Some(rb.success(vec![record])?))
     }
 
-    /// Internal logic to collect all addresses from a device and convert them into DNS records.
+    /// Collects all IP addresses for a device and converts them to DNS records.
+    ///
+    /// Returns `None` if no addresses match the requested query type.
     #[must_use]
     pub fn resolve_local(
         &self,
@@ -84,8 +107,6 @@ impl<'a> LocalResolver<'a> {
         device: &Device,
         qtype: RecordType,
     ) -> Option<Vec<Record>> {
-        use hickory_proto::rr::{RData, Record, RecordType};
-
         let question = query.queries().first()?;
         let name = question.name().clone();
 
@@ -123,8 +144,17 @@ impl<'a> LocalResolver<'a> {
         }
     }
 
-    /// Aggregates all IPs for a device (ULA, GUA, IPv4) and sorts them by priority.
-    /// Data is tidied up in memory before being returned for DNS record generation.
+    /// Collects and sorts all IP addresses for a device.
+    ///
+    /// Aggregates addresses from:
+    /// 1. Static IPv4/V6 reservations
+    /// 2. Dynamic DHCP leases
+    /// 3. SLAAC-observed addresses
+    /// 4. V6 suffixes combined with learned prefixes
+    ///
+    /// Results are sorted by priority (ULA first, then GUA, then IPv4)
+    /// and deduplicated. Falls back to configured prefixes if the system
+    /// hasn't learned interface prefixes yet (useful for tests).
     #[must_use]
     pub fn collect_device_ips(&self, device: &Device) -> Vec<IpAddr> {
         let (sys_gua, sys_ula) = self
@@ -132,11 +162,10 @@ impl<'a> LocalResolver<'a> {
             .target_ifindex()
             .map_or((None, None), |idx| self.ctx.get_interface_prefixes_opt(idx));
 
-        // Fallback to configured prefixes if system hasn't learned them yet (useful for tests)
+        // Fallback to configured prefixes if system hasn't learned them yet
         let gua = sys_gua.or(self.cfg.gua_prefix);
         let ula = sys_ula.or(self.cfg.ula_prefix);
 
-        // Use the core method which already handles sorting, deduplication and suffix resolution
         device.all_addresses_sorted(gua, ula)
     }
 }

@@ -1,3 +1,8 @@
+//! DNS wire-format utility functions.
+//!
+//! Provides optimized parsers for ARPA names, hostname extraction,
+//! and IPv6 prefix/suffix combining — all designed to minimize allocations.
+
 use hickory_proto::rr::Name;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use std::array::from_fn;
@@ -7,16 +12,25 @@ use std::str::from_utf8;
 
 use crate::wire::WireLabelIter;
 
-/// Optimized ARPA parser that operates directly on Name labels, avoiding allocations.
+/// Parses an IPv4 or IPv6 address from an ARPA domain name (reverse DNS).
+///
+/// Works directly on Hickory-DNS `Name` labels, avoiding UTF-8 validation
+/// and intermediate string allocations.
+///
+/// # Supported Formats
+///
+/// - **IPv4:** `4.3.2.1.in-addr.arpa.` → `1.2.3.4`
+/// - **IPv6:** `b.a.9.8...0.0.0.0.ip6.arpa.` → `2001:db8::`
 #[must_use]
 pub fn parse_arpa(name: &Name) -> Option<IpAddr> {
     let labels = name.iter().rev();
-
     byte_parse_arpa(labels)
 }
 
-/// Parses a decimal octet directly from bytes without UTF-8 validation.
-/// Rejects empty strings, labels > 3 chars, non-digits, and values > 255.
+/// Parses a decimal octet (0-255) directly from raw bytes.
+///
+/// Rejects empty strings, labels longer than 3 characters, non-digit bytes,
+/// and values exceeding 255. No UTF-8 validation is performed.
 #[inline]
 fn parse_octet(label: &[u8]) -> Option<u8> {
     if label.is_empty() || label.len() > 3 {
@@ -50,6 +64,10 @@ fn parse_nibble(label: &[u8]) -> Option<u8> {
     }
 }
 
+/// Parses an IP address from reversed ARPA labels.
+///
+/// Expects labels in reverse order (root label first), starting with "arpa",
+/// then "in-addr" (IPv4) or "ip6" (IPv6), followed by the address components.
 #[inline]
 fn byte_parse_arpa<'a>(mut labels: impl Iterator<Item = &'a [u8]>) -> Option<IpAddr> {
     if !labels.next()?.eq_ignore_ascii_case(b"arpa") {
@@ -80,6 +98,10 @@ fn byte_parse_arpa<'a>(mut labels: impl Iterator<Item = &'a [u8]>) -> Option<IpA
     None
 }
 
+/// Combines an IPv6 prefix (first 64 bits) with a suffix (last 64 bits).
+///
+/// If the suffix is a full address, it is returned as-is. Otherwise, the
+/// first 4 segments from `prefix_segs` are combined with the 8-byte suffix.
 #[must_use]
 pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &Ipv6AddrOrSuffix) -> Option<Ipv6Addr> {
     match suffix {
@@ -97,7 +119,21 @@ pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &Ipv6AddrOrSuffix) -> 
     }
 }
 
-/// Extracts the local hostname directly from a wire iterator's labels without allocations.
+/// Extracts a local hostname from a wire-format DNS query.
+///
+/// Matches the first label against the configured search domains
+/// (`multi_search_labels`). Returns the hostname as a `&str` if it
+/// matches, without allocating.
+///
+/// # Supported Queries
+///
+/// - Short name: `"node-1"` (single label)
+/// - FQDN: `"node-1.lan."` (hostname + search domain)
+///
+/// # Rejected Queries
+///
+/// - Wrong suffix: `"node-1.other."`
+/// - Extra subdomains: `"sub.node-1.lan."`
 pub fn extract_local_hostname_wire<'a>(
     labels: &mut WireLabelIter<'a>,
     multi_search_labels: &[Vec<Vec<u8>>],
@@ -142,7 +178,10 @@ pub fn extract_local_hostname_wire<'a>(
     }
 }
 
-/// Parses an ARPA request directly from a wire label iterator.
+/// Parses an ARPA request from a wire label iterator.
+///
+/// Collects labels into a fixed-size array to avoid allocations, then
+/// delegates to `byte_parse_arpa` in reverse order.
 #[must_use]
 pub fn parse_arpa_wire(labels: WireLabelIter<'_>) -> Option<IpAddr> {
     // IPv6: 32 nibbles + "ip6" + "arpa" = 34 labels max
@@ -160,8 +199,20 @@ pub fn parse_arpa_wire(labels: WireLabelIter<'_>) -> Option<IpAddr> {
     byte_parse_arpa(parts[..count].iter().copied().rev())
 }
 
-/// Extracts the local hostname directly from a Hickory-DNS Name object.
-/// Allocation cost: 0 bytes.
+/// Extracts a local hostname from a Hickory-DNS `Name` object.
+///
+/// Zero-allocation: iterates over labels directly, matching against
+/// `multi_search_labels` without constructing intermediate strings.
+///
+/// # Supported Queries
+///
+/// - Short name: `"node-1"` → `Some("node-1")`
+/// - Full name: `"node-1.lan."` → `Some("node-1")`
+///
+/// # Rejected
+///
+/// - Wrong suffix: `"node-1.other."` → `None`
+/// - Extra subdomains: `"sub.node-1.lan."` → `None`
 #[must_use]
 pub fn extract_local_hostname<'a>(
     qname: &'a Name,
@@ -179,10 +230,10 @@ pub fn extract_local_hostname<'a>(
             from_utf8(host_bytes).ok()
         }
         Some(first_actual) => {
-            // Collect the remaining labels of the query once for efficient multi-pass matching.
+            // Collect remaining labels once for efficient multi-pass matching
             let rest: Vec<&[u8]> = iter.collect();
 
-            // Check if it matches any of the configured domains
+            // Check if it matches any configured domain
             for search_labels in multi_search_labels {
                 if search_labels.is_empty() {
                     continue;
@@ -193,7 +244,7 @@ pub fn extract_local_hostname<'a>(
                     continue;
                 }
 
-                // 2. Length check for the remaining labels
+                // 2. Length check for remaining labels
                 if rest.len() != search_labels.len() - 1 {
                     continue;
                 }
@@ -217,10 +268,11 @@ pub fn extract_local_hostname<'a>(
     }
 }
 
-/// Ensures a string is lowercase with minimal allocations.
+/// Converts a string to lowercase with minimal allocations.
 ///
 /// In 99% of LAN queries, no allocation is performed (returns `Borrowed`).
-/// Only allocates on the heap (`Owned`) if the input contains uppercase ASCII characters.
+/// Only allocates on the heap (`Owned`) if the input contains uppercase
+/// ASCII characters.
 #[must_use]
 pub fn fast_lowercase(s: &str) -> Cow<'_, str> {
     if s.bytes().any(|b| b.is_ascii_uppercase()) {
