@@ -1,18 +1,36 @@
-//! DORA State Machine — Core `DHCPv4` server logic.
+//! `DHCPv4` `DORA` state machine (`RFC 2131`).
 //!
-//! This module implements address allocation and message processing logic
-//! as defined in RFC 2131. It uses `IpPool` to manage lease states and
-//! `DeviceIdentity` to resolve MACs and hostnames.
+//! Implements the full `DHCPv4` address assignment lifecycle: `Discover`→`Offer`,
+//! `Request`→`Ack`/`Nak`, `Release`, `Decline`, and `Inform` handling.
+//!
+//! ## `DORA` State Machine
+//!
+//! ```mermaid
+//! stateDiagram-v2
+//!     [*] --> Idle
+//!     Idle --> Discover: Client broadcast
+//!     Discover --> Offer: Pool allocate
+//!     Offer --> Request: Client selects offer
+//!     Request --> Ack: Lease confirmed
+//!     Request --> Nak: IP unavailable
+//!     Ack --> Idle: Lease active
+//!     Idle --> Release: Client RELEASE
+//!     Release --> [*]: Pool free
+//!     Idle --> Decline: Client DECLINE
+//!     Decline --> [*]: IP quarantined
+//!     Idle --> Inform: Client INFORM
+//!     Inform --> Ack: Options only
+//! ```
 //!
 //! ## Decision Table
 //!
-//! | Message     | Action                    | Response |
-//! |-------------|---------------------------|----------|
-//! | Discover    | Allocate IP (offered)     | Offer    |
-//! | Request     | Confirm/Extend lease      | Ack/Nak  |
-//! | Release     | Free IP in the pool       | (none)   |
-//! | Decline     | Mark IP as in conflict    | (none)   |
-//! | Inform      | Provide options (no IP)   | Ack      |
+//! | Message | Action | Response |
+//! | :--- | :--- | :--- |
+//! | Discover | Allocate IP from pool | Offer (unicast/broadcast) |
+//! | Request | Confirm or extend lease | Ack / Nak |
+//! | Release | Free IP in pool | None |
+//! | Decline | Mark IP as conflicted (2h quarantine) | None |
+//! | Inform | Provide config options (no IP) | Ack |
 
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
@@ -28,40 +46,64 @@ use super::config::Dhcpv4Config;
 use super::pool::IpPool;
 use crate::dhcp::identity::DeviceIdentity;
 
-/// Result of processing a DHCP message.
+/// Outcome of processing a DHCP message from a client.
 pub enum HandleResult {
-    /// A reply to be sent.
+    /// A reply packet is ready to be sent.
+    ///
+    /// The service wrapper decides how to dispatch it:
+    /// - If `giaddr` is set → UDP to relay agent
+    /// - If `broadcast` → L2 broadcast (`ff:ff:ff:ff:ff:ff`)
+    /// - Otherwise → L2 unicast via `RawSender`
     Reply {
-        /// Encoded packet bytes.
+        /// Encoded DHCP packet (wire format).
         packet: Vec<u8>,
-        /// Whether it should be sent via L2 broadcast.
+        /// Whether to use L2 broadcast (client has no IP yet).
         broadcast: bool,
-        /// L3 destination IP (for IP/UDP header).
+        /// L3 destination IP for the UDP/IP headers.
         dest_ip: Ipv4Addr,
-        /// Relay Agent address (if any).
+        /// Relay agent address (0.0.0.0 if no relay).
         giaddr: Ipv4Addr,
-        /// Hostname suggested by the client.
+        /// Hostname suggested by the client (Option 12), for logging.
         hostname: Option<String>,
     },
-    /// A lease was formally released by the client.
-    Release { ip: Ipv4Addr },
-    /// No response necessary.
+    /// Client formally released its lease (RELEASE message).
+    ///
+    /// The IP should be returned to the available pool.
+    Release {
+        /// The released IP address.
+        ip: Ipv4Addr,
+    },
+    /// No response necessary — client message was processed silently.
     Ignore,
 }
 
-/// Stateful `DHCPv4` Server.
+/// Stateful `DHCPv4` server with pool-based address allocation.
 ///
-/// Maintains configurations and the IP pool for a specific interface.
+/// Manages the full `DORA` lifecycle for a single interface. The pool
+/// (`IpPool`) tracks available addresses, static reservations, and
+/// quarantined (`DECLINEd`) IPs.
+///
+/// # Lifecycle
+///
+/// 1. `DhcpServer::new(cfg, ctx)` — creates pool from config range
+/// 2. `handle_packet(data, device)` — processes raw bytes, returns `HandleResult`
+/// 3. `last_assignment_for()` — retrieves the IP allocated during the last call
+/// 4. `build_forcerenew(mac, ip)` — constructs a FORCERENEW message for lease renewal
 pub struct DhcpServer {
-    /// Server configuration (range, lease time, etc.)
+    /// Server configuration (range, lease time, router, DNS, etc.).
     pub cfg: Dhcpv4Config,
+    /// Dynamic IP pool with quarantine and sticky lease support.
     pub pool: IpPool,
-    /// Temporarily stores the last allocated IP during packet processing.
+    /// Temporarily stores the last allocated IP during `handle_packet()`.
+    ///
+    /// This is consumed by the service wrapper to emit `DeviceUpdate::V4LeaseGranted`.
     pub last_assigned_ip: Option<Ipv4Addr>,
+    /// Global context for device lookups and state updates.
     pub ctx: LanforgeContext,
 }
 
 impl DhcpServer {
+    /// Creates a new DHCP server with an empty pool seeded from the config range.
     #[must_use]
     pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
         let pool = IpPool::new(cfg.range_start, cfg.range_end);
@@ -73,7 +115,12 @@ impl DhcpServer {
         }
     }
 
-    /// Processes a raw DHCP packet and returns a response (if any).
+    /// Processes a raw DHCP packet and returns a response action.
+    ///
+    /// Decodes the packet, determines the message type, and dispatches to
+    /// the appropriate handler (Discover, Request, Release, Decline, Inform).
+    /// The result (`HandleResult`) contains the response packet or signals
+    /// a release/ignore action.
     pub fn handle_packet(&mut self, data: &[u8], device: Option<Arc<Device>>) -> HandleResult {
         self.last_assigned_ip = None;
         let msg = match Message::decode(&mut Decoder::new(data)) {

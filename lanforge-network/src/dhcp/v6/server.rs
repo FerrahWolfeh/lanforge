@@ -1,18 +1,42 @@
-//! SARR State Machine — Core `DHCPv6` server logic.
+//! `DHCPv6` `SARR` state machine (`RFC 8415`).
 //!
-//! This module implements address allocation and message processing
-//! as defined in RFC 8415. It focuses on DUID-based identification and
-//! address allocation within the configured ULA prefix.
+//! Implements the full `DHCPv6` address and prefix delegation lifecycle:
+//! `Solicit`→`Advertise`→`Request`→`Reply`, plus `Renew`, `Rebind`, `Release`, `Decline`,
+//! and `Information-Request` handling.
+//!
+//! ## `SARR` State Machine
+//!
+//! ```mermaid
+//! stateDiagram-v2
+//!     [*] --> Idle
+//!     Idle --> Solicit: Client multicast
+//!     Solicit --> Advertise: Pool allocate IA_NA/IA_PD
+//!     Advertise --> Request: Client selects
+//!     Request --> Reply: Lease confirmed
+//!     Reply --> Idle: Lease active
+//!     Idle --> Renew: Client extends lease
+//!     Renew --> Reply: Lifetime updated
+//!     Idle --> Rebind: Client rebinds
+//!     Rebind --> Reply
+//!     Idle --> Release: Client releases
+//!     Release --> Reply: Pool freed
+//!     Idle --> Decline: Client declines
+//!     Decline --> Reply: Status Code Decline
+//!     Idle --> InfoReq: Options only
+//!     InfoReq --> Reply: DNS/search domain
+//! ```
 //!
 //! ## Decision Table
 //!
-//! | Message     | Action                      | Response        |
-//! |-------------|-----------------------------|-----------------|
-//! | Solicit     | Offer/Allocate IA_NA        | Advertise/Reply |
-//! | Request     | Confirm lease               | Reply           |
-//! | Renew       | Extend lease                | Reply           |
-//! | Release     | Free IA_NA                  | Reply           |
-//! | Info-Req    | Provide options (DNS)       | Reply           |
+//! | Message | Action | Response |
+//! | :--- | :--- | :--- |
+//! | Solicit | Allocate IA_NA/IA_PD from pool | Advertise (rapid commit) or Reply |
+//! | Request | Confirm lease assignment | Reply |
+//! | Renew | Extend lease lifetimes | Reply |
+//! | Rebind | Rebind to any available server | Reply |
+//! | Release | Free IA_NA/IA_PD | Reply |
+//! | Decline | Mark address as conflicted | Reply |
+//! | Information-Request | Provide DNS/search options | Reply |
 
 use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,
@@ -32,16 +56,20 @@ use super::pool::Ipv6Pool;
 use crate::dhcp::identity::DeviceIdentity;
 use std::sync::Arc;
 
-/// IAIDs assigned in a response.
+/// `IA_NA` and `IA_PD` identifiers assigned in a `DHCPv6` response.
+///
+/// Collected by the service wrapper to emit `DeviceUpdate` events.
 #[derive(Default, Clone, Debug)]
 pub struct AssignedIAs {
+    /// `IA_NA` (Identity Association — Non-temporary Address) identifiers.
     pub na: Vec<u32>,
+    /// `IA_PD` (Identity Association — Prefix Delegation) identifiers.
     pub pd: Vec<u32>,
 }
 
-/// Result of processing a `DHCPv6` message.
+/// Outcome of processing a `DHCPv6` message.
 pub enum HandleResult<'a> {
-    /// A reply to be sent (encoded bytes, destination IP, learned DUID, extracted MAC, IAIDs).
+    /// A reply packet is ready (encoded bytes, destination IP, learned DUID, MAC, IAIDs).
     Reply(
         &'a [u8],
         Ipv6Addr,
@@ -49,11 +77,11 @@ pub enum HandleResult<'a> {
         Option<MacAddr>,
         AssignedIAs,
     ),
-    /// No response necessary (e.g., malformed message or directed to another server).
+    /// No response necessary — message was malformed or directed to another server.
     Ignore,
 }
 
-/// Context for sending status codes.
+/// Context for sending status codes to clients.
 struct StatusContext<'a> {
     msg: &'a Message,
     client_duid: &'a Duid,
@@ -61,20 +89,22 @@ struct StatusContext<'a> {
     mac: Option<MacAddr>,
 }
 
-/// Stateful `DHCPv6` Server.
+/// Stateful `DHCPv6` server with multi-prefix address allocation.
 ///
-/// Maintains configurations, the ULA address pool, and the server's identity (DUID).
+/// Manages the full `SARR` lifecycle for `IA_NA` and `IA_PD` on a single interface.
+/// Uses `DUIDs` (not `MACs`) as primary client identifiers per `RFC 8415`.
 pub struct Dhcpv6Server {
-    /// Server configuration (iface, lease time, etc.)
+    /// Server configuration (interface, lease time, pools, DNS).
     pub cfg: Dhcpv6Config,
-    /// ULA /64 address pool.
+    /// Multi-prefix IPv6 pool (`ULA` + `GUA`).
     pub pool: Ipv6Pool,
     /// DUID (DHCP Unique Identifier) of this server.
     pub server_duid: Duid,
-    /// Learned lifetimes from the GUA prefix (preferred, valid).
+    /// Learned lifetimes from the `GUA` prefix (`preferred`, `valid`) via `RA`.
     pub prefix_lifetimes: Option<(u32, u32)>,
-    /// Persistent socket for NDP pokes (saves `socket()` syscalls).
+    /// Persistent socket for `NDP` probes (avoids repeated `socket()` syscalls).
     pub ndp_poke_sock: Arc<UdpSocket>,
+    /// Global context for device lookups and state updates.
     pub ctx: LanforgeContext,
 }
 

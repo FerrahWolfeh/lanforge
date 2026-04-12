@@ -1,16 +1,32 @@
+//! `DHCPv6` server and pool configuration.
+//!
+//! Supports multi-prefix operation (`ULA` + `GUA`) with flexible pool definitions:
+//! fixed ranges, floating suffix ranges, or single static addresses.
+
 use std::net::Ipv6Addr;
 
 use lanforge_core::device::Ipv6AddrOrSuffix;
 
 /// Configuration for a single `DHCPv6` address pool.
+///
+/// Pools can be defined as:
+/// - **Fixed range**: explicit `range_start`/`range_end` suffixes
+/// - **Single address**: static `address` string (CIDR notation)
 #[derive(Clone, Debug)]
 pub struct Dhcpv6PoolConfig {
+    /// Lower bound suffix for the pool range (relative to prefix).
     pub range_start: Option<Ipv6AddrOrSuffix>,
+    /// Upper bound suffix for the pool range (relative to prefix).
     pub range_end: Option<Ipv6AddrOrSuffix>,
+    /// Static CIDR address (alternative to range-based pools).
     pub address: Option<String>,
 }
 
 /// `DHCPv6` server configuration — built from the `[dhcp.v6]` TOML section.
+///
+/// Supports both `IA_NA` (non-temporary addresses) and `IA_PD` (prefix delegation).
+/// The `ula_prefix` enables Unique Local Address assignment in addition to
+/// Global Unicast Addresses learned from RA.
 #[derive(Clone, Debug)]
 pub struct Dhcpv6Config {
     /// Whether the `DHCPv6` service is enabled.
@@ -19,17 +35,17 @@ pub struct Dhcpv6Config {
     pub iface: String,
     /// Lease time in seconds.
     pub lease_time: u32,
-    /// Local Unique Address (ULA) prefix to announce.
+    /// Local Unique Address (ULA) prefix (`fd00::/8`) to announce.
     pub ula_prefix: Option<Ipv6Addr>,
-    /// Prefix length of the ULA.
+    /// Prefix length of the ULA (typically 64).
     pub ula_prefix_len: u8,
-    /// UDP port to listen on (default: 547).
+    /// UDP port to listen on (default: 547, per RFC 8415).
     pub port: u16,
-    /// Multiple pools for address assignment (new).
+    /// Multiple pools for address assignment (ULA + GUA).
     pub pools: Vec<Dhcpv6PoolConfig>,
-    /// DNS servers to announce (Option 23).
+    /// DNS servers to announce to clients (`DHCPv6` Option 23).
     pub dns_servers: Vec<Ipv6Addr>,
-    /// Search domains to announce (Option 24).
+    /// Search domains to announce to clients (`DHCPv6` Option 24).
     pub search_domains: Vec<String>,
 }
 

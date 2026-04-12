@@ -1,29 +1,42 @@
-//! Router Advertisement packet construction and checksum (RFC 4861 §4.2).
+//! RA packet construction and `ICMPv6` checksum (`RFC 4861 §4.2`).
 //!
-//! This module handles the manual assembly of `ICMPv6` packets for the RA service,
-//! including options such as Prefix Information, RDNSS, and MTU.
+//! Manual assembly of `ICMPv6` `Router Advertisement` packets with options.
+//! Used by the `RaService` to build raw bytes for injection via raw sockets.
 //!
 //! ## RA Packet Structure
 //!
 //! ```text
-//! [ ICMPv6 Header ]
-//! [ RA Fixed Fields (Hop Limit, Flags, Lifetime) ]
-//! [ Option: Source Link-Layer Address ]
-//! [ Option: MTU (if configured) ]
-//! [ Option: Prefix Information (SLAAC) ]
-//! [ Option: RDNSS (DNS) ]
-//! [ Option: DNSSL (Search Domains) ]
+//! [ ICMPv6 Header: Type=134, Code=0, Checksum ]
+//! [ RA Fixed Fields: HopLimit, M/O/Prf flags, RouterLifetime ]
+//! [ Option 1: Source Link-Layer Address (MAC) ]
+//! [ Option 5: MTU (if configured) ]
+//! [ Option 3: Prefix Information (one per prefix, SLAAC) ]
+//! [ Option 25: RDNSS (DNS servers) ]
+//! [ Option 31: DNSSL (search domains) ]
 //! ```
 
 use super::config::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
 use std::net::Ipv6Addr;
 
+/// `ICMPv6` type for `Router Advertisement` (`134` per `RFC 4861`).
 pub const ICMPV6_TYPE_RA: u8 = 134;
 
 // ---------------------------------------------------------------------------
 // RA Packet Assembly (RFC 4861 §4.2)
 // ---------------------------------------------------------------------------
 
+/// Builds a complete RA packet as raw bytes.
+///
+/// # Arguments
+///
+/// * `cfg` — RA service configuration (prefixes, DNS, flags, lifetimes)
+/// * `mac` — source link-layer address (router's MAC)
+/// * `gua_prefix` — current `GUA` prefix for `AutoGua` prefix resolution
+///
+/// # Returns
+///
+/// A `Vec<u8>` containing the full `ICMPv6` `RA` packet with checksum calculated.
+/// The caller must prepend an IPv6 header (src=link-local, dst=`ff02::1`, `next_hdr=58`).
 #[must_use]
 pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Addr>) -> Vec<u8> {
     let mut p = Vec::with_capacity(256);
@@ -131,7 +144,10 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
     p
 }
 
-/// Serializes the Prefix Information option (Type 3, 32 bytes — RFC 4861 §4.6.2).
+/// Pushes a Prefix Information Option (type 3) onto the RA packet.
+///
+/// Follows RFC 4861 §4.6.2: sets L/A/R flags, prefix length, lifetimes,
+/// and rounds the prefix to 64 bits for SLAAC compatibility.
 pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) {
     p.push(3u8); // type
     p.push(4u8); // length = 4 × 8 = 32 bytes
@@ -159,9 +175,13 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) 
     p.extend_from_slice(&octets);
 }
 
-/// Encodes domains in DNS wire format (RFC 1035 §3.1) for the DNSSL option.
+/// Encodes domain names in DNS wire format (RFC 1035 §3.1).
+///
+/// Each label is prefixed by its length. Terminated by a zero byte.
+/// Used for the DNSSL option (RFC 8106 §3.2).
 ///
 /// # Example
+///
 /// `["home.arpa"]` → `b"\x04home\x04arpa\x00"`
 #[must_use]
 pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
@@ -181,10 +201,10 @@ pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
 // ICMPv6 Checksum — RFC 4443 §2.3
 // ---------------------------------------------------------------------------
 
-/// Calculates the `ICMPv6` checksum, including the IPv6 pseudo-header.
+/// Computes the `ICMPv6` checksum per `RFC 4443 §2.3`.
 ///
-/// Unlike `ICMPv4`, the checksum covers a pseudo-header that includes source/destination
-/// IPv6 addresses, payload length, and next-header=58.
+/// Uses the `IPv6` pseudo-header (`src`, `dst`, `upper-layer-packet-length`, `next-header=58`)
+/// plus the `ICMPv6` payload. The checksum field in the payload must be zeroed.
 /// Receivers detecting an incorrect checksum MUST discard the packet silently.
 #[must_use]
 pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {

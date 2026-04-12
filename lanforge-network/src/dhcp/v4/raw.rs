@@ -13,12 +13,31 @@ use pnet::packet::ipv4::{self, Ipv4Flags, MutableIpv4Packet};
 use pnet::packet::udp::{self, MutableUdpPacket};
 use std::net::Ipv4Addr;
 
+/// Layer 2 packet sender via `AF_PACKET` (using pnet).
+///
+/// Used to send unicast DHCP replies directly to clients that don't yet have
+/// an ARP entry for the server. Per RFC 2131, when a client's IP is not yet
+/// confirmed, the server must use L2 broadcast — but if the server knows the
+/// client's MAC, L2 unicast is more efficient.
+///
+/// # Packet Construction
+///
+/// The `send_dhcp` method manually assembles:
+/// 1. Ethernet header (dst=client MAC, src=server MAC, EtherType=IPv4)
+/// 2. IPv4 header (checksum calculated, TTL=64, Don't Fragment)
+/// 3. UDP header (src=67, dst=68, checksum calculated)
+/// 4. DHCP/BOOTP payload
 pub struct RawSender {
     tx: Box<dyn datalink::DataLinkSender>,
     src_mac: PnetMac,
 }
 
 impl RawSender {
+    /// Opens an `AF_PACKET` channel on the given interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `iface_name` — network interface name (e.g., `"eth0"`)
     pub fn new(iface_name: &str) -> Result<Self, NetworkError> {
         let interface = datalink::interfaces()
             .into_iter()

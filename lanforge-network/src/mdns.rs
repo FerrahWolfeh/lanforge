@@ -1,3 +1,26 @@
+//! mDNS (Multicast DNS) prober for hostname discovery.
+//!
+//! Actively probes the LAN for devices by sending mDNS PTR queries and parsing
+//! responses to extract hostnames. Discovered hostnames are applied to the
+//! `LanforgeContext` as `DeviceUpdate::DhcpHostnameHint`.
+//!
+//! ## Protocol
+//!
+//! - Listens on `224.0.0.251:5353` (IPv4) and `[ff02::fb]:5353` (IPv6)
+//! - Sends PTR queries for `_services._dns-sd._udp.local.` to discover services
+//! - Sends reverse-DNS PTR queries for specific IPs (e.g., `1.0.168.192.in-addr.arpa.`)
+//! - Parses PTR/SRV records from responses to extract hostnames
+//!
+//! ## Design
+//!
+//! Uses spawn-blocking `UdpSocket` listeners (non-async) because mDNS requires
+//! `SO_REUSEPORT` on port 5353 — the standard async `UdpSocket` cannot share
+//! this port with other processes. Commands are sent via an `mpsc` channel.
+//!
+//! ## Non-Critical Service
+//!
+//! Marked as `critical: false` — failure does not halt the daemon.
+
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::state::DeviceUpdate;
@@ -26,6 +49,10 @@ enum MdnsCommand {
     ProbeIp(IpAddr),
 }
 
+/// mDNS hostname prober for IPv4 and IPv6.
+///
+/// Sends commands to the background worker via an `mpsc` channel.
+/// The worker manages the actual socket listeners and packet processing.
 pub struct MdnsProber {
     tx: Sender<MdnsCommand>,
     ctx: LanforgeContext,
@@ -63,16 +90,19 @@ impl AsyncService for MdnsProber {
 }
 
 impl MdnsProber {
+    /// Creates a new `MdnsProber` (command channel is unconnected until `run()` is called).
     #[must_use]
     pub fn new(ctx: LanforgeContext) -> Self {
         let (tx, _) = mpsc::channel(32);
         Self { tx, ctx }
     }
 
+    /// Requests a full mDNS broadcast probe across all interfaces.
     pub async fn trigger_scan(&self) {
         let _ = self.tx.send(MdnsCommand::ProbeAll).await;
     }
 
+    /// Sends a targeted mDNS PTR query for a specific IP address.
     pub async fn probe_ip(&self, ip: IpAddr) {
         let _ = self.tx.send(MdnsCommand::ProbeIp(ip)).await;
     }

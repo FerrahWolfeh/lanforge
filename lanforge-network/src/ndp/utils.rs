@@ -1,3 +1,20 @@
+//! NDP (Neighbor Discovery Protocol) utility functions.
+//!
+//! Provides low-level helpers for interacting with the Linux kernel's
+//! neighbor table (NDP for IPv6, ARP for IPv4) via netlink.
+//!
+//! ## Public API
+//!
+//! | Function | Purpose |
+//! | :--- | :--- |
+//! | `lookup_mac_for_ipv6()` | Query kernel NDP table for a MAC address |
+//! | `get_ipv6_neighbors()` | Dump all IPv6 neighbors, optionally filtered by prefix/ifindex |
+//! | `get_ipv4_neighbors()` | Dump all IPv4 neighbors (ARP table), optionally filtered by ifindex |
+//! | `probe_neighbor()` | Trigger an NDP/ARP probe for a specific IP |
+//! | `parse_neighbor_msg()` | Parse a raw netlink neighbor message into a `NeighborEvent` |
+//! | `extract_neigh_info()` | Extract `NeighborEvent` from a full netlink broadcast message |
+//! | `get_ipv4_subnet_iterable()` | Generate all usable IPv4 addresses in a CIDR subnet |
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use futures::TryStreamExt;
@@ -14,6 +31,8 @@ use rtnetlink::{
 use crate::error::NetworkError;
 
 /// Looks up the MAC address for a specific IPv6 neighbor in the kernel's NDP table.
+///
+/// Returns `None` if the neighbor is in `Incomplete` or `Failed` state.
 pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAddr> {
     let mut stream = handle
         .neighbours()
@@ -52,6 +71,9 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
     None
 }
 
+/// Parses a raw `NeighbourMessage` into a `NeighborEvent`.
+///
+/// Filters out incomplete, failed, zero-MAC, and multicast-MAC entries.
 #[must_use]
 pub fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
     if matches!(
@@ -92,6 +114,10 @@ pub fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
     Some(NeighborEvent::Added { ip, mac, ifindex })
 }
 
+/// Extracts a `NeighborEvent` from a raw netlink broadcast message.
+///
+/// Handles both `NewNeighbour` and `DelNeighbour` message types.
+/// Filters incomplete states and invalid MACs.
 #[must_use]
 pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<NeighborEvent> {
     let (neigh, is_delete) = match &msg.payload {
@@ -242,6 +268,10 @@ pub async fn get_ipv4_neighbors(
     Ok(neighbors)
 }
 
+/// Sends a neighbor probe (NDP for IPv6, ARP for IPv4) to trigger a kernel resolution.
+///
+/// Sets the neighbor state to `Probe`, which causes the kernel to send a
+/// Neighbor Solicitation (IPv6) or ARP Request (IPv4).
 pub async fn probe_neighbor(
     handle: &Handle,
     ifindex: u32,

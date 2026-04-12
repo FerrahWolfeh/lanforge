@@ -1,19 +1,41 @@
+//! Device identity resolution from DHCP packet data.
+//!
+//! The `DeviceIdentity` struct ("Who am I?" — WTFAI) merges information from
+//! DHCP packets (hostname via Option 12, vendor class via Option 60/77) with
+//! the persistent device table in `LanforgeContext` to produce a complete
+//! identity for logging, display, and state updates.
+
 use std::{fmt, sync::Arc};
 
 use lanforge_core::{device::Device, identifiers::MacAddr};
 
-/// Device identity — "Who am I?" (WTFAI) representation.
+/// Resolved identity of a DHCP client device.
+///
+/// Combines packet-level hints (hostname, vendor) with persistent state
+/// from the device table. If the packet lacks a hostname but the table
+/// has one (e.g., from a previous lease or CLI static config), the table's
+/// version is used.
+///
+/// # Display Format
+///
+/// | hostname | vendor | Output |
+/// | :--- | :--- | :--- |
+/// | Some | Some | `"my-phone" (Android) [aa:bb:cc:dd:ee:ff]` |
+/// | Some | None | `"my-phone" [aa:bb:cc:dd:ee:ff]` |
+/// | None | Some | `(Apple) [aa:bb:cc:dd:ee:ff]` |
+/// | None | None | `[aa:bb:cc:dd:ee:ff]` |
 #[derive(Debug, Clone)]
 pub struct DeviceIdentity {
     /// Device's MAC address.
     pub mac: MacAddr,
-    /// Device's hostname (if any).
+    /// Device's hostname (from DHCP Option 12 or device table).
     pub hostname: Option<String>,
-    /// Device's vendor class (if any).
+    /// Device's vendor class (from DHCP Option 60 or 77).
     pub vendor_class: Option<String>,
 }
 
 impl DeviceIdentity {
+    /// Creates a new identity with explicit fields.
     #[must_use]
     pub const fn new(mac: MacAddr, hostname: Option<String>, vendor_class: Option<String>) -> Self {
         Self {
@@ -23,7 +45,10 @@ impl DeviceIdentity {
         }
     }
 
-    /// Resolves the identity using packet-provided information and an optional device snapshot.
+    /// Resolves identity by merging packet data with the persistent device table.
+    ///
+    /// If the packet provides no hostname but the device table has one,
+    /// the table's hostname is used — ensuring continuity across reboots.
     #[must_use]
     pub fn resolve(
         mac: MacAddr,

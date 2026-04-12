@@ -1,9 +1,9 @@
-//! `DHCPv6` service — Dynamic IPv6 address management (RFC 8415).
+//! `DHCPv6` service — Dynamic IPv6 address management (`RFC 8415`).
 //!
-//! This service manages IPv6 address assignment via stateful `DHCPv6`,
-//! serving as an alternative or complement to SLAAC.
+//! Manages `IA_NA` (non-temporary addresses) and `IA_PD` (prefix delegation)
+//! via the `SARR` cycle (`Solicit`→`Advertise`→`Request`→`Reply`).
 //!
-//! ## SARR Cycle (Solicit, Advertise, Request, Reply)
+//! ## `SARR` Cycle
 //!
 //! ```mermaid
 //! sequenceDiagram
@@ -11,20 +11,31 @@
 //!     participant S as Dhcpv6Server (Lanforge)
 //!     participant Ctx as LanforgeContext
 //!
-//!     C->>S: 1. Solicit (Multicast ff02::1:2)
-//!     S->>C: 2. Advertise (Unicast)
-//!
+//!     C->>S: 1. Solicit (multicast ff02::1:2)
+//!     S->>C: 2. Advertise (unicast)
 //!     C->>S: 3. Request
-//!     S->>Ctx: 4. apply(DeviceUpdate::V6LeaseGranted / V6PrefixAssigned)
-//!     Ctx-->>S: 5. EventBus Signal
-//!     S->>C: 6. Reply
+//!     S->>Ctx: 4. apply(V6LeaseGranted / V6PrefixAssigned)
+//!     S->>C: 5. Reply
 //! ```
 //!
-//! ## Manager Integration
+//! ## Key Differences from `DHCPv4`
 //!
-//! The `dhcpv6_service` reports DUIDs and IP leases to the `LanforgeContext`.
-//! Unlike v4, `DHCPv6` relies heavily on DUIDs for persistent client
-//! identification, even if the MAC address changes or is unavailable.
+//! - Uses **DUIDs** (not MACs) as primary client identifiers
+//! - Supports **prefix delegation** (`IA_PD`) for clients that need subnets
+//! - Multi-prefix operation (`ULA` + `GUA` simultaneously)
+//! - `RECONFIGURE` messages for lease renewal (`RFC 8415` Section 18.16)
+//!
+//! ## Service Model
+//!
+//! Runs as `SyncService` (blocking UDP I/O, 200ms timeout) like `DHCPv4`.
+//!
+//! ## Module Structure
+//!
+//! | Submodule | Purpose |
+//! | :--- | :--- |
+//! | `config` | `Dhcpv6Config`, `Dhcpv6PoolConfig` |
+//! | `pool` | `Ipv6Pool` — multi-prefix, deterministic + random allocation |
+//! | `server` | `Dhcpv6Server` — full SARR state machine |
 
 pub mod config;
 pub mod pool;
@@ -54,6 +65,13 @@ use dhcproto::{Decodable, Decoder};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, SyncService};
 
+/// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
+///
+/// Wraps the `Dhcpv6Server` state machine with bus event handling for:
+/// - `LeaseRelease` (`v4` and `v6-prefix`)
+/// - `DeviceUpdated` (`V6` suffix changes)
+/// - `PrefixChanged` (`GUA` updates → client `RECONFIGURE`)
+/// - `LeaseRenew` (manual RECONFIGURE send)
 pub struct Dhcpv6Service {
     config: Dhcpv6Config,
     ctx: LanforgeContext,

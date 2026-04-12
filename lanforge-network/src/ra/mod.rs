@@ -1,29 +1,47 @@
-//! Router Advertisement Service (RFC 4861 + RFC 8106).
+//! Router Advertisement service (RFC 4861 + RFC 8106).
 //!
-//! A generic, RFC-compliant implementation of the NDP/RA protocol.
-//! Designed to run on resource-constrained hardware like the Raspberry Pi 4B.
+//! Full RFC-compliant RA implementation for IPv6 clients. Supports startup
+//! burst, rate-limited periodic advertisements, RS-triggered unicast responses
+//! with random delay, and DNS options (RDNSS + DNSSL).
 //!
-//! ## RA / RS Cycle
+//! ## RA/RS Cycle
 //!
 //! ```mermaid
 //! sequenceDiagram
 //!     participant R as Router (Lanforge)
 //!     participant C as Client
 //!
-//!     Note over R,C: Periodic or Startup Advertisement
-//!     R->>C: 1. RA Multicast (ff02::1)
-//!
-//!     Note over R,C: Solicitation Phase
-//!     C->>R: 2. RS Unicast/Multicast (Solicitation)
-//!     Note right of R: Random Delay (0-500ms)
-//!     R->>C: 3. RA Unicast/Multicast (Response)
+//!     Note over R,C: Startup Burst (3 RAs, 16s interval)
+//!     R->>C: RA multicast (ff02::1)
+//!     R->>C: RA multicast
+//!     R->>C: RA multicast
+//!     Note over R,C: Periodic (MinRtrAdvInterval)
+//!     R->>C: RA multicast
+//!     Note over R,C: RS Triggered
+//!     C->>R: RS (solicitation)
+//!     Note right of R: Random delay 0-500ms
+//!     R->>C: RA unicast (response)
 //! ```
 //!
-//! # Implemented RFCs
-//! - RFC 4861 — Neighbor Discovery for IPv6 (Full RA/RS support)
-//! - RFC 8106 — RA Options for DNS Configuration (RDNSS + DNSSL)
-//! - RFC 4191 — Default Router Preferences (Priority flags)
-//! - RFC 3775 — `AdvRouterAddr` flag in Prefix Information
+//! ## Implemented RFCs
+//!
+//! | RFC | Purpose |
+//! | :--- | :--- |
+//! | 4861 | Neighbor Discovery — Full RA/RS support |
+//! | 8106 | RA Options for DNS (RDNSS + DNSSL) |
+//! | 4191 | Default Router Preferences (Low/Medium/High) |
+//! | 3775 | `AdvRouterAddr` flag in Prefix Information |
+//!
+//! ## Design
+//!
+//! - Uses **raw `ICMPv6` sockets** (not async `UdpSocket`) for direct packet control
+//! - `ICMP6_FILTER` kernel optimization to only receive `RS` packets (reduces CPU)
+//! - **`RaState`** handles `RFC` timing independently of the service struct
+//! - `RaContext` is a `Copy` reference holder for zero-allocation packet building
+//!
+//! ## Service Model
+//!
+//! Runs as `AsyncService` with raw socket wrapped in `AsyncFd` for tokio readiness.
 
 pub mod config;
 pub mod packet;
@@ -75,7 +93,16 @@ const ICMP6_FILTER: libc::c_int = 1;
 // Runtime State — Handles RFC-compliant timing
 // ---------------------------------------------------------------------------
 
-/// Runtime state for the RA server.
+/// Runtime timing state for the RA service.
+///
+/// Tracks RFC 4861 startup burst counters, last multicast/unicast timestamps,
+/// and rate limiting logic. Designed to be used independently of the service struct.
+///
+/// # RFC 4861 Timing Rules
+///
+/// - **Startup burst**: 3 RAs at 16s intervals (§6.2.6)
+/// - **Min delay between multicast RAs**: 3s (§6.2.4)
+/// - **Max random delay after RS**: 500ms (§6.2.6)
 pub struct RaState {
     /// Count of initial RAs sent (startup phase tracking).
     initial_sent: u8,

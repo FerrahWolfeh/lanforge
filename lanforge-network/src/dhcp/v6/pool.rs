@@ -1,3 +1,28 @@
+//! Multi-prefix IPv6 address pool for `DHCPv6` (`IA_NA` + `IA_PD`).
+//!
+//! Supports simultaneous `ULA` and `GUA` prefix operation, with both
+//! **fixed** (prefix-bound) and **floating** (suffix-only) pool ranges.
+//!
+//! ## Pool Types
+//!
+//! | Type | Use Case | Example |
+//! | :--- | :--- | :--- |
+//! | `Fixed` | Addresses tied to a specific 64-bit prefix | `fd00::100`–`fd00::200` |
+//! | `Floating` | Suffix ranges that apply to any managed prefix | `::100`–`::200` on ULA or GUA |
+//!
+//! ## Allocation Strategy
+//!
+//! 1. **Static reservations** — pre-allocated on startup per prefix
+//! 2. **Sticky leases** — return same address for returning DUID+IAID
+//! 3. **Deterministic** — hash(DUID, IAID, index) for reproducible assignment
+//! 4. **Random fallback** — when deterministic slots are taken
+//!
+//! ## Multi-Prefix Operation
+//!
+//! When both `ULA` and `GUA` prefixes are configured, the pool allocates
+//! addresses on both prefixes simultaneously. A single `IA_NA` request
+//! may receive one `ULA` and one `GUA` address.
+
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr};
@@ -10,18 +35,24 @@ use rand::random;
 
 use crate::dhcp::v6::config::Dhcpv6PoolConfig;
 
-/// Internal representation of a `DHCPv6` address range.
+/// Range definition for a `DHCPv6` address pool.
 #[derive(Clone, Debug)]
 pub enum PoolRange {
-    /// A range bound to a specific 64-bit prefix.
+    /// A range bound to a specific 64-bit prefix (e.g., `fd00::100`–`fd00::200`).
     Fixed {
+        /// First 4 segments (64 bits) of the prefix.
         prefix: [u16; 4],
+        /// Lower bound of the range as a full 128-bit value.
         start_u128: u128,
+        /// Upper bound of the range as a full 128-bit value.
         end_u128: u128,
     },
     /// A "floating" range that applies to any managed prefix (ULA or GUA).
+    /// The suffix is combined with the active prefix at allocation time.
     Floating {
+        /// Lower bound 64-bit suffix.
         start_suffix: [u8; 8],
+        /// Upper bound 64-bit suffix.
         end_suffix: [u8; 8],
     },
 }
@@ -129,18 +160,23 @@ impl PoolRange {
     }
 }
 
+/// Multi-prefix IPv6 address pool supporting `IA_NA` and `IA_PD` allocation.
+///
+/// Manages both `ULA` (static) and `GUA` (dynamic, from `RA`) prefixes simultaneously.
+/// Addresses are tracked per `DUID`+`IAID` for sticky lease behavior.
 #[allow(dead_code)]
 pub struct Ipv6Pool {
-    /// Configured pools (Fixed or Floating).
+    /// Configured pool ranges (Fixed or Floating).
     pub pools: Vec<PoolRange>,
-    /// Static ULA prefix from config.
+    /// Static ULA prefix from configuration (`fd00::/8`).
     pub ula_prefix: Option<Ipv6Addr>,
-    /// Dynamic GUA prefix detected from RA.
+    /// Dynamic GUA prefix detected from Router Advertisements.
     pub gua_prefix: Option<Ipv6Addr>,
+    /// Prefix length for the ULA (typically 64).
     pub ula_prefix_len: u8,
-    /// IPs in quarantine.
+    /// Blacklisted IPs from DECLINE with quarantine timestamp.
     blacklisted: HashMap<Ipv6Addr, Instant>,
-    /// Static IP reservations to avoid dynamic pool collisions.
+    /// Static IP reservations to prevent dynamic allocation collisions.
     reserved_static: Vec<Ipv6Addr>,
 }
 

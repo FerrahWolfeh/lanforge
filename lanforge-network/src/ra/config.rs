@@ -54,13 +54,19 @@ impl RouterPriority {
 }
 
 /// Lifetime for a prefix — finite in seconds or infinite.
+///
+/// Maps to the `ValidLifetime` and `PreferredLifetime` fields
+/// in the Prefix Information Option (RFC 4861 §4.6.2).
 #[derive(Debug, Clone, Copy)]
 pub enum PrefixLifetime {
+    /// Finite lifetime in seconds.
     Secs(u32),
+    /// Infinite lifetime (`0xFFFF_FFFF`).
     Infinity,
 }
 
 impl PrefixLifetime {
+    /// Converts to the raw `u32` value used in the RA packet.
     #[must_use]
     pub const fn as_u32(self) -> u32 {
         match self {
@@ -81,7 +87,17 @@ pub enum PrefixSource {
     AutoGua,
 }
 
-/// Configuration for an IPv6 prefix to be advertised (Option type 3, RFC 4861 §4.6.2).
+/// Configuration for an IPv6 prefix to be advertised in RA packets.
+///
+/// Generates a **Prefix Information Option** (type 3, RFC 4861 §4.6.2).
+///
+/// # Key Flags
+///
+/// | Flag | Field | Effect |
+/// | :--- | :--- | :--- |
+/// | L | `on_link` | Clients treat addresses in this prefix as on-link neighbors |
+/// | A | `autonomous` | Enables SLAAC — clients autoconfigure addresses via EUI-64 |
+/// | R | `router_addr` | This address is the router's own address (Mobile IPv6, RFC 3775) |
 #[derive(Debug, Clone)]
 pub struct PrefixConfig {
     pub source: PrefixSource,
@@ -156,27 +172,32 @@ impl RdnssConfig {
 }
 
 /// DNS Search Lists via DNSSL (RFC 8106 §3.2, option type 31).
+///
+/// Provides domain search suffixes to clients without requiring `DHCPv6`.
 #[derive(Debug, Clone)]
 pub struct DnsslConfig {
+    /// Domain names (e.g., `["lan", "home.arpa"]`).
     pub domains: Vec<String>,
     /// None → same policy as RDNSS (2 × `MaxRtrAdvInterval`).
     pub lifetime: Option<Duration>,
 }
 
 /// Full RA service configuration for an interface.
+///
+/// Maps directly to RA packet fields and options per RFC 4861 and RFC 8106.
 #[derive(Debug, Clone)]
 pub struct RaConfig {
-    /// Network interface name (e.g., "eth0").
+    /// Network interface name (e.g., `"eth0"`).
     pub iface: String,
 
-    /// M=1: Clients should use `DHCPv6` for managed address configuration (RFC 4861 §4.2).
+    /// M=1: Managed flag — clients should use `DHCPv6` for address assignment (RFC 4861 §4.2).
     pub managed: bool,
-    /// O=1: Clients seek DNS and other options via stateless `DHCPv6` (RFC 4861 §4.2).
+    /// O=1: Other config flag — clients should use `DHCPv6` for DNS/options only (RFC 4861 §4.2).
     pub other_config: bool,
 
     /// Suggested hop limit for clients' unicast traffic (0 = unspecified).
     pub hop_limit: u8,
-    /// Default router priority (RFC 4191).
+    /// Default router priority (RFC 4191) — Low, Medium, or High.
     pub priority: RouterPriority,
 
     /// `MaxRtrAdvInterval`: RFC 4861 §6.2.1 — between 4s and 1800s; default: 200s.
@@ -186,15 +207,15 @@ pub struct RaConfig {
     pub min_interval: Option<Duration>,
 
     /// `RouterLifetime`: None → 3 × `MaxRtrAdvInterval`.
-    /// 0 → This router is not a default gateway (clients won't use it for external routing).
+    /// 0 → This router is not a default gateway.
     /// RFC 4861: must be 0 or in the range [`MaxRtrAdvInterval`, 9000s].
     pub router_lifetime: Option<Duration>,
 
     /// MTU to announce (Option type 5, RFC 4861 §4.6.4).
-    /// Relevant when the WAN bandwidth has an MTU < 1500 (e.g., `PPPoE` = 1492 bytes).
+    /// Relevant when WAN bandwidth has an MTU < 1500 (e.g., `PPPoE` = 1492 bytes).
     pub mtu: Option<u32>,
 
-    /// IPv6 prefixes to advertise (Option type 3).
+    /// IPv6 prefixes to advertise (Option type 3 — Prefix Information).
     pub prefixes: Vec<PrefixConfig>,
     /// DNS servers via RDNSS (Option type 25).
     pub rdnss: Vec<RdnssConfig>,

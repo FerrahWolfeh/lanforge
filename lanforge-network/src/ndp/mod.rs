@@ -1,21 +1,34 @@
-//! Netlink wrapper for IPv6 neighbor queries and event filtering.
+//! NDP (`Neighbor Discovery Protocol`) monitor for IPv6 and ARP.
 //!
-//! Centralizes all interaction with the Linux kernel's netlink subsystem.
+//! Reacts to Linux kernel neighbor events (`RTM_NEWNEIGH`/`RTM_DELNEIGH`) and
+//! keeps the `LanforgeContext` synchronized with the kernel's NDP/ARP cache.
 //!
-//! ## Integration Flow with Manager
+//! ## Integration Flow
 //!
 //! ```mermaid
 //! sequenceDiagram
-//!     participant K as Kernel (RTM_NEWNEIGH)
-//!     participant N as netlink::extract_neigh_info()
+//!     participant K as Kernel netlink
+//!     participant N as NeighborMonitor
 //!     participant E as NeighborEvent
-//!     participant C as LanforgeContext (apply)
+//!     participant C as LanforgeContext
 //!
-//!     K->>N: Inbound Message
-//!     N->>E: Option<NeighborEvent>
-//!     Note over E: to_device_update(prefix)
-//!     E->>C: SlaacObserved (GUA) / NdpSeen (Other)
+//!     K->>N: RTM_NEWNEIGH / RTM_DELNEIGH
+//!     N->>E: extract_neigh_info
+//!     E->>C: to_device_update
+//!     C->>C: apply update (SlaacObserved/NdpSeen/ArpSeen)
 //! ```
+//!
+//! ## Features
+//!
+//! - **Event-driven**: Listens to netlink broadcast for neighbor state changes
+//! - **Bootstrap**: Full neighbor table dump on startup via `slaac::bootstrap_table()`
+//! - **ARP subnet scan**: On `NeighborScanRequested`, probes every IPv4 in the subnet
+//!   (paced at 10ms/address to avoid CPU spikes)
+//! - **Prefix tracking**: Updates GUA/ULA context from RA for SLAAC classification
+//!
+//! ## Critical Service
+//!
+//! Marked as `critical: true` — failure halts the daemon.
 
 #[cfg(test)]
 pub mod tests;
@@ -40,12 +53,15 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
-// NdpMonitor — The "Serviceable Struct" for Netlink
+// NeighborMonitor — Reacts to netlink neighbor events
 // ---------------------------------------------------------------------------
 
 type NetlinkMessageStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
-/// Monitor that reacts to Netlink neighbor events and keeps the `ManagedTable` updated.
+/// Monitors kernel neighbor table changes via netlink events.
+///
+/// Maintains synchronization with the `LanforgeContext` by applying
+/// `DeviceUpdate` events for every neighbor state change.
 pub struct NeighborMonitor {
     handle: Handle,
     messages: NetlinkMessageStream,
@@ -55,6 +71,7 @@ pub struct NeighborMonitor {
 }
 
 impl NeighborMonitor {
+    /// Creates a new `NeighborMonitor` for the given interface.
     #[must_use]
     pub fn new(
         handle: Handle,

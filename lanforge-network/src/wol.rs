@@ -1,13 +1,43 @@
+//! Wake-on-LAN (`WoL`) magic packet sender.
+//!
+//! Sends a `WoL` "magic packet" to wake up sleeping devices on the LAN.
+//! For redundancy, the packet is sent to three targets:
+//!
+//! 1. **Directed broadcast** (e.g., `192.168.1.255:9`) — if provided
+//! 2. **Unicast fallback** (device's last known IP) — if provided
+//! 3. Both use a UDP socket bound to the target interface with `SO_BROADCAST`
+//!
+//! The magic packet format: 6 bytes of `0xFF` followed by 16 repetitions
+//! of the target MAC address (total 102 bytes).
+
 use lanforge_core::identifiers::MacAddr;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 
-/// Sends a Wake-on-LAN Magic Packet to multiple targets for redundancy.
+/// Sends a Wake-on-LAN magic packet for the given MAC address.
 ///
-/// 1. Limited Broadcast: 255.255.255.255:9
-/// 2. Directed Broadcast: If provided (e.g. 192.168.1.255:9)
-/// 3. Unicast Fallback: If provided (the last known IP of the device)
+/// # Arguments
+///
+/// * `mac` — target device's MAC address
+/// * `interface` — network interface name (e.g., `"eth0"`) for socket binding
+/// * `directed_broadcast` — optional directed broadcast address (e.g., `192.168.1.255`)
+/// * `unicast_ip` — optional fallback unicast IP (device's last known address)
+///
+/// # Example
+///
+/// ```ignore
+/// use lanforge_core::identifiers::MacAddr;
+/// use lanforge_network::wol::send_wol_magic_packet;
+///
+/// let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+/// send_wol_magic_packet(
+///     mac,
+///     "eth0",
+///     Some("192.168.1.255".parse().unwrap()),
+///     Some("192.168.1.100".parse().unwrap()),
+/// ).unwrap();
+/// ```
 pub fn send_wol_magic_packet(
     mac: MacAddr,
     interface: &str,

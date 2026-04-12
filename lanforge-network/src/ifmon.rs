@@ -1,8 +1,23 @@
-//! Interface configuration monitor.
+//! Interface address monitor.
 //!
-//! This service is responsible for tracking the IP addresses (Link-Local, GUA, ULA)
-//! assigned to the local network interfaces. It provides a synchronous bootstrap
-//! mechanism to ensure networking is ready before other services start.
+//! Tracks the IP addresses (Link-Local, GUA, ULA) assigned to the local network interface
+//! by subscribing to Netlink RTNL address events and performing periodic refreshes.
+//!
+//! ## Bootstrap Flow
+//!
+//! 1. `initial_scan()` — performs a full `RTM_GETADDR` query for the target interface
+//! 2. `refresh_interface()` — updates `InterfaceState` in `LanforgeContext`
+//! 3. Netlink event listener — reacts to `NewAddress`/`DelAddress` events in real time
+//!
+//! ## `InterfaceState` Fields
+//!
+//! | Field | Description |
+//! | :--- | :--- |
+//! | `v4` | IPv4 address + prefix length |
+//! | `link_local` | `fe80::/10` address (required for RA/NDP) |
+//! | `gua` | Global Unicast Address (`2000::/3`) with mask applied |
+//! | `ula` | Unique Local Address (`fd00::/8`) with mask applied |
+//! | `gua_preferred` / `gua_valid` | Lifetime timers from `IFA_CACHEINFO`
 
 use futures::stream::TryStreamExt;
 use lanforge_core::bus::LanforgeEvent;
@@ -23,8 +38,20 @@ use netlink_sys::SocketAddr;
 
 use crate::error::NetworkError;
 
+/// Broadcast receiver for raw Netlink messages.
 pub type NetlinkStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
+/// Monitors interface address changes via Netlink RTNL events.
+///
+/// This service is critical — it is marked as `critical: true` in `ServiceMeta`,
+/// meaning the service manager will halt on failure.
+///
+/// # Lifecycle
+///
+/// - Constructed with a `Handle` (rtnetlink) and a broadcast stream of netlink messages
+/// - `initial_scan()` is called during bootstrap to seed `InterfaceState`
+/// - `run()` enters the async event loop, listening for address events and shutdown signals
+/// - On `NewAddress`/`DelAddress` events targeting `target_ifindex`, refreshes the interface
 pub struct InterfaceMonitor {
     handle: Handle,
     messages: NetlinkStream,
@@ -33,6 +60,14 @@ pub struct InterfaceMonitor {
 }
 
 impl InterfaceMonitor {
+    /// Creates a new `InterfaceMonitor` for the given interface index.
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` — rtnetlink handle for address queries
+    /// * `messages` — broadcast receiver for raw netlink events
+    /// * `target_ifindex` — the interface index to monitor
+    /// * `ctx` — global context for state updates
     #[must_use]
     pub const fn new(
         handle: Handle,

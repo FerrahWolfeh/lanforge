@@ -1,3 +1,34 @@
+//! IPv4 address pool with dynamic allocation and quarantine.
+//!
+//! Uses a `RoaringBitmap` for efficient IP tracking (O(1) insert/remove,
+//! O(log n) random selection). Supports sticky leases, static reservations,
+//! and DECLINE quarantine (2-hour timeout for conflicted IPs).
+//!
+//! ## Allocation Strategy
+//!
+//! ```mermaid
+//! flowchart TD
+//!     START["allocate called for MAC"] --> STATIC{"Static/Dynamic in ctx?"}
+//!     STATIC -->|Yes| RETURN["Return existing IP"]
+//!     STATIC -->|No| REQUESTED{"Requested IP free?"}
+//!     REQUESTED -->|Yes| ASSIGN["Assign requested IP"]
+//!     REQUESTED -->|No| RANDOM["Random from available pool"]
+//!     RANDOM --> EXHAUSTED{"Pool empty?"}
+//!     EXHAUSTED -->|Yes| GC["Garbage collect expired leases"]
+//!     EXHAUSTED -->|No| RETURN
+//!     GC --> SECOND["Second random pass"]
+//!     SECOND --> STILL_EMPTY{"Still empty?"}
+//!     STILL_EMPTY -->|Yes| DECLINE["Recover DECLINEd IPs"]
+//!     STILL_EMPTY -->|No| RETURN
+//!     DECLINE --> RETURN
+//! ```
+//!
+//! ## Quarantine
+//!
+//! IPs rejected via DHCP DECLINE (client detected IP conflict) are quarantined
+//! for 2 hours before being returned to the pool. If the pool is fully exhausted,
+//! quarantine is bypassed as an emergency fallback.
+
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
@@ -10,19 +41,26 @@ use lanforge_core::context::LanforgeContext;
 
 use roaring::RoaringBitmap;
 
-/// IPv4 address pool with dynamic allocation.
+/// Dynamic IPv4 address pool backed by a roaring bitmap.
+///
+/// # Allocation Guarantees
+///
+/// - Never assigns an IP already owned by another MAC (checked via `LanforgeContext`)
+/// - Respects static reservations by removing them from the available set
+/// - Quarantines `DECLINEd` IPs for 2 hours to avoid conflict storms
 pub struct IpPool {
-    /// Range start (inclusive).
+    /// Range start (inclusive), as `u32` in network byte order.
     start: u32,
-    /// Range end (inclusive).
+    /// Range end (inclusive), as `u32` in network byte order.
     end: u32,
-    /// IPs rejected via DECLINE (Quarantine with timestamp).
+    /// IPs rejected via DECLINE with quarantine timestamp.
     declined: HashMap<Ipv4Addr, Instant>,
-    /// Bitmap of free IPs for efficient storage and allocation.
+    /// Bitmap of free IPs — efficient O(1) insert/remove, O(log n) select.
     available: RoaringBitmap,
 }
 
 impl IpPool {
+    /// Creates a new pool with all IPs in `[start, end]` marked as available.
     #[must_use]
     pub fn new(start: Ipv4Addr, end: Ipv4Addr) -> Self {
         let s = u32::from(start);
