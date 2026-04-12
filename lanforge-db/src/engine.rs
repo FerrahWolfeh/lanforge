@@ -1,7 +1,50 @@
-//! `LeaseDb` — Synchronous SQLite engine for `DeviceTable` persistence.
+//! `LeaseDb` — Synchronous `SQLite` engine for `DeviceTable` persistence.
 //!
-//! Responsible for schema management, migrations, atomic saves (UPSERT),
+//! Responsible for schema management, migrations, atomic saves (`UPSERT`),
 //! and state reconstruction during loading.
+//!
+//! ## Schema
+//!
+//! The database consists of the following tables:
+//!
+//! | Table | Purpose |
+//! | :--- | :--- |
+//! | `devices` | Core device identity (`MAC`, `hostname`, `origin`, `DUID`) |
+//! | `v4_leases` | Active `DHCPv4` leases (1 per `MAC`) |
+//! | `v6_leases` | Active `DHCPv6` `IA_NA` leases (multiple per `MAC` via `IAID`) |
+//! | `v6_prefixes` | Delegated `IA_PD` prefixes (multiple per `MAC` via `IAID`) |
+//! | `slaac_addrs` | `SLAAC`-configured `IPv6` addresses (multiple per `MAC`) |
+//! | `seen_v4` | `IPv4` addresses observed via `ARP`/`netlink` (multiple per `MAC`) |
+//! | `lease_history` | Audit trail for lease events (assigned, renewed, released, expired) |
+//!
+//! All child tables use `ON DELETE CASCADE` so that deleting a device
+//! automatically removes all associated leases, prefixes, and addresses.
+//!
+//! ## Write Strategy
+//!
+//! `save_table()` uses a **clear-then-insert** pattern inside a single transaction:
+//! 1. Snapshot all existing MACs from the database
+//! 2. UPSERT every device currently in memory
+//! 3. DELETE any MACs that are no longer in memory (cascades to children)
+//!
+//! `upsert_device_internal()` uses DELETE + INSERT for child tables rather than
+//! diff logic — this simplifies the code and naturally handles lease expirations.
+//!
+//! ## Migrations
+//!
+//! Three migrations are defined (via `rusqlite_migration`):
+//!
+//! 1. **v1** — Full schema (drop & recreate legacy tables, create all 6 tables)
+//! 2. **v2** — `lease_history` table with indexes on `mac` and `timestamp`
+//! 3. **v3** — `vendor` column added to `devices` (reserved for manufacturer lookup)
+//!
+//! ## `SQLite` Configuration
+//!
+//! | PRAGMA | Value | Rationale |
+//! | :--- | :--- | :--- |
+//! | `journal_mode` | `WAL` | Writes are append-only; reduces SD card wear |
+//! | `synchronous` | `NORMAL` | Safe for SD cards in WAL mode; crash-consistent |
+//! | `foreign_keys` | `ON` | Enables CASCADE deletes |
 
 use rusqlite::{Connection, params};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -29,6 +72,9 @@ use rusqlite_migration::{M, Migrations};
 // Internal DB Row Models
 // ---------------------------------------------------------------------------
 
+/// Internal representation of a device row read from the `devices` table.
+///
+/// Used during `load_table()` to deserialize stored devices.
 struct DeviceRow {
     mac: String,
     hostname: String,
@@ -42,19 +88,38 @@ struct DeviceRow {
     v6_suffix: Option<String>,
 }
 
-/// A handle to the SQLite database for network leases and devices.
+/// A handle to the `SQLite` database for network leases and devices.
 ///
 /// `LeaseDb` manages synchronous I/O operations for persistent state.
 /// It uses Write-Ahead Logging (WAL) mode to improve concurrency on
 /// embedded systems like the Raspberry Pi.
+///
+/// # Key Operations
+///
+/// - **`open(path)`** — Opens or creates the database, runs migrations
+/// - **`save_table(state)`** — Persists the entire `State` atomically
+/// - **`load_table()`** — Reconstructs a `State` from disk
+/// - **`upsert_device(device)`** — Persists a single device
+/// - **`remove_device(mac)`** — Deletes a device and all child rows (CASCADE)
+/// - **`vacuum()`** — Reclaims disk space from deleted entries
+/// - **`prune_zombies()`** — Removes dynamic devices with no leases or traffic
 pub struct LeaseDb {
-    /// The underlying SQLite connection.
+    /// The underlying `SQLite` connection.
     pub conn: Connection,
 }
 
-/// Opens (or creates) the SQLite database at the specified path and runs migrations.
+/// Opens (or creates) the `SQLite` database at the specified path and runs migrations.
+///
+/// Ensures the parent directory exists (creating it if necessary), then opens
+/// the database in WAL mode with `synchronous=NORMAL` and foreign keys enabled.
+///
+/// # Errors
+///
+/// Returns [`LeaseDbError::PathAccess`] if the parent directory cannot be created,
+/// [`LeaseDbError::ConnectionOpen`] if `SQLite` fails to open, or
+/// [`LeaseDbError::Migration`] if schema migrations fail.
 impl LeaseDb {
-    /// Opens (or creates) the SQLite database at the specified path and runs migrations.
+    /// Opens (or creates) the `SQLite` database at the specified path and runs migrations.
     pub fn open(path: &Path) -> Result<Self, LeaseDbError> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -178,6 +243,16 @@ impl LeaseDb {
     /// Persists the current state of the `DeviceTable` using structured updates.
     ///
     /// Uses SQL UPSERT for devices and relies on `ON DELETE CASCADE` for child tables.
+    ///
+    /// # Process
+    ///
+    /// 1. Snapshots all MAC strings currently in the database
+    /// 2. UPSERTs every device from memory (INSERT ... ON CONFLICT DO UPDATE)
+    /// 3. DELETEs any MACs from the database that no longer exist in memory
+    ///    (this cascades to child tables: `v4_leases`, `v6_leases`, `v6_prefixes`,
+    ///    `slaac_addrs`, `seen_v4`)
+    ///
+    /// All steps run inside a single transaction for atomicity.
     pub fn save_table(&self, table: &State) -> Result<(), LeaseDbError> {
         let tx = self.conn.unchecked_transaction()?;
 
@@ -207,11 +282,17 @@ impl LeaseDb {
     }
 
     /// Persists a single device's state to the database atomically.
+    ///
+    /// Uses an UPSERT (INSERT ... ON CONFLICT DO UPDATE) for the `devices` table
+    /// and clears + re-inserts all child table rows for this MAC.
     pub fn upsert_device(&self, device: &Device) -> Result<(), LeaseDbError> {
         Self::upsert_device_internal(&self.conn, device)
     }
 
     /// Batches multiple device upserts into a single transaction.
+    ///
+    /// More efficient than calling [`upsert_device`](Self::upsert_device) repeatedly,
+    /// as all writes share one transaction.
     pub fn upsert_many<'a, I>(&self, devices: I) -> Result<(), LeaseDbError>
     where
         I: IntoIterator<Item = &'a Device>,
@@ -341,6 +422,9 @@ impl LeaseDb {
     }
 
     /// Explicitly removes a device from the database by its MAC address.
+    ///
+    /// Triggers `ON DELETE CASCADE`, automatically removing all associated rows
+    /// in `v4_leases`, `v6_leases`, `v6_prefixes`, `slaac_addrs`, and `seen_v4`.
     pub fn remove_device(&self, mac: MacAddr) -> Result<(), LeaseDbError> {
         let mac_str = mac.to_string();
         self.conn
@@ -353,6 +437,13 @@ impl LeaseDb {
     // -----------------------------------------------------------------------
 
     /// Loads the persisted state and returns a fully populated `State`.
+    ///
+    /// Reads all tables in sequence: `devices` → `v4_leases` → `v6_leases` →
+    /// `v6_prefixes` → `slaac_addrs` → `seen_v4`, reconstructing each device
+    /// and applying `DeviceUpdate` events for leases and addresses.
+    ///
+    /// Invalid rows (e.g., unparseable MACs or IPs) are silently skipped
+    /// to tolerate partial corruption or migration artifacts.
     pub fn load_table(&self) -> Result<State, LeaseDbError> {
         let mut table = State::new();
 
@@ -564,19 +655,29 @@ impl LeaseDb {
         Ok(table)
     }
 
-    /// Executes the VACUUM command to optimize the database file on disk.
+    /// Executes the `SQLite` `VACUUM` command to rebuild the database file,
+    /// reclaiming space from deleted entries and defragmenting pages.
+    ///
+    /// This is an expensive operation that rewrites the entire database file.
+    /// It should be run periodically during low-traffic windows.
     pub fn vacuum(&self) -> Result<(), LeaseDbError> {
-        debug!("Executando VACUUM no SQLite...");
+        debug!("Running VACUUM on SQLite...");
         self.conn
             .execute("VACUUM", [])
             .map_err(LeaseDbError::VacuumFailed)?;
         Ok(())
     }
 
-    /// Removes 'zombie' entries from the database.
+    /// Removes "zombie" entries from the database.
     ///
-    /// Zombies are defined as dynamic devices with no hostname, no active leases,
-    /// no static configurations, and no observed traffic.
+    /// A zombie is a `dynamic` device with:
+    /// - No hostname
+    /// - No active V4 or V6 leases
+    /// - No delegated V6 prefixes
+    /// - No SLAAC addresses
+    /// - No observed ARP/IPv4 entries
+    ///
+    /// Returns the number of deleted rows.
     pub fn prune_zombies(&self) -> Result<usize, LeaseDbError> {
         debug!("[db] Pruning zombie entries...");
         let rows = self.conn.execute(
@@ -593,7 +694,7 @@ impl LeaseDb {
         Ok(rows)
     }
 
-    /// Records a lease-related event in the persistent history.
+    /// Records a lease-related event in the persistent `lease_history` table.
     pub fn record_lease_event(
         &self,
         mac: MacAddr,
@@ -610,6 +711,8 @@ impl LeaseDb {
     }
 
     /// Retrieves the lease history for a specific device.
+    ///
+    /// Returns up to 100 most recent entries, ordered newest-first.
     pub fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>, LeaseDbError> {
         let mut stmt = self.conn.prepare(
             "SELECT ip, lease_type, action, timestamp FROM lease_history WHERE mac = ?1 ORDER BY timestamp DESC LIMIT 100"
@@ -636,22 +739,24 @@ impl LeaseDb {
 }
 
 /// Represents the type of action taken on a lease.
+///
+/// Used in the `lease_history` table for audit and troubleshooting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LeaseAction {
-    /// A new lease was assigned.
+    /// A new lease was assigned to a device.
     #[default]
     Assigned,
-    /// An existing lease was renewed.
+    /// An existing lease was renewed (DHCP REQUEST/Renew).
     Renewed,
-    /// A lease was explicitly released.
+    /// A lease was explicitly released (DHCP RELEASE).
     Released,
-    /// A lease expired naturally.
+    /// A lease expired naturally (timeout without renewal).
     Expired,
 }
 
 impl LeaseAction {
-    fn as_str(&self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Assigned => "assigned",
             Self::Renewed => "renewed",
@@ -675,15 +780,17 @@ impl std::str::FromStr for LeaseAction {
 }
 
 /// A single entry in the lease history.
+///
+/// Returned by [`LeaseDb::get_lease_history`].
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LeaseHistoryEntry {
-    /// The IP address involved.
+    /// The IP address involved in the event.
     pub ip: String,
-    /// The type of lease (e.g., "DHCPv4", "DHCPv6", "PD").
+    /// The type of lease (e.g., `"dhcpv4"`, `"dhcpv6"`, `"pd"`).
     pub lease_type: String,
-    /// The action performed.
+    /// The action that was performed.
     pub action: LeaseAction,
-    /// When the event occurred.
+    /// When the event occurred (UTC).
     pub timestamp: SystemTime,
 }
 
@@ -699,15 +806,21 @@ impl Default for LeaseHistoryEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers de conversão SystemTime <-> unix timestamp
+// SystemTime <-> Unix timestamp conversion helpers
 // ---------------------------------------------------------------------------
 
+/// Converts a `SystemTime` to a Unix timestamp (seconds since epoch).
+///
+/// Returns `0` for times before the Unix epoch (1970-01-01).
 pub(crate) fn system_time_to_unix(t: SystemTime) -> i64 {
     t.duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs().cast_signed())
         .unwrap_or(0)
 }
 
+/// Converts a Unix timestamp (seconds since epoch) to `SystemTime`.
+///
+/// Returns `UNIX_EPOCH` for zero or negative values.
 pub(crate) fn unix_to_system_time(unix: i64) -> SystemTime {
     if unix > 0 {
         UNIX_EPOCH + Duration::from_secs(unix.cast_unsigned())

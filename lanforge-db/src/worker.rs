@@ -1,3 +1,35 @@
+//! `DbWorker` — Synchronous persistence service.
+//!
+//! Runs on a dedicated thread, consuming events from the [`EventBus`](lanforge_core::bus::EventBus)
+//! via a [`SyncBusReceiver`](lanforge_core::service::SyncBusReceiver) and translating
+//! them into SQLite operations.
+//!
+//! ## Write Strategy
+//!
+//! The worker implements **trailing edge debounce** to protect SD cards from micro-writes:
+//!
+//! | Event | Action | Flush? |
+//! | :--- | :--- | :---: |
+//! | `DeviceUpdated` / `DeviceDiscovered` | Accumulate in `pending_upserts` HashMap | ❌ |
+//! | `DeviceExpired` / `DevicePurged` | Immediate `remove_device(mac)` | ✅ |
+//! | `DeviceTableDirty` | Full `save_table(snapshot)` | ✅ |
+//! | `DbVacuum` / `DbPrune` / `DbLogClean` | Maintenance operation | ✅ |
+//! | `Shutdown` | Final batch flush, then exit | ✅ |
+//!
+//! ## Batch Upsert
+//!
+//! Instead of writing each device individually, `DeviceUpdated` events are
+//! accumulated in a `HashMap<MacAddr, Arc<Device>>` and flushed as a single
+//! `upsert_many()` transaction — either when a non-device event arrives, when
+//! 2 seconds have elapsed since the last flush, or when the worker goes idle.
+//!
+//! ## Lifecycle
+//!
+//! 1. Opens `LeaseDb` and `LogDb`
+//! 2. Signals `DbReady` to unblock dependent services
+//! 3. Enters event loop with 200ms `recv_timeout`
+//! 4. On `Shutdown`: final flush and clean exit
+
 use crate::engine::LeaseDb;
 use crate::log_engine::LogDb;
 use lanforge_core::bus::LanforgeEvent;
@@ -13,6 +45,23 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
+/// A synchronous service that persists Lanforge state to SQLite.
+///
+/// Listens to the event bus, batches device updates, and flushes them
+/// to disk with debounce protection. Also manages transient event logs
+/// via `LogDb`.
+///
+/// # Example
+///
+/// ```ignore
+/// let worker = DbWorker::new(
+///     "/var/lib/lanforge/leases.db".into(),
+///     "/tmp/lanforge/logs.db".into(),
+///     context,
+/// );
+/// // Run on a dedicated thread:
+/// std::thread::spawn(|| worker.run(&bus_rx));
+/// ```
 pub struct DbWorker {
     db_path: PathBuf,
     log_db_path: PathBuf,
@@ -20,6 +69,9 @@ pub struct DbWorker {
 }
 
 impl DbWorker {
+    /// Creates a new `DbWorker` with the given database paths and context.
+    ///
+    /// The databases are **not** opened until [`run`](SyncService::run) is called.
     #[must_use]
     pub fn new(db_path: PathBuf, log_db_path: PathBuf, ctx: LanforgeContext) -> Self {
         Self {
@@ -49,6 +101,11 @@ impl LanforgeService for DbWorker {
 }
 
 impl SyncService for DbWorker {
+    /// Runs the main event loop on a dedicated thread.
+    ///
+    /// Opens both databases, signals `DbReady`, then enters a 200ms-polling
+    /// loop that dispatches events to SQLite operations. Exits on `Shutdown`
+    /// or when `ctx.is_running()` returns false.
     fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
         let db = LeaseDb::open(&self.db_path).map_err(|e| CoreError::Generic(e.to_string()))?;
         let log_db =
@@ -158,6 +215,12 @@ impl SyncService for DbWorker {
 }
 
 impl DbWorker {
+    /// Flushes all pending device upserts as a single batch transaction.
+    ///
+    /// Called when:
+    /// - A non-device event arrives (forces consistency before handling other events)
+    /// - 2 seconds have elapsed since the last flush (debounce timeout)
+    /// - The worker is shutting down (final flush)
     fn flush_batch(
         db: &LeaseDb,
         ctx: &LanforgeContext,

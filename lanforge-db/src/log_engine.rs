@@ -1,7 +1,26 @@
 //! `LogDb` — SQLite engine for transient system logs.
 //!
-//! Stores LanforgeEvents in a separate database (typically on tmpfs)
-//! to provide history for `log --follow` without SSD wear.
+//! Stores `LanforgeEvent`s in a separate database (typically on tmpfs/ramdisk)
+//! to provide history for `log --follow` without causing SD card wear.
+//!
+//! ## Design
+//!
+//! The `LogDb` is optimized for high-throughput, low-latency writes with minimal
+//! durability guarantees:
+//!
+//! | PRAGMA | Value | Rationale |
+//! | :--- | :--- | :--- |
+//! | `journal_mode` | `WAL` | Minimal write amplification |
+//! | `synchronous` | `OFF` | Data is volatile (ramdisk); loss is acceptable |
+//!
+//! ## Auto-Pruning
+//!
+//! Logs are automatically pruned using a dual-limit strategy:
+//!
+//! 1. **Time window:** Entries older than 24 hours are deleted
+//! 2. **Capacity cap:** Maximum 50,000 entries (prevents OOM on small ramdisks)
+//!
+//! Pruning runs at most once every 60 seconds to avoid overhead.
 
 use rusqlite::{Connection, params};
 use serde_json;
@@ -15,13 +34,26 @@ use tracing::info;
 use crate::LeaseDbError;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 
+/// A SQLite-backed log store for transient system events.
+///
+/// Designed for use on tmpfs/ramdisk where data loss on reboot is acceptable
+/// but high write throughput and low SD card wear are essential.
+///
+/// # Auto-Pruning
+///
+/// Automatically prunes logs older than 24 hours and caps the total at 50,000
+/// entries. Pruning is rate-limited to once per 60 seconds.
 pub struct LogDb {
     conn: Connection,
     last_prune: Cell<Instant>,
 }
 
 impl LogDb {
-    /// Opens (or creates) the log database.
+    /// Opens (or creates) the log database at the given path.
+    ///
+    /// Configures SQLite with `synchronous=OFF` and `journal_mode=WAL` for
+    /// maximum throughput on tmpfs/ramdisk. Creates the `system_logs` table
+    /// and its timestamp index if they don't exist.
     pub fn open(path: &Path) -> Result<Self, LeaseDbError> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -54,6 +86,9 @@ impl LogDb {
     }
 
     /// Records a new event in the log history.
+    ///
+    /// Serializes the `LanforgeEvent` to JSON and inserts it into `system_logs`.
+    /// Triggers auto-pruning if more than 60 seconds have elapsed since the last prune.
     pub fn record_log(&self, timed_event: &TimedEvent) -> Result<(), LeaseDbError> {
         let json = serde_json::to_string(&timed_event.event)
             .map_err(|e| LeaseDbError::Migration("event serialization".into(), e.to_string()))?;
@@ -91,6 +126,8 @@ impl LogDb {
     }
 
     /// Wipes all logged events from the database.
+    ///
+    /// Also resets the autoincrement counter by clearing `sqlite_sequence`.
     pub fn clear_logs(&self) -> Result<(), LeaseDbError> {
         self.conn.execute("DELETE FROM system_logs", [])?;
         self.conn
@@ -99,6 +136,9 @@ impl LogDb {
     }
 
     /// Retrieves the most recent log entries.
+    ///
+    /// Returns up to `limit` entries, ordered oldest-first (chronological)
+    /// for convenient display in UIs and log viewers.
     pub fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, LeaseDbError> {
         let mut stmt = self.conn.prepare(
             "SELECT timestamp, module, event_json FROM system_logs ORDER BY id DESC LIMIT ?1",
