@@ -1,12 +1,66 @@
-// ---------------------------------------------------------------------------
-// NeighborEvent — Typed structure for kernel neighbor events
-// ---------------------------------------------------------------------------
+//! Neighbor Discovery Protocol (NDP) event mapping.
+//!
+//! This module handles kernel-level neighbor discovery events received via
+//! netlink (`RTM_NEWNEIGH` / `RTM_DELNEIGH`) signals.
+//!
+//! # NDP Overview
+//!
+//! The Neighbor Discovery Protocol (NDP) is the IPv6 equivalent of ARP.
+//! It discovers and tracks which MAC addresses are using which IPv6 addresses
+//! on the local network segment.
+//!
+//! # Event Flow
+//!
+//! 1. **Kernel**: Emits netlink events when neighbor state changes
+//! 2. **Lanforge**: Receives events and wraps as [`NeighborEvent`]
+//! 3. **Mapping**: Converts to [`DeviceUpdate`](crate::state::DeviceUpdate) via
+//!    [`to_device_update`](NeighborEvent::to_device_update)
+//! 4. **State**: Updates are applied to the device table
+//!
+//! # Neighbor States
+//!
+//! | State     | Description                                    |
+//! |-----------|------------------------------------------------|
+//! | Added     | New neighbor entry or existing entry updated   |
+//! | Deleted   | Neighbor entry removed from kernel table       |
+//! | Failed    | Neighbor reached `NUD_FAILED` (unreachable)      |
+//!
+//! # SLAAC Detection
+//!
+//! When processing `Added` events for IPv6, the system attempts to detect
+//! SLAAC addresses by checking if the IPv6 address matches the current
+//! GUA or ULA prefix. Both EUI-64 and privacy-extension addresses are
+//! treated as SLAAC at the NDP layer.
 
 use std::net::{IpAddr, Ipv6Addr};
 
 use crate::{context::state::DeviceUpdate, identifiers::MacAddr, utils::ip_matches_prefix};
 
 /// A neighbor event (IPv4 or IPv6) observed via the kernel `RTM_NEWNEIGH` netlink signal.
+///
+/// This enum represents the raw events from the kernel's neighbor cache.
+/// Use [`to_device_update`](NeighborEvent::to_device_update) to convert
+/// these into higher-level device state updates.
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::ndp::NeighborEvent;
+/// use lanforge_core::identifiers::MacAddr;
+/// use std::net::Ipv6Addr;
+///
+/// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+/// let ip: Ipv6Addr = "fe80::1".parse().unwrap();
+///
+/// let event = NeighborEvent::Added {
+///     ip: ip.into(),
+///     mac,
+///     ifindex: 2,
+/// };
+///
+/// assert_eq!(event.ifindex(), 2);
+/// assert_eq!(event.mac(), Some(mac));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NeighborEvent {
     /// A neighbor entry was added or updated.
@@ -18,6 +72,8 @@ pub enum NeighborEvent {
     /// A neighbor entry was deleted from the kernel table.
     Deleted { ip: IpAddr, ifindex: u32 },
     /// A neighbor entry reached a FAILED state (`NUD_FAILED`).
+    ///
+    /// This indicates the neighbor is unreachable.
     Failed { ip: IpAddr, ifindex: u32 },
 }
 
@@ -47,6 +103,49 @@ impl NeighborEvent {
     }
 
     /// Maps the raw neighbor event into a higher-level [`DeviceUpdate`].
+    ///
+    /// # Mapping Logic
+    ///
+    /// | `NeighborEvent`      | `DeviceUpdate` (IPv6, matches prefix) | `DeviceUpdate` (IPv6, no match) | `DeviceUpdate` (IPv4) |
+    /// |--------------------|--------------------------------------|-------------------------------|---------------------|
+    /// | Added (IPv6)       | `SlaacObserved`                      | `NdpSeen`                     | —                   |
+    /// | Added (IPv4)       | —                                    | —                             | `ArpSeen`           |
+    /// | Deleted            | `IpDeleted`                          | —                             | `IpDeleted`         |
+    /// | Failed             | `IpOffline`                          | —                             | `IpOffline`         |
+    ///
+    /// # SLAAC Detection
+    ///
+    /// For IPv6 `Added` events, the address is checked against the provided
+    /// `gua_prefix` and `ula_prefix`. If it matches EITHER prefix, it's
+    /// considered a SLAAC observation. Otherwise, it's treated as generic
+    /// NDP activity (e.g., link-local probes, `DHCPv6` addresses).
+    ///
+    /// # Parameters
+    ///
+    /// - `gua_prefix`: The current Global Unicast prefix for the interface
+    /// - `ula_prefix`: The current Unique Local prefix for the interface
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use lanforge_core::ndp::NeighborEvent;
+    /// use lanforge_core::state::DeviceUpdate;
+    /// use lanforge_core::identifiers::MacAddr;
+    /// use std::net::Ipv6Addr;
+    ///
+    /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    /// let prefix: Ipv6Addr = "fd00::".parse().unwrap();
+    /// let slaac_ip: Ipv6Addr = "fd00::aabb:ccff:fedd:eeff".parse().unwrap();
+    ///
+    /// let event = NeighborEvent::Added {
+    ///     ip: slaac_ip.into(),
+    ///     mac,
+    ///     ifindex: 2,
+    /// };
+    ///
+    /// let update = event.to_device_update(None, Some(&prefix));
+    /// assert!(matches!(update, DeviceUpdate::SlaacObserved { .. }));
+    /// ```
     #[must_use]
     pub fn to_device_update(
         &self,

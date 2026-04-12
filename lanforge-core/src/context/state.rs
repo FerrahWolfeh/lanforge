@@ -1,7 +1,59 @@
 //! `State` — Central Lanforge device and interface state.
 //!
-//! This module replaces the old `DeviceTable` and is now integrated directly
-//! into the `LanforgeContext`.
+//! This module contains the core state storage and mutation logic for all
+//! discovered network devices and network interfaces.
+//!
+//! # Key Types
+//!
+//! | Type                | Description                                  |
+//! |---------------------|----------------------------------------------|
+//! | [`State`]           | Central device and interface state storage   |
+//! | [`DeviceUpdate`]    | All possible state mutation commands         |
+//! | [`FieldUpdate<T>`]  | Optional change specification (Set/Clear/NoChange) |
+//! | [`StaticEntry`]     | Manual device reservation record             |
+//! | [`LeaseTarget`]     | Identifies a specific lease type             |
+//! | [`InterfaceState`]  | Network interface IP configuration           |
+//! | [`StaticRegistry`]  | Validated static entry registry with collision detection |
+//!
+//! # State Structure
+//!
+//! The `State` struct contains:
+//!
+//! | Field              | Type                              | Description                    |
+//! |--------------------|-----------------------------------|--------------------------------|
+//! | `devices`          | `HashMap<MacAddr, Arc<Device>>`  | Main device table             |
+//! | `duid_index`       | `HashMap<Duid, MacAddr>`         | DUID → MAC lookup             |
+//! | `static_entries`   | `HashMap<MacAddr, StaticEntry>`   | Manual reservations           |
+//! | `ndp_cache`        | `HashMap<Ipv6Addr, (MacAddr, Time)>` | NDP neighbor cache        |
+//! | `orphaned_v6`      | `HashMap<Ipv6Addr, (Duid, IAID, Time)>` | Unresolved IPv6 leases |
+//! | `interface_ips`    | `HashMap<u32, InterfaceState>`    | Interface IP configurations   |
+//! | `name_index`       | `HashMap<String, MacAddr>`        | Hostname → MAC lookup         |
+//! | `ip_index`         | `HashMap<IpAddr, MacAddr>`        | IP → MAC lookup (DNS hot path)|
+//!
+//! # Update Flow
+//!
+//! All state mutations go through [`State::apply_update`], which dispatches
+//! to specific handlers based on the [`DeviceUpdate`] variant.
+//!
+//! # Example
+//!
+//! ```rust
+//! use lanforge_core::context::state::{State, DeviceUpdate};
+//! use lanforge_core::identifiers::MacAddr;
+//! use std::time::{Duration, SystemTime};
+//!
+//! let mut state = State::new();
+//! let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+//!
+//! let update = DeviceUpdate::V4LeaseGranted {
+//!     mac,
+//!     ip: "192.168.1.10".parse().unwrap(),
+//!     expires: SystemTime::now() + Duration::from_secs(3600),
+//! };
+//!
+//! let changed = state.apply_update(update);
+//! assert!(changed);
+//! ```
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,6 +73,33 @@ use crate::identifiers::{Duid, MacAddr};
 // FieldUpdate
 // ---------------------------------------------------------------------------
 
+/// Represents an optional field modification in a [`DeviceUpdate::CliHostUpdated`].
+///
+/// This enum allows partial updates — you can change one field without
+/// affecting others.
+///
+/// # Variants
+///
+/// | Variant    | Behavior                        |
+/// |------------|---------------------------------|
+/// | `NoChange` | Leave the field as-is           |
+/// | `Clear`    | Remove/reset the field          |
+/// | `Set(T)`   | Replace with a new value        |
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::state::FieldUpdate;
+///
+/// let update: FieldUpdate<String> = FieldUpdate::Set("new-hostname".to_string());
+/// assert!(matches!(update, FieldUpdate::Set(_)));
+///
+/// // From Option
+/// let from_some: FieldUpdate<i32> = Some(42).into();
+/// let from_none: FieldUpdate<i32> = None.into();
+/// assert!(matches!(from_some, FieldUpdate::Set(42)));
+/// assert!(matches!(from_none, FieldUpdate::Clear));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FieldUpdate<T> {
     #[serde(rename = "no_change")]
@@ -42,6 +121,10 @@ impl<T> From<Option<T>> for FieldUpdate<T> {
 // StaticEntry
 // ---------------------------------------------------------------------------
 
+/// A manual device reservation stored in the state.
+///
+/// Created when a device is configured via CLI or TOML.
+/// Tracks the relationship between MAC, hostname, and static IPs.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StaticEntry {
     pub mac: MacAddr,
@@ -54,10 +137,17 @@ pub struct StaticEntry {
 // LeaseTarget
 // ---------------------------------------------------------------------------
 
+/// Identifies which type of lease to operate on.
+///
+/// Used by `LeaseReleased` and `LeaseExpired` events to specify
+/// the target lease type (`IPv4`, `IPv6 IA_NA`, or `IPv6 IA_PD`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum LeaseTarget {
+    /// `DHCPv4` lease.
     V4,
+    /// `DHCPv6` `IA_NA` (Non-temporary Address) lease.
     V6 { iaid: u32 },
+    /// `DHCPv6` `IA_PD` (Prefix Delegation) lease.
     V6Prefix { iaid: u32 },
 }
 
@@ -65,13 +155,24 @@ pub enum LeaseTarget {
 // InterfaceState
 // ---------------------------------------------------------------------------
 
+/// Represents the IP configuration of a network interface.
+///
+/// Tracked by interface index (ifindex). The GUA and ULA prefixes
+/// extracted from this state are used for SLAAC detection and
+/// address resolution.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InterfaceState {
+    /// IPv4 address and prefix length.
     pub v4: Option<(Ipv4Addr, u8)>,
+    /// Link-local IPv6 address (`fe80::/10`).
     pub link_local: Option<Ipv6Addr>,
+    /// Global Unicast Address prefix (`2000::/3`).
     pub gua: Option<Ipv6Addr>,
+    /// Unique Local Address prefix (`fc00::/7`).
     pub ula: Option<Ipv6Addr>,
+    /// GUA preferred lifetime in seconds.
     pub gua_preferred: u32,
+    /// GUA valid lifetime in seconds.
     pub gua_valid: u32,
 }
 
@@ -79,13 +180,74 @@ pub struct InterfaceState {
 // DeviceUpdate
 // ---------------------------------------------------------------------------
 
+/// A state mutation command for the device table.
+///
+/// This enum represents all possible ways to modify device and interface state.
+/// Submit via [`LanforgeContext::apply`](crate::context::LanforgeContext::apply)
+/// to apply changes and trigger event broadcasting.
+///
+/// # Categories
+///
+/// ## Lease Management
+/// | Variant              | Description                           |
+/// |----------------------|---------------------------------------|
+/// | `V4LeaseGranted`     | Assign/renew a `DHCPv4` lease           |
+/// | `V6LeaseGranted`     | Assign/renew a `DHCPv6` `IA_NA` lease     |
+/// | `V6PrefixAssigned`   | Delegate a `DHCPv6` `IA_PD` prefix        |
+/// | `LeaseReleased`      | Manually release a lease              |
+///
+/// ## Neighbor Discovery
+/// | Variant              | Description                           |
+/// |----------------------|---------------------------------------|
+/// | `NdpSeen`            | IPv6 neighbor observed via NDP        |
+/// | `ArpSeen`            | IPv4 neighbor observed via ARP        |
+/// | `SlaacObserved`      | SLAAC address observed                |
+/// | `SlaacSynced`        | Full SLAAC address synchronization    |
+/// | `SlaacCleared`       | Clear all SLAAC addresses             |
+///
+/// ## Hostname
+/// | Variant              | Description                           |
+/// |----------------------|---------------------------------------|
+/// | `DhcpHostnameHint`   | Hostname from DHCP Option 12          |
+/// | `MdnsHostnameHint`   | Hostname from mDNS                    |
+///
+/// ## DUID
+/// | Variant              | Description                           |
+/// |----------------------|---------------------------------------|
+/// | `DuidAssociated`     | Link a DUID to a MAC address          |
+///
+/// ## CLI/Manual
+/// | Variant              | Description                           |
+/// |----------------------|---------------------------------------|
+/// | `CliHostUpdated`     | Add/update a static device entry      |
+/// | `HostRemoved`        | Explicitly remove a device            |
+///
+/// ## IP Management
+/// | Variant              | Description                           |
+/// |----------------------|---------------------------------------|
+/// | `IpDeleted`          | Remove a specific IP from state       |
+/// | `IpOffline`          | Mark an IP as unreachable (`NUD_FAILED`)|
+///
+/// ## Interface
+/// | Variant              | Description                           |
+/// |----------------------|---------------------------------------|
+/// | `InterfaceIpsChanged`| Update interface IP configuration     |
+///
+/// ## Maintenance
+/// | Variant              | Description                           |
+/// |----------------------|---------------------------------------|
+/// | `PruneZombies`       | Remove unworthy dynamic devices       |
+/// | `RebuildDnsIndices`  | Rebuild O(1) DNS lookup caches        |
 #[derive(Debug, Clone)]
 pub enum DeviceUpdate {
+    /// Assign or renew a `DHCPv4` lease for a device.
     V4LeaseGranted {
         mac: MacAddr,
         ip: Ipv4Addr,
         expires: SystemTime,
     },
+    /// Assign or renew a `DHCPv6` `IA_NA` lease for a device.
+    /// MAC is optional — the DUID can be used to resolve it later.
     V6LeaseGranted {
         mac: Option<MacAddr>,
         duid: Duid,
@@ -93,6 +255,7 @@ pub enum DeviceUpdate {
         ip: Ipv6Addr,
         expires: SystemTime,
     },
+    /// Delegate an IPv6 prefix via `DHCPv6` `IA_PD`.
     V6PrefixAssigned {
         mac: Option<MacAddr>,
         duid: Duid,
@@ -101,35 +264,29 @@ pub enum DeviceUpdate {
         len: u8,
         expires: SystemTime,
     },
+    /// Perform a full SLAAC address synchronization for a device.
+    /// Replaces all existing SLAAC addresses with the provided list.
     SlaacSynced {
         mac: MacAddr,
         addresses: Vec<Ipv6Addr>,
     },
-    SlaacObserved {
-        mac: MacAddr,
-        addr: Ipv6Addr,
-    },
-    NdpSeen {
-        mac: MacAddr,
-        ip: Ipv6Addr,
-    },
-    ArpSeen {
-        mac: MacAddr,
-        ip: Ipv4Addr,
-    },
-    DhcpHostnameHint {
-        mac: MacAddr,
-        hostname: String,
-    },
-    MdnsHostnameHint {
-        mac: MacAddr,
-        hostname: String,
-    },
+    /// Record a single SLAAC address observation.
+    SlaacObserved { mac: MacAddr, addr: Ipv6Addr },
+    /// Record an IPv6 neighbor observation via NDP.
+    NdpSeen { mac: MacAddr, ip: Ipv6Addr },
+    /// Record an IPv4 neighbor observation via ARP.
+    ArpSeen { mac: MacAddr, ip: Ipv4Addr },
+    /// Update a device's hostname based on a DHCP hint.
+    DhcpHostnameHint { mac: MacAddr, hostname: String },
+    /// Update a device's hostname based on an mDNS hint.
+    MdnsHostnameHint { mac: MacAddr, hostname: String },
+    /// Link a DUID to a MAC address for `DHCPv6` correlation.
     DuidAssociated {
         mac: Option<MacAddr>,
         duid: Duid,
         iaid: u32,
     },
+    /// Add or update a static device entry from the CLI.
     CliHostUpdated {
         mac: MacAddr,
         hostname: FieldUpdate<String>,
@@ -137,27 +294,21 @@ pub enum DeviceUpdate {
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
         origin: Origin,
     },
-    SlaacCleared {
-        mac: MacAddr,
-    },
-    HostRemoved {
-        mac: MacAddr,
-    },
-    LeaseReleased {
-        mac: MacAddr,
-        target: LeaseTarget,
-    },
-    IpDeleted {
-        ip: IpAddr,
-    },
-    IpOffline {
-        ip: IpAddr,
-    },
-    InterfaceIpsChanged {
-        ifindex: u32,
-        state: InterfaceState,
-    },
+    /// Clear all SLAAC addresses for a device.
+    SlaacCleared { mac: MacAddr },
+    /// Explicitly remove a device from the table.
+    HostRemoved { mac: MacAddr },
+    /// Release a specific lease (`V4`, `V6`, or `V6Prefix`).
+    LeaseReleased { mac: MacAddr, target: LeaseTarget },
+    /// Remove a specific IP address from device state.
+    IpDeleted { ip: IpAddr },
+    /// Mark a device as unreachable via a specific IP.
+    IpOffline { ip: IpAddr },
+    /// Update the IP configuration of a network interface.
+    InterfaceIpsChanged { ifindex: u32, state: InterfaceState },
+    /// Trigger pruning of unworthy dynamic devices (zombie cleanup).
     PruneZombies,
+    /// Trigger a full rebuild of the DNS lookup indices.
     RebuildDnsIndices,
 }
 
@@ -165,15 +316,56 @@ pub enum DeviceUpdate {
 // State
 // ---------------------------------------------------------------------------
 
+/// Central Lanforge device and interface state storage.
+///
+/// This is the primary data structure holding all device information.
+/// It is designed to be protected by a `parking_lot::RwLock` for concurrent access.
+///
+/// # Tables
+///
+/// | Table              | Key               | Value                    | Purpose                      |
+/// |--------------------|-------------------|--------------------------|------------------------------|
+/// | `devices`          | MAC address       | `Arc<Device>`            | Main device records          |
+/// | `duid_index`       | DUID              | MAC address              | DUID → MAC resolution        |
+/// | `static_entries`   | MAC address       | `StaticEntry`            | Manual reservations          |
+/// | `ndp_cache`        | IPv6 address      | (MAC, timestamp)         | NDP neighbor observations    |
+/// | `orphaned_v6`      | IPv6 address      | (DUID, IAID, expiry)     | Unresolved IPv6 leases       |
+/// | `interface_ips`    | ifindex (u32)     | `InterfaceState`         | Interface configurations     |
+/// | `name_index`       | hostname (lower)  | MAC address              | DNS hot-path: name → MAC     |
+/// | `ip_index`         | IP address        | MAC address              | DNS hot-path: IP → MAC       |
+///
+/// # Performance
+///
+/// - DNS lookups (`name_index`, `ip_index`) are O(1) and rebuilt on demand
+/// - Device lookups by MAC, IP, hostname, or DUID are all O(1)
+/// - Updates unindex/reindex the affected device to maintain consistency
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::context::state::State;
+///
+/// let mut state = State::new();
+/// assert_eq!(state.devices.len(), 0);
+/// assert_eq!(state.devices.len(), state.stats().total_devices);
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct State {
+    /// Main device table: MAC → Device.
     pub devices: HashMap<MacAddr, Arc<Device>>,
+    /// DUID to MAC index for `DHCPv6` correlation.
     pub duid_index: HashMap<Duid, MacAddr>,
+    /// Manual device reservations from CLI/TOML.
     pub static_entries: HashMap<MacAddr, StaticEntry>,
+    /// NDP (Neighbor Discovery Protocol) cache for IPv6 link-local observations.
     pub ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
+    /// IPv6 leases that haven't been resolved to a MAC yet (waiting for DUID association).
     pub orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
+    /// Network interface IP configurations indexed by ifindex.
     pub interface_ips: HashMap<u32, InterfaceState>,
+    /// DNS hot-path: hostname (lowercase) → MAC.
     pub name_index: HashMap<String, MacAddr>,
+    /// DNS hot-path: IP address → MAC.
     pub ip_index: HashMap<IpAddr, MacAddr>,
 }
 

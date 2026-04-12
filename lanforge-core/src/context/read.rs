@@ -1,6 +1,45 @@
-// ---------------------------------------------------------------------------
-// Read Operations
-// ---------------------------------------------------------------------------
+//! Read-only operations on the device state.
+//!
+//! This module implements all query methods on [`LanforgeContext`](super::LanforgeContext).
+//! These operations acquire a read lock on the state and can be executed
+//! concurrently by multiple threads.
+//!
+//! # Query Types
+//!
+//! | Method                | Lookup By     | Returns          |
+//! |-----------------------|---------------|------------------|
+//! | `get_device`          | MAC address   | `Option<Device>` |
+//! | `get_by_hostname`     | Hostname      | `Option<Device>` |
+//! | `get_by_ip`           | IP address    | `Option<Device>` |
+//! | `get_by_duid`         | DUID          | `Option<Device>` |
+//! | `get_mac_by_ip`       | IP address    | `Option<MacAddr>`|
+//! | `all_devices`         | —             | `Vec<Device>`    |
+//!
+//! # Prefix Queries
+//!
+//! | Method                    | Description                        |
+//! |---------------------------|------------------------------------|
+//! | `is_prefix_delegated`     | Check if a prefix is in use        |
+//! | `get_interface_gua_at`    | Get GUA prefix for an interface    |
+//! | `get_interface_prefixes_opt` | Get GUA and ULA for interface   |
+//!
+//! # Example
+//!
+//! ```rust
+//! use lanforge_core::context::LanforgeContext;
+//! use lanforge_core::state::State;
+//! use lanforge_core::bus::EventBus;
+//! use lanforge_core::identifiers::MacAddr;
+//! use std::sync::Arc;
+//!
+//! let bus = Arc::new(EventBus::new());
+//! let ctx = LanforgeContext::new(bus, State::new(), None);
+//!
+//! let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+//! if let Some(device) = ctx.get_device(&mac) {
+//!     println!("Found device: {}", device.display_hostname());
+//! }
+//! ```
 
 use std::{
     net::{IpAddr, Ipv6Addr},

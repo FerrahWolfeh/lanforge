@@ -1,6 +1,66 @@
-// ---------------------------------------------------------------------------
-// Write & Publish Operations
-// ---------------------------------------------------------------------------
+//! Write & publish operations on the device state.
+//!
+//! This module implements all state mutation methods on [`LanforgeContext`](super::LanforgeContext).
+//! These operations acquire a **write lock** on the state and are exclusive.
+//!
+//! # Core Method: `apply`
+//!
+//! The primary entry point for all state changes. It:
+//! 1. Acquires a write lock on the state
+//! 2. Applies the [`DeviceUpdate`](crate::state::DeviceUpdate)
+//! 3. Computes resulting [`LanforgeEvent`](crate::bus::LanforgeEvent)s
+//! 4. Publishes events to the bus
+//! 5. Marks the table as dirty (triggers DB flush)
+//!
+//! # Convenience Methods
+//!
+//! | Method                     | Purpose                          |
+//! |----------------------------|----------------------------------|
+//! | `allocate_v4_lease`        | Grant a `DHCPv4` lease             |
+//! | `grant_v6_lease`           | Grant a `DHCPv6` (`IA_NA`) lease     |
+//! | `delegate_v6_prefix`       | Delegate an `IPv6` prefix (`IA_PD`)  |
+//! | `associate_duid`           | Link a `DUID` to a `MAC`             |
+//! | `update_hostname`          | Set or hint a hostname           |
+//! | `track_ndp_neighbor`       | Record an `NDP` observation        |
+//! | `track_arp_neighbor`       | Record an ARP observation        |
+//! | `observe_slaac`            | Record a SLAAC address           |
+//! | `sync_slaac`               | Full SLAAC sync for a device     |
+//! | `add_static_device`        | Add/update a static reservation  |
+//! | `release_v4_lease`         | Release a `DHCPv4` lease           |
+//! | `release_v6_lease`         | Release a `DHCPv6` lease           |
+//! | `release_v6_prefix`        | Release a delegated prefix       |
+//! | `remove_host`              | Explicitly remove a device       |
+//! | `delete_ip`                | Remove a specific IP             |
+//! | `expire_stale`             | Run garbage collection           |
+//! | `rebuild_dns_indices`      | Rebuild DNS lookup caches        |
+//!
+//! # Lifecycle Control
+//!
+//! | Method           | Purpose                          |
+//! |------------------|----------------------------------|
+//! | `terminate`      | Set shutdown flag                |
+//! | `set_db_ready`   | Mark database as initialized     |
+//! | `set_if_ready`   | Mark interfaces as configured    |
+//!
+//! # Example
+//!
+//! ```rust
+//! use lanforge_core::context::LanforgeContext;
+//! use lanforge_core::state::State;
+//! use lanforge_core::bus::EventBus;
+//! use lanforge_core::identifiers::MacAddr;
+//! use std::sync::Arc;
+//! use std::time::{Duration, SystemTime};
+//!
+//! let bus = Arc::new(EventBus::new());
+//! let ctx = LanforgeContext::new(bus, State::new(), None);
+//!
+//! let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+//! let ip = "192.168.1.10".parse().unwrap();
+//! let expires = SystemTime::now() + Duration::from_secs(3600);
+//!
+//! ctx.allocate_v4_lease(mac, ip, expires);
+//! ```
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -36,7 +96,46 @@ impl LanforgeContext {
     }
 
     /// Performs a write operation on the table and publishes events to the bus.
-    /// This is the primary entry point for all system state mutations.
+    ///
+    /// This is the **primary entry point** for all system state mutations.
+    ///
+    /// # Flow
+    ///
+    /// 1. Resolves the MAC address from the update (or from IP index for IpOffline/IpDeleted)
+    /// 2. Captures pre-update state (online status, prefix state)
+    /// 3. Applies the update to the internal state
+    /// 4. Computes resulting events (`DeviceDiscovered`, `DeviceUpdated`, `StatusChanged`)
+    /// 5. Publishes all events to the bus
+    /// 6. Publishes `DeviceTableDirty` to signal a DB flush is needed
+    ///
+    /// # Returns
+    ///
+    /// `true` if the state was actually changed, `false` if the update was a no-op
+    /// (e.g., renewing an existing lease with the same parameters).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use lanforge_core::context::LanforgeContext;
+    /// use lanforge_core::state::{DeviceUpdate, State};
+    /// use lanforge_core::bus::EventBus;
+    /// use lanforge_core::identifiers::MacAddr;
+    /// use std::sync::Arc;
+    /// use std::time::{Duration, SystemTime};
+    ///
+    /// let bus = Arc::new(EventBus::new());
+    /// let ctx = LanforgeContext::new(bus, State::new(), None);
+    ///
+    /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    /// let update = DeviceUpdate::V4LeaseGranted {
+    ///     mac,
+    ///     ip: "192.168.1.10".parse().unwrap(),
+    ///     expires: SystemTime::now() + Duration::from_secs(3600),
+    /// };
+    ///
+    /// let changed = ctx.apply(&update);
+    /// assert!(changed); // First time, should be true
+    /// ```
     #[must_use]
     pub fn apply(&self, update: &DeviceUpdate) -> bool {
         let mut state = self.inner.state.write();
@@ -300,7 +399,25 @@ impl LanforgeContext {
     ///
     /// This method identifies expired leases and stale devices, removes them from
     /// the table, and publishes granular `DeviceUpdated` events for each change.
-    /// Triggers the background garbage collection process (alias for `trigger_garbage_collection`).
+    ///
+    /// # Garbage Collection Rules
+    ///
+    /// - `DHCPv4` leases past their expiry → removed, `LeaseExpired` event
+    /// - `DHCPv6` `IA_NA` leases past their expiry → removed, `LeaseExpired` event
+    /// - `DHCPv6` `IA_PD` prefixes past their expiry → removed, `LeaseExpired` event
+    /// - Dynamic devices with no leases, no prefixes, and no activity for 7 days → removed
+    /// - `NDP` cache entries older than 24 hours → purged
+    /// - Orphaned `IPv6` leases past expiry → purged
+    ///
+    /// # Events Published
+    ///
+    /// For each expired lease: `DeviceUpdated { change: LeaseExpired { .. } }`
+    /// For each removed device: `DeviceUpdated { change: HostRemoved }`
+    /// If any changes: `DeviceTableDirty`
+    ///
+    /// # Alias
+    ///
+    /// This is an alias for `trigger_garbage_collection`.
     pub fn expire_stale(&self) {
         let dead_leases = {
             let mut state = self.inner.state.write();

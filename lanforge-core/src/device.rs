@@ -1,3 +1,26 @@
+//! Network device data structures.
+//!
+//! This module defines the core types representing network devices and their state:
+//!
+//! - **[`Device`]**: The central data structure for a discovered/managed network device.
+//! - **[`Origin`]**: Administrative source of a device's configuration.
+//! - **[`Hostname`]** / **[`HostnameOrigin`]**: Hostname with discovery source tracking.
+//! - **[`IPv4State`]** / **[`IPv6State`]**: IP connectivity state for a device.
+//! - **[`V4Lease`]** / **[`V6Lease`]** / **[`V6PrefixLease`]**: DHCP lease representations.
+//! - **[`Ipv6AddrOrSuffix`]**: Full IPv6 address or 64-bit Interface ID (for prefix-flexible addresses).
+//! - **[`IpClassification`]** / **[`Ipv6Prefix`]**: IPv6 address categorization and prefix handling.
+//! - **[`LearningMethod`]**: How a device was discovered or configured.
+//!
+//! # Device Lifecycle
+//!
+//! Devices start as [`Device::new`] with just a MAC address. As network events occur
+//! (DHCP leases, NDP/ARP observations, mDNS hints), the device accumulates state
+//! (IPs, hostnames, DUIDs) via [`DeviceUpdate`](crate::state::DeviceUpdate) applied
+//! through [`LanforgeContext`](crate::context::LanforgeContext).
+//!
+//! A device becomes "worthy" of inclusion in the device table when it has meaningful
+//! information (hostname, IP, or static config).
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -47,6 +70,32 @@ where
 /// The administrative source of a device's configuration.
 ///
 /// This determines the priority and persistence of the device's settings.
+/// Higher-priority origins override lower-priority ones during state conflicts.
+///
+/// # Priority Order (lowest to highest)
+///
+/// 1. **Dynamic** — Auto-discovered (DHCP, ARP); lowest priority, may be pruned
+/// 2. **External** — Configured via HTTP API (pre-registration)
+/// 3. **Cli** — Configured or overridden via CLI control interface
+/// 4. **Toml** — Manually configured in `lanforge.toml`; highest persistence
+///
+/// # Symbols
+///
+/// Each origin has a display symbol for CLI/UI rendering:
+/// - `★` = Toml (static)
+/// - `·` = Cli (managed)
+/// - `ⓔ` = External (API)
+/// - `–` = Dynamic (auto)
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::device::Origin;
+///
+/// assert!(Origin::Toml.is_static());
+/// assert!(!Origin::Dynamic.is_static());
+/// assert_eq!(Origin::Cli.symbol(), "·");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Origin {
     /// Configured manually via the `lanforge.toml` file.
@@ -105,6 +154,17 @@ impl FromStr for Origin {
 // ---------------------------------------------------------------------------
 
 /// The discovery source of a hostname, defining its precedence.
+///
+/// Hostnames from higher-priority sources override lower-priority ones.
+///
+/// # Priority (lowest to highest)
+///
+/// | Origin    | Value | Source                           |
+/// |-----------|-------|----------------------------------|
+/// | None      | 0     | No hostname assigned             |
+/// | Mdns      | 1     | Multicast DNS discovery          |
+/// | Dhcp      | 2     | DHCP Option 12 (v4) or v6 hint   |
+/// | Static    | 3     | Manual config (CLI/TOML/API)     |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum HostnameOrigin {
     /// No hostname discovered or assigned.
@@ -119,6 +179,20 @@ pub enum HostnameOrigin {
 }
 
 /// Represents a device's hostname with its origin for priority resolution.
+///
+/// This type tracks not just the name itself, but where it came from,
+/// allowing the system to prefer DHCP hostnames over mDNS, and static
+/// overrides over both.
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::device::{Hostname, HostnameOrigin};
+///
+/// let hostname = Hostname::from("my-laptop");
+/// assert_eq!(hostname.origin, HostnameOrigin::Static);
+/// assert_eq!(hostname.display(), "my-laptop");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Hostname {
     /// The actual name string.
@@ -170,6 +244,10 @@ impl fmt::Display for Hostname {
 }
 
 /// Represents an active `DHCPv4` lease.
+///
+/// Contains the assigned IPv4 address and the precise expiration time.
+/// When `expires` passes, the lease is considered invalid and will be
+/// removed during the next [`expire_stale`](crate::context::state::State::expire_stale) run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V4Lease {
     /// The assigned IPv4 address.
@@ -179,12 +257,15 @@ pub struct V4Lease {
     pub expires: SystemTime,
 }
 
-/// Represents an active `DHCPv6` `IA_NA` (Address) lease.
+/// Represents an active `DHCPv6` `IA_NA` (Non-temporary Address) lease.
+///
+/// `IA_NA` leases are the standard IPv6 address assignments in `DHCPv6`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V6Lease {
     /// The assigned IPv6 address.
     pub ip: Ipv6Addr,
     /// The Identity Association Identifier from the client.
+    /// IAIDs allow a single client to have multiple address assignments.
     pub iaid: u32,
     /// The precise moment when this lease will expire.
     #[serde(serialize_with = "serialize_time")]
@@ -192,11 +273,13 @@ pub struct V6Lease {
 }
 
 /// Represents an active `DHCPv6` `IA_PD` (Prefix Delegation) lease.
+///
+/// `IA_PD` is used to delegate entire prefixes to downstream clients (e.g., routers).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V6PrefixLease {
     /// The delegated IPv6 prefix.
     pub prefix: Ipv6Addr,
-    /// The prefix length (e.g., 60).
+    /// The prefix length (e.g., 60, 64).
     pub len: u8,
     /// The Identity Association Identifier from the client.
     pub iaid: u32,
@@ -206,6 +289,8 @@ pub struct V6PrefixLease {
 }
 
 /// Represents the current IPv4 configuration of a device.
+///
+/// A device can have either a static address, a dynamic DHCP lease, or no address at all.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IPv4State {
     /// A manually configured static IPv4 address.
@@ -229,14 +314,26 @@ impl IPv4State {
 
 /// Represents a specific IPv6 address state for a device.
 ///
-/// A single device may have multiple IPv6 states (e.g., a SLAAC address and a `DHCPv6` lease).
+/// A single device may have multiple IPv6 states simultaneously:
+/// - A SLAAC address (autoconfigured from router advertisements)
+/// - A `DHCPv6` lease (explicitly assigned)
+/// - A static address (manually configured)
+///
+/// # Example
+///
+/// A typical dual-stack device might have:
+/// - `IPv6State::Slaac(fd00::aabb:ccff:fedd:eeff)` — ULA via SLAAC
+/// - `IPv6State::Slaac(2001:db8::aabb:ccff:fedd:eeff)` — GUA via SLAAC
+/// - `IPv6State::Dynamic(...)` — `DHCPv6` lease
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IPv6State {
     /// A manually configured static address or suffix.
+    /// Suffixes are resolved against the current global prefix.
     Static(Ipv6AddrOrSuffix),
     /// An address assigned via a dynamic `DHCPv6` lease (`IA_NA`).
     Dynamic(V6Lease),
     /// An address observed being used via SLAAC (Stateless Address Autoconfiguration).
+    /// These are learned from NDP/neighbor discovery events.
     Slaac(Ipv6Addr),
 }
 
@@ -262,7 +359,28 @@ impl IPv6State {
 /// Represents either a complete IPv6 address or a 64-bit Interface ID (suffix).
 ///
 /// Suffixes are useful when the global prefix changes but the device's
-/// identifier remains constant.
+/// identifier remains constant. This is common with ULA prefixes where
+/// only the lower 64 bits (the Interface ID) are device-specific.
+///
+/// # Parsing Rules
+///
+/// - If the string is a valid `Ipv6Addr` and the first 64 bits are zero → `Suffix`
+/// - If it's a valid `Ipv6Addr` with non-zero prefix bits → `Full`
+/// - If it's a short string (e.g., "1", "beef") that parses as lower bits → `Suffix`
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::device::Ipv6AddrOrSuffix;
+///
+/// // Full address
+/// let full = Ipv6AddrOrSuffix::parse("fd00::1").unwrap();
+/// assert!(matches!(full, Ipv6AddrOrSuffix::Full(_)));
+///
+/// // Suffix (only interface ID)
+/// let suffix = Ipv6AddrOrSuffix::parse("aabb:ccff:fedd:eeff").unwrap();
+/// assert!(matches!(suffix, Ipv6AddrOrSuffix::Suffix(_)));
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Ipv6AddrOrSuffix {
     /// A complete 128-bit IPv6 address.
@@ -364,6 +482,30 @@ impl fmt::Display for Ipv6AddrOrSuffix {
 ///
 /// Lower values have higher priority in sorting and display.
 /// ULA (Unique Local Address) has the highest priority for local consistency.
+///
+/// # Priority Table
+///
+/// | Classification | Score | Range           | Description                        |
+/// |----------------|-------|-----------------|------------------------------------|
+/// | `Ula`            | 0     | `fc00::/7`      | Unique Local Address (highest)     |
+/// | `Ipv4`           | 1     | —               | Standard IPv4 address              |
+/// | `Gua`            | 2     | `2000::/3`      | Global Unicast Address             |
+/// | `LinkLocal`      | 3     | `fe80::/10`     | Link-local address                 |
+/// | `Loopback`       | 4     | `127.0.0.1`/`::1` | Local loopback                   |
+/// | `Other`          | 10    | —               | Unknown or non-categorized (lowest)|
+///
+/// # Example
+///
+/// ```rust
+/// use std::net::IpAddr;
+/// use lanforge_core::device::{classify_ip, IpClassification};
+///
+/// let ula = "fd00::1".parse::<IpAddr>().unwrap();
+/// assert_eq!(classify_ip(&ula), IpClassification::Ula);
+///
+/// let ipv4 = "192.168.1.1".parse::<IpAddr>().unwrap();
+/// assert_eq!(classify_ip(&ipv4), IpClassification::Ipv4);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IpClassification {
     /// IPv6 Unique Local Address (`fc00::/7`).
@@ -477,38 +619,98 @@ impl Ipv6Prefix {
 
 /// Represents a network device discovered and managed by Lanforge.
 ///
-/// This is the central data structure in the `DeviceTable`, containing identity,
-/// addressing, and persistence metadata.
+/// This is the central data structure in the [`State`](crate::state::State), containing
+/// identity, addressing, and persistence metadata for each network device.
+///
+/// # Fields
+///
+/// | Field           | Description                                     |
+/// |-----------------|-------------------------------------------------|
+/// | `mac`           | Primary identifier (MAC address)                |
+/// | `hostname`      | Current hostname with origin tracking           |
+/// | `origin`        | Configuration source (static/dynamic/CLI/API)   |
+/// | `managed_at`    | When the device was first manually configured   |
+/// | `v4`            | Current IPv4 state (static, DHCP, or none)      |
+/// | `v6`            | List of IPv6 states (SLAAC, `DHCPv6`, static)     |
+/// | `v6_prefixes`   | Delegated IPv6 prefixes (`DHCPv6-PD`)             |
+/// | `seen_v4`       | IPv4 addresses observed via ARP/Netlink         |
+/// | `last_seen`     | Last time the device was observed on the network|
+/// | `duid`          | `DHCPv6` Unique Identifier (if known)             |
+/// | `dns_fallback`  | Auto-generated DNS name (e.g., `host-aa11bb`)   |
+///
+/// # Lifecycle
+///
+/// 1. **Creation**: Device starts with only a MAC address via [`Device::new`]
+/// 2. **Accumulation**: Gains state through network events (leases, NDP, mDNS)
+/// 3. **Worthiness**: Becomes "worthy" when it has hostname, IP, or static config
+/// 4. **Expiry**: Dynamic devices without activity for 7 days are pruned
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::device::Device;
+/// use lanforge_core::identifiers::MacAddr;
+///
+/// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+/// let device = Device::new(mac);
+/// assert_eq!(device.mac, mac);
+/// assert!(!device.is_worthy()); // Not yet meaningful
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     /// The primary identifier: MAC address.
     pub mac: MacAddr,
     /// The device's hostname and its discovery origin.
+    ///
+    /// Defaults to empty string with [`HostnameOrigin::None`](HostnameOrigin::None).
     pub hostname: Hostname,
     /// Where this device's configuration originated.
+    ///
+    /// See [`Origin`] for priority order.
     pub origin: Origin,
 
     /// Precise moment when the device was first manually managed, if applicable.
+    ///
+    /// Only set for devices configured via CLI, TOML, or API.
+    /// Dynamic devices have this as `None`.
     #[serde(serialize_with = "serialize_time_opt")]
     pub managed_at: Option<SystemTime>,
 
     /// Current IPv4 connectivity state.
+    ///
+    /// See [`IPv4State`] for possible values.
     pub v4: IPv4State,
     /// List of IPv6 connectivity states (SLAAC, `DHCPv6`, etc.).
+    ///
+    /// A device may have multiple entries (e.g., SLAAC + `DHCPv6`).
     pub v6: Vec<IPv6State>,
     /// List of delegated IPv6 prefixes assigned to this device.
+    ///
+    /// These come from `DHCPv6` Prefix Delegation (`IA_PD`).
     pub v6_prefixes: Vec<V6PrefixLease>,
 
-    /// IPv4 addresses observed via network traffic (ARP/Netlink).
+    /// IPv4 addresses observed via network traffic (`ARP`/`Netlink`).
+    ///
+    /// These are "seen" addresses — the device may not have an active lease
+    /// but was observed communicating on the network.
     pub seen_v4: Vec<Ipv4Addr>,
 
     /// Precise moment when the device was last seen on the network.
+    ///
+    /// Updated on every network event (DHCP, NDP, ARP). Used for expiry
+    /// calculations during garbage collection.
     #[serde(serialize_with = "serialize_time")]
     pub last_seen: SystemTime,
 
     /// `DHCPv6` Unique Identifier (DUID), if tracked.
+    ///
+    /// The DUID is learned during `DHCPv6` interactions and can be used
+    /// to correlate devices across different network interfaces.
     pub duid: Option<Duid>,
     /// Pre-calculated DNS fallback name (e.g., "host-abcdef123456").
+    ///
+    /// Generated from the MAC address to provide a consistent, if not
+    /// user-friendly, DNS name for devices without a configured hostname.
     pub dns_fallback: String,
 }
 
@@ -538,11 +740,30 @@ impl Device {
     /// Returns true if the device has enough "meaningful" information to be officially
     /// registered in the table.
     ///
-    /// Criteria:
-    /// - Has a non-empty hostname.
-    /// - Has an IPv4 address (Static or DHCP).
-    /// - Has a routable IPv6 address (Dynamic lease, or SLAAC/Static that is GUA/ULA).
-    /// - Has a static configuration origin.
+    /// # Worthiness Criteria
+    ///
+    /// A device is considered "worthy" if ANY of the following is true:
+    /// - Has a non-empty hostname (even if dynamic)
+    /// - Has an IPv4 address (Static or DHCP)
+    /// - Has a routable IPv6 address (Dynamic lease, or SLAAC/Static that is GUA/ULA)
+    /// - Has a static configuration origin (TOML, CLI, API)
+    ///
+    /// # Purpose
+    ///
+    /// This prevents the table from filling with "ghost" devices that have only
+    /// been briefly observed (e.g., a single NDP probe) but have no real
+    /// network presence.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use lanforge_core::device::Device;
+    /// use lanforge_core::identifiers::MacAddr;
+    ///
+    /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    /// let device = Device::new(mac);
+    /// assert!(!device.is_worthy()); // Just MAC, nothing else
+    /// ```
     #[must_use]
     pub fn is_worthy(&self) -> bool {
         if self.is_static() || !self.hostname.name.is_empty() {
@@ -627,14 +848,42 @@ impl Device {
         }
     }
 
-    /// Returns the primary IPv6 address based on following priority:
+    /// Returns the primary IPv6 address based on the following priority:
     ///
-    /// 1. **ULA** (Unique Local Address): Static or Dynamic Lease.
-    /// 2. **Custom GUA**: Static or Dynamic Lease.
-    /// 3. **SLAAC ULA**: Observed SLAAC address in ULA range.
-    /// 4. **SLAAC GUA**: Observed SLAAC address in GUA range.
+    /// # Priority Order (highest to lowest)
     ///
-    /// Suffixes are resolved using the provided `gua_prefix` or `ula_prefix`.
+    /// 1. **ULA (Unique Local Address)**: Static or Dynamic Lease — most stable for local networking
+    /// 2. **Custom GUA**: Static or Dynamic Lease — globally routable, but less stable than ULA
+    /// 3. **SLAAC ULA**: Observed SLAAC address in ULA range
+    /// 4. **SLAAC GUA**: Observed SLAAC address in GUA range
+    ///
+    /// # Parameters
+    ///
+    /// - `gua_prefix`: The current Global Unicast prefix (e.g., `2001:db8:1234::/64`)
+    ///   used to resolve static suffixes.
+    /// - `ula_prefix`: The current Unique Local prefix (e.g., `fd00:dead:beef::/64`)
+    ///   used to resolve static suffixes.
+    ///
+    /// # Returns
+    ///
+    /// `Some(Ipv6Addr)` if the device has any IPv6 state, `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use lanforge_core::device::{Device, IPv6State, Ipv6AddrOrSuffix};
+    /// use lanforge_core::identifiers::MacAddr;
+    /// use std::net::Ipv6Addr;
+    ///
+    /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    /// let mut device = Device::new(mac);
+    ///
+    /// // Add a SLAAC ULA address
+    /// device.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
+    ///
+    /// let primary = device.primary_v6(None, None);
+    /// assert_eq!(primary, Some("fd00::1".parse().unwrap()));
+    /// ```
     #[must_use]
     pub fn primary_v6(
         &self,
@@ -730,7 +979,22 @@ impl Device {
         addrs
     }
 
-    /// Categorizes how this device was primarily learned or configured.
+    /// Categorizes how this device was primarily discovered or configured.
+    ///
+    /// This method inspects the device's state to determine the most likely
+    /// discovery method, which is useful for UI display and analytics.
+    ///
+    /// # Detection Logic
+    ///
+    /// | Condition                                | Returns          |
+    /// |------------------------------------------|------------------|
+    /// | `origin == Toml`                         | `Static`         |
+    /// | `origin == Cli`                          | `Managed`        |
+    /// | Has active DHCPv4 lease                  | `DhcpV4`         |
+    /// | Has active DHCPv6 lease                  | `DhcpV6`         |
+    /// | Has SLAAC addresses                      | `Slaac`          |
+    /// | Has observed IPv4 via ARP/Netlink        | `NdpArp`         |
+    /// | None of the above                        | `Unknown`        |
     #[must_use]
     pub fn learning_method(&self) -> LearningMethod {
         if self.origin == Origin::Toml {
@@ -765,6 +1029,21 @@ impl Device {
 }
 
 /// The protocol or method by which a device was discovered.
+///
+/// This enum is used for analytics, UI display, and understanding the
+/// network topology.
+///
+/// # Variants
+///
+/// | Variant    | Description                                |
+/// |------------|--------------------------------------------|
+/// | Static     | Manually configured in `lanforge.toml`     |
+/// | Managed    | Manually configured or overridden via CLI  |
+/// | DhcpV4     | Discovered via DHCPv4 lease                |
+/// | DhcpV6     | Discovered via DHCPv6 lease (IA_NA)        |
+/// | Slaac      | Observed via SLAAC (Neighbor Discovery)    |
+/// | NdpArp     | Observed via ARP/Netlink (no DHCP/SLAAC)   |
+/// | Unknown    | Minimal presence, no clear discovery method|
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LearningMethod {
     /// Manually configured in `lanforge.toml`.

@@ -3,11 +3,13 @@
 //! This module uses `tokio::sync::broadcast` to provide a thread-safe,
 //! multi-producer multi-consumer event bus.
 //!
-//! ## Event Model
+//! # Event Model
 //!
 //! The bus follows a **device-centric** model: events primarily describe changes
 //! to the identity and state of discovery of network devices rather than low-level
 //! protocol actions.
+//!
+//! # Architecture
 //!
 //! ```mermaid
 //! sequenceDiagram
@@ -21,6 +23,23 @@
 //!     Bus-->>Handler: Event Received
 //!     Note right of Handler: UI updates or CLI notification
 //! ```
+//!
+//! # Key Types
+//!
+//! - **[`EventBus`]**: The central broadcast channel (capacity: 256 events)
+//! - **[`LanforgeEvent`]**: All possible events in the system
+//! - **[`DeviceChange`]**: Detailed changes applied to a specific device
+//! - **[`TimedEvent`]**: Event wrapper with timestamp and source module metadata
+//!
+//! # Event Categories
+//!
+//! | Category              | Events                                           |
+//! |-----------------------|--------------------------------------------------|
+//! | Device Lifecycle      | `DeviceDiscovered`, `DeviceUpdated`, `DeviceExpired`, `DevicePurged` |
+//! | Infrastructure        | `PrefixChanged`, `InterfaceUpdated`, `ScanRequested` |
+//! | System Control        | `Shutdown`, `ReloadConfig`, `DbVacuum`, `DbPrune` |
+//! | Initialization        | `StateReady`, `DbReady`, `InterfaceReady`, `SystemReady` |
+//! | Diagnostic            | `WolTriggered`, `LeaseRelease`, `LeaseRenew`     |
 
 #[cfg(test)]
 pub mod tests;
@@ -44,6 +63,39 @@ use serde::{Deserialize, Serialize};
 /// Detailed changes applied to a specific `Device`.
 ///
 /// Published within a [`LanforgeEvent::DeviceUpdated`] event on the bus.
+/// Each variant represents a specific type of state change that UI components
+/// or other listeners may care about.
+///
+/// # Change Types
+///
+/// | Variant                | Description                                  |
+/// |------------------------|----------------------------------------------|
+/// | `V4Assigned`           | IPv4 address assigned/renewed via `DHCPv4`     |
+/// | `LeaseExpired`         | Dynamic lease expired and removed            |
+/// | `V6Assigned`           | IPv6 address assigned/renewed via `DHCPv6`     |
+/// | `HostRemoved`          | Device entirely removed from active table    |
+/// | `V6PrefixAssigned`     | IPv6 prefix delegated via `DHCPv6-PD`          |
+/// | `SlaacObserved`        | SLAAC address observed via `NDP`               |
+/// | `SlaacSynced`          | Full SLAAC address synchronization           |
+/// | `HostnameChanged`      | Hostname updated (DHCP hint, CLI, mDNS)      |
+/// | `V4StaticChanged`      | Static IPv4 reservation modified             |
+/// | `V6SuffixChanged`      | Static IPv6 suffix modified                  |
+/// | `DuidAssociated`       | DUID linked to device's MAC                  |
+/// | `NdpActivity`          | NDP neighbor observed (no SLAAC address)     |
+/// | `ArpActivity`          | ARP neighbor observed (IPv4)                 |
+/// | `StatusChanged`        | Device online/offline status changed         |
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::bus::{DeviceChange, LanforgeEvent};
+/// use lanforge_core::identifiers::MacAddr;
+/// use std::net::Ipv4Addr;
+///
+/// // Checking for a specific change in an event
+/// let change = DeviceChange::V4Assigned { ip: Ipv4Addr::new(192, 168, 1, 10) };
+/// assert!(matches!(change, DeviceChange::V4Assigned { .. }));
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DeviceChange {
     /// An IPv4 address was assigned or renewed via `DHCPv4`.
@@ -102,6 +154,24 @@ pub enum DeviceChange {
 }
 
 /// A wrapper for an event along with its metadata (timestamp, source module).
+///
+/// All events on the bus are wrapped in `TimedEvent` to enable:
+/// - Temporal ordering for event replay and debugging
+/// - Source attribution via the `module` field
+/// - Loggability determination via [`is_loggable`](TimedEvent::is_loggable)
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::bus::{TimedEvent, LanforgeEvent};
+///
+/// let event = TimedEvent::new(
+///     LanforgeEvent::Shutdown,
+///     Some("cli".to_string()),
+/// );
+/// assert!(event.module.as_deref() == Some("cli"));
+/// assert!(!event.is_loggable()); // Internal signal
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimedEvent {
     /// The actual event data.
@@ -129,6 +199,33 @@ impl TimedEvent {
 // ---------------------------------------------------------------------------
 
 /// All events that can be broadcast across the system bus.
+///
+/// This is the central event type for the entire Lanforge system. Protocol workers,
+/// the CLI, and the UI all communicate by publishing and subscribing to these events.
+///
+/// # Event Categories
+///
+/// ## Device Lifecycle
+/// Events related to network device discovery and state changes.
+///
+/// ## Infrastructure
+/// Events about network interface configuration and scanning.
+///
+/// ## System Control
+/// Administrative commands (shutdown, reload, maintenance).
+///
+/// ## Initialization
+/// Readiness signals for system components (state, DB, interfaces).
+///
+/// ## Diagnostic
+/// Manual triggers for debugging and maintenance operations.
+///
+/// # Loggability
+///
+/// Not all events are persisted to the log. Use [`TimedEvent::is_loggable()`]
+/// to determine if an event should be written to the database.
+/// Generally, internal coordination signals (e.g., `StateReady`, `DbReady`)
+/// are not logged, while user-facing changes are.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LanforgeEvent {
     // -- Device lifecycle --
@@ -150,14 +247,17 @@ pub enum LanforgeEvent {
 
     // -- Infrastructure --
     /// The global IPv6 prefix has changed.
+    ///
+    /// This event is published when a router advertisement updates
+    /// the local interface's GUA or ULA prefix.
     PrefixChanged {
         /// The new GUA prefix, if any.
         gua: Option<Ipv6Addr>,
         /// The new ULA prefix, if any.
         ula: Option<Ipv6Addr>,
-        /// Preferred lifetime of the prefix.
+        /// Preferred lifetime of the prefix (seconds).
         preferred: u32,
-        /// Valid lifetime of the prefix.
+        /// Valid lifetime of the prefix (seconds).
         valid: u32,
     },
     /// A local network interface's IP configuration was updated.
@@ -248,11 +348,49 @@ impl TimedEvent {
 // ---------------------------------------------------------------------------
 
 /// Internal bus capacity for the broadcast channel.
+///
+/// This limits the number of events that can be buffered before slow
+/// subscribers start lagging. 256 is sufficient for typical Lanforge
+/// workloads where events are consumed promptly.
 const BUS_CAPACITY: usize = 256;
 
 /// A thread-safe, shared event bus used for multi-component communication.
 ///
 /// This is typically wrapped in an `Arc` and shared among protocol tasks.
+/// It uses `tokio::sync::broadcast` under the hood, providing:
+///
+/// - **Multi-producer**: Any component can publish events
+/// - **Multi-consumer**: Multiple subscribers can receive all events
+/// - **Lossy**: Slow subscribers may miss events if the buffer fills up
+///
+/// # Example
+///
+/// ```rust
+/// use lanforge_core::bus::EventBus;
+/// use lanforge_core::bus::LanforgeEvent;
+/// use std::sync::Arc;
+///
+/// let bus = Arc::new(EventBus::new());
+/// let mut rx = bus.subscribe();
+///
+/// // Publish an event
+/// bus.publish(LanforgeEvent::Shutdown);
+///
+/// // Receive it
+/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+/// if let Ok(timed) = rx.recv().await {
+///     assert!(matches!(timed.event, LanforgeEvent::Shutdown));
+/// }
+/// # });
+/// ```
+///
+/// # Publishing Methods
+///
+/// | Method                  | Description                              |
+/// |-------------------------|------------------------------------------|
+/// | `publish(event)`        | Publish with auto-timestamp, no module   |
+/// | `publish_timed(event)`  | Publish pre-wrapped `TimedEvent`         |
+/// | `publish_with_module()` | Publish with source module attribution   |
 pub struct EventBus {
     tx: broadcast::Sender<TimedEvent>,
 }
