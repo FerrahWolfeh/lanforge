@@ -238,6 +238,40 @@ impl Ipv6Pool {
         self.ula_prefix.map(|ula| self.construct_addr(ula, suffix))
     }
 
+    /// Collects static suffix addresses across all active prefixes.
+    /// Returns addresses for every prefix where the device has a static reservation.
+    fn collect_static_ips(
+        &self,
+        ctx: &LanforgeContext,
+        duid: &Duid,
+        mac: Option<MacAddr>,
+        prefixes: &[Ipv6Addr],
+    ) -> Vec<Ipv6Addr> {
+        let mut dev_opt = ctx.query(|t| t.get_by_duid(duid));
+        if dev_opt.is_none()
+            && let Some(m) = mac
+        {
+            dev_opt = ctx.get_device(&m);
+        }
+
+        let Some(dev) = dev_opt else {
+            return Vec::new();
+        };
+
+        let mut ips = Vec::new();
+        for prefix in prefixes {
+            for state in &dev.v6 {
+                if let IPv6State::Static(suffix) = state {
+                    let ip = self.construct_addr(*prefix, suffix);
+                    if Self::is_on_prefix(&ip, prefix) && !ips.contains(&ip) {
+                        ips.push(ip);
+                    }
+                }
+            }
+        }
+        ips
+    }
+
     /// Allocates IPv6 addresses for the given DUID+IAID.
     /// Returns a list of addresses (e.g. one ULA and one GUA).
     pub fn allocate(
@@ -248,15 +282,23 @@ impl Ipv6Pool {
         mac: Option<MacAddr>,
         requested: Option<Ipv6Addr>,
     ) -> Vec<Ipv6Addr> {
-        // 1. Sticky IP check: if we already have addresses globally, return them.
+        let prefixes = self.get_active_prefixes();
+
+        // 1. Static reservations take absolute priority (OpenWrt-style).
+        //    If the device has a configured suffix, apply it to ALL active prefixes.
+        let static_ips = self.collect_static_ips(ctx, duid, mac, &prefixes);
+        if !static_ips.is_empty() {
+            return static_ips;
+        }
+
+        // 2. Sticky IP check: return previously assigned dynamic leases.
         let sticky = Self::get_sticky_ips(ctx, duid, iaid, mac);
         if !sticky.is_empty() {
             return sticky;
         }
 
+        // 3. Fresh dynamic allocation from pools.
         let mut assigned = Vec::new();
-        let prefixes = self.get_active_prefixes();
-
         for prefix in prefixes {
             if let Some(ip) = self.allocate_for_prefix(ctx, prefix, duid, mac, requested, &assigned)
             {
@@ -327,28 +369,10 @@ impl Ipv6Pool {
         requested: Option<Ipv6Addr>,
         already_assigned: &[Ipv6Addr],
     ) -> Option<Ipv6Addr> {
-        // 1. Static Reservation check
-        let mut dev_opt = ctx.query(|t| t.get_by_duid(duid));
-        if dev_opt.is_none()
-            && let Some(m) = mac
-        {
-            dev_opt = ctx.get_device(&m);
-        }
-
-        if let Some(dev) = dev_opt {
-            for state in &dev.v6 {
-                if let IPv6State::Static(suffix) = state {
-                    let ip = self.construct_addr(prefix, suffix);
-                    if Self::is_on_prefix(&ip, &prefix) && !already_assigned.contains(&ip) {
-                        return Some(ip);
-                    }
-                }
-            }
-        }
-
-        // 2. Requested IP check
+        // 1. Requested IP check
         if let Some(req_ip) = requested
             && Self::is_on_prefix(&req_ip, &prefix)
+            && !already_assigned.contains(&req_ip) // Added check
             && self.is_available(ctx, &req_ip, mac)
         {
             return Some(req_ip);
@@ -373,7 +397,9 @@ impl Ipv6Pool {
                         *start_u128,
                         *end_u128,
                         mac,
-                    ) {
+                    ) && !already_assigned.contains(&ip)
+                    {
+                        // Added check
                         return Some(ip);
                     }
                 }
@@ -397,7 +423,9 @@ impl Ipv6Pool {
                     start_u128,
                     end_u128,
                     mac,
-                ) {
+                ) && !already_assigned.contains(&ip)
+                {
+                    // Added check
                     return Some(ip);
                 }
             }
@@ -1035,5 +1063,61 @@ mod tests {
         } else {
             panic!("Expected Fixed range for fd00::/120");
         }
+    }
+
+    #[test]
+    fn test_static_overrides_sticky() {
+        let ctx = init_test_context();
+        let ula = "fd00::".parse().unwrap();
+        let pools = vec![Dhcpv6PoolConfig {
+            range_start: Some(Ipv6AddrOrSuffix::parse("::1").unwrap()),
+            range_end: Some(Ipv6AddrOrSuffix::parse("::10").unwrap()),
+            address: None,
+        }];
+        let mut pool = Ipv6Pool::new(&pools, Some(ula), 64);
+
+        // 1. Allocate dynamic first
+        let ips1 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
+        let dynamic_ip = ips1[0];
+        assert_ne!(dynamic_ip, "fd00::cafe".parse::<Ipv6Addr>().unwrap());
+        commit_lease(&ctx, Some(mac(1)), &duid(1), 1, dynamic_ip);
+
+        // 2. Set static suffix later
+        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+            mac: mac(1),
+            hostname: FieldUpdate::Set("test".to_string()),
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
+            origin: Origin::Cli,
+        });
+
+        // 3. Re-allocate -> must return static address, NOT the sticky dynamic one
+        let ips2 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
+        assert_eq!(ips2.len(), 1);
+        assert_eq!(ips2[0], "fd00::cafe".parse::<Ipv6Addr>().unwrap());
+    }
+
+    #[test]
+    fn test_multi_prefix_static_suffix_dual_stack() {
+        let ctx = init_test_context();
+        let ula = "fd00::".parse().unwrap();
+        let gua = "2001:db8::".parse().unwrap();
+        let mut pool = Ipv6Pool::new(&Vec::new(), Some(ula), 64);
+        pool.set_gua_prefix(gua);
+
+        // Setup static device
+        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+            mac: mac(1),
+            hostname: FieldUpdate::Set("test".to_string()),
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
+            origin: Origin::Cli,
+        });
+
+        // Allocate -> must return suffix on both ULA and GUA
+        let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
+        assert_eq!(ips.len(), 2);
+        assert!(ips.contains(&"fd00::cafe".parse().unwrap()));
+        assert!(ips.contains(&"2001:db8::cafe".parse().unwrap()));
     }
 }

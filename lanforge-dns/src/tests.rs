@@ -4,7 +4,7 @@ use hickory_proto::rr::{Name, RData, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use lanforge_core::bus::EventBus;
 use lanforge_core::device::{Device, Ipv6AddrOrSuffix, Origin};
-use lanforge_core::identifiers::MacAddr;
+use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::{DeviceUpdate, FieldUpdate, State};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -293,4 +293,84 @@ fn test_dhcp_registration_creates_dns_record() {
     } else {
         panic!("Wrong RData type");
     }
+}
+
+#[test]
+fn test_dns_response_contract() {
+    let ctx = init_test_context();
+    let ula = "fd00::".parse::<Ipv6Addr>().unwrap();
+    let gua = "2001:db8::".parse::<Ipv6Addr>().unwrap();
+    let mut cfg = mock_config();
+    cfg.ula_prefix = Some(ula);
+    cfg.gua_prefix = Some(gua);
+
+    let mac = MacAddr([1, 2, 3, 4, 5, 0x99]);
+
+    // 1. Static Suffix
+    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+        mac,
+        hostname: FieldUpdate::Set("contract-test".to_string()),
+        v4_static: FieldUpdate::NoChange,
+        v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::1057:cafe").unwrap()),
+        origin: Origin::Cli,
+    });
+
+    // 2. SLAAC addresses
+    let slaac_ula = "fd00::7c5a:23c3:41dc:7d9e".parse().unwrap();
+    let slaac_gua = "2001:db8::c8a2:cbd3:9d9e:89c7".parse().unwrap();
+    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
+        mac,
+        addr: slaac_ula,
+    });
+    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
+        mac,
+        addr: slaac_gua,
+    });
+
+    // 3. DHCPv6 Dynamic Lease
+    let dynamic_ula = "fd00::33c".parse().unwrap();
+    let _ = ctx.apply(&DeviceUpdate::V6LeaseGranted {
+        mac: Some(mac),
+        duid: Duid::generate_ll_from_mac(mac.0),
+        iaid: 1,
+        ip: dynamic_ula,
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+
+    let mut query = Message::new();
+    let name = Name::from_str("contract-test.lan.").unwrap();
+    query.add_query(Query::query(name, RecordType::AAAA));
+
+    let device_arc = ctx.get_device(&mac).unwrap();
+    let res_bytes = resolve_local(&query, &device_arc, RecordType::AAAA, &cfg, ctx)
+        .unwrap()
+        .expect("Should resolve locally");
+
+    let res = Message::from_bytes(&res_bytes).unwrap();
+    let ips: HashSet<Ipv6Addr> = res
+        .answers()
+        .iter()
+        .filter_map(|r| {
+            if let RData::AAAA(ip) = r.data() {
+                Some((*ip).into())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Assert ALL expected addresses are present
+    assert!(
+        ips.contains(&"fd00::1057:cafe".parse().unwrap()),
+        "Missing Custom ULA"
+    );
+    assert!(
+        ips.contains(&"2001:db8::1057:cafe".parse().unwrap()),
+        "Missing Custom GUA"
+    );
+    assert!(ips.contains(&slaac_ula), "Missing SLAAC ULA");
+    assert!(ips.contains(&slaac_gua), "Missing SLAAC GUA");
+    assert!(ips.contains(&dynamic_ula), "Missing DHCPv6 Dynamic");
+
+    assert_eq!(ips.len(), 5);
 }

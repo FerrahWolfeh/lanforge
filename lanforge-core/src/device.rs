@@ -954,17 +954,14 @@ impl Device {
         // IPv6
         for state in &self.v6 {
             if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_)) = state {
-                if let Some(gua) = gua_prefix
-                    && let Some(ip) = state.ip_with_prefix(Some(gua))
-                {
-                    addrs.push(IpAddr::V6(ip));
-                }
-                if let Some(ula) = ula_prefix
-                    && let Some(ip) = state.ip_with_prefix(Some(ula))
-                {
-                    addrs.push(IpAddr::V6(ip));
+                // DNS Contract: Static suffixes produce addresses on ALL active prefixes.
+                for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
+                    if let Some(ip) = state.ip_with_prefix(Some(prefix)) {
+                        addrs.push(IpAddr::V6(ip));
+                    }
                 }
             } else if let Some(ip) = state.ip() {
+                // DNS Contract: Dynamic leases (DHCPv6) and SLAAC addresses are always included.
                 addrs.push(IpAddr::V6(ip));
             }
         }
