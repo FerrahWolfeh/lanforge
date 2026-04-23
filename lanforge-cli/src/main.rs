@@ -1,7 +1,7 @@
 mod args;
 mod cli;
 
-use crate::args::CliArgs;
+use crate::args::{Cli, Command};
 use clap::Parser;
 use color_eyre::Result;
 
@@ -9,14 +9,47 @@ use color_eyre::Result;
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
-    let args = CliArgs::parse();
+    let cli = Cli::parse();
 
-    if let Some(cmd) = args.command {
-        // We'll need to adapt the Command enum from args to what run_client expects
-        // or just update run_client to use the new Command enum.
-        cli::run_client(cmd, &args.socket).await?;
-    } else {
-        println!("Nenhum comando especificado. Use --help para ver as opções.");
+    match cli {
+        Cli::Lanforge(args) => {
+            if let Some(cmd) = args.command {
+                cli::run_client(cmd, &args.socket).await?;
+            } else {
+                println!("Nenhum comando especificado. Use --help para ver as opções.");
+            }
+        }
+        Cli::Wake { target, socket } => {
+            cli::run_client(Command::Wol { target }, &socket).await?;
+        }
+        Cli::LfStatus { socket } => {
+            cli::run_client(Command::Status, &socket).await?;
+        }
+        Cli::LfDevices {
+            verbose,
+            filter,
+            vendor,
+            method,
+            format,
+            sort,
+            socket,
+        } => {
+            cli::run_client(
+                Command::Devices {
+                    verbose,
+                    filter,
+                    vendor,
+                    method,
+                    format,
+                    sort,
+                },
+                &socket,
+            )
+            .await?;
+        }
+        Cli::LfScan { socket } => {
+            cli::run_client(Command::Scan, &socket).await?;
+        }
     }
 
     Ok(())

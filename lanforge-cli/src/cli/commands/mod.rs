@@ -4,6 +4,7 @@ pub mod dns;
 pub mod host;
 pub mod lease;
 pub mod log;
+pub mod query;
 pub mod status;
 pub mod whois;
 pub mod wol;

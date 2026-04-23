@@ -64,6 +64,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
         Command::Wol { target } => Box::new(WolCommand { target }),
         Command::Whois { target } => Box::new(WhoisHandler { target }),
         Command::Dns { action } => Box::new(DnsCommand { action }),
+        Command::Query { target } => Box::new(crate::cli::commands::query::QueryHandler { target }),
     };
 
     let mut control_cmd = match handler.prepare() {

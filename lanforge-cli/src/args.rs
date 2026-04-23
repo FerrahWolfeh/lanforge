@@ -1,8 +1,82 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
-#[command(name = "lanforge-cli", version, about = "Lanforge Control CLI", long_about = None)]
-pub struct CliArgs {
+#[command(
+    name = "lanforge",
+    version,
+    about = "Lanforge Control CLI",
+    multicall = true
+)]
+pub enum Cli {
+    /// Standard lanforge command
+    #[command(name = "lanforge")]
+    Lanforge(LanforgeArgs),
+
+    /// Quick Wake-on-LAN (alias for 'lanforge wol')
+    #[command(name = "wake")]
+    Wake {
+        /// Target device MAC or Hostname
+        target: Option<String>,
+        #[arg(
+            short,
+            long,
+            env = "LANFORGE_CONTROL_SOCKET",
+            default_value = "/run/lanforge/control.sock"
+        )]
+        socket: String,
+    },
+
+    /// Show service status (alias for 'lanforge status')
+    #[command(name = "lf-status")]
+    LfStatus {
+        #[arg(
+            short,
+            long,
+            env = "LANFORGE_CONTROL_SOCKET",
+            default_value = "/run/lanforge/control.sock"
+        )]
+        socket: String,
+    },
+
+    /// List devices (alias for 'lanforge devices')
+    #[command(name = "lf-devices")]
+    LfDevices {
+        #[arg(short, long)]
+        verbose: bool,
+        #[arg(long)]
+        filter: Option<String>,
+        #[arg(long)]
+        vendor: Option<String>,
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long)]
+        format: Option<String>,
+        #[arg(short, long, value_enum, default_value_t = SortMode::LastSeen)]
+        sort: SortMode,
+        #[arg(
+            short,
+            long,
+            env = "LANFORGE_CONTROL_SOCKET",
+            default_value = "/run/lanforge/control.sock"
+        )]
+        socket: String,
+    },
+
+    /// Force network scan (alias for 'lanforge scan')
+    #[command(name = "lf-scan")]
+    LfScan {
+        #[arg(
+            short,
+            long,
+            env = "LANFORGE_CONTROL_SOCKET",
+            default_value = "/run/lanforge/control.sock"
+        )]
+        socket: String,
+    },
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct LanforgeArgs {
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -84,6 +158,21 @@ pub enum Command {
         #[command(subcommand)]
         action: DnsCommand,
     },
+    /// Script-friendly data querying (outputs raw JSON)
+    Query {
+        #[command(subcommand)]
+        target: QueryTarget,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum QueryTarget {
+    /// Dump full system status as JSON
+    Status,
+    /// Dump all devices as JSON
+    Devices,
+    /// Dump configured hosts as JSON
+    Hosts,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 # CLI subcomando 'run' sobe todos os serviços habilitados
-ExecStart=/usr/local/bin/lanforge --config /etc/lanforge/lanforge.toml
+ExecStart=/usr/local/bin/lanforged --config /etc/lanforge/lanforge.toml
 # Suporte a overrides via Env Vars se necessário
 Environment=LANFORGE_CONFIG=/etc/lanforge/lanforge.toml
 
