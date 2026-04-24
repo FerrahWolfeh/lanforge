@@ -781,118 +781,52 @@ impl State {
         drop(dev_arc_managed);
 
         let mut dev_arc = self.devices.remove(&mac).unwrap();
-        let mut changed = false;
-
         self.unindex_device(&dev_arc);
-        {
+
+        let changed = {
             let dev = Arc::make_mut(&mut dev_arc);
-            match hostname {
-                FieldUpdate::Set(hn) => {
-                    if dev.hostname.name != hn || dev.hostname.origin != HostnameOrigin::Static {
-                        dev.hostname = Hostname {
-                            name: hn,
-                            origin: HostnameOrigin::Static,
-                        };
-                        changed = true;
-                    }
-                }
-                FieldUpdate::Clear => {
-                    if !dev.hostname.name.is_empty() {
-                        dev.hostname = Hostname::default();
-                        changed = true;
-                    }
-                }
-                FieldUpdate::NoChange => {}
-            }
-            match duid {
-                FieldUpdate::Set(d) => {
-                    if dev.duid.as_ref() != Some(&d) {
-                        dev.duid = Some(d.clone());
-                        self.duid_index.insert(d, mac);
-                        changed = true;
-                    }
-                }
-                FieldUpdate::Clear => {
-                    if let Some(d) = dev.duid.take() {
-                        self.duid_index.remove(&d);
-                        changed = true;
-                    }
-                }
-                FieldUpdate::NoChange => {}
-            }
-            match v4_static {
-                FieldUpdate::Set(ip) => {
-                    if dev.v4 != IPv4State::Static(ip) {
-                        dev.v4 = IPv4State::Static(ip);
-                        changed = true;
-                    }
-                }
-                FieldUpdate::Clear => {
-                    if dev.v4 != IPv4State::None {
-                        dev.v4 = IPv4State::None;
-                        changed = true;
-                    }
-                }
-                FieldUpdate::NoChange => {}
-            }
-            match v6_suffix {
-                FieldUpdate::Set(suf) => {
-                    let new_state = IPv6State::Static(suf);
-                    let mut found = false;
-                    for state in &mut dev.v6 {
-                        if matches!(state, IPv6State::Static(_)) {
-                            if *state != new_state {
-                                *state = new_state.clone();
-                                changed = true;
-                            }
-                            found = true;
-                            break;
-                        }
-                    }
-                    if !found {
-                        dev.v6.push(new_state);
-                        changed = true;
-                    }
-                }
-                FieldUpdate::Clear => {
-                    let initial_len = dev.v6.len();
-                    dev.v6.retain(|s| !matches!(s, IPv6State::Static(_)));
-                    if dev.v6.len() != initial_len {
-                        changed = true;
-                    }
-                }
-                FieldUpdate::NoChange => {}
-            }
+            let old_duid = dev.duid.clone();
+
+            let changed = dev.update_from_fields(hostname, duid, v4_static, v6_suffix, origin);
 
             if changed {
-                dev.origin = origin;
-                dev.managed_at = Some(SystemTime::now());
-                dev.last_seen = SystemTime::now();
-                self.static_entries.insert(
-                    mac,
-                    StaticEntry {
-                        mac,
-                        hostname: dev.hostname.name.clone(),
-                        duid: dev.duid.clone(),
-                        v4_static: match dev.v4 {
-                            IPv4State::Static(ip) => Some(ip),
-                            _ => None,
-                        },
-                        v6_suffix: dev.v6.iter().find_map(|s| {
-                            if let IPv6State::Static(suffix) = s {
-                                Some(suffix.clone())
-                            } else {
-                                None
-                            }
-                        }),
-                        origin: dev.origin,
-                    },
-                );
+                if dev.duid != old_duid {
+                    if let Some(old) = old_duid {
+                        self.duid_index.remove(&old);
+                    }
+                    if let Some(new) = &dev.duid {
+                        self.duid_index.insert(new.clone(), mac);
+                    }
+                }
+                self.static_entries
+                    .insert(mac, Self::create_static_entry(mac, dev));
             }
-        }
+            changed
+        };
+
         self.index_device(mac, &dev_arc);
         self.devices.insert(mac, dev_arc);
         changed
+    }
+
+    fn create_static_entry(mac: MacAddr, dev: &Device) -> StaticEntry {
+        StaticEntry {
+            mac,
+            hostname: dev.hostname.name.clone(),
+            duid: dev.duid.clone(),
+            v4_static: match dev.v4 {
+                IPv4State::Static(ip) => Some(ip),
+                _ => None,
+            },
+            v6_suffix: dev.v6.iter().find_map(|s| {
+                if let IPv6State::Static(suffix) = s {
+                    Some(suffix.clone())
+                } else {
+                    None
+                }
+            }),
+            origin: dev.origin,
+        }
     }
 
     fn handle_host_removed(&mut self, mac: MacAddr) -> bool {
@@ -1158,6 +1092,7 @@ impl State {
         let now = SystemTime::now();
         let max_age = Duration::from_hours(168);
         let ndp_max_age = Duration::from_hours(24);
+        let ip_expiry_threshold = Duration::from_hours(24);
         let mut events = Vec::new();
 
         self.ndp_cache
@@ -1168,125 +1103,25 @@ impl State {
         let mut to_reindex = Vec::new();
 
         self.devices.retain(|&mac, dev_arc| {
-            let v4_expired = if let IPv4State::Dynamic(lease) = &dev_arc.v4 {
-                lease.expires < now
-            } else {
-                false
-            };
-            let v6_expired_iaids: Vec<u32> = dev_arc
-                .v6
-                .iter()
-                .filter_map(|s| match s {
-                    IPv6State::Dynamic(lease) if lease.expires < now => Some(lease.iaid),
-                    _ => None,
-                })
-                .collect();
-            let prefix_expired_iaids: Vec<u32> = dev_arc
-                .v6_prefixes
-                .iter()
-                .filter_map(|p| if p.expires < now { Some(p.iaid) } else { None })
-                .collect();
+            let hostname = Some(dev_arc.hostname.name.clone());
 
-            // Passive IP Expiration (24h)
-            let ip_expiry_threshold = Duration::from_hours(24);
-            let slaac_expired = dev_arc.v6.iter().any(|s| match s {
-                IPv6State::Slaac { last_seen, .. } => {
-                    last_seen.elapsed().unwrap_or(Duration::ZERO) > ip_expiry_threshold
-                }
-                _ => false,
-            });
-            let arp_expired = dev_arc
-                .seen_v4
-                .iter()
-                .any(|(_, ts)| ts.elapsed().unwrap_or(Duration::ZERO) > ip_expiry_threshold);
-
-            let changed = v4_expired
-                || !v6_expired_iaids.is_empty()
-                || !prefix_expired_iaids.is_empty()
-                || slaac_expired
-                || arp_expired;
-
-            if changed {
+            if dev_arc.is_zombie(max_age) {
                 to_unindex.push(Arc::clone(dev_arc));
-                let hostname = Some(dev_arc.hostname.name.clone());
-
-                if v4_expired {
-                    events.push((
-                        mac,
-                        hostname.clone(),
-                        DeviceChange::LeaseExpired {
-                            target: LeaseTarget::V4,
-                        },
-                    ));
-                }
-
-                for &iaid in &v6_expired_iaids {
-                    events.push((
-                        mac,
-                        hostname.clone(),
-                        DeviceChange::LeaseExpired {
-                            target: LeaseTarget::V6 { iaid },
-                        },
-                    ));
-                }
-
-                for &iaid in &prefix_expired_iaids {
-                    events.push((
-                        mac,
-                        hostname.clone(),
-                        DeviceChange::LeaseExpired {
-                            target: LeaseTarget::V6Prefix { iaid },
-                        },
-                    ));
-                }
-
-                let dev = Arc::make_mut(dev_arc);
-                if v4_expired {
-                    dev.v4 = IPv4State::None;
-                }
-                for iaid in v6_expired_iaids {
-                    dev.v6.retain(
-                        |state| !matches!(state, IPv6State::Dynamic(lease) if lease.iaid == iaid),
-                    );
-                }
-                for iaid in prefix_expired_iaids {
-                    dev.v6_prefixes.retain(|p| p.iaid != iaid);
-                }
-
-                // Prune expired SLAAC/ARP addresses
-                if slaac_expired {
-                    dev.v6.retain(|s| match s {
-                        IPv6State::Slaac { last_seen, .. } => {
-                            last_seen.elapsed().unwrap_or(Duration::ZERO) <= ip_expiry_threshold
-                        }
-                        _ => true,
-                    });
-                }
-                if arp_expired {
-                    dev.seen_v4.retain(|(_, ts)| {
-                        ts.elapsed().unwrap_or(Duration::ZERO) <= ip_expiry_threshold
-                    });
-                }
-
-                to_reindex.push((mac, Arc::clone(dev_arc)));
+                events.push((mac, hostname, DeviceChange::HostRemoved));
+                return false;
             }
 
-            // Cleanup dynamic zombies
-            if !dev_arc.is_static()
-                && matches!(dev_arc.v4, IPv4State::None)
-                && dev_arc.v6.is_empty()
-                && dev_arc.v6_prefixes.is_empty()
-                && dev_arc.last_seen.elapsed().unwrap_or(Duration::ZERO) > max_age
-            {
-                if !changed {
-                    to_unindex.push(Arc::clone(dev_arc));
+            let mut dev_arc_mut = Arc::clone(dev_arc);
+            let dev = Arc::make_mut(&mut dev_arc_mut);
+            let dev_events = dev.expire_stale_inner(now, ip_expiry_threshold);
+
+            if !dev_events.is_empty() {
+                to_unindex.push(Arc::clone(dev_arc));
+                for e in dev_events {
+                    events.push((mac, hostname.clone(), e));
                 }
-                events.push((
-                    mac,
-                    Some(dev_arc.hostname.name.clone()),
-                    DeviceChange::HostRemoved,
-                ));
-                return false;
+                *dev_arc = dev_arc_mut;
+                to_reindex.push((mac, Arc::clone(dev_arc)));
             }
 
             true

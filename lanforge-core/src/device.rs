@@ -28,6 +28,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::time::SystemTime;
 
+use crate::bus::DeviceChange;
+use crate::context::state::{FieldUpdate, LeaseTarget};
 use crate::identifiers::{Duid, MacAddr};
 
 // ---------------------------------------------------------------------------
@@ -813,6 +815,184 @@ impl Device {
                 self.v6.len() != initial_v6
             }
         }
+    }
+
+    pub fn update_from_fields(
+        &mut self,
+        hostname: FieldUpdate<String>,
+        duid: FieldUpdate<Duid>,
+        v4_static: FieldUpdate<Ipv4Addr>,
+        v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
+        origin: Origin,
+    ) -> bool {
+        let mut changed = false;
+
+        match hostname {
+            FieldUpdate::Set(hn) => {
+                if self.hostname.name != hn || self.hostname.origin != HostnameOrigin::Static {
+                    self.hostname = Hostname {
+                        name: hn,
+                        origin: HostnameOrigin::Static,
+                    };
+                    changed = true;
+                }
+            }
+            FieldUpdate::Clear => {
+                if !self.hostname.name.is_empty() {
+                    self.hostname = Hostname::default();
+                    changed = true;
+                }
+            }
+            FieldUpdate::NoChange => {}
+        }
+
+        match duid {
+            FieldUpdate::Set(d) => {
+                if self.duid.as_ref() != Some(&d) {
+                    self.duid = Some(d);
+                    changed = true;
+                }
+            }
+            FieldUpdate::Clear => {
+                if self.duid.is_some() {
+                    self.duid = None;
+                    changed = true;
+                }
+            }
+            FieldUpdate::NoChange => {}
+        }
+
+        match v4_static {
+            FieldUpdate::Set(ip) => {
+                if self.v4 != IPv4State::Static(ip) {
+                    self.v4 = IPv4State::Static(ip);
+                    changed = true;
+                }
+            }
+            FieldUpdate::Clear => {
+                if self.v4 != IPv4State::None {
+                    self.v4 = IPv4State::None;
+                    changed = true;
+                }
+            }
+            FieldUpdate::NoChange => {}
+        }
+
+        match v6_suffix {
+            FieldUpdate::Set(suf) => {
+                let new_state = IPv6State::Static(suf);
+                let mut found = false;
+                for state in &mut self.v6 {
+                    if matches!(state, IPv6State::Static(_)) {
+                        if *state != new_state {
+                            *state = new_state.clone();
+                            changed = true;
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    self.v6.push(new_state);
+                    changed = true;
+                }
+            }
+            FieldUpdate::Clear => {
+                let initial_len = self.v6.len();
+                self.v6.retain(|s| !matches!(s, IPv6State::Static(_)));
+                if self.v6.len() != initial_len {
+                    changed = true;
+                }
+            }
+            FieldUpdate::NoChange => {}
+        }
+
+        if changed {
+            self.origin = origin;
+            let now = SystemTime::now();
+            self.managed_at = Some(now);
+            self.last_seen = now;
+        }
+
+        changed
+    }
+
+    pub fn expire_stale_inner(
+        &mut self,
+        now: SystemTime,
+        ip_expiry_threshold: std::time::Duration,
+    ) -> Vec<DeviceChange> {
+        let mut events = Vec::new();
+
+        // V4
+        if let IPv4State::Dynamic(lease) = &self.v4
+            && lease.expires < now
+        {
+            events.push(DeviceChange::LeaseExpired {
+                target: LeaseTarget::V4,
+            });
+            self.v4 = IPv4State::None;
+        }
+
+        // V6
+        let mut v6_expired_iaids = Vec::new();
+        self.v6.retain(|state| match state {
+            IPv6State::Dynamic(lease) if lease.expires < now => {
+                v6_expired_iaids.push(lease.iaid);
+                false
+            }
+            IPv6State::Slaac { last_seen, .. } => {
+                last_seen.elapsed().unwrap_or(std::time::Duration::ZERO) <= ip_expiry_threshold
+            }
+            _ => true,
+        });
+        for iaid in v6_expired_iaids {
+            events.push(DeviceChange::LeaseExpired {
+                target: LeaseTarget::V6 { iaid },
+            });
+        }
+
+        // Prefixes
+        let mut prefix_expired_iaids = Vec::new();
+        self.v6_prefixes.retain(|p| {
+            if p.expires < now {
+                prefix_expired_iaids.push(p.iaid);
+                false
+            } else {
+                true
+            }
+        });
+        for iaid in prefix_expired_iaids {
+            events.push(DeviceChange::LeaseExpired {
+                target: LeaseTarget::V6Prefix { iaid },
+            });
+        }
+
+        // ARP
+        self.seen_v4.retain(|(_, ts)| {
+            ts.elapsed().unwrap_or(std::time::Duration::ZERO) <= ip_expiry_threshold
+        });
+
+        events
+    }
+
+    #[must_use]
+    pub fn is_zombie(&self, max_age: std::time::Duration) -> bool {
+        if self.is_static() {
+            return false;
+        }
+
+        if !matches!(self.v4, IPv4State::None)
+            || !self.v6.is_empty()
+            || !self.v6_prefixes.is_empty()
+        {
+            return false;
+        }
+
+        self.last_seen
+            .elapsed()
+            .unwrap_or(std::time::Duration::ZERO)
+            > max_age
     }
 }
 
