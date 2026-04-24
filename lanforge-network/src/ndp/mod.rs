@@ -163,6 +163,10 @@ impl LanforgeService for NeighborMonitor {
 
 impl AsyncService for NeighborMonitor {
     async fn run(&mut self) -> Result<(), CoreError> {
+        // 0. Wait for Interface Ready (Sanity check)
+        // This ensures the initial_scan has completed and ctx is seeded with prefixes.
+        self.ctx.wait_for_interfaces().await?;
+
         let mut bus_rx = self.ctx.bus().subscribe();
 
         // Initialize prefixes from current context state

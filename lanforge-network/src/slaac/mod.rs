@@ -55,6 +55,10 @@ impl LanforgeService for SlaacTracker {
 
 impl AsyncService for SlaacTracker {
     async fn run(&mut self) -> Result<(), CoreError> {
+        // 0. Wait for Interface Ready (Sanity check)
+        // This ensures the initial_scan has completed and we have a valid link-local address.
+        self.ctx.wait_for_interfaces().await?;
+
         // Initialize discovery socket
         let socket = Arc::new(
             create_icmpv6_send_socket(self.target_ifindex)
