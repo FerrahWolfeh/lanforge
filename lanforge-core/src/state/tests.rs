@@ -72,7 +72,7 @@ fn apply_update_hostname_hint_respects_static() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
     // Simula device estático via API correta
-    table.add_static_device(mac, "static-host".to_string(), None, None);
+    table.add_static_device(mac, "static-host".to_string(), None, None, None);
 
     let changed = table.apply_update(DeviceUpdate::DhcpHostnameHint {
         mac,
@@ -376,6 +376,7 @@ fn test_cli_host_updated_sync() {
     let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("cli-host".to_string()),
+        duid: FieldUpdate::NoChange,
         v4_static: FieldUpdate::Set("192.168.1.10".parse().unwrap()),
         v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::10").unwrap()),
         origin: Origin::Cli,
@@ -396,7 +397,7 @@ fn test_cli_host_updated_sync() {
         .get(&mac)
         .expect("Should have static entry");
     assert_eq!(entry.hostname, "cli-host");
-    assert_eq!(entry.v4_ip, Some("192.168.1.10".parse().unwrap()));
+    assert_eq!(entry.v4_static, Some("192.168.1.10".parse().unwrap()));
     assert!(
         matches!(entry.v6_suffix, Some(Ipv6AddrOrSuffix::Suffix(b)) if b == [0,0,0,0,0,0,0,0x10])
     );
@@ -405,6 +406,7 @@ fn test_cli_host_updated_sync() {
     let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("new-name".to_string()),
+        duid: FieldUpdate::NoChange,
         v4_static: FieldUpdate::NoChange, // No change
         v6_suffix: FieldUpdate::NoChange, // No change
         origin: Origin::Cli,
@@ -413,7 +415,7 @@ fn test_cli_host_updated_sync() {
     assert!(changed);
     let entry = table.static_entries.get(&mac).unwrap();
     assert_eq!(entry.hostname, "new-name");
-    assert_eq!(entry.v4_ip, Some("192.168.1.10".parse().unwrap())); // Preserved
+    assert_eq!(entry.v4_static, Some("192.168.1.10".parse().unwrap())); // Preserved
 }
 
 #[test]
@@ -715,11 +717,17 @@ fn test_static_registry_validation() {
     let suf1 = Ipv6AddrOrSuffix::parse("::100").unwrap();
 
     // 1. Setup normal registrations
-    table.add_static_device(mac1, "host1".to_string(), Some(ip1), Some(suf1.clone()));
+    table.add_static_device(
+        mac1,
+        "host1".to_string(),
+        None,
+        Some(ip1),
+        Some(suf1.clone()),
+    );
 
     // 2. Add conflicting registrations for mac2
     // mac2 tries to claim the same IPv4 and IPv6 suffix as mac1
-    table.add_static_device(mac2, "host2".to_string(), Some(ip1), Some(suf1));
+    table.add_static_device(mac2, "host2".to_string(), None, Some(ip1), Some(suf1));
 
     // 3. Get registry - should perform collision detection
     let registry = table.get_static_registry();
@@ -788,6 +796,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
     state.apply_update(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::NoChange,
+        duid: FieldUpdate::NoChange,
         v4_static: FieldUpdate::NoChange,
         v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::Full(match static_ip {
             IpAddr::V6(a) => a,

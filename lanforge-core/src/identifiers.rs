@@ -49,7 +49,7 @@ use std::{fmt, str::FromStr};
 /// let mac = duid.extract_mac().unwrap();
 /// assert_eq!(mac.to_string(), "00:01:02:03:04:05");
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Duid {
     /// The raw bytes of the DUID.
     #[serde(
@@ -222,17 +222,34 @@ impl fmt::Display for Duid {
     }
 }
 
+impl std::str::FromStr for Duid {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes: Vec<u8> = s
+            .split(':')
+            .map(|x| {
+                u8::from_str_radix(x.trim(), 16)
+                    .map_err(|e| format!("Invalid DUID hex byte '{x}': {e}"))
+            })
+            .collect::<Result<Vec<u8>, String>>()?;
+
+        if bytes.is_empty() {
+            return Err("DUID cannot be empty".to_string());
+        }
+        Ok(Self::new(bytes))
+    }
+}
+
 /// Deserializes a DUID from a colon-separated hex string.
 fn deserialize_duid<'de, D>(deserializer: D) -> Result<Arc<[u8]>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
+    use serde::de::Error;
     let s = String::deserialize(deserializer)?;
-    let bytes: Vec<u8> = s
-        .split(':')
-        .filter_map(|x| u8::from_str_radix(x, 16).ok())
-        .collect();
-    Ok(Arc::from(bytes))
+    let duid = s.parse::<Duid>().map_err(D::Error::custom)?;
+    Ok(duid.bytes)
 }
 
 // ---------------------------------------------------------------------------

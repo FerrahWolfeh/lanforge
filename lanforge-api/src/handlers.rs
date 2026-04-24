@@ -285,7 +285,7 @@ impl ClientContext {
                 online: is_online,
                 last_seen: format_iso8601(dev.last_seen),
                 learning_method: dev.learning_method().to_string(),
-                duid: dev.duid.as_ref().map(|d: &Duid| hex::encode(d.as_bytes())),
+                duid: dev.duid.as_ref().map(|d: &Duid| d.to_string()),
                 display_v4: dev.display_v4(),
                 display_v6: dev.display_v6(gua_prefix, ula_prefix),
                 v4: match &dev.v4 {
@@ -472,7 +472,7 @@ impl ClientContext {
                 online: dev.is_online(),
                 last_seen: format_iso8601(dev.last_seen),
                 learning_method: dev.learning_method().to_string(),
-                duid: dev.duid.as_ref().map(|d: &Duid| hex::encode(d.as_bytes())),
+                duid: dev.duid.as_ref().map(|d: &Duid| d.to_string()),
                 display_v4: dev.display_v4(),
                 display_v6: dev.display_v6(gua_prefix, ula_prefix),
                 v4: match &dev.v4 {

@@ -146,7 +146,8 @@ impl Bootstrapper {
                     .v6_suffix
                     .as_ref()
                     .and_then(|s| Ipv6AddrOrSuffix::parse(s));
-                table.add_static_device(mac, e.hostname.clone(), v4_ip, v6_suffix);
+                let duid = e.duid.as_ref().and_then(|s| s.parse().ok());
+                table.add_static_device(mac, e.hostname.clone(), duid, v4_ip, v6_suffix);
             }
         }
 

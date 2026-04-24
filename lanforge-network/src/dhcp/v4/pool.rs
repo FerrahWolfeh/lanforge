@@ -309,6 +309,7 @@ mod tests {
         let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
             mac: mac(99),
             hostname: FieldUpdate::Set("test".to_string()),
+            duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::Set(reserved_ip),
             v6_suffix: FieldUpdate::NoChange,
             origin: Origin::Cli,

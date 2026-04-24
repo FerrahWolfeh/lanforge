@@ -118,6 +118,7 @@ fn test_resolve_local_v6_suffix_merging() {
     let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("test".to_string()),
+        duid: FieldUpdate::NoChange,
         v4_static: FieldUpdate::NoChange,
         v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::beef").unwrap()),
         origin: Origin::Cli,
@@ -310,6 +311,7 @@ fn test_dns_response_contract() {
     let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("contract-test".to_string()),
+        duid: FieldUpdate::NoChange,
         v4_static: FieldUpdate::NoChange,
         v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::1057:cafe").unwrap()),
         origin: Origin::Cli,

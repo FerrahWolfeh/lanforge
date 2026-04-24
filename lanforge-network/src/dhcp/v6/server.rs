@@ -46,10 +46,10 @@ use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::utils::mac_from_eui64_link_local;
-use std::net::{Ipv6Addr, SocketAddrV6, UdpSocket};
+use std::net::{Ipv6Addr, UdpSocket};
 use std::str::FromStr;
 use std::string::ToString;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::config::Dhcpv6Config;
 use super::pool::Ipv6Pool;
@@ -177,12 +177,15 @@ impl Dhcpv6Server {
             })
             .or_else(|| mac_from_eui64_link_local(&peer));
 
-        // 1. Try to recover MAC from NDP cache (synchronous lock)
+        // 1. Try to recover MAC from NDP cache or DUID index
         if mac.is_none() {
             mac = self.ctx.get_mac_by_ip(peer.into());
         }
+        if mac.is_none() {
+            mac = self.ctx.get_mac_by_duid(&client_duid);
+        }
 
-        // 2. Resolve identity (new synchronous lock)
+        // 2. Resolve identity
         let identity = mac.map(|m| {
             DeviceIdentity::resolve(
                 m,
@@ -192,17 +195,10 @@ impl Dhcpv6Server {
             )
         });
 
-        if mac.is_none() {
-            warn!(
-                "SOLICIT from {peer}: no MAC addr found (DUID: {}). Proceeding without MAC...",
-                client_duid.duid_type()
+        if mac.is_none() && msg.msg_type() != MessageType::InformationRequest {
+            info!(
+                "DHCPv6 from {peer}: MAC addr not resolved (DUID: {client_duid}). Proceeding anonymously...",
             );
-
-            // Force the kernel to resolve the MAC by sending an empty packet.
-            // Reusing the persistent poke socket!
-            let poke_sock = self.ndp_poke_sock.clone();
-            let addr = SocketAddrV6::new(peer, 546, 0, 0);
-            let _ = poke_sock.send_to(&[0], addr);
         }
 
         match msg.msg_type() {
@@ -292,9 +288,17 @@ impl Dhcpv6Server {
         is_rapid_commit: bool,
     ) -> Option<Duid> {
         let mac = identity.map(|i| i.mac);
+        let requested_ip = iana.opts.get(OptionCode::IAAddr).and_then(|opt| {
+            if let DhcpOption::IAAddr(ia_addr) = opt {
+                Some(ia_addr.addr)
+            } else {
+                None
+            }
+        });
+
         let ips = self
             .pool
-            .allocate(&self.ctx, client_duid, iana.id, mac, None);
+            .allocate(&self.ctx, client_duid, iana.id, mac, requested_ip);
 
         if ips.is_empty() {
             let mut opts = DhcpOptions::new();

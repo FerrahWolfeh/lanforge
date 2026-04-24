@@ -512,25 +512,24 @@ impl LeaseDb {
 
             // Restore static entries for CLI-managed devices
             if row.origin == "cli" {
-                let v4_ip = match device.v4 {
-                    IPv4State::Static(ip) => Some(ip),
-                    _ => None,
-                };
-                let v6_suffix = device.v6.iter().find_map(|s| {
-                    if let IPv6State::Static(suffix) = s {
-                        Some(suffix.clone())
-                    } else {
-                        None
-                    }
-                });
-
                 table.add_static_entry(
                     mac,
                     StaticEntry {
                         mac,
                         hostname: device.hostname.name.clone(),
-                        v4_ip,
-                        v6_suffix,
+                        duid: device.duid.clone(),
+                        v4_static: match device.v4 {
+                            IPv4State::Static(ip) => Some(ip),
+                            _ => None,
+                        },
+                        v6_suffix: device.v6.iter().find_map(|s| {
+                            if let IPv6State::Static(suffix) = s {
+                                Some(suffix.clone())
+                            } else {
+                                None
+                            }
+                        }),
+                        origin: device.origin,
                     },
                 );
             }

@@ -224,7 +224,7 @@ fn handle_command(cmd: &MdnsCommand, socket_v4: &UdpSocket, socket_v6: &UdpSocke
 
 fn handle_lanforge_event(event: &LanforgeEvent, tx: &Sender<MdnsCommand>) {
     if matches!(event, LanforgeEvent::ScanRequested) {
-        let _ = tx.blocking_send(MdnsCommand::ProbeAll);
+        let _ = tx.try_send(MdnsCommand::ProbeAll);
     }
 }
 

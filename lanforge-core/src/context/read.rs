@@ -93,6 +93,12 @@ impl LanforgeContext {
         self.read().get_by_duid(duid)
     }
 
+    /// Helper to find a MAC address by its DUID.
+    #[must_use]
+    pub fn get_mac_by_duid(&self, duid: &Duid) -> Option<MacAddr> {
+        self.read().get_mac_by_duid(duid)
+    }
+
     /// Helper to find a MAC address by its IP in the DNS index.
     #[must_use]
     pub fn get_mac_by_ip(&self, ip: IpAddr) -> Option<MacAddr> {

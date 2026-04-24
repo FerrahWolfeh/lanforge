@@ -191,6 +191,7 @@ impl Default for DnsCfg {
 pub struct StaticDeviceCfg {
     pub mac: String,
     pub hostname: String,
+    pub duid: Option<String>,
     pub v4_ip: Option<String>,
     pub v6_suffix: Option<String>,
 }

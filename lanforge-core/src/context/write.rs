@@ -442,12 +442,14 @@ impl LanforgeContext {
         &self,
         mac: MacAddr,
         hostname: String,
+        duid: Option<Duid>,
         v4_static: Option<Ipv4Addr>,
         v6_suffix: Option<Ipv6AddrOrSuffix>,
     ) -> bool {
         self.apply(&DeviceUpdate::CliHostUpdated {
             mac,
             hostname: FieldUpdate::Set(hostname),
+            duid: duid.into(),
             v4_static: v4_static.into(),
             v6_suffix: v6_suffix.into(),
             origin: Origin::Cli,

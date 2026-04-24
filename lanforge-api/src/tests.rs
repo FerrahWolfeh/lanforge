@@ -39,6 +39,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
     let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
         mac: mac_cli,
+        duid: FieldUpdate::NoChange,
         hostname: FieldUpdate::Set("cli-host".to_string()),
         v4_static: FieldUpdate::NoChange,
         v6_suffix: FieldUpdate::NoChange,
@@ -57,6 +58,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
     let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
         mac: mac_toml,
+        duid: FieldUpdate::NoChange,
         hostname: FieldUpdate::Set("toml-host".to_string()),
         v4_static: FieldUpdate::Set("192.168.1.5".parse().unwrap()),
         v6_suffix: FieldUpdate::NoChange,

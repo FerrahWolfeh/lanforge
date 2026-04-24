@@ -96,7 +96,7 @@ where
 /// assert!(!Origin::Dynamic.is_static());
 /// assert_eq!(Origin::Cli.symbol(), "·");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum Origin {
     /// Configured manually via the `lanforge.toml` file.
     Toml,

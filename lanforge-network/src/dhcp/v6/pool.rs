@@ -898,6 +898,7 @@ mod tests {
         let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
             mac: mac(1),
             hostname: FieldUpdate::Set("test".to_string()),
+            duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(static_suffix),
             origin: Origin::Cli,
@@ -947,6 +948,7 @@ mod tests {
         let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
             mac: mac(1),
             hostname: FieldUpdate::Set("test".to_string()),
+            duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(static_suffix),
             origin: Origin::Cli,
@@ -1086,6 +1088,7 @@ mod tests {
         let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
             mac: mac(1),
             hostname: FieldUpdate::Set("test".to_string()),
+            duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
             origin: Origin::Cli,
@@ -1109,6 +1112,7 @@ mod tests {
         let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
             mac: mac(1),
             hostname: FieldUpdate::Set("test".to_string()),
+            duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
             origin: Origin::Cli,

@@ -339,6 +339,7 @@ where
                         let _ = ctx.ctx.apply(&DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
                             hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                            duid: FieldUpdate::NoChange,
                             v4_static: v4
                                 .and_then(|s| s.parse().ok())
                                 .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
@@ -406,6 +407,7 @@ where
                         let _ = ctx.ctx.apply(&DeviceUpdate::CliHostUpdated {
                             mac: mac_addr,
                             hostname: hn,
+                            duid: FieldUpdate::NoChange,
                             v4_static: v4s,
                             v6_suffix: v6s,
                             origin: Origin::Cli,

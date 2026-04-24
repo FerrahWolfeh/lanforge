@@ -119,6 +119,7 @@ async fn cli_host_update_publishes_events() {
     let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("cli-host".to_string()),
+        duid: FieldUpdate::NoChange,
         v4_static: FieldUpdate::NoChange,
         v6_suffix: FieldUpdate::NoChange,
         origin: Origin::Cli,
@@ -144,6 +145,7 @@ async fn cli_host_update_publishes_events() {
     let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::NoChange,
+        duid: FieldUpdate::NoChange,
         v4_static: FieldUpdate::Set("1.2.3.4".parse().unwrap()),
         v6_suffix: FieldUpdate::NoChange,
         origin: Origin::Cli,

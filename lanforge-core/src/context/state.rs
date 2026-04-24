@@ -129,8 +129,10 @@ impl<T> From<Option<T>> for FieldUpdate<T> {
 pub struct StaticEntry {
     pub mac: MacAddr,
     pub hostname: String,
-    pub v4_ip: Option<Ipv4Addr>,
+    pub duid: Option<Duid>,
+    pub v4_static: Option<Ipv4Addr>,
     pub v6_suffix: Option<Ipv6AddrOrSuffix>,
+    pub origin: Origin,
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +292,7 @@ pub enum DeviceUpdate {
     CliHostUpdated {
         mac: MacAddr,
         hostname: FieldUpdate<String>,
+        duid: FieldUpdate<Duid>,
         v4_static: FieldUpdate<Ipv4Addr>,
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
         origin: Origin,
@@ -413,10 +416,11 @@ impl State {
             DeviceUpdate::CliHostUpdated {
                 mac,
                 hostname,
+                duid,
                 v4_static,
                 v6_suffix,
                 origin,
-            } => self.handle_cli_host_updated(mac, hostname, v4_static, v6_suffix, origin),
+            } => self.handle_cli_host_updated(mac, hostname, duid, v4_static, v6_suffix, origin),
             DeviceUpdate::SlaacCleared { mac } => self.handle_slaac_cleared(mac),
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
             DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, &target),
@@ -797,6 +801,7 @@ impl State {
         &mut self,
         mac: MacAddr,
         hostname: FieldUpdate<String>,
+        duid: FieldUpdate<Duid>,
         v4_static: FieldUpdate<Ipv4Addr>,
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
         origin: Origin,
@@ -827,6 +832,22 @@ impl State {
                 FieldUpdate::Clear => {
                     if !dev.hostname.name.is_empty() {
                         dev.hostname = Hostname::default();
+                        changed = true;
+                    }
+                }
+                FieldUpdate::NoChange => {}
+            }
+            match duid {
+                FieldUpdate::Set(d) => {
+                    if dev.duid.as_ref() != Some(&d) {
+                        dev.duid = Some(d.clone());
+                        self.duid_index.insert(d, mac);
+                        changed = true;
+                    }
+                }
+                FieldUpdate::Clear => {
+                    if let Some(d) = dev.duid.take() {
+                        self.duid_index.remove(&d);
                         changed = true;
                     }
                 }
@@ -885,7 +906,8 @@ impl State {
                     StaticEntry {
                         mac,
                         hostname: dev.hostname.name.clone(),
-                        v4_ip: match dev.v4 {
+                        duid: dev.duid.clone(),
+                        v4_static: match dev.v4 {
                             IPv4State::Static(ip) => Some(ip),
                             _ => None,
                         },
@@ -896,6 +918,7 @@ impl State {
                                 None
                             }
                         }),
+                        origin: dev.origin,
                     },
                 );
             }
@@ -1376,7 +1399,7 @@ impl State {
         let mut sorted_entries: Vec<_> = self.static_entries.iter().collect();
         sorted_entries.sort_by_key(|(mac, _)| **mac);
         for (&mac, entry) in sorted_entries {
-            if let Some(ip) = entry.v4_ip {
+            if let Some(ip) = entry.v4_static {
                 if let Some(&owner) = registry.v4.get(&ip) {
                     if owner != mac {
                         warn!(
@@ -1408,12 +1431,14 @@ impl State {
         &mut self,
         mac: MacAddr,
         hostname: String,
+        duid: Option<Duid>,
         v4_static: Option<Ipv4Addr>,
         v6_suffix: Option<Ipv6AddrOrSuffix>,
     ) -> bool {
         self.apply_update(DeviceUpdate::CliHostUpdated {
             mac,
             hostname: FieldUpdate::Set(hostname),
+            duid: duid.into(),
             v4_static: v4_static.into(),
             v6_suffix: v6_suffix.into(),
             origin: Origin::Cli,
@@ -1435,7 +1460,12 @@ impl State {
 
     #[must_use]
     pub fn get_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
-        self.devices.get(&mac)?.duid.as_ref()
+        self.duid_index.iter().find(|(_, m)| **m == mac).map(|(d, _)| d)
+    }
+
+    #[must_use]
+    pub fn get_mac_by_duid(&self, duid: &Duid) -> Option<MacAddr> {
+        self.duid_index.get(duid).copied()
     }
 
     #[must_use]
