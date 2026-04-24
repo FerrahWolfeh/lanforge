@@ -32,7 +32,8 @@ pub async fn run_event_loop(
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
-    let mut stale_timer = interval(Duration::from_mins(10));
+    let stale_interval = Duration::from_secs(120);
+    let mut stale_timer = interval(stale_interval);
     stale_timer.tick().await;
 
     // Initial scan request to kick off discovery across all services
@@ -52,7 +53,7 @@ pub async fn run_event_loop(
     loop {
         tokio::select! {
             _ = stale_timer.tick() => {
-                ctx.expire_stale();
+                ctx.expire_stale(stale_interval);
             }
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 received, forcing state synchronization...");

@@ -1102,8 +1102,13 @@ impl Device {
     /// Returns true if the device was seen within the last 5 minutes.
     #[must_use]
     pub fn is_online(&self) -> bool {
-        self.last_seen
-            .elapsed()
+        self.is_online_at(SystemTime::now())
+    }
+
+    /// Returns true if the device was seen within the threshold relative to the given time.
+    #[must_use]
+    pub fn is_online_at(&self, now: SystemTime) -> bool {
+        now.duration_since(self.last_seen)
             .is_ok_and(|d| d.as_secs() < Self::ONLINE_THRESHOLD_SECS)
     }
 

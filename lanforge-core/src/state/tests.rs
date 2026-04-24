@@ -256,7 +256,7 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
         expires: future,
     });
 
-    assert!(!table.expire_stale().is_empty());
+    assert!(!table.expire_stale(Duration::from_mins(10)).is_empty());
 
     let dev_after = table.devices().next().unwrap();
     assert!(
@@ -470,7 +470,7 @@ fn test_multiple_iaids_and_prefixes() {
         expires: past,
     });
 
-    assert!(!table.expire_stale().is_empty());
+    assert!(!table.expire_stale(Duration::from_mins(10)).is_empty());
     let dev = table.get_device(&mac).unwrap();
     assert_eq!(
         dev.v6_prefixes.len(),
@@ -723,17 +723,17 @@ fn test_handle_ip_offline_slaac_removal() {
     state.apply_update(DeviceUpdate::IpOffline { ip: ip1 });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 1, "SLAAC IP should be removed");
-    assert!(dev.is_online(), "Device should still be online via ip2");
+    assert!(
+        !dev.is_online(),
+        "Device should be marked offline after NUD_FAILED"
+    );
 
     // 3. Report ip2 as offline
     state.ip_index.insert(ip2, mac);
     state.apply_update(DeviceUpdate::IpOffline { ip: ip2 });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 0, "All SLAAC IPs should be removed");
-    assert!(
-        dev.is_online(),
-        "Device should still be online via recent activity"
-    );
+    assert!(!dev.is_online(), "Device should be offline");
 }
 #[test]
 fn test_handle_ip_offline_static_ula_persistence() {
@@ -793,8 +793,8 @@ fn test_handle_ip_offline_static_ula_persistence() {
     );
 
     assert!(
-        dev.is_online(),
-        "Still online because Static is persistent and we are within 5min window"
+        !dev.is_online(),
+        "Should be offline after NUD_FAILED regardless of recent activity"
     );
 
     // 4. Device marks as online again on activity
@@ -808,4 +808,66 @@ fn test_handle_ip_offline_static_ula_persistence() {
 
     let dev = state.get_device(&mac).unwrap();
     assert!(dev.is_online());
+}
+
+#[test]
+fn test_nud_failed_forces_offline() {
+    let mut state = State::new();
+    let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    let ip = IpAddr::from_str("192.168.1.10").unwrap();
+
+    state.apply_update(DeviceUpdate::ArpSeen {
+        mac,
+        ip: match ip {
+            IpAddr::V4(a) => a,
+            IpAddr::V6(_) => unreachable!(),
+        },
+    });
+    let dev = state.get_device(&mac).unwrap();
+    assert!(dev.is_online());
+
+    // Simulate NUD_FAILED
+    state.apply_update(DeviceUpdate::IpOffline { ip });
+    let dev = state.get_device(&mac).unwrap();
+    assert!(!dev.is_online(), "NUD_FAILED should force device offline");
+}
+
+#[test]
+fn test_expire_stale_status_transition() {
+    let mut state = State::new();
+    let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+
+    // 1. Device is online
+    state.apply_update(DeviceUpdate::ArpSeen {
+        mac,
+        ip: "1.1.1.1".parse().unwrap(),
+    });
+    assert!(state.get_device(&mac).unwrap().is_online());
+
+    // 2. 10 minutes pass... (we simulate this by backdating last_seen)
+    {
+        let mut dev_arc = state.devices.remove(&mac).unwrap();
+        let dev = std::sync::Arc::make_mut(&mut dev_arc);
+        // We want it to be online at last_run (now - 600s) but offline at now.
+        // If last_seen is now - 700s:
+        // - At last_run: (now - 600) - (now - 700) = 100s since last_seen -> Online (< 300)
+        // - At now: 700s since last_seen -> Offline (> 300)
+        dev.last_seen = SystemTime::now() - Duration::from_secs(700);
+        state.devices.insert(mac, dev_arc);
+    }
+
+    // 3. Run expire_stale
+    let events = state.expire_stale(Duration::from_mins(10));
+
+    // 4. Verify that we got a StatusChanged event
+    let found = events.iter().any(|(_, _, change)| {
+        matches!(
+            change,
+            crate::bus::DeviceChange::StatusChanged { online: false, .. }
+        )
+    });
+    assert!(
+        found,
+        "Should have detected offline transition due to time passing"
+    );
 }

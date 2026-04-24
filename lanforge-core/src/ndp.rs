@@ -137,7 +137,7 @@ impl NeighborEvent {
                     ip: *ip4,
                 }),
             },
-            Self::Deleted { .. } | Self::Failed { .. } => None,
+            Self::Deleted { ip, .. } | Self::Failed { ip, .. } => Some(DeviceUpdate::IpOffline { ip: *ip }),
         }
     }
 }

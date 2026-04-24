@@ -782,6 +782,12 @@ impl State {
         let elapsed = SystemTime::now()
             .duration_since(old_seen)
             .unwrap_or_default();
+
+        let mut dev_arc = self.devices.remove(&mac).unwrap();
+        let dev = Arc::make_mut(&mut dev_arc);
+        dev.last_seen = SystemTime::now();
+        self.devices.insert(mac, dev_arc);
+
         !exists || elapsed.as_secs() > 300
     }
 
@@ -1113,6 +1119,11 @@ impl State {
             {
                 let dev = Arc::make_mut(&mut dev_arc);
                 dev.remove_ip(&ip);
+                // Force last_seen to be just past the threshold to trigger an immediate "Offline" status
+                // while preserving the fact that we saw it recently (but it failed).
+                dev.last_seen = SystemTime::now()
+                    .checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 1))
+                    .unwrap_or(std::time::UNIX_EPOCH);
             }
             self.index_device(mac, &dev_arc);
             self.devices.insert(mac, dev_arc);
@@ -1213,8 +1224,13 @@ impl State {
         }
     }
 
-    pub fn expire_stale(&mut self) -> Vec<(MacAddr, Option<String>, DeviceChange)> {
+    pub fn expire_stale(
+        &mut self,
+        interval: Duration,
+    ) -> Vec<(MacAddr, Option<String>, DeviceChange)> {
         let now = SystemTime::now();
+        let last_run = now.checked_sub(interval).unwrap_or(now);
+
         let max_age = Duration::from_hours(168);
         let ndp_max_age = Duration::from_hours(24);
         let ip_expiry_threshold = Duration::from_hours(24);
@@ -1230,6 +1246,23 @@ impl State {
         self.devices.retain(|&mac, dev_arc| {
             let hostname = Some(dev_arc.hostname.name.clone());
 
+            // 1. Check for Online -> Offline transition due to time passing
+            if dev_arc.is_online_at(last_run) && !dev_arc.is_online_at(now) {
+                debug!(
+                    "[state] Device {} transitioned to offline (inactivity)",
+                    mac
+                );
+                events.push((
+                    mac,
+                    hostname.clone(),
+                    DeviceChange::StatusChanged {
+                        online: false,
+                        hostname: hostname.clone(),
+                    },
+                ));
+            }
+
+            // 2. Cleanup zombie devices (completely unused dynamic entries)
             if dev_arc.is_zombie(max_age) {
                 to_unindex.push(Arc::clone(dev_arc));
                 events.push((mac, hostname, DeviceChange::HostRemoved));

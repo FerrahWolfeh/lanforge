@@ -292,10 +292,10 @@ impl LanforgeContext {
     }
 
     /// Triggers the background garbage collection process.
-    pub fn expire_stale(&self) {
+    pub fn expire_stale(&self, interval: std::time::Duration) {
         let dead_leases = {
             let mut state = self.inner.state.write();
-            state.expire_stale()
+            state.expire_stale(interval)
         };
 
         if !dead_leases.is_empty() {
