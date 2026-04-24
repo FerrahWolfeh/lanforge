@@ -34,7 +34,7 @@ pub async fn run_event_loop(
     let mut fallback = interval(Duration::from_secs(cfg.fallback_mins * 60));
     fallback.tick().await;
 
-    let mut stale_timer = interval(Duration::from_secs(600));
+    let mut stale_timer = interval(Duration::from_mins(10));
     stale_timer.tick().await;
 
     // Initial scan
@@ -116,38 +116,36 @@ fn handle_bus_event(
     system_ready_sent: &mut bool,
 ) -> bool {
     match event {
-        LanforgeEvent::ServiceReady { name } => {
-            if expected_services.contains(name.as_str()) {
-                ready_services.insert(name.clone());
-                debug!(
-                    "ServiceReady: {} ({}/{})",
-                    name,
-                    ready_services.len(),
-                    expected_services.len()
-                );
+        LanforgeEvent::ServiceReady { name } if expected_services.contains(name.as_str()) => {
+            ready_services.insert(name.clone());
+            debug!(
+                "ServiceReady: {} ({}/{})",
+                name,
+                ready_services.len(),
+                expected_services.len()
+            );
 
-                if !*system_ready_sent && ready_services.len() >= expected_services.len() {
-                    info!("✅ All internal services ready. System fully operational.");
-                    let _ = ctx.bus().publish(LanforgeEvent::SystemReady);
-                    sd_notify_ready();
-                    *system_ready_sent = true;
-                }
+            if !*system_ready_sent && ready_services.len() >= expected_services.len() {
+                info!("✅ All internal services ready. System fully operational.");
+                let _ = ctx.bus().publish(LanforgeEvent::SystemReady);
+                sd_notify_ready();
+                *system_ready_sent = true;
             }
         }
-        LanforgeEvent::PrefixChanged { gua, ula, .. } => {
-            if state.current_gua != gua || state.current_ula != ula {
-                info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
-                state.current_gua = gua;
-                state.current_ula = ula;
-                spawn_scan(
-                    ctx.clone(),
-                    cfg.clone(),
-                    handle.clone(),
-                    gua,
-                    ula,
-                    target_ifindex,
-                );
-            }
+        LanforgeEvent::PrefixChanged { gua, ula, .. }
+            if (state.current_gua != gua || state.current_ula != ula) =>
+        {
+            info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
+            state.current_gua = gua;
+            state.current_ula = ula;
+            spawn_scan(
+                ctx.clone(),
+                cfg.clone(),
+                handle.clone(),
+                gua,
+                ula,
+                target_ifindex,
+            );
         }
         LanforgeEvent::ReloadConfig => {
             info!("ReloadConfig: Forcing background synchronization...");

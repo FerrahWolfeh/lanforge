@@ -831,8 +831,7 @@ impl Device {
     pub fn is_online(&self) -> bool {
         self.last_seen
             .elapsed()
-            .map(|d| d.as_secs() < Self::ONLINE_THRESHOLD_SECS)
-            .unwrap_or(false)
+            .is_ok_and(|d| d.as_secs() < Self::ONLINE_THRESHOLD_SECS)
     }
 
     /// Returns a human-readable primary IPv4 address or "—".

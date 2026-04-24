@@ -86,7 +86,7 @@ impl IpPool {
     /// Cleans up quarantine IPs.
     pub fn cleanup_quarantine(&mut self, now: Instant) {
         // Cleanup Quarantine (DECLINEs) - Recover IPs after 2 hours
-        let quarantine_timeout = Duration::from_secs(7200);
+        let quarantine_timeout = Duration::from_hours(2);
         let recovered_ips: Vec<Ipv4Addr> = self
             .declined
             .iter()
@@ -280,7 +280,7 @@ mod tests {
         let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
             mac: mac(1),
             ip: ip1,
-            expires: SystemTime::now() + Duration::from_secs(3600),
+            expires: SystemTime::now() + Duration::from_hours(1),
         });
 
         let ip2 = p.allocate(&ctx, mac(1), None).unwrap();
@@ -317,7 +317,7 @@ mod tests {
         p.mark_declined(declined_ip);
 
         // Pedimos IPs
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        let expiry = SystemTime::now() + Duration::from_hours(1);
         for i in 0..4 {
             if let Some(ip) = p.allocate(&ctx, mac(i), None) {
                 // Registrar cada um para que NÂO seja pego de novo
@@ -371,7 +371,7 @@ mod tests {
         assert!(p.available.is_empty());
 
         // 3. Simula 3 horas no futuro
-        let three_hours_later = Instant::now() + Duration::from_secs(3 * 3600);
+        let three_hours_later = Instant::now() + Duration::from_hours(3);
         p.cleanup_quarantine(three_hours_later);
 
         // 4. Deve ter recuperado o IP

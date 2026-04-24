@@ -1185,8 +1185,8 @@ impl State {
 
     pub fn expire_stale(&mut self) -> Vec<(MacAddr, Option<String>, DeviceChange)> {
         let now = SystemTime::now();
-        let max_age = Duration::from_secs(7 * 24 * 3600);
-        let ndp_max_age = Duration::from_secs(24 * 3600);
+        let max_age = Duration::from_hours(168);
+        let ndp_max_age = Duration::from_hours(24);
         let mut events = Vec::new();
 
         self.ndp_cache

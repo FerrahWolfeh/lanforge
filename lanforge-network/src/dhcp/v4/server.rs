@@ -619,7 +619,7 @@ mod tests {
         let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
             mac: mac1,
             ip: contested_ip,
-            expires: SystemTime::now() + Duration::from_secs(3600),
+            expires: SystemTime::now() + Duration::from_hours(1),
         });
 
         // 2. MAC2 tenta pedir o IP que já é do MAC1

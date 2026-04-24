@@ -814,8 +814,7 @@ impl Default for LeaseHistoryEntry {
 /// Returns `0` for times before the Unix epoch (1970-01-01).
 pub(crate) fn system_time_to_unix(t: SystemTime) -> i64 {
     t.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs().cast_signed())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs().cast_signed())
 }
 
 /// Converts a Unix timestamp (seconds since epoch) to `SystemTime`.

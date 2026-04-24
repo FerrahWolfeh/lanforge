@@ -155,24 +155,22 @@ impl Duid {
 
         match duid_type {
             // DUID-LLT (Link-Layer Address Plus Time)
-            1 => {
+            1
                 // type(2) + htype(2) + time(4) + lladdr(6+)
-                if self.bytes.len() >= 14 {
+                if self.bytes.len() >= 14 => {
                     return MacAddr::from_slice(&self.bytes[8..14]);
                 }
-            }
             // DUID-EN (Enterprise Number)
             2 => {
                 // type(2) + enterprise(4) + identifier(variable)
                 // Cannot reliably extract MAC
             }
             // DUID-LL (Link-Layer Address)
-            3 => {
+            3
                 // type(2) + htype(2) + lladdr(6+)
-                if self.bytes.len() >= 10 {
+                if self.bytes.len() >= 10 => {
                     return MacAddr::from_slice(&self.bytes[4..10]);
                 }
-            }
             _ => {}
         }
         None

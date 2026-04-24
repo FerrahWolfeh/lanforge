@@ -710,7 +710,7 @@ mod tests {
             duid: Duid::new(duid.to_vec()),
             iaid,
             ip,
-            expires: SystemTime::now() + Duration::from_secs(3600),
+            expires: SystemTime::now() + Duration::from_hours(1),
         });
     }
 

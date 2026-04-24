@@ -41,7 +41,7 @@ fn register_test_device(ctx: &LanforgeContext, hostname: &str, mac: MacAddr, ip:
     let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
         mac,
         ip,
-        expires: SystemTime::now() + Duration::from_secs(3600),
+        expires: SystemTime::now() + Duration::from_hours(1),
     });
     if !hostname.is_empty() {
         let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
@@ -166,7 +166,7 @@ fn test_resolve_local_priority_ordering() {
     let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
         mac,
         ip: "192.168.1.1".parse().unwrap(),
-        expires: SystemTime::now() + Duration::from_secs(3600),
+        expires: SystemTime::now() + Duration::from_hours(1),
     });
     let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
@@ -266,7 +266,7 @@ fn test_dhcp_registration_creates_dns_record() {
     let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
         mac,
         ip,
-        expires: SystemTime::now() + Duration::from_secs(3600),
+        expires: SystemTime::now() + Duration::from_hours(1),
     });
 
     // 2. Simulate Hostname Hint from DHCP
@@ -334,7 +334,7 @@ fn test_dns_response_contract() {
         duid: Duid::generate_ll_from_mac(mac.0),
         iaid: 1,
         ip: dynamic_ula,
-        expires: SystemTime::now() + Duration::from_secs(3600),
+        expires: SystemTime::now() + Duration::from_hours(1),
     });
 
     let mut query = Message::new();
