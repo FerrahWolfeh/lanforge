@@ -115,6 +115,10 @@ pub enum Command {
         /// Optional record type (A, AAAA, TXT, etc.).
         record_type: Option<String>,
     },
+    /// Fully dump the main database state (in-memory state).
+    DbDump,
+    /// Completely reset and re-seed the database.
+    DbReset,
 }
 
 /// Represents a response sent from the daemon to a client.
@@ -144,6 +148,8 @@ pub enum Response {
     DnsStats(DnsStatsResponse),
     /// Response for a DNS diagnostic query.
     DnsQuery(DnsQueryResponse),
+    /// Response for a database dump.
+    DbDump(Box<lanforge_core::state::State>),
 }
 
 /// A simple success result containing a message.

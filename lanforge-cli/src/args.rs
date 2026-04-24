@@ -173,6 +173,8 @@ pub enum QueryTarget {
     Devices,
     /// Dump configured hosts as JSON
     Hosts,
+    /// Dump full in-memory state as JSON
+    State,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -226,6 +228,10 @@ pub enum DbCommand {
     LogClean,
     /// Remove 'zombie' entries (dynamic devices with no IP nor hostname)
     Prune,
+    /// Dump the full in-memory state as JSON
+    Dump,
+    /// Completely reset and re-seed the database (FACTORY RESET)
+    Reset,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]

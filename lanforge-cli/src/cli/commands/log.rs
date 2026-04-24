@@ -310,6 +310,22 @@ impl LogHandler {
                     mac
                 );
             }
+            LanforgeEvent::DbReset => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".yellow().bold(),
+                    "System-wide database reset requested!".red().bold()
+                );
+            }
+            LanforgeEvent::DbResetCompleted => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".green().bold(),
+                    "Database reset completed. Reloading state...".bright_green()
+                );
+            }
         }
     }
 

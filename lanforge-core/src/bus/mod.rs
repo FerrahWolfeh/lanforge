@@ -128,6 +128,8 @@ pub enum LanforgeEvent {
     DbVacuum,
     DbLogClean,
     DbPrune,
+    DbReset,
+    DbResetCompleted,
     LeaseRelease {
         mac: MacAddr,
         target: LeaseTarget,

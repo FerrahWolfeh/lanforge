@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::bus::DeviceChange;
 use crate::context::state::{FieldUpdate, LeaseTarget};
@@ -67,6 +67,71 @@ where
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
     serializer.serialize_u64(elapsed.as_secs())
+}
+
+/// Serializes a list of observed IPv4 addresses with their timestamps.
+///
+/// # Errors
+///
+/// Returns an error if the serializer fails to serialize the sequence or its elements.
+pub fn serialize_seen_v4<S>(
+    seen: &[(Ipv4Addr, SystemTime)],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(seen.len()))?;
+    for (ip, time) in seen {
+        let elapsed = time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        seq.serialize_element(&(*ip, elapsed.as_secs()))?;
+    }
+    seq.end()
+}
+
+/// Deserializes a `SystemTime` from a Unix timestamp.
+///
+/// # Errors
+///
+/// Returns an error if the deserializer fails to parse the timestamp.
+pub fn deserialize_time<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let secs = u64::deserialize(deserializer)?;
+    Ok(UNIX_EPOCH + Duration::from_secs(secs))
+}
+
+/// Deserializes an optional `SystemTime` from a Unix timestamp.
+///
+/// # Errors
+///
+/// Returns an error if the deserializer fails to parse the timestamp.
+pub fn deserialize_time_opt<'de, D>(deserializer: D) -> Result<Option<SystemTime>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt_secs = Option::<u64>::deserialize(deserializer)?;
+    Ok(opt_secs.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)))
+}
+
+/// Deserializes a list of observed IPv4 addresses with their timestamps.
+///
+/// # Errors
+///
+/// Returns an error if the deserializer fails to parse the sequence or its elements.
+pub fn deserialize_seen_v4<'de, D>(deserializer: D) -> Result<Vec<(Ipv4Addr, SystemTime)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<(Ipv4Addr, u64)>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(ip, secs)| (ip, UNIX_EPOCH + Duration::from_secs(secs)))
+        .collect())
 }
 
 /// The administrative source of a device's configuration.
@@ -255,7 +320,10 @@ pub struct V4Lease {
     /// The assigned IPv4 address.
     pub ip: Ipv4Addr,
     /// The precise moment when this lease will expire.
-    #[serde(serialize_with = "serialize_time")]
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
     pub expires: SystemTime,
 }
 
@@ -270,7 +338,10 @@ pub struct V6Lease {
     /// IAIDs allow a single client to have multiple address assignments.
     pub iaid: u32,
     /// The precise moment when this lease will expire.
-    #[serde(serialize_with = "serialize_time")]
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
     pub expires: SystemTime,
 }
 
@@ -286,7 +357,10 @@ pub struct V6PrefixLease {
     /// The Identity Association Identifier from the client.
     pub iaid: u32,
     /// The precise moment when this lease will expire.
-    #[serde(serialize_with = "serialize_time")]
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
     pub expires: SystemTime,
 }
 
@@ -340,7 +414,10 @@ pub enum IPv6State {
         /// The observed IPv6 address.
         ip: Ipv6Addr,
         /// The last time this specific address was observed.
-        #[serde(serialize_with = "serialize_time")]
+        #[serde(
+            serialize_with = "serialize_time",
+            deserialize_with = "deserialize_time"
+        )]
         last_seen: SystemTime,
     },
 }
@@ -681,7 +758,10 @@ pub struct Device {
     ///
     /// Only set for devices configured via CLI, TOML, or API.
     /// Dynamic devices have this as `None`.
-    #[serde(serialize_with = "serialize_time_opt")]
+    #[serde(
+        serialize_with = "serialize_time_opt",
+        deserialize_with = "deserialize_time_opt"
+    )]
     pub managed_at: Option<SystemTime>,
 
     /// Current IPv4 connectivity state.
@@ -701,13 +781,20 @@ pub struct Device {
     ///
     /// These are "seen" addresses — the device may not have an active lease
     /// but was observed communicating on the network.
+    #[serde(
+        serialize_with = "serialize_seen_v4",
+        deserialize_with = "deserialize_seen_v4"
+    )]
     pub seen_v4: Vec<(Ipv4Addr, SystemTime)>,
 
     /// Precise moment when the device was last seen on the network.
     ///
     /// Updated on every network event (DHCP, NDP, ARP). Used for expiry
     /// calculations during garbage collection.
-    #[serde(serialize_with = "serialize_time")]
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
     pub last_seen: SystemTime,
 
     /// `DHCPv6` Unique Identifier (DUID), if tracked.

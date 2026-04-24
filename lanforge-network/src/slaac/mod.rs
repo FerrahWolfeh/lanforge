@@ -79,7 +79,7 @@ impl AsyncService for SlaacTracker {
                 () = tokio::time::sleep(sleep_duration) => {
                     info!("SLAAC Tracker: Periodic sweep");
                     self.send_discovery_ping();
-                    next_sweep = Instant::now() + Duration::from_mins(5); // 5 minutes
+                    next_sweep = Instant::now() + Duration::from_hours(1); // 60 minutes
                 }
 
                 Ok(timed_event) = bus_rx.recv() => {

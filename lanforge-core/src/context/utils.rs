@@ -22,7 +22,8 @@ pub(crate) const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         | DeviceUpdate::IpOffline { .. }
         | DeviceUpdate::InterfaceIpsChanged { .. }
         | DeviceUpdate::PruneZombies
-        | DeviceUpdate::RebuildDnsIndices => None,
+        | DeviceUpdate::RebuildDnsIndices
+        | DeviceUpdate::Reset => None,
     }
 }
 

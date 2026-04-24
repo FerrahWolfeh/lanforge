@@ -17,10 +17,17 @@ use crate::{
     },
     device::{HostnameOrigin, Ipv6AddrOrSuffix, Origin},
     identifiers::{Duid, MacAddr},
-    state::{DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget},
+    state::{DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget, State},
 };
 
+use parking_lot::RwLockWriteGuard;
+
 impl LanforgeContext {
+    /// Provides direct write access to the underlying device state.
+    pub fn write(&self) -> RwLockWriteGuard<'_, State> {
+        self.inner.state.write()
+    }
+
     /// Sets the system lifecycle to shutdown mode for this instance.
     pub fn terminate(&self) {
         self.inner.running.store(false, Ordering::SeqCst);
@@ -331,5 +338,11 @@ impl LanforgeContext {
     /// Sets the shared DNS statistics.
     pub fn set_dns_stats<T: std::any::Any + Send + Sync + 'static>(&self, stats: Arc<T>) {
         *self.inner.dns_stats.write() = Some(stats);
+    }
+
+    /// Completely resets the in-memory state.
+    pub fn reset(&self) {
+        let _ = self.apply(&DeviceUpdate::Reset);
+        *self.inner.last_db_flush.write() = None;
     }
 }

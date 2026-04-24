@@ -507,3 +507,35 @@ impl Config {
         }
     }
 }
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            #[cfg(feature = "debug-commands")]
+            command: args::Command::Run { only: None },
+            iface_lan: "lo".to_string(),
+            leases_db: "lanforge.db".to_string(),
+            db_url: "sqlite://lanforge.db".to_string(),
+            fallback_mins: 60,
+            control_socket: "/run/lanforge/control.sock".to_string(),
+            log_db: "/run/lanforge/log.db".to_string(),
+            log_db_url: "sqlite://:memory:".to_string(),
+            ra_enabled: true,
+            ra_toml: RaCfg::default(),
+            dhcpv4_enabled: true,
+            dhcpv4_toml: DhcpV4Cfg::default(),
+            dhcpv6_enabled: true,
+            dhcpv6_toml: DhcpV6Cfg::default(),
+            dns_enabled: true,
+            dns_toml: DnsCfg::default(),
+            search_domains: vec!["lan".to_string()],
+            devices: Vec::new(),
+            devices_file: None,
+            dhcpv4_port: 67,
+            dhcpv6_port: 547,
+            dns_port: Some(5300),
+            api_port: None,
+            http_listen: None,
+        }
+    }
+}

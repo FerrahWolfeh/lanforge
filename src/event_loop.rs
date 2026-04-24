@@ -25,14 +25,12 @@ pub async fn run_event_loop(
     let cfg = bootstrap.cfg;
     let target_ifindex = bootstrap.target_ifindex;
 
-    let mut state = LoopState::new();
+    let if_state = ctx.get_interface_state(target_ifindex);
+    let mut state = LoopState::new(if_state.gua, if_state.ula);
 
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
-
-    let mut fallback = interval(Duration::from_secs(cfg.fallback_mins * 60));
-    fallback.tick().await;
 
     let mut stale_timer = interval(Duration::from_mins(10));
     stale_timer.tick().await;
@@ -46,9 +44,6 @@ pub async fn run_event_loop(
 
     loop {
         tokio::select! {
-            _ = fallback.tick() => {
-                debug!("Periodic SLAAC synchronization (Fallback)...");
-            }
             _ = stale_timer.tick() => {
                 ctx.expire_stale();
             }
@@ -160,6 +155,18 @@ fn handle_bus_event(
                 );
             }
         }
+        LanforgeEvent::DbResetCompleted => {
+            info!("Database reset confirmed. Performing state refresh...");
+            ctx.reset();
+
+            // Reload static devices from config
+            let mut state = ctx.write();
+            crate::bootstrap::Bootstrapper::reload_static_devices_into_state(&mut state, cfg);
+            drop(state);
+
+            info!("State re-seeded with static devices. Triggering new discovery scan...");
+            let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
+        }
         LanforgeEvent::Shutdown => {
             debug!("EventLoop: shutdown received via bus");
             return false;
@@ -175,10 +182,10 @@ struct LoopState {
 }
 
 impl LoopState {
-    const fn new() -> Self {
+    pub const fn new(gua: Option<Ipv6Addr>, ula: Option<Ipv6Addr>) -> Self {
         Self {
-            current_gua: None,
-            current_ula: None,
+            current_gua: gua,
+            current_ula: ula,
         }
     }
 }

@@ -128,7 +128,16 @@ impl Bootstrapper {
             }
         };
 
-        // Load static devices
+        Self::reload_static_devices_into_state(&mut table, cfg);
+
+        // Trigger early collision validation and logging
+        let _ = table.get_static_registry();
+
+        Ok(table)
+    }
+
+    /// Reloads all static devices from the configuration into the given state.
+    pub fn reload_static_devices_into_state(table: &mut State, cfg: &Config) {
         let mut all_static_devices = cfg.devices.clone();
         if let Some(ref extra_path) = cfg.devices_file {
             info!("📂 Carregando devices adicionais de {extra_path}");
@@ -147,11 +156,6 @@ impl Bootstrapper {
                 table.add_static_device(mac, e.hostname.clone(), duid, v4_ip, v6_suffix);
             }
         }
-
-        // Trigger early collision validation and logging
-        let _ = table.get_static_registry();
-
-        Ok(table)
     }
 
     fn find_target_interface(cfg: &Config) -> Result<u32> {

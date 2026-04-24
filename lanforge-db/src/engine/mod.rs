@@ -35,12 +35,23 @@ impl LeaseDb {
                 .unwrap_or(url);
 
             let path_str = path_str.split('?').next().unwrap_or(path_str);
+            let path = Path::new(path_str);
 
-            if let Some(parent) = Path::new(path_str).parent()
+            if let Some(parent) = path.parent()
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
                 let _ = std::fs::create_dir_all(parent);
+            }
+
+            // Manually create the file if it doesn't exist to avoid "unable to open database file"
+            if !path.exists() {
+                debug!("Creating new database file: {}", path_str);
+                let _ = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(path);
             }
         }
 
@@ -435,6 +446,27 @@ impl LeaseDb {
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => Ok(postgres::prune_zombies(p).await?),
         }
+    }
+
+    pub async fn reset(&self) -> Result<(), LeaseDbError> {
+        info!("Resetting database (clearing all tables)...");
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => {
+                sqlx::query("DELETE FROM devices").execute(p).await?;
+                sqlx::query("DELETE FROM lease_history").execute(p).await?;
+            }
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => {
+                sqlx::query("TRUNCATE TABLE devices CASCADE")
+                    .execute(p)
+                    .await?;
+                sqlx::query("TRUNCATE TABLE lease_history")
+                    .execute(p)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn record_lease_event(

@@ -140,7 +140,7 @@ impl Default for GeneralCfg {
             db_url: None,
             target_prefix: "fd97:f00d:cafe:3731".into(),
             debounce_secs: 2,
-            fallback_mins: 5,
+            fallback_mins: 60,
             control_socket: "/run/lanforge/control.sock".into(),
             http_listen: None,
             search_domains: None,

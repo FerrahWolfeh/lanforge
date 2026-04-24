@@ -187,17 +187,17 @@ impl AsyncService for ControlService {
 /// Internal context for a specific client connection.
 ///
 /// Groups shared state and configuration to facilitate command handling.
-pub(crate) struct ClientContext {
+pub struct ClientContext {
     /// Currently known Global Unicast Address prefix.
-    pub(crate) current_gua: Option<String>,
+    pub current_gua: Option<String>,
     /// Uptime of the daemon in seconds.
-    pub(crate) uptime_secs: u64,
+    pub uptime_secs: u64,
     /// Seconds since the last network scan.
-    pub(crate) last_scan_secs_ago: u64,
+    pub last_scan_secs_ago: u64,
     /// API server configuration.
-    pub(crate) cfg: Arc<ApiConfig>,
+    pub cfg: Arc<ApiConfig>,
     /// Lanforge Context.
-    pub(crate) ctx: LanforgeContext,
+    pub ctx: LanforgeContext,
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ pub(crate) struct ClientContext {
 ///
 /// Reads JSON lines from the stream, dispatches them to the appropriate
 /// handler in `ClientContext`, and writes back the JSON response.
-async fn handle_client<S>(stream: S, ctx: ClientContext) -> Result<(), ApiError>
+pub async fn handle_client<S>(stream: S, ctx: ClientContext) -> Result<(), ApiError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -532,6 +532,8 @@ where
                     message: "Pruning zombie entries from memory and database...".to_string(),
                 })
             }
+            Ok(Command::DbDump) => ctx.handle_db_dump().await,
+            Ok(Command::DbReset) => ctx.handle_db_reset().await,
             Err(e) => Response::Error {
                 error: format!("Invalid command or malformed JSON: {e}"),
             },

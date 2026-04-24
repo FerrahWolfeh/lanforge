@@ -164,8 +164,11 @@ impl LanforgeService for NeighborMonitor {
 impl AsyncService for NeighborMonitor {
     async fn run(&mut self) -> Result<(), CoreError> {
         let mut bus_rx = self.ctx.bus().subscribe();
-        let mut current_gua: Option<Ipv6Addr> = None;
-        let mut current_ula: Option<Ipv6Addr> = None;
+
+        // Initialize prefixes from current context state
+        let if_state = self.ctx.get_interface_state(self.target_ifindex);
+        let mut current_gua: Option<Ipv6Addr> = if_state.gua;
+        let mut current_ula: Option<Ipv6Addr> = if_state.ula;
 
         // 1. Initial Neighbor Scan (Bootstrap)
         // We perform a simple dump of the kernel's neighbor table for the interface.

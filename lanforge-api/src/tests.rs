@@ -127,3 +127,76 @@ async fn test_api_status_reports_gua_and_ula() {
         panic!("Expected Response::Status, got {:?}", resp);
     }
 }
+
+#[tokio::test]
+async fn test_dump_command_simulation() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
+
+    let ctx_handle = init_test_context();
+    let cfg = Arc::new(make_dummy_config());
+
+    // 1. Add a device to state
+    let mac = MacAddr::parse("00:00:00:00:00:0a").unwrap();
+    let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
+        mac,
+        duid: FieldUpdate::NoChange,
+        hostname: FieldUpdate::Set("dump-target".to_string()),
+        v4_static: FieldUpdate::NoChange,
+        v6_suffix: FieldUpdate::NoChange,
+        origin: Origin::Cli,
+    });
+
+    let ctx = ClientContext {
+        current_gua: None,
+        uptime_secs: 123,
+        last_scan_secs_ago: 45,
+        cfg,
+        ctx: ctx_handle,
+    };
+
+    // 2. Create duplex stream
+    let (client, server) = duplex(1024);
+
+    // 3. Spawn server (handle_client)
+    let server_handle = tokio::spawn(async move {
+        crate::server::handle_client(server, ctx)
+            .await
+            .expect("handle_client failed");
+    });
+
+    // 4. Send "db_dump" command as JSON line
+    let (reader, mut writer) = tokio::io::split(client);
+    let mut reader = BufReader::new(reader);
+
+    writer
+        .write_all(b"{\"command\":\"db_dump\"}\n")
+        .await
+        .unwrap();
+
+    // 5. Read and verify response
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .await
+        .expect("Failed to read line from server");
+
+    let resp: Response = serde_json::from_str(&line).expect("Failed to deserialize Response");
+    if let Response::DbDump(state) = resp {
+        assert!(
+            state.devices.contains_key(&mac),
+            "Dumped state missing target device"
+        );
+        assert_eq!(
+            state.devices.get(&mac).unwrap().hostname.name,
+            "dump-target",
+            "Hostname mismatch in dumped state"
+        );
+    } else {
+        panic!("Expected Response::DbDump, got {:?}", resp);
+    }
+
+    // 6. Cleanup (closing connection should terminate handle_client)
+    writer.shutdown().await.expect("Failed to shutdown writer");
+    drop(writer);
+    let _ = server_handle.await;
+}

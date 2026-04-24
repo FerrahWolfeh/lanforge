@@ -5,16 +5,10 @@
     clippy::module_name_repetitions,
     clippy::similar_names
 )]
-mod app;
-mod bootstrap;
-mod config;
-mod event_loop;
-mod registry;
-mod supervisor;
 
-use crate::app::Daemon;
-use crate::bootstrap::Bootstrapper;
 use anyhow::Result;
+use lanforge::app::Daemon;
+use lanforge::bootstrap::Bootstrapper;
 use tokio::runtime::Builder;
 use tracing_subscriber::EnvFilter;
 

@@ -19,6 +19,7 @@ impl CliCommand for QueryHandler {
                 format: None,
             }),
             QueryTarget::Hosts => Ok(ControlCommand::HostList),
+            QueryTarget::State => Ok(ControlCommand::DbDump),
         }
     }
 

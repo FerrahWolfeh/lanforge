@@ -94,6 +94,7 @@ impl AsyncService for DbWorker {
         let mut flush_interval: Interval = interval(Duration::from_secs(5));
 
         info!("Database worker started");
+        self.ctx.set_db_ready(true);
         let _ = self.ctx.bus().publish(LanforgeEvent::DbReady);
 
         loop {
@@ -125,6 +126,19 @@ impl AsyncService for DbWorker {
                             if let Err(e) = db.prune_zombies().await {
                                 error!("Prune error: {e}");
                             }
+                        }
+                        LanforgeEvent::DbReset => {
+                            info!("Full database reset requested...");
+                            self.ctx.set_db_ready(false);
+                            if let Err(e) = db.reset().await {
+                                error!("LeaseDb reset error: {e}");
+                            }
+                            if let Err(e) = log_db.clear_logs().await {
+                                error!("LogDb reset error: {e}");
+                            }
+                            self.dirty = false;
+                            self.ctx.set_db_ready(true);
+                            let _ = self.ctx.bus().publish(LanforgeEvent::DbResetCompleted);
                         }
                         LanforgeEvent::Shutdown => {
                             info!("Database worker shutting down...");

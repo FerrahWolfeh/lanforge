@@ -125,7 +125,7 @@ impl<T> From<Option<T>> for FieldUpdate<T> {
 ///
 /// Created when a device is configured via CLI or TOML.
 /// Tracks the relationship between MAC, hostname, and static IPs.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StaticEntry {
     pub mac: MacAddr,
     pub hostname: String,
@@ -305,6 +305,107 @@ pub enum DeviceUpdate {
     PruneZombies,
     /// Trigger a full rebuild of the DNS lookup indices.
     RebuildDnsIndices,
+    /// Completely reset the state (clear all devices and indices).
+    Reset,
+}
+
+/// Serializes the NDP cache with Unix timestamps.
+///
+/// # Errors
+///
+/// Returns an error if the serializer fails to serialize the map or its entries.
+pub fn serialize_ndp_cache<S, H>(
+    cache: &HashMap<Ipv6Addr, (MacAddr, SystemTime), H>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    H: std::hash::BuildHasher,
+{
+    use serde::ser::SerializeMap;
+    let mut map = serializer.serialize_map(Some(cache.len()))?;
+    for (ip, (mac, time)) in cache {
+        let elapsed = time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        map.serialize_entry(ip, &(*mac, elapsed.as_secs()))?;
+    }
+    map.end()
+}
+
+/// Deserializes the NDP cache from Unix timestamps.
+///
+/// # Errors
+///
+/// Returns an error if the deserializer fails to parse the map or its entries.
+pub fn deserialize_ndp_cache<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<Ipv6Addr, (MacAddr, SystemTime)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = HashMap::<Ipv6Addr, (MacAddr, u64)>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(ip, (mac, secs))| {
+            (
+                ip,
+                (mac, SystemTime::UNIX_EPOCH + Duration::from_secs(secs)),
+            )
+        })
+        .collect())
+}
+
+/// Serializes the orphaned v6 leases with Unix timestamps.
+///
+/// # Errors
+///
+/// Returns an error if the serializer fails to serialize the map or its entries.
+pub fn serialize_orphaned_v6<S, H>(
+    orphaned: &HashMap<Ipv6Addr, (Duid, u32, SystemTime), H>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    H: std::hash::BuildHasher,
+{
+    use serde::ser::SerializeMap;
+    let mut map = serializer.serialize_map(Some(orphaned.len()))?;
+    for (ip, (duid, iaid, time)) in orphaned {
+        let elapsed = time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        map.serialize_entry(ip, &(duid, iaid, elapsed.as_secs()))?;
+    }
+    map.end()
+}
+
+type OrphanedV6Map<H> = HashMap<Ipv6Addr, (Duid, u32, SystemTime), H>;
+
+/// Deserializes the orphaned v6 leases from Unix timestamps.
+///
+/// # Errors
+///
+/// Returns an error if the deserializer fails to parse the map or its entries.
+pub fn deserialize_orphaned_v6<'de, D, H>(deserializer: D) -> Result<OrphanedV6Map<H>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    H: std::hash::BuildHasher + Default,
+{
+    let raw = HashMap::<Ipv6Addr, (Duid, u32, u64), H>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(ip, (duid, iaid, secs))| {
+            (
+                ip,
+                (
+                    duid,
+                    iaid,
+                    SystemTime::UNIX_EPOCH + Duration::from_secs(secs),
+                ),
+            )
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +445,7 @@ pub enum DeviceUpdate {
 /// assert_eq!(state.devices.len(), 0);
 /// assert_eq!(state.devices.len(), state.stats().total_devices);
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
     /// Main device table: MAC → Device.
     pub devices: HashMap<MacAddr, Arc<Device>>,
@@ -353,8 +454,16 @@ pub struct State {
     /// Manual device reservations from CLI/TOML.
     pub static_entries: HashMap<MacAddr, StaticEntry>,
     /// NDP (Neighbor Discovery Protocol) cache for IPv6 link-local observations.
+    #[serde(
+        serialize_with = "serialize_ndp_cache",
+        deserialize_with = "deserialize_ndp_cache"
+    )]
     pub ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
     /// IPv6 leases that haven't been resolved to a MAC yet (waiting for DUID association).
+    #[serde(
+        serialize_with = "serialize_orphaned_v6",
+        deserialize_with = "deserialize_orphaned_v6"
+    )]
     pub orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
     /// Network interface IP configurations indexed by ifindex.
     pub interface_ips: HashMap<u32, InterfaceState>,
@@ -422,7 +531,23 @@ impl State {
                 self.rebuild_dns_indices();
                 true
             }
+            DeviceUpdate::Reset => {
+                self.handle_reset();
+                true
+            }
         }
+    }
+
+    fn handle_reset(&mut self) {
+        self.devices.clear();
+        self.duid_index.clear();
+        self.static_entries.clear();
+        self.ndp_cache.clear();
+        self.orphaned_v6.clear();
+        self.interface_ips.clear();
+        self.name_index.clear();
+        self.ip_index.clear();
+        debug!("[state] State fully reset");
     }
 
     fn handle_v4_lease_granted(&mut self, mac: MacAddr, ip: Ipv4Addr, expires: SystemTime) -> bool {

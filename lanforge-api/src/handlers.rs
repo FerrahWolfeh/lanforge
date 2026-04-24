@@ -554,4 +554,18 @@ impl ClientContext {
             authoritative: false,
         })
     }
+
+    /// Fully dumps the main database state (in-memory state).
+    pub(crate) async fn handle_db_dump(&self) -> Response {
+        let state = self.ctx.read().clone();
+        Response::DbDump(Box::new(state))
+    }
+
+    /// Completely resets and re-seeds the database.
+    pub(crate) async fn handle_db_reset(&self) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::DbReset);
+        Response::Success(SimpleSuccess {
+            message: "Database reset requested. Simulating cold start...".to_string(),
+        })
+    }
 }

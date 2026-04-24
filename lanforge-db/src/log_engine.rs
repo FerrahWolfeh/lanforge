@@ -42,12 +42,23 @@ impl LogDb {
                 .unwrap_or(url);
 
             let path_str = path_str.split('?').next().unwrap_or(path_str);
+            let path = Path::new(path_str);
 
-            if let Some(parent) = Path::new(path_str).parent()
+            if let Some(parent) = path.parent()
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
                 let _ = std::fs::create_dir_all(parent);
+            }
+
+            // Manually create the file if it doesn't exist to avoid "unable to open database file"
+            if !path.exists() {
+                debug!("Creating new log database file: {}", path_str);
+                let _ = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(path);
             }
         }
 
