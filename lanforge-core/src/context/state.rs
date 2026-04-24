@@ -266,12 +266,6 @@ pub enum DeviceUpdate {
         len: u8,
         expires: SystemTime,
     },
-    /// Perform a full SLAAC address synchronization for a device.
-    /// Replaces all existing SLAAC addresses with the provided list.
-    SlaacSynced {
-        mac: MacAddr,
-        addresses: Vec<Ipv6Addr>,
-    },
     /// Record a single SLAAC address observation.
     SlaacObserved { mac: MacAddr, addr: Ipv6Addr },
     /// Record an IPv6 neighbor observation via NDP.
@@ -297,8 +291,6 @@ pub enum DeviceUpdate {
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
         origin: Origin,
     },
-    /// Clear all SLAAC addresses for a device.
-    SlaacCleared { mac: MacAddr },
     /// Explicitly remove a device from the table.
     HostRemoved { mac: MacAddr },
     /// Release a specific lease (`V4`, `V6`, or `V6Prefix`).
@@ -398,9 +390,6 @@ impl State {
                 len,
                 expires,
             } => self.handle_v6_prefix_assigned(mac, duid, iaid, prefix, len, expires),
-            DeviceUpdate::SlaacSynced { mac, addresses } => {
-                self.handle_slaac_synced(mac, addresses)
-            }
             DeviceUpdate::SlaacObserved { mac, addr } => self.handle_slaac_observed(mac, addr),
             DeviceUpdate::NdpSeen { mac, ip } => self.handle_ndp_seen(mac, ip),
             DeviceUpdate::ArpSeen { mac, ip } => self.handle_arp_seen(mac, ip),
@@ -421,7 +410,6 @@ impl State {
                 v6_suffix,
                 origin,
             } => self.handle_cli_host_updated(mac, hostname, duid, v4_static, v6_suffix, origin),
-            DeviceUpdate::SlaacCleared { mac } => self.handle_slaac_cleared(mac),
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
             DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, &target),
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
@@ -582,71 +570,51 @@ impl State {
         true
     }
 
-    fn handle_slaac_synced(&mut self, mac: MacAddr, addresses: Vec<Ipv6Addr>) -> bool {
-        let exists = self.devices.contains_key(&mac);
-        let dev_arc = self.get_or_insert(mac);
-
-        let mut current_slaac: Vec<Ipv6Addr> = dev_arc
-            .v6
-            .iter()
-            .filter_map(|s| match s {
-                IPv6State::Slaac(a) => Some(*a),
-                _ => None,
-            })
-            .collect();
-        current_slaac.sort();
-        let mut new_slaac = addresses;
-        new_slaac.sort();
-        if current_slaac == new_slaac {
-            return !exists;
-        }
-
-        let mut dev_arc = self.devices.remove(&mac).unwrap();
-        self.unindex_device(&dev_arc);
-        {
-            let dev = Arc::make_mut(&mut dev_arc);
-            dev.last_seen = SystemTime::now();
-            dev.v6.retain(|s| !matches!(s, IPv6State::Slaac(_)));
-            for addr in new_slaac {
-                dev.v6.push(IPv6State::Slaac(addr));
-                debug!("[state] SLAAC {} synced: {}", mac, addr);
-            }
-        }
-
-        if !dev_arc.is_worthy() && !exists {
-            // Not inserted back
-            return false;
-        }
-
-        self.index_device(mac, &dev_arc);
-        self.devices.insert(mac, dev_arc);
-        true
-    }
-
     fn handle_slaac_observed(&mut self, mac: MacAddr, addr: Ipv6Addr) -> bool {
+        let now = SystemTime::now();
         if let Some(&indexed_mac) = self.ip_index.get(&IpAddr::V6(addr))
             && indexed_mac == mac
         {
             if let Some(dev_arc) = self.devices.get_mut(&mac) {
                 let dev = Arc::make_mut(dev_arc);
-                dev.last_seen = SystemTime::now();
+                dev.last_seen = now;
+                for state in &mut dev.v6 {
+                    if let IPv6State::Slaac { ip, last_seen } = state
+                        && *ip == addr
+                    {
+                        *last_seen = now;
+                        break;
+                    }
+                }
             }
             return false;
         }
-        // ... else continue to normal check ...
 
         let exists = self.devices.contains_key(&mac);
         let dev_arc = self.get_or_insert(mac);
 
-        let already_has = dev_arc
-            .v6
-            .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr));
+        let mut already_has = false;
+        for state in &dev_arc.v6 {
+            if let IPv6State::Slaac { ip, .. } = state
+                && *ip == addr
+            {
+                already_has = true;
+                break;
+            }
+        }
 
         if already_has {
             let dev_arc_mut = self.devices.get_mut(&mac).unwrap();
             let dev = Arc::make_mut(dev_arc_mut);
-            dev.last_seen = SystemTime::now();
+            dev.last_seen = now;
+            for state in &mut dev.v6 {
+                if let IPv6State::Slaac { ip, last_seen } = state
+                    && *ip == addr
+                {
+                    *last_seen = now;
+                    break;
+                }
+            }
             return !exists;
         }
 
@@ -654,8 +622,11 @@ impl State {
         self.unindex_device(&dev_arc);
         {
             let dev = Arc::make_mut(&mut dev_arc);
-            dev.last_seen = SystemTime::now();
-            dev.v6.push(IPv6State::Slaac(addr));
+            dev.last_seen = now;
+            dev.v6.push(IPv6State::Slaac {
+                ip: addr,
+                last_seen: now,
+            });
             debug!("[state] SLAAC {} → {}", mac, addr);
         }
 
@@ -690,26 +661,24 @@ impl State {
     }
 
     fn handle_arp_seen(&mut self, mac: MacAddr, ip: Ipv4Addr) -> bool {
+        let now = SystemTime::now();
         let exists = self.devices.contains_key(&mac);
         let dev_arc = self.get_or_insert(mac);
         let old_seen = dev_arc.last_seen;
 
-        let is_new_ip = !dev_arc.seen_v4.contains(&ip);
+        let existing_pos = dev_arc.seen_v4.iter().position(|(i, _)| *i == ip);
 
-        if is_new_ip {
-            let mut dev_arc = self.devices.remove(&mac).unwrap();
+        let mut dev_arc = self.devices.remove(&mac).unwrap();
+        if existing_pos.is_some() {
             self.unindex_device(&dev_arc);
-            {
-                let dev = Arc::make_mut(&mut dev_arc);
-                dev.seen_v4.push(ip);
-                dev.last_seen = SystemTime::now();
-            }
-            self.index_device(mac, &dev_arc);
-            self.devices.insert(mac, dev_arc);
-        } else if let Some(dev_arc_mut) = self.devices.get_mut(&mac) {
-            let dev = Arc::make_mut(dev_arc_mut);
-            dev.last_seen = SystemTime::now();
         }
+
+        let dev = Arc::make_mut(&mut dev_arc);
+        dev.seen_v4.push((ip, now));
+        dev.last_seen = now;
+
+        self.index_device(mac, &dev_arc);
+        self.devices.insert(mac, dev_arc);
 
         if let Some(dev_arc) = self.devices.get(&mac)
             && !dev_arc.is_worthy()
@@ -719,10 +688,8 @@ impl State {
             return false;
         }
 
-        let elapsed = SystemTime::now()
-            .duration_since(old_seen)
-            .unwrap_or_default();
-        is_new_ip || !exists || elapsed.as_secs() > 300
+        let elapsed = now.duration_since(old_seen).unwrap_or_default();
+        existing_pos.is_none() || !exists || elapsed.as_secs() > 300
     }
 
     fn handle_hostname_hint(
@@ -928,24 +895,6 @@ impl State {
         changed
     }
 
-    fn handle_slaac_cleared(&mut self, mac: MacAddr) -> bool {
-        if let Some(dev_arc) = self.devices.get(&mac) {
-            let slaac_present = dev_arc.v6.iter().any(|s| matches!(s, IPv6State::Slaac(_)));
-            if slaac_present {
-                let mut dev_arc = self.devices.remove(&mac).unwrap();
-                self.unindex_device(&dev_arc);
-                {
-                    let dev = Arc::make_mut(&mut dev_arc);
-                    dev.v6.retain(|s| !matches!(s, IPv6State::Slaac(_)));
-                }
-                self.index_device(mac, &dev_arc);
-                self.devices.insert(mac, dev_arc);
-                return true;
-            }
-        }
-        false
-    }
-
     fn handle_host_removed(&mut self, mac: MacAddr) -> bool {
         if let Some(dev) = self.devices.remove(&mac) {
             self.unindex_device(&dev);
@@ -1031,13 +980,13 @@ impl State {
                         if dev_arc
                             .v6
                             .iter()
-                            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip6))
+                            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip6))
                         {
                             local_changed = true;
                         }
                     }
                     IpAddr::V4(ip4) => {
-                        if dev_arc.seen_v4.contains(&ip4) {
+                        if dev_arc.seen_v4.iter().any(|(i, _)| *i == ip4) {
                             local_changed = true;
                         }
                     }
@@ -1051,13 +1000,12 @@ impl State {
                     let dev = Arc::make_mut(&mut dev_arc);
                     match ip {
                         IpAddr::V6(ip6) => {
-                            dev.v6
-                                .retain(|s| !matches!(s, IPv6State::Slaac(a) if *a == ip6));
+                            dev.v6.retain(
+                                |s| !matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip6),
+                            );
                         }
                         IpAddr::V4(ip4) => {
-                            if let Some(pos) = dev.seen_v4.iter().position(|&x| x == ip4) {
-                                dev.seen_v4.remove(pos);
-                            }
+                            dev.seen_v4.retain(|(i, _)| *i != ip4);
                         }
                     }
                 }
@@ -1087,13 +1035,13 @@ impl State {
                     if dev_arc
                         .v6
                         .iter()
-                        .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip6))
+                        .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip6))
                     {
                         local_changed = true;
                     }
                 }
                 IpAddr::V4(ip4) => {
-                    if dev_arc.seen_v4.contains(&ip4) {
+                    if dev_arc.seen_v4.iter().any(|(i, _)| *i == ip4) {
                         local_changed = true;
                     }
                 }
@@ -1176,8 +1124,8 @@ impl State {
         if let Some(ip) = dev.v4.ip() {
             self.ip_index.insert(IpAddr::V4(ip), mac);
         }
-        for &ip in &dev.seen_v4 {
-            self.ip_index.insert(IpAddr::V4(ip), mac);
+        for (ip, _) in &dev.seen_v4 {
+            self.ip_index.insert(IpAddr::V4(*ip), mac);
         }
         for state in &dev.v6 {
             if let Some(ip) = state.ip() {
@@ -1196,8 +1144,8 @@ impl State {
         if let Some(ip) = dev.v4.ip() {
             self.ip_index.remove(&IpAddr::V4(ip));
         }
-        for &ip in &dev.seen_v4 {
-            self.ip_index.remove(&IpAddr::V4(ip));
+        for (ip, _) in &dev.seen_v4 {
+            self.ip_index.remove(&IpAddr::V4(*ip));
         }
         for state in &dev.v6 {
             if let Some(ip) = state.ip() {
@@ -1239,8 +1187,24 @@ impl State {
                 .filter_map(|p| if p.expires < now { Some(p.iaid) } else { None })
                 .collect();
 
-            let changed =
-                v4_expired || !v6_expired_iaids.is_empty() || !prefix_expired_iaids.is_empty();
+            // Passive IP Expiration (24h)
+            let ip_expiry_threshold = Duration::from_hours(24);
+            let slaac_expired = dev_arc.v6.iter().any(|s| match s {
+                IPv6State::Slaac { last_seen, .. } => {
+                    last_seen.elapsed().unwrap_or(Duration::ZERO) > ip_expiry_threshold
+                }
+                _ => false,
+            });
+            let arp_expired = dev_arc
+                .seen_v4
+                .iter()
+                .any(|(_, ts)| ts.elapsed().unwrap_or(Duration::ZERO) > ip_expiry_threshold);
+
+            let changed = v4_expired
+                || !v6_expired_iaids.is_empty()
+                || !prefix_expired_iaids.is_empty()
+                || slaac_expired
+                || arp_expired;
 
             if changed {
                 to_unindex.push(Arc::clone(dev_arc));
@@ -1288,6 +1252,22 @@ impl State {
                 for iaid in prefix_expired_iaids {
                     dev.v6_prefixes.retain(|p| p.iaid != iaid);
                 }
+
+                // Prune expired SLAAC/ARP addresses
+                if slaac_expired {
+                    dev.v6.retain(|s| match s {
+                        IPv6State::Slaac { last_seen, .. } => {
+                            last_seen.elapsed().unwrap_or(Duration::ZERO) <= ip_expiry_threshold
+                        }
+                        _ => true,
+                    });
+                }
+                if arp_expired {
+                    dev.seen_v4.retain(|(_, ts)| {
+                        ts.elapsed().unwrap_or(Duration::ZERO) <= ip_expiry_threshold
+                    });
+                }
+
                 to_reindex.push((mac, Arc::clone(dev_arc)));
             }
 
@@ -1460,7 +1440,10 @@ impl State {
 
     #[must_use]
     pub fn get_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
-        self.duid_index.iter().find(|(_, m)| **m == mac).map(|(d, _)| d)
+        self.duid_index
+            .iter()
+            .find(|(_, m)| **m == mac)
+            .map(|(d, _)| d)
     }
 
     #[must_use]

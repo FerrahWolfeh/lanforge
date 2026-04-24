@@ -4,7 +4,7 @@
 //! JSON responses for `Status`, `Devices`, and `HostList` commands.
 
 use std::fs::metadata;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
@@ -151,7 +151,7 @@ impl ClientContext {
             slaac_addrs += dev
                 .v6
                 .iter()
-                .filter(|s| matches!(s, IPv6State::Slaac(_)))
+                .filter(|s| matches!(s, IPv6State::Slaac { .. }))
                 .count();
         }
 
@@ -301,7 +301,7 @@ impl ClientContext {
                     }),
                     IPv4State::None => None,
                 },
-                seen_v4: dev.seen_v4.iter().map(|ip| ip.to_string()).collect(),
+                seen_v4: dev.seen_v4.iter().map(|(ip, _)| ip.to_string()).collect(),
                 v6: dev.primary_v6(gua_prefix, ula_prefix).map(|ip| {
                     let state = dev.v6.iter().find(|s| {
                         s.ip_with_prefix(gua_prefix) == Some(ip)
@@ -488,11 +488,7 @@ impl ClientContext {
                     }),
                     IPv4State::None => None,
                 },
-                seen_v4: dev
-                    .seen_v4
-                    .iter()
-                    .map(|ip: &Ipv4Addr| ip.to_string())
-                    .collect(),
+                seen_v4: dev.seen_v4.iter().map(|(ip, _)| ip.to_string()).collect(),
                 v6: dev
                     .primary_v6(gua_prefix, ula_prefix)
                     .map(|ip: Ipv6Addr| LeaseInfo {

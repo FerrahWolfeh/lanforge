@@ -334,7 +334,13 @@ pub enum IPv6State {
     Dynamic(V6Lease),
     /// An address observed being used via SLAAC (Stateless Address Autoconfiguration).
     /// These are learned from NDP/neighbor discovery events.
-    Slaac(Ipv6Addr),
+    Slaac {
+        /// The observed IPv6 address.
+        ip: Ipv6Addr,
+        /// The last time this specific address was observed.
+        #[serde(serialize_with = "serialize_time")]
+        last_seen: SystemTime,
+    },
 }
 
 impl IPv6State {
@@ -345,7 +351,7 @@ impl IPv6State {
     pub fn ip_with_prefix(&self, prefix: Option<Ipv6Addr>) -> Option<Ipv6Addr> {
         match self {
             Self::Dynamic(lease) => Some(lease.ip),
-            Self::Slaac(ip) | Self::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(*ip),
+            Self::Slaac { ip, .. } | Self::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(*ip),
             Self::Static(suf) => prefix.map(|p| Ipv6Addr::from(suf.as_u128(Some(p)))),
         }
     }
@@ -693,7 +699,7 @@ pub struct Device {
     ///
     /// These are "seen" addresses — the device may not have an active lease
     /// but was observed communicating on the network.
-    pub seen_v4: Vec<Ipv4Addr>,
+    pub seen_v4: Vec<(Ipv4Addr, SystemTime)>,
 
     /// Precise moment when the device was last seen on the network.
     ///
@@ -791,7 +797,7 @@ impl Device {
         match ip {
             IpAddr::V4(ip4) => {
                 let initial_seen = self.seen_v4.len();
-                self.seen_v4.retain(|i| i != ip4);
+                self.seen_v4.retain(|(i, _)| i != ip4);
                 let changed = self.seen_v4.len() != initial_seen;
 
                 if matches!(&self.v4, IPv4State::Dynamic(lease) if lease.ip == *ip4) {
@@ -803,7 +809,7 @@ impl Device {
             IpAddr::V6(ip6) => {
                 let initial_v6 = self.v6.len();
                 self.v6
-                    .retain(|s| !matches!(s, IPv6State::Slaac(a) if a == ip6));
+                    .retain(|s| !matches!(s, IPv6State::Slaac { ip: a, .. } if a == ip6));
                 self.v6.len() != initial_v6
             }
         }
@@ -843,7 +849,7 @@ impl Device {
             IPv4State::None => self
                 .seen_v4
                 .first()
-                .map_or_else(|| "—".to_string(), |seen| format!("{seen} ?")),
+                .map_or_else(|| "—".to_string(), |(seen, _)| format!("{seen} ?")),
         }
     }
 
@@ -869,20 +875,6 @@ impl Device {
     ///
     /// # Example
     ///
-    /// ```rust
-    /// use lanforge_core::device::{Device, IPv6State, Ipv6AddrOrSuffix};
-    /// use lanforge_core::identifiers::MacAddr;
-    /// use std::net::Ipv6Addr;
-    ///
-    /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-    /// let mut device = Device::new(mac);
-    ///
-    /// // Add a SLAAC ULA address
-    /// device.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
-    ///
-    /// let primary = device.primary_v6(None, None);
-    /// assert_eq!(primary, Some("fd00::1".parse().unwrap()));
-    /// ```
     #[must_use]
     pub fn primary_v6(
         &self,
@@ -898,7 +890,7 @@ impl Device {
         };
 
         for state in &self.v6 {
-            if let IPv6State::Slaac(ip) = state {
+            if let IPv6State::Slaac { ip, .. } = state {
                 if is_ula(ip) {
                     update_best(3, *ip);
                 } else if matches!(classify_ipv6(ip), IpClassification::Gua) {
@@ -946,7 +938,7 @@ impl Device {
         if let Some(ip) = self.v4.ip() {
             addrs.push(IpAddr::V4(ip));
         }
-        for ip in &self.seen_v4 {
+        for (ip, _) in &self.seen_v4 {
             addrs.push(IpAddr::V4(*ip));
         }
 
@@ -1011,7 +1003,7 @@ impl Device {
         }
 
         // Check SLAAC
-        if self.v6.iter().any(|s| matches!(s, IPv6State::Slaac(_))) {
+        if self.v6.iter().any(|s| matches!(s, IPv6State::Slaac { .. })) {
             return LearningMethod::Slaac;
         }
 
@@ -1122,8 +1114,14 @@ mod tests {
             duid: None,
             v4: IPv4State::Static("192.168.1.1".parse().unwrap()),
             v6: vec![
-                IPv6State::Slaac("2001:db8::1".parse().unwrap()),
-                IPv6State::Slaac("fd00::1".parse().unwrap()),
+                IPv6State::Slaac {
+                    ip: "2001:db8::1".parse().unwrap(),
+                    last_seen: SystemTime::now(),
+                },
+                IPv6State::Slaac {
+                    ip: "fd00::1".parse().unwrap(),
+                    last_seen: SystemTime::now(),
+                },
             ],
             v6_prefixes: Vec::new(),
             seen_v4: Vec::new(),

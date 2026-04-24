@@ -1,10 +1,11 @@
-use crate::app::{run_scan, sd_notify_ready};
+use crate::app::sd_notify_ready;
 use crate::config::Config;
+
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_network::wol::send_wol_magic_packet;
-use rtnetlink::Handle;
+
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -22,7 +23,6 @@ pub async fn run_event_loop(
     mut bus_rx: Receiver<TimedEvent>,
 ) -> Result<()> {
     let cfg = bootstrap.cfg;
-    let handle = bootstrap.rt_handle;
     let target_ifindex = bootstrap.target_ifindex;
 
     let mut state = LoopState::new();
@@ -38,14 +38,7 @@ pub async fn run_event_loop(
     stale_timer.tick().await;
 
     // Initial scan
-    spawn_scan(
-        ctx.clone(),
-        cfg.clone(),
-        handle.clone(),
-        None,
-        None,
-        target_ifindex,
-    );
+    let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
 
     let expected_services = determine_expected_services(&cfg);
     let mut ready_services = HashSet::new();
@@ -61,7 +54,7 @@ pub async fn run_event_loop(
             }
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 received, forcing state synchronization...");
-                spawn_scan(ctx.clone(), cfg.clone(), handle.clone(), state.current_gua, state.current_ula, target_ifindex);
+                let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
             }
             _ = sigterm.recv() => {
                 info!("SIGTERM received — starting graceful shutdown...");
@@ -78,7 +71,6 @@ pub async fn run_event_loop(
                             timed_event.event,
                             &ctx,
                             &cfg,
-                            &handle,
                             &mut state,
                             target_ifindex,
                             &expected_services,
@@ -108,7 +100,6 @@ fn handle_bus_event(
     event: LanforgeEvent,
     ctx: &LanforgeContext,
     cfg: &Arc<Config>,
-    handle: &Handle,
     state: &mut LoopState,
     target_ifindex: u32,
     expected_services: &HashSet<&'static str>,
@@ -138,25 +129,11 @@ fn handle_bus_event(
             info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
             state.current_gua = gua;
             state.current_ula = ula;
-            spawn_scan(
-                ctx.clone(),
-                cfg.clone(),
-                handle.clone(),
-                gua,
-                ula,
-                target_ifindex,
-            );
+            let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
         }
         LanforgeEvent::ReloadConfig => {
             info!("ReloadConfig: Forcing background synchronization...");
-            spawn_scan(
-                ctx.clone(),
-                cfg.clone(),
-                handle.clone(),
-                state.current_gua,
-                state.current_ula,
-                target_ifindex,
-            );
+            let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
         }
         LanforgeEvent::WolTriggered { mac, ip_hint } => {
             info!("WOL: Triggering for {mac} (hint: {ip_hint:?})");
@@ -168,7 +145,6 @@ fn handle_bus_event(
                     && let Some((ip, prefix)) = if_ips.v4
                 {
                     let ip_u32 = u32::from_be_bytes(ip.octets());
-                    // Fix truncation warning by using u32::MAX >> prefix
                     let mask = !((1u32.checked_shl(32 - u32::from(prefix))).map_or(0, |v| v - 1));
                     let broadcast = ip_u32 | !mask;
                     directed_broadcast = Some(Ipv4Addr::from(broadcast.to_be_bytes()));
@@ -225,19 +201,4 @@ fn determine_expected_services(cfg: &Config) -> HashSet<&'static str> {
         services.insert("http");
     }
     services
-}
-
-fn spawn_scan(
-    ctx: LanforgeContext,
-    cfg: Arc<Config>,
-    handle: Handle,
-    gua: Option<Ipv6Addr>,
-    ula: Option<Ipv6Addr>,
-    target_ifindex: u32,
-) {
-    tokio::spawn(async move {
-        if let Err(e) = run_scan(&ctx, &cfg, &handle, gua, ula, target_ifindex).await {
-            error!("❌ Scan error: {e:#}");
-        }
-    });
 }

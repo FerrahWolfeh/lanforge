@@ -41,26 +41,6 @@ use crate::{context::state::DeviceUpdate, identifiers::MacAddr, utils::ip_matche
 /// This enum represents the raw events from the kernel's neighbor cache.
 /// Use [`to_device_update`](NeighborEvent::to_device_update) to convert
 /// these into higher-level device state updates.
-///
-/// # Example
-///
-/// ```rust
-/// use lanforge_core::ndp::NeighborEvent;
-/// use lanforge_core::identifiers::MacAddr;
-/// use std::net::Ipv6Addr;
-///
-/// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-/// let ip: Ipv6Addr = "fe80::1".parse().unwrap();
-///
-/// let event = NeighborEvent::Added {
-///     ip: ip.into(),
-///     mac,
-///     ifindex: 2,
-/// };
-///
-/// assert_eq!(event.ifindex(), 2);
-/// assert_eq!(event.mac(), Some(mac));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NeighborEvent {
     /// A neighbor entry was added or updated.
@@ -104,14 +84,21 @@ impl NeighborEvent {
 
     /// Maps the raw neighbor event into a higher-level [`DeviceUpdate`].
     ///
+    /// # Passive Expiration
+    ///
+    /// This method ignores `Deleted` and `Failed` events by returning `None`.
+    /// This prevents "flapping" in the UI when the kernel evicts an entry from
+    /// its cache due to inactivity. Instead, Lanforge relies on passive
+    /// expiration during garbage collection based on last-seen timestamps.
+    ///
     /// # Mapping Logic
     ///
     /// | `NeighborEvent`      | `DeviceUpdate` (IPv6, matches prefix) | `DeviceUpdate` (IPv6, no match) | `DeviceUpdate` (IPv4) |
     /// |--------------------|--------------------------------------|-------------------------------|---------------------|
-    /// | Added (IPv6)       | `SlaacObserved`                      | `NdpSeen`                     | —                   |
-    /// | Added (IPv4)       | —                                    | —                             | `ArpSeen`           |
-    /// | Deleted            | `IpDeleted`                          | —                             | `IpDeleted`         |
-    /// | Failed             | `IpOffline`                          | —                             | `IpOffline`         |
+    /// | Added (IPv6)       | `Some(SlaacObserved)`                | `Some(NdpSeen)`               | —                   |
+    /// | Added (IPv4)       | —                                    | —                             | `Some(ArpSeen)`     |
+    /// | Deleted            | `None`                               | —                             | `None`              |
+    /// | Failed             | `None`                               | —                             | `None`              |
     ///
     /// # SLAAC Detection
     ///
@@ -119,39 +106,12 @@ impl NeighborEvent {
     /// `gua_prefix` and `ula_prefix`. If it matches EITHER prefix, it's
     /// considered a SLAAC observation. Otherwise, it's treated as generic
     /// NDP activity (e.g., link-local probes, `DHCPv6` addresses).
-    ///
-    /// # Parameters
-    ///
-    /// - `gua_prefix`: The current Global Unicast prefix for the interface
-    /// - `ula_prefix`: The current Unique Local prefix for the interface
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use lanforge_core::ndp::NeighborEvent;
-    /// use lanforge_core::state::DeviceUpdate;
-    /// use lanforge_core::identifiers::MacAddr;
-    /// use std::net::Ipv6Addr;
-    ///
-    /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-    /// let prefix: Ipv6Addr = "fd00::".parse().unwrap();
-    /// let slaac_ip: Ipv6Addr = "fd00::aabb:ccff:fedd:eeff".parse().unwrap();
-    ///
-    /// let event = NeighborEvent::Added {
-    ///     ip: slaac_ip.into(),
-    ///     mac,
-    ///     ifindex: 2,
-    /// };
-    ///
-    /// let update = event.to_device_update(None, Some(&prefix));
-    /// assert!(matches!(update, DeviceUpdate::SlaacObserved { .. }));
-    /// ```
     #[must_use]
     pub fn to_device_update(
         &self,
         gua_prefix: Option<&Ipv6Addr>,
         ula_prefix: Option<&Ipv6Addr>,
-    ) -> DeviceUpdate {
+    ) -> Option<DeviceUpdate> {
         match self {
             Self::Added { ip, mac, .. } => match ip {
                 IpAddr::V6(ip6) => {
@@ -161,24 +121,23 @@ impl NeighborEvent {
                         ula_prefix.is_some_and(|prefix| ip_matches_prefix(ip6, prefix));
 
                     if matches_gua || matches_ula {
-                        DeviceUpdate::SlaacObserved {
+                        Some(DeviceUpdate::SlaacObserved {
                             mac: *mac,
                             addr: *ip6,
-                        }
+                        })
                     } else {
-                        DeviceUpdate::NdpSeen {
+                        Some(DeviceUpdate::NdpSeen {
                             mac: *mac,
                             ip: *ip6,
-                        }
+                        })
                     }
                 }
-                IpAddr::V4(ip4) => DeviceUpdate::ArpSeen {
+                IpAddr::V4(ip4) => Some(DeviceUpdate::ArpSeen {
                     mac: *mac,
                     ip: *ip4,
-                },
+                }),
             },
-            Self::Deleted { ip, .. } => DeviceUpdate::IpDeleted { ip: *ip },
-            Self::Failed { ip, .. } => DeviceUpdate::IpOffline { ip: *ip },
+            Self::Deleted { .. } | Self::Failed { .. } => None,
         }
     }
 }
@@ -212,11 +171,11 @@ mod tests {
         let update_dhcp = event_dhcp.to_device_update(None, Some(&prefix));
 
         assert!(
-            matches!(update_slaac, DeviceUpdate::SlaacObserved { .. }),
+            matches!(update_slaac, Some(DeviceUpdate::SlaacObserved { .. })),
             "EUI-64 should be SlaacObserved"
         );
         assert!(
-            matches!(update_dhcp, DeviceUpdate::SlaacObserved { .. }),
+            matches!(update_dhcp, Some(DeviceUpdate::SlaacObserved { .. })),
             "Custom suffix (potential Privacy Extension) should also be SlaacObserved at the NDP layer"
         );
     }

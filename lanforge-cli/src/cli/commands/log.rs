@@ -301,6 +301,15 @@ impl LogHandler {
                     "Zombie devices manually pruned from DB".dimmed()
                 );
             }
+            LanforgeEvent::RsReceived { mac } => {
+                println!(
+                    "[{}] {} {} ({})",
+                    now,
+                    "NET".magenta().bold(),
+                    "Router Solicitation:".white(),
+                    mac
+                );
+            }
         }
     }
 
@@ -344,12 +353,6 @@ impl LogHandler {
                     "IA_PD assigned: {}/{}",
                     prefix.to_string().bright_cyan(),
                     len
-                )
-            }
-            DeviceChange::SlaacSynced { addresses } => {
-                format!(
-                    "SLAAC synced: {} addresses",
-                    addresses.len().to_string().bright_magenta()
                 )
             }
             DeviceChange::HostRemoved => "Host removed".red().to_string(),

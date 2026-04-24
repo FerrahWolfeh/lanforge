@@ -402,7 +402,7 @@ impl LeaseDb {
 
         conn.execute("DELETE FROM slaac_addrs WHERE mac = ?1", params![&mac_str])?;
         for state in &device.v6 {
-            if let IPv6State::Slaac(ip) = state {
+            if let IPv6State::Slaac { ip, .. } = state {
                 conn.execute(
                     "INSERT INTO slaac_addrs (mac, ip) VALUES (?1, ?2)",
                     params![mac_str, ip.to_string()],
@@ -411,7 +411,7 @@ impl LeaseDb {
         }
 
         conn.execute("DELETE FROM seen_v4 WHERE mac = ?1", params![&mac_str])?;
-        for ip in &device.seen_v4 {
+        for (ip, _) in &device.seen_v4 {
             conn.execute(
                 "INSERT INTO seen_v4 (mac, ip) VALUES (?1, ?2)",
                 params![mac_str, ip.to_string()],

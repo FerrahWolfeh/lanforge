@@ -144,69 +144,6 @@ fn apply_update_slaac_excludes_managed_addr() {
 }
 
 #[test]
-fn apply_update_slaac_synced() {
-    let mut table = State::new();
-    let mac = MacAddr::parse("11:22:33:44:55:66").unwrap();
-
-    let addr1: Ipv6Addr = "fd00::1".parse().unwrap();
-    let addr2: Ipv6Addr = "fd00::2".parse().unwrap();
-
-    // 1. Initial sync - should be dirty
-    assert!(table.apply_update(DeviceUpdate::SlaacSynced {
-        mac,
-        addresses: vec![addr1, addr2],
-    }));
-
-    let dev = table.get_device(&mac).unwrap();
-    assert_eq!(dev.v6.len(), 2);
-
-    // 2. Same addresses, different order - should NOT be dirty
-    assert!(!table.apply_update(DeviceUpdate::SlaacSynced {
-        mac,
-        addresses: vec![addr2, addr1],
-    }));
-
-    // 3. Differential change - remove addr1, add addr3 - should be dirty
-    let addr3: Ipv6Addr = "fd00::3".parse().unwrap();
-    assert!(table.apply_update(DeviceUpdate::SlaacSynced {
-        mac,
-        addresses: vec![addr2, addr3],
-    }));
-
-    let dev = table.get_device(&mac).unwrap();
-    assert_eq!(dev.v6.len(), 2);
-    assert!(
-        !dev.v6
-            .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr1))
-    );
-    assert!(
-        dev.v6
-            .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr2))
-    );
-    assert!(
-        dev.v6
-            .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == addr3))
-    );
-}
-
-#[test]
-fn apply_update_slaac_cleared() {
-    let mut table = State::new();
-    let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-    table.apply_update(DeviceUpdate::SlaacObserved {
-        mac,
-        addr: "fd97::1".parse().unwrap(),
-    });
-    assert!(table.apply_update(DeviceUpdate::SlaacCleared { mac }));
-    assert!(table.devices().next().unwrap().v6.is_empty());
-    // Limpar de novo quando já está vazio — não dirty
-    assert!(!table.apply_update(DeviceUpdate::SlaacCleared { mac }));
-}
-
-#[test]
 fn apply_update_lease_released() {
     let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
@@ -432,7 +369,7 @@ fn test_ip_deleted_cleanup() {
     assert!(
         dev.v6
             .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip))
+            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip))
     );
     assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
 
@@ -446,7 +383,7 @@ fn test_ip_deleted_cleanup() {
     assert!(
         !dev.v6
             .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip))
+            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip))
     );
 }
 
@@ -602,16 +539,23 @@ fn test_is_worthy_logic() {
     dev.hostname.name.clear();
 
     // 3. Com IPv4 (visto ou lease) -> Digno
-    dev.seen_v4.push("1.1.1.1".parse().unwrap());
+    dev.seen_v4
+        .push(("1.1.1.1".parse().unwrap(), SystemTime::now()));
     assert!(dev.is_worthy());
     dev.seen_v4.clear();
 
     // 4. Com IPv6 Link-Local -> Não digno
-    dev.v6.push(IPv6State::Slaac("fe80::1".parse().unwrap()));
+    dev.v6.push(IPv6State::Slaac {
+        ip: "fe80::1".parse().unwrap(),
+        last_seen: SystemTime::now(),
+    });
     assert!(!dev.is_worthy());
 
     // 5. Com IPv6 ULA -> Digno
-    dev.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
+    dev.v6.push(IPv6State::Slaac {
+        ip: "fd00::1".parse().unwrap(),
+        last_seen: SystemTime::now(),
+    });
     assert!(dev.is_worthy());
     dev.v6.clear();
 
@@ -653,14 +597,20 @@ fn test_primary_v6_priority() {
     let lease_ula: Ipv6Addr = "fd00::beef".parse().unwrap();
 
     // 4. SLAAC GUA
-    dev.v6.push(IPv6State::Slaac(slaac_gua));
+    dev.v6.push(IPv6State::Slaac {
+        ip: slaac_gua,
+        last_seen: SystemTime::now(),
+    });
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(slaac_gua)
     );
 
     // 3. SLAAC ULA > SLAAC GUA
-    dev.v6.push(IPv6State::Slaac(slaac_ula));
+    dev.v6.push(IPv6State::Slaac {
+        ip: slaac_ula,
+        last_seen: SystemTime::now(),
+    });
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(slaac_ula)
@@ -820,7 +770,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
     let dev = state.get_device(&mac).unwrap();
 
     assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(_))));
-    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(_))));
+    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac { .. })));
 
     // 2. Report static IP as offline
     state.apply_update(DeviceUpdate::IpOffline { ip: static_ip });
@@ -838,7 +788,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
     let dev = state.get_device(&mac).unwrap();
 
     assert!(
-        !dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(_))),
+        !dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac { .. })),
         "SLAAC should be removed"
     );
 

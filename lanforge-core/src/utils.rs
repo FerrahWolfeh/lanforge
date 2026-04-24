@@ -60,6 +60,41 @@ pub fn ip_matches_prefix(ip: &Ipv6Addr, prefix: &Ipv6Addr) -> bool {
     ip_segs[..4] == prefix_segs[..4]
 }
 
+/// Generates an EUI-64 IPv6 address from a /64 prefix and a MAC address.
+///
+/// This is used to predict the default SLAAC address for a device.
+///
+/// # Example
+///
+/// ```rust
+/// use std::net::Ipv6Addr;
+/// use lanforge_core::identifiers::MacAddr;
+/// use lanforge_core::utils::compute_eui64_ip;
+///
+/// let prefix: Ipv6Addr = "fd00::".parse().unwrap();
+/// let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
+/// let expected: Ipv6Addr = "fd00::0211:22ff:fe33:4455".parse().unwrap();
+/// assert_eq!(compute_eui64_ip(&prefix, &mac), expected);
+/// ```
+#[must_use]
+pub fn compute_eui64_ip(prefix: &Ipv6Addr, mac: &MacAddr) -> Ipv6Addr {
+    let mut octets = prefix.octets();
+    let m = mac.0;
+
+    // First 64 bits come from the prefix.
+    // The last 64 bits (Interface ID) are generated from the MAC.
+    octets[8] = m[0] ^ 0x02;
+    octets[9] = m[1];
+    octets[10] = m[2];
+    octets[11] = 0xff;
+    octets[12] = 0xfe;
+    octets[13] = m[3];
+    octets[14] = m[4];
+    octets[15] = m[5];
+
+    Ipv6Addr::from(octets)
+}
+
 // ---------------------------------------------------------------------------
 // EUI-64 helpers
 // ---------------------------------------------------------------------------

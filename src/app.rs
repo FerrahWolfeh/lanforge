@@ -1,8 +1,6 @@
 use anyhow::Result;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
-use lanforge_network::slaac::bootstrap_table;
-use std::net::Ipv6Addr;
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,7 +8,6 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::bootstrap::BootstrapResult;
-use crate::config::Config;
 use crate::event_loop::run_event_loop;
 use crate::registry::ServiceRegistry;
 use lanforge_api::http::HttpService;
@@ -23,6 +20,7 @@ use lanforge_network::ifmon::InterfaceMonitor;
 use lanforge_network::mdns::MdnsProber;
 use lanforge_network::ndp::NeighborMonitor;
 use lanforge_network::ra::RaService;
+use lanforge_network::slaac::SlaacTracker;
 
 /// The central application controller for the Lanforge daemon.
 pub struct Daemon {
@@ -42,25 +40,14 @@ impl Daemon {
     }
 
     /// Runs the daemon's main execution cycle.
-    ///
-    /// This method performs the following steps:
-    /// 1. Subscribes to the event bus (captured in the main thread).
-    /// 2. Spawns all configured services.
-    /// 3. Executes the main event loop.
-    /// 4. Handles graceful shutdown.
     pub async fn run(mut self) -> Result<()> {
         let bus = self.ctx.bus();
-
-        // 1. Subscribe to bus BEFORE spawning services to capture all ServiceReady events
         let bus_rx = bus.subscribe();
 
-        // 2. Register and Spawn Services
         self.spawn_services();
 
-        // 3. Run Event Loop
         run_event_loop(self.bootstrap.clone(), self.ctx.clone(), bus_rx).await?;
 
-        // 4. Shutdown Sequence
         self.shutdown().await
     }
 
@@ -70,7 +57,6 @@ impl Daemon {
         let netlink_handle = &self.bootstrap.rt_handle;
         let messages = &self.bootstrap.messages;
 
-        // DB Worker (Sync)
         let db_path = PathBuf::from(&cfg.leases_db);
         let log_db_path = PathBuf::from(&cfg.log_db);
         let ctx_db = self.ctx.clone();
@@ -78,12 +64,10 @@ impl Daemon {
             DbWorker::new(db_path.clone(), log_db_path.clone(), ctx_db.clone())
         });
 
-        // mDNS Prober (Async)
         let ctx_mdns = self.ctx.clone();
         self.registry
             .spawn_async(&self.ctx, move || MdnsProber::new(ctx_mdns.clone()));
 
-        // Interface Monitor (Async)
         let h1 = netlink_handle.clone();
         let m1 = messages.clone();
         let ctx_ifmon = self.ctx.clone();
@@ -96,25 +80,27 @@ impl Daemon {
             )
         });
 
-        // Ndp Monitor (Async)
         let h2 = netlink_handle.clone();
         let m2 = messages.clone();
         let ctx_ndp = self.ctx.clone();
-
         self.registry.spawn_async(&self.ctx, move || {
             NeighborMonitor::new(h2.clone(), m2.subscribe(), target_ifindex, ctx_ndp.clone())
         });
 
-        // RA Service (Async)
         if cfg.ra_enabled {
             let ra_cfg = cfg.to_ra_config();
             let ctx_ra = self.ctx.clone();
             self.registry.spawn_async(&self.ctx, move || {
                 RaService::new(ra_cfg.clone(), ctx_ra.clone())
             });
+
+            let h3 = netlink_handle.clone();
+            let ctx_slaac = self.ctx.clone();
+            self.registry.spawn_async(&self.ctx, move || {
+                SlaacTracker::new(h3.clone(), target_ifindex, ctx_slaac.clone())
+            });
         }
 
-        // DHCPv4 Service (Sync)
         if cfg.dhcpv4_enabled {
             let d4_cfg = cfg.to_dhcpv4_config();
             let ctx_v4 = self.ctx.clone();
@@ -123,7 +109,6 @@ impl Daemon {
             });
         }
 
-        // DHCPv6 Service (Sync)
         if cfg.dhcpv6_enabled {
             let d6_cfg = cfg.to_dhcpv6_config();
             let ctx_v6 = self.ctx.clone();
@@ -132,7 +117,6 @@ impl Daemon {
             });
         }
 
-        // DNS Service (Async)
         if cfg.dns_enabled {
             let dns_cfg = cfg.to_dns_config();
             let ctx_dns = self.ctx.clone();
@@ -141,9 +125,7 @@ impl Daemon {
             });
         }
 
-        // API & Control Services
         let api_cfg = Arc::new(cfg.to_api_config());
-
         let api_cfg_ctrl = api_cfg.clone();
         let ctx_ctrl = self.ctx.clone();
         self.registry.spawn_async(&self.ctx, move || {
@@ -165,7 +147,6 @@ impl Daemon {
         let _ = self.ctx.bus().publish(LanforgeEvent::Shutdown);
         let _ = self.ctx.bus().publish(LanforgeEvent::Shutdown);
 
-        // Wait for all services to stop (with timeout)
         tokio::select! {
             _ = tokio::task::spawn_blocking(move || self.registry.wait_all()) => {
                 info!("All services shut down cleanly.");
@@ -178,27 +159,6 @@ impl Daemon {
         info!("👋 Lanforge terminated.");
         Ok(())
     }
-}
-
-/// Helper public functions needed by modules
-pub async fn run_scan(
-    ctx: &LanforgeContext,
-    cfg: &Config,
-    handle: &rtnetlink::Handle,
-    gua: Option<Ipv6Addr>,
-    ula: Option<Ipv6Addr>,
-    target_ifindex: u32,
-) -> Result<()> {
-    bootstrap_table(
-        ctx,
-        &cfg.target_prefix,
-        handle,
-        gua,
-        ula,
-        Some(target_ifindex),
-    )
-    .await
-    .map_err(anyhow::Error::from)
 }
 
 pub fn sd_notify_ready() {

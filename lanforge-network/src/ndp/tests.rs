@@ -142,7 +142,7 @@ fn to_device_update_gua_becomes_slaac_observed() {
     let update = event.to_device_update(Some(&gua_prefix), None);
 
     assert!(
-        matches!(update, DeviceUpdate::SlaacObserved { addr, .. } if addr == slaac_ip),
+        matches!(update, Some(DeviceUpdate::SlaacObserved { addr, .. }) if addr == slaac_ip),
         "IP in GUA prefix should become SlaacObserved"
     );
 }
@@ -161,7 +161,7 @@ fn to_device_update_link_local_becomes_ndp_seen() {
     let update = event.to_device_update(Some(&gua_prefix), None);
 
     assert!(
-        matches!(update, DeviceUpdate::NdpSeen { .. }),
+        matches!(update, Some(DeviceUpdate::NdpSeen { .. })),
         "Link-local should become NdpSeen"
     );
 }
@@ -179,7 +179,7 @@ fn to_device_update_no_prefix_always_ndp_seen() {
     // No prefix configured — never assume SLAAC
     let update = event.to_device_update(None, None);
 
-    assert!(matches!(update, DeviceUpdate::NdpSeen { .. }));
+    assert!(matches!(update, Some(DeviceUpdate::NdpSeen { .. })));
 }
 
 // --- is_relevant_neigh_event ---

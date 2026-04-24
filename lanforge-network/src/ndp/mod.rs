@@ -34,8 +34,10 @@
 pub mod tests;
 pub mod utils;
 
-use crate::ndp::utils::{extract_neigh_info, get_ipv4_subnet_iterable, probe_neighbor};
-use crate::slaac::bootstrap_table;
+use crate::ndp::utils::{
+    extract_neigh_info, get_ipv4_neighbors, get_ipv4_subnet_iterable, get_ipv6_neighbors,
+    probe_neighbor,
+};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
@@ -166,18 +168,28 @@ impl AsyncService for NeighborMonitor {
         let mut current_ula: Option<Ipv6Addr> = None;
 
         // 1. Initial Neighbor Scan (Bootstrap)
+        // We perform a simple dump of the kernel's neighbor table for the interface.
+        // This is "gentle" because it just sends individual Added events for existing entries.
         {
-            if let Err(e) = bootstrap_table(
-                &self.ctx,
-                "",
-                &self.handle,
-                None,
-                None,
-                Some(self.target_ifindex),
-            )
-            .await
-            {
-                error!("NeighborMonitor: Initial bootstrap scan failed: {e}");
+            info!("NeighborMonitor: Performing initial neighbor bootstrap...");
+            let mut bootstrap_events = Vec::new();
+
+            match get_ipv4_neighbors(&self.handle, Some(self.target_ifindex)).await {
+                Ok(evs) => bootstrap_events.extend(evs),
+                Err(e) => error!("NeighborMonitor: Failed to dump IPv4 neighbors: {e}"),
+            }
+
+            match get_ipv6_neighbors(&self.handle, "", Some(self.target_ifindex)).await {
+                Ok(evs) => bootstrap_events.extend(evs),
+                Err(e) => error!("NeighborMonitor: Failed to dump IPv6 neighbors: {e}"),
+            }
+
+            for event in bootstrap_events {
+                if let Some(update) =
+                    event.to_device_update(current_gua.as_ref(), current_ula.as_ref())
+                {
+                    let _ = self.ctx.apply(&update);
+                }
             }
         }
 
@@ -196,12 +208,10 @@ impl AsyncService for NeighborMonitor {
                     };
                     // A. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg)
-                        && event.ifindex() == self.target_ifindex {
-                            let update = event.to_device_update(current_gua.as_ref(), current_ula.as_ref());
-                            if !self.ctx.apply(&update) {
-                                // No change or error
+                        && event.ifindex() == self.target_ifindex
+                            && let Some(update) = event.to_device_update(current_gua.as_ref(), current_ula.as_ref()) {
+                                let _ = self.ctx.apply(&update);
                             }
-                        }
                 }
 
                 Ok(event) = bus_rx.recv() => {

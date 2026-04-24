@@ -59,7 +59,7 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
 use std::io::{self, ErrorKind};
 use std::mem::{MaybeUninit, size_of};
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
 use std::ptr::{from_mut, from_ref};
 use std::time::{Duration, Instant};
@@ -392,6 +392,15 @@ impl RaService {
                                 }
                             }
                             _ => debug!("RS discarded: rate limit active"),
+                        }
+
+                        // Passive discovery: se conseguirmos o MAC do cara que pediu o RA,
+                        // avisamos o sistema para tentar o prober de SLAAC.
+                        if let Some(src) = rs_src
+                            && let Some(mac) = ctx.lctx.get_mac_by_ip(IpAddr::V6(src))
+                        {
+                            tracing::event!(target:(module_path!()),tracing::Level::DEBUG,"RS trigger: emitindo RsReceived para {}",mac);
+                            let _ = ctx.lctx.bus().publish(LanforgeEvent::RsReceived { mac });
                         }
                     }
                 }

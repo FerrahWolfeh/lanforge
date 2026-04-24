@@ -74,7 +74,7 @@ fn handles_slaac_multiple_addrs() {
             .unwrap()
             .v6
             .iter()
-            .filter(|s| matches!(s, IPv6State::Slaac(_)))
+            .filter(|s| matches!(s, IPv6State::Slaac { .. }))
             .count(),
         3
     );
@@ -331,10 +331,11 @@ fn test_seen_v4_persistence() {
         .get_device(&mac)
         .expect("Deve persistir dispositivo digno");
     assert_eq!(dev.seen_v4.len(), 2);
-    assert!(dev.seen_v4.contains(&ip));
+    assert!(dev.seen_v4.iter().any(|(i, _)| *i == ip));
     assert!(
         dev.seen_v4
-            .contains(&"5.6.7.8".parse::<Ipv4Addr>().unwrap())
+            .iter()
+            .any(|(i, _)| *i == "5.6.7.8".parse::<Ipv4Addr>().unwrap())
     );
 }
 
@@ -360,12 +361,12 @@ fn test_slaac_persistence_integration() {
     assert!(
         dev.v6
             .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == slaac1))
+            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == slaac1))
     );
     assert!(
         dev.v6
             .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == slaac2))
+            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == slaac2))
     );
 
     // 3. Verify it doesn't duplicate if we save the table as-is

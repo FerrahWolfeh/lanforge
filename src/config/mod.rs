@@ -59,7 +59,6 @@ pub struct Config {
     #[cfg(feature = "debug-commands")]
     pub command: Command,
     pub iface_lan: String,
-    pub target_prefix: String,
     pub leases_db: String,
     pub fallback_mins: u64,
     pub control_socket: String,
@@ -133,7 +132,6 @@ impl Config {
             #[cfg(feature = "debug-commands")]
             command: cli.command.unwrap_or(Command::Run { only: None }),
             iface_lan: cli.iface_lan.unwrap_or(toml_cfg.general.iface_lan),
-            target_prefix: cli.target_prefix.unwrap_or(toml_cfg.general.target_prefix),
             leases_db: cli.db_path.unwrap_or(toml_cfg.general.leases_db),
             fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
             control_socket: cli
