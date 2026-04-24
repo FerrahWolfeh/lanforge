@@ -5,7 +5,6 @@
 
 use std::fs::metadata;
 use std::net::{IpAddr, Ipv6Addr};
-use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
@@ -14,7 +13,6 @@ use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
-use tokio::task::spawn_blocking;
 
 use crate::api::{
     DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DnsQueryResponse,
@@ -447,12 +445,11 @@ impl ClientContext {
 
             // Fetch history from DB
             let history: Vec<LeaseHistoryEntry> =
-                spawn_blocking(move || match LeaseDb::open(Path::new("lanforge.db")) {
-                    Ok(db) => db.get_lease_history(mac).unwrap_or_default(),
-                    Err(_) => Vec::new(),
-                })
-                .await
-                .unwrap_or_default();
+                if let Ok(db) = LeaseDb::open(&self.cfg.db_url).await {
+                    db.get_lease_history(mac).await.unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
 
             // Build DeviceEntry (reusing implementation from handle_devices)
             let gua_prefix = self

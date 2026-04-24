@@ -10,17 +10,16 @@ use lanforge_db::engine::LeaseDb;
 use lanforge_network::ifmon::InterfaceMonitor;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
-use rtnetlink::constants::RTMGRP_NEIGH;
 use rtnetlink::new_connection;
 use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
 use crate::config::{Config, load_devices_only};
 
+const RTNLGRP_NEIGH: u32 = 3;
 const RTNLGRP_IPV4_IFADDR: u32 = 5;
 const RTNLGRP_IPV6_IFADDR: u32 = 9;
 
@@ -52,7 +51,7 @@ impl Bootstrapper {
         );
 
         let bus = Arc::new(EventBus::new());
-        let initial_table = Self::init_device_table(&cfg)?;
+        let initial_table = Self::init_device_table(&cfg).await?;
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
@@ -111,13 +110,11 @@ impl Bootstrapper {
         cfg
     }
 
-    fn init_device_table(cfg: &Config) -> Result<State> {
-        let leases_db_path = PathBuf::from(&cfg.leases_db);
-
-        let mut table = match LeaseDb::open(&leases_db_path) {
-            Ok(db) => match db.load_table() {
+    async fn init_device_table(cfg: &Config) -> Result<State> {
+        let mut table = match LeaseDb::open(&cfg.db_url).await {
+            Ok(db) => match db.load_table().await {
                 Ok(persisted) => {
-                    info!("📦 Database loaded: {}", cfg.leases_db);
+                    info!("📦 Database loaded: {}", cfg.db_url);
                     persisted
                 }
                 Err(e) => {
@@ -173,7 +170,7 @@ impl Bootstrapper {
         connection
             .socket_mut()
             .socket_mut()
-            .add_membership(RTMGRP_NEIGH)?;
+            .add_membership(RTNLGRP_NEIGH)?;
         connection
             .socket_mut()
             .socket_mut()

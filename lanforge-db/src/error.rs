@@ -2,7 +2,7 @@
 //!
 //! Covers I/O failures, SQLite errors, migration failures, and maintenance errors.
 
-use std::{io::Error, path::PathBuf};
+use std::{io::Error, num::TryFromIntError, path::PathBuf};
 use thiserror::Error;
 
 /// Errors specific to the Lanforge lease database engine.
@@ -36,15 +36,15 @@ pub enum LeaseDbError {
     #[error("Generic I/O failure: {0}")]
     Io(#[from] Error),
 
-    /// Failed to open or create the SQLite connection at the given path.
+    /// Failed to open or create the database connection at the given path.
     ///
-    /// May indicate a corrupted database file or insufficient directory permissions.
-    #[error("Failed to open SQLite at {0}: {1}")]
-    ConnectionOpen(PathBuf, #[source] rusqlite::Error),
+    /// May indicate a corrupted database file or insufficient permissions.
+    #[error("Failed to connect to database at {0}: {1}")]
+    ConnectionOpen(PathBuf, #[source] sqlx::Error),
 
-    /// Low-level SQLite execution error from `rusqlite`.
-    #[error("SQLite database failure: {0}")]
-    Sqlite(#[from] rusqlite::Error),
+    /// Low-level database execution error from `sqlx`.
+    #[error("Database failure: {0}")]
+    Sqlx(#[from] sqlx::Error),
 
     /// Failed during a schema migration or initial table creation.
     ///
@@ -54,11 +54,11 @@ pub enum LeaseDbError {
 
     /// A transactional operation failed during commit.
     #[error("Failed to commit database transaction: {0}")]
-    TransactionFailed(#[source] rusqlite::Error),
+    TransactionFailed(#[source] sqlx::Error),
 
     /// Database optimization (VACUUM) failed.
     #[error("Failed to execute VACUUM: {0}")]
-    VacuumFailed(#[source] rusqlite::Error),
+    VacuumFailed(#[source] sqlx::Error),
 
     /// A requested entity (e.g., a specific lease) was not found in the database.
     #[error("Entity not found: {0}")]
@@ -67,4 +67,12 @@ pub enum LeaseDbError {
     /// Migration version mismatch or schema integrity error.
     #[error("Database migration error: {0}")]
     MigrationIncompatibility(String),
+
+    /// Value out of expected range during database deserialization.
+    #[error("Invalid value for {0}: {1} (range: {2}..={3})")]
+    RangeError(String, i64, i64, i64),
+
+    /// Integer conversion failed during database deserialization.
+    #[error("Invalid integer conversion: {0}")]
+    IntConversion(#[from] TryFromIntError),
 }

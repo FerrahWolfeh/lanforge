@@ -2,41 +2,39 @@
 //!
 //! Listens for device connection signals and periodically pings the All-Nodes
 //! multicast address (`ff02::1`) to force devices (especially Android with
-//! randomized privacy addresses) to reveal their SLAAC addresses.
+//! randomized privacy addresses) to reveal their SLAAC addresses via the kernel neighbor cache.
 
 pub mod packet;
 
-use std::mem::MaybeUninit;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::net::{Ipv6Addr, SocketAddrV6};
+use std::os::unix::io::AsRawFd;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::NetworkError;
-use crate::ndp::utils::probe_neighbor;
-use crate::slaac::packet::{ICMPV6_TYPE_ECHO_REPLY, build_echo_request};
+use crate::slaac::packet::build_echo_request;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
-use rtnetlink::Handle;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use tokio::io::unix::AsyncFd;
 use tracing::{debug, info, warn};
 
 /// Active SLAAC Tracker service.
 pub struct SlaacTracker {
-    handle: Handle,
     target_ifindex: u32,
     ctx: LanforgeContext,
+    socket: Option<Arc<Socket>>,
 }
 
 impl SlaacTracker {
+    /// Creates a new `SlaacTracker` for the given interface.
     #[must_use]
-    pub const fn new(handle: Handle, target_ifindex: u32, ctx: LanforgeContext) -> Self {
+    pub const fn new(target_ifindex: u32, ctx: LanforgeContext) -> Self {
         Self {
-            handle,
             target_ifindex,
             ctx,
+            socket: None,
         }
     }
 }
@@ -57,18 +55,15 @@ impl LanforgeService for SlaacTracker {
 
 impl AsyncService for SlaacTracker {
     async fn run(&mut self) -> Result<(), CoreError> {
+        // Initialize discovery socket
+        let socket = Arc::new(
+            create_icmpv6_send_socket(self.target_ifindex)
+                .map_err(|e| CoreError::Generic(e.to_string()))?,
+        );
+        self.socket = Some(Arc::clone(&socket));
+
         let mut bus_rx = self.ctx.bus().subscribe();
-        let mut current_gua: Option<Ipv6Addr> = None;
-        let mut current_ula: Option<Ipv6Addr> = None;
-
-        // Create raw ICMPv6 socket for Echo Reply monitoring
-        let socket = create_icmpv6_socket(self.target_ifindex)
-            .map_err(|e| CoreError::Generic(e.to_string()))?;
-        socket.set_nonblocking(true).map_err(CoreError::Io)?;
-        let async_socket = AsyncFd::new(socket).map_err(CoreError::Io)?;
-
-        let mut next_periodic_sweep = Instant::now() + Duration::from_secs(30);
-        let mut buf = [0u8; 1500];
+        let mut next_sweep = Instant::now(); // Immediate sweep on boot
 
         info!("SLAAC Tracker: Active and listening for discovery triggers");
 
@@ -78,165 +73,78 @@ impl AsyncService for SlaacTracker {
             }
 
             let now = Instant::now();
-            let sleep_duration = if next_periodic_sweep > now {
-                next_periodic_sweep - now
-            } else {
-                Duration::ZERO
-            };
+            let sleep_duration = next_sweep.saturating_duration_since(now);
 
             tokio::select! {
-                // 1. Periodic Discovery Sweep
                 () = tokio::time::sleep(sleep_duration) => {
-                    self.trigger_multicast_ping(current_gua, current_ula, &async_socket);
-                    next_periodic_sweep = Instant::now() + Duration::from_mins(5); // 5 minutes
+                    info!("SLAAC Tracker: Periodic sweep");
+                    self.send_discovery_ping();
+                    next_sweep = Instant::now() + Duration::from_mins(5); // 5 minutes
                 }
 
-                // 2. Event Driven Discovery
                 Ok(timed_event) = bus_rx.recv() => {
                     match timed_event.event {
-                        LanforgeEvent::PrefixChanged { gua, ula, .. } => {
-                            current_gua = gua;
-                            current_ula = ula;
-                        }
-                        LanforgeEvent::DeviceUpdated { mac: _, hostname: _, change } => {
-                            // If a device just got an IPv4 or updated its hostname,
-                            // it might have IPv6 ready too. Trigger a sweep.
-                            if matches!(change, lanforge_core::bus::DeviceChange::V4Assigned { .. } | lanforge_core::bus::DeviceChange::HostnameChanged { .. }) {
-                                self.trigger_multicast_ping(current_gua, current_ula, &async_socket);
-                            }
-                        }
                         LanforgeEvent::RsReceived { .. } => {
-                            // Device just asked for an RA, wait a bit for it to configure SLAAC then ping.
+                            // Device requested RA, will configure SLAAC shortly.
+                            let socket_clone = Arc::clone(&socket);
+                            let ifindex = self.target_ifindex;
                             let ctx = self.ctx.clone();
-                            let ifidx = self.target_ifindex;
-                            let socket_fd = async_socket.as_raw_fd();
-                            let gua = current_gua;
-                            let ula = current_ula;
                             tokio::spawn(async move {
                                 tokio::time::sleep(Duration::from_millis(800)).await;
-                                trigger_ping_internal(&ctx, socket_fd, ifidx, gua, ula);
+                                let ll = ctx.get_interface_state(ifindex).link_local;
+                                if let Some(src) = ll {
+                                    send_multicast_echo(&socket_clone, &src, ifindex);
+                                }
                             });
                         }
-                        LanforgeEvent::ScanRequested => {
-                            self.trigger_multicast_ping(current_gua, current_ula, &async_socket);
+                        LanforgeEvent::ScanRequested | LanforgeEvent::NeighborScanRequested => {
+                            info!("SLAAC Tracker: Discovery requested, triggering sweep");
+                            self.send_discovery_ping();
                         }
+                        LanforgeEvent::Shutdown => break,
                         _ => {}
-                    }
-                }
-
-                // 3. Monitor Echo Replies
-                res = async_socket.readable() => {
-                    let mut guard = res.map_err(CoreError::Io)?;
-                    let buf_uninit = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<MaybeUninit<u8>>(), buf.len()) };
-                    match guard.get_inner().recv_from(buf_uninit) {
-                        Ok((n, addr)) => {
-                            guard.clear_ready();
-                            if n >= 8 && buf[0] == ICMPV6_TYPE_ECHO_REPLY
-                                && let Some(ip) = addr.as_socket().and_then(|s| match s {
-                                    SocketAddr::V6(v6) => Some(*v6.ip()),
-                                    SocketAddr::V4(_) => None,
-                                }) {
-                                    self.handle_echo_reply(ip).await;
-                                }
-                        }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            guard.clear_ready();
-                        }
-                        Err(e) => {
-                            warn!("SLAAC Tracker: Socket read error: {e}");
-                        }
                     }
                 }
             }
         }
-
         Ok(())
     }
 }
 
 impl SlaacTracker {
-    fn trigger_multicast_ping(
-        &self,
-        gua: Option<Ipv6Addr>,
-        ula: Option<Ipv6Addr>,
-        socket: &AsyncFd<Socket>,
-    ) {
-        trigger_ping_internal(&self.ctx, socket.as_raw_fd(), self.target_ifindex, gua, ula);
-    }
-
-    async fn handle_echo_reply(&self, ip: Ipv6Addr) {
-        // Do we know this IP?
-        if self.ctx.get_mac_by_ip(IpAddr::V6(ip)).is_none() {
-            debug!(
-                "SLAAC Tracker: Discovered unknown IPv6 node {}, triggering NDP probe...",
-                ip
-            );
-            // Trigger kernel NDP resolution. NeighborMonitor will pick up the result.
-            if let Err(e) =
-                probe_neighbor(&self.handle, self.target_ifindex, IpAddr::V6(ip), None).await
-            {
-                debug!("SLAAC Tracker: Failed to probe {}: {}", ip, e);
-            }
-        }
+    fn send_discovery_ping(&self) {
+        let Some(ref socket) = self.socket else {
+            return;
+        };
+        let state = self.ctx.get_interface_state(self.target_ifindex);
+        let Some(src_ll) = state.link_local else {
+            warn!("SLAAC Tracker: No link-local address, cannot ping");
+            return;
+        };
+        // Only link-local as source. GUA/ULA don't help here for discovery.
+        send_multicast_echo(socket, &src_ll, self.target_ifindex);
     }
 }
 
-fn trigger_ping_internal(
-    ctx: &LanforgeContext,
-    fd: i32,
-    ifindex: u32,
-    gua: Option<Ipv6Addr>,
-    ula: Option<Ipv6Addr>,
-) {
-    let if_ips = ctx.get_interface_state(ifindex);
-    let Some(src_ll) = if_ips.link_local else {
-        return;
-    };
-    let dst_all = "ff02::1".parse::<Ipv6Addr>().unwrap();
-    let dst_sa = SockAddr::from(SocketAddrV6::new(dst_all, 0, 0, ifindex));
-
-    let socket = unsafe { Socket::from_raw_fd(fd) };
-
-    // 1. Ping from Link-Local
-    send_echo(&socket, &src_ll, &dst_all, &dst_sa);
-
-    // 2. Ping from GUA (if we have one) to tease out device GUAs
-    if let Some(src_gua) = gua.or(if_ips.gua) {
-        send_echo(&socket, &src_gua, &dst_all, &dst_sa);
-    }
-
-    // 3. Ping from ULA (if we have one) to tease out device ULAs
-    if let Some(src_ula) = ula.or(if_ips.ula) {
-        send_echo(&socket, &src_ula, &dst_all, &dst_sa);
-    }
-
-    // Don't close the socket! We are just borrowing the FD.
-    std::mem::forget(socket);
-}
-
-fn send_echo(socket: &Socket, src: &Ipv6Addr, dst: &Ipv6Addr, dst_sa: &SockAddr) {
-    let pkt = build_echo_request(src, dst, 0xcafe, 1);
-    if let Err(e) = socket.send_to(&pkt, dst_sa) {
-        debug!(
-            "SLAAC Tracker: Failed to send multicast ping from {}: {}",
-            src, e
-        );
+fn send_multicast_echo(socket: &Socket, src: &Ipv6Addr, ifindex: u32) {
+    let dst: Ipv6Addr = "ff02::1".parse().unwrap();
+    let dst_sa = SockAddr::from(SocketAddrV6::new(dst, 0, 0, ifindex));
+    let pkt = build_echo_request(src, &dst, 0xcafe, 1);
+    if let Err(e) = socket.send_to(&pkt, &dst_sa) {
+        debug!("SLAAC Tracker: Failed to ping ff02::1 from {src}: {e}");
     }
 }
 
-fn create_icmpv6_socket(ifindex: u32) -> Result<Socket, NetworkError> {
+/// Creates an `ICMPv6` socket optimized for sending discovery probes.
+///
+/// This socket is write-only from the tracker's perspective: it blocks all
+/// incoming `ICMPv6` traffic at the kernel level and disables multicast loopback.
+fn create_icmpv6_send_socket(ifindex: u32) -> Result<Socket, NetworkError> {
     let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))
-        .map_err(|e| NetworkError::Socket(format!("Failed to create ICMPv6 socket: {e}")))?;
+        .map_err(|e| NetworkError::Socket(format!("ICMPv6 socket creation: {e}")))?;
 
-    // We want to receive Echo Replies from everyone.
-    // The host already joins ff02::1.
-
-    // Set ICMP6_FILTER to receive only Echo Reply (129)
-    let mut filter = [0xFFu8; 32];
-    let t = ICMPV6_TYPE_ECHO_REPLY as usize;
-    filter[t / 8] &= !(1u8 << (t % 8));
-
-    // ICMP6_FILTER is option 1 on Linux
+    // 1. Filter ALL incoming `ICMPv6` messages - we don't want to receive anything
+    let filter = [0xFFu8; 32];
     unsafe {
         let ret = libc::setsockopt(
             sock.as_raw_fd(),
@@ -253,7 +161,11 @@ fn create_icmpv6_socket(ifindex: u32) -> Result<Socket, NetworkError> {
         }
     }
 
-    // Bind to interface
+    // 2. Disable multicast loopback to avoid pinging ourselves
+    sock.set_multicast_loop_v6(false)
+        .map_err(|e| NetworkError::Socket(format!("set_multicast_loop_v6: {e}")))?;
+
+    // 3. Bind to specific interface
     sock.bind_device(Some(get_iface_name(ifindex)?.as_bytes()))
         .map_err(|e| NetworkError::Socket(format!("bind_device: {e}")))?;
 
@@ -261,7 +173,6 @@ fn create_icmpv6_socket(ifindex: u32) -> Result<Socket, NetworkError> {
 }
 
 fn get_iface_name(ifindex: u32) -> Result<String, NetworkError> {
-    // This is a bit slow but only done once at startup
     for entry in
         std::fs::read_dir("/sys/class/net").map_err(|e| NetworkError::Generic(e.to_string()))?
     {

@@ -60,9 +60,11 @@ pub struct Config {
     pub command: Command,
     pub iface_lan: String,
     pub leases_db: String,
+    pub db_url: String,
     pub fallback_mins: u64,
     pub control_socket: String,
     pub log_db: String,
+    pub log_db_url: String,
 
     // RA
     pub ra_enabled: bool,
@@ -131,13 +133,29 @@ impl Config {
         Self {
             #[cfg(feature = "debug-commands")]
             command: cli.command.unwrap_or(Command::Run { only: None }),
-            iface_lan: cli.iface_lan.unwrap_or(toml_cfg.general.iface_lan),
-            leases_db: cli.db_path.unwrap_or(toml_cfg.general.leases_db),
+            iface_lan: cli
+                .iface_lan
+                .unwrap_or_else(|| toml_cfg.general.iface_lan.clone()),
+            leases_db: cli
+                .db_path
+                .unwrap_or_else(|| toml_cfg.general.leases_db.clone()),
+            db_url: if let Some(url) = cli.db_url {
+                url
+            } else {
+                toml_cfg.general.get_db_url()
+            },
             fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
             control_socket: cli
                 .control_socket
-                .unwrap_or(toml_cfg.general.control_socket),
-            log_db: cli.log_db,
+                .unwrap_or_else(|| toml_cfg.general.control_socket.clone()),
+            log_db: cli
+                .log_db
+                .unwrap_or_else(|| toml_cfg.general.log_db.clone()),
+            log_db_url: if let Some(url) = cli.log_db_url {
+                url
+            } else {
+                toml_cfg.general.get_log_db_url()
+            },
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: RaCfg {
@@ -458,7 +476,9 @@ impl Config {
             dns_enabled: self.dns_enabled,
             dns_upstream: self.dns_toml.upstream.clone(),
             db_path: self.leases_db.clone(),
+            db_url: self.db_url.clone(),
             log_db_path: self.log_db.clone(),
+            log_db_url: self.log_db_url.clone(),
             tcp_port: self.api_port,
             http_listen: self.http_listen.clone(),
             dhcp_v4_range_size: {

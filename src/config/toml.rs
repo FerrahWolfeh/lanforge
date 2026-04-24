@@ -1,6 +1,6 @@
 use serde::Deserialize;
-use std::net::Ipv6Addr;
 use std::path::Path;
+use std::{clone::Clone, net::Ipv6Addr};
 use tracing::{info, warn};
 
 /// Root structure of the TOML file.
@@ -87,8 +87,10 @@ impl Default for DhcpV6Cfg {
 pub struct GeneralCfg {
     /// LAN interface where the daemon listens.
     pub iface_lan: String,
-    /// Path to the `SQLite` database file (leases).
+    /// @deprecated Path to the `SQLite` database file (leases). Use `db_url` instead.
     pub leases_db: String,
+    /// Database connection URL (e.g. `sqlite:///var/lib/lanforge/leases.db` or `postgresql://user:pass@host/db`).
+    pub db_url: Option<String>,
     /// "Target" IPv6 prefix to identify local devices (SLAAC).
     pub target_prefix: String,
     /// Wait time before processing network events.
@@ -101,6 +103,33 @@ pub struct GeneralCfg {
     pub http_listen: Option<String>,
     /// Global list of search domains.
     pub search_domains: Option<Vec<String>>,
+    /// @deprecated Path to the `SQLite` log database file. Use `log_db_url` instead.
+    pub log_db: String,
+    /// Log database connection URL.
+    pub log_db_url: Option<String>,
+}
+
+impl GeneralCfg {
+    /// Returns the resolved database URL, prioritizing `db_url` over `leases_db`.
+    pub fn get_db_url(&self) -> String {
+        self.db_url
+            .as_ref()
+            .map_or_else(|| format!("sqlite://{}", self.leases_db), Clone::clone)
+    }
+
+    /// Returns the resolved log database URL, prioritizing `log_db_url` over `log_db`.
+    pub fn get_log_db_url(&self) -> String {
+        self.log_db_url.as_ref().map_or_else(
+            || {
+                if self.log_db == ":memory:" {
+                    "sqlite::memory:?cache=shared".to_string()
+                } else {
+                    format!("sqlite://{}", self.log_db)
+                }
+            },
+            Clone::clone,
+        )
+    }
 }
 
 impl Default for GeneralCfg {
@@ -108,12 +137,15 @@ impl Default for GeneralCfg {
         Self {
             iface_lan: "end0".into(),
             leases_db: "/var/lib/lanforge/leases.db".into(),
+            db_url: None,
             target_prefix: "fd97:f00d:cafe:3731".into(),
             debounce_secs: 2,
             fallback_mins: 5,
             control_socket: "/run/lanforge/control.sock".into(),
             http_listen: None,
             search_domains: None,
+            log_db: ":memory:".into(),
+            log_db_url: None,
         }
     }
 }

@@ -2,448 +2,353 @@
 
 use crate::engine::LeaseDb;
 use crate::worker::DbWorker;
-use lanforge_core::bus::{EventBus, TimedEvent};
-use lanforge_core::device::{Device, HostnameOrigin, IPv4State, IPv6State, V4Lease};
+use lanforge_core::bus::{EventBus, LanforgeEvent};
+use lanforge_core::device::{Device, HostnameOrigin, IPv4State, IPv6State, V4Lease, V6PrefixLease};
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::{DeviceUpdate, State};
-use rusqlite::params;
+use lanforge_core::state::State;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
+
+// ---------------------------------------------------------------------------
+// Test Helpers
+// ---------------------------------------------------------------------------
 
 fn make_mac(last: u8) -> MacAddr {
     MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, last])
 }
 
-#[test]
-fn create_and_load_empty() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let table = db.load_table().unwrap();
-    assert_eq!(table.devices().count(), 0);
+async fn create_test_db() -> LeaseDb {
+    LeaseDb::open_in_memory()
+        .await
+        .expect("Failed to create in-memory test database")
 }
 
-#[test]
-fn save_and_load_roundtrip() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-
-    let mac = make_mac(1);
+fn create_test_device(mac_last: u8, hostname: &str) -> Device {
+    let mac = make_mac(mac_last);
     let mut dev = Device::new(mac);
-    dev.hostname = "TestDevice".into();
-    dev.v4 = IPv4State::Dynamic(V4Lease {
-        ip: Ipv4Addr::new(192, 168, 0, 100),
-        expires: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-    });
-    table.insert_device(mac, dev);
-
-    db.save_table(&table).unwrap();
-    let loaded = db.load_table().unwrap();
-
-    let dev = loaded.devices().next().unwrap();
-    assert_eq!(dev.hostname.name, "TestDevice");
-    assert_eq!(dev.v4.ip().unwrap(), Ipv4Addr::new(192, 168, 0, 100));
+    dev.hostname = hostname.into();
+    dev
 }
 
-#[test]
-fn handles_slaac_multiple_addrs() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
+// ---------------------------------------------------------------------------
+// Basic Persistence Tests
+// ---------------------------------------------------------------------------
 
-    let mac = make_mac(2);
-    table.apply_update(DeviceUpdate::SlaacObserved {
-        mac,
-        addr: "fd97:f00d:cafe:3731::1234".parse().unwrap(),
-    });
-    table.apply_update(DeviceUpdate::SlaacObserved {
-        mac,
-        addr: "fd97:f00d:cafe:3731::5678".parse().unwrap(),
-    });
-    table.apply_update(DeviceUpdate::SlaacObserved {
-        mac,
-        addr: "2001:db8::abcd".parse().unwrap(),
-    });
-
-    db.save_table(&table).unwrap();
-    let loaded = db.load_table().unwrap();
-
-    assert_eq!(
-        loaded
-            .devices()
-            .next()
-            .unwrap()
-            .v6
-            .iter()
-            .filter(|s| matches!(s, IPv6State::Slaac { .. }))
-            .count(),
-        3
-    );
-}
-
-#[test]
-fn handles_duid_persistence() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-
-    let mac = make_mac(3);
-    let duid = Duid::new(vec![
-        0x00, 0x03, 0x00, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x03,
-    ]);
-
-    let mut dev = Device::new(mac);
-    dev.hostname = "DuidDevice".into();
-    dev.duid = Some(duid.clone());
-    table.insert_device(mac, dev);
-
-    db.save_table(&table).unwrap();
-    let loaded = db.load_table().unwrap();
-
-    let dev = loaded.devices().next().unwrap();
-    assert_eq!(dev.duid.as_ref().unwrap().bytes, duid.bytes);
-
-    let found = loaded.get_by_duid(&duid);
-    assert!(found.is_some());
-    assert_eq!(found.unwrap().hostname.name, "DuidDevice");
-}
-
-#[test]
-fn handles_v6_lease() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-
-    let mac = make_mac(4);
-    let duid = Duid::new(vec![
-        0x00, 0x03, 0x00, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x04,
-    ]);
-
-    let mut dev = Device::new(mac);
-    dev.hostname = "V6Device".into();
-    dev.duid = Some(duid.clone());
-    table.insert_device(mac, dev);
-
-    table.apply_update(DeviceUpdate::V6LeaseGranted {
-        mac: Some(mac),
-        duid,
-        iaid: 0,
-        ip: "fd97:f00d:cafe:3731::1057:cafe".parse().unwrap(),
-        expires: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-    });
-
-    db.save_table(&table).unwrap();
-    let loaded = db.load_table().unwrap();
-
-    let dev = loaded.devices().next().unwrap();
-    assert_eq!(dev.v6.len(), 1);
-    assert_eq!(
-        dev.v6[0].ip().unwrap(),
-        "fd97:f00d:cafe:3731::1057:cafe"
-            .parse::<Ipv6Addr>()
-            .unwrap()
-    );
-}
-
-#[test]
-fn save_overwrites_previous() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-    let mac = make_mac(1);
-
-    let mut dev1 = Device::new(mac);
-    dev1.hostname = "First".into();
-    table.insert_device(mac, dev1);
-    db.save_table(&table).unwrap();
-
-    let mut dev2 = Device::new(mac);
-    dev2.hostname = "Second".into();
-    table.insert_device(mac, dev2);
-    db.save_table(&table).unwrap();
-
-    let loaded = db.load_table().unwrap();
-    assert_eq!(loaded.devices().next().unwrap().hostname.name, "Second");
-    assert_eq!(loaded.devices().count(), 1);
-}
-
-#[test]
-fn skips_invalid_database_records_gracefully() {
-    let db = LeaseDb::open_in_memory().unwrap();
-
-    db.conn
-        .execute(
-            "INSERT INTO devices (mac, hostname, hostname_origin, is_static, last_seen)
-             VALUES ('bad-mac', 'Lixo', 0, 0, 0)",
-            [],
-        )
-        .unwrap();
-    db.conn
-        .execute(
-            "INSERT INTO devices (mac, hostname, hostname_origin, is_static, last_seen)
-             VALUES ('aa:bb:cc:dd:ee:ff', 'Valido', 0, 0, 0)",
-            [],
-        )
-        .unwrap();
-    db.conn
-        .execute(
-            "INSERT INTO v4_leases (mac, ip, expires)
-             VALUES ('aa:bb:cc:dd:ee:ff', '999.999.999.999', 0)",
-            [],
-        )
-        .unwrap();
-
-    let table = db
-        .load_table()
-        .expect("banco com lixo não deve causar erro fatal");
-
-    assert_eq!(table.devices().count(), 1, "MAC inválido deve ser ignorado");
-    let dev = table.devices().next().unwrap();
-    assert_eq!(dev.hostname.name, "Valido");
-    assert!(
-        matches!(dev.v4, IPv4State::None),
-        "IP inválido deve ser descartado"
-    );
+#[tokio::test]
+async fn test_empty_state_roundtrip() {
+    let db = create_test_db().await;
+    let table = db.load_table().await.expect("Failed to load empty table");
+    assert_eq!(table.devices.len(), 0, "New database should be empty");
 }
 
 #[tokio::test]
-async fn db_worker_persists_on_dirty_event() {
-    use lanforge_core::bus::LanforgeEvent;
+async fn test_complex_device_roundtrip() {
+    let db = create_test_db().await;
+    let mut table = State::new();
+
+    let mac = make_mac(0x01);
+    let mut dev = Device::new(mac);
+    dev.hostname = "ComplexDevice".into();
+    dev.hostname.origin = HostnameOrigin::Static;
+
+    // IPv4 State
+    dev.v4 = IPv4State::Dynamic(V4Lease {
+        ip: Ipv4Addr::new(192, 168, 1, 50),
+        expires: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
+    });
+
+    // IPv6 State (SLAAC)
+    dev.v6.push(IPv6State::Slaac {
+        ip: "fd00::1".parse().unwrap(),
+        last_seen: SystemTime::now(),
+    });
+
+    // IPv6 Prefix Delegation
+    dev.v6_prefixes.push(V6PrefixLease {
+        prefix: "2001:db8:beef::".parse().unwrap(),
+        len: 64,
+        iaid: 101,
+        expires: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
+    });
+
+    // Seen V4
+    dev.seen_v4
+        .push((Ipv4Addr::new(192, 168, 1, 51), SystemTime::now()));
+
+    // DUID
+    let duid = Duid::new(vec![0x00, 0x01, 0x02, 0x03, 0x04]);
+    dev.duid = Some(duid);
+
+    table.devices.insert(mac, Arc::new(dev));
+
+    db.save_table(&table)
+        .await
+        .expect("Failed to save complex state");
+    let loaded = db.load_table().await.expect("Failed to load complex state");
+
+    let loaded_dev = loaded.devices.get(&mac).expect("Device missing after load");
+
+    assert_eq!(loaded_dev.hostname.name, "ComplexDevice");
+    assert_eq!(loaded_dev.hostname.origin, HostnameOrigin::Static);
+    assert!(matches!(loaded_dev.v4, IPv4State::Dynamic(_)));
+    assert_eq!(loaded_dev.v6.len(), 1);
+    assert_eq!(loaded_dev.v6_prefixes.len(), 1);
+    assert_eq!(
+        loaded_dev.v6_prefixes[0].prefix,
+        "2001:db8:beef::".parse::<Ipv6Addr>().unwrap()
+    );
+    assert_eq!(loaded_dev.v6_prefixes[0].len, 64);
+    assert_eq!(loaded_dev.v6_prefixes[0].iaid, 101);
+    assert_eq!(
+        loaded_dev.duid.as_ref().unwrap().bytes,
+        vec![0x00, 0x01, 0x02, 0x03, 0x04].into()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Atomicity and Integrity Tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_cascading_delete() {
+    let db = create_test_db().await;
+    let mut table = State::new();
+    let mac = make_mac(0x05);
+
+    let mut dev = Device::new(mac);
+    dev.v4 = IPv4State::Dynamic(V4Lease {
+        ip: Ipv4Addr::new(10, 0, 0, 5),
+        expires: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
+    });
+    table.devices.insert(mac, Arc::new(dev));
+    db.save_table(&table).await.unwrap();
+
+    // Verify presence in child tables via raw query
+    let pool = db.pool.as_sqlite();
+    let lease_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM v4_leases WHERE mac = ?")
+        .bind(mac.to_string())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(lease_count, 1, "Lease should exist in child table");
+
+    // Remove device - should cascade
+    db.remove_device(mac)
+        .await
+        .expect("Failed to remove device");
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM devices WHERE mac = ?")
+        .bind(mac.to_string())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "Device should be gone from main table");
+
+    let lease_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM v4_leases WHERE mac = ?")
+        .bind(mac.to_string())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(lease_count, 0, "Lease should have been deleted via CASCADE");
+}
+
+#[tokio::test]
+async fn test_upsert_logic() {
+    let db = create_test_db().await;
+    let mac = make_mac(0x10);
+
+    let dev1 = create_test_device(0x10, "Original");
+    db.upsert_device(&dev1).await.unwrap();
+
+    let mut dev2 = create_test_device(0x10, "Updated");
+    dev2.v4 = IPv4State::Static(Ipv4Addr::new(1, 1, 1, 1));
+    db.upsert_device(&dev2).await.unwrap();
+
+    let loaded = db.load_table().await.unwrap();
+    let dev = loaded.devices.get(&mac).unwrap();
+    assert_eq!(dev.hostname.name, "Updated");
+    assert_eq!(dev.v4.ip().unwrap(), Ipv4Addr::new(1, 1, 1, 1));
+}
+
+// ---------------------------------------------------------------------------
+// Maintenance Tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_prune_zombies() {
+    let db = create_test_db().await;
+
+    // Worthy device (has hostname)
+    let dev1 = create_test_device(0x20, "Worthy");
+    db.upsert_device(&dev1).await.unwrap();
+
+    // Zombie device (dynamic, no hostname, no leases)
+    let mac_zombie = make_mac(0x21);
+    let dev2 = Device::new(mac_zombie);
+    db.upsert_device(&dev2).await.unwrap();
+
+    let pruned = db.prune_zombies().await.expect("Failed to prune zombies");
+    assert_eq!(pruned, 1, "Should have pruned one zombie device");
+
+    let loaded = db.load_table().await.unwrap();
+    assert!(loaded.devices.contains_key(&make_mac(0x20)));
+    assert!(!loaded.devices.contains_key(&mac_zombie));
+}
+
+#[tokio::test]
+async fn test_lease_history_recording() {
+    let db = create_test_db().await;
+    let mac = make_mac(0x30);
+
+    db.record_lease_event(
+        mac,
+        "192.168.1.10",
+        "dhcpv4",
+        crate::engine::LeaseAction::Assigned,
+    )
+    .await
+    .unwrap();
+    // Use >1s sleep because timestamps are in seconds
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    db.record_lease_event(
+        mac,
+        "192.168.1.10",
+        "dhcpv4",
+        crate::engine::LeaseAction::Renewed,
+    )
+    .await
+    .unwrap();
+
+    let history = db
+        .get_lease_history(mac)
+        .await
+        .expect("Failed to get history");
+    assert_eq!(history.len(), 2);
+    // DESC order means Renewed (newest) comes first
+    assert_eq!(history[0].action, crate::engine::LeaseAction::Renewed);
+    assert_eq!(history[1].action, crate::engine::LeaseAction::Assigned);
+}
+
+// ---------------------------------------------------------------------------
+// Integration / Worker Tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_db_worker_lifecycle() {
     use lanforge_core::context::LanforgeContext;
-    use lanforge_core::service::{SyncBusReceiver, SyncService};
+    use lanforge_core::service::AsyncService;
 
     let dir = tempdir().unwrap();
-    let db_path = dir.path().join("test.db");
-    let log_db_path = dir.path().join("test_logs.db");
+    let db_path = dir.path().join("worker.db");
+    // SQLx requires the file to exist for SQLite if not configured otherwise
+    std::fs::File::create(&db_path).unwrap();
+    let db_url = format!("sqlite:///{}", db_path.display());
 
     let bus = Arc::new(EventBus::new());
     let table = State::new();
     let ctx = LanforgeContext::new(bus.clone(), table, None);
 
-    let (tx, rx) = mpsc::channel();
-    let bus_rx = SyncBusReceiver::new(rx, ctx.clone());
+    let mut worker = DbWorker::new(db_url.clone(), "sqlite::memory:".to_string(), ctx.clone());
 
-    let mut worker = DbWorker::new(db_path.clone(), log_db_path, ctx.clone());
+    let mac = make_mac(0x40);
+    let _ = ctx.update_hostname(mac, "worker-node".into(), HostnameOrigin::Dhcp);
 
-    // Prepare table and context
-    let mac = make_mac(0xAB);
-    let _ = ctx.update_hostname(mac, "worker-test".into(), HostnameOrigin::Dhcp);
+    let mut bus_rx = bus.subscribe();
 
-    std::thread::spawn(move || {
-        let _ = worker.run(&bus_rx);
+    let worker_handle = tokio::spawn(async move {
+        worker.run().await.expect("Worker failed");
     });
 
-    // Send Dirty event to trigger save
-    tx.send(TimedEvent::new(LanforgeEvent::DeviceTableDirty, None))
-        .unwrap();
+    // Wait for DbReady
+    let mut ready = false;
+    for _ in 0..20 {
+        if let Ok(timed_ev) = tokio::time::timeout(Duration::from_millis(100), bus_rx.recv()).await
+            && let Ok(ev) = timed_ev
+            && matches!(ev.event, LanforgeEvent::DbReady)
+        {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready, "Worker failed to signal DbReady");
 
-    // Small wait for the sync thread to process
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Trigger persistence
+    let _ = bus.publish(LanforgeEvent::DeviceTableDirty);
 
-    // Shutdown worker
-    tx.send(TimedEvent::new(LanforgeEvent::Shutdown, None))
-        .unwrap();
+    // Give some time for persistence
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let db = LeaseDb::open(&db_path).unwrap();
-    let loaded = db.load_table().unwrap();
-    assert_eq!(loaded.devices().count(), 1);
-    assert_eq!(
-        loaded.devices().next().unwrap().hostname.name,
-        "worker-test"
-    );
-}
+    // Shutdown
+    let _ = bus.publish(LanforgeEvent::Shutdown);
+    worker_handle.await.expect("Worker join failed");
 
-#[test]
-fn test_remove_device_cascades() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-
-    let mac = make_mac(5);
-    let mut dev = Device::new(mac);
-    dev.hostname = "CascadeTest".into();
-    dev.v4 = IPv4State::Dynamic(V4Lease {
-        ip: Ipv4Addr::new(10, 0, 0, 5),
-        expires: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
-    });
-    table.insert_device(mac, dev);
-
-    db.save_table(&table).unwrap();
-
-    // Verify it's in the DB
-    let count: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM devices WHERE mac = ?1",
-            params![mac.to_string()],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 1);
-    let lease_count: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM v4_leases WHERE mac = ?1",
-            params![mac.to_string()],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(lease_count, 1);
-
-    // Remove device
-    db.remove_device(mac).unwrap();
-
-    // Verify cascade
-    let count: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM devices WHERE mac = ?1",
-            params![mac.to_string()],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 0);
-}
-
-// --- Novos testes de Persistência e Integração ---
-
-#[test]
-fn test_seen_v4_persistence() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-    let mac = make_mac(10);
-    let ip: Ipv4Addr = "1.2.3.4".parse().unwrap();
-
-    // 1. Give it a hostname to make it worthy
-    table.apply_update(DeviceUpdate::DhcpHostnameHint {
-        mac,
-        hostname: "WorthyHost".to_string(),
-    });
-
-    // 2. Add some seen IPs
-    table.apply_update(DeviceUpdate::ArpSeen { mac, ip });
-    table.apply_update(DeviceUpdate::ArpSeen {
-        mac,
-        ip: "5.6.7.8".parse().unwrap(),
-    });
-
-    // 3. Save and Load
-    db.save_table(&table).unwrap();
-    let loaded = db.load_table().unwrap();
-
+    // Verify persistence
+    let db = LeaseDb::open(&db_url).await.expect("Failed to reopen DB");
+    let loaded = db.load_table().await.unwrap();
     let dev = loaded
-        .get_device(&mac)
-        .expect("Deve persistir dispositivo digno");
-    assert_eq!(dev.seen_v4.len(), 2);
-    assert!(dev.seen_v4.iter().any(|(i, _)| *i == ip));
-    assert!(
-        dev.seen_v4
-            .iter()
-            .any(|(i, _)| *i == "5.6.7.8".parse::<Ipv4Addr>().unwrap())
-    );
+        .devices
+        .get(&mac)
+        .expect("Device not found in persisted table");
+    assert_eq!(dev.hostname.name, "worker-node");
 }
 
-#[test]
-fn test_slaac_persistence_integration() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-    let mac = make_mac(11);
-    let slaac1: Ipv6Addr = "fd00::1".parse().unwrap();
-    let slaac2: Ipv6Addr = "fd00::2".parse().unwrap();
+// ---------------------------------------------------------------------------
+// Resilience Tests
+// ---------------------------------------------------------------------------
 
-    // 1. Initial SLAAC (is_worthy via ULA)
-    table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: slaac1 });
-    db.save_table(&table).unwrap();
+#[tokio::test]
+async fn test_invalid_data_resilience() {
+    let db = create_test_db().await;
+    let pool = db.pool.as_sqlite();
 
-    // 2. Add another SLAAC and save again
-    table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: slaac2 });
-    db.save_table(&table).unwrap();
+    // Insert malformed MAC
+    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, is_static, last_seen, origin) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind("not-a-mac")
+        .bind("Garbage")
+        .bind(0)
+        .bind(0)
+        .bind(0)
+        .bind("dynamic")
+        .execute(&pool)
+        .await
+        .unwrap();
 
-    let loaded = db.load_table().unwrap();
-    let dev = loaded.get_device(&mac).unwrap();
-    assert_eq!(dev.v6.len(), 2);
-    assert!(
-        dev.v6
-            .iter()
-            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == slaac1))
+    // Insert valid device but malformed lease IP
+    let mac = make_mac(0x50);
+    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, is_static, last_seen, origin) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(mac.to_string())
+        .bind("ValidDevice")
+        .bind(0)
+        .bind(0)
+        .bind(0)
+        .bind("dynamic")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    sqlx::query("INSERT INTO v4_leases (mac, ip, expires) VALUES (?, ?, ?)")
+        .bind(mac.to_string())
+        .bind("999.999.999.999")
+        .bind(0)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let table = db
+        .load_table()
+        .await
+        .expect("Load should survive malformed data");
+
+    assert_eq!(
+        table.devices.len(),
+        1,
+        "Should have ignored device with invalid MAC"
     );
+    let dev = table.devices.get(&mac).unwrap();
     assert!(
-        dev.v6
-            .iter()
-            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == slaac2))
+        matches!(dev.v4, IPv4State::None),
+        "Should have discarded invalid IP lease"
     );
-
-    // 3. Verify it doesn't duplicate if we save the table as-is
-    db.save_table(&table).unwrap();
-    let loaded2 = db.load_table().unwrap();
-    assert_eq!(loaded2.get_device(&mac).unwrap().v6.len(), 2);
-}
-
-#[test]
-fn test_worthy_filtering_db_integration() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-    let mac = make_mac(12);
-    let ll_ip: Ipv6Addr = "fe80::dead:beef".parse().unwrap();
-
-    // 1. Unworthy device (Link-Local only)
-    table.apply_update(DeviceUpdate::NdpSeen { mac, ip: ll_ip });
-    assert!(
-        table.get_device(&mac).is_none(),
-        "Device should be filtered out"
-    );
-
-    // 2. Save should result in empty DB
-    db.save_table(&table).unwrap();
-    let loaded = db.load_table().unwrap();
-    assert!(loaded.get_device(&mac).is_none());
-
-    // 3. Make it worthy (Hostname)
-    table.apply_update(DeviceUpdate::DhcpHostnameHint {
-        mac,
-        hostname: "NowWorthy".to_string(),
-    });
-    assert!(table.get_device(&mac).is_some());
-
-    // 4. Save and Load
-    db.save_table(&table).unwrap();
-    let loaded2 = db.load_table().unwrap();
-    assert!(loaded2.get_device(&mac).is_some());
-    assert_eq!(loaded2.get_device(&mac).unwrap().hostname.name, "NowWorthy");
-}
-
-#[test]
-fn test_persistence_of_various_updates() {
-    let db = LeaseDb::open_in_memory().unwrap();
-    let mut table = State::new();
-    let mac = make_mac(20);
-
-    // 1. Hostname Hint
-    table.apply_update(DeviceUpdate::DhcpHostnameHint {
-        mac,
-        hostname: "persistence-test".to_string(),
-    });
-
-    // 2. NDP Discovery
-    table.apply_update(DeviceUpdate::NdpSeen {
-        mac,
-        ip: "fe80::1".parse().unwrap(),
-    });
-
-    // 3. DHCPv4 Registration
-    let ip_v4 = "192.168.1.100".parse().unwrap();
-    table.apply_update(DeviceUpdate::V4LeaseGranted {
-        mac,
-        ip: ip_v4,
-        expires: SystemTime::now() + Duration::from_secs(3600),
-    });
-
-    // 4. SLAAC Probe (Observed)
-    let ip_v6 = "2001:db8::abc".parse().unwrap();
-    table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip_v6 });
-
-    // Save and Reload
-    db.save_table(&table).unwrap();
-    let loaded = db.load_table().unwrap();
-
-    let dev = loaded.get_device(&mac).expect("Device should be persisted");
-    assert_eq!(dev.hostname.name, "persistence-test");
-    assert_eq!(dev.v4.ip().unwrap(), ip_v4);
-    assert!(dev.v6.iter().any(|s| s.ip() == Some(ip_v6)));
 }

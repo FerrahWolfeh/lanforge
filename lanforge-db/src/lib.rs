@@ -47,6 +47,9 @@
 //! | [`log_engine`] | `LogDb` — transient logs with auto-pruning (24h + 50K cap) |
 //! | [`worker`] | `DbWorker` — sync service coordinating persistence |
 //! | [`error`] | `LeaseDbError` — I/O and SQLite error hierarchy |
+#[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+compile_error!("Either 'sqlite' or 'postgres' feature must be enabled for lanforge-db.");
+
 #[warn(clippy::all, clippy::nursery, clippy::pedantic)]
 #[allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 pub mod engine;

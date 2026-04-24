@@ -1,7 +1,6 @@
 use crate::api::{Command, Response, SimpleSuccess};
 use lanforge_core::error::CoreError;
 use lanforge_db::log_engine::LogDb;
-use tokio::task::spawn_blocking;
 
 use crate::config::ApiConfig;
 use crate::error::ApiError;
@@ -278,14 +277,11 @@ where
 
                 // Fetch history if it's a log command
                 let history = if let Command::Log { .. } = req_cmd {
-                    let log_db_path = ctx.cfg.log_db_path.clone();
-                    spawn_blocking(move || {
-                        LogDb::open(Path::new(&log_db_path))
-                            .and_then(|db| db.get_history(100))
-                            .unwrap_or_default()
-                    })
-                    .await
-                    .unwrap_or_default()
+                    if let Ok(db) = LogDb::open(&ctx.cfg.log_db_url).await {
+                        db.get_history(100).await.unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
                 };

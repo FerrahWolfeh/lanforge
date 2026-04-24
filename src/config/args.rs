@@ -33,9 +33,17 @@ pub struct CliArgs {
     #[arg(short = 'd', long, env = "LANFORGE_DB_PATH")]
     pub db_path: Option<String>,
 
+    /// Database connection URL (e.g. `sqlite:///var/lib/lanforge/leases.db`).
+    #[arg(long, env = "LANFORGE_DB_URL")]
+    pub db_url: Option<String>,
+
     /// Path to the `SQLite` database for logs (history).
-    #[arg(long, env = "LANFORGE_LOG_DB", default_value = "/tmp/lanforge_logs.db")]
-    pub log_db: String,
+    #[arg(long, env = "LANFORGE_LOG_DB")]
+    pub log_db: Option<String>,
+
+    /// Log database connection URL (e.g. `sqlite:///tmp/lanforge_logs.db`).
+    #[arg(long, env = "LANFORGE_LOG_DB_URL")]
+    pub log_db_url: Option<String>,
 
     /// Path to an additional TOML/JSON file containing only static devices (debug).
     #[arg(long, env = "LANFORGE_DEVICES_FILE")]

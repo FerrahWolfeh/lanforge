@@ -18,8 +18,10 @@ name = "lanforged"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["sqlite"]
 debug-commands = []
+sqlite = ["lanforge-db/sqlite"]
+postgres = ["lanforge-db/postgres"]
 
 [dependencies]
 lanforge-core = { path = "lanforge-core" }

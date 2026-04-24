@@ -2,7 +2,6 @@ use anyhow::Result;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use std::os::unix::net::UnixDatagram;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -57,11 +56,11 @@ impl Daemon {
         let netlink_handle = &self.bootstrap.rt_handle;
         let messages = &self.bootstrap.messages;
 
-        let db_path = PathBuf::from(&cfg.leases_db);
-        let log_db_path = PathBuf::from(&cfg.log_db);
+        let db_url = cfg.db_url.clone();
+        let log_db_url = cfg.log_db_url.clone();
         let ctx_db = self.ctx.clone();
-        self.registry.spawn_sync(&self.ctx, move || {
-            DbWorker::new(db_path.clone(), log_db_path.clone(), ctx_db.clone())
+        self.registry.spawn_async(&self.ctx, move || {
+            DbWorker::new(db_url.clone(), log_db_url.clone(), ctx_db.clone())
         });
 
         let ctx_mdns = self.ctx.clone();
@@ -94,10 +93,9 @@ impl Daemon {
                 RaService::new(ra_cfg.clone(), ctx_ra.clone())
             });
 
-            let h3 = netlink_handle.clone();
             let ctx_slaac = self.ctx.clone();
             self.registry.spawn_async(&self.ctx, move || {
-                SlaacTracker::new(h3.clone(), target_ifindex, ctx_slaac.clone())
+                SlaacTracker::new(target_ifindex, ctx_slaac.clone())
             });
         }
 

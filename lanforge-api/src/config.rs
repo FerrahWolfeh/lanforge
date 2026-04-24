@@ -30,8 +30,12 @@ pub struct ApiConfig {
 
     /// Path to the SQLite database (used for calculating file size stats).
     pub db_path: String,
+    /// Database connection URL.
+    pub db_url: String,
     /// Path to the SQLite database for logs (history).
     pub log_db_path: String,
+    /// Log database connection URL.
+    pub log_db_url: String,
 
     /// Optional TCP port for the control API (debug).
     pub tcp_port: Option<u16>,
@@ -57,7 +61,9 @@ impl ApiConfig {
             dns_enabled: true,
             dns_upstream: None,
             db_path: "/tmp/leases.db".to_string(),
+            db_url: "sqlite:///tmp/leases.db".to_string(),
             log_db_path: "/tmp/lanforge_logs.db".to_string(),
+            log_db_url: "sqlite:///tmp/lanforge_logs.db".to_string(),
             tcp_port: None,
             http_listen: None,
             dhcp_v4_range_size: 100,
