@@ -35,12 +35,19 @@ pub async fn run_event_loop(
     let mut stale_timer = interval(Duration::from_mins(10));
     stale_timer.tick().await;
 
-    // Initial scan
+    // Initial scan request to kick off discovery across all services
     let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
 
     let expected_services = determine_expected_services(&cfg);
-    let mut ready_services = HashSet::new();
-    let mut system_ready_sent = false;
+    let mut loop_ctx = LoopContext {
+        ctx: &ctx,
+        cfg: &cfg,
+        state: &mut state,
+        target_ifindex,
+        expected_services: &expected_services,
+        ready_services: HashSet::new(),
+        system_ready_sent: false,
+    };
 
     loop {
         tokio::select! {
@@ -62,16 +69,7 @@ pub async fn run_event_loop(
             event = bus_rx.recv() => {
                 match event {
                     Ok(timed_event) => {
-                        if !handle_bus_event(
-                            timed_event.event,
-                            &ctx,
-                            &cfg,
-                            &mut state,
-                            target_ifindex,
-                            &expected_services,
-                            &mut ready_services,
-                            &mut system_ready_sent
-                        ) {
+                        if !handle_bus_event(timed_event.event, &mut loop_ctx) {
                             break;
                         }
                     }
@@ -90,82 +88,59 @@ pub async fn run_event_loop(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn handle_bus_event(
-    event: LanforgeEvent,
-    ctx: &LanforgeContext,
-    cfg: &Arc<Config>,
-    state: &mut LoopState,
+struct LoopContext<'a> {
+    ctx: &'a LanforgeContext,
+    cfg: &'a Arc<Config>,
+    state: &'a mut LoopState,
     target_ifindex: u32,
-    expected_services: &HashSet<&'static str>,
-    ready_services: &mut HashSet<String>,
-    system_ready_sent: &mut bool,
-) -> bool {
+    expected_services: &'a HashSet<&'static str>,
+    ready_services: HashSet<String>,
+    system_ready_sent: bool,
+}
+
+fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
     match event {
-        LanforgeEvent::ServiceReady { name } if expected_services.contains(name.as_str()) => {
-            ready_services.insert(name.clone());
+        LanforgeEvent::ServiceReady { name } if l_ctx.expected_services.contains(name.as_str()) => {
+            l_ctx.ready_services.insert(name.clone());
             debug!(
                 "ServiceReady: {} ({}/{})",
                 name,
-                ready_services.len(),
-                expected_services.len()
+                l_ctx.ready_services.len(),
+                l_ctx.expected_services.len()
             );
 
-            if !*system_ready_sent && ready_services.len() >= expected_services.len() {
+            if !l_ctx.system_ready_sent
+                && l_ctx.ready_services.len() >= l_ctx.expected_services.len()
+            {
                 info!("✅ All internal services ready. System fully operational.");
-                let _ = ctx.bus().publish(LanforgeEvent::SystemReady);
+                let _ = l_ctx.ctx.bus().publish(LanforgeEvent::SystemReady);
                 sd_notify_ready();
-                *system_ready_sent = true;
+                l_ctx.system_ready_sent = true;
             }
         }
         LanforgeEvent::PrefixChanged { gua, ula, .. }
-            if (state.current_gua != gua || state.current_ula != ula) =>
+            if (l_ctx.state.current_gua != gua || l_ctx.state.current_ula != ula) =>
         {
             info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
-            state.current_gua = gua;
-            state.current_ula = ula;
-            let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
+            l_ctx.state.current_gua = gua;
+            l_ctx.state.current_ula = ula;
+            let _ = l_ctx
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::NeighborScanRequested);
         }
         LanforgeEvent::ReloadConfig => {
             info!("ReloadConfig: Forcing background synchronization...");
-            let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
+            let _ = l_ctx
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::NeighborScanRequested);
         }
         LanforgeEvent::WolTriggered { mac, ip_hint } => {
-            info!("WOL: Triggering for {mac} (hint: {ip_hint:?})");
-            let mut directed_broadcast = None;
-
-            {
-                let ctx_read = ctx.read();
-                if let Some(if_ips) = ctx_read.interface_ips.get(&target_ifindex)
-                    && let Some((ip, prefix)) = if_ips.v4
-                {
-                    let ip_u32 = u32::from_be_bytes(ip.octets());
-                    let mask = !((1u32.checked_shl(32 - u32::from(prefix))).map_or(0, |v| v - 1));
-                    let broadcast = ip_u32 | !mask;
-                    directed_broadcast = Some(Ipv4Addr::from(broadcast.to_be_bytes()));
-                }
-            }
-
-            if let Err(e) = send_wol_magic_packet(mac, &cfg.iface_lan, directed_broadcast, ip_hint)
-            {
-                error!("❌ Error sending WOL packet: {e}");
-            } else {
-                info!(
-                    "✅ Magic packet sent (targets: 255.255.255.255, {directed_broadcast:?}, {ip_hint:?})"
-                );
-            }
+            handle_wol_event(l_ctx, mac, ip_hint);
         }
         LanforgeEvent::DbResetCompleted => {
-            info!("Database reset confirmed. Performing state refresh...");
-            ctx.reset();
-
-            // Reload static devices from config
-            let mut state = ctx.write();
-            crate::bootstrap::Bootstrapper::reload_static_devices_into_state(&mut state, cfg);
-            drop(state);
-
-            info!("State re-seeded with static devices. Triggering new discovery scan...");
-            let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
+            handle_db_reset(l_ctx);
         }
         LanforgeEvent::Shutdown => {
             debug!("EventLoop: shutdown received via bus");
@@ -174,6 +149,51 @@ fn handle_bus_event(
         _ => {}
     }
     true
+}
+
+fn handle_wol_event(
+    l_ctx: &LoopContext,
+    mac: lanforge_core::identifiers::MacAddr,
+    ip_hint: Option<Ipv4Addr>,
+) {
+    info!("WOL: Triggering for {mac} (hint: {ip_hint:?})");
+    let mut directed_broadcast = None;
+
+    {
+        let ctx_read = l_ctx.ctx.read();
+        if let Some(if_ips) = ctx_read.interface_ips.get(&l_ctx.target_ifindex)
+            && let Some((ip, prefix)) = if_ips.v4
+        {
+            let ip_u32 = u32::from_be_bytes(ip.octets());
+            let mask = !((1u32.checked_shl(32 - u32::from(prefix))).map_or(0, |v| v - 1));
+            let broadcast = ip_u32 | !mask;
+            directed_broadcast = Some(Ipv4Addr::from(broadcast.to_be_bytes()));
+        }
+    }
+
+    if let Err(e) = send_wol_magic_packet(mac, &l_ctx.cfg.iface_lan, directed_broadcast, ip_hint) {
+        error!("❌ Error sending WOL packet: {e}");
+    } else {
+        info!(
+            "✅ Magic packet sent (targets: 255.255.255.255, {directed_broadcast:?}, {ip_hint:?})"
+        );
+    }
+}
+
+fn handle_db_reset(l_ctx: &LoopContext) {
+    info!("Database reset confirmed. Performing state refresh...");
+    l_ctx.ctx.reset();
+
+    // Reload static devices from config
+    let mut state = l_ctx.ctx.write();
+    crate::bootstrap::Bootstrapper::reload_static_devices_into_state(&mut state, l_ctx.cfg);
+    drop(state);
+
+    info!("State re-seeded with static devices. Triggering new discovery scan...");
+    let _ = l_ctx
+        .ctx
+        .bus()
+        .publish(LanforgeEvent::NeighborScanRequested);
 }
 
 struct LoopState {
@@ -191,7 +211,8 @@ impl LoopState {
 }
 
 fn determine_expected_services(cfg: &Config) -> HashSet<&'static str> {
-    let mut services = HashSet::from(["db", "mdns", "monitor", "ifmon", "control"]);
+    let mut services =
+        HashSet::from(["db", "mdns", "monitor", "ifmon", "control", "slaac_tracker"]);
     if cfg.ra_enabled {
         services.insert("ra");
     }

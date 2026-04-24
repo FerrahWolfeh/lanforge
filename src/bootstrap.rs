@@ -15,7 +15,7 @@ use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, load_devices_only};
 
@@ -43,6 +43,7 @@ pub struct Bootstrapper;
 impl Bootstrapper {
     /// Executes the full bootstrap sequence.
     pub async fn run() -> Result<(BootstrapResult, LanforgeContext)> {
+        // --- PHASE 1: Initialization ---
         let cfg = Arc::new(Self::load_config());
 
         info!(
@@ -57,6 +58,7 @@ impl Bootstrapper {
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
         let _ = bus.publish(LanforgeEvent::StateReady);
 
+        // --- PHASE 2: Netlink Setup ---
         let (handle, messages_rx) = Self::init_netlink()?;
         let (tx, _rx) = broadcast::channel(NETLINK_BROADCAST_CAPACITY);
         let messages = tx.clone();
@@ -67,18 +69,22 @@ impl Bootstrapper {
             let mut rx = messages_rx;
             while let Some(msg) = rx.next().await {
                 if dispatcher_tx.send(msg).is_err() {
-                    // All receivers dropped, but keep dispatcher alive if possible?
-                    // Actually, if all dropped, nothing to do.
+                    // All receivers dropped — this is expected during shutdown,
+                    // but we log it once if the dispatcher is still running.
+                    debug!("Netlink dispatcher: zero active subscribers");
                 }
             }
         });
 
+        // --- PHASE 3: Initial Scan ---
+        // Crucial: updates ctx with current GUA/ULA/Link-Local before services start.
         let if_state = Self::perform_initial_scan(&handle, &messages, target_ifindex, &ctx).await?;
         Self::log_welcome_banner(&cfg, &if_state);
 
         ctx.set_if_ready(true);
         let _ = bus.publish(LanforgeEvent::InterfaceReady);
 
+        // --- PHASE 4/5: Handover to Daemon ---
         Ok((
             BootstrapResult {
                 cfg,
@@ -111,23 +117,17 @@ impl Bootstrapper {
     }
 
     async fn init_device_table(cfg: &Config) -> Result<State> {
-        let mut table = match LeaseDb::open(&cfg.db_url).await {
-            Ok(db) => match db.load_table().await {
-                Ok(persisted) => {
-                    info!("📦 Database loaded: {}", cfg.db_url);
-                    persisted
-                }
-                Err(e) => {
-                    warn!("Falha ao carregar DB ({e}), iniciando do zero");
-                    State::new()
-                }
-            },
-            Err(e) => {
-                error!("❌ Erro fatal abrindo leases DB: {e}");
-                return Err(e.into());
-            }
-        };
+        let db = LeaseDb::open(&cfg.db_url).await.map_err(|e| {
+            error!("❌ Erro fatal abrindo leases DB: {e}");
+            e
+        })?;
 
+        let mut table = db.load_table().await.unwrap_or_else(|e| {
+            warn!("Falha ao carregar DB ({e}), iniciando do zero");
+            State::new()
+        });
+
+        info!("📦 Database loaded: {}", cfg.db_url);
         Self::reload_static_devices_into_state(&mut table, cfg);
 
         // Trigger early collision validation and logging

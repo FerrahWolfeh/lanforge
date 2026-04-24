@@ -53,88 +53,88 @@ impl Daemon {
     fn spawn_services(&mut self) {
         let cfg = &self.bootstrap.cfg;
         let target_ifindex = self.bootstrap.target_ifindex;
-        let netlink_handle = &self.bootstrap.rt_handle;
+        let rt_handle = &self.bootstrap.rt_handle;
         let messages = &self.bootstrap.messages;
 
+        // 1. Core Services (DB, mDNS)
         let db_url = cfg.db_url.clone();
         let log_db_url = cfg.log_db_url.clone();
-        let ctx_db = self.ctx.clone();
+        let ctx = self.ctx.clone();
         self.registry.spawn_async(&self.ctx, move || {
-            DbWorker::new(db_url.clone(), log_db_url.clone(), ctx_db.clone())
+            DbWorker::new(db_url.clone(), log_db_url.clone(), ctx.clone())
         });
 
-        let ctx_mdns = self.ctx.clone();
+        let ctx = self.ctx.clone();
         self.registry
-            .spawn_async(&self.ctx, move || MdnsProber::new(ctx_mdns.clone()));
+            .spawn_async(&self.ctx, move || MdnsProber::new(ctx.clone()));
 
-        let h1 = netlink_handle.clone();
-        let m1 = messages.clone();
-        let ctx_ifmon = self.ctx.clone();
+        // 2. Network Monitoring (Interface, Neighbors)
+        let ctx = self.ctx.clone();
+        let h = rt_handle.clone();
+        let m = messages.clone();
         self.registry.spawn_async(&self.ctx, move || {
-            InterfaceMonitor::new(
-                h1.clone(),
-                m1.subscribe(),
-                target_ifindex,
-                ctx_ifmon.clone(),
-            )
+            InterfaceMonitor::new(h.clone(), m.subscribe(), target_ifindex, ctx.clone())
         });
 
-        let h2 = netlink_handle.clone();
-        let m2 = messages.clone();
-        let ctx_ndp = self.ctx.clone();
+        let ctx = self.ctx.clone();
+        let h = rt_handle.clone();
+        let m = messages.clone();
         self.registry.spawn_async(&self.ctx, move || {
-            NeighborMonitor::new(h2.clone(), m2.subscribe(), target_ifindex, ctx_ndp.clone())
+            NeighborMonitor::new(h.clone(), m.subscribe(), target_ifindex, ctx.clone())
         });
 
+        // 3. IPv6 Protocol Services (RA, SLAAC)
         if cfg.ra_enabled {
             let ra_cfg = cfg.to_ra_config();
-            let ctx_ra = self.ctx.clone();
+            let ctx = self.ctx.clone();
             self.registry.spawn_async(&self.ctx, move || {
-                RaService::new(ra_cfg.clone(), ctx_ra.clone())
+                RaService::new(ra_cfg.clone(), ctx.clone())
             });
 
-            let ctx_slaac = self.ctx.clone();
+            let ctx = self.ctx.clone();
             self.registry.spawn_async(&self.ctx, move || {
-                SlaacTracker::new(target_ifindex, ctx_slaac.clone())
+                SlaacTracker::new(target_ifindex, ctx.clone())
             });
         }
 
+        // 4. Address Assignment (DHCPv4, DHCPv6)
         if cfg.dhcpv4_enabled {
             let d4_cfg = cfg.to_dhcpv4_config();
-            let ctx_v4 = self.ctx.clone();
+            let ctx = self.ctx.clone();
             self.registry.spawn_sync(&self.ctx, move || {
-                Dhcpv4Service::new(d4_cfg.clone(), ctx_v4.clone())
+                Dhcpv4Service::new(d4_cfg.clone(), ctx.clone())
             });
         }
 
         if cfg.dhcpv6_enabled {
             let d6_cfg = cfg.to_dhcpv6_config();
-            let ctx_v6 = self.ctx.clone();
+            let ctx = self.ctx.clone();
             self.registry.spawn_sync(&self.ctx, move || {
-                Dhcpv6Service::new(d6_cfg.clone(), ctx_v6.clone())
+                Dhcpv6Service::new(d6_cfg.clone(), ctx.clone())
             });
         }
 
+        // 5. Application Services (DNS, API)
         if cfg.dns_enabled {
             let dns_cfg = cfg.to_dns_config();
-            let ctx_dns = self.ctx.clone();
+            let ctx = self.ctx.clone();
             self.registry.spawn_async(&self.ctx, move || {
-                DnsService::new(dns_cfg.clone(), ctx_dns.clone())
+                DnsService::new(dns_cfg.clone(), ctx.clone())
             });
         }
 
         let api_cfg = Arc::new(cfg.to_api_config());
+        let ctx = self.ctx.clone();
         let api_cfg_ctrl = api_cfg.clone();
-        let ctx_ctrl = self.ctx.clone();
         self.registry.spawn_async(&self.ctx, move || {
-            ControlService::new(api_cfg_ctrl.clone(), ctx_ctrl.clone())
+            ControlService::new(api_cfg_ctrl.clone(), ctx.clone())
         });
 
         if cfg.http_listen.is_some() {
+            let ctx = self.ctx.clone();
             let api_cfg_http = api_cfg;
-            let ctx_http = self.ctx.clone();
             self.registry.spawn_async(&self.ctx, move || {
-                HttpService::new(api_cfg_http.clone(), ctx_http.clone())
+                HttpService::new(api_cfg_http.clone(), ctx.clone())
             });
         }
     }
@@ -142,7 +142,6 @@ impl Daemon {
     async fn shutdown(self) -> Result<()> {
         info!("🛑 Starting shutdown sequence...");
         self.ctx.terminate();
-        let _ = self.ctx.bus().publish(LanforgeEvent::Shutdown);
         let _ = self.ctx.bus().publish(LanforgeEvent::Shutdown);
 
         tokio::select! {
