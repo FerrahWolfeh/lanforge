@@ -53,6 +53,8 @@ pub enum Cli {
         format: Option<String>,
         #[arg(short, long, value_enum, default_value_t = SortMode::LastSeen)]
         sort: SortMode,
+        #[arg(long)]
+        show_vendor: bool,
         #[arg(
             short,
             long,
@@ -106,6 +108,9 @@ pub enum Command {
         format: Option<String>,
         #[arg(short, long, value_enum, default_value_t = SortMode::LastSeen)]
         sort: SortMode,
+        /// Resolve and display vendor names (can be slow)
+        #[arg(long)]
+        show_vendor: bool,
     },
     /// Live view reativo via socket (sem polling)
     Watch,

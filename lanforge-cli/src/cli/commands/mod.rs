@@ -74,6 +74,40 @@ pub fn format_uptime(secs: u64) -> String {
     }
 }
 
+pub fn format_short_relative(iso: &str) -> String {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(iso) {
+        let now = Utc::now();
+        let diff = dt.with_timezone(&Utc).signed_duration_since(now);
+
+        let mut secs = diff.num_seconds();
+        if secs > 0 {
+            return "now".to_string();
+        }
+        secs = -secs;
+
+        if secs < 60 {
+            return "now".to_string();
+        }
+
+        let m = secs / 60;
+        let h = secs / 3600;
+        let d = secs / 86400;
+        let w = secs / 604800;
+
+        if w > 0 {
+            return format!("{w}w");
+        }
+        if d > 0 {
+            return format!("{d}d");
+        }
+        if h > 0 {
+            return format!("{h}h");
+        }
+        return format!("{m}m");
+    }
+    "—".to_string()
+}
+
 pub fn format_relative_iso8601(iso: &str) -> String {
     if let Ok(dt) = DateTime::parse_from_rfc3339(iso) {
         let now = Utc::now();

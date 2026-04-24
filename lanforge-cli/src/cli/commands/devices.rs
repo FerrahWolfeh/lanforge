@@ -1,4 +1,4 @@
-use super::{CliCommand, format_relative_iso8601};
+use super::{CliCommand, format_relative_iso8601, format_short_relative};
 use crate::args::SortMode;
 use crate::cli::vendor::resolve_vendor;
 use color_eyre::eyre::Result;
@@ -15,6 +15,7 @@ pub struct DevicesHandler {
     pub method: Option<String>,
     pub format: Option<String>,
     pub sort: SortMode,
+    pub show_vendor: bool,
 }
 
 impl CliCommand for DevicesHandler {
@@ -39,7 +40,7 @@ impl CliCommand for DevicesHandler {
                     });
                 }
                 sort_devices(&mut owned_resp.devices, self.sort);
-                render_devices(&owned_resp, self.verbose);
+                render_devices(&owned_resp, self.verbose, self.show_vendor);
             }
             Response::Error { error } => {
                 println!("Error: {error}");
@@ -55,7 +56,7 @@ impl CliCommand for DevicesHandler {
     }
 }
 
-pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
+pub fn render_devices(resp: &DevicesResponse, verbose: bool, show_vendor: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -76,6 +77,7 @@ pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
             render_verbose_device(dev);
         }
     } else {
+        let separator_len = if show_vendor { 124 } else { 104 };
         element! {
             View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
                 // Header
@@ -83,15 +85,18 @@ pub fn render_devices(resp: &DevicesResponse, verbose: bool) {
                     Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
                     Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
                     Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
-                    Text(content: format!("{:<41}", "IPv6 / SLAAC"), color: Color::DarkGrey)
-                    Text(content: "VENDOR", color: Color::DarkGrey)
+                    Text(content: format!("{:<31}", "IPv6 / SLAAC"), color: Color::DarkGrey)
+                    Text(content: format!("{:<10}", "SEEN"), color: Color::DarkGrey)
+                    #(show_vendor.then(|| element! {
+                         Text(content: "VENDOR", color: Color::DarkGrey)
+                    }))
                 }
                 // Separator
-                Text(content: "─".repeat(124), color: Color::DarkGrey)
+                Text(content: "─".repeat(separator_len), color: Color::DarkGrey)
 
                 // Rows
                 View(flex_direction: FlexDirection::Column) {
-                    #(resp.devices.iter().cloned().map(|dev| element! { DeviceRow(device: dev) }))
+                    #(resp.devices.iter().cloned().map(|dev| element! { DeviceRow(device: dev, show_vendor: show_vendor) }))
                 }
             }
         }.print();
@@ -119,7 +124,7 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
     } else {
         format!("{} {}", dev.hostname, symbol)
     };
-    let vendor = resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string());
+    let last_seen_compact = format_short_relative(&dev.last_seen);
 
     element! {
         View(flex_direction: FlexDirection::Row) {
@@ -127,8 +132,14 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
             Text(content: format!("{:<23}", truncate(&host, 20)))
             Text(content: format!("{:<20}", dev.mac), color: Color::Cyan)
             Text(content: format!("{:<18}", dev.display_v4), color: Color::Green)
-            Text(content: format!("{:<41}", dev.display_v6), color: Color::Yellow)
-            Text(content: truncate(&vendor, 25), color: Color::White)
+            Text(content: format!("{:<31}", truncate(&dev.display_v6, 30)), color: Color::Yellow)
+            Text(content: format!("{:<10}", last_seen_compact), color: Color::DarkGrey)
+            #(props.show_vendor.then(|| {
+                let vendor = resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string());
+                element! {
+                    Text(content: truncate(&vendor, 25), color: Color::White)
+                }
+            }))
         }
     }
 }
@@ -136,6 +147,7 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
 #[derive(Props, Clone, Default)]
 struct DeviceRowProps {
     pub device: DeviceEntry,
+    pub show_vendor: bool,
 }
 
 pub fn render_hosts(resp: &HostsResponse) {

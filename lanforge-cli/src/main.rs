@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
             method,
             format,
             sort,
+            show_vendor,
             socket,
         } => {
             cli::run_client(
@@ -42,6 +43,7 @@ async fn main() -> Result<()> {
                     method,
                     format,
                     sort,
+                    show_vendor,
                 },
                 &socket,
             )

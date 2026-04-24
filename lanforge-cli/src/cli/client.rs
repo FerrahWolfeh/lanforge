@@ -33,6 +33,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             method,
             format,
             sort,
+            show_vendor,
         } => Box::new(DevicesHandler {
             verbose,
             filter,
@@ -40,6 +41,7 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
             method,
             format,
             sort,
+            show_vendor,
         }),
         Command::Host { action } => Box::new(HostHandler { action }),
         Command::Lease { action } => Box::new(LeaseHandler { action }),
