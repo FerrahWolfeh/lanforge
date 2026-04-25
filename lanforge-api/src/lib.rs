@@ -50,6 +50,7 @@ pub mod config;
 pub mod error;
 pub mod handlers;
 pub mod http;
+pub mod metrics;
 pub mod server;
 #[cfg(test)]
 pub mod tests;

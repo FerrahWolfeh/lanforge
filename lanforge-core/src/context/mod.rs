@@ -69,6 +69,21 @@ pub mod state;
 pub mod utils;
 pub mod write;
 
+use std::sync::atomic::AtomicU64;
+
+/// Internal counters for tracking transient network events.
+///
+/// These are exported via Prometheus to monitor discovery rates.
+#[derive(Debug, Default)]
+pub struct EventCounters {
+    pub arp_seen: AtomicU64,
+    pub ndp_seen: AtomicU64,
+    pub slaac_observed: AtomicU64,
+    pub dhcp_v4_leases: AtomicU64,
+    pub dhcp_v6_leases: AtomicU64,
+    pub dns_auth_hits: AtomicU64,
+}
+
 #[derive(Clone)]
 pub struct LanforgeContext {
     inner: Arc<LanforgeContextInner>,
@@ -95,6 +110,8 @@ struct LanforgeContextInner {
     dns_stats: RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
     /// Timestamp of the last successful database flush.
     last_db_flush: RwLock<Option<SystemTime>>,
+    /// Internal counters for event rates.
+    event_counters: Arc<EventCounters>,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -135,6 +152,7 @@ impl LanforgeContext {
                 if_ready: AtomicBool::new(false),
                 dns_stats: RwLock::new(None),
                 last_db_flush: RwLock::new(None),
+                event_counters: Arc::new(EventCounters::default()),
             }),
         }
     }
@@ -169,6 +187,12 @@ impl LanforgeContext {
     #[must_use]
     pub fn last_db_flush(&self) -> Option<SystemTime> {
         *self.inner.last_db_flush.read()
+    }
+
+    /// Returns a reference to the internal event counters.
+    #[must_use]
+    pub fn counters(&self) -> Arc<EventCounters> {
+        self.inner.event_counters.clone()
     }
 }
 

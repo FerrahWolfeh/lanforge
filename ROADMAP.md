@@ -22,8 +22,8 @@ This document outlines planned and potential future improvements for the Lanforg
 
 ## 4. Integration & Persistence
 - [ ] **Web UI**: Develop a lightweight React/Next.js dashboard using the HTTP API for visual network management.
-- [ ] **Prometheus Exporter**: Add a metrics endpoint for integration with Grafana/Prometheus.
-- [ ] **Database Migrations**: Implement a robust migration system for `lanforge-db` to handle schema changes more gracefully.
+- [x] **Prometheus Exporter**: Add a metrics endpoint for integration with Grafana/Prometheus.
+- [x] **Database Migrations**: Implement a robust migration system for `lanforge-db` to handle schema changes more gracefully (Already implemented using `sqlx::migrate!`).
 - [ ] **Backup & Restore**: Add CLI commands to safely export and import the full system state and configuration.
 
 ---

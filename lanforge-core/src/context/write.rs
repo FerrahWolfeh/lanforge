@@ -81,8 +81,73 @@ impl LanforgeContext {
             return false;
         }
 
+        // Increment metrics counters
+        match update {
+            DeviceUpdate::ArpSeen { .. } => {
+                self.inner
+                    .event_counters
+                    .arp_seen
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            DeviceUpdate::NdpSeen { .. } => {
+                self.inner
+                    .event_counters
+                    .ndp_seen
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            DeviceUpdate::SlaacObserved { .. } => {
+                self.inner
+                    .event_counters
+                    .slaac_observed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            DeviceUpdate::V4LeaseGranted { .. } => {
+                self.inner
+                    .event_counters
+                    .dhcp_v4_leases
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            DeviceUpdate::V6LeaseGranted { .. } => {
+                self.inner
+                    .event_counters
+                    .dhcp_v6_leases
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+
+        let events = Self::compute_events(
+            update,
+            &state,
+            opt_mac,
+            is_new,
+            was_online,
+            change,
+            prev_prefix,
+        );
+
+        drop(state);
+
+        for event in events {
+            let _ = self.inner.bus.publish(event);
+        }
+        let _ = self.inner.bus.publish(LanforgeEvent::DeviceTableDirty);
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compute_events(
+        update: &DeviceUpdate,
+        state: &State,
+        mac: Option<MacAddr>,
+        is_new: bool,
+        was_online: Option<bool>,
+        change: Option<DeviceChange>,
+        prev_prefix: Option<(Option<Ipv6Addr>, Option<Ipv6Addr>)>,
+    ) -> Vec<LanforgeEvent> {
         let mut events = Vec::new();
-        if let Some(mac) = opt_mac {
+
+        if let Some(mac) = mac {
             let dev = state.get_device(&mac);
             let now_online = dev.as_ref().is_some_and(|d| d.is_online());
             let hostname = dev.as_ref().map(|d| d.hostname.name.clone());
@@ -93,6 +158,7 @@ impl LanforgeContext {
                     hostname: hostname.clone(),
                 });
             }
+
             if let Some(mut change) = change {
                 if let DeviceChange::StatusChanged {
                     ref mut hostname, ..
@@ -107,6 +173,7 @@ impl LanforgeContext {
                     hostname: hostname.clone(),
                 });
             }
+
             if let Some(was) = was_online
                 && was != now_online
             {
@@ -119,7 +186,8 @@ impl LanforgeContext {
                     hostname,
                 });
             }
-            if let DeviceUpdate::HostRemoved { .. } = update {
+
+            if matches!(update, DeviceUpdate::HostRemoved { .. }) {
                 events.push(LanforgeEvent::DevicePurged { mac });
             }
         }
@@ -143,13 +211,7 @@ impl LanforgeContext {
             }
         }
 
-        drop(state);
-
-        for event in events {
-            let _ = self.inner.bus.publish(event);
-        }
-        let _ = self.inner.bus.publish(LanforgeEvent::DeviceTableDirty);
-        true
+        events
     }
 
     /// Allocates an IPv4 lease for a device.

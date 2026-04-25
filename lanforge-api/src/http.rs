@@ -27,6 +27,7 @@ use tracing::info;
 struct AppState {
     cfg: Arc<ApiConfig>,
     ctx: LanforgeContext,
+    start_time: std::time::Instant,
 }
 
 /// Parameters for the /register endpoint (Query or JSON).
@@ -94,6 +95,7 @@ impl AsyncService for HttpService {
         let state = AppState {
             cfg,
             ctx: self.ctx.clone(),
+            start_time: std::time::Instant::now(),
         };
 
         let app = Router::new()
@@ -103,6 +105,7 @@ impl AsyncService for HttpService {
             )
             .route("/devices", get(handle_devices))
             .route("/status", get(handle_status))
+            .route("/metrics", get(handle_metrics))
             .with_state(state);
 
         let tcp_listener = TcpListener::bind(&addr)
@@ -217,4 +220,14 @@ async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
             "dns": state.cfg.dns_enabled,
         }
     }))
+}
+
+async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let uptime = state.start_time.elapsed().as_secs();
+    let body = crate::metrics::generate_metrics(&state.ctx, &state.cfg, uptime);
+
+    axum::response::Response::builder()
+        .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        .body(axum::body::Body::from(body))
+        .unwrap()
 }

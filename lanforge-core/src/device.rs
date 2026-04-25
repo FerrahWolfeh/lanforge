@@ -386,6 +386,12 @@ impl IPv4State {
             Self::None => None,
         }
     }
+
+    /// Returns true if the address was assigned via a dynamic DHCP lease.
+    #[must_use]
+    pub const fn is_dynamic(&self) -> bool {
+        matches!(self, Self::Dynamic(_))
+    }
 }
 
 /// Represents a specific IPv6 address state for a device.
@@ -438,6 +444,12 @@ impl IPv6State {
     #[must_use]
     pub fn ip(&self) -> Option<Ipv6Addr> {
         self.ip_with_prefix(None)
+    }
+
+    /// Returns true if the address was assigned via a dynamic `DHCPv6` lease.
+    #[must_use]
+    pub const fn is_dynamic(&self) -> bool {
+        matches!(self, Self::Dynamic(_))
     }
 }
 
