@@ -3,7 +3,7 @@ use crate::args::SortMode;
 use crate::cli::vendor::resolve_vendor;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::Command as ControlCommand;
+use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_api::api::Response;
 use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
 use lanforge_core::device::Origin;
@@ -20,12 +20,12 @@ pub struct DevicesHandler {
 
 impl CliCommand for DevicesHandler {
     fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(ControlCommand::Devices {
+        Ok(ControlCommand::new(CommandAction::Devices {
             filter: self.filter.clone(),
             vendor: self.vendor.clone(),
             method: self.method.clone(),
             format: self.format.clone(),
-        })
+        }))
     }
 
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {

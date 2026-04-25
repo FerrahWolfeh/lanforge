@@ -1,6 +1,54 @@
 use lanforge_core::bus::TimedEvent;
 use lanforge_core::context::state::LeaseTarget;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// Supported response encodings.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Encoding {
+    /// JSON line-based (standard).
+    Json,
+    /// Bincode binary (length-prefixed).
+    Bincode,
+}
+
+impl fmt::Display for Encoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Json => write!(f, "json"),
+            Self::Bincode => write!(f, "bincode"),
+        }
+    }
+}
+
+/// Supported compression algorithms.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Compression {
+    /// No compression.
+    None,
+    /// Zstd compression.
+    Zstd,
+}
+
+impl fmt::Display for Compression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::Zstd => write!(f, "zstd"),
+        }
+    }
+}
+
+/// Daemon capabilities payload.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Capabilities {
+    /// List of supported response encodings.
+    pub encodings: Vec<Encoding>,
+    /// List of supported compression algorithms.
+    pub compression: Vec<Compression>,
+}
 
 /// Represents a command sent from a client to the Lanforge daemon.
 ///
@@ -9,15 +57,47 @@ use serde::{Deserialize, Serialize};
 /// # Example
 ///
 /// ```rust
-/// use lanforge_api::api::Command;
+/// use lanforge_api::api::{Command, CommandAction};
 ///
-/// let cmd = Command::Devices { filter: Some("arch".into()), vendor: None, method: None, format: None };
+/// let cmd = Command::new(CommandAction::Devices { filter: Some("arch".into()), vendor: None, method: None, format: None });
 /// let json = serde_json::to_string(&cmd).unwrap();
 /// assert!(json.contains(r#""command":"devices""#));
 /// ```
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
+pub struct Command {
+    /// Override response encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<Encoding>,
+    /// Request response compression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<Compression>,
+    /// The actual command to execute.
+    #[serde(flatten)]
+    pub action: CommandAction,
+}
+
+impl Command {
+    /// Helper to create a command with default transport options.
+    pub fn new(action: CommandAction) -> Self {
+        Self {
+            encoding: None,
+            compression: None,
+            action,
+        }
+    }
+
+    /// Pre-defined Status command.
+    pub const STATUS: Self = Self {
+        encoding: None,
+        compression: None,
+        action: CommandAction::Status,
+    };
+}
+
+/// The actual action variants for a Command.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
 #[serde(tag = "command", rename_all = "snake_case")]
-pub enum Command {
+pub enum CommandAction {
     /// Retrieve general system status (uptime, versions, service states).
     Status,
     /// List all managed devices with optional filtering.
@@ -277,6 +357,8 @@ pub struct StatusResponse {
     pub resources: ResourcesStatus,
     /// General device counting statistics.
     pub devices: DevicesStats,
+    /// Daemon capabilities.
+    pub capabilities: Capabilities,
 }
 
 /// Aggregated status for all major daemon services.
@@ -495,16 +577,16 @@ mod tests {
 
     #[test]
     fn test_command_serialization() {
-        let cmd = Command::Status;
+        let cmd = Command::new(CommandAction::Status);
         let json = serde_json::to_string(&cmd).unwrap();
         assert_eq!(json, r#"{"command":"status"}"#);
 
-        let cmd = Command::Devices {
+        let cmd = Command::new(CommandAction::Devices {
             filter: Some("arch".to_string()),
             vendor: None,
             method: None,
             format: None,
-        };
+        });
         let json = serde_json::to_string(&cmd).unwrap();
         assert_eq!(
             json,

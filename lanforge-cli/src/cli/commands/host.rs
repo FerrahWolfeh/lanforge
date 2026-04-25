@@ -4,8 +4,7 @@ use color_eyre::Result;
 use color_eyre::eyre::bail;
 use inquire::{Confirm, Select, Text as InquireText};
 use iocraft::prelude::*;
-use lanforge_api::api::Command as ControlCommand;
-use lanforge_api::api::Response;
+use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
 
 pub struct HostHandler {
     pub action: HostCommand,
@@ -91,20 +90,24 @@ impl CliCommand for HostHandler {
                     }
                 }
 
-                Ok(ControlCommand::HostAdd {
+                Ok(ControlCommand::new(CommandAction::HostAdd {
                     mac: Some(final_mac),
                     hostname: Some(final_hostname),
                     v4: final_v4,
                     v6_suffix: final_v6,
-                })
+                }))
             }
-            HostCommand::Set { mac, field, value } => Ok(ControlCommand::HostSet {
+            HostCommand::Set { mac, field, value } => {
+                Ok(ControlCommand::new(CommandAction::HostSet {
+                    mac: mac.clone(),
+                    field: field.clone(),
+                    value: value.clone(),
+                }))
+            }
+            HostCommand::Remove { mac } => Ok(ControlCommand::new(CommandAction::HostRemove {
                 mac: mac.clone(),
-                field: field.clone(),
-                value: value.clone(),
-            }),
-            HostCommand::Remove { mac } => Ok(ControlCommand::HostRemove { mac: mac.clone() }),
-            HostCommand::List => Ok(ControlCommand::HostList),
+            })),
+            HostCommand::List => Ok(ControlCommand::new(CommandAction::HostList)),
         }
     }
 

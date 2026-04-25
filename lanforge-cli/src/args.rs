@@ -82,6 +82,14 @@ pub struct LanforgeArgs {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    /// Use Bincode binary protocol instead of JSON.
+    #[arg(long, global = true)]
+    pub bincode: bool,
+
+    /// Disable response compression.
+    #[arg(long, global = true)]
+    pub no_compress: bool,
+
     /// Path to the Unix domain socket for daemon control.
     #[arg(
         short,

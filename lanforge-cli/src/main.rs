@@ -14,16 +14,40 @@ async fn main() -> Result<()> {
     match cli {
         Cli::Lanforge(args) => {
             if let Some(cmd) = args.command {
-                cli::run_client(cmd, &args.socket).await?;
+                cli::run_client(
+                    cmd,
+                    &args.socket,
+                    cli::ClientOptions {
+                        bincode: args.bincode,
+                        no_compress: args.no_compress,
+                    },
+                )
+                .await?;
             } else {
                 println!("Nenhum comando especificado. Use --help para ver as opções.");
             }
         }
         Cli::Wake { target, socket } => {
-            cli::run_client(Command::Wol { target }, &socket).await?;
+            cli::run_client(
+                Command::Wol { target },
+                &socket,
+                cli::ClientOptions {
+                    bincode: false,
+                    no_compress: false,
+                },
+            )
+            .await?;
         }
         Cli::LfStatus { socket } => {
-            cli::run_client(Command::Status, &socket).await?;
+            cli::run_client(
+                Command::Status,
+                &socket,
+                cli::ClientOptions {
+                    bincode: false,
+                    no_compress: false,
+                },
+            )
+            .await?;
         }
         Cli::LfDevices {
             verbose,
@@ -46,11 +70,23 @@ async fn main() -> Result<()> {
                     show_vendor,
                 },
                 &socket,
+                cli::ClientOptions {
+                    bincode: false,
+                    no_compress: false,
+                },
             )
             .await?;
         }
         Cli::LfScan { socket } => {
-            cli::run_client(Command::Scan, &socket).await?;
+            cli::run_client(
+                Command::Scan,
+                &socket,
+                cli::ClientOptions {
+                    bincode: false,
+                    no_compress: false,
+                },
+            )
+            .await?;
         }
     }
 

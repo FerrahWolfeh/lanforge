@@ -28,10 +28,10 @@
 //! ### Serializing a Command
 //!
 //! ```rust
-//! use lanforge_api::api::Command;
+//! use lanforge_api::api::{Command, CommandAction};
 //!
 //! // Create a status command
-//! let cmd = Command::Status;
+//! let cmd = Command::new(CommandAction::Status);
 //!
 //! // Serialize to JSON string
 //! let json = serde_json::to_string(&cmd).unwrap();

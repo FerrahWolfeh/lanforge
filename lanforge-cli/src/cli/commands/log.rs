@@ -3,7 +3,7 @@ use chrono::DateTime;
 use chrono::Local;
 use color_eyre::eyre::Result;
 use colored::*;
-use lanforge_api::api::Command as ControlCommand;
+use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_api::api::Response;
 use lanforge_api::api::SimpleSuccess;
 use lanforge_core::bus::TimedEvent;
@@ -18,10 +18,10 @@ pub struct LogHandler {
 
 impl CliCommand for LogHandler {
     fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(ControlCommand::Log {
+        Ok(ControlCommand::new(CommandAction::Log {
             follow: self.follow,
             n: Some(self.lines),
-        })
+        }))
     }
 
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {

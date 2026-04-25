@@ -63,6 +63,15 @@ impl ClientContext {
             network: NetworkStatus::default(),
             resources: ResourcesStatus::default(),
             devices: DevicesStats::default(),
+            capabilities: crate::api::Capabilities {
+                encodings: vec![crate::api::Encoding::Json, crate::api::Encoding::Bincode],
+                compression: {
+                    let mut c = vec![crate::api::Compression::None];
+                    #[cfg(feature = "zstd")]
+                    c.push(crate::api::Compression::Zstd);
+                    c
+                },
+            },
         };
 
         // DB stats

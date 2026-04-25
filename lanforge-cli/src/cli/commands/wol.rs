@@ -1,7 +1,7 @@
 use crate::cli::commands::CliCommand;
 use color_eyre::eyre::Result;
 use inquire::Select;
-use lanforge_api::api::{Command as ControlCommand, Response};
+use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
 
 pub struct WolCommand {
     pub target: Option<String>,
@@ -10,17 +10,17 @@ pub struct WolCommand {
 impl CliCommand for WolCommand {
     fn prepare(&mut self) -> Result<ControlCommand> {
         if let Some(target) = &self.target {
-            Ok(ControlCommand::Wol {
+            Ok(ControlCommand::new(CommandAction::Wol {
                 target: target.clone(),
-            })
+            }))
         } else {
             // Interactive mode: fetch devices first
-            Ok(ControlCommand::Devices {
+            Ok(ControlCommand::new(CommandAction::Devices {
                 filter: None,
                 vendor: None,
                 method: None,
                 format: None,
-            })
+            }))
         }
     }
 
@@ -48,9 +48,9 @@ impl CliCommand for WolCommand {
 
                 println!("Triggering Wake-on-LAN for {}...", mac);
 
-                return Ok(Some(ControlCommand::Wol {
+                return Ok(Some(ControlCommand::new(CommandAction::Wol {
                     target: mac.clone(),
-                }));
+                })));
             }
             Response::Success(s) => {
                 println!("✓ {}", s.message);
