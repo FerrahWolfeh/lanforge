@@ -871,3 +871,20 @@ fn test_expire_stale_status_transition() {
         "Should have detected offline transition due to time passing"
     );
 }
+
+#[test]
+fn test_handle_arp_seen_deduplicates() {
+    let mut state = State::new();
+    let mac = MacAddr([0, 0, 0, 0, 0, 1]);
+    let ip = Ipv4Addr::new(192, 168, 1, 10);
+
+    state.apply_update(DeviceUpdate::ArpSeen { mac, ip });
+    state.apply_update(DeviceUpdate::ArpSeen { mac, ip });
+
+    let dev = state.get_device(&mac).unwrap();
+    assert_eq!(
+        dev.seen_v4.len(),
+        1,
+        "Should only have 1 entry for the same IP"
+    );
+}

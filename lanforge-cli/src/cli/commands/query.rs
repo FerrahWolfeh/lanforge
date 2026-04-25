@@ -19,13 +19,13 @@ impl CliCommand for QueryHandler {
                 format: None,
             }),
             QueryTarget::Hosts => Ok(ControlCommand::HostList),
-            QueryTarget::State => Ok(ControlCommand::DbDump),
+            QueryTarget::State => Ok(ControlCommand::ContextDump),
         }
     }
 
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        let json = serde_json::to_string(response)?;
-        println!("{}", json);
+        serde_json::to_writer(std::io::stdout(), response)?;
+        println!();
         Ok(None)
     }
 }

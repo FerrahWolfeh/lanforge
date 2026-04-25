@@ -555,10 +555,10 @@ impl ClientContext {
         })
     }
 
-    /// Fully dumps the main database state (in-memory state).
-    pub(crate) async fn handle_db_dump(&self) -> Response {
+    /// Fully dumps the main in-memory state.
+    pub(crate) async fn handle_context_dump(&self) -> Response {
         let state = self.ctx.read().clone();
-        Response::DbDump(Box::new(state))
+        Response::ContextDump(Box::new(state))
     }
 
     /// Completely resets and re-seeds the database.

@@ -14,14 +14,14 @@ impl CliCommand for DbHandler {
             DbCommand::Vacuum => Ok(ControlCommand::DbVacuum),
             DbCommand::LogClean => Ok(ControlCommand::DbLogClean),
             DbCommand::Prune => Ok(ControlCommand::DbPrune),
-            DbCommand::Dump => Ok(ControlCommand::DbDump),
+            DbCommand::Snapshot => Ok(ControlCommand::ContextDump),
             DbCommand::Reset => Ok(ControlCommand::DbReset),
         }
     }
 
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
-            Response::DbDump(state) => {
+            Response::ContextDump(state) => {
                 println!("{}", serde_json::to_string_pretty(&state)?);
             }
             Response::Success(s) => {

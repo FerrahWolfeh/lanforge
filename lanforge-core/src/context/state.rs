@@ -408,6 +408,51 @@ where
         .collect())
 }
 
+/// Serializes a map with integer keys as string keys in JSON.
+///
+/// # Errors
+///
+/// Returns an error if the serializer fails to serialize the map or its entries.
+pub fn serialize_int_map<S, K, V, H>(
+    map: &HashMap<K, V, H>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    K: std::fmt::Display + std::hash::Hash + Eq,
+    V: Serialize,
+    H: std::hash::BuildHasher,
+{
+    use serde::ser::SerializeMap;
+    let mut s = serializer.serialize_map(Some(map.len()))?;
+    for (k, v) in map {
+        s.serialize_entry(&k.to_string(), v)?;
+    }
+    s.end()
+}
+
+/// Deserializes a map with integer keys from string keys in JSON.
+///
+/// # Errors
+///
+/// Returns an error if the deserializer fails to parse the map, its keys, or its entries.
+pub fn deserialize_int_map<'de, D, K, V, H>(deserializer: D) -> Result<HashMap<K, V, H>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    K: std::str::FromStr + std::hash::Hash + Eq,
+    K::Err: std::fmt::Display,
+    V: Deserialize<'de>,
+    H: std::hash::BuildHasher + Default,
+{
+    let raw = HashMap::<String, V, H>::deserialize(deserializer)?;
+    let mut res = HashMap::with_capacity_and_hasher(raw.len(), H::default());
+    for (k, v) in raw {
+        let key = k.parse::<K>().map_err(serde::de::Error::custom)?;
+        res.insert(key, v);
+    }
+    Ok(res)
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -450,6 +495,7 @@ pub struct State {
     /// Main device table: MAC → Device.
     pub devices: HashMap<MacAddr, Arc<Device>>,
     /// DUID to MAC index for `DHCPv6` correlation.
+    #[serde(skip_serializing, default)]
     pub duid_index: HashMap<Duid, MacAddr>,
     /// Manual device reservations from CLI/TOML.
     pub static_entries: HashMap<MacAddr, StaticEntry>,
@@ -466,10 +512,16 @@ pub struct State {
     )]
     pub orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
     /// Network interface IP configurations indexed by ifindex.
+    #[serde(
+        serialize_with = "serialize_int_map",
+        deserialize_with = "deserialize_int_map"
+    )]
     pub interface_ips: HashMap<u32, InterfaceState>,
     /// DNS hot-path: hostname (lowercase) → MAC.
+    #[serde(skip_serializing, default)]
     pub name_index: HashMap<String, MacAddr>,
     /// DNS hot-path: IP address → MAC.
+    #[serde(skip_serializing, default)]
     pub ip_index: HashMap<IpAddr, MacAddr>,
 }
 
@@ -800,15 +852,22 @@ impl State {
         let existing_pos = dev_arc.seen_v4.iter().position(|(i, _)| *i == ip);
 
         let mut dev_arc = self.devices.remove(&mac).unwrap();
-        if existing_pos.is_some() {
+        if let Some(pos) = existing_pos {
+            // Already known IP, just update timestamp in place.
+            // No need to unindex/reindex because the IP itself hasn't changed.
+            let dev = Arc::make_mut(&mut dev_arc);
+            dev.seen_v4[pos].1 = now;
+            dev.last_seen = now;
+        } else {
+            // New IP, need to reindex for DNS visibility.
             self.unindex_device(&dev_arc);
+            {
+                let dev = Arc::make_mut(&mut dev_arc);
+                dev.seen_v4.push((ip, now));
+                dev.last_seen = now;
+            }
+            self.index_device(mac, &dev_arc);
         }
-
-        let dev = Arc::make_mut(&mut dev_arc);
-        dev.seen_v4.push((ip, now));
-        dev.last_seen = now;
-
-        self.index_device(mac, &dev_arc);
         self.devices.insert(mac, dev_arc);
 
         if let Some(dev_arc) = self.devices.get(&mac)
@@ -1122,7 +1181,12 @@ impl State {
 
                 // Only force offline if the device has NO more active addresses.
                 // If it still has other IPs, it should remain online based on their activity.
-                if !dev.has_any_ip() {
+                if dev.has_any_ip() {
+                    debug!(
+                        "[state] Device {} still has other IPs after {} failure. Keeping status.",
+                        mac, ip
+                    );
+                } else {
                     debug!(
                         "[state] Device {} has no IPs left after {} failure. Forcing offline.",
                         mac, ip
@@ -1130,11 +1194,6 @@ impl State {
                     dev.last_seen = SystemTime::now()
                         .checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 1))
                         .unwrap_or(std::time::UNIX_EPOCH);
-                } else {
-                    debug!(
-                        "[state] Device {} still has other IPs after {} failure. Keeping status.",
-                        mac, ip
-                    );
                 }
             }
             self.index_device(mac, &dev_arc);

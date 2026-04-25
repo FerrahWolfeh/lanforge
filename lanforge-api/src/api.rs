@@ -117,8 +117,8 @@ pub enum Command {
         /// Optional record type (A, AAAA, TXT, etc.).
         record_type: Option<String>,
     },
-    /// Fully dump the main database state (in-memory state).
-    DbDump,
+    /// Fully dump the main in-memory state (diagnostic).
+    ContextDump,
     /// Completely reset and re-seed the database.
     DbReset,
 }
@@ -127,7 +127,7 @@ pub enum Command {
 ///
 /// This enum is untagged, meaning its variant is determined by the JSON structure.
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type")]
 pub enum Response {
     /// Detailed system status.
     Status(Box<StatusResponse>),
@@ -150,8 +150,8 @@ pub enum Response {
     DnsStats(DnsStatsResponse),
     /// Response for a DNS diagnostic query.
     DnsQuery(DnsQueryResponse),
-    /// Response for a database dump.
-    DbDump(Box<lanforge_core::state::State>),
+    /// Response for a full context dump.
+    ContextDump(Box<lanforge_core::state::State>),
 }
 
 /// A simple success result containing a message.

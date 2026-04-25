@@ -906,7 +906,7 @@ impl Device {
 
     /// Returns true if the device has any active IP addresses (v4 or v6).
     #[must_use]
-    pub fn has_any_ip(&self) -> bool {
+    pub const fn has_any_ip(&self) -> bool {
         self.v4.ip().is_some() || !self.seen_v4.is_empty() || !self.v6.is_empty()
     }
 

@@ -236,8 +236,8 @@ pub enum DbCommand {
     LogClean,
     /// Remove 'zombie' entries (dynamic devices with no IP nor hostname)
     Prune,
-    /// Dump the full in-memory state as JSON
-    Dump,
+    /// Generate a diagnostic snapshot of the in-memory state as JSON
+    Snapshot,
     /// Completely reset and re-seed the database (FACTORY RESET)
     Reset,
 }

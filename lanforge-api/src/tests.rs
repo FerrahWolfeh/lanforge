@@ -164,12 +164,12 @@ async fn test_dump_command_simulation() {
             .expect("handle_client failed");
     });
 
-    // 4. Send "db_dump" command as JSON line
+    // 4. Send "context_dump" command as JSON line
     let (reader, mut writer) = tokio::io::split(client);
     let mut reader = BufReader::new(reader);
 
     writer
-        .write_all(b"{\"command\":\"db_dump\"}\n")
+        .write_all(b"{\"command\":\"context_dump\"}\n")
         .await
         .unwrap();
 
@@ -181,7 +181,7 @@ async fn test_dump_command_simulation() {
         .expect("Failed to read line from server");
 
     let resp: Response = serde_json::from_str(&line).expect("Failed to deserialize Response");
-    if let Response::DbDump(state) = resp {
+    if let Response::ContextDump(state) = resp {
         assert!(
             state.devices.contains_key(&mac),
             "Dumped state missing target device"
@@ -192,7 +192,7 @@ async fn test_dump_command_simulation() {
             "Hostname mismatch in dumped state"
         );
     } else {
-        panic!("Expected Response::DbDump, got {:?}", resp);
+        panic!("Expected Response::ContextDump, got {:?}", resp);
     }
 
     // 6. Cleanup (closing connection should terminate handle_client)

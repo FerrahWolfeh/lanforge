@@ -532,16 +532,31 @@ where
                     message: "Pruning zombie entries from memory and database...".to_string(),
                 })
             }
-            Ok(Command::DbDump) => ctx.handle_db_dump().await,
+            Ok(Command::ContextDump) => ctx.handle_context_dump().await,
             Ok(Command::DbReset) => ctx.handle_db_reset().await,
             Err(e) => Response::Error {
                 error: format!("Invalid command or malformed JSON: {e}"),
             },
         };
 
-        if let Ok(json_resp) = serde_json::to_string(&resp) {
-            writer.write_all(json_resp.as_bytes()).await?;
-            writer.write_all(b"\n").await?;
+        match serde_json::to_string(&resp) {
+            Ok(json_resp) => {
+                if let Err(e) = writer.write_all(json_resp.as_bytes()).await {
+                    error!("[server] Failed to write response to socket: {}", e);
+                    break;
+                }
+                let _ = writer.write_all(b"\n").await;
+            }
+            Err(e) => {
+                error!("[server] Failed to serialize response: {}", e);
+                let err_resp = Response::Error {
+                    error: format!("Internal serialization error: {e}"),
+                };
+                if let Ok(json) = serde_json::to_string(&err_resp) {
+                    let _ = writer.write_all(json.as_bytes()).await;
+                    let _ = writer.write_all(b"\n").await;
+                }
+            }
         }
 
         line.clear();
