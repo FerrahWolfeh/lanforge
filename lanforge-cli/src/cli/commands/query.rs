@@ -25,10 +25,42 @@ impl CliCommand for QueryHandler {
                 only_devices,
                 only_orphans,
             })),
+            QueryTarget::Leases { count, .. } => {
+                Ok(ControlCommand::new(CommandAction::Leases { count }))
+            }
         }
     }
 
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
+        if let QueryTarget::Leases { count, plain } = &self.target
+            && let Response::Leases(res) = response
+        {
+            if *plain {
+                if *count {
+                    println!("{}", res.leases.len());
+                } else {
+                    for lease in &res.leases {
+                        println!(
+                            "{} {} {} {:?} {}",
+                            lease.mac,
+                            lease.hostname,
+                            lease.address,
+                            lease.kind,
+                            lease.remaining_secs
+                        );
+                    }
+                }
+                return Ok(None);
+            } else if *count {
+                serde_json::to_writer(
+                    std::io::stdout(),
+                    &serde_json::json!({ "count": res.leases.len() }),
+                )?;
+                println!();
+                return Ok(None);
+            }
+        }
+
         serde_json::to_writer(std::io::stdout(), response)?;
         println!();
         Ok(None)

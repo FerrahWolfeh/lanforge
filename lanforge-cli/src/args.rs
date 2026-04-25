@@ -198,6 +198,15 @@ pub enum QueryTarget {
         #[arg(long)]
         only_orphans: bool,
     },
+    /// Dump current DHCP leases as JSON
+    Leases {
+        /// Only print the count of leases
+        #[arg(short, long)]
+        count: bool,
+        /// Print the result plainly to stdout (instead of JSON)
+        #[arg(short, long)]
+        plain: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

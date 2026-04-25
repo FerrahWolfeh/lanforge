@@ -578,6 +578,7 @@ where
                 only_orphans,
             } => ctx.handle_context_dump(only_devices, only_orphans).await,
             CommandAction::DbReset => ctx.handle_db_reset().await,
+            CommandAction::Leases { count } => ctx.handle_leases(count).await,
         };
 
         if let Err(e) = write_response(&mut writer, &resp, resp_encoding, resp_compression).await {

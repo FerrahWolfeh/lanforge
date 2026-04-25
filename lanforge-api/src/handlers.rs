@@ -600,4 +600,68 @@ impl ClientContext {
             message: "Database reset requested. Simulating cold start...".to_string(),
         })
     }
+
+    /// Aggregates all active dynamic leases (v4, v6, and prefixes).
+    pub(crate) async fn handle_leases(&self, _count_only: bool) -> Response {
+        let devices = self.ctx.all_devices();
+        let mut api_leases = Vec::new();
+        let now = SystemTime::now();
+
+        for dev in &devices {
+            let hostname = dev.display_hostname().to_string();
+            let mac = dev.mac.to_string();
+
+            // DHCPv4
+            if let IPv4State::Dynamic(lease) = &dev.v4 {
+                api_leases.push(crate::api::LeaseEntry {
+                    mac: mac.clone(),
+                    hostname: hostname.clone(),
+                    address: lease.ip.to_string(),
+                    kind: crate::api::LeaseKind::V4,
+                    expires: format_iso8601(lease.expires),
+                    remaining_secs: lease
+                        .expires
+                        .duration_since(now)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0),
+                });
+            }
+
+            // DHCPv6 IA_NA
+            for v6 in &dev.v6 {
+                if let IPv6State::Dynamic(lease) = v6 {
+                    api_leases.push(crate::api::LeaseEntry {
+                        mac: mac.clone(),
+                        hostname: hostname.clone(),
+                        address: lease.ip.to_string(),
+                        kind: crate::api::LeaseKind::V6,
+                        expires: format_iso8601(lease.expires),
+                        remaining_secs: lease
+                            .expires
+                            .duration_since(now)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0),
+                    });
+                }
+            }
+
+            // DHCPv6 IA_PD (Prefix Delegation)
+            for prefix in &dev.v6_prefixes {
+                api_leases.push(crate::api::LeaseEntry {
+                    mac: mac.clone(),
+                    hostname: hostname.clone(),
+                    address: format!("{}/{}", prefix.prefix, prefix.len),
+                    kind: crate::api::LeaseKind::V6Prefix,
+                    expires: format_iso8601(prefix.expires),
+                    remaining_secs: prefix
+                        .expires
+                        .duration_since(now)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0),
+                });
+            }
+        }
+
+        Response::Leases(crate::api::LeasesResponse { leases: api_leases })
+    }
 }

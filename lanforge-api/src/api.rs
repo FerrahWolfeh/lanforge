@@ -208,6 +208,12 @@ pub enum CommandAction {
     },
     /// Completely reset and re-seed the database.
     DbReset,
+    /// Retrieve all active DHCP leases.
+    Leases {
+        /// If true, the response should focus on the count.
+        #[serde(default)]
+        count: bool,
+    },
 }
 
 /// Represents a response sent from the daemon to a client.
@@ -239,6 +245,8 @@ pub enum Response {
     DnsQuery(DnsQueryResponse),
     /// Response for a full context dump.
     ContextDump(Box<lanforge_core::state::State>),
+    /// List of active DHCP leases.
+    Leases(LeasesResponse),
 }
 
 /// A simple success result containing a message.
@@ -269,6 +277,42 @@ pub struct DevicesResponse {
 pub struct HostsResponse {
     /// The list of host configurations.
     pub hosts: Vec<HostConfigEntry>,
+}
+
+/// A response containing active DHCP leases.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LeasesResponse {
+    /// List of lease entries.
+    pub leases: Vec<LeaseEntry>,
+}
+
+/// A single active DHCP lease entry.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LeaseEntry {
+    /// MAC address of the leased device.
+    pub mac: String,
+    /// Hostname of the device.
+    pub hostname: String,
+    /// Assigned IP address or prefix.
+    pub address: String,
+    /// Type of lease (v4, v6, prefix).
+    pub kind: LeaseKind,
+    /// Expiration timestamp in ISO 8601.
+    pub expires: String,
+    /// Remaining lifetime in seconds.
+    pub remaining_secs: i64,
+}
+
+/// Supported DHCP lease types.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseKind {
+    /// Standard DHCPv4 lease.
+    V4,
+    /// DHCPv6 IA_NA address lease.
+    V6,
+    /// DHCPv6 IA_PD prefix delegation lease.
+    V6Prefix,
 }
 
 /// A single entry in the host configuration list.
