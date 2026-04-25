@@ -14,7 +14,10 @@ impl CliCommand for DbHandler {
             DbCommand::Vacuum => Ok(ControlCommand::new(CommandAction::DbVacuum)),
             DbCommand::LogClean => Ok(ControlCommand::new(CommandAction::DbLogClean)),
             DbCommand::Prune => Ok(ControlCommand::new(CommandAction::DbPrune)),
-            DbCommand::Snapshot => Ok(ControlCommand::new(CommandAction::ContextDump)),
+            DbCommand::Snapshot => Ok(ControlCommand::new(CommandAction::ContextDump {
+                only_devices: false,
+                only_orphans: false,
+            })),
             DbCommand::Reset => Ok(ControlCommand::new(CommandAction::DbReset)),
         }
     }

@@ -190,7 +190,14 @@ pub enum QueryTarget {
     /// Dump configured hosts as JSON
     Hosts,
     /// Dump full in-memory state as JSON
-    State,
+    State {
+        /// Only include the main device table
+        #[arg(long)]
+        only_devices: bool,
+        /// Only include orphaned entries (no MAC resolved yet)
+        #[arg(long)]
+        only_orphans: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

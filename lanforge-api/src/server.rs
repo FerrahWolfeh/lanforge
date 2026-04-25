@@ -214,7 +214,7 @@ async fn write_response<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    let mut data = match encoding {
+    let data = match encoding {
         crate::api::Encoding::Json => {
             let mut s = serde_json::to_string(response)?;
             s.push('\n');
@@ -225,6 +225,7 @@ where
         }
     };
 
+    let mut data = data;
     if compression == crate::api::Compression::Zstd {
         #[cfg(feature = "zstd")]
         {
@@ -572,7 +573,10 @@ where
                     message: "Pruning triggered".to_string(),
                 })
             }
-            CommandAction::ContextDump => ctx.handle_context_dump().await,
+            CommandAction::ContextDump {
+                only_devices,
+                only_orphans,
+            } => ctx.handle_context_dump(only_devices, only_orphans).await,
             CommandAction::DbReset => ctx.handle_db_reset().await,
         };
 

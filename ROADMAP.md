@@ -11,7 +11,7 @@ This document outlines planned and potential future improvements for the Lanforg
 ## 2. CLI & User Experience
 - [ ] **Interactive TUI Dashboard**: Build a real-time terminal dashboard using `ratatui` that consumes the `watch` event stream.
 - [ ] **State Diffing**: Add a `lanforge state diff` command to compare the current state with a previous snapshot.
-- [ ] **Granular Querying**: Allow sub-filtering in `query state` (e.g., `--only-devices`, `--only-orphans`).
+- [x] **Granular Querying**: Allow sub-filtering in `query state` (e.g., `--only-devices`, `--only-orphans`).
 - [ ] **Compact Log Format**: Provide a "compact" view for logs that squashes repeated flapping events into a single "X is flapping" entry.
 
 ## 3. Core Logic & Networking

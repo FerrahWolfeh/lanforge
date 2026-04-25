@@ -198,7 +198,14 @@ pub enum CommandAction {
         record_type: Option<String>,
     },
     /// Fully dump the main in-memory state (diagnostic).
-    ContextDump,
+    ContextDump {
+        /// Only include the main device table.
+        #[serde(default)]
+        only_devices: bool,
+        /// Only include orphaned IPv6 leases.
+        #[serde(default)]
+        only_orphans: bool,
+    },
     /// Completely reset and re-seed the database.
     DbReset,
 }

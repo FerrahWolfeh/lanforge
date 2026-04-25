@@ -18,7 +18,13 @@ impl CliCommand for QueryHandler {
                 format: None,
             })),
             QueryTarget::Hosts => Ok(ControlCommand::new(CommandAction::HostList)),
-            QueryTarget::State => Ok(ControlCommand::new(CommandAction::ContextDump)),
+            QueryTarget::State {
+                only_devices,
+                only_orphans,
+            } => Ok(ControlCommand::new(CommandAction::ContextDump {
+                only_devices,
+                only_orphans,
+            })),
         }
     }
 

@@ -200,3 +200,56 @@ async fn test_dump_command_simulation() {
     drop(writer);
     let _ = server_handle.await;
 }
+
+#[tokio::test]
+async fn test_granular_querying() {
+    let ctx_handle = init_test_context();
+    let cfg = Arc::new(make_dummy_config());
+
+    // Add a device
+    let mac = MacAddr::parse("00:00:00:00:00:01").unwrap();
+    let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
+        mac,
+        duid: FieldUpdate::NoChange,
+        hostname: FieldUpdate::Set("host1".to_string()),
+        v4_static: FieldUpdate::NoChange,
+        v6_suffix: FieldUpdate::NoChange,
+        origin: Origin::Cli,
+    });
+
+    // Add an orphan
+    let ip_v6 = "2001:db8::dead:beef".parse().unwrap();
+    let _ = ctx_handle.apply(&DeviceUpdate::V6LeaseGranted {
+        mac: None,
+        duid: "00:01:00:01:2d:65:6d:73".parse().unwrap(),
+        iaid: 1,
+        ip: ip_v6,
+        expires: SystemTime::now() + Duration::from_secs(3600),
+    });
+
+    let ctx = ClientContext {
+        current_gua: None,
+        uptime_secs: 10,
+        last_scan_secs_ago: 5,
+        cfg,
+        ctx: ctx_handle,
+    };
+
+    // Test only_devices
+    let resp = ctx.handle_context_dump(true, false).await;
+    if let Response::ContextDump(state) = resp {
+        assert!(!state.devices.is_empty());
+        assert!(state.orphaned_v6.is_empty());
+    } else {
+        panic!("Expected ContextDump");
+    }
+
+    // Test only_orphans
+    let resp = ctx.handle_context_dump(false, true).await;
+    if let Response::ContextDump(state) = resp {
+        assert!(state.devices.is_empty());
+        assert!(!state.orphaned_v6.is_empty());
+    } else {
+        panic!("Expected ContextDump");
+    }
+}

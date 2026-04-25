@@ -66,10 +66,14 @@ impl ClientContext {
             capabilities: crate::api::Capabilities {
                 encodings: vec![crate::api::Encoding::Json, crate::api::Encoding::Bincode],
                 compression: {
-                    let mut c = vec![crate::api::Compression::None];
                     #[cfg(feature = "zstd")]
-                    c.push(crate::api::Compression::Zstd);
-                    c
+                    {
+                        vec![crate::api::Compression::None, crate::api::Compression::Zstd]
+                    }
+                    #[cfg(not(feature = "zstd"))]
+                    {
+                        vec![crate::api::Compression::None]
+                    }
                 },
             },
         };
@@ -565,8 +569,25 @@ impl ClientContext {
     }
 
     /// Fully dumps the main in-memory state.
-    pub(crate) async fn handle_context_dump(&self) -> Response {
-        let state = self.ctx.read().clone();
+    pub(crate) async fn handle_context_dump(
+        &self,
+        only_devices: bool,
+        only_orphans: bool,
+    ) -> Response {
+        let mut state = self.ctx.read().clone();
+
+        if only_devices {
+            state.static_entries.clear();
+            state.ndp_cache.clear();
+            state.orphaned_v6.clear();
+            state.interface_ips.clear();
+        } else if only_orphans {
+            state.devices.clear();
+            state.static_entries.clear();
+            state.ndp_cache.clear();
+            state.interface_ips.clear();
+        }
+
         Response::ContextDump(Box::new(state))
     }
 
