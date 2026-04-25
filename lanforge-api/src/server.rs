@@ -268,17 +268,17 @@ where
             Ok(Command::DnsQuery { name, record_type }) => {
                 ctx.handle_dns_query(name, record_type).await
             }
-            Ok(req_cmd @ (Command::Log { follow: _ } | Command::Watch)) => {
-                let is_follow = match req_cmd {
-                    Command::Log { follow } => follow,
-                    Command::Watch => true,
+            Ok(req_cmd @ (Command::Log { .. } | Command::Watch)) => {
+                let (is_follow, n_lines) = match req_cmd {
+                    Command::Log { follow, n } => (follow, n.unwrap_or(100)),
+                    Command::Watch => (true, 0),
                     _ => unreachable!(),
                 };
 
                 // Fetch history if it's a log command
                 let history = if let Command::Log { .. } = req_cmd {
                     if let Ok(db) = LogDb::open(&ctx.cfg.log_db_url).await {
-                        db.get_history(100).await.unwrap_or_default()
+                        db.get_history(n_lines).await.unwrap_or_default()
                     } else {
                         Vec::new()
                     }

@@ -46,7 +46,15 @@ pub async fn run_client(command: Command, socket_path: &str) -> Result<()> {
         Command::Host { action } => Box::new(HostHandler { action }),
         Command::Lease { action } => Box::new(LeaseHandler { action }),
         Command::Db { action } => Box::new(DbHandler { action }),
-        Command::Log { follow, verbose } => Box::new(LogHandler { follow, verbose }),
+        Command::Log {
+            follow,
+            verbose,
+            lines,
+        } => Box::new(LogHandler {
+            follow,
+            verbose,
+            lines,
+        }),
         Command::Reload => Box::new(GenericHandler {
             cmd: lanforge_api::api::Command::Reload,
             streaming: false,

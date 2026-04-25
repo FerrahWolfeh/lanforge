@@ -123,6 +123,9 @@ pub enum Command {
         /// Show more detailed events (like ARP/NDP activity)
         #[arg(short, long)]
         verbose: bool,
+        /// Number of historical lines to show
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
     },
     /// Gerenciamento de leases (renew/release)
     Lease {

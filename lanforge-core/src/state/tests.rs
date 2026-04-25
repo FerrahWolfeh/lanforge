@@ -723,17 +723,14 @@ fn test_handle_ip_offline_slaac_removal() {
     state.apply_update(DeviceUpdate::IpOffline { ip: ip1 });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 1, "SLAAC IP should be removed");
-    assert!(
-        !dev.is_online(),
-        "Device should be marked offline after NUD_FAILED"
-    );
+    assert!(dev.is_online(), "Device should still be online via ip2");
 
     // 3. Report ip2 as offline
     state.ip_index.insert(ip2, mac);
     state.apply_update(DeviceUpdate::IpOffline { ip: ip2 });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 0, "All SLAAC IPs should be removed");
-    assert!(!dev.is_online(), "Device should be offline");
+    assert!(!dev.is_online(), "Device should be offline after last IP fails");
 }
 #[test]
 fn test_handle_ip_offline_static_ula_persistence() {
@@ -793,8 +790,8 @@ fn test_handle_ip_offline_static_ula_persistence() {
     );
 
     assert!(
-        !dev.is_online(),
-        "Should be offline after NUD_FAILED regardless of recent activity"
+        dev.is_online(),
+        "Should stay online because it still has a Static IP"
     );
 
     // 4. Device marks as online again on activity

@@ -1119,11 +1119,23 @@ impl State {
             {
                 let dev = Arc::make_mut(&mut dev_arc);
                 dev.remove_ip(&ip);
-                // Force last_seen to be just past the threshold to trigger an immediate "Offline" status
-                // while preserving the fact that we saw it recently (but it failed).
-                dev.last_seen = SystemTime::now()
-                    .checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 1))
-                    .unwrap_or(std::time::UNIX_EPOCH);
+
+                // Only force offline if the device has NO more active addresses.
+                // If it still has other IPs, it should remain online based on their activity.
+                if !dev.has_any_ip() {
+                    debug!(
+                        "[state] Device {} has no IPs left after {} failure. Forcing offline.",
+                        mac, ip
+                    );
+                    dev.last_seen = SystemTime::now()
+                        .checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 1))
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                } else {
+                    debug!(
+                        "[state] Device {} still has other IPs after {} failure. Keeping status.",
+                        mac, ip
+                    );
+                }
             }
             self.index_device(mac, &dev_arc);
             self.devices.insert(mac, dev_arc);

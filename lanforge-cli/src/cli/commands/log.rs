@@ -13,12 +13,14 @@ use lanforge_core::state::LeaseTarget;
 pub struct LogHandler {
     pub follow: bool,
     pub verbose: bool,
+    pub lines: usize,
 }
 
 impl CliCommand for LogHandler {
     fn prepare(&mut self) -> Result<ControlCommand> {
         Ok(ControlCommand::Log {
             follow: self.follow,
+            n: Some(self.lines),
         })
     }
 
@@ -37,7 +39,9 @@ impl CliCommand for LogHandler {
     }
 
     fn is_streaming(&self) -> bool {
-        self.follow
+        // We always return true because even if follow is false, 
+        // we expect the daemon to stream historical entries.
+        true
     }
 }
 

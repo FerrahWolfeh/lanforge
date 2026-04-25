@@ -35,10 +35,12 @@ pub enum Command {
     Reload,
     /// Enter 'watch' mode to stream live state changes.
     Watch,
-    /// Retrieve and optionally follow event bus logs.
+    /// Stream or fetch logs/events.
     Log {
         /// If true, keep the connection open and stream new events.
         follow: bool,
+        /// Number of historical entries to fetch.
+        n: Option<usize>,
     },
     /// Force an immediate network scan.
     Scan,
