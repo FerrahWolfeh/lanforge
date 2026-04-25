@@ -3,9 +3,9 @@ use chrono::DateTime;
 use chrono::Local;
 use color_eyre::eyre::Result;
 use colored::*;
-use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_api::api::Response;
 use lanforge_api::api::SimpleSuccess;
+use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_core::bus::TimedEvent;
 use lanforge_core::bus::{DeviceChange, LanforgeEvent};
 use lanforge_core::state::LeaseTarget;
@@ -388,6 +388,12 @@ impl LogHandler {
                 } else {
                     format!("has gone {}", "Offline".red().bold())
                 }
+            }
+            DeviceChange::Classified { class } => {
+                format!(
+                    "classified as {}",
+                    class.as_str().to_string().bright_magenta().bold()
+                )
             }
         }
     }

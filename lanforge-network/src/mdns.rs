@@ -373,6 +373,28 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
         return;
     }
 
+    // Passive Classification Mapping
+    let classify = |name: &str| -> Option<lanforge_core::device::DeviceClass> {
+        let n = name.to_lowercase();
+        if n.contains("printer") || n.contains("_ipp") || n.contains("_pdl-datastream") {
+            Some(lanforge_core::device::DeviceClass::Printer)
+        } else if n.contains("_airplay")
+            || n.contains("_googlecast")
+            || n.contains("_spotify")
+            || n.contains("_raop")
+        {
+            Some(lanforge_core::device::DeviceClass::Media)
+        } else if n.contains("_hap") || n.contains("_miio") || n.contains("_homekit") {
+            Some(lanforge_core::device::DeviceClass::IoT)
+        } else if n.contains("_ssh") || n.contains("_smb") || n.contains("_afp") {
+            Some(lanforge_core::device::DeviceClass::Computer)
+        } else if n.contains("_ubnt") || n.contains("_unifi") || n.contains("_mikrotik") {
+            Some(lanforge_core::device::DeviceClass::Network)
+        } else {
+            None
+        }
+    };
+
     // We look for PTR, SRV, or A/AAAA records that might reveal a hostname.
     // The most reliable is the "Answer" section names or SRV target.
     for record in msg.answers().iter().chain(msg.additionals().iter()) {
@@ -385,6 +407,15 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
         if let Some(h) = hostname {
             let clean_host: &str = h.trim_end_matches('.').trim_end_matches(".local");
             if clean_host.is_empty() || clean_host.contains('.') {
+                // It might still be useful for classification even if not a valid hostname
+                if let Some(class) = classify(&h)
+                    && let Some(mac) = ctx.get_mac_by_ip(from.ip())
+                {
+                    let _ = ctx.apply(&lanforge_core::context::state::DeviceUpdate::ClassHint {
+                        mac,
+                        class,
+                    });
+                }
                 continue;
             }
 
@@ -392,6 +423,14 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
             let mac = ctx.get_mac_by_ip(from.ip());
 
             if let Some(mac) = mac {
+                // If it has a classification hit, apply it
+                if let Some(class) = classify(&h) {
+                    let _ = ctx.apply(&lanforge_core::context::state::DeviceUpdate::ClassHint {
+                        mac,
+                        class,
+                    });
+                }
+
                 // If it already has a hostname, skip update to avoid useless noise
                 if let Some(dev) = ctx.get_device(&mac)
                     && !dev.hostname.name.is_empty()

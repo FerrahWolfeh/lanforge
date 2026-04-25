@@ -15,6 +15,7 @@ pub(crate) const fn mac_of(update: &DeviceUpdate) -> Option<MacAddr> {
         | DeviceUpdate::DhcpHostnameHint { mac, .. }
         | DeviceUpdate::MdnsHostnameHint { mac, .. }
         | DeviceUpdate::CliHostUpdated { mac, .. }
+        | DeviceUpdate::ClassHint { mac, .. }
         | DeviceUpdate::HostRemoved { mac }
         | DeviceUpdate::LeaseReleased { mac, .. } => Some(*mac),
 
@@ -91,6 +92,7 @@ pub(crate) fn device_change_of(update: &DeviceUpdate) -> Option<DeviceChange> {
                 None
             }
         }
+        DeviceUpdate::ClassHint { class, .. } => Some(DeviceChange::Classified { class: *class }),
         _ => None,
     }
 }

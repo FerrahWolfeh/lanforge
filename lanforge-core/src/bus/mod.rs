@@ -72,6 +72,9 @@ pub enum DeviceChange {
 
     /// An IPv4 neighbor event (ARP) was observed.
     ArpActivity { ip: Ipv4Addr },
+
+    /// The device has been classified into a high-level category (e.g., Printer).
+    Classified { class: crate::device::DeviceClass },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

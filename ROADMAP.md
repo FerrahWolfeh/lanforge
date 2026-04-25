@@ -9,7 +9,7 @@ This document outlines planned and potential future improvements for the Lanforg
 - [ ] **Lazy Indexing**: Explore lazy-loading or background rebuilding of DNS indices to speed up daemon cold starts.
 
 ## 2. CLI & User Experience
-- [ ] **Interactive TUI Dashboard**: Build a real-time terminal dashboard using `ratatui` that consumes the `watch` event stream.
+- [ ] **Interactive TUI Dashboard**: Build a real-time terminal dashboard using `ratatui` that consumes the `watch` event stream. (Will display detailed mDNS metadata & category icons).
 - [ ] **State Diffing**: Add a `lanforge state diff` command to compare the current state with a previous snapshot.
 - [x] **Granular Querying**: Allow sub-filtering in `query state` (e.g., `--only-devices`, `--only-orphans`).
 - [ ] **Compact Log Format**: Provide a "compact" view for logs that squashes repeated flapping events into a single "X is flapping" entry.
@@ -18,7 +18,7 @@ This document outlines planned and potential future improvements for the Lanforg
 - [ ] **Active Probing Engine**: Implement a background service to actively probe (ICMP/TCP) devices that haven't been seen recently to verify status before pruning.
 - [ ] **OUI Anomaly Detection**: Flag devices with MAC addresses that don't match their expected vendor or usage patterns.
 - [ ] **Topology Mapping**: Use LLDP or neighbor observation patterns to attempt a basic mapping of "which device is behind which switch port."
-- [ ] **Advanced mDNS Scraper**: Expand mDNS hint gathering to extract detailed service types (e.g., AirPlay, HomeKit) for better device classification.
+- [x] **Advanced mDNS Scraper**: Expand mDNS hint gathering to extract detailed service types (e.g., AirPlay, HomeKit) for better device classification.
 
 ## 4. Integration & Persistence
 - [ ] **Web UI**: Develop a lightweight React/Next.js dashboard using the HTTP API for visual network management.

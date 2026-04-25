@@ -305,6 +305,11 @@ pub enum DeviceUpdate {
     PruneZombies,
     /// Trigger a full rebuild of the DNS lookup indices.
     RebuildDnsIndices,
+    /// Provide a classification hint for a device (e.g., via mDNS).
+    ClassHint {
+        mac: MacAddr,
+        class: crate::device::DeviceClass,
+    },
     /// Completely reset the state (clear all devices and indices).
     Reset,
 }
@@ -582,6 +587,17 @@ impl State {
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
                 true
+            }
+            DeviceUpdate::ClassHint { mac, class } => {
+                if let Some(dev) = self.devices.get_mut(&mac)
+                    && dev.class != class
+                {
+                    let mut new_dev = (**dev).clone();
+                    new_dev.class = class;
+                    *dev = Arc::new(new_dev);
+                    return true;
+                }
+                false
             }
             DeviceUpdate::Reset => {
                 self.handle_reset();

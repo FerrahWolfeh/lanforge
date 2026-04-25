@@ -314,6 +314,8 @@ pub struct DeviceEntry {
     /// List of IPv6 addresses (SLAAC, GUA, etc.) tracked for this device.
     pub ipv6_addrs: Vec<Ipv6Entry>,
     pub learning_method: String,
+    /// Discovered category (e.g., "printer", "media").
+    pub class: String,
 }
 
 /// A single IPv6 address entry with its type category.

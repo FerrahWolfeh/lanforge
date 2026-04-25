@@ -217,6 +217,65 @@ impl FromStr for Origin {
 }
 
 // ---------------------------------------------------------------------------
+// Device Classification
+// ---------------------------------------------------------------------------
+
+/// High-level categorization of a network device based on discovery hints.
+///
+/// Designed to be memory-efficient (1 byte) for storage in the core state.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, Hash,
+)]
+#[repr(u8)]
+pub enum DeviceClass {
+    /// No specific classification identified yet.
+    #[default]
+    None = 0,
+    /// Desktop, Laptop, or general-purpose Server.
+    Computer = 1,
+    /// Smartphone or Tablet.
+    Mobile = 2,
+    /// Printer or Scanner.
+    Printer = 3,
+    /// Smart TV, Streaming Stick, or Audio Speaker.
+    Media = 4,
+    /// Smart Home device (`IoT`), Sensors, or Hubs.
+    IoT = 5,
+    /// Network Infrastructure (Switch, Access Point, Router).
+    Network = 6,
+}
+
+impl DeviceClass {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Computer => "computer",
+            Self::Mobile => "mobile",
+            Self::Printer => "printer",
+            Self::Media => "media",
+            Self::IoT => "iot",
+            Self::Network => "network",
+        }
+    }
+}
+
+impl FromStr for DeviceClass {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "computer" | "pc" | "server" => Ok(Self::Computer),
+            "mobile" | "phone" | "tablet" => Ok(Self::Mobile),
+            "printer" | "scanner" => Ok(Self::Printer),
+            "media" | "tv" | "audio" | "speaker" => Ok(Self::Media),
+            "iot" | "smarthome" | "sensor" => Ok(Self::IoT),
+            "network" | "switch" | "router" | "ap" => Ok(Self::Network),
+            _ => Ok(Self::None),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Hostname Hierarchy
 // ---------------------------------------------------------------------------
 
@@ -819,6 +878,8 @@ pub struct Device {
     /// Generated from the MAC address to provide a consistent, if not
     /// user-friendly, DNS name for devices without a configured hostname.
     pub dns_fallback: String,
+    /// Discovered classification of the device (e.g., Printer, Media).
+    pub class: DeviceClass,
 }
 
 impl Device {
@@ -836,6 +897,7 @@ impl Device {
             last_seen: SystemTime::now(),
             duid: None,
             dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
+            class: DeviceClass::None,
         }
     }
 
@@ -1401,6 +1463,7 @@ mod tests {
             mac: MacAddr([1, 2, 3, 4, 5, 6]),
             origin: Origin::Dynamic,
             managed_at: None,
+            class: DeviceClass::None,
             duid: None,
             v4: IPv4State::Static("192.168.1.1".parse().unwrap()),
             v6: vec![

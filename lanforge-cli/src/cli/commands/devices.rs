@@ -3,8 +3,8 @@ use crate::args::SortMode;
 use crate::cli::vendor::resolve_vendor;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_api::api::Response;
+use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
 use lanforge_core::device::Origin;
 
@@ -327,6 +327,10 @@ fn render_verbose_device(dev: &DeviceEntry) {
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "Method     ", color: Color::DarkGrey)
                     Text(content: &dev.learning_method)
+                }
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: "Category   ", color: Color::DarkGrey)
+                    Text(content: &dev.class, color: Color::Magenta)
                 }
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "last seen  ", color: Color::DarkGrey)
