@@ -39,7 +39,7 @@ impl CliCommand for LogHandler {
     }
 
     fn is_streaming(&self) -> bool {
-        // We always return true because even if follow is false, 
+        // We always return true because even if follow is false,
         // we expect the daemon to stream historical entries.
         true
     }
