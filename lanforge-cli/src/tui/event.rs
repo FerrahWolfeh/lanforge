@@ -8,5 +8,6 @@ pub enum AppEvent {
     DaemonEvent(TimedEvent),
     StatusUpdate(Box<StatusResponse>),
     StateUpdate(Box<State>),
+    DnsStatsUpdate(Box<lanforge_api::api::DnsStatsResponse>),
     Tick,
 }

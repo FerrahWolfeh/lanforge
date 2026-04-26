@@ -78,6 +78,9 @@ pub async fn run_tui(socket_path: &str) -> Result<()> {
                 AppEvent::StateUpdate(s) => {
                     app.state.state = Some(*s);
                 }
+                AppEvent::DnsStatsUpdate(s) => {
+                    app.state.dns_stats = Some(*s);
+                }
                 AppEvent::Tick => {}
             }
         }
@@ -160,6 +163,18 @@ async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                         read_response(&mut reader, Encoding::Json, Compression::None).await
                 {
                     let _ = tx.send(AppEvent::StateUpdate(s)).await;
+                }
+
+                // DNS Stats
+                let mut cmd = Command::new(CommandAction::DnsStats);
+                cmd.encoding = Some(Encoding::Json);
+                if write_request(&mut writer, &cmd, Encoding::Json)
+                    .await
+                    .is_ok()
+                    && let Ok(Some(Response::DnsStats(s))) =
+                        read_response(&mut reader, Encoding::Json, Compression::None).await
+                {
+                    let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
                 }
             }
             last_refresh = Instant::now();

@@ -1,7 +1,20 @@
 use chrono::{DateTime, Utc};
 use lanforge_core::context::state::{InterfaceState, StaticEntry};
-use lanforge_core::device::IPv6State;
+use lanforge_core::device::{DeviceClass, IPv6State};
 use std::time::SystemTime;
+
+/// Returns an emoji icon for a device class.
+pub fn get_class_icon(class: DeviceClass) -> &'static str {
+    match class {
+        DeviceClass::None => "❓",
+        DeviceClass::Computer => "💻",
+        DeviceClass::Mobile => "📱",
+        DeviceClass::Printer => "🖨️",
+        DeviceClass::Media => "📺",
+        DeviceClass::IoT => "🏠",
+        DeviceClass::Network => "🌐",
+    }
+}
 
 /// Formats SystemTime into a human-readable relative duration string (e.g., "2m ago")
 /// or "now" if very recent.

@@ -1,4 +1,4 @@
-use lanforge_api::api::StatusResponse;
+use lanforge_api::api::{DnsStatsResponse, StatusResponse};
 use lanforge_core::bus::TimedEvent;
 use lanforge_core::context::state::State;
 use std::collections::VecDeque;
@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 pub struct TuiState {
     pub status: Option<StatusResponse>,
     pub state: Option<State>,
+    pub dns_stats: Option<DnsStatsResponse>,
     pub events: VecDeque<TimedEvent>,
     pub connected: bool,
     pub connection_error: Option<String>,
@@ -16,6 +17,7 @@ impl TuiState {
         Self {
             status: None,
             state: None,
+            dns_stats: None,
             events: VecDeque::with_capacity(500),
             connected: false,
             connection_error: None,

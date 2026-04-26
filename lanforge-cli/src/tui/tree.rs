@@ -59,6 +59,14 @@ pub fn build_tree(
         let dev = &state.devices[mac];
         let mut dev_fields = vec![
             TreeItem::new_leaf(
+                format!("dev.{}.vendor", mac),
+                key_val(
+                    "vendor",
+                    crate::cli::vendor::resolve_vendor(&mac.to_string())
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                ),
+            ),
+            TreeItem::new_leaf(
                 format!("dev.{}.hostname", mac),
                 key_val(
                     "hostname",
@@ -112,6 +120,7 @@ pub fn build_tree(
             TreeItem::new(
                 format!("dev.{}", mac),
                 Text::from(Line::from(vec![
+                    Span::raw(format!("{} ", utils::get_class_icon(dev.class))),
                     Span::styled(mac.to_string(), Style::default().fg(theme::MAC)),
                     Span::raw(" — "),
                     Span::styled(

@@ -118,10 +118,73 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
     );
     f.render_widget(stats_widget, top_chunks[2]);
 
-    // Bottom area could have a welcome message or a logo
-    let welcome =
-        Paragraph::new("\n\nWelcome to Lanforge TUI\nUse keys 1-5 to navigate between dashboards.")
-            .alignment(ratatui::layout::Alignment::Center)
-            .style(Style::default().fg(theme::TEXT_DIM));
-    f.render_widget(welcome, chunks[1]);
+    // 4. Bottom Area: Inventory & DNS
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
+
+    // 4a. Device Breakdown by Category
+    let category_breakdown = if let Some(cs) = &state.state {
+        let mut counts = std::collections::HashMap::new();
+        for dev in cs.devices.values() {
+            *counts.entry(dev.class).or_insert(0) += 1;
+        }
+
+        let mut lines = Vec::new();
+        let mut sorted_classes: Vec<_> = counts.keys().collect();
+        sorted_classes.sort_by_key(|c| format!("{:?}", c));
+
+        for class in sorted_classes {
+            let count = counts[class];
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {} {:<10} ", utils::get_class_icon(*class), format!("{:?}", class))),
+                Span::styled(count.to_string(), Style::default().fg(theme::VALUE)),
+            ]));
+        }
+        Paragraph::new(lines)
+    } else {
+        Paragraph::new("Calculating inventory...")
+    };
+
+    let inventory_block = category_breakdown.block(
+        Block::default()
+            .title(" Device Inventory ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER)),
+    );
+    f.render_widget(inventory_block, bottom_chunks[0]);
+
+    // 4b. DNS Stats
+    let dns_stats_block = if let Some(ds) = &state.dns_stats {
+        let render_stat = |label: &str, val: u64| {
+            Line::from(vec![
+                Span::styled(
+                    format!("{:<14}", label),
+                    Style::default().fg(theme::TEXT_DIM),
+                ),
+                Span::styled(val.to_string(), Style::default().fg(theme::VALUE)),
+            ])
+        };
+
+        let lines = vec![
+            render_stat("Total Queries:", ds.total_requests),
+            render_stat("Cache Hits:", ds.cache_hits),
+            render_stat("Cache Misses:", ds.cache_misses),
+            render_stat("Blocked:", ds.blocked_queries),
+            render_stat("Auth Queries:", ds.auth_queries),
+            render_stat("Recursions:", ds.recursions),
+        ];
+        Paragraph::new(lines)
+    } else {
+        Paragraph::new("Waiting for DNS stats...")
+    };
+
+    let dns_widget = dns_stats_block.block(
+        Block::default()
+            .title(" DNS Resolver Stats ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER)),
+    );
+    f.render_widget(dns_widget, bottom_chunks[1]);
 }

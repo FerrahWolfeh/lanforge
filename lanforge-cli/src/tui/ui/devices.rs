@@ -8,6 +8,8 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
 };
 
+// (Render function below)
+
 pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     let header_cells = ["MAC", "HOSTNAME", "IPv4", "IPv6", "SEEN"].iter().map(|h| {
         Cell::from(*h).style(
@@ -61,10 +63,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
                 .map(|ip| ip.to_string())
                 .unwrap_or_else(|| "—".to_string());
 
+            let host_display = format!("{} {}", utils::get_class_icon(dev.class), host);
+
             rows.push(Row::new(vec![
                 Cell::from(Span::styled(mac_str, Style::default().fg(theme::MAC))),
                 Cell::from(Span::styled(
-                    host.to_string(),
+                    host_display,
                     Style::default().fg(theme::HOSTNAME),
                 )),
                 Cell::from(Span::styled(v4, Style::default().fg(theme::IP))),
@@ -142,12 +146,17 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                         .join(", ")
                 };
 
+                let vendor = crate::cli::vendor::resolve_vendor(&dev.mac.to_string())
+                    .unwrap_or_else(|| "Unknown".to_string());
+
                 format!(
-                    "MAC:       {}\nHostname:  {} ({:?})\nOrigin:    {:?}\nClass:     {:?}\nLast Seen: {}\n\nIPv4:      {}\nIPv6:      {}\nPrefixes:  {}",
+                    "MAC:       {}\nVendor:    {}\nHostname:  {} ({:?})\nOrigin:    {:?}\nClass:     {} {:?}\nLast Seen: {}\n\nIPv4:      {}\nIPv6:      {}\nPrefixes:  {}",
                     dev.mac,
+                    vendor,
                     dev.hostname.name,
                     dev.hostname.origin,
                     dev.origin,
+                    utils::get_class_icon(dev.class),
                     dev.class,
                     utils::format_absolute_time(dev.last_seen),
                     dev.v4
