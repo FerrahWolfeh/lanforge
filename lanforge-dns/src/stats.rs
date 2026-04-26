@@ -25,6 +25,9 @@ pub struct DnsStats {
     pub auth_queries: AtomicU64,
     /// Number of queries forwarded recursively to upstream.
     pub recursions: AtomicU64,
+    /// Number of queries blocked by the adblocker.
+    #[cfg(feature = "adblock")]
+    pub blocked_queries: AtomicU64,
 }
 
 impl DnsStats {
@@ -64,6 +67,12 @@ impl DnsStats {
         self.recursions.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increments the blocked query counter.
+    #[cfg(feature = "adblock")]
+    pub fn inc_blocked(&self) {
+        self.blocked_queries.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Captures a point-in-time snapshot of all counters.
     ///
     /// The returned `DnsStatsSnapshot` is safe to serialize and report
@@ -76,6 +85,8 @@ impl DnsStats {
             upstream_errors: self.upstream_errors.load(Ordering::Relaxed),
             auth_queries: self.auth_queries.load(Ordering::Relaxed),
             recursions: self.recursions.load(Ordering::Relaxed),
+            #[cfg(feature = "adblock")]
+            blocked_queries: self.blocked_queries.load(Ordering::Relaxed),
         }
     }
 }
@@ -97,6 +108,9 @@ pub struct DnsStatsSnapshot {
     pub auth_queries: u64,
     /// Number of queries forwarded recursively.
     pub recursions: u64,
+    /// Number of queries blocked by the adblocker.
+    #[cfg(feature = "adblock")]
+    pub blocked_queries: u64,
 }
 
 impl Default for DnsStats {
@@ -108,6 +122,8 @@ impl Default for DnsStats {
             upstream_errors: AtomicU64::new(0),
             auth_queries: AtomicU64::new(0),
             recursions: AtomicU64::new(0),
+            #[cfg(feature = "adblock")]
+            blocked_queries: AtomicU64::new(0),
         }
     }
 }

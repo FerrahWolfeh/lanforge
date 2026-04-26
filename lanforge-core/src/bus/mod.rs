@@ -156,33 +156,47 @@ pub enum LanforgeEvent {
     RsReceived {
         mac: MacAddr,
     },
+    #[cfg(feature = "adblock")]
+    DnsAdblockToggle {
+        enabled: bool,
+        duration_secs: Option<u64>,
+    },
+    #[cfg(feature = "adblock")]
+    DnsAdblockReload,
+    #[cfg(feature = "adblock")]
+    DnsQueryBlocked {
+        src_addr: std::net::IpAddr,
+        domain: String,
+    },
 }
 
 impl TimedEvent {
     #[must_use]
     pub const fn is_loggable(&self) -> bool {
-        matches!(
-            &self.event,
+        match &self.event {
             LanforgeEvent::DeviceDiscovered { .. }
-                | LanforgeEvent::DeviceUpdated { .. }
-                | LanforgeEvent::DeviceExpired { .. }
-                | LanforgeEvent::PrefixChanged { .. }
-                | LanforgeEvent::InterfaceUpdated { .. }
-                | LanforgeEvent::LeaseRelease { .. }
-                | LanforgeEvent::LeaseRenew { .. }
-                | LanforgeEvent::DbVacuum
-                | LanforgeEvent::DbLogClean
-                | LanforgeEvent::DbPrune
-                | LanforgeEvent::DevicePurged { .. }
-                | LanforgeEvent::WolTriggered { .. }
-                | LanforgeEvent::RsReceived { .. }
-                | LanforgeEvent::ReloadConfig
-                | LanforgeEvent::ServiceReady { .. }
-                | LanforgeEvent::SystemReady
-                | LanforgeEvent::ScanRequested
-                | LanforgeEvent::NeighborScanRequested
-                | LanforgeEvent::SubnetScanStarted { .. }
-        )
+            | LanforgeEvent::DeviceUpdated { .. }
+            | LanforgeEvent::DeviceExpired { .. }
+            | LanforgeEvent::PrefixChanged { .. }
+            | LanforgeEvent::InterfaceUpdated { .. }
+            | LanforgeEvent::LeaseRelease { .. }
+            | LanforgeEvent::LeaseRenew { .. }
+            | LanforgeEvent::DbVacuum
+            | LanforgeEvent::DbLogClean
+            | LanforgeEvent::DbPrune
+            | LanforgeEvent::DevicePurged { .. }
+            | LanforgeEvent::WolTriggered { .. }
+            | LanforgeEvent::RsReceived { .. }
+            | LanforgeEvent::ReloadConfig
+            | LanforgeEvent::ServiceReady { .. }
+            | LanforgeEvent::SystemReady
+            | LanforgeEvent::ScanRequested
+            | LanforgeEvent::NeighborScanRequested
+            | LanforgeEvent::SubnetScanStarted { .. } => true,
+            #[cfg(feature = "adblock")]
+            LanforgeEvent::DnsAdblockToggle { .. } | LanforgeEvent::DnsAdblockReload => true,
+            _ => false,
+        }
     }
 }
 

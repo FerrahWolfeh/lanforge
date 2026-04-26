@@ -4,9 +4,10 @@ version = "0.5.0"
 edition = "2024"
 
 [features]
-default = ["sqlite"]
+default = ["sqlite", "adblock", "postgres"]
 sqlite = ["sqlx/sqlite"]
 postgres = ["sqlx/postgres"]
+adblock = ["lanforge-core/adblock"]
 
 [dependencies]
 # rusqlite = { version = "0.39.0", features = ["bundled"] }

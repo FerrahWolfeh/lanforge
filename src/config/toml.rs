@@ -204,6 +204,12 @@ pub struct DnsCfg {
     pub search_domain: String,
     /// LAN responses TTL in seconds
     pub ttl: u32,
+    /// Whether the micro-adblocker is enabled.
+    #[serde(default)]
+    pub adblock_enabled: bool,
+    /// List of URLs to fetch blocklists from.
+    #[serde(default)]
+    pub adblock_urls: Vec<String>,
 }
 
 impl Default for DnsCfg {
@@ -214,6 +220,8 @@ impl Default for DnsCfg {
             upstream: None,
             search_domain: "lan".into(),
             ttl: 60,
+            adblock_enabled: false,
+            adblock_urls: Vec::new(),
         }
     }
 }

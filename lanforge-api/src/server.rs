@@ -220,9 +220,8 @@ where
             s.push('\n');
             s.into_bytes()
         }
-        crate::api::Encoding::Bincode => {
-            bincode::serialize(response).map_err(|e| ApiError::Bincode(e.to_string()))?
-        }
+        crate::api::Encoding::Bincode => bincode::serialize(response)
+            .map_err(|e| ApiError::Bincode(format!("Bincode serialize error: {}", e)))?,
     };
 
     let mut data = data;
@@ -376,6 +375,35 @@ where
             CommandAction::DnsStats => ctx.handle_dns_stats().await,
             CommandAction::DnsQuery { name, record_type } => {
                 ctx.handle_dns_query(name, record_type).await
+            }
+            CommandAction::DnsAdblockSet {
+                #[cfg(feature = "adblock")]
+                enabled,
+                #[cfg(feature = "adblock")]
+                duration_secs,
+            } => {
+                #[cfg(feature = "adblock")]
+                {
+                    ctx.handle_dns_adblock_set(enabled, duration_secs).await
+                }
+                #[cfg(not(feature = "adblock"))]
+                {
+                    Response::Error {
+                        error: "Adblock feature not supported by this backend build".to_string(),
+                    }
+                }
+            }
+            CommandAction::DnsAdblockReload => {
+                #[cfg(feature = "adblock")]
+                {
+                    ctx.handle_dns_adblock_reload().await
+                }
+                #[cfg(not(feature = "adblock"))]
+                {
+                    Response::Error {
+                        error: "Adblock feature not supported by this backend build".to_string(),
+                    }
+                }
             }
             CommandAction::Log { follow, n } => {
                 let n_lines = n.unwrap_or(100);

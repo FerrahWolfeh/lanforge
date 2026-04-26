@@ -60,6 +60,8 @@
 pub mod cache;
 pub mod config;
 pub mod error;
+#[cfg(feature = "adblock")]
+pub mod filter;
 pub mod resolver;
 pub mod response;
 pub mod server;

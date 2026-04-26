@@ -82,6 +82,8 @@ pub struct EventCounters {
     pub dhcp_v4_leases: AtomicU64,
     pub dhcp_v6_leases: AtomicU64,
     pub dns_auth_hits: AtomicU64,
+    #[cfg(feature = "adblock")]
+    pub dns_blocked: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -193,6 +195,15 @@ impl LanforgeContext {
     #[must_use]
     pub fn counters(&self) -> Arc<EventCounters> {
         self.inner.event_counters.clone()
+    }
+
+    /// Increments the DNS blocked queries counter.
+    #[cfg(feature = "adblock")]
+    pub fn inc_dns_blocked(&self) {
+        self.inner
+            .event_counters
+            .dns_blocked
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 

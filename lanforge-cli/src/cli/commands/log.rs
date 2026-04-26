@@ -68,6 +68,34 @@ impl LogHandler {
                     mac.to_string().dimmed()
                 );
             }
+            LanforgeEvent::DnsAdblockToggle {
+                enabled,
+                duration_secs,
+            } => {
+                let status = if *enabled {
+                    "ENABLED".green().bold()
+                } else {
+                    "DISABLED".red().bold()
+                };
+                let suffix = duration_secs
+                    .map(|s| format!(" for {s}s"))
+                    .unwrap_or_default();
+                println!("[{}] {} DNS Adblocker{}", now, status, suffix);
+            }
+            LanforgeEvent::DnsAdblockReload => {
+                println!("[{}] {} Reloading blocklists...", now, "DNS".cyan().bold());
+            }
+            LanforgeEvent::DnsQueryBlocked { src_addr, domain } => {
+                if self.verbose {
+                    println!(
+                        "[{}] {} {} -> {}",
+                        now,
+                        "BLOCK".red().bold(),
+                        src_addr.to_string().bright_cyan(),
+                        domain.bright_red()
+                    );
+                }
+            }
             LanforgeEvent::DeviceUpdated {
                 mac,
                 hostname,

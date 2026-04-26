@@ -455,6 +455,10 @@ impl Config {
             gua_prefix: None,
             ttl: self.dns_toml.ttl,
             multi_search_labels,
+            #[cfg(feature = "adblock")]
+            adblock_enabled: self.dns_toml.adblock_enabled,
+            #[cfg(feature = "adblock")]
+            adblock_urls: self.dns_toml.adblock_urls.clone(),
         }
     }
 

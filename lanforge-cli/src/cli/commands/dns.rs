@@ -11,10 +11,33 @@ impl CliCommand for DnsCommand {
     fn prepare(&mut self) -> Result<ControlCommand> {
         match &self.action {
             args::DnsCommand::Stats => Ok(ControlCommand::new(CommandAction::DnsStats)),
-            args::DnsCommand::Query { name, record_type } => Ok(ControlCommand::new(CommandAction::DnsQuery {
-                name: name.clone(),
-                record_type: record_type.clone(),
-            })),
+            args::DnsCommand::Query { name, record_type } => {
+                Ok(ControlCommand::new(CommandAction::DnsQuery {
+                    name: name.clone(),
+                    record_type: record_type.clone(),
+                }))
+            }
+            args::DnsCommand::Adblock { action } => match action {
+                args::AdblockAction::Enable => {
+                    Ok(ControlCommand::new(CommandAction::DnsAdblockSet {
+                        enabled: true,
+                        duration_secs: None,
+                    }))
+                }
+                args::AdblockAction::Disable { duration } => {
+                    let secs = duration
+                        .as_ref()
+                        .and_then(|d| duration_str::parse_std(d).ok())
+                        .map(|d| d.as_secs());
+                    Ok(ControlCommand::new(CommandAction::DnsAdblockSet {
+                        enabled: false,
+                        duration_secs: secs,
+                    }))
+                }
+                args::AdblockAction::Reload => {
+                    Ok(ControlCommand::new(CommandAction::DnsAdblockReload))
+                }
+            },
         }
     }
 
@@ -33,6 +56,7 @@ impl CliCommand for DnsCommand {
                             StatLine(label: "Upstream Errors", value: stats.upstream_errors, color: Color::Red)
                             StatLine(label: "Auth Queries", value: stats.auth_queries)
                             StatLine(label: "Recursions", value: stats.recursions)
+                            StatLine(label: "Blocked Queries", value: stats.blocked_queries, color: Color::Cyan)
                         }
                     }
                 }.print();
@@ -55,6 +79,9 @@ impl CliCommand for DnsCommand {
             }
             Response::Error { error } => {
                 println!("Error: {}", error);
+            }
+            Response::Success(msg) => {
+                println!("{}", msg.message);
             }
             _ => {
                 println!("Unexpected response: {:?}", response);

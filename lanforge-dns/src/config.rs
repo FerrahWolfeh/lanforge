@@ -39,6 +39,12 @@ pub struct DnsConfig {
     /// Pre-parsed search domain labels for zero-allocation hostname matching.
     /// Default: `[[b"lan"]]`.
     pub multi_search_labels: Vec<Vec<Vec<u8>>>,
+    #[cfg(feature = "adblock")]
+    /// Whether the micro-adblocker is enabled.
+    pub adblock_enabled: bool,
+    #[cfg(feature = "adblock")]
+    /// List of URLs to fetch blocklists from.
+    pub adblock_urls: Vec<String>,
 }
 
 impl Default for DnsConfig {
@@ -52,6 +58,10 @@ impl Default for DnsConfig {
             gua_prefix: None,
             ttl: 60,
             multi_search_labels: vec![vec![b"lan".to_vec()]],
+            #[cfg(feature = "adblock")]
+            adblock_enabled: false,
+            #[cfg(feature = "adblock")]
+            adblock_urls: Vec::new(),
         }
     }
 }

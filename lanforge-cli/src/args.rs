@@ -217,10 +217,28 @@ pub enum DnsCommand {
     Query {
         /// Name to resolve
         name: String,
-        /// Optional record type (A, AAAA, etc.)
+        /// Optional record type (A, AAAA, TXT, etc.)
         #[arg(short = 't', long)]
         record_type: Option<String>,
     },
+    /// Manage micro-adblocker filtering
+    Adblock {
+        #[command(subcommand)]
+        action: AdblockAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum AdblockAction {
+    /// Enable the adblocker
+    Enable,
+    /// Disable the adblocker
+    Disable {
+        /// Duration to disable for (e.g. 15m, 2h, 1d)
+        duration: Option<String>,
+    },
+    /// Reload blocklists from URLs
+    Reload,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

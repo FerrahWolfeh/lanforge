@@ -28,6 +28,9 @@ use crate::{
 };
 use lanforge_core::bus::LanforgeEvent;
 
+#[cfg(feature = "adblock")]
+use crate::filter::{AdBlocker, labels_to_domain};
+
 /// Shared, immutable service state for the DNS hot path.
 ///
 /// A single `Arc<DnsContext>` replaces several individual `Arc` clones per query,
@@ -37,6 +40,8 @@ pub(crate) struct DnsContext {
     pub upstream_mgr: Option<Arc<UpstreamManager>>,
     pub stats: Arc<DnsStats>,
     pub ctx: lanforge_core::context::LanforgeContext,
+    #[cfg(feature = "adblock")]
+    pub adblocker: Option<Arc<AdBlocker>>,
 }
 
 use lanforge_core::error::CoreError;
@@ -85,11 +90,20 @@ impl DnsService {
             None
         };
 
+        #[cfg(feature = "adblock")]
+        let adblocker = if self.cfg.adblock_enabled && self.cfg.upstream.is_some() {
+            Some(Arc::new(AdBlocker::new()))
+        } else {
+            None
+        };
+
         Ok(Arc::new(DnsContext {
             cfg: self.cfg.clone(),
             upstream_mgr,
             stats: Arc::clone(&self.stats),
             ctx: self.ctx.clone(),
+            #[cfg(feature = "adblock")]
+            adblocker,
         }))
     }
 
@@ -101,12 +115,92 @@ impl DnsService {
                 tokio::select! {
                     res = sock.recv_from(&mut buf) => {
                         let Ok((len, src)) = res else { continue; };
-                        if let Ok(Some(response)) = handle_query(&buf[..len], &dns_ctx).await {
+                        if let Ok(Some(response)) = handle_query(&buf[..len], &dns_ctx,
+                            #[cfg(feature = "adblock")]
+                            src.ip()
+                        ).await {
                             let _ = sock.send_to(&response, src).await;
                         }
                     }
                     () = tokio::time::sleep(Duration::from_millis(100)) => {
                          if !ctx_udp.is_running() { break; }
+                    }
+                }
+            }
+        })
+    }
+
+    #[cfg(feature = "adblock")]
+    fn spawn_adblock_manager(&self, dns_ctx: &Arc<DnsContext>) -> JoinHandle<()> {
+        let bus = self.ctx.bus();
+        let mut rx = bus.subscribe();
+        let adblocker = dns_ctx.adblocker.clone();
+        let urls = self.cfg.adblock_urls.clone();
+        let initial_enabled = self.cfg.adblock_enabled;
+
+        tokio::spawn(async move {
+            let Some(adblocker) = adblocker else {
+                return;
+            };
+
+            // 1. Initial Load
+            if !urls.is_empty() {
+                let a = Arc::clone(&adblocker);
+                let u = urls.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(list) = a.load_from_urls(&u) {
+                        a.replace_blocklist(list);
+                        if initial_enabled {
+                            a.set_enabled(true);
+                        }
+                    }
+                })
+                .await;
+            }
+
+            // 2. Event Loop
+            let mut reenable_at: Option<std::time::Instant> = None;
+            loop {
+                let sleep_duration = reenable_at.map_or_else(
+                    || Duration::from_hours(1),
+                    |at| at.saturating_duration_since(std::time::Instant::now()),
+                );
+
+                tokio::select! {
+                    res = rx.recv() => {
+                        match res {
+                            Ok(TimedEvent { event: LanforgeEvent::DnsAdblockToggle { enabled, duration_secs }, .. }) => {
+                                adblocker.set_enabled(enabled);
+                                if enabled {
+                                    reenable_at = None;
+                                    info!("Adblock: enabled");
+                                } else if let Some(secs) = duration_secs {
+                                    reenable_at = Some(std::time::Instant::now() + Duration::from_secs(secs));
+                                    info!("Adblock: disabled for {} seconds", secs);
+                                } else {
+                                    reenable_at = None;
+                                    info!("Adblock: disabled permanently");
+                                }
+                            }
+                            Ok(TimedEvent { event: LanforgeEvent::DnsAdblockReload, .. }) => {
+                                let a = Arc::clone(&adblocker);
+                                let u = urls.clone();
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    if let Ok(list) = a.load_from_urls(&u) {
+                                        a.replace_blocklist(list);
+                                    }
+                                }).await;
+                            }
+                            _ => {}
+                        }
+                    }
+                    () = tokio::time::sleep(sleep_duration), if reenable_at.is_some() => {
+                        if let Some(at) = reenable_at
+                            && at <= std::time::Instant::now() {
+                                adblocker.set_enabled(true);
+                                reenable_at = None;
+                                info!("Adblock: timer expired, re-enabled automatically");
+                            }
                     }
                 }
             }
@@ -129,7 +223,10 @@ impl DnsService {
                                     let mut query_buf = vec![0u8; len];
                                     stream.read_exact(&mut query_buf).await?;
 
-                                    if let Ok(Some(response)) = handle_query(&query_buf, &c).await {
+                                    if let Ok(Some(response)) = handle_query(&query_buf, &c,
+                                        #[cfg(feature = "adblock")]
+                                        stream.peer_addr()?.ip()
+                                    ).await {
                                         let resp_len = u16::try_from(response.len()).unwrap_or(u16::MAX).to_be_bytes();
                                         stream.write_all(&resp_len).await?;
                                         stream.write_all(&response).await?;
@@ -210,6 +307,8 @@ impl AsyncService for DnsService {
         let rx = bus.subscribe();
         let udp_task = self.spawn_udp_handler(Arc::clone(&dns_ctx), udp_sock);
         let tcp_task = self.spawn_tcp_handler(Arc::clone(&dns_ctx), tcp_listener);
+        #[cfg(feature = "adblock")]
+        let adblock_task = self.spawn_adblock_manager(&dns_ctx);
 
         // 5. Enter main process loop
         self.wait_for_shutdown(rx).await;
@@ -217,6 +316,8 @@ impl AsyncService for DnsService {
         // Cleanup
         udp_task.abort();
         tcp_task.abort();
+        #[cfg(feature = "adblock")]
+        adblock_task.abort();
         Ok(())
     }
 }
@@ -241,6 +342,7 @@ impl AsyncService for DnsService {
 pub(crate) async fn handle_query(
     data: &[u8],
     ctx: &DnsContext,
+    #[cfg(feature = "adblock")] src_addr: std::net::IpAddr,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     ctx.stats.inc_requests();
 
@@ -253,7 +355,13 @@ pub(crate) async fn handle_query(
     }
 
     let Some(question) = WireQuestion::parse(data) else {
-        return handle_query_fallback(data, ctx).await;
+        return handle_query_fallback(
+            data,
+            ctx,
+            #[cfg(feature = "adblock")]
+            src_addr,
+        )
+        .await;
     };
 
     // PHASE 2: Local Resolution Attempt
@@ -264,6 +372,29 @@ pub(crate) async fn handle_query(
     }
 
     ctx.stats.inc_cache_miss();
+
+    // PHASE 2.5: Adblock Filtering
+    #[cfg(feature = "adblock")]
+    if let Some(adblocker) = &ctx.adblocker
+        && adblocker.is_enabled()
+    {
+        let domain = labels_to_domain(question.labels());
+        if adblocker.should_block(&domain) {
+            ctx.stats.inc_blocked();
+            ctx.ctx.inc_dns_blocked();
+            adblocker.inc_ip_stats(src_addr);
+
+            let edns = WireOptScanner::scan(data, &header, &question);
+            let ra = ctx.cfg.upstream.is_some();
+            return Ok(Some(WireResponseWriter::write_error_response(
+                data,
+                &question,
+                3, // NXDOMAIN
+                edns.as_ref(),
+                ra,
+            )));
+        }
+    }
 
     // PHASE 3: Recursive Forwarding
     if let (Some(upstream), Some(mgr)) = (ctx.cfg.upstream, &ctx.upstream_mgr) {
@@ -323,7 +454,11 @@ fn resolve_local_wire(
 }
 
 /// Fallback logic for queries that are too complex for the zero-alloc wire parser.
-async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<Vec<u8>>, DnsError> {
+async fn handle_query_fallback(
+    data: &[u8],
+    ctx: &DnsContext,
+    #[cfg(feature = "adblock")] src_addr: std::net::IpAddr,
+) -> Result<Option<Vec<u8>>, DnsError> {
     let Ok(query) = Message::from_bytes(data) else {
         return Ok(None);
     };
@@ -354,6 +489,20 @@ async fn handle_query_fallback(data: &[u8], ctx: &DnsContext) -> Result<Option<V
     }
 
     ctx.stats.inc_cache_miss();
+
+    // Adblock check for fallback path
+    #[cfg(feature = "adblock")]
+    if let Some(adblocker) = &ctx.adblocker
+        && adblocker.is_enabled()
+    {
+        let domain = qname.to_string().trim_end_matches('.').to_ascii_lowercase();
+        if adblocker.should_block(&domain) {
+            ctx.stats.inc_blocked();
+            ctx.ctx.inc_dns_blocked();
+            adblocker.inc_ip_stats(src_addr);
+            return Ok(Some(rb.nxdomain()?));
+        }
+    }
 
     if let (Some(upstream), Some(mgr)) = (ctx.cfg.upstream, &ctx.upstream_mgr) {
         ctx.stats.inc_recursive();

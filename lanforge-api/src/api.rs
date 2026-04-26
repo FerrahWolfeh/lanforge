@@ -197,6 +197,17 @@ pub enum CommandAction {
         /// Optional record type (A, AAAA, TXT, etc.).
         record_type: Option<String>,
     },
+    /// Enable or disable the DNS adblocker.
+    DnsAdblockSet {
+        /// Whether to enable or disable.
+        #[cfg(feature = "adblock")]
+        enabled: bool,
+        /// Optional duration in seconds to disable it for.
+        #[cfg(feature = "adblock")]
+        duration_secs: Option<u64>,
+    },
+    /// Force a reload of the DNS blocklists.
+    DnsAdblockReload,
     /// Fully dump the main in-memory state (diagnostic).
     ContextDump {
         /// Only include the main device table.
@@ -592,6 +603,8 @@ pub struct DnsStatsResponse {
     pub auth_queries: u64,
     /// Number of recursive queries forwarded.
     pub recursions: u64,
+    /// Number of queries blocked by the adblocker.
+    pub blocked_queries: u64,
 }
 
 /// Results of a DNS diagnostic query.

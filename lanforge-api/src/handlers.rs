@@ -543,6 +543,10 @@ impl ClientContext {
                 upstream_errors: stats.upstream_errors.load(Ordering::Relaxed),
                 auth_queries: stats.auth_queries.load(Ordering::Relaxed),
                 recursions: stats.recursions.load(Ordering::Relaxed),
+                #[cfg(feature = "adblock")]
+                blocked_queries: stats.blocked_queries.load(Ordering::Relaxed),
+                #[cfg(not(feature = "adblock"))]
+                blocked_queries: 0,
             });
         }
 
@@ -553,6 +557,38 @@ impl ClientContext {
             upstream_errors: 0,
             auth_queries: 0,
             recursions: 0,
+            blocked_queries: 0,
+        })
+    }
+
+    /// Toggles the DNS adblocker.
+    #[cfg(feature = "adblock")]
+    pub(crate) async fn handle_dns_adblock_set(
+        &self,
+        enabled: bool,
+        duration_secs: Option<u64>,
+    ) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::DnsAdblockToggle {
+            enabled,
+            duration_secs,
+        });
+        Response::Success(SimpleSuccess {
+            message: if enabled {
+                "DNS Adblock enabled".to_string()
+            } else if let Some(d) = duration_secs {
+                format!("DNS Adblock disabled for {} seconds", d)
+            } else {
+                "DNS Adblock disabled permanently".to_string()
+            },
+        })
+    }
+
+    /// Triggers a reload of DNS blocklists.
+    #[cfg(feature = "adblock")]
+    pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::DnsAdblockReload);
+        Response::Success(SimpleSuccess {
+            message: "DNS Adblock reload requested".to_string(),
         })
     }
 

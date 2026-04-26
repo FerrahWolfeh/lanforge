@@ -145,6 +145,20 @@ impl AsyncService for DbWorker {
                             self.flush_batch(&db).await;
                             break;
                         }
+                        #[cfg(feature = "adblock")]
+                        LanforgeEvent::DnsQueryBlocked { src_addr, ref domain } => {
+                            let src_mac = self
+                                .ctx
+                                .read()
+                                .get_mac_by_ip(src_addr)
+                                .map(|m| m.to_string());
+                            if let Err(e) = log_db
+                                .record_dns_block(&timed_event, src_addr, domain, src_mac)
+                                .await
+                            {
+                                error!("DNS log record error: {e}");
+                            }
+                        }
                         _ => {}
                     }
                 }
