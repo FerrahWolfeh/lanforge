@@ -1,0 +1,92 @@
+use chrono::{DateTime, Utc};
+use lanforge_core::context::state::{InterfaceState, StaticEntry};
+use lanforge_core::device::IPv6State;
+use std::time::SystemTime;
+
+/// Formats SystemTime into a human-readable relative duration string (e.g., "2m ago")
+/// or "now" if very recent.
+pub fn format_relative_time(st: SystemTime) -> String {
+    let now = SystemTime::now();
+    match now.duration_since(st) {
+        Ok(d) => {
+            if d.as_secs() < 5 {
+                "now".to_string()
+            } else if d.as_secs() < 60 {
+                format!("{}s ago", d.as_secs())
+            } else if d.as_secs() < 3600 {
+                format!("{}m ago", d.as_secs() / 60)
+            } else if d.as_secs() < 86400 {
+                format!("{}h ago", d.as_secs() / 3600)
+            } else {
+                format!("{}d ago", d.as_secs() / 86400)
+            }
+        }
+        Err(_) => "future".to_string(),
+    }
+}
+
+/// Formats SystemTime into an absolute timestamp (HH:MM:SS).
+pub fn format_absolute_time(st: SystemTime) -> String {
+    let dt: DateTime<Utc> = st.into();
+    dt.format("%H:%M:%S").to_string()
+}
+
+/// Formats uptime seconds into a concise string (e.g. "1h 23m").
+pub fn format_uptime(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else if secs < 86400 {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    } else {
+        format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
+    }
+}
+
+/// Formats an IPv6State into a clean string.
+pub fn format_v6_state(state: &IPv6State) -> String {
+    match state {
+        IPv6State::Static(s) => format!("Static({})", s),
+        IPv6State::Dynamic(lease) => format!("DHCP({})", lease.ip),
+        IPv6State::Slaac { ip, last_seen } => {
+            format!(
+                "Slaac {{ ip: {}, last_seen: {} }}",
+                ip,
+                format_relative_time(*last_seen)
+            )
+        }
+    }
+}
+
+/// Formats a StaticEntry into a clean string.
+pub fn format_static_entry(entry: &StaticEntry) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("host: {}", entry.hostname));
+    if let Some(v4) = entry.v4_static {
+        parts.push(format!("v4: {}", v4));
+    }
+    if let Some(v6) = &entry.v6_suffix {
+        parts.push(format!("v6: {}", v6));
+    }
+    parts.push(format!("origin: {:?}", entry.origin));
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// Formats InterfaceState into a clean string.
+pub fn format_interface_state(state: &InterfaceState) -> String {
+    let mut parts = Vec::new();
+    if let Some((ip, mask)) = state.v4 {
+        parts.push(format!("v4: {}/{}", ip, mask));
+    }
+    if let Some(ll) = state.link_local {
+        parts.push(format!("ll: {}", ll));
+    }
+    if let Some(gua) = state.gua {
+        parts.push(format!("gua: {}", gua));
+    }
+    if let Some(ula) = state.ula {
+        parts.push(format!("ula: {}", ula));
+    }
+    format!("{{ {} }}", parts.join(", "))
+}

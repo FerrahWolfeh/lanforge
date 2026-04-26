@@ -122,6 +122,9 @@ pub enum Command {
     },
     /// Live view reativo via socket (sem polling)
     Watch,
+    /// Interactive TUI dashboard
+    #[cfg(feature = "tui")]
+    Tui,
     /// Service health and general status
     Status,
     /// `EventBus` interno em tempo real

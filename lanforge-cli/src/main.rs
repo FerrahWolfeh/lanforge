@@ -1,5 +1,7 @@
 mod args;
 mod cli;
+#[cfg(feature = "tui")]
+mod tui;
 
 use crate::args::{Cli, Command};
 use clap::Parser;
@@ -14,6 +16,11 @@ async fn main() -> Result<()> {
     match cli {
         Cli::Lanforge(args) => {
             if let Some(cmd) = args.command {
+                #[cfg(feature = "tui")]
+                if cmd == Command::Tui {
+                    return crate::tui::run_tui(&args.socket).await;
+                }
+
                 cli::run_client(
                     cmd,
                     &args.socket,

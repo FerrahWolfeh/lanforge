@@ -11,7 +11,9 @@ pub struct StatusHandler;
 
 impl CliCommand for StatusHandler {
     fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(ControlCommand::new(lanforge_api::api::CommandAction::Status))
+        Ok(ControlCommand::new(
+            lanforge_api::api::CommandAction::Status,
+        ))
     }
 
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {

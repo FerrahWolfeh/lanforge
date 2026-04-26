@@ -80,6 +80,8 @@ pub async fn run_client(command: Command, socket_path: &str, opts: ClientOptions
         Command::Whois { target } => Box::new(WhoisHandler { target }),
         Command::Dns { action } => Box::new(DnsCommand { action }),
         Command::Query { target } => Box::new(crate::cli::commands::query::QueryHandler { target }),
+        #[cfg(feature = "tui")]
+        Command::Tui => return Err(eyre!("TUI should be handled in main.rs")),
     };
 
     let mut control_cmd = match handler.prepare() {
@@ -174,7 +176,7 @@ where
     Ok((encoding, compression))
 }
 
-async fn write_request<W>(
+pub(crate) async fn write_request<W>(
     writer: &mut W,
     cmd: &lanforge_api::api::Command,
     encoding: Encoding,
@@ -201,7 +203,7 @@ where
     Ok(())
 }
 
-async fn read_response<R>(
+pub(crate) async fn read_response<R>(
     reader: &mut BufReader<R>,
     encoding: Encoding,
     compression: Compression,
