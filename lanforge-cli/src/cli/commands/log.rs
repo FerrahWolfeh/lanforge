@@ -423,6 +423,17 @@ impl LogHandler {
                     class.as_str().to_string().bright_magenta().bold()
                 )
             }
+            DeviceChange::TopologyChanged { parent_mac, port } => {
+                let parent = parent_mac
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "Local".to_string());
+                let port = port.as_deref().unwrap_or("?");
+                format!(
+                    "topology updated: behind {} on port {}",
+                    parent.bright_cyan(),
+                    port.bright_yellow()
+                )
+            }
         }
     }
 }

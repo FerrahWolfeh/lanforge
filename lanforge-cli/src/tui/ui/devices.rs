@@ -149,8 +149,16 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                 let vendor = crate::cli::vendor::resolve_vendor(&dev.mac.to_string())
                     .unwrap_or_else(|| "Unknown".to_string());
 
+                let topo = if let Some(t) = &dev.topology {
+                    let parent = t.parent_mac.map(|m| m.to_string()).unwrap_or_else(|| "Local".to_string());
+                    let port = t.port.as_deref().unwrap_or("?");
+                    format!("{} @ {} (ifindex {})", parent, port, t.local_ifindex)
+                } else {
+                    "—".to_string()
+                };
+
                 format!(
-                    "MAC:       {}\nVendor:    {}\nHostname:  {} ({:?})\nOrigin:    {:?}\nClass:     {} {:?}\nLast Seen: {}\n\nIPv4:      {}\nIPv6:      {}\nPrefixes:  {}",
+                    "MAC:       {}\nVendor:    {}\nHostname:  {} ({:?})\nOrigin:    {:?}\nClass:     {} {:?}\nLast Seen: {}\n\nIPv4:      {}\nIPv6:      {}\nPrefixes:  {}\nTopology:  {}",
                     dev.mac,
                     vendor,
                     dev.hostname.name,
@@ -164,7 +172,8 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                         .map(|ip| ip.to_string())
                         .unwrap_or_else(|| "—".to_string()),
                     v6_addrs,
-                    prefixes
+                    prefixes,
+                    topo
                 )
             } else {
                 "No device selected.".to_string()

@@ -64,8 +64,8 @@ use tracing::{debug, warn};
 
 use crate::bus::DeviceChange;
 use crate::device::{
-    Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V4Lease,
-    V6Lease, V6PrefixLease,
+    Device, DeviceClass, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
+    TopologyInfo, V4Lease, V6Lease, V6PrefixLease,
 };
 use crate::identifiers::{Duid, MacAddr};
 
@@ -322,6 +322,13 @@ pub enum DeviceUpdate {
         mac: MacAddr,
         class: crate::device::DeviceClass,
     },
+    /// Update a device's topology information (parent device and port).
+    TopologyUpdated {
+        mac: MacAddr,
+        parent_mac: Option<MacAddr>,
+        port: Option<String>,
+        ifindex: u32,
+    },
     /// Completely reset the state (clear all devices and indices).
     Reset,
 }
@@ -571,6 +578,12 @@ impl State {
         self.indexing_enabled = enabled;
     }
 
+    /// Applies a device update to the current state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a device that was just retrieved from the map is missing during removal,
+    /// which should be impossible under normal operation with the context lock held.
     pub fn apply_update(&mut self, update: DeviceUpdate) -> bool {
         match update {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
@@ -631,17 +644,13 @@ impl State {
                 self.rebuild_dns_indices();
                 true
             }
-            DeviceUpdate::ClassHint { mac, class } => {
-                if let Some(dev) = self.devices.get_mut(&mac)
-                    && dev.class != class
-                {
-                    let mut new_dev = (**dev).clone();
-                    new_dev.class = class;
-                    *dev = Arc::new(new_dev);
-                    return true;
-                }
-                false
-            }
+            DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
+            DeviceUpdate::TopologyUpdated {
+                mac,
+                parent_mac,
+                port,
+                ifindex,
+            } => self.handle_topology_updated(mac, parent_mac, port, ifindex),
             DeviceUpdate::Reset => {
                 self.handle_reset();
                 true
@@ -1677,6 +1686,51 @@ impl State {
 
     pub fn devices(&self) -> impl Iterator<Item = Arc<Device>> + '_ {
         self.devices.values().cloned()
+    }
+
+    fn handle_class_hint(&mut self, mac: MacAddr, class: DeviceClass) -> bool {
+        let dev_arc = self.get_or_insert(mac);
+        if dev_arc.class != class {
+            let mut dev_arc = self.devices.remove(&mac).unwrap();
+            {
+                let dev = Arc::make_mut(&mut dev_arc);
+                dev.class = class;
+            }
+            self.devices.insert(mac, dev_arc);
+            return true;
+        }
+        false
+    }
+
+    fn handle_topology_updated(
+        &mut self,
+        mac: MacAddr,
+        parent_mac: Option<MacAddr>,
+        port: Option<String>,
+        ifindex: u32,
+    ) -> bool {
+        let dev_arc = self.get_or_insert(mac);
+
+        let needs_update = dev_arc.topology.as_ref().is_none_or(|t| {
+            t.parent_mac != parent_mac || t.port != port || t.local_ifindex != ifindex
+        });
+
+        if needs_update {
+            let mut dev_arc = self.devices.remove(&mac).unwrap();
+            {
+                let dev = Arc::make_mut(&mut dev_arc);
+                dev.topology = Some(TopologyInfo {
+                    parent_mac,
+                    port,
+                    local_ifindex: ifindex,
+                    last_updated: SystemTime::now(),
+                });
+                dev.last_seen = SystemTime::now();
+            }
+            self.devices.insert(mac, dev_arc);
+            return true;
+        }
+        false
     }
 }
 

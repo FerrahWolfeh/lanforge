@@ -13,6 +13,7 @@
 pub mod dhcp;
 pub mod error;
 pub mod ifmon;
+pub mod lldp;
 pub mod mdns;
 pub mod ndp;
 pub mod ra;

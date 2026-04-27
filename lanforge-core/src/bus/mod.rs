@@ -75,6 +75,11 @@ pub enum DeviceChange {
 
     /// The device has been classified into a high-level category (e.g., Printer).
     Classified { class: crate::device::DeviceClass },
+    /// The device's physical or logical topology has changed.
+    TopologyChanged {
+        parent_mac: Option<MacAddr>,
+        port: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

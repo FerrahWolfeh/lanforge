@@ -316,6 +316,15 @@ impl LeaseDb {
                     device.duid = Some(Duid::new(bytes.clone()));
                 }
 
+                if row.topo_updated > 0 {
+                    device.topology = Some(lanforge_core::device::TopologyInfo {
+                        parent_mac: row.parent_mac.as_ref().and_then(|m| MacAddr::parse(m)),
+                        port: row.parent_port.clone(),
+                        local_ifindex: u32::try_from(row.local_ifindex).unwrap_or(0),
+                        last_updated: unix_to_system_time(row.topo_updated),
+                    });
+                }
+
                 if row.origin == "cli" {
                     table.add_static_entry(
                         mac,

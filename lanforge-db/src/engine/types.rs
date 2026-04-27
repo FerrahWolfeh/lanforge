@@ -70,6 +70,10 @@ pub struct DeviceRow {
     pub managed_at: Option<i64>,
     pub v4_static: Option<String>,
     pub v6_suffix: Option<String>,
+    pub parent_mac: Option<String>,
+    pub parent_port: Option<String>,
+    pub local_ifindex: i64,
+    pub topo_updated: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -16,6 +16,7 @@ use lanforge_dns::server::DnsService;
 use lanforge_network::dhcp::v4::Dhcpv4Service;
 use lanforge_network::dhcp::v6::Dhcpv6Service;
 use lanforge_network::ifmon::InterfaceMonitor;
+use lanforge_network::lldp::LldpMonitor;
 use lanforge_network::mdns::MdnsProber;
 use lanforge_network::ndp::NeighborMonitor;
 use lanforge_network::ra::RaService;
@@ -81,6 +82,12 @@ impl Daemon {
         let m = messages.clone();
         self.registry.spawn_async(&self.ctx, move || {
             NeighborMonitor::new(h.clone(), m.subscribe(), target_ifindex, ctx.clone())
+        });
+
+        let ctx = self.ctx.clone();
+        let ifname = cfg.iface_lan.clone();
+        self.registry.spawn_async(&self.ctx, move || {
+            LldpMonitor::new(ifname.clone(), target_ifindex, ctx.clone())
         });
 
         // 3. IPv6 Protocol Services (RA, SLAAC)

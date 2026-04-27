@@ -50,11 +50,15 @@ async fn upsert_base_device(
                 None
             }
         }),
+        parent_mac: device.topology.as_ref().and_then(|t| t.parent_mac.map(|m| m.to_string())),
+        parent_port: device.topology.as_ref().and_then(|t| t.port.clone()),
+        local_ifindex: device.topology.as_ref().map_or(0, |t| i64::from(t.local_ifindex)),
+        topo_updated: device.topology.as_ref().map_or(0, |t| system_time_to_unix(t.last_updated)),
     };
 
     sqlx::query(
-        "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(mac) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             hostname_origin = EXCLUDED.hostname_origin,
@@ -64,7 +68,11 @@ async fn upsert_base_device(
             origin = EXCLUDED.origin,
             managed_at = EXCLUDED.managed_at,
             v4_static = EXCLUDED.v4_static,
-            v6_suffix = EXCLUDED.v6_suffix"
+            v6_suffix = EXCLUDED.v6_suffix,
+            parent_mac = EXCLUDED.parent_mac,
+            parent_port = EXCLUDED.parent_port,
+            local_ifindex = EXCLUDED.local_ifindex,
+            topo_updated = EXCLUDED.topo_updated"
     )
     .bind(&row.mac)
     .bind(&row.hostname)
@@ -76,6 +84,10 @@ async fn upsert_base_device(
     .bind(row.managed_at)
     .bind(&row.v4_static)
     .bind(&row.v6_suffix)
+    .bind(&row.parent_mac)
+    .bind(&row.parent_port)
+    .bind(row.local_ifindex)
+    .bind(row.topo_updated)
     .execute(&mut **tx).await?;
 
     Ok(())
@@ -208,7 +220,7 @@ async fn persist_seen_v4(
 
 pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>, LeaseDbError> {
     sqlx::query_as::<_, DeviceRow>(
-        "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix FROM devices"
+        "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated FROM devices"
     )
     .fetch_all(pool)
     .await
@@ -303,8 +315,8 @@ pub async fn vacuum(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
 pub async fn prune_zombies(pool: &sqlx::SqlitePool) -> Result<usize, sqlx::Error> {
     let result = sqlx::query(
         "DELETE FROM devices
-         WHERE origin = 'dynamic'
-           AND hostname = ''
+         WHERE origin = \"dynamic\"
+           AND hostname = \"\"
            AND mac NOT IN (SELECT mac FROM v4_leases)
            AND mac NOT IN (SELECT mac FROM v6_leases)
            AND mac NOT IN (SELECT mac FROM v6_prefixes)

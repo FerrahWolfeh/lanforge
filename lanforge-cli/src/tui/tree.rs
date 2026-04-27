@@ -87,6 +87,16 @@ pub fn build_tree(
             ),
         ];
 
+        // Topology
+        if let Some(t) = &dev.topology {
+            let parent = t.parent_mac.map(|m| m.to_string()).unwrap_or_else(|| "Local".to_string());
+            let port = t.port.as_deref().unwrap_or("?");
+            dev_fields.push(TreeItem::new_leaf(
+                format!("dev.{}.topology", mac),
+                key_val("topology", format!("{} @ {}", parent, port)),
+            ));
+        }
+
         // IPv4
         dev_fields.push(TreeItem::new_leaf(
             format!("dev.{}.v4", mac),

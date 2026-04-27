@@ -66,6 +66,8 @@ use std::time::SystemTime;
 
 pub mod read;
 pub mod state;
+#[cfg(test)]
+pub mod tests;
 pub mod utils;
 pub mod write;
 

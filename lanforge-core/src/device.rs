@@ -880,6 +880,29 @@ pub struct Device {
     pub dns_fallback: String,
     /// Discovered classification of the device (e.g., Printer, Media).
     pub class: DeviceClass,
+    /// Physical or logical network topology information.
+    ///
+    /// Tracks which infrastructure device or local interface this device
+    /// is connected to, learned via LLDP or bridge observation.
+    pub topology: Option<TopologyInfo>,
+}
+
+/// Represents a device's position in the network hierarchy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TopologyInfo {
+    /// The MAC address of the parent device (e.g., a switch or AP).
+    /// If `None`, the device is directly connected to a local interface.
+    pub parent_mac: Option<MacAddr>,
+    /// The name or index of the port on the parent device.
+    pub port: Option<String>,
+    /// The local interface index where the device was observed.
+    pub local_ifindex: u32,
+    /// The last time this topology information was refreshed.
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
+    pub last_updated: SystemTime,
 }
 
 impl Device {
@@ -898,6 +921,7 @@ impl Device {
             duid: None,
             dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
             class: DeviceClass::None,
+            topology: None,
         }
     }
 
@@ -1480,6 +1504,7 @@ mod tests {
             seen_v4: Vec::new(),
             last_seen: SystemTime::now(),
             dns_fallback: "host-010203040506".to_string(),
+            topology: None,
         };
 
         let sorted = dev.all_addresses_sorted(None, None);
