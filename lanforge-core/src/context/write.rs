@@ -287,19 +287,31 @@ impl LanforgeContext {
     /// Tracks a neighbor seen via NDP (IPv6).
     #[must_use]
     pub fn track_ndp_neighbor(&self, mac: MacAddr, ip: Ipv6Addr) -> bool {
-        self.apply(&DeviceUpdate::NdpSeen { mac, ip })
+        self.apply(&DeviceUpdate::NdpSeen {
+            mac,
+            ip,
+            is_active: true,
+        })
     }
 
     /// Tracks a neighbor seen via ARP (IPv4).
     #[must_use]
     pub fn track_arp_neighbor(&self, mac: MacAddr, ip: Ipv4Addr) -> bool {
-        self.apply(&DeviceUpdate::ArpSeen { mac, ip })
+        self.apply(&DeviceUpdate::ArpSeen {
+            mac,
+            ip,
+            is_active: true,
+        })
     }
 
     /// Observes a single SLAAC address for a device.
     #[must_use]
     pub fn observe_slaac(&self, mac: MacAddr, ip: Ipv6Addr) -> bool {
-        self.apply(&DeviceUpdate::SlaacObserved { mac, addr: ip })
+        self.apply(&DeviceUpdate::SlaacObserved {
+            mac,
+            addr: ip,
+            is_active: true,
+        })
     }
 
     /// Signals a change in interface IP configuration.

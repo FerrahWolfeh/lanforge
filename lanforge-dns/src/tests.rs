@@ -112,6 +112,7 @@ fn test_resolve_local_v6_suffix_merging() {
     let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
         addr: "2001:db8::1".parse().unwrap(),
+        is_active: true,
     });
 
     // Directly setup static device via apply to ensure consistency
@@ -172,10 +173,12 @@ fn test_resolve_local_priority_ordering() {
     let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
         addr: "2001:db8::1".parse().unwrap(),
+        is_active: true,
     });
     let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
         addr: "fd00::1".parse().unwrap(),
+        is_active: true,
     });
 
     let mut query = Message::new();
@@ -375,10 +378,12 @@ fn test_dns_response_contract() {
     let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
         addr: slaac_ula,
+        is_active: true,
     });
     let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
         mac,
         addr: slaac_gua,
+        is_active: true,
     });
 
     // 3. DHCPv6 Dynamic Lease

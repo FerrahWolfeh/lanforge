@@ -65,7 +65,7 @@ impl<'a> LocalResolver<'a> {
             return rb.success(records);
         }
         // Host promoted but has no records for the requested type
-        rb.empty_noerror()
+        rb.nxdomain()
     }
 
     /// Resolves a reverse DNS (PTR) query for an IP address.

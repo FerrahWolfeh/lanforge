@@ -91,8 +91,27 @@ fn extract_neigh_info_returns_typed_event() {
 
     assert_eq!(*event.ip(), ip);
     assert_eq!(event.mac(), Some(MacAddr(mac_bytes)));
-    if let NeighborEvent::Added { ifindex, .. } = event {
+    if let NeighborEvent::Added {
+        ifindex, is_active, ..
+    } = event
+    {
         assert_eq!(ifindex, 2);
+        assert!(is_active, "Reachable should be active");
+    } else {
+        panic!("expected NeighborEvent::Added");
+    }
+}
+
+#[test]
+fn extract_neigh_info_handles_stale_as_inactive() {
+    let ip: IpAddr = "fe80::1".parse().unwrap();
+    let mac_bytes = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+
+    let msg = mock_neigh_msg(NeighbourState::Stale, ip, Some(mac_bytes), false);
+    let event = extract_neigh_info(&msg).expect("should extract event");
+
+    if let NeighborEvent::Added { is_active, .. } = event {
+        assert!(!is_active, "Stale should be inactive");
     } else {
         panic!("expected NeighborEvent::Added");
     }
@@ -138,6 +157,7 @@ fn to_device_update_gua_becomes_slaac_observed() {
         ip: slaac_ip.into(),
         mac,
         ifindex: 2,
+        is_active: true,
     };
     let update = event.to_device_update(Some(&gua_prefix), None);
 
@@ -157,6 +177,7 @@ fn to_device_update_link_local_becomes_ndp_seen() {
         ip: link_local.into(),
         mac,
         ifindex: 2,
+        is_active: true,
     };
     let update = event.to_device_update(Some(&gua_prefix), None);
 
@@ -175,6 +196,7 @@ fn to_device_update_no_prefix_always_ndp_seen() {
         ip: ip.into(),
         mac,
         ifindex: 2,
+        is_active: true,
     };
     // No prefix configured — never assume SLAAC
     let update = event.to_device_update(None, None);
@@ -247,7 +269,11 @@ fn parse_neighbor_msg_only_active() {
         NeighbourAttribute::LinkLocalAddress(mac.to_vec()),
     ];
     let event = parse_neighbor_msg(msg).expect("deve parsear");
-    assert!(matches!(event, NeighborEvent::Added { .. }));
+    if let NeighborEvent::Added { is_active, .. } = event {
+        assert!(is_active);
+    } else {
+        panic!("esperado Added");
+    }
 
     // 2. Mensagem inválida (Failed)
     let mut msg_fail = NeighbourMessage::default();

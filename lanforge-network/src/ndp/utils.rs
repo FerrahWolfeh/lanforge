@@ -76,10 +76,8 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
 /// Filters out incomplete, failed, zero-MAC, and multicast-MAC entries.
 #[must_use]
 pub fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
-    if matches!(
-        msg.header.state,
-        NeighbourState::Incomplete | NeighbourState::Failed
-    ) {
+    let state = msg.header.state;
+    if matches!(state, NeighbourState::Incomplete | NeighbourState::Failed) {
         return None;
     }
 
@@ -111,7 +109,17 @@ pub fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
         return None;
     }
 
-    Some(NeighborEvent::Added { ip, mac, ifindex })
+    let is_active = matches!(
+        state,
+        NeighbourState::Reachable | NeighbourState::Permanent | NeighbourState::Noarp
+    );
+
+    Some(NeighborEvent::Added {
+        ip,
+        mac,
+        ifindex,
+        is_active,
+    })
 }
 
 /// Extracts a `NeighborEvent` from a raw netlink broadcast message.
@@ -143,8 +151,9 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
     }
 
     let ip = ip_addr?;
+    let state = neigh.header.state;
 
-    if !is_delete && matches!(neigh.header.state, NeighbourState::Incomplete) {
+    if !is_delete && matches!(state, NeighbourState::Incomplete) {
         return None;
     }
 
@@ -153,7 +162,7 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
             ip,
             ifindex: neigh.header.ifindex,
         })
-    } else if neigh.header.state == NeighbourState::Failed {
+    } else if state == NeighbourState::Failed {
         Some(NeighborEvent::Failed {
             ip,
             ifindex: neigh.header.ifindex,
@@ -164,10 +173,16 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
             return None;
         }
 
+        let is_active = matches!(
+            state,
+            NeighbourState::Reachable | NeighbourState::Permanent | NeighbourState::Noarp
+        );
+
         Some(NeighborEvent::Added {
             ip,
             mac,
             ifindex: neigh.header.ifindex,
+            is_active,
         })
     }
 }

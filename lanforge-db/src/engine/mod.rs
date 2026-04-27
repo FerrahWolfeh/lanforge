@@ -403,7 +403,11 @@ impl LeaseDb {
             if let Some(mac) = MacAddr::parse(&mac_s)
                 && let Ok(ip) = ip_s.parse::<Ipv6Addr>()
             {
-                table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
+                table.apply_update(DeviceUpdate::SlaacObserved {
+                    mac,
+                    addr: ip,
+                    is_active: false,
+                });
             }
         }
     }
@@ -413,7 +417,11 @@ impl LeaseDb {
             if let Some(mac) = MacAddr::parse(&mac_s)
                 && let Ok(ip) = ip_s.parse::<Ipv4Addr>()
             {
-                table.apply_update(DeviceUpdate::ArpSeen { mac, ip });
+                table.apply_update(DeviceUpdate::ArpSeen {
+                    mac,
+                    ip,
+                    is_active: false,
+                });
             }
         }
     }

@@ -267,11 +267,23 @@ pub enum DeviceUpdate {
         expires: SystemTime,
     },
     /// Record a single SLAAC address observation.
-    SlaacObserved { mac: MacAddr, addr: Ipv6Addr },
+    SlaacObserved {
+        mac: MacAddr,
+        addr: Ipv6Addr,
+        is_active: bool,
+    },
     /// Record an IPv6 neighbor observation via NDP.
-    NdpSeen { mac: MacAddr, ip: Ipv6Addr },
+    NdpSeen {
+        mac: MacAddr,
+        ip: Ipv6Addr,
+        is_active: bool,
+    },
     /// Record an IPv4 neighbor observation via ARP.
-    ArpSeen { mac: MacAddr, ip: Ipv4Addr },
+    ArpSeen {
+        mac: MacAddr,
+        ip: Ipv4Addr,
+        is_active: bool,
+    },
     /// Update a device's hostname based on a DHCP hint.
     DhcpHostnameHint { mac: MacAddr, hostname: String },
     /// Update a device's hostname based on an mDNS hint.
@@ -579,9 +591,17 @@ impl State {
                 len,
                 expires,
             } => self.handle_v6_prefix_assigned(mac, duid, iaid, prefix, len, expires),
-            DeviceUpdate::SlaacObserved { mac, addr } => self.handle_slaac_observed(mac, addr),
-            DeviceUpdate::NdpSeen { mac, ip } => self.handle_ndp_seen(mac, ip),
-            DeviceUpdate::ArpSeen { mac, ip } => self.handle_arp_seen(mac, ip),
+            DeviceUpdate::SlaacObserved {
+                mac,
+                addr,
+                is_active,
+            } => self.handle_slaac_observed(mac, addr, is_active),
+            DeviceUpdate::NdpSeen { mac, ip, is_active } => {
+                self.handle_ndp_seen(mac, ip, is_active)
+            }
+            DeviceUpdate::ArpSeen { mac, ip, is_active } => {
+                self.handle_arp_seen(mac, ip, is_active)
+            }
             DeviceUpdate::DhcpHostnameHint { mac, hostname } => {
                 self.handle_hostname_hint(mac, hostname, HostnameOrigin::Dhcp)
             }
@@ -786,19 +806,24 @@ impl State {
         true
     }
 
-    fn handle_slaac_observed(&mut self, mac: MacAddr, addr: Ipv6Addr) -> bool {
+    fn handle_slaac_observed(&mut self, mac: MacAddr, addr: Ipv6Addr, is_active: bool) -> bool {
         let now = SystemTime::now();
+
         if let Some(&indexed_mac) = self.ip_index.get(&IpAddr::V6(addr))
             && indexed_mac == mac
         {
             if let Some(dev_arc) = self.devices.get_mut(&mac) {
                 let dev = Arc::make_mut(dev_arc);
-                dev.last_seen = now;
+                if is_active {
+                    dev.last_seen = now;
+                }
                 for state in &mut dev.v6 {
                     if let IPv6State::Slaac { ip, last_seen } = state
                         && *ip == addr
                     {
-                        *last_seen = now;
+                        if is_active {
+                            *last_seen = now;
+                        }
                         break;
                     }
                 }
@@ -822,12 +847,16 @@ impl State {
         if already_has {
             let dev_arc_mut = self.devices.get_mut(&mac).unwrap();
             let dev = Arc::make_mut(dev_arc_mut);
-            dev.last_seen = now;
+            if is_active {
+                dev.last_seen = now;
+            }
             for state in &mut dev.v6 {
                 if let IPv6State::Slaac { ip, last_seen } = state
                     && *ip == addr
                 {
-                    *last_seen = now;
+                    if is_active {
+                        *last_seen = now;
+                    }
                     break;
                 }
             }
@@ -836,14 +865,25 @@ impl State {
 
         let mut dev_arc = self.devices.remove(&mac).unwrap();
         self.unindex_device(&dev_arc);
+
+        let last_seen_for_new = if is_active {
+            now
+        } else {
+            // Passive bootstrap/scan: Mark as known but already offline
+            now.checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 60))
+                .unwrap_or(std::time::UNIX_EPOCH)
+        };
+
         {
             let dev = Arc::make_mut(&mut dev_arc);
-            dev.last_seen = now;
+            if !exists || is_active {
+                dev.last_seen = last_seen_for_new;
+            }
             dev.v6.push(IPv6State::Slaac {
                 ip: addr,
-                last_seen: now,
+                last_seen: last_seen_for_new,
             });
-            debug!("[state] SLAAC {} → {}", mac, addr);
+            debug!("[state] SLAAC {} → {} (active={})", mac, addr, is_active);
         }
 
         if !dev_arc.is_worthy() && !exists {
@@ -854,7 +894,7 @@ impl State {
         true
     }
 
-    fn handle_ndp_seen(&mut self, mac: MacAddr, ip: Ipv6Addr) -> bool {
+    fn handle_ndp_seen(&mut self, mac: MacAddr, ip: Ipv6Addr, is_active: bool) -> bool {
         self.ndp_cache.insert(ip, (mac, SystemTime::now()));
         if let Some((duid, iaid, expires)) = self.orphaned_v6.remove(&ip) {
             self.handle_v6_lease_granted(Some(mac), duid, iaid, ip, expires);
@@ -870,19 +910,28 @@ impl State {
             return false;
         }
 
+        let mut dev_arc = self.devices.remove(&mac).unwrap();
+        let dev = Arc::make_mut(&mut dev_arc);
+
+        if !exists && !is_active {
+            // New device from passive scan: initialize as offline
+            dev.last_seen = SystemTime::now()
+                .checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 60))
+                .unwrap_or(std::time::UNIX_EPOCH);
+        } else if is_active {
+            dev.last_seen = SystemTime::now();
+        }
+
+        self.devices.insert(mac, dev_arc);
+
         let elapsed = SystemTime::now()
             .duration_since(old_seen)
             .unwrap_or_default();
 
-        let mut dev_arc = self.devices.remove(&mac).unwrap();
-        let dev = Arc::make_mut(&mut dev_arc);
-        dev.last_seen = SystemTime::now();
-        self.devices.insert(mac, dev_arc);
-
-        !exists || elapsed.as_secs() > 300
+        !exists || (is_active && elapsed.as_secs() > 300)
     }
 
-    fn handle_arp_seen(&mut self, mac: MacAddr, ip: Ipv4Addr) -> bool {
+    fn handle_arp_seen(&mut self, mac: MacAddr, ip: Ipv4Addr, is_active: bool) -> bool {
         let now = SystemTime::now();
         let exists = self.devices.contains_key(&mac);
         let dev_arc = self.get_or_insert(mac);
@@ -891,19 +940,28 @@ impl State {
         let existing_pos = dev_arc.seen_v4.iter().position(|(i, _)| *i == ip);
 
         let mut dev_arc = self.devices.remove(&mac).unwrap();
-        if let Some(pos) = existing_pos {
-            // Already known IP, just update timestamp in place.
-            // No need to unindex/reindex because the IP itself hasn't changed.
-            let dev = Arc::make_mut(&mut dev_arc);
-            dev.seen_v4[pos].1 = now;
-            dev.last_seen = now;
+
+        let last_seen_for_new = if is_active {
+            now
         } else {
-            // New IP, need to reindex for DNS visibility.
+            now.checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 60))
+                .unwrap_or(std::time::UNIX_EPOCH)
+        };
+
+        if let Some(pos) = existing_pos {
+            let dev = Arc::make_mut(&mut dev_arc);
+            if is_active {
+                dev.seen_v4[pos].1 = now;
+                dev.last_seen = now;
+            }
+        } else {
             self.unindex_device(&dev_arc);
             {
                 let dev = Arc::make_mut(&mut dev_arc);
-                dev.seen_v4.push((ip, now));
-                dev.last_seen = now;
+                dev.seen_v4.push((ip, last_seen_for_new));
+                if !exists || is_active {
+                    dev.last_seen = last_seen_for_new;
+                }
             }
             self.index_device(mac, &dev_arc);
         }
@@ -918,7 +976,7 @@ impl State {
         }
 
         let elapsed = now.duration_since(old_seen).unwrap_or_default();
-        existing_pos.is_none() || !exists || elapsed.as_secs() > 300
+        existing_pos.is_none() || !exists || (is_active && elapsed.as_secs() > 300)
     }
 
     fn handle_hostname_hint(

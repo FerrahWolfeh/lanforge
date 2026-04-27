@@ -103,12 +103,21 @@ fn apply_update_slaac_deduplicates() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let addr: Ipv6Addr = "fd97::1234".parse().unwrap();
 
-    assert!(table.apply_update(DeviceUpdate::SlaacObserved { mac, addr }));
-    // Duplicata — não deve marcar dirty
-    assert!(!table.apply_update(DeviceUpdate::SlaacObserved { mac, addr }));
     assert!(table.apply_update(DeviceUpdate::SlaacObserved {
         mac,
-        addr: "fd97::5678".parse().unwrap()
+        addr,
+        is_active: true
+    }));
+    // Duplicata — não deve marcar dirty
+    assert!(!table.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr,
+        is_active: true
+    }));
+    assert!(table.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: "fd97::5678".parse().unwrap(),
+        is_active: true,
     }));
 
     assert_eq!(table.devices().next().unwrap().v6.len(), 2);
@@ -132,7 +141,11 @@ fn apply_update_slaac_excludes_managed_addr() {
 
     // 2. Observe the same IP via SLAAC
     // A tabela reconstrói índices de DNS automaticamente no final de apply_update (changed=true)
-    let _ = table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
+    let _ = table.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: ip,
+        is_active: true,
+    });
 
     let dev = table.get_device(&mac).unwrap();
     assert_eq!(
@@ -229,7 +242,11 @@ fn apply_update_ndp_seen_not_dirty() {
     let ip: Ipv6Addr = "fe80::1".parse().unwrap();
 
     // NdpSeen nunca marca dirty (só bump de last_seen e cache)
-    assert!(!table.apply_update(DeviceUpdate::NdpSeen { mac, ip }));
+    assert!(!table.apply_update(DeviceUpdate::NdpSeen {
+        mac,
+        ip,
+        is_active: true
+    }));
     assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
 }
 
@@ -288,7 +305,11 @@ fn test_orphaned_v6_promotion() {
     assert!(!table.orphaned_v6.is_empty());
 
     // 2. NDP visto para o mesmo IP -> Promove
-    let changed = table.apply_update(DeviceUpdate::NdpSeen { mac, ip });
+    let changed = table.apply_update(DeviceUpdate::NdpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
     assert!(changed);
 
     // Agora deve existir o device com o DUID e IP corretos
@@ -307,6 +328,7 @@ fn test_cli_host_updated_sync() {
     table.apply_update(DeviceUpdate::NdpSeen {
         mac,
         ip: "fe80::1".parse().unwrap(),
+        is_active: true,
     });
 
     // 2. Update via CLI (Hostname + Static V4)
@@ -362,8 +384,16 @@ fn test_ip_deleted_cleanup() {
     let ip: Ipv6Addr = "fd00::1".parse().unwrap();
 
     // 1. Setup: Add IP to NDP cache and SLAAC list
-    table.apply_update(DeviceUpdate::NdpSeen { mac, ip });
-    table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ip });
+    table.apply_update(DeviceUpdate::NdpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    table.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: ip,
+        is_active: true,
+    });
 
     let dev = table.get_device(&mac).unwrap();
     assert!(
@@ -573,15 +603,27 @@ fn test_filtering_ndp_seen_worthy() {
     let ula_ip: Ipv6Addr = "fd00::1".parse().unwrap();
 
     // 1. NDP Seen com Link-Local em novo MAC -> Não registra
-    assert!(!table.apply_update(DeviceUpdate::NdpSeen { mac, ip: ll_ip }));
+    assert!(!table.apply_update(DeviceUpdate::NdpSeen {
+        mac,
+        ip: ll_ip,
+        is_active: true
+    }));
     assert!(table.get_device(&mac).is_none());
 
     // 2. SLAAC Observed com ULA -> Registra
-    assert!(table.apply_update(DeviceUpdate::SlaacObserved { mac, addr: ula_ip }));
+    assert!(table.apply_update(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: ula_ip,
+        is_active: true
+    }));
     assert!(table.get_device(&mac).is_some());
 
     // 3. Agora que existe, NDP Seen com Link-Local não deve marcar dirty imediatamente (throttle de 300s)
-    assert!(!table.apply_update(DeviceUpdate::NdpSeen { mac, ip: ll_ip }));
+    assert!(!table.apply_update(DeviceUpdate::NdpSeen {
+        mac,
+        ip: ll_ip,
+        is_active: true
+    }));
 }
 
 #[test]
@@ -707,6 +749,7 @@ fn test_handle_ip_offline_slaac_removal() {
             IpAddr::V6(a) => a,
             IpAddr::V4(_) => unreachable!(),
         },
+        is_active: true,
     });
     state.apply_update(DeviceUpdate::SlaacObserved {
         mac,
@@ -714,6 +757,7 @@ fn test_handle_ip_offline_slaac_removal() {
             IpAddr::V6(a) => a,
             IpAddr::V4(_) => unreachable!(),
         },
+        is_active: true,
     });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 2);
@@ -761,6 +805,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
             IpAddr::V6(a) => a,
             IpAddr::V4(_) => unreachable!(),
         },
+        is_active: true,
     });
 
     state.ip_index.insert(static_ip, mac);
@@ -804,6 +849,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
             IpAddr::V6(a) => a,
             IpAddr::V4(_) => unreachable!(),
         },
+        is_active: true,
     });
 
     let dev = state.get_device(&mac).unwrap();
@@ -822,6 +868,7 @@ fn test_nud_failed_forces_offline() {
             IpAddr::V4(a) => a,
             IpAddr::V6(_) => unreachable!(),
         },
+        is_active: true,
     });
     let dev = state.get_device(&mac).unwrap();
     assert!(dev.is_online());
@@ -841,6 +888,7 @@ fn test_expire_stale_status_transition() {
     state.apply_update(DeviceUpdate::ArpSeen {
         mac,
         ip: "1.1.1.1".parse().unwrap(),
+        is_active: true,
     });
     assert!(state.get_device(&mac).unwrap().is_online());
 
@@ -878,8 +926,16 @@ fn test_handle_arp_seen_deduplicates() {
     let mac = MacAddr([0, 0, 0, 0, 0, 1]);
     let ip = Ipv4Addr::new(192, 168, 1, 10);
 
-    state.apply_update(DeviceUpdate::ArpSeen { mac, ip });
-    state.apply_update(DeviceUpdate::ArpSeen { mac, ip });
+    state.apply_update(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    state.apply_update(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
 
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(

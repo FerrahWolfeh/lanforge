@@ -48,6 +48,8 @@ pub enum NeighborEvent {
         ip: IpAddr,
         mac: MacAddr,
         ifindex: u32,
+        /// True if the neighbor is in a "trustworthy" active state (Reachable, Permanent).
+        is_active: bool,
     },
     /// A neighbor entry was deleted from the kernel table.
     Deleted { ip: IpAddr, ifindex: u32 },
@@ -113,7 +115,9 @@ impl NeighborEvent {
         ula_prefix: Option<&Ipv6Addr>,
     ) -> Option<DeviceUpdate> {
         match self {
-            Self::Added { ip, mac, .. } => match ip {
+            Self::Added {
+                ip, mac, is_active, ..
+            } => match ip {
                 IpAddr::V6(ip6) => {
                     let matches_gua =
                         gua_prefix.is_some_and(|prefix| ip_matches_prefix(ip6, prefix));
@@ -124,17 +128,20 @@ impl NeighborEvent {
                         Some(DeviceUpdate::SlaacObserved {
                             mac: *mac,
                             addr: *ip6,
+                            is_active: *is_active,
                         })
                     } else {
                         Some(DeviceUpdate::NdpSeen {
                             mac: *mac,
                             ip: *ip6,
+                            is_active: *is_active,
                         })
                     }
                 }
                 IpAddr::V4(ip4) => Some(DeviceUpdate::ArpSeen {
                     mac: *mac,
                     ip: *ip4,
+                    is_active: *is_active,
                 }),
             },
             Self::Deleted { ip, .. } | Self::Failed { ip, .. } => {
@@ -162,11 +169,13 @@ mod tests {
             ip: slaac_ip.into(),
             mac,
             ifindex: 1,
+            is_active: true,
         };
         let event_dhcp = NeighborEvent::Added {
             ip: dhcp_ip.into(),
             mac,
             ifindex: 1,
+            is_active: true,
         };
 
         let update_slaac = event_slaac.to_device_update(None, Some(&prefix));

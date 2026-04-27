@@ -96,7 +96,11 @@ async fn ndp_seen_publishes_nothing() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: std::net::Ipv6Addr = "fe80::1".parse().unwrap();
 
-    let _ = ctx.apply(&DeviceUpdate::NdpSeen { mac, ip });
+    let _ = ctx.apply(&DeviceUpdate::NdpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
 
     let count = {
         let mut n = 0;
