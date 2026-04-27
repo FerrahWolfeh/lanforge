@@ -313,3 +313,19 @@ pub async fn prune_zombies(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
     .await?;
     Ok(usize::try_from(result.rows_affected()).unwrap_or(0))
 }
+
+pub async fn find_mac_by_hostname(
+    pool: &sqlx::PgPool,
+    hostname: &str,
+    since_unix: i64,
+) -> Result<Option<lanforge_core::identifiers::MacAddr>, crate::LeaseDbError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT mac FROM devices WHERE (hostname = $1 OR LOWER(hostname) = LOWER($1)) AND last_seen >= $2 LIMIT 1",
+    )
+    .bind(hostname)
+    .bind(since_unix)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.and_then(|(mac,)| lanforge_core::identifiers::MacAddr::parse(&mac)))
+}

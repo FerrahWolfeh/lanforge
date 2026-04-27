@@ -55,7 +55,17 @@ impl<'a> LocalResolver<'a> {
             return rb.empty_noerror();
         }
 
-        rb.nxdomain()
+        // Phase 2: JIT Shadow Lookup (Trace Back)
+        let threshold =
+            std::time::Duration::from_secs(u64::from(self.cfg.last_seen_threshold_days) * 86400);
+        if let Some(mac) = self.ctx.find_mac_by_hostname_jit(hostname, Some(threshold))
+            && let Some(device) = self.ctx.get_device(&mac)
+            && let Some(records) = self.resolve_local(query, &device, qtype)
+        {
+            return rb.success(records);
+        }
+        // Host promoted but has no records for the requested type
+        rb.empty_noerror()
     }
 
     /// Resolves a reverse DNS (PTR) query for an IP address.

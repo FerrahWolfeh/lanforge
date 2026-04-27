@@ -459,6 +459,7 @@ impl Config {
             adblock_enabled: self.dns_toml.adblock_enabled,
             #[cfg(feature = "adblock")]
             adblock_urls: self.dns_toml.adblock_urls.clone(),
+            last_seen_threshold_days: self.dns_toml.last_seen_threshold_days,
         }
     }
 

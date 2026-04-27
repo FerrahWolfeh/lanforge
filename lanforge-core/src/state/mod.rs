@@ -25,4 +25,6 @@ pub use crate::context::state::{
 };
 
 #[cfg(test)]
+pub mod jit_tests;
+#[cfg(test)]
 pub mod tests;

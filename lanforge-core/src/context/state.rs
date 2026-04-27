@@ -495,7 +495,7 @@ where
 /// assert_eq!(state.devices.len(), 0);
 /// assert_eq!(state.devices.len(), state.stats().total_devices);
 /// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
     /// Main device table: MAC → Device.
     pub devices: HashMap<MacAddr, Arc<Device>>,
@@ -528,12 +528,35 @@ pub struct State {
     /// DNS hot-path: IP address → MAC.
     #[serde(skip_serializing, default)]
     pub ip_index: HashMap<IpAddr, MacAddr>,
+    #[serde(skip)]
+    pub(crate) indexing_enabled: bool,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            devices: HashMap::new(),
+            duid_index: HashMap::new(),
+            static_entries: HashMap::new(),
+            ndp_cache: HashMap::new(),
+            orphaned_v6: HashMap::new(),
+            interface_ips: HashMap::new(),
+            name_index: HashMap::new(),
+            ip_index: HashMap::new(),
+            indexing_enabled: true,
+        }
+    }
 }
 
 impl State {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enables or disables automatic indexing of discovered devices.
+    pub const fn set_indexing_enabled(&mut self, enabled: bool) {
+        self.indexing_enabled = enabled;
     }
 
     pub fn apply_update(&mut self, update: DeviceUpdate) -> bool {
@@ -1272,6 +1295,9 @@ impl State {
     }
 
     fn index_device(&mut self, mac: MacAddr, dev: &Device) {
+        if !self.indexing_enabled && !dev.origin.is_static() {
+            return;
+        }
         if !dev.hostname.name.is_empty() {
             self.name_index
                 .insert(dev.hostname.name.to_ascii_lowercase(), mac);
@@ -1540,11 +1566,55 @@ impl State {
         self.orphaned_v6.iter()
     }
 
+    /// Performs a Just-In-Time lookup for a hostname by searching the entire device table.
+    /// This is used when the hot-path `name_index` misses. If found, the device
+    /// is promoted to the hot-path index for future queries.
+    pub fn find_mac_by_hostname_jit(
+        &mut self,
+        hostname: &str,
+        last_seen_threshold: Option<Duration>,
+    ) -> Option<MacAddr> {
+        let hostname_lower = hostname.to_ascii_lowercase();
+        let now = SystemTime::now();
+
+        let mut found_mac = None;
+        for (mac, dev) in &self.devices {
+            // Check last_seen heuristic if threshold is provided
+            if let (Some(threshold), Ok(elapsed)) =
+                (last_seen_threshold, now.duration_since(dev.last_seen))
+                && elapsed > threshold
+            {
+                continue;
+            }
+
+            if dev.hostname.name.to_ascii_lowercase() == hostname_lower
+                || dev.dns_fallback == hostname_lower
+            {
+                found_mac = Some(*mac);
+                break;
+            }
+        }
+
+        if let Some(mac) = found_mac {
+            let dev = self.devices.get(&mac).unwrap().clone();
+            // Force promotion even if indexing_enabled is false (discovery-driven)
+            let prev_enabled = self.indexing_enabled;
+            self.indexing_enabled = true;
+            self.index_device(mac, &dev);
+            self.indexing_enabled = prev_enabled;
+            return Some(mac);
+        }
+
+        None
+    }
+
     pub fn insert_device(&mut self, mac: MacAddr, device: Device) {
         if let Some(duid) = &device.duid {
             self.duid_index.insert(duid.clone(), mac);
         }
-        self.devices.insert(mac, Arc::new(device));
+        let dev_arc = Arc::new(device);
+        self.devices.insert(mac, dev_arc.clone());
+        self.index_device(mac, &dev_arc);
     }
 
     pub fn add_static_entry(&mut self, mac: MacAddr, entry: StaticEntry) {

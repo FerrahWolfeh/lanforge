@@ -138,7 +138,11 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
         for class in sorted_classes {
             let count = counts[class];
             lines.push(Line::from(vec![
-                Span::raw(format!("  {} {:<10} ", utils::get_class_icon(*class), format!("{:?}", class))),
+                Span::raw(format!(
+                    "  {} {:<10} ",
+                    utils::get_class_icon(*class),
+                    format!("{:?}", class)
+                )),
                 Span::styled(count.to_string(), Style::default().fg(theme::VALUE)),
             ]));
         }

@@ -23,6 +23,18 @@ use crate::{
 use parking_lot::RwLockWriteGuard;
 
 impl LanforgeContext {
+    /// Attempts a Just-In-Time lookup for a hostname.
+    /// If found, the device is promoted to the hot-path index.
+    #[must_use]
+    pub fn find_mac_by_hostname_jit(
+        &self,
+        hostname: &str,
+        last_seen_threshold: Option<std::time::Duration>,
+    ) -> Option<MacAddr> {
+        self.write()
+            .find_mac_by_hostname_jit(hostname, last_seen_threshold)
+    }
+
     /// Provides direct write access to the underlying device state.
     pub fn write(&self) -> RwLockWriteGuard<'_, State> {
         self.inner.state.write()

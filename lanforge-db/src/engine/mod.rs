@@ -214,8 +214,23 @@ impl LeaseDb {
         Ok(())
     }
 
+    pub async fn find_mac_by_hostname(
+        &self,
+        hostname: &str,
+        last_seen_since: SystemTime,
+    ) -> Result<Option<MacAddr>, LeaseDbError> {
+        let since_unix = utils::system_time_to_unix(last_seen_since);
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::find_mac_by_hostname(p, hostname, since_unix).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::find_mac_by_hostname(p, hostname, since_unix).await,
+        }
+    }
+
     pub async fn load_table(&self) -> Result<State, LeaseDbError> {
         let mut table = State::new();
+        table.set_indexing_enabled(false);
 
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -245,6 +260,7 @@ impl LeaseDb {
         }
 
         info!("Loaded devices from database");
+        table.set_indexing_enabled(true);
         Ok(table)
     }
 

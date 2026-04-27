@@ -45,6 +45,8 @@ pub struct DnsConfig {
     #[cfg(feature = "adblock")]
     /// List of URLs to fetch blocklists from.
     pub adblock_urls: Vec<String>,
+    /// How many days a device can be offline before its DNS entry is hidden.
+    pub last_seen_threshold_days: u32,
 }
 
 impl Default for DnsConfig {
@@ -62,6 +64,7 @@ impl Default for DnsConfig {
             adblock_enabled: false,
             #[cfg(feature = "adblock")]
             adblock_urls: Vec::new(),
+            last_seen_threshold_days: 7,
         }
     }
 }
