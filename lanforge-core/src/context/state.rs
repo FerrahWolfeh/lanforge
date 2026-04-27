@@ -1635,26 +1635,22 @@ impl State {
         let hostname_lower = hostname.to_ascii_lowercase();
         let now = SystemTime::now();
 
-        let mut found_mac = None;
-        for (mac, dev) in &self.devices {
+        let found = self.devices.iter().find(|(_, dev)| {
             // Check last_seen heuristic if threshold is provided
             if let (Some(threshold), Ok(elapsed)) =
                 (last_seen_threshold, now.duration_since(dev.last_seen))
                 && elapsed > threshold
             {
-                continue;
+                return false;
             }
 
-            if dev.hostname.name.to_ascii_lowercase() == hostname_lower
+            dev.hostname.name.to_ascii_lowercase() == hostname_lower
                 || dev.dns_fallback == hostname_lower
-            {
-                found_mac = Some(*mac);
-                break;
-            }
-        }
+        });
 
-        if let Some(mac) = found_mac {
-            let dev = self.devices.get(&mac).unwrap().clone();
+        if let Some((mac, dev)) = found {
+            let mac = *mac;
+            let dev = dev.clone();
             // Force promotion even if indexing_enabled is false (discovery-driven)
             let prev_enabled = self.indexing_enabled;
             self.indexing_enabled = true;
