@@ -13,6 +13,7 @@ pub mod explorer;
 pub mod header;
 pub mod overview;
 pub mod services;
+pub mod topology;
 
 pub fn render(f: &mut Frame, app: &mut TuiApp) {
     let chunks = Layout::default()
@@ -35,6 +36,7 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         "[3] Explorer",
         "[4] Events",
         "[5] Services",
+        "[6] Topology",
     ];
     let tabs = Tabs::new(titles)
         .block(
@@ -58,13 +60,14 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         TuiTab::Explorer => explorer::render(f, chunks[2], app),
         TuiTab::Events => events::render(f, chunks[2], &app.state, app.auto_scroll),
         TuiTab::Services => services::render(f, chunks[2], &app.state),
+        TuiTab::Topology => topology::render(f, app, chunks[2]),
     }
 
     // 4. Footer
     let help_text = if app.filter_active {
         "TYPE TO FILTER...  Enter/Esc: Confirm"
     } else {
-        "q:Quit  1-5:Tabs  ↑↓:Navigate  Enter:Details  /:Search  r:Refresh"
+        "q:Quit  1-6:Tabs  ↑↓:Navigate  Enter:Details  /:Search  r:Refresh"
     };
     let footer = Paragraph::new(help_text).style(Style::default().fg(theme::TEXT_DIM));
     f.render_widget(footer, chunks[3]);

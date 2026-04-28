@@ -1,7 +1,7 @@
-use crate::context::LanforgeContext;
 use crate::bus::EventBus;
-use crate::state::{State, DeviceUpdate};
+use crate::context::LanforgeContext;
 use crate::identifiers::MacAddr;
+use crate::state::{DeviceUpdate, State};
 use std::sync::Arc;
 
 #[test]
@@ -49,5 +49,8 @@ fn test_topology_update() {
     });
     assert!(changed);
     let dev = ctx.get_device(&mac).expect("Device should exist");
-    assert_eq!(dev.topology.as_ref().unwrap().port, Some("Gi0/2".to_string()));
+    assert_eq!(
+        dev.topology.as_ref().unwrap().port,
+        Some("Gi0/2".to_string())
+    );
 }

@@ -18,7 +18,7 @@ use crate::api::{
     DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DnsQueryResponse,
     DnsStatsResponse, HostConfigEntry, HostsResponse, Ipv6Entry, LeaseInfo, NetworkStatus,
     ResourcesStatus, Response, ServiceStatusInfo, ServicesStatus, SimpleSuccess, StatusResponse,
-    WhoisResponse,
+    TopologyEntry, TopologyResponse, WhoisResponse,
 };
 use crate::server::ClientContext;
 
@@ -699,5 +699,26 @@ impl ClientContext {
         }
 
         Response::Leases(crate::api::LeasesResponse { leases: api_leases })
+    }
+
+    /// Fetches the current topology of the network.
+    pub(crate) async fn handle_topology(&self) -> Response {
+        let devices = self.ctx.all_devices();
+        let mut entries = Vec::new();
+
+        for dev in &devices {
+            if let Some(topo) = &dev.topology {
+                entries.push(TopologyEntry {
+                    mac: dev.mac.to_string(),
+                    hostname: dev.display_hostname().to_string(),
+                    parent_mac: topo.parent_mac.map(|m| m.to_string()),
+                    port: topo.port.clone(),
+                    local_ifindex: topo.local_ifindex,
+                    last_updated: format_iso8601(topo.last_updated),
+                });
+            }
+        }
+
+        Response::Topology(TopologyResponse { entries })
     }
 }

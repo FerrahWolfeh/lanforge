@@ -28,6 +28,7 @@ impl CliCommand for QueryHandler {
             QueryTarget::Leases { count, .. } => {
                 Ok(ControlCommand::new(CommandAction::Leases { count }))
             }
+            QueryTarget::Topology => Ok(ControlCommand::new(CommandAction::Topology)),
         }
     }
 

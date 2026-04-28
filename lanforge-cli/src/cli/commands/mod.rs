@@ -6,6 +6,7 @@ pub mod lease;
 pub mod log;
 pub mod query;
 pub mod status;
+pub mod topology;
 pub mod whois;
 pub mod wol;
 

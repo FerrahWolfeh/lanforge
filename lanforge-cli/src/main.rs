@@ -95,6 +95,17 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
+        Cli::LfTopology { socket } => {
+            cli::run_client(
+                Command::Topology,
+                &socket,
+                cli::ClientOptions {
+                    bincode: false,
+                    no_compress: false,
+                },
+            )
+            .await?;
+        }
     }
 
     Ok(())

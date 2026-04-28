@@ -10,6 +10,7 @@ pub enum TuiTab {
     Explorer,
     Events,
     Services,
+    Topology,
 }
 
 impl TuiTab {
@@ -20,6 +21,7 @@ impl TuiTab {
             2 => TuiTab::Explorer,
             3 => TuiTab::Events,
             4 => TuiTab::Services,
+            5 => TuiTab::Topology,
             _ => TuiTab::Overview,
         }
     }
@@ -31,6 +33,7 @@ impl TuiTab {
             TuiTab::Explorer => 2,
             TuiTab::Events => 3,
             TuiTab::Services => 4,
+            TuiTab::Topology => 5,
         }
     }
 }
@@ -40,6 +43,7 @@ pub struct TuiApp {
     pub active_tab: TuiTab,
     pub device_list_state: TableState,
     pub tree_state: TreeState<String>,
+    pub tree_state_topology: TreeState<String>,
     pub showing_detail: bool,
     pub auto_scroll: bool,
     pub filter_text: String,
@@ -54,6 +58,7 @@ impl TuiApp {
             active_tab: TuiTab::Overview,
             device_list_state: TableState::default(),
             tree_state: TreeState::default(),
+            tree_state_topology: TreeState::default(),
             showing_detail: false,
             auto_scroll: true,
             filter_text: String::new(),
@@ -90,10 +95,14 @@ impl TuiApp {
             KeyCode::Char('3') => self.active_tab = TuiTab::Explorer,
             KeyCode::Char('4') => self.active_tab = TuiTab::Events,
             KeyCode::Char('5') => self.active_tab = TuiTab::Services,
+            KeyCode::Char('6') => self.active_tab = TuiTab::Topology,
             KeyCode::Left => self.prev_tab(),
             KeyCode::Right => self.next_tab(),
             KeyCode::Char('/') => {
-                if matches!(self.active_tab, TuiTab::Devices | TuiTab::Explorer) {
+                if matches!(
+                    self.active_tab,
+                    TuiTab::Devices | TuiTab::Explorer | TuiTab::Topology
+                ) {
                     self.filter_active = true;
                 }
             }
@@ -108,6 +117,9 @@ impl TuiApp {
                 TuiTab::Devices => self.showing_detail = true,
                 TuiTab::Explorer => {
                     self.tree_state.toggle_selected();
+                }
+                TuiTab::Topology => {
+                    self.tree_state_topology.toggle_selected();
                 }
                 _ => {}
             },
@@ -124,12 +136,12 @@ impl TuiApp {
 
     fn next_tab(&mut self) {
         let i = self.active_tab.to_index();
-        self.active_tab = TuiTab::from_index((i + 1) % 5);
+        self.active_tab = TuiTab::from_index((i + 1) % 6);
     }
 
     fn prev_tab(&mut self) {
         let i = self.active_tab.to_index();
-        self.active_tab = TuiTab::from_index((i + 4) % 5);
+        self.active_tab = TuiTab::from_index((i + 5) % 6);
     }
 
     fn move_up(&mut self) {
@@ -150,6 +162,9 @@ impl TuiApp {
             TuiTab::Explorer => {
                 self.tree_state.key_up();
             }
+            TuiTab::Topology => {
+                self.tree_state_topology.key_up();
+            }
             _ => {}
         }
     }
@@ -165,6 +180,9 @@ impl TuiApp {
             }
             TuiTab::Explorer => {
                 self.tree_state.key_down();
+            }
+            TuiTab::Topology => {
+                self.tree_state_topology.key_down();
             }
             _ => {}
         }

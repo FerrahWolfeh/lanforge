@@ -150,7 +150,10 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                     .unwrap_or_else(|| "Unknown".to_string());
 
                 let topo = if let Some(t) = &dev.topology {
-                    let parent = t.parent_mac.map(|m| m.to_string()).unwrap_or_else(|| "Local".to_string());
+                    let parent = t
+                        .parent_mac
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| "Local".to_string());
                     let port = t.port.as_deref().unwrap_or("?");
                     format!("{} @ {} (ifindex {})", parent, port, t.local_ifindex)
                 } else {

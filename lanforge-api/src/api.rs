@@ -225,6 +225,8 @@ pub enum CommandAction {
         #[serde(default)]
         count: bool,
     },
+    /// Retrieve the physical network topology (LLDP).
+    Topology,
 }
 
 /// Represents a response sent from the daemon to a client.
@@ -258,6 +260,8 @@ pub enum Response {
     ContextDump(Box<lanforge_core::state::State>),
     /// List of active DHCP leases.
     Leases(LeasesResponse),
+    /// Hierarchical physical topology.
+    Topology(TopologyResponse),
 }
 
 /// A simple success result containing a message.
@@ -324,6 +328,30 @@ pub enum LeaseKind {
     V6,
     /// DHCPv6 IA_PD prefix delegation lease.
     V6Prefix,
+}
+
+/// A response containing the discovered physical topology.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TopologyResponse {
+    /// The list of devices with known topology connections.
+    pub entries: Vec<TopologyEntry>,
+}
+
+/// A topology connection representing a link between a device and its parent.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TopologyEntry {
+    /// MAC address of the device.
+    pub mac: String,
+    /// Hostname of the device.
+    pub hostname: String,
+    /// Parent MAC address, if known.
+    pub parent_mac: Option<String>,
+    /// Port on the parent device, if known.
+    pub port: Option<String>,
+    /// Local interface index connecting to this topology tree.
+    pub local_ifindex: u32,
+    /// Last seen timestamp of this topology link.
+    pub last_updated: String,
 }
 
 /// A single entry in the host configuration list.

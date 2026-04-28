@@ -50,10 +50,19 @@ async fn upsert_base_device(
                 None
             }
         }),
-        parent_mac: device.topology.as_ref().and_then(|t| t.parent_mac.map(|m| m.to_string())),
+        parent_mac: device
+            .topology
+            .as_ref()
+            .and_then(|t| t.parent_mac.map(|m| m.to_string())),
         parent_port: device.topology.as_ref().and_then(|t| t.port.clone()),
-        local_ifindex: device.topology.as_ref().map_or(0, |t| i64::from(t.local_ifindex)),
-        topo_updated: device.topology.as_ref().map_or(0, |t| system_time_to_unix(t.last_updated)),
+        local_ifindex: device
+            .topology
+            .as_ref()
+            .map_or(0, |t| i64::from(t.local_ifindex)),
+        topo_updated: device
+            .topology
+            .as_ref()
+            .map_or(0, |t| system_time_to_unix(t.last_updated)),
     };
 
     sqlx::query(

@@ -75,6 +75,18 @@ pub enum Cli {
         )]
         socket: String,
     },
+
+    /// View network topology hierarchically
+    #[command(name = "lf-topology")]
+    LfTopology {
+        #[arg(
+            short,
+            long,
+            env = "LANFORGE_CONTROL_SOCKET",
+            default_value = "/run/lanforge/control.sock"
+        )]
+        socket: String,
+    },
 }
 
 #[derive(Args, Debug, Clone)]
@@ -182,6 +194,8 @@ pub enum Command {
         #[command(subcommand)]
         target: QueryTarget,
     },
+    /// View network topology hierarchically
+    Topology,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -210,6 +224,8 @@ pub enum QueryTarget {
         #[arg(short, long)]
         plain: bool,
     },
+    /// Dump the hierarchical network topology as JSON
+    Topology,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

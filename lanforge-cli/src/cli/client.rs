@@ -12,6 +12,7 @@ use crate::cli::commands::host::HostHandler;
 use crate::cli::commands::lease::LeaseHandler;
 use crate::cli::commands::log::LogHandler;
 use crate::cli::commands::status::StatusHandler;
+use crate::cli::commands::topology::TopologyHandler;
 use crate::cli::commands::whois::WhoisHandler;
 use crate::cli::commands::wol::WolCommand;
 use lanforge_api::api::{Compression, Encoding, Response};
@@ -80,6 +81,7 @@ pub async fn run_client(command: Command, socket_path: &str, opts: ClientOptions
         Command::Whois { target } => Box::new(WhoisHandler { target }),
         Command::Dns { action } => Box::new(DnsCommand { action }),
         Command::Query { target } => Box::new(crate::cli::commands::query::QueryHandler { target }),
+        Command::Topology => Box::new(TopologyHandler),
         #[cfg(feature = "tui")]
         Command::Tui => return Err(eyre!("TUI should be handled in main.rs")),
     };
