@@ -87,7 +87,7 @@ impl<'a> LocalResolver<'a> {
             return Ok(None);
         };
 
-        let question = query.queries().first().ok_or(DnsError::WireParseError)?;
+        let question = query.queries.first().ok_or(DnsError::WireParseError)?;
         let name = question.name().clone();
 
         let host = if device.hostname.name.is_empty() {
@@ -117,7 +117,7 @@ impl<'a> LocalResolver<'a> {
         device: &Device,
         qtype: RecordType,
     ) -> Option<Vec<Record>> {
-        let question = query.queries().first()?;
+        let question = query.queries.first()?;
         let name = question.name().clone();
 
         if !matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {

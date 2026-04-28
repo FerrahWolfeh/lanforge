@@ -81,7 +81,7 @@ fn resolve_local_matches_question_name_exactly() {
     let mac = MacAddr([1, 2, 3, 4, 5, 0x11]);
     register_test_device(&ctx, "solarium", mac, Ipv4Addr::new(192, 168, 0, 2));
 
-    let mut query = Message::new();
+    let mut query = Message::query();
     let name = Name::from_str("solarium.lan.").unwrap();
     query.add_query(hickory_proto::op::Query::query(name.clone(), RecordType::A));
 
@@ -90,7 +90,7 @@ fn resolve_local_matches_question_name_exactly() {
     let resp_bytes = result.unwrap();
     let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
 
-    assert_eq!(resp_msg.answers()[0].name(), &name);
+    assert_eq!(resp_msg.answers[0].name, name);
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn test_resolve_local_v6_suffix_merging() {
         origin: Origin::Cli,
     });
 
-    let mut query = Message::new();
+    let mut query = Message::query();
     let name = Name::from_str("test.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::AAAA));
 
@@ -135,13 +135,13 @@ fn test_resolve_local_v6_suffix_merging() {
         .expect("Should resolve locally");
 
     let res = Message::from_bytes(&res_bytes).unwrap();
-    let answers = res.answers();
+    let answers = &res.answers;
 
     assert!(answers.len() >= 2);
     let ips: HashSet<Ipv6Addr> = answers
         .iter()
         .filter_map(|r| {
-            if let RData::AAAA(ip) = r.data() {
+            if let RData::AAAA(ip) = &r.data {
                 Some((*ip).into())
             } else {
                 None
@@ -181,7 +181,7 @@ fn test_resolve_local_priority_ordering() {
         is_active: true,
     });
 
-    let mut query = Message::new();
+    let mut query = Message::query();
     let name = Name::from_str("priority-test.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::ANY));
 
@@ -191,7 +191,7 @@ fn test_resolve_local_priority_ordering() {
         .expect("Should resolve locally");
 
     let res = Message::from_bytes(&res_bytes).unwrap();
-    let answers = res.answers();
+    let answers = &res.answers;
 
     assert!(answers.len() >= 3);
 }
@@ -200,7 +200,7 @@ fn test_resolve_local_priority_ordering() {
 async fn test_nxdomain_leak_prevention_and_soa() {
     let ctx_instance = init_test_context();
     let cfg = mock_config();
-    let mut query = Message::new();
+    let mut query = Message::query();
     let name = Name::from_str("fantasma.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::A));
     let data = query.to_bytes().unwrap();
@@ -222,7 +222,7 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     .unwrap()
     .expect("Deve retornar uma resposta DNS");
     let resp = Message::from_bytes(&resp_bytes).unwrap();
-    assert_eq!(resp.response_code(), ResponseCode::NXDomain);
+    assert_eq!(resp.response_code, ResponseCode::NXDomain);
 }
 
 #[tokio::test]
@@ -248,7 +248,7 @@ async fn test_adblock_integration() {
         adblocker: Some(adblocker),
     };
 
-    let mut query = Message::new();
+    let mut query = Message::query();
     query.add_query(Query::query(
         Name::from_str("malware.com.").unwrap(),
         RecordType::A,
@@ -261,7 +261,7 @@ async fn test_adblock_integration() {
         .expect("Should return a response");
 
     let resp = Message::from_bytes(&resp_bytes).unwrap();
-    assert_eq!(resp.response_code(), ResponseCode::NXDomain);
+    assert_eq!(resp.response_code, ResponseCode::NXDomain);
     assert_eq!(
         ctx.stats
             .blocked_queries
@@ -273,7 +273,7 @@ async fn test_adblock_integration() {
 #[test]
 fn test_edns0_is_preserved() {
     let cfg = mock_config();
-    let mut query = Message::new();
+    let mut query = Message::query();
     query.add_query(Query::query(
         Name::from_str("localhost.").unwrap(),
         RecordType::A,
@@ -282,14 +282,9 @@ fn test_edns0_is_preserved() {
     extensions
         .options_mut()
         .insert(EdnsOption::Unknown(123, vec![1, 2, 3]));
-    let query_ext = query.extensions_mut();
-    if let Some(ext) = query_ext {
-        *ext = extensions;
-    } else {
-        *query_ext = Some(extensions);
-    }
+    query.set_edns(extensions);
     let resp = ResponseBuilder::new(&query, &cfg).base();
-    assert!(resp.extensions().is_some());
+    assert!(resp.edns.is_some());
 }
 
 #[test]
@@ -299,7 +294,7 @@ fn test_local_resolver_direct_api() {
     let mac = MacAddr([1, 2, 3, 4, 5, 0x33]);
     register_test_device(&ctx, "direct", mac, Ipv4Addr::new(10, 10, 10, 10));
     let resolver = crate::resolver::LocalResolver::new(&cfg, ctx);
-    let mut query = Message::new();
+    let mut query = Message::query();
     query.add_query(hickory_proto::op::Query::query(
         Name::from_str("direct.lan.").unwrap(),
         RecordType::A,
@@ -308,7 +303,7 @@ fn test_local_resolver_direct_api() {
         .resolve_ip(&query, "direct", RecordType::A)
         .unwrap();
     let resp = Message::from_bytes(&resp_bytes).unwrap();
-    assert_eq!(resp.response_code(), ResponseCode::NoError);
+    assert_eq!(resp.response_code, ResponseCode::NoError);
 }
 
 #[test]
@@ -331,7 +326,7 @@ fn test_dhcp_registration_creates_dns_record() {
         hostname: "my-device".to_string(),
     });
 
-    let mut query = Message::new();
+    let mut query = Message::query();
     let name = Name::from_str("my-device.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::A));
 
@@ -342,9 +337,9 @@ fn test_dhcp_registration_creates_dns_record() {
     };
     let resp = Message::from_bytes(&resp_bytes).unwrap();
 
-    assert_eq!(resp.response_code(), ResponseCode::NoError);
-    assert_eq!(resp.answers().len(), 1);
-    if let RData::A(resolved_ip) = resp.answers()[0].data() {
+    assert_eq!(resp.response_code, ResponseCode::NoError);
+    assert_eq!(resp.answers.len(), 1);
+    if let RData::A(resolved_ip) = &resp.answers[0].data {
         assert_eq!(**resolved_ip, ip);
     } else {
         panic!("Wrong RData type");
@@ -396,7 +391,7 @@ fn test_dns_response_contract() {
         expires: SystemTime::now() + Duration::from_hours(1),
     });
 
-    let mut query = Message::new();
+    let mut query = Message::query();
     let name = Name::from_str("contract-test.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::AAAA));
 
@@ -407,10 +402,10 @@ fn test_dns_response_contract() {
 
     let res = Message::from_bytes(&res_bytes).unwrap();
     let ips: HashSet<Ipv6Addr> = res
-        .answers()
+        .answers
         .iter()
         .filter_map(|r| {
-            if let RData::AAAA(ip) = r.data() {
+            if let RData::AAAA(ip) = &r.data {
                 Some((*ip).into())
             } else {
                 None

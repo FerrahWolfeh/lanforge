@@ -16,6 +16,10 @@ pub enum DnsError {
     #[error("DNS Protocol failure: {0}")]
     Protocol(#[from] hickory_proto::ProtoError),
 
+    /// DNS decoding error from Hickory-DNS.
+    #[error("DNS Decoding failure: {0}")]
+    Decode(#[from] hickory_proto::serialize::binary::DecodeError),
+
     /// Failed to decode a UDP DNS response message.
     #[error("Corrupt UDP response: {0}")]
     UdpDecode(String),

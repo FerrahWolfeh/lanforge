@@ -433,7 +433,7 @@ fn resolve_local_wire(
             if let Some(_target_ip) = parse_arpa_wire(question.labels()) {
                 let query = Message::from_bytes(data)?;
                 let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone())
-                    .resolve_ptr(&query, query.queries()[0].name())?;
+                    .resolve_ptr(&query, query.queries[0].name())?;
                 if let Some(r) = resp {
                     return Ok(Some(r));
                 }
@@ -454,7 +454,7 @@ async fn handle_query_fallback(
         return Ok(None);
     };
     let rb = ResponseBuilder::new(&query, &ctx.cfg);
-    let question = query.queries().first().ok_or(DnsError::WireParseError)?;
+    let question = query.queries.first().ok_or(DnsError::WireParseError)?;
     let qname = question.name();
     let qtype = question.query_type();
 

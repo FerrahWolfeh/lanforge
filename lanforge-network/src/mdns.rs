@@ -32,7 +32,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{debug, error, warn};
 
-use hickory_proto::op::{Message, MessageType, OpCode, Query};
+use hickory_proto::op::{Message, MessageType, OpCode, Query, UpdateMessage};
 use hickory_proto::rr::{Name, RData, RecordType};
 
 use crate::error::NetworkError;
@@ -284,11 +284,7 @@ fn setup_multicast_socket_v6() -> Result<UdpSocket, NetworkError> {
 }
 
 fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket) -> Result<(), NetworkError> {
-    let mut msg = Message::new();
-    msg.set_id(0); // mDNS standard
-    msg.set_message_type(MessageType::Query);
-    msg.set_op_code(OpCode::Query);
-    msg.set_recursion_desired(false);
+    let mut msg = Message::new(0, MessageType::Query, OpCode::Query);
 
     // PTR query for _services._dns-sd._udp.local.
     let name = Name::from_ascii("_services._dns-sd._udp.local.")
@@ -310,9 +306,7 @@ fn send_unicast_query(
     sock6: &UdpSocket,
     target: IpAddr,
 ) -> Result<(), NetworkError> {
-    let mut msg = Message::new();
-    msg.set_id(0);
-    msg.set_message_type(MessageType::Query);
+    let mut msg = Message::new(0, MessageType::Query, OpCode::Query);
 
     // Most devices respond to a PTR query for their own IP.
     // Example: 1.1.168.192.in-addr.arpa.
@@ -359,7 +353,7 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
     let Ok(msg) = Message::from_vec(data) else {
         return;
     };
-    if msg.message_type() != MessageType::Response {
+    if msg.message_type != MessageType::Response {
         return;
     }
 
@@ -387,10 +381,10 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
 
     // We look for PTR, SRV, or A/AAAA records that might reveal a hostname.
     // The most reliable is the "Answer" section names or SRV target.
-    for record in msg.answers().iter().chain(msg.additionals().iter()) {
-        let hostname = match record.data() {
+    for record in msg.answers.iter().chain(msg.additionals().iter()) {
+        let hostname = match &record.data {
             RData::PTR(name) => Some(name.to_string()),
-            RData::SRV(srv) => Some(srv.target().to_string()),
+            RData::SRV(srv) => Some(srv.target.to_string()),
             _ => None,
         };
 

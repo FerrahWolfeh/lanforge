@@ -39,20 +39,13 @@ impl<'a> ResponseBuilder<'a> {
     /// - Copies query section and EDNS extensions
     #[must_use]
     pub fn base(&self) -> Message {
-        let mut resp = Message::new();
-        resp.set_id(self.query.id())
-            .set_message_type(MessageType::Response)
-            .set_op_code(OpCode::Query)
-            .set_authoritative(true)
-            .set_recursion_available(self.cfg.upstream.is_some())
-            .add_queries(self.query.queries().to_vec());
+        let mut resp = Message::new(self.query.metadata.id, MessageType::Response, OpCode::Query);
+        resp.metadata.authoritative = true;
+        resp.metadata.recursion_available = self.cfg.upstream.is_some();
+        resp.add_queries(self.query.queries.iter().cloned());
 
-        if let Some(edns) = self.query.extensions() {
-            if let Some(ext) = resp.extensions_mut() {
-                *ext = edns.clone();
-            } else {
-                *resp.extensions_mut() = Some(edns.clone());
-            }
+        if let Some(edns) = &self.query.edns {
+            resp.set_edns(edns.clone());
         }
         resp
     }
@@ -68,13 +61,13 @@ impl<'a> ResponseBuilder<'a> {
         let rname = Name::from_str(&format!("hostmaster.{}.", self.cfg.search_domain))
             .unwrap_or_else(|_| Name::root());
         let soa = SOA::new(mname, rname, 1, 7200, 3600, 1_209_600, 3600);
-        resp.add_name_server(Record::from_rdata(name, 3600, RData::SOA(soa)));
+        resp.authorities.push(Record::from_rdata(name, 3600, RData::SOA(soa)));
     }
 
     /// Builds an NXDOMAIN response (domain does not exist).
     pub fn nxdomain(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
-        resp.set_response_code(ResponseCode::NXDomain);
+        resp.metadata.response_code = ResponseCode::NXDomain;
         self.add_soa(&mut resp);
         Ok(resp.to_bytes()?)
     }
@@ -82,7 +75,7 @@ impl<'a> ResponseBuilder<'a> {
     /// Builds a REFUSED response (server refuses to answer).
     pub fn refused(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
-        resp.set_response_code(ResponseCode::Refused);
+        resp.metadata.response_code = ResponseCode::Refused;
         Ok(resp.to_bytes()?)
     }
 
@@ -91,7 +84,7 @@ impl<'a> ResponseBuilder<'a> {
     /// RCODE = `NoError`, but with zero answer records and an SOA in the authority section.
     pub fn empty_noerror(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
-        resp.set_response_code(ResponseCode::NoError);
+        resp.metadata.response_code = ResponseCode::NoError;
         self.add_soa(&mut resp);
         Ok(resp.to_bytes()?)
     }
@@ -99,15 +92,15 @@ impl<'a> ResponseBuilder<'a> {
     /// Builds a FORMERR response (malformed query).
     pub fn formerr(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
-        resp.set_response_code(ResponseCode::FormErr);
+        resp.metadata.response_code = ResponseCode::FormErr;
         Ok(resp.to_bytes()?)
     }
 
     /// Builds a successful response with the given answer records.
     pub fn success(&self, answers: Vec<Record>) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
-        resp.set_response_code(ResponseCode::NoError)
-            .add_answers(answers);
+        resp.metadata.response_code = ResponseCode::NoError;
+        resp.add_answers(answers);
         Ok(resp.to_bytes()?)
     }
 }

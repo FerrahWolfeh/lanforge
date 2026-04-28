@@ -110,7 +110,7 @@ impl DnsCache {
     /// This is fully synchronous — no `.await` required.
     #[must_use]
     pub fn get(&self, query: &Message) -> Option<Vec<u8>> {
-        let question = query.queries().first()?;
+        let question = query.queries.first()?;
         let key = CacheKey {
             name: question.name().clone(),
             qtype: question.query_type(),
@@ -122,7 +122,7 @@ impl DnsCache {
         let mut owned_data = self.cache.get(&key)?.data;
 
         if owned_data.len() >= 2 {
-            let id_bytes = query.id().to_be_bytes();
+            let id_bytes = query.id.to_be_bytes();
             owned_data[0] = id_bytes[0];
             owned_data[1] = id_bytes[1];
         }
@@ -138,7 +138,7 @@ impl DnsCache {
     ///
     /// TTL is clamped to a range of 5-3600 seconds.
     pub fn insert(&self, query: &Message, response_msg: &Message, response_data: Vec<u8>) {
-        let Some(question) = query.queries().first() else {
+        let Some(question) = query.queries.first() else {
             return;
         };
 
@@ -146,13 +146,13 @@ impl DnsCache {
         let mut found = false;
 
         for record in response_msg
-            .answers()
+            .answers
             .iter()
-            .chain(response_msg.name_servers())
-            .chain(response_msg.additionals())
+            .chain(response_msg.authorities.iter())
+            .chain(response_msg.additionals.iter())
         {
-            if record.ttl() < min_ttl {
-                min_ttl = record.ttl();
+            if record.ttl < min_ttl {
+                min_ttl = record.ttl;
             }
             found = true;
         }
@@ -162,9 +162,9 @@ impl DnsCache {
 
             // RFC 2308: Negative caching TTL comes from the minimum of
             // the SOA's TTL and the SOA's MINIMUM field
-            for record in response_msg.name_servers() {
-                if let RData::SOA(soa) = record.data() {
-                    min_ttl = std::cmp::min(record.ttl(), soa.minimum());
+            for record in &response_msg.authorities {
+                if let RData::SOA(soa) = &record.data {
+                    min_ttl = std::cmp::min(record.ttl, soa.minimum);
                     break;
                 }
             }

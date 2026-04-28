@@ -24,7 +24,7 @@ socket2 = "0.6.3"
 futures = "0.3.32"
 rand = "0.10.1"
 libc = "0.2.183"
-hickory-proto = { version = "0.25.2", features = [
+hickory-proto = { version = "0.26.0", features = [
     "mdns",
 ], default-features = false }
 roaring = "0.11.3"

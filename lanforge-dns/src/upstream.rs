@@ -99,12 +99,12 @@ impl UpstreamManager {
         }
 
         // 2. Try UDP
-        let orig_id = query.id();
+        let orig_id = query.metadata.id;
         let mut forward_query = query.clone();
 
         // Maps to a unique internal ID to avoid collisions between multiple LAN clients
         let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        forward_query.set_id(internal_id);
+        forward_query.metadata.id = internal_id;
 
         let data_to_send = forward_query.to_bytes()?;
         let (tx, rx) = oneshot::channel();
@@ -116,24 +116,24 @@ impl UpstreamManager {
 
         self.socket.send_to(&data_to_send, upstream).await?;
 
-        let udp_result = match timeout(Duration::from_secs(3), rx).await {
+        let udp_result: Result<Vec<u8>, DnsError> = match timeout(Duration::from_secs(3), rx).await {
             Ok(Ok(resp_bytes)) => {
                 if let Ok(resp) = Message::from_bytes(&resp_bytes) {
                     // RFC 1035: If TC (truncated) flag is set, fall back to TCP
-                    if resp.truncated() {
+                    if resp.metadata.truncation {
                         trace!("UDP response truncated, attempting TCP fallback");
                         self.forward_tcp(data, upstream).await
                     } else {
                         Ok(resp_bytes)
                     }
                 } else {
-                    return Err(DnsError::UdpDecode("Corrupt UDP response".to_string()));
+                    Err(DnsError::UdpDecode("Corrupt UDP response".to_string()))
                 }
             }
-            Ok(Err(_)) => return Err(DnsError::ChannelClosed),
+            Ok(Err(_)) => Err(DnsError::ChannelClosed),
             Err(_) => {
                 self.pending.lock().unwrap().remove(&internal_id);
-                return Err(DnsError::UpstreamTimeout);
+                Err(DnsError::UpstreamTimeout)
             }
         };
 
@@ -141,7 +141,7 @@ impl UpstreamManager {
             Ok(resp_bytes) => {
                 // Restore original query ID before returning and caching
                 if let Ok(mut resp) = Message::from_bytes(&resp_bytes) {
-                    resp.set_id(orig_id);
+                    resp.metadata.id = orig_id;
                     let final_bytes = resp.to_bytes()?;
                     self.cache.insert(&query, &resp, final_bytes.clone());
                     Ok(final_bytes)
