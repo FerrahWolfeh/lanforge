@@ -1,28 +1,30 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::{clone::Clone, net::Ipv6Addr};
+use std::net::Ipv6Addr;
 use tracing::{info, warn};
 
 /// Root structure of the TOML file.
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct TomlConfig {
     pub general: GeneralCfg,
     pub ra: RaCfg,
     pub dhcp: DhcpCfg,
     pub dns: DnsCfg,
+    pub auth: AuthCfg,
+    pub http: HttpCfg,
     #[serde(default)]
     pub devices: Vec<StaticDeviceCfg>,
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct DhcpCfg {
     pub v4: DhcpV4Cfg,
     pub v6: DhcpV6Cfg,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct DhcpV4Cfg {
     pub enabled: bool,
@@ -51,7 +53,7 @@ impl Default for DhcpV4Cfg {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct DhcpV6Cfg {
     pub enabled: bool,
@@ -62,7 +64,7 @@ pub struct DhcpV6Cfg {
     pub pools: Vec<DhcpV6PoolCfg>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DhcpV6PoolCfg {
     pub range_start: Option<String>,
     pub range_end: Option<String>,
@@ -82,7 +84,7 @@ impl Default for DhcpV6Cfg {
 }
 
 /// General system configuration.
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct GeneralCfg {
     /// LAN interface where the daemon listens.
@@ -150,7 +152,7 @@ impl Default for GeneralCfg {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct RaCfg {
     pub enabled: bool,
@@ -180,19 +182,19 @@ impl Default for RaCfg {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct RaPrefixCfg {
     pub source: String,
     pub address: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct RaRdnssCfg {
     pub servers: Vec<Ipv6Addr>,
     pub lifetime: Option<u64>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct DnsCfg {
     pub enabled: bool,
@@ -235,13 +237,27 @@ impl Default for DnsCfg {
 }
 
 /// Static device — read from `[[devices]]` in the TOML.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct StaticDeviceCfg {
     pub mac: String,
     pub hostname: String,
     pub duid: Option<String>,
     pub v4_ip: Option<String>,
     pub v6_suffix: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Default, Clone)]
+#[serde(default)]
+pub struct AuthCfg {
+    pub password_hash: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Default, Clone)]
+#[serde(default)]
+pub struct HttpCfg {
+    pub listen: Option<String>,
+    pub tls_cert: Option<String>,
+    pub tls_key: Option<String>,
 }
 
 /// Load and parse the TOML config file, or return defaults if missing.

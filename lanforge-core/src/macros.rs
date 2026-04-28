@@ -40,21 +40,24 @@ macro_rules! spawn_event_listener {
 /// - Conditional spawning (`if condition`).
 /// - Explicit cloning of shared variables (`[ctx, var1, ...]`).
 /// - Dispatching to `spawn_async` or `spawn_sync`.
+/// - Supports attributes (like `#[cfg]`) on individual services.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// spawn_services!(self.registry, &self.ctx, {
 ///     async [ctx, db_url, log_db_url] => DbWorker::new(db_url, log_db_url, ctx),
+///     #[cfg(feature = "extra")]
 ///     sync  [ctx] if cfg.dhcpv4_enabled => Dhcpv4Service::new(d4_cfg, ctx),
 /// });
 /// ```
 #[macro_export]
 macro_rules! spawn_services {
     ($registry:expr, $ctx_ref:expr, {
-        $( $kind:ident $( [ $($clone:ident),* ] )? $( if $cond:expr )? => $ctor:expr ),* $(,)?
+        $( $(#[$attr:meta])* $kind:ident $( [ $($clone:ident),* ] )? $( if $cond:expr )? => $ctor:expr ),* $(,)?
     }) => {
         $(
+            $(#[$attr])*
             {
                 let mut run = true;
                 $( run = $cond; )?

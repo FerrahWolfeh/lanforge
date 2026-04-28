@@ -41,6 +41,7 @@ pub use toml::{
 
 use clap::Parser;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
 
@@ -92,6 +93,9 @@ pub struct Config {
     pub dns_port: Option<u16>,
     pub api_port: Option<u16>,
     pub http_listen: Option<String>,
+    pub auth_toml: toml::AuthCfg,
+    pub http_toml: toml::HttpCfg,
+    pub config_path: String,
 }
 
 impl Config {
@@ -195,8 +199,22 @@ impl Config {
             dhcpv6_port: cli.dhcpv6_port.unwrap_or(547),
             dns_port: cli.dns_port,
             api_port: cli.control_port,
-            http_listen: cli.http_listen.or(toml_cfg.general.http_listen),
+            http_listen: cli
+                .http_listen
+                .or(toml_cfg.general.http_listen)
+                .or(toml_cfg.http.listen.clone()),
+            auth_toml: toml_cfg.auth,
+            http_toml: toml_cfg.http,
+            config_path: cli.config,
         }
+    }
+
+    /// Returns the path to the dedicated API password hash file.
+    pub fn get_password_hash_path(&self) -> PathBuf {
+        Path::new(&self.config_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("/etc/lanforge"))
+            .join("api_password.hash")
     }
 
     /// Parses a CIDR string (e.g., "`fd00::/48`") into an `Ipv6Addr` and a prefix length.
@@ -465,6 +483,13 @@ impl Config {
 
     /// Builds an `ApiConfig` for the control service.
     pub fn to_api_config(&self) -> ApiConfig {
+        // Resolve password hash from dedicated file, falling back to TOML
+        #[cfg(feature = "http")]
+        let auth_password_hash = std::fs::read_to_string(self.get_password_hash_path())
+            .map(|s| s.trim().to_string())
+            .ok()
+            .or_else(|| self.auth_toml.password_hash.clone());
+
         ApiConfig {
             socket_path: self.control_socket.clone(),
             lan_iface: self.iface_lan.clone(),
@@ -485,6 +510,7 @@ impl Config {
             log_db_path: self.log_db.clone(),
             log_db_url: self.log_db_url.clone(),
             tcp_port: self.api_port,
+            #[cfg(feature = "http")]
             http_listen: self.http_listen.clone(),
             dhcp_v4_range_size: {
                 let v4 = self.to_dhcpv4_config();
@@ -497,18 +523,22 @@ impl Config {
                 for p in &v6.pools {
                     if let (Some(start), Some(end)) = (&p.range_start, &p.range_end) {
                         // Very rough approximation for IPv6 range size
-                        // Since we only care about FINITE ranges here
                         let s = start.as_u128(None);
                         let e = end.as_u128(None);
                         total += u64::try_from(e - s + 1).unwrap_or(u64::MAX);
                     } else {
-                        // CIDR-based or dynamic prefix: potentially "infinite" for status purposes
                         finite = false;
                         break;
                     }
                 }
                 if finite { Some(total) } else { None }
             },
+            #[cfg(feature = "http")]
+            auth_password_hash,
+            #[cfg(feature = "http")]
+            tls_cert: self.http_toml.tls_cert.clone(),
+            #[cfg(feature = "http")]
+            tls_key: self.http_toml.tls_key.clone(),
         }
     }
 }
@@ -541,6 +571,9 @@ impl Default for Config {
             dns_port: Some(5300),
             api_port: None,
             http_listen: None,
+            auth_toml: toml::AuthCfg::default(),
+            http_toml: toml::HttpCfg::default(),
+            config_path: "/etc/lanforge/lanforge.toml".to_string(),
         }
     }
 }

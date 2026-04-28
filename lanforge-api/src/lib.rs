@@ -46,10 +46,14 @@
 //! 3. Read the response line and parse it as a `Response` enum.
 
 pub mod api;
+#[cfg(feature = "http")]
+pub mod auth;
 pub mod config;
 pub mod error;
 pub mod handlers;
+#[cfg(feature = "http")]
 pub mod http;
+#[cfg(feature = "http")]
 pub mod metrics;
 pub mod server;
 #[cfg(test)]

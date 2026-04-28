@@ -16,9 +16,48 @@ async fn main() -> Result<()> {
     match cli {
         Cli::Lanforge(args) => {
             if let Some(cmd) = args.command {
+                if let Some(remote_url) = &args.remote {
+                    #[cfg(feature = "remote")]
+                    {
+                        use crate::cli::remote::RemoteClient;
+                        let mut client = RemoteClient::new(remote_url.clone(), args.token.clone());
+                        if let Some(pwd) = &args.password {
+                            client.login(pwd).await?;
+                        }
+
+                        #[cfg(feature = "tui")]
+                        if cmd == Command::Tui {
+                            return crate::tui::run_tui(None, Some(client)).await;
+                        }
+
+                        let mut handler = match cmd {
+                            #[cfg(feature = "tui")]
+                            Command::Tui => unreachable!("TUI handled above"),
+                            c => c.to_handler(),
+                        };
+
+                        let control_cmd = handler.prepare()?;
+                        let resp = client.send(control_cmd).await?;
+                        let _ = handler.on_response(&resp)?;
+                        return Ok(());
+                    }
+                    #[cfg(not(feature = "remote"))]
+                    {
+                        let _ = remote_url;
+                        return Err(color_eyre::eyre::eyre!(
+                            "Remote support not enabled. Recompile with --features remote."
+                        ));
+                    }
+                }
+
                 #[cfg(feature = "tui")]
                 if cmd == Command::Tui {
-                    return crate::tui::run_tui(&args.socket).await;
+                    return crate::tui::run_tui(
+                        Some(args.socket.clone()),
+                        #[cfg(feature = "remote")]
+                        None,
+                    )
+                    .await;
                 }
 
                 cli::run_client(

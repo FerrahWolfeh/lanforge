@@ -27,6 +27,7 @@ debug-commands = []
 sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]
 adblock = ["lanforge-dns/adblock"]
+http = ["lanforge-api/http"]
 
 [dependencies]
 lanforge-core = { path = "lanforge-core" }

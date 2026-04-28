@@ -9,6 +9,7 @@ pub mod status;
 pub mod topology;
 pub mod whois;
 pub mod wol;
+pub mod config;
 
 pub use db::DbHandler;
 pub use devices::DevicesHandler;
@@ -21,6 +22,7 @@ pub use status::StatusHandler;
 pub use topology::TopologyHandler;
 pub use whois::WhoisHandler;
 pub use wol::WolCommand;
+pub use config::ConfigHandler;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;

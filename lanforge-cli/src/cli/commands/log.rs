@@ -322,7 +322,7 @@ impl LogHandler {
                     "Transient logs cleared manually".dimmed()
                 );
             }
-            LanforgeEvent::DeviceTableDirty | LanforgeEvent::Shutdown => {
+            LanforgeEvent::DeviceTableDirty => {
                 // Ignore these or print subtly if needed
             }
             LanforgeEvent::DbPrune => {
@@ -356,6 +356,23 @@ impl LogHandler {
                     now,
                     "SYS".green().bold(),
                     "Database reset completed. Reloading state...".bright_green()
+                );
+            }
+            LanforgeEvent::ConfigUpdate { .. } => {
+                if self.verbose {
+                    println!(
+                        "[{}] {} API configuration updated",
+                        now,
+                        "CFG".magenta().bold()
+                    );
+                }
+            }
+            LanforgeEvent::Shutdown => {
+                println!(
+                    "[{}] {} {}",
+                    now,
+                    "SYS".red().bold(),
+                    "Daemon is shutting down...".dimmed()
                 );
             }
         }

@@ -110,6 +110,18 @@ pub struct LanforgeArgs {
         default_value = "/run/lanforge/control.sock"
     )]
     pub socket: String,
+
+    /// Remote URL of the Lanforge daemon (e.g. https://192.168.1.1:8080)
+    #[arg(long, global = true, env = "LANFORGE_REMOTE_URL")]
+    pub remote: Option<String>,
+
+    /// Authentication token for remote connection.
+    #[arg(long, global = true, env = "LANFORGE_TOKEN")]
+    pub token: Option<String>,
+
+    /// Password for remote connection (used to obtain a token).
+    #[arg(long, global = true, env = "LANFORGE_PASSWORD")]
+    pub password: Option<String>,
 }
 
 use lanforge_macros::CliHandler;
@@ -213,6 +225,12 @@ pub enum Command {
     /// View network topology hierarchically
     #[handler(TopologyHandler)]
     Topology,
+    /// Gerenciamento de configurações do daemon
+    #[handler(ConfigHandler { .. })]
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommand,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -281,6 +299,15 @@ pub enum AdblockAction {
 pub enum LeaseCommand {
     Renew { mac: String },
     Release { mac: String },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum ConfigCommand {
+    /// Update the daemon's API password (requires UDS connection).
+    SetPassword {
+        /// New password for remote access.
+        password: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

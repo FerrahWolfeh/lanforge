@@ -143,6 +143,16 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
         LanforgeEvent::DbResetCompleted => {
             handle_db_reset(l_ctx);
         }
+        LanforgeEvent::ConfigUpdate { password_hash } => {
+            let hash_path = l_ctx.cfg.get_password_hash_path();
+            info!("ConfigUpdate: Saving new API password hash to {:?}...", hash_path);
+            
+            if let Err(e) = std::fs::write(&hash_path, password_hash) {
+                error!("❌ Failed to save password hash: {e}");
+            } else {
+                info!("✅ Configuration updated and saved to {:?}", hash_path);
+            }
+        }
         LanforgeEvent::Shutdown => {
             debug!("EventLoop: shutdown received via bus");
             return false;

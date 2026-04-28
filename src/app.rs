@@ -9,6 +9,7 @@ use tracing::{debug, info};
 use crate::bootstrap::BootstrapResult;
 use crate::event_loop::run_event_loop;
 use crate::registry::ServiceRegistry;
+#[cfg(feature = "http")]
 use lanforge_api::http::HttpService;
 use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
@@ -87,6 +88,8 @@ impl Daemon {
             // 5. Application Services (DNS, API)
             async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
             async [ctx, cfg] => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
+
+            #[cfg(feature = "http")]
             async [ctx, cfg] if cfg.http_listen.is_some() => HttpService::new(Arc::new(cfg.to_api_config()), ctx),
         });
     }

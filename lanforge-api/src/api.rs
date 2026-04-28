@@ -252,6 +252,12 @@ pub enum CommandAction {
     /// Get network topology.
     #[dispatch(handler = "handle_topology", readonly)]
     Topology,
+    /// Update the daemon's API password (requires UDS connection).
+    #[dispatch(handler = "handle_config_set_password", args(password))]
+    ConfigSetPassword {
+        /// New plaintext password to hash and store.
+        password: String,
+    },
 }
 
 /// Represents a response sent from the daemon to a client.

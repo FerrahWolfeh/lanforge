@@ -7,6 +7,8 @@ use crossterm::{
 use lanforge_api::api::{Command, CommandAction, Compression, Encoding, Response};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::stdout;
+#[cfg(feature = "remote")]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
@@ -23,7 +25,10 @@ pub mod utils;
 use crate::tui::app::TuiApp;
 use crate::tui::event::AppEvent;
 
-pub async fn run_tui(socket_path: &str) -> Result<()> {
+pub async fn run_tui(
+    socket_path: Option<String>,
+    #[cfg(feature = "remote")] remote: Option<crate::cli::remote::RemoteClient>,
+) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -55,11 +60,20 @@ pub async fn run_tui(socket_path: &str) -> Result<()> {
     });
 
     // Spawn daemon connection tasks
-    let socket = socket_path.to_string();
-    let tx = event_tx.clone();
-    tokio::spawn(async move {
-        daemon_loop(socket, tx).await;
-    });
+    #[cfg(feature = "remote")]
+    if let Some(remote_client) = remote {
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            remote_daemon_loop(remote_client, tx).await;
+        });
+    }
+
+    if let Some(socket) = socket_path {
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            daemon_loop(socket, tx).await;
+        });
+    }
 
     let mut app = TuiApp::new();
 
@@ -96,6 +110,57 @@ pub async fn run_tui(socket_path: &str) -> Result<()> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+#[cfg(feature = "remote")]
+async fn remote_daemon_loop(client: crate::cli::remote::RemoteClient, tx: mpsc::Sender<AppEvent>) {
+    let mut last_refresh = Instant::now() - Duration::from_secs(10);
+    let client = Arc::new(client);
+
+    // 1. WebSocket Connection (persistent)
+    let ws_tx = tx.clone();
+    let ws_client = client.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Ok(mut rx) = ws_client.connect_ws().await {
+                while let Some(resp) = rx.recv().await {
+                    if let Response::Event(event) = resp {
+                        let _ = ws_tx.send(AppEvent::DaemonEvent(event)).await;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    });
+
+    // 2. Fetch Connection (periodic)
+    loop {
+        if last_refresh.elapsed() >= Duration::from_secs(5) {
+            // Status
+            if let Ok(Response::Status(s)) = client.send(Command::STATUS).await {
+                let _ = tx.send(AppEvent::StatusUpdate(s)).await;
+            }
+
+            // State (ContextDump)
+            let cmd = Command::new(CommandAction::ContextDump {
+                only_devices: false,
+                only_orphans: false,
+            });
+            if let Ok(Response::ContextDump(s)) = client.send(cmd).await {
+                let _ = tx.send(AppEvent::StateUpdate(s)).await;
+            }
+
+            // DNS Stats
+            if let Ok(Response::DnsStats(s)) =
+                client.send(Command::new(CommandAction::DnsStats)).await
+            {
+                let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+            }
+
+            last_refresh = Instant::now();
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {

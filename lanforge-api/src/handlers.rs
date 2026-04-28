@@ -19,9 +19,13 @@ use std::str::FromStr;
 use crate::api::{
     DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DnsQueryResponse,
     DnsStatsResponse, HostConfigEntry, HostsResponse, Ipv6Entry, LeaseInfo, NetworkStatus,
-    ResourcesStatus, Response, ServiceStatusInfo, ServicesStatus, SimpleSuccess, StatusResponse,
-    TopologyEntry, TopologyResponse, WhoisResponse,
+    ResourcesStatus, Response, ServicesStatus, SimpleSuccess, StatusResponse, TopologyEntry,
+    TopologyResponse, WhoisResponse,
 };
+
+#[cfg(feature = "http")]
+use crate::api::ServiceStatusInfo;
+
 use crate::server::ClientContext;
 
 // ---------------------------------------------------------------------------
@@ -214,6 +218,7 @@ impl ClientContext {
         status.services.mdns_prober.state = "active".to_string();
         status.services.iface_monitor.state = "online".to_string();
         status.services.control_api.state = "online".to_string();
+        #[cfg(feature = "http")]
         if self.cfg.http_listen.is_some() {
             status.services.http_api = Some(ServiceStatusInfo {
                 state: "online".to_string(),
@@ -945,5 +950,29 @@ impl ClientContext {
         Response::Success(SimpleSuccess {
             message: format!("Starting event stream ({} historical)...", history_len),
         })
+    }
+
+    /// Sets the API password by hashing it and publishing an update event.
+    #[cfg(feature = "http")]
+    pub(crate) async fn handle_config_set_password(&self, password: String) -> Response {
+        let hash = crate::auth::hash_password(&password);
+
+        let _ = self.ctx.bus().publish(LanforgeEvent::ConfigUpdate {
+            password_hash: hash.clone(),
+        });
+
+        Response::Success(SimpleSuccess {
+            message:
+                "API password updated successfully. Changes will be persisted to lanforge.toml."
+                    .to_string(),
+        })
+    }
+
+    #[cfg(not(feature = "http"))]
+    pub(crate) async fn handle_config_set_password(&self, _password: String) -> Response {
+        Response::Error {
+            error: "HTTP API support not enabled in this build. Recompile with --features http."
+                .to_string(),
+        }
     }
 }

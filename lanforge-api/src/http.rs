@@ -1,9 +1,14 @@
+use crate::api::{Command, Response};
+use crate::server::ClientContext;
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{
+        Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::{
@@ -18,12 +23,24 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
 
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::service::AsyncService;
+
+use crate::config::ApiConfig;
+
 /// State shared across Axum handlers.
 #[derive(Clone)]
-struct AppState {
-    cfg: Arc<ApiConfig>,
-    ctx: LanforgeContext,
-    start_time: std::time::Instant,
+pub struct AppState {
+    pub cfg: Arc<ApiConfig>,
+    pub ctx: LanforgeContext,
+    pub auth: Arc<crate::auth::AuthManager>,
+    pub start_time: std::time::Instant,
+}
+
+impl axum::extract::FromRef<AppState> for crate::auth::AuthManager {
+    fn from_ref(state: &AppState) -> Self {
+        (*state.auth).clone()
+    }
 }
 
 /// Parameters for the /register endpoint (Query or JSON).
@@ -38,11 +55,6 @@ pub struct RegisterRequest {
     /// IPv6 Interface ID / Suffix (optional).
     pub v6_suffix: Option<String>,
 }
-
-use lanforge_core::context::LanforgeContext;
-use lanforge_core::service::AsyncService;
-
-use crate::config::ApiConfig;
 
 #[lanforge_macros::lanforge_service(
     id = "http",
@@ -80,12 +92,13 @@ impl AsyncService for HttpService {
         })?;
 
         let state = AppState {
-            cfg,
+            cfg: cfg.clone(),
             ctx: self.ctx.clone(),
+            auth: Arc::new(crate::auth::AuthManager::new()),
             start_time: std::time::Instant::now(),
         };
 
-        let app = Router::new()
+        let mut app = Router::new()
             .route(
                 "/register",
                 get(handle_register_get).post(handle_register_post),
@@ -93,7 +106,18 @@ impl AsyncService for HttpService {
             .route("/devices", get(handle_devices))
             .route("/status", get(handle_status))
             .route("/metrics", get(handle_metrics))
-            .with_state(state);
+            .route("/login", post(handle_login));
+
+        if cfg.auth_password_hash.is_some() {
+            info!("🔐 API Authentication enabled. RPC routes active.");
+            app = app
+                .route("/api/rpc", post(handle_rpc))
+                .route("/api/ws", get(handle_ws));
+        } else {
+            info!("🔓 No password hash set. API RPC routes disabled for safety.");
+        }
+
+        let app = app.with_state(state);
 
         let tcp_listener = TcpListener::bind(&addr)
             .await
@@ -217,4 +241,101 @@ async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
         .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
         .body(axum::body::Body::from(body))
         .unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// Authentication & RPC Handlers
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub password: String,
+}
+
+async fn handle_login(
+    State(state): State<AppState>,
+    Json(payload): Json<LoginRequest>,
+) -> impl IntoResponse {
+    let hash = match &state.cfg.auth_password_hash {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(
+                    serde_json::json!({ "error": "Authentication not configured on this daemon" }),
+                ),
+            );
+        }
+    };
+
+    if crate::auth::verify_password(hash, &payload.password) {
+        match state.auth.generate_token("admin") {
+            Ok(token) => (StatusCode::OK, Json(serde_json::json!({ "token": token }))),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Token generation failed: {e}") })),
+            ),
+        }
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid password" })),
+        )
+    }
+}
+
+async fn handle_rpc(
+    State(state): State<AppState>,
+    _claims: crate::auth::Claims,
+    Json(cmd): Json<Command>,
+) -> impl IntoResponse {
+    let ctx = ClientContext {
+        current_gua: None, // Will fallback to config in handle_status
+        uptime_secs: state.start_time.elapsed().as_secs(),
+        last_scan_secs_ago: 0,
+        cfg: state.cfg.clone(),
+        ctx: state.ctx.clone(),
+    };
+
+    let resp = cmd.action.dispatch(&ctx).await;
+    Json(resp)
+}
+
+async fn handle_ws(
+    State(state): State<AppState>,
+    _claims: crate::auth::Claims,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    let mut rx = state.ctx.bus().subscribe();
+
+    // In a real implementation, we would also handle incoming messages (e.g. RPC over WS)
+    // For now, we just stream events.
+    loop {
+        tokio::select! {
+            event = rx.recv() => {
+                match event {
+                    Ok(timed_event) => {
+                        let json = match serde_json::to_string(&Response::Event(timed_event)) {
+                            Ok(j) => j,
+                            Err(_) => continue,
+                        };
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {} // Ignore other incoming messages for now
+                }
+            }
+        }
+    }
 }

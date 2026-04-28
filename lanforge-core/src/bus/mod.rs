@@ -173,6 +173,9 @@ pub enum LanforgeEvent {
         src_addr: std::net::IpAddr,
         domain: String,
     },
+    ConfigUpdate {
+        password_hash: String,
+    },
 }
 
 impl TimedEvent {
@@ -197,7 +200,8 @@ impl TimedEvent {
             | LanforgeEvent::SystemReady
             | LanforgeEvent::ScanRequested
             | LanforgeEvent::NeighborScanRequested
-            | LanforgeEvent::SubnetScanStarted { .. } => true,
+            | LanforgeEvent::SubnetScanStarted { .. }
+            | LanforgeEvent::ConfigUpdate { .. } => true,
             #[cfg(feature = "adblock")]
             LanforgeEvent::DnsAdblockToggle { .. } | LanforgeEvent::DnsAdblockReload => true,
             _ => false,
