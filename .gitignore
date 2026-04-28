@@ -4,3 +4,5 @@ debug_leases.db
 debug_leases.db-shm
 debug_leases.db-wal
 test.db
+AGENTS.md
+ROADMAP.md
