@@ -46,7 +46,7 @@ http = [
     "dep:rustls-pemfile",
     "dep:futures",
 ]
-default = ["adblock"]
+default = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

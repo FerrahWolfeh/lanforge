@@ -16,4 +16,4 @@ tokio = { version = "1.50.0", features = ["macros", "sync", "rt-multi-thread"] }
 
 [features]
 adblock = []
-default = ["adblock"]
+default = []

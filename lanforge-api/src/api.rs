@@ -223,10 +223,10 @@ pub enum CommandAction {
     /// Enable or disable the DNS adblocker.
     #[dispatch(handler = "handle_dns_adblock_set", args(enabled, duration_secs))]
     DnsAdblockSet {
-        #[cfg(feature = "adblock")]
+        /// Whether to enable or disable the adblocker.
         #[serde(default)]
         enabled: bool,
-        #[cfg(feature = "adblock")]
+        /// Optional duration in seconds for temporary disabling.
         duration_secs: Option<u64>,
     },
     /// Force a reload of the adblock blocklists.

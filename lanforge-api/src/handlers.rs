@@ -593,6 +593,18 @@ impl ClientContext {
         })
     }
 
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_adblock_set(
+        &self,
+        _enabled: bool,
+        _duration_secs: Option<u64>,
+    ) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
     /// Triggers a reload of DNS blocklists.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
@@ -600,6 +612,14 @@ impl ClientContext {
         Response::Success(SimpleSuccess {
             message: "DNS Adblock reload requested".to_string(),
         })
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
     }
 
     /// DNS diagnostic query.

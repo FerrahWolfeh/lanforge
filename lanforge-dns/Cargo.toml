@@ -20,7 +20,7 @@ parking_lot = "0.12.5"
 
 [features]
 adblock = ["dep:ureq", "dep:dashmap", "lanforge-core/adblock"]
-default = ["adblock"]
+default = []
 
 [dev-dependencies]
 tokio = { version = "1.50.0", features = ["io-util", "net", "rt", "time"] }
