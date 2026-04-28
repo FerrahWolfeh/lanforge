@@ -40,7 +40,11 @@ pub async fn run_event_loop(
     // Initial scan request to kick off discovery across all services
     let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
 
-    info!("Event loop: expecting readiness from {} services: {:?}", expected_services.len(), expected_services);
+    info!(
+        "Event loop: expecting readiness from {} services: {:?}",
+        expected_services.len(),
+        expected_services
+    );
 
     let mut loop_ctx = LoopContext {
         ctx: &ctx,
@@ -119,8 +123,10 @@ struct LoopContext<'a> {
 
 fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
     match event {
-        LanforgeEvent::ServiceReady { name } if l_ctx.expected_services.contains(&name) => {
-            l_ctx.ready_services.insert(name.clone());
+        LanforgeEvent::ServiceReady { name }
+            if l_ctx.expected_services.contains(&name)
+                && l_ctx.ready_services.insert(name.clone()) =>
+        {
             info!(
                 "▸ Service '{}' reported ready ({}/{})",
                 name,
@@ -241,4 +247,3 @@ impl LoopState {
         }
     }
 }
-
