@@ -116,7 +116,8 @@ impl UpstreamManager {
 
         self.socket.send_to(&data_to_send, upstream).await?;
 
-        let udp_result: Result<Vec<u8>, DnsError> = match timeout(Duration::from_secs(3), rx).await {
+        let udp_result: Result<Vec<u8>, DnsError> = match timeout(Duration::from_secs(3), rx).await
+        {
             Ok(Ok(resp_bytes)) => {
                 if let Ok(resp) = Message::from_bytes(&resp_bytes) {
                     // RFC 1035: If TC (truncated) flag is set, fall back to TCP

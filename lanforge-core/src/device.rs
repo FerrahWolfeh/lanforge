@@ -163,7 +163,9 @@ where
 /// assert!(!Origin::Dynamic.is_static());
 /// assert_eq!(Origin::Cli.symbol(), "·");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
+)]
 pub enum Origin {
     /// Configured manually via the `lanforge.toml` file.
     #[enum_repr(alias = "static")]
@@ -205,7 +207,18 @@ impl Origin {
 ///
 /// Designed to be memory-efficient (1 byte) for storage in the core state.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, Hash, EnumRepr,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default,
+    Hash,
+    EnumRepr,
 )]
 #[repr(u8)]
 pub enum DeviceClass {
@@ -257,7 +270,9 @@ pub enum DeviceClass {
 /// | Mdns      | 1     | Multicast DNS discovery          |
 /// | Dhcp      | 2     | DHCP Option 12 (v4) or v6 hint   |
 /// | Static    | 3     | Manual config (CLI/TOML/API)     |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
+)]
 pub enum HostnameOrigin {
     /// No hostname discovered or assigned.
     #[default]

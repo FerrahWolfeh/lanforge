@@ -10,17 +10,17 @@ pub mod topology;
 pub mod whois;
 pub mod wol;
 
-pub use status::StatusHandler;
+pub use db::DbHandler;
 pub use devices::DevicesHandler;
+pub use dns::DnsCommand;
 pub use host::HostHandler;
 pub use lease::LeaseHandler;
 pub use log::LogHandler;
-pub use db::DbHandler;
-pub use wol::WolCommand;
-pub use whois::WhoisHandler;
-pub use dns::DnsCommand;
 pub use query::QueryHandler;
+pub use status::StatusHandler;
 pub use topology::TopologyHandler;
+pub use whois::WhoisHandler;
+pub use wol::WolCommand;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;

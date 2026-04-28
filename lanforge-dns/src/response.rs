@@ -61,7 +61,8 @@ impl<'a> ResponseBuilder<'a> {
         let rname = Name::from_str(&format!("hostmaster.{}.", self.cfg.search_domain))
             .unwrap_or_else(|_| Name::root());
         let soa = SOA::new(mname, rname, 1, 7200, 3600, 1_209_600, 3600);
-        resp.authorities.push(Record::from_rdata(name, 3600, RData::SOA(soa)));
+        resp.authorities
+            .push(Record::from_rdata(name, 3600, RData::SOA(soa)));
     }
 
     /// Builds an NXDOMAIN response (domain does not exist).

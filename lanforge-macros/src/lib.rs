@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::Parse;
-use syn::{parse_macro_input, Data, DeriveInput, ItemFn, LitStr, Fields, Ident, ItemStruct, Meta};
+use syn::{Data, DeriveInput, Fields, Ident, ItemFn, ItemStruct, LitStr, Meta, parse_macro_input};
 
 /// Attribute macro that automatically implements `LanforgeService` for a struct.
 ///
@@ -52,9 +52,11 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     }
 
-    let id = id.expect("lanforge_service requires an 'id' argument (e.g., #[lanforge_service(id = \"my-id\")])");
+    let id = id.expect(
+        "lanforge_service requires an 'id' argument (e.g., #[lanforge_service(id = \"my-id\")])",
+    );
     let display_name = name.unwrap_or_else(|| id.clone());
-    
+
     let describe_method = if let Some(expr) = describe {
         quote! {
             fn describe(&self) -> String {
@@ -157,7 +159,8 @@ pub fn enum_repr_derive(input: TokenStream) -> TokenStream {
                 }
             }
         }
-    }.into()
+    }
+    .into()
 }
 
 /// Derive macro for generating Display, Debug, and Serde implementations for identifiers.
@@ -226,12 +229,12 @@ pub fn device_handler(args: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #fn_vis fn #fn_name(#fn_args) #fn_output {
             let m = #mac_ident;
-            
+
             let mut dev_arc = match self.devices.remove(&m) {
                 Some(d) => d,
                 None => std::sync::Arc::new(crate::device::Device::new(m)),
             };
-            
+
             let result;
             {
                 let dev = std::sync::Arc::make_mut(&mut dev_arc);
@@ -240,10 +243,10 @@ pub fn device_handler(args: TokenStream, input: TokenStream) -> TokenStream {
                 result = (|| {
                     #fn_block
                 })();
-                
+
                 self.index_device(m, dev);
             }
-            
+
             self.devices.insert(m, dev_arc);
             result
         }
@@ -259,55 +262,58 @@ pub fn proxy_update_derive(input: TokenStream) -> TokenStream {
     let _name = input.ident;
 
     let variants = if let Data::Enum(data) = input.data {
-        data.variants.iter().map(|v| {
-            let ident = &v.ident;
-            let mut method_name = None;
+        data.variants
+            .iter()
+            .map(|v| {
+                let ident = &v.ident;
+                let mut method_name = None;
 
-            for attr in &v.attrs {
-                if attr.path().is_ident("proxy") {
-                    let _ = attr.parse_nested_meta(|meta| {
-                        if meta.path.is_ident("method") {
-                            let value: LitStr = meta.value()?.parse()?;
-                            method_name = Some(value.value());
-                        }
-                        Ok(())
-                    });
-                }
-            }
-
-            if let Some(m) = method_name {
-                let m_ident = Ident::new(&m, ident.span());
-                
-                match &v.fields {
-                    Fields::Named(f) => {
-                        let f_idents = f.named.iter().map(|f| &f.ident);
-                        let f_types = f.named.iter().map(|f| &f.ty);
-                        let f_clones = f.named.iter().map(|f| {
-                            let id = &f.ident;
-                            quote! { #id: #id.clone() }
+                for attr in &v.attrs {
+                    if attr.path().is_ident("proxy") {
+                        let _ = attr.parse_nested_meta(|meta| {
+                            if meta.path.is_ident("method") {
+                                let value: LitStr = meta.value()?.parse()?;
+                                method_name = Some(value.value());
+                            }
+                            Ok(())
                         });
-                        quote! {
-                            /// Automatically generated proxy for DeviceUpdate variant.
-                            #[must_use]
-                            pub fn #m_ident(&self, #(#f_idents: #f_types),*) -> bool {
-                                self.apply(&DeviceUpdate::#ident { #(#f_clones),* })
-                            }
-                        }
                     }
-                    Fields::Unit => {
-                        quote! {
-                            /// Automatically generated proxy for DeviceUpdate variant.
-                            pub fn #m_ident(&self) {
-                                let _ = self.apply(&DeviceUpdate::#ident);
-                            }
-                        }
-                    }
-                    _ => quote! {},
                 }
-            } else {
-                quote! {}
-            }
-        }).collect::<Vec<_>>()
+
+                if let Some(m) = method_name {
+                    let m_ident = Ident::new(&m, ident.span());
+
+                    match &v.fields {
+                        Fields::Named(f) => {
+                            let f_idents = f.named.iter().map(|f| &f.ident);
+                            let f_types = f.named.iter().map(|f| &f.ty);
+                            let f_clones = f.named.iter().map(|f| {
+                                let id = &f.ident;
+                                quote! { #id: #id.clone() }
+                            });
+                            quote! {
+                                /// Automatically generated proxy for DeviceUpdate variant.
+                                #[must_use]
+                                pub fn #m_ident(&self, #(#f_idents: #f_types),*) -> bool {
+                                    self.apply(&DeviceUpdate::#ident { #(#f_clones),* })
+                                }
+                            }
+                        }
+                        Fields::Unit => {
+                            quote! {
+                                /// Automatically generated proxy for DeviceUpdate variant.
+                                pub fn #m_ident(&self) {
+                                    let _ = self.apply(&DeviceUpdate::#ident);
+                                }
+                            }
+                        }
+                        _ => quote! {},
+                    }
+                } else {
+                    quote! {}
+                }
+            })
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
@@ -316,7 +322,8 @@ pub fn proxy_update_derive(input: TokenStream) -> TokenStream {
         impl LanforgeContext {
             #(#variants)*
         }
-    }.into()
+    }
+    .into()
 }
 
 #[proc_macro_derive(CommandDispatch, attributes(dispatch))]
@@ -582,5 +589,6 @@ pub fn cli_handler_derive(input: TokenStream) -> TokenStream {
                 }
             }
         }
-    }.into()
+    }
+    .into()
 }

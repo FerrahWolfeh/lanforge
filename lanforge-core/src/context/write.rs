@@ -225,7 +225,6 @@ impl LanforgeContext {
         events
     }
 
-
     /// Updates or hints a device hostname (e.g., via DHCP or mDNS).
     #[must_use]
     pub fn update_hostname(&self, mac: MacAddr, hostname: String, _source: HostnameOrigin) -> bool {
@@ -252,8 +251,6 @@ impl LanforgeContext {
         })
     }
 
-
-
     /// Signals a global IPv6 GUA change for an interface.
     #[must_use]
     pub fn signal_gua_change(
@@ -271,7 +268,6 @@ impl LanforgeContext {
         };
         self.apply(&DeviceUpdate::InterfaceIpsChanged { ifindex, state })
     }
-
 
     /// Releases a `DHCPv4` lease associated with a MAC.
     #[must_use]
@@ -299,7 +295,6 @@ impl LanforgeContext {
             target: LeaseTarget::V6Prefix { iaid },
         })
     }
-
 
     /// Triggers the background garbage collection process.
     pub fn expire_stale(&self, interval: std::time::Duration) {
@@ -339,7 +334,6 @@ impl LanforgeContext {
             origin: Origin::Cli,
         })
     }
-
 
     /// Sets the shared DNS statistics.
     pub fn set_dns_stats<T: std::any::Any + Send + Sync + 'static>(&self, stats: Arc<T>) {
