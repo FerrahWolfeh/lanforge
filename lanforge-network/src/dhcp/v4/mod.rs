@@ -49,7 +49,7 @@ use crate::dhcp::v4::config::Dhcpv4Config;
 use crate::error::NetworkError;
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{SyncBusReceiver, SyncService};
+use lanforge_core::service::{ServiceControl, SyncBusReceiver, SyncService};
 
 #[lanforge_macros::lanforge_service(
     id = "dhcpv4",
@@ -76,7 +76,7 @@ impl Dhcpv4Service {
 }
 
 impl SyncService for Dhcpv4Service {
-    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
+    fn run(&mut self, ctrl: ServiceControl, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
         // 1. Wait for DB and Interface Ready
         info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
         bus_rx.wait_for_db();
@@ -96,6 +96,8 @@ impl SyncService for Dhcpv4Service {
 
         let mut raw_tx =
             RawSender::new(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
+
+        ctrl.signal_ready();
 
         let mut buf = [0u8; 1500];
         let mut last_cleanup = Instant::now();

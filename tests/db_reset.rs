@@ -54,9 +54,10 @@ async fn test_full_db_reset_chain() {
     // 3. Spawn DbWorker
     let ctx_db = ctx.clone();
     let mut db_worker = DbWorker::new(db_url, log_db_url, ctx_db);
+    let ctrl = lanforge_core::service::ServiceControl::new("db", ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
-        let _ = db_worker.run().await;
+        let _ = db_worker.run(ctrl).await;
     });
 
     // Wait for DB ready

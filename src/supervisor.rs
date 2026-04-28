@@ -19,19 +19,11 @@
 
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::service::{AsyncService, ServiceMeta, SyncBusReceiver, SyncService};
+use lanforge_core::service::{AsyncService, ServiceControl, SyncBusReceiver, SyncService};
 use std::thread::sleep;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{error, info, warn};
-
-/// Publishes a `ServiceReady` event and logs the readiness signal.
-fn signal_ready(ctx: &LanforgeContext, meta: &ServiceMeta, description: &str) {
-    info!("▸ {} ready ({})", description, meta.id);
-    let _ = ctx.bus().publish(LanforgeEvent::ServiceReady {
-        name: meta.id.to_string(),
-    });
-}
 
 /// Executa uma task supervisionada que implementa `AsyncService`.
 pub async fn supervise_async<S, F>(ctx: &LanforgeContext, factory: F)
@@ -49,7 +41,7 @@ where
 
         info!("▸ Starting async service: {}", description);
 
-        signal_ready(ctx, &meta, &description);
+        let ctrl = ServiceControl::new(meta.id, ctx.clone());
 
         let mut bus_rx = ctx.bus().subscribe();
         tokio::select! {
@@ -69,7 +61,7 @@ where
                     return;
                 }
             }
-            res = service.run() => {
+            res = service.run(ctrl) => {
                 match res {
                     Ok(()) => {
                         if !ctx.is_running() {
@@ -182,9 +174,9 @@ where
             }
         });
 
-        signal_ready(ctx, &meta, &description);
+        let ctrl = ServiceControl::new(meta.id, ctx.clone());
 
-        let res = service.run(&bus_rx);
+        let res = service.run(ctrl, &bus_rx);
 
         match res {
             Ok(()) => {
@@ -256,10 +248,11 @@ mod tests {
     use lanforge_core::bus::EventBus;
     use lanforge_core::error::CoreError;
     use lanforge_core::service::LanforgeService;
+    use lanforge_core::service::ServiceControl;
     use lanforge_core::service::ServiceMeta;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU32;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
 
     fn init_test_context() -> LanforgeContext {
         let bus = Arc::new(EventBus::new());
@@ -303,7 +296,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for TestAsyncService {
-        async fn run(&mut self) -> Result<(), CoreError> {
+        async fn run(&mut self, _ctrl: ServiceControl) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             Err(CoreError::Generic("always fails".into()))
         }
@@ -341,7 +334,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for TestResetService {
-        async fn run(&mut self) -> Result<(), CoreError> {
+        async fn run(&mut self, _ctrl: ServiceControl) -> Result<(), CoreError> {
             let n = self.attempts.fetch_add(1, Ordering::Relaxed);
             if n == 0 {
                 Ok(())
@@ -488,8 +481,10 @@ mod tests {
     impl lanforge_core::service::SyncService for TestSyncService {
         fn run(
             &mut self,
+            ctrl: ServiceControl,
             bus_rx: &lanforge_core::service::SyncBusReceiver,
         ) -> Result<(), CoreError> {
+            ctrl.signal_ready();
             loop {
                 if let Some(e) = bus_rx.recv_timeout(Duration::from_millis(500)) {
                     println!("LOG: TestSyncService received: {:?}", e.event);
@@ -528,10 +523,11 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for RefService {
-        async fn run(&mut self) -> Result<(), CoreError> {
+        async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             // Simulate work then failure
             tokio::time::sleep(Duration::from_millis(2)).await;
+            ctrl.signal_ready();
             Err(CoreError::Generic("simulated error".into()))
         }
     }

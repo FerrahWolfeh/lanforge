@@ -20,7 +20,7 @@ use tracing::{debug, error, info};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 
 use crate::engine::LeaseDb;
 use crate::log_engine::LogDb;
@@ -70,7 +70,7 @@ impl DbWorker {
 }
 
 impl AsyncService for DbWorker {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let db = LeaseDb::open(&self.db_url).await.map_err(|e| {
             error!("Failed to open lease database: {e}");
             CoreError::Generic(e.to_string())
@@ -87,6 +87,9 @@ impl AsyncService for DbWorker {
         info!("Database worker started");
         self.ctx.set_db_ready(true);
         let _ = self.ctx.bus().publish(LanforgeEvent::DbReady);
+
+        // Explicitly signal readiness to the event loop
+        ctrl.signal_ready();
 
         loop {
             tokio::select! {

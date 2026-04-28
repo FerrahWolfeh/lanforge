@@ -21,6 +21,7 @@ pub async fn run_event_loop(
     bootstrap: BootstrapResult,
     ctx: LanforgeContext,
     mut bus_rx: Receiver<TimedEvent>,
+    expected_services: HashSet<String>,
 ) -> Result<()> {
     let cfg = bootstrap.cfg;
     let target_ifindex = bootstrap.target_ifindex;
@@ -39,16 +40,20 @@ pub async fn run_event_loop(
     // Initial scan request to kick off discovery across all services
     let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
 
-    let expected_services = determine_expected_services(&cfg);
+    info!("Event loop: expecting readiness from {} services: {:?}", expected_services.len(), expected_services);
+
     let mut loop_ctx = LoopContext {
         ctx: &ctx,
         cfg: &cfg,
         state: &mut state,
         target_ifindex,
-        expected_services: &expected_services,
+        expected_services,
         ready_services: HashSet::new(),
         system_ready_sent: false,
     };
+
+    let mut status_timer = interval(Duration::from_secs(10));
+    status_timer.tick().await; // skip first tick
 
     loop {
         tokio::select! {
@@ -66,6 +71,19 @@ pub async fn run_event_loop(
             _ = sigint.recv() => {
                 info!("SIGINT received — starting graceful shutdown...");
                 break;
+            }
+            _ = status_timer.tick() => {
+                if !loop_ctx.system_ready_sent {
+                    let mut missing = Vec::new();
+                    for s in &loop_ctx.expected_services {
+                        if !loop_ctx.ready_services.contains(s) {
+                            missing.push(s);
+                        }
+                    }
+                    if !missing.is_empty() {
+                        warn!("⌛ Still waiting for {} services to be ready: {:?}", missing.len(), missing);
+                    }
+                }
             }
             event = bus_rx.recv() => {
                 match event {
@@ -94,17 +112,17 @@ struct LoopContext<'a> {
     cfg: &'a Arc<Config>,
     state: &'a mut LoopState,
     target_ifindex: u32,
-    expected_services: &'a HashSet<&'static str>,
+    expected_services: HashSet<String>,
     ready_services: HashSet<String>,
     system_ready_sent: bool,
 }
 
 fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
     match event {
-        LanforgeEvent::ServiceReady { name } if l_ctx.expected_services.contains(name.as_str()) => {
+        LanforgeEvent::ServiceReady { name } if l_ctx.expected_services.contains(&name) => {
             l_ctx.ready_services.insert(name.clone());
-            debug!(
-                "ServiceReady: {} ({}/{})",
+            info!(
+                "▸ Service '{}' reported ready ({}/{})",
                 name,
                 l_ctx.ready_services.len(),
                 l_ctx.expected_services.len()
@@ -145,8 +163,11 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
         }
         LanforgeEvent::ConfigUpdate { password_hash } => {
             let hash_path = l_ctx.cfg.get_password_hash_path();
-            info!("ConfigUpdate: Saving new API password hash to {:?}...", hash_path);
-            
+            info!(
+                "ConfigUpdate: Saving new API password hash to {:?}...",
+                hash_path
+            );
+
             if let Err(e) = std::fs::write(&hash_path, password_hash) {
                 error!("❌ Failed to save password hash: {e}");
             } else {
@@ -221,23 +242,3 @@ impl LoopState {
     }
 }
 
-fn determine_expected_services(cfg: &Config) -> HashSet<&'static str> {
-    let mut services =
-        HashSet::from(["db", "mdns", "monitor", "ifmon", "control", "slaac_tracker"]);
-    if cfg.ra_enabled {
-        services.insert("ra");
-    }
-    if cfg.dhcpv4_enabled {
-        services.insert("dhcpv4");
-    }
-    if cfg.dhcpv6_enabled {
-        services.insert("dhcpv6");
-    }
-    if cfg.dns_enabled {
-        services.insert("dns");
-    }
-    if cfg.http_listen.is_some() {
-        services.insert("http");
-    }
-    services
-}

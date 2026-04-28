@@ -41,7 +41,7 @@ use crate::ndp::utils::{
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 use netlink_packet_core::NetlinkMessage;
 use netlink_sys::SocketAddr;
 use rtnetlink::Handle;
@@ -148,7 +148,7 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
 }
 
 impl AsyncService for NeighborMonitor {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         // 0. Wait for Interface Ready (Sanity check)
         // This ensures the initial_scan has completed and ctx is seeded with prefixes.
         self.ctx.wait_for_interfaces().await?;
@@ -185,6 +185,8 @@ impl AsyncService for NeighborMonitor {
                 }
             }
         }
+
+        ctrl.signal_ready();
 
         loop {
             if !self.ctx.is_running() {

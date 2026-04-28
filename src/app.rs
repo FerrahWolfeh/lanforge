@@ -32,7 +32,7 @@ pub struct Daemon {
 
 impl Daemon {
     /// Creates a new Daemon instance from a bootstrap result and context.
-    pub const fn new(bootstrap: BootstrapResult, ctx: LanforgeContext) -> Self {
+    pub fn new(bootstrap: BootstrapResult, ctx: LanforgeContext) -> Self {
         Self {
             bootstrap,
             registry: ServiceRegistry::new(),
@@ -46,8 +46,9 @@ impl Daemon {
         let bus_rx = bus.subscribe();
 
         self.spawn_services();
+        let expected = self.registry.registered_ids();
 
-        run_event_loop(self.bootstrap.clone(), self.ctx.clone(), bus_rx).await?;
+        run_event_loop(self.bootstrap.clone(), self.ctx.clone(), bus_rx, expected).await?;
 
         self.shutdown().await
     }

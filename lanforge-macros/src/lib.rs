@@ -70,6 +70,11 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #input_struct
 
+        impl #struct_name {
+            /// Static identifier for the service.
+            pub const SERVICE_ID: &'static str = #id;
+        }
+
         impl lanforge_core::service::LanforgeService for #struct_name {
             fn meta(&self) -> lanforge_core::service::ServiceMeta {
                 lanforge_core::service::ServiceMeta {

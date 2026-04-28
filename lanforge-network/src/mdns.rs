@@ -42,7 +42,7 @@ const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const MDNS_IPV6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 
 enum MdnsCommand {
     ProbeAll,
@@ -67,9 +67,11 @@ pub struct MdnsProber {
 }
 
 impl AsyncService for MdnsProber {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
+
+        ctrl.signal_ready();
 
         if let Err(e) = run_mdns_worker(self.ctx.clone(), rx, tx).await {
             error!("mDNS worker fatal error: {e}");

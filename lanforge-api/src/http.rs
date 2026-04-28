@@ -24,7 +24,7 @@ use tokio::net::TcpListener;
 use tracing::info;
 
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 
 use crate::config::ApiConfig;
 
@@ -80,7 +80,7 @@ impl HttpService {
 }
 
 impl AsyncService for HttpService {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
 
         let listen_addr = cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080");
@@ -122,6 +122,8 @@ impl AsyncService for HttpService {
         let tcp_listener = TcpListener::bind(&addr)
             .await
             .map_err(|e| CoreError::Generic(format!("Failed to bind to {}: {}", addr, e)))?;
+
+        ctrl.signal_ready();
 
         let ctx_shutdown = self.ctx.clone();
         axum::serve(tcp_listener, app)

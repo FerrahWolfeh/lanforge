@@ -21,7 +21,7 @@
 //! # Example
 //!
 //! ```rust
-//! use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+//! use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta, ServiceControl};
 //! use lanforge_core::error::CoreError;
 //! use std::time::Duration;
 //!
@@ -42,7 +42,8 @@
 //! }
 //!
 //! impl AsyncService for MyService {
-//!     async fn run(&mut self) -> Result<(), CoreError> {
+//!     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+//!         ctrl.signal_ready();
 //!         // Service main loop
 //!         Ok(())
 //!     }
@@ -178,7 +179,7 @@ pub trait LanforgeService: Send + Sync {
 /// # Example
 ///
 /// ```rust
-/// use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+/// use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta, ServiceControl};
 /// use lanforge_core::context::LanforgeContext;
 /// use lanforge_core::error::CoreError;
 /// use lanforge_core::bus::LanforgeEvent;
@@ -203,7 +204,8 @@ pub trait LanforgeService: Send + Sync {
 /// }
 ///
 /// impl AsyncService for MyAsyncService {
-///     async fn run(&mut self) -> Result<(), CoreError> {
+///     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+///         ctrl.signal_ready();
 ///         let mut rx = self.ctx.bus().subscribe();
 ///         loop {
 ///             match rx.recv().await {
@@ -225,7 +227,7 @@ pub trait AsyncService: LanforgeService {
     ///
     /// # Errors
     /// Returns `CoreError` if the service execution fails and cannot be recovered.
-    fn run(&mut self) -> impl Future<Output = Result<(), CoreError>> + Send;
+    fn run(&mut self, ctrl: ServiceControl) -> impl Future<Output = Result<(), CoreError>> + Send;
 }
 
 /// A thread-safe receiver for `EventBus` events in synchronous contexts.
@@ -319,7 +321,7 @@ impl SyncBusReceiver {
 /// # Example
 ///
 /// ```rust
-/// use lanforge_core::service::{SyncService, LanforgeService, ServiceMeta, SyncBusReceiver};
+/// use lanforge_core::service::{SyncService, LanforgeService, ServiceMeta, SyncBusReceiver, ServiceControl};
 /// use lanforge_core::error::CoreError;
 /// use std::time::Duration;
 ///
@@ -340,7 +342,9 @@ impl SyncBusReceiver {
 /// }
 ///
 /// impl SyncService for MySyncService {
-///     fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
+///     fn run(&mut self, ctrl: ServiceControl, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
+///         ctrl.signal_ready();
+///
 ///         // Wait for dependencies
 ///         bus_rx.wait_for_interfaces();
 ///         bus_rx.wait_for_db();
@@ -363,5 +367,46 @@ pub trait SyncService: LanforgeService {
     ///
     /// # Errors
     /// Returns `CoreError` if the service execution fails.
-    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError>;
+    fn run(&mut self, ctrl: ServiceControl, bus_rx: &SyncBusReceiver) -> Result<(), CoreError>;
+}
+
+/// A handle provided to services to control their lifecycle and signal readiness.
+pub struct ServiceControl {
+    id: &'static str,
+    ctx: LanforgeContext,
+    signaled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ServiceControl {
+    /// Creates a new service control handle.
+    #[must_use]
+    pub fn new(id: &'static str, ctx: LanforgeContext) -> Self {
+        Self {
+            id,
+            ctx,
+            signaled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Signals that the service is now fully initialized and ready to handle traffic.
+    /// This is idempotent; multiple calls will only result in one signal.
+    pub fn signal_ready(&self) {
+        if !self
+            .signaled
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let _ = self
+                .ctx
+                .bus()
+                .publish(crate::bus::LanforgeEvent::ServiceReady {
+                    name: self.id.to_string(),
+                });
+        }
+    }
+
+    /// Returns the ID of the service this handle belongs to.
+    #[must_use]
+    pub const fn id(&self) -> &'static str {
+        self.id
+    }
 }

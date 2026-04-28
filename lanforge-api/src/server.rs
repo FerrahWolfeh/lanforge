@@ -17,7 +17,7 @@ use tokio::io::{
 use tokio::net::{TcpListener, UnixListener};
 use tracing::{debug, error, info};
 
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 
 #[lanforge_macros::lanforge_service(
     id = "control",
@@ -40,7 +40,7 @@ impl ControlService {
 }
 
 impl AsyncService for ControlService {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
 
         let path_ref = Path::new(&cfg.socket_path);
@@ -65,6 +65,8 @@ impl AsyncService for ControlService {
         if let Err(e) = fs::set_permissions(path_ref, Permissions::from_mode(0o666)) {
             debug!("Warning: could not set 0666 permissions on socket: {e}");
         }
+
+        ctrl.signal_ready();
 
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut current_gua: Option<String> = None;

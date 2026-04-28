@@ -63,7 +63,7 @@ use dhcproto::v6::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{SyncBusReceiver, SyncService};
+use lanforge_core::service::{ServiceControl, SyncBusReceiver, SyncService};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 ///
@@ -97,7 +97,7 @@ impl Dhcpv6Service {
 }
 
 impl SyncService for Dhcpv6Service {
-    fn run(&mut self, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
+    fn run(&mut self, ctrl: ServiceControl, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
         if !self.config.enabled {
             info!("DHCPv6 is disabled in config.");
             return Ok(());
@@ -185,6 +185,7 @@ impl SyncService for Dhcpv6Service {
 
         let mut buf = [0u8; 2048];
         info!("DHCPv6 state machine started");
+        ctrl.signal_ready();
 
         loop {
             if !self.ctx.is_running() {

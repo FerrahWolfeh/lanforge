@@ -45,7 +45,7 @@ pub(crate) struct DnsContext {
 }
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 
 #[lanforge_macros::lanforge_service(
     id = "dns",
@@ -273,7 +273,7 @@ impl DnsService {
 }
 
 impl AsyncService for DnsService {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
             return Ok(());
@@ -290,9 +290,7 @@ impl AsyncService for DnsService {
         let dns_ctx = self.init_dns_context().await?;
 
         // 3. Signal readiness
-        let _ = bus.publish(LanforgeEvent::ServiceReady {
-            name: "dns".to_string(),
-        });
+        ctrl.signal_ready();
 
         // 4. Spawn protocol handlers
         let rx = bus.subscribe();

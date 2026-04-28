@@ -238,7 +238,7 @@ async fn test_lease_history_recording() {
 #[tokio::test]
 async fn test_db_worker_lifecycle() {
     use lanforge_core::context::LanforgeContext;
-    use lanforge_core::service::AsyncService;
+    use lanforge_core::service::{AsyncService, ServiceControl};
 
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("worker.db");
@@ -257,8 +257,9 @@ async fn test_db_worker_lifecycle() {
 
     let mut bus_rx = bus.subscribe();
 
+    let ctrl = ServiceControl::new("db", ctx.clone());
     let worker_handle = tokio::spawn(async move {
-        worker.run().await.expect("Worker failed");
+        worker.run(ctrl).await.expect("Worker failed");
     });
 
     // Wait for DbReady

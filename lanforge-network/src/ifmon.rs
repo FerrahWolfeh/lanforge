@@ -23,7 +23,7 @@ use futures::stream::TryStreamExt;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_core::state::{DeviceUpdate, InterfaceState};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::Handle;
@@ -159,8 +159,10 @@ impl AddressMonitor {
 }
 
 impl AsyncService for AddressMonitor {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let mut bus_rx = self.ctx.bus().subscribe();
+
+        ctrl.signal_ready();
 
         loop {
             if !self.ctx.is_running() {

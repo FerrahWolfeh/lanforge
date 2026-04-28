@@ -15,7 +15,7 @@ use std::ptr::from_mut;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_core::state::DeviceUpdate;
 use pnet::packet::Packet;
 use pnet::packet::ethernet::EthernetPacket;
@@ -53,7 +53,7 @@ impl LldpMonitor {
 }
 
 impl AsyncService for LldpMonitor {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let socket = create_lldp_socket(&self.iface).map_err(|e| {
             error!("Failed to create LLDP socket: {e}");
             CoreError::Generic(e.to_string())
@@ -62,6 +62,7 @@ impl AsyncService for LldpMonitor {
         let async_fd = AsyncFd::new(socket).map_err(CoreError::Io)?;
 
         info!("LLDP Monitor started on {}", self.iface);
+        ctrl.signal_ready();
 
         let mut buf = [0u8; 2048];
 

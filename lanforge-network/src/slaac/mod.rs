@@ -16,7 +16,7 @@ use crate::slaac::packet::build_echo_request;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tracing::{debug, info, warn};
 
@@ -48,7 +48,7 @@ impl SlaacTracker {
 }
 
 impl AsyncService for SlaacTracker {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         // 0. Wait for Interface Ready (Sanity check)
         // This ensures the initial_scan has completed and we have a valid link-local address.
         self.ctx.wait_for_interfaces().await?;
@@ -59,6 +59,8 @@ impl AsyncService for SlaacTracker {
                 .map_err(|e| CoreError::Generic(e.to_string()))?,
         );
         self.socket = Some(Arc::clone(&socket));
+
+        ctrl.signal_ready();
 
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut next_sweep = Instant::now(); // Immediate sweep on boot

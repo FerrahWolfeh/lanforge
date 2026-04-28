@@ -53,7 +53,7 @@ pub use packet::{build_ra_packet, icmpv6_checksum};
 use crate::error::NetworkError;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceControl};
 use rand::RngExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
@@ -188,7 +188,7 @@ impl RaService {
 }
 
 impl AsyncService for RaService {
-    async fn run(&mut self) -> Result<(), CoreError> {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         self.cfg
             .validate()
             .map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -227,6 +227,8 @@ impl AsyncService for RaService {
             .map_err(|e| CoreError::Generic(e.to_string()))?;
         socket.set_nonblocking(true).map_err(CoreError::Io)?;
         let async_socket = AsyncFd::new(socket).map_err(CoreError::Io)?;
+
+        ctrl.signal_ready();
 
         let mut state = RaState::new();
 
