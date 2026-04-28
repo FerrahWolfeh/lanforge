@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{error, info};
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -108,6 +108,11 @@ impl AsyncService for HttpService {
             .route("/metrics", get(handle_metrics))
             .route("/login", post(handle_login));
 
+        #[cfg(feature = "doh")]
+        {
+            app = app.route("/dns-query", get(handle_dns_query).post(handle_dns_query));
+        }
+
         if cfg.auth_password_hash.is_some() {
             info!("🔐 API Authentication enabled. RPC routes active.");
             app = app
@@ -119,26 +124,53 @@ impl AsyncService for HttpService {
 
         let app = app.with_state(state);
 
-        let tcp_listener = TcpListener::bind(&addr)
-            .await
-            .map_err(|e| CoreError::Generic(format!("Failed to bind to {}: {}", addr, e)))?;
+        let maybe_tls_config = if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
+            match crate::tls::load_tls_config(cert, key) {
+                Ok(config) => Some(config),
+                Err(e) => {
+                    error!(
+                        "❌ Failed to load TLS configuration: {}. Falling back to HTTP.",
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let ctx_shutdown = self.ctx.clone();
+        let shutdown_signal = async move {
+            let mut rx = ctx_shutdown.bus().subscribe();
+            while let Ok(event) = rx.recv().await {
+                if !ctx_shutdown.is_running() || matches!(event.event, LanforgeEvent::Shutdown) {
+                    info!("HTTP: shutdown signal received");
+                    break;
+                }
+            }
+        };
 
         ctrl.signal_ready();
 
-        let ctx_shutdown = self.ctx.clone();
-        axum::serve(tcp_listener, app)
-            .with_graceful_shutdown(async move {
-                let mut rx = ctx_shutdown.bus().subscribe();
-                while let Ok(event) = rx.recv().await {
-                    if !ctx_shutdown.is_running() || matches!(event.event, LanforgeEvent::Shutdown)
-                    {
-                        info!("HTTP: shutdown signal received");
-                        break;
-                    }
-                }
-            })
-            .await
-            .map_err(|e| CoreError::Generic(format!("Axum server error: {}", e)))?;
+        if let Some(tls_config) = maybe_tls_config {
+            info!("🚀 HTTPS API listening on https://{}", addr);
+            let config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls_config));
+            axum_server::bind_rustls(addr, config)
+                .handle(axum_server::Handle::new()) // For graceful shutdown if needed, but we use .serve
+                .serve(app.into_make_service())
+                .await
+                .map_err(|e| CoreError::Generic(format!("HTTPS server error: {}", e)))?;
+        } else {
+            info!("🚀 HTTP API listening on http://{}", addr);
+            let tcp_listener = TcpListener::bind(&addr)
+                .await
+                .map_err(|e| CoreError::Generic(format!("Failed to bind to {}: {}", addr, e)))?;
+
+            axum::serve(tcp_listener, app)
+                .with_graceful_shutdown(shutdown_signal)
+                .await
+                .map_err(|e| CoreError::Generic(format!("Axum server error: {}", e)))?;
+        }
 
         Ok(())
     }
@@ -339,5 +371,71 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DNS over HTTPS (DoH)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "doh")]
+#[derive(Debug, serde::Deserialize)]
+pub struct DnsQueryParams {
+    pub dns: Option<String>,
+}
+
+#[cfg(feature = "doh")]
+async fn handle_dns_query(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<DnsQueryParams>,
+    method: axum::http::Method,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use lanforge_dns::server::{DnsContext, handle_query};
+
+    let query_data = if method == axum::http::Method::GET {
+        let Some(dns_base64) = params.dns else {
+            return (StatusCode::BAD_REQUEST, "Missing dns parameter").into_response();
+        };
+        match URL_SAFE_NO_PAD.decode(dns_base64) {
+            Ok(d) => d,
+            Err(_) => return (StatusCode::BAD_REQUEST, "Invalid base64").into_response(),
+        }
+    } else {
+        body.to_vec()
+    };
+
+    if query_data.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Empty query").into_response();
+    }
+
+    let dns_ctx_any = match state.ctx.get_dns_context() {
+        Some(c) => c,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, "DNS engine not ready").into_response(),
+    };
+
+    let dns_ctx = match dns_ctx_any.downcast_ref::<DnsContext>() {
+        Some(c) => c,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid DNS context").into_response(),
+    };
+
+    // For DoH, we don't have a simple source IP like UDP, but we can try to get it from headers
+    let _src_ip: std::net::IpAddr = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or_else(|| "127.0.0.1".parse().unwrap());
+
+    match handle_query(&query_data, dns_ctx, _src_ip).await {
+        Ok(Some(response)) => (
+            [(axum::http::header::CONTENT_TYPE, "application/dns-message")],
+            response,
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

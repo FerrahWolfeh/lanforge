@@ -92,6 +92,9 @@ impl Daemon {
 
             #[cfg(feature = "http")]
             async [ctx, cfg] if cfg.http_listen.is_some() => HttpService::new(Arc::new(cfg.to_api_config()), ctx),
+
+            #[cfg(feature = "dot")]
+            async [ctx, cfg] if cfg.dns_toml.dot_listen.is_some() => lanforge_api::dot::DotService::new(Arc::new(cfg.to_api_config()), ctx),
         });
     }
 

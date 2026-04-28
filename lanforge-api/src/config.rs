@@ -43,6 +43,10 @@ pub struct ApiConfig {
     /// Optional address to listen for the HTTP REST API (e.g., "0.0.0.0:8080").
     #[cfg(feature = "http")]
     pub http_listen: Option<String>,
+    
+    /// Optional address to listen for DNS-over-TLS (e.g., "0.0.0.0:853").
+    #[cfg(feature = "dot")]
+    pub dot_listen: Option<String>,
 
     /// Total number of addresses in the DHCPv4 dynamic pool.
     pub dhcp_v4_range_size: u32,
@@ -54,11 +58,11 @@ pub struct ApiConfig {
     pub auth_password_hash: Option<String>,
 
     /// Native TLS certificate (Path or raw PEM).
-    #[cfg(feature = "http")]
+    #[cfg(any(feature = "https", feature = "tls"))]
     pub tls_cert: Option<String>,
 
     /// Native TLS private key (Path or raw PEM).
-    #[cfg(feature = "http")]
+    #[cfg(any(feature = "https", feature = "tls"))]
     pub tls_key: Option<String>,
 }
 
@@ -82,13 +86,15 @@ impl ApiConfig {
             tcp_port: None,
             #[cfg(feature = "http")]
             http_listen: None,
+            #[cfg(feature = "dot")]
+            dot_listen: None,
             dhcp_v4_range_size: 100,
             dhcp_v6_pool_size: Some(100),
             #[cfg(feature = "http")]
             auth_password_hash: None,
-            #[cfg(feature = "http")]
+            #[cfg(any(feature = "https", feature = "tls"))]
             tls_cert: None,
-            #[cfg(feature = "http")]
+            #[cfg(any(feature = "https", feature = "tls"))]
             tls_key: None,
         }
     }

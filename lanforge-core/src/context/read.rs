@@ -147,4 +147,10 @@ impl LanforgeContext {
     pub fn get_dns_stats(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
         self.inner.dns_stats.read().clone()
     }
+
+    /// Returns the shared DNS context, if set.
+    #[must_use]
+    pub fn get_dns_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        self.inner.dns_context.read().clone()
+    }
 }

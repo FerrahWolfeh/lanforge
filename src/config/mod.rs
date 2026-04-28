@@ -512,6 +512,8 @@ impl Config {
             tcp_port: self.api_port,
             #[cfg(feature = "http")]
             http_listen: self.http_listen.clone(),
+            #[cfg(feature = "dot")]
+            dot_listen: self.dns_toml.dot_listen.clone(),
             dhcp_v4_range_size: {
                 let v4 = self.to_dhcpv4_config();
                 u32::from(v4.range_end) - u32::from(v4.range_start) + 1
@@ -535,9 +537,9 @@ impl Config {
             },
             #[cfg(feature = "http")]
             auth_password_hash,
-            #[cfg(feature = "http")]
+            #[cfg(any(feature = "https", feature = "tls"))]
             tls_cert: self.http_toml.tls_cert.clone(),
-            #[cfg(feature = "http")]
+            #[cfg(any(feature = "https", feature = "tls"))]
             tls_key: self.http_toml.tls_key.clone(),
         }
     }

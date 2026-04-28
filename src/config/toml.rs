@@ -212,6 +212,8 @@ pub struct DnsCfg {
     /// List of URLs to fetch blocklists from.
     #[serde(default)]
     pub adblock_urls: Vec<String>,
+    /// Address and port for DNS-over-TLS (e.g. "0.0.0.0:853")
+    pub dot_listen: Option<String>,
     /// How many days a device can be offline before its DNS entry is hidden.
     #[serde(default = "default_threshold_days")]
     pub last_seen_threshold_days: u32,
@@ -231,6 +233,7 @@ impl Default for DnsCfg {
             ttl: 60,
             adblock_enabled: false,
             adblock_urls: Vec::new(),
+            dot_listen: None,
             last_seen_threshold_days: 7,
         }
     }

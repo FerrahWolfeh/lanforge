@@ -112,6 +112,8 @@ struct LanforgeContextInner {
     if_ready: AtomicBool,
     /// Shared DNS statistics, updated by the DNS module.
     dns_stats: RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
+    /// Shared DNS context for DoT/DoH, updated by the DNS module.
+    dns_context: RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
     /// Timestamp of the last successful database flush.
     last_db_flush: RwLock<Option<SystemTime>>,
     /// Internal counters for event rates.
@@ -155,6 +157,7 @@ impl LanforgeContext {
                 db_ready: AtomicBool::new(false),
                 if_ready: AtomicBool::new(false),
                 dns_stats: RwLock::new(None),
+                dns_context: RwLock::new(None),
                 last_db_flush: RwLock::new(None),
                 event_counters: Arc::new(EventCounters::default()),
             }),

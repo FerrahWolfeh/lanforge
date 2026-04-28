@@ -22,12 +22,33 @@ name = "lanforged"
 path = "src/main.rs"
 
 [features]
-default = ["sqlite"]
+default = ["sqlite", "full"]
 debug-commands = []
 sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]
-adblock = ["lanforge-dns/adblock"]
+adblock = [
+    "lanforge-dns/adblock",
+    "lanforge-api/adblock",
+    "lanforge-db/adblock",
+]
 http = ["lanforge-api/http"]
+dot = ["lanforge-api/dot"]
+https = ["lanforge-api/https"]
+doh = ["lanforge-api/doh"]
+tls = ["lanforge-api/tls"]
+zstd = ["lanforge-api/zstd"]
+full = [
+    "http",
+    "dot",
+    "https",
+    "doh",
+    "tls",
+    "zstd",
+    "adblock",
+    "postgres",
+    "sqlite",
+]
+
 
 [dependencies]
 lanforge-core = { path = "lanforge-core" }

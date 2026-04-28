@@ -35,7 +35,7 @@ use crate::filter::{AdBlocker, labels_to_domain};
 ///
 /// A single `Arc<DnsContext>` replaces several individual `Arc` clones per query,
 /// reducing atomic reference counting overhead in the fast path.
-pub(crate) struct DnsContext {
+pub struct DnsContext {
     pub cfg: DnsConfig,
     pub upstream_mgr: Option<Arc<UpstreamManager>>,
     pub stats: Arc<DnsStats>,
@@ -91,7 +91,8 @@ impl DnsService {
         Ok((udp_sock, tcp_listener))
     }
 
-    async fn init_dns_context(&self) -> Result<Arc<DnsContext>, CoreError> {
+    /// Initializes a `DnsContext` for manual query handling.
+    pub async fn init_dns_context(&self) -> Result<Arc<DnsContext>, CoreError> {
         let upstream_mgr = if let Some(upstream) = self.cfg.upstream {
             Some(
                 UpstreamManager::new(upstream)
@@ -127,10 +128,7 @@ impl DnsService {
                 tokio::select! {
                     res = sock.recv_from(&mut buf) => {
                         let Ok((len, src)) = res else { continue; };
-                        if let Ok(Some(response)) = handle_query(&buf[..len], &dns_ctx,
-                            #[cfg(feature = "adblock")]
-                            src.ip()
-                        ).await {
+                        if let Ok(Some(response)) = handle_query(&buf[..len], &dns_ctx, src.ip()).await {
                             let _ = sock.send_to(&response, src).await;
                         }
                     }
@@ -235,10 +233,7 @@ impl DnsService {
                                     let mut query_buf = vec![0u8; len];
                                     stream.read_exact(&mut query_buf).await?;
 
-                                    if let Ok(Some(response)) = handle_query(&query_buf, &c,
-                                        #[cfg(feature = "adblock")]
-                                        stream.peer_addr()?.ip()
-                                    ).await {
+                                    if let Ok(Some(response)) = handle_query(&query_buf, &c, stream.peer_addr()?.ip()).await {
                                         let resp_len = u16::try_from(response.len()).unwrap_or(u16::MAX).to_be_bytes();
                                         stream.write_all(&resp_len).await?;
                                         stream.write_all(&response).await?;
@@ -289,6 +284,9 @@ impl AsyncService for DnsService {
         let (udp_sock, tcp_listener) = self.bind_sockets().await?;
         let dns_ctx = self.init_dns_context().await?;
 
+        // Expose context for other services (DoT/DoH)
+        self.ctx.set_dns_context(Arc::clone(&dns_ctx));
+
         // 3. Signal readiness
         ctrl.signal_ready();
 
@@ -328,12 +326,14 @@ impl AsyncService for DnsService {
 ///     Local2 -->|Found| Return
 ///     Local2 -->|Not Found| Upstream
 /// ```
-pub(crate) async fn handle_query(
+pub async fn handle_query(
     data: &[u8],
     ctx: &DnsContext,
-    #[cfg(feature = "adblock")] src_addr: std::net::IpAddr,
+    src_addr: std::net::IpAddr,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     ctx.stats.inc_requests();
+
+    let _ = src_addr;
 
     // PHASE 1: Zero-Alloc Triage
     let Some(header) = WireHeader::parse(data) else {
@@ -347,7 +347,6 @@ pub(crate) async fn handle_query(
         return handle_query_fallback(
             data,
             ctx,
-            #[cfg(feature = "adblock")]
             src_addr,
         )
         .await;
@@ -446,8 +445,10 @@ fn resolve_local_wire(
 async fn handle_query_fallback(
     data: &[u8],
     ctx: &DnsContext,
-    #[cfg(feature = "adblock")] src_addr: std::net::IpAddr,
+    src_addr: std::net::IpAddr,
 ) -> Result<Option<Vec<u8>>, DnsError> {
+    let _ = src_addr;
+
     let Ok(query) = Message::from_bytes(data) else {
         return Ok(None);
     };

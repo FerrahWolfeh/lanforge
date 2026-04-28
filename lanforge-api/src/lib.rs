@@ -55,6 +55,10 @@ pub mod handlers;
 pub mod http;
 #[cfg(feature = "http")]
 pub mod metrics;
+#[cfg(any(feature = "https", feature = "tls"))]
+pub mod tls;
+#[cfg(feature = "dot")]
+pub mod dot;
 pub mod server;
 #[cfg(test)]
 pub mod tests;

@@ -337,7 +337,12 @@ impl LanforgeContext {
 
     /// Sets the shared DNS statistics.
     pub fn set_dns_stats<T: std::any::Any + Send + Sync + 'static>(&self, stats: Arc<T>) {
-        *self.inner.dns_stats.write() = Some(stats);
+        *self.inner.dns_stats.write() = Some(stats as Arc<dyn std::any::Any + Send + Sync>);
+    }
+
+    /// Sets the shared DNS context.
+    pub fn set_dns_context<T: std::any::Any + Send + Sync + 'static>(&self, ctx: Arc<T>) {
+        *self.inner.dns_context.write() = Some(ctx as Arc<dyn std::any::Any + Send + Sync>);
     }
 
     /// Completely resets the in-memory state.
