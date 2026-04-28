@@ -22,7 +22,7 @@ name = "lanforged"
 path = "src/main.rs"
 
 [features]
-default = ["sqlite", "full"]
+default = ["sqlite"]
 debug-commands = []
 sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]

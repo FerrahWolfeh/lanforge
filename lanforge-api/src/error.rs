@@ -58,6 +58,8 @@ pub enum ApiError {
     /// TLS configuration or handshake error.
     #[error("TLS error: {0}")]
     Tls(String),
+
+    #[cfg(feature = "tls")]
     /// PEM parsing error.
     #[error("PEM error: {0}")]
     Pem(#[from] rustls_pki_types::pem::Error),

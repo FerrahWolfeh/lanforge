@@ -212,15 +212,10 @@ async fn test_nxdomain_leak_prevention_and_soa() {
         #[cfg(feature = "adblock")]
         adblocker: None,
     };
-    let resp_bytes = handle_query(
-        &data,
-        &ctx,
-        #[cfg(feature = "adblock")]
-        "127.0.0.1".parse().unwrap(),
-    )
-    .await
-    .unwrap()
-    .expect("Deve retornar uma resposta DNS");
+    let resp_bytes = handle_query(&data, &ctx, "127.0.0.1".parse().unwrap())
+        .await
+        .unwrap()
+        .expect("Deve retornar uma resposta DNS");
     let resp = Message::from_bytes(&resp_bytes).unwrap();
     assert_eq!(resp.response_code, ResponseCode::NXDomain);
 }
