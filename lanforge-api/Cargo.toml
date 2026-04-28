@@ -7,6 +7,7 @@ edition = "2024"
 lanforge-core = { path = "../lanforge-core" }
 lanforge-db = { path = "../lanforge-db" }
 lanforge-dns = { path = "../lanforge-dns" }
+lanforge-macros = { path = "../lanforge-macros" }
 
 hex = { version = "0.4.3", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive", "rc"] }

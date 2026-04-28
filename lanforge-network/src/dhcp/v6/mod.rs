@@ -63,7 +63,7 @@ use dhcproto::v6::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, SyncService};
+use lanforge_core::service::{SyncBusReceiver, SyncService};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 ///
@@ -72,6 +72,18 @@ use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, Sync
 /// - `DeviceUpdated` (`V6` suffix changes)
 /// - `PrefixChanged` (`GUA` updates → client `RECONFIGURE`)
 /// - `LeaseRenew` (manual RECONFIGURE send)
+#[lanforge_macros::lanforge_service(
+    id = "dhcpv6",
+    name = "DHCPv6 Server",
+    critical = true,
+    retries = 0,
+    base_backoff = 2,
+    max_backoff = 30,
+    describe = format!(
+        "DHCPv6 on [{}]:{} (iface: {})",
+        ALL_DHCP_RELAY_AGENTS_AND_SERVERS, self.config.port, self.config.iface
+    )
+)]
 pub struct Dhcpv6Service {
     config: Dhcpv6Config,
     ctx: LanforgeContext,
@@ -81,27 +93,6 @@ impl Dhcpv6Service {
     #[must_use]
     pub const fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
         Self { config, ctx }
-    }
-}
-
-impl LanforgeService for Dhcpv6Service {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "dhcpv6",
-            display_name: "DHCPv6 Server",
-            critical: true,
-            max_retries: 0,
-            base_backoff: Duration::from_secs(2),
-            max_backoff: Duration::from_secs(30),
-            stack_kb: 512,
-        }
-    }
-
-    fn describe(&self) -> String {
-        format!(
-            "DHCPv6 on [{}]:{} (iface: {})",
-            ALL_DHCP_RELAY_AGENTS_AND_SERVERS, self.config.port, self.config.iface
-        )
     }
 }
 

@@ -55,6 +55,8 @@
 //! assert!(changed);
 //! ```
 
+use crate::context::LanforgeContext;
+use lanforge_macros::{ProxyUpdate, device_handler};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -240,9 +242,10 @@ pub struct InterfaceState {
 /// |----------------------|---------------------------------------|
 /// | `PruneZombies`       | Remove unworthy dynamic devices       |
 /// | `RebuildDnsIndices`  | Rebuild O(1) DNS lookup caches        |
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ProxyUpdate)]
 pub enum DeviceUpdate {
     /// Assign or renew a `DHCPv4` lease for a device.
+    #[proxy(method = "allocate_v4_lease")]
     V4LeaseGranted {
         mac: MacAddr,
         ip: Ipv4Addr,
@@ -250,6 +253,7 @@ pub enum DeviceUpdate {
     },
     /// Assign or renew a `DHCPv6` `IA_NA` lease for a device.
     /// MAC is optional — the DUID can be used to resolve it later.
+    #[proxy(method = "grant_v6_lease")]
     V6LeaseGranted {
         mac: Option<MacAddr>,
         duid: Duid,
@@ -258,6 +262,7 @@ pub enum DeviceUpdate {
         expires: SystemTime,
     },
     /// Delegate an IPv6 prefix via `DHCPv6` `IA_PD`.
+    #[proxy(method = "delegate_v6_prefix")]
     V6PrefixAssigned {
         mac: Option<MacAddr>,
         duid: Duid,
@@ -267,6 +272,7 @@ pub enum DeviceUpdate {
         expires: SystemTime,
     },
     /// Record a single SLAAC address observation.
+    #[proxy(method = "observe_slaac")]
     SlaacObserved {
         mac: MacAddr,
         addr: Ipv6Addr,
@@ -289,6 +295,7 @@ pub enum DeviceUpdate {
     /// Update a device's hostname based on an mDNS hint.
     MdnsHostnameHint { mac: MacAddr, hostname: String },
     /// Link a DUID to a MAC address for `DHCPv6` correlation.
+    #[proxy(method = "associate_duid")]
     DuidAssociated {
         mac: Option<MacAddr>,
         duid: Duid,
@@ -304,25 +311,33 @@ pub enum DeviceUpdate {
         origin: Origin,
     },
     /// Explicitly remove a device from the table.
+    #[proxy(method = "remove_host")]
     HostRemoved { mac: MacAddr },
     /// Release a specific lease (`V4`, `V6`, or `V6Prefix`).
     LeaseReleased { mac: MacAddr, target: LeaseTarget },
     /// Remove a specific IP address from device state.
+    #[proxy(method = "delete_ip")]
     IpDeleted { ip: IpAddr },
     /// Mark a device as unreachable via a specific IP.
+    #[proxy(method = "mark_ip_offline")]
     IpOffline { ip: IpAddr },
     /// Update the IP configuration of a network interface.
+    #[proxy(method = "signal_interface_update")]
     InterfaceIpsChanged { ifindex: u32, state: InterfaceState },
     /// Trigger pruning of unworthy dynamic devices (zombie cleanup).
+    #[proxy(method = "prune_zombies")]
     PruneZombies,
     /// Trigger a full rebuild of the DNS lookup indices.
+    #[proxy(method = "rebuild_dns_indices")]
     RebuildDnsIndices,
     /// Provide a classification hint for a device (e.g., via mDNS).
+    #[proxy(method = "update_class")]
     ClassHint {
         mac: MacAddr,
         class: crate::device::DeviceClass,
     },
     /// Update a device's topology information (parent device and port).
+    #[proxy(method = "update_topology")]
     TopologyUpdated {
         mac: MacAddr,
         parent_mac: Option<MacAddr>,
@@ -670,31 +685,20 @@ impl State {
         debug!("[state] State fully reset");
     }
 
+    #[device_handler(mac)]
     fn handle_v4_lease_granted(&mut self, mac: MacAddr, ip: Ipv4Addr, expires: SystemTime) -> bool {
-        let exists = self.devices.contains_key(&mac);
-        let dev_arc = self.get_or_insert(mac);
-
-        let changed = match &dev_arc.v4 {
-            IPv4State::Static(s_ip) if *s_ip == ip => false,
-            IPv4State::Dynamic(old) if old.ip == ip && old.expires == expires => false,
-            _ => true,
-        };
-
-        if changed {
-            debug!("[state] V4 lease {} → {}", mac, ip);
-            // Temporarily remove to avoid borrow issues while indexing
-            let mut dev_arc = self.devices.remove(&mac).unwrap();
-            self.unindex_device(&dev_arc);
-            {
-                let dev = Arc::make_mut(&mut dev_arc);
-                dev.v4 = IPv4State::Dynamic(V4Lease { ip, expires });
-                dev.last_seen = SystemTime::now();
-            }
-            self.index_device(mac, &dev_arc);
-            self.devices.insert(mac, dev_arc);
-            return true;
+        let new_v4 = IPv4State::Dynamic(V4Lease { ip, expires });
+        if matches!(&dev.v4, IPv4State::Static(s_ip) if *s_ip == ip) {
+            return false;
         }
-        !exists
+        if matches!(&dev.v4, IPv4State::Dynamic(old) if old.ip == ip && old.expires == expires) {
+            return false;
+        }
+
+        debug!("[state] V4 lease {} → {}", mac, ip);
+        dev.v4 = new_v4;
+        dev.last_seen = SystemTime::now();
+        true
     }
 
     fn handle_v6_lease_granted(
@@ -988,30 +992,21 @@ impl State {
         existing_pos.is_none() || !exists || (is_active && elapsed.as_secs() > 300)
     }
 
+    #[device_handler(mac)]
     fn handle_hostname_hint(
         &mut self,
         mac: MacAddr,
         hostname: String,
         origin: HostnameOrigin,
     ) -> bool {
-        let exists = self.devices.contains_key(&mac);
-        let dev_arc = self.get_or_insert(mac);
-
-        if origin >= dev_arc.hostname.origin && dev_arc.hostname.name != hostname {
-            let mut dev_arc = self.devices.remove(&mac).unwrap();
-            self.unindex_device(&dev_arc);
-            {
-                let dev = Arc::make_mut(&mut dev_arc);
-                dev.hostname = Hostname {
-                    name: hostname,
-                    origin,
-                };
-            }
-            self.index_device(mac, &dev_arc);
-            self.devices.insert(mac, dev_arc);
+        if origin >= dev.hostname.origin && dev.hostname.name != hostname {
+            dev.hostname = Hostname {
+                name: hostname,
+                origin,
+            };
             return true;
         }
-        !exists
+        false
     }
 
     fn handle_duid_associated(&mut self, mac: Option<MacAddr>, duid: &Duid, iaid: u32) -> bool {
@@ -1060,6 +1055,7 @@ impl State {
         changed_info || !exists
     }
 
+    #[device_handler(mac)]
     fn handle_cli_host_updated(
         &mut self,
         mac: MacAddr,
@@ -1069,39 +1065,26 @@ impl State {
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
         origin: Origin,
     ) -> bool {
-        let dev_arc_managed = self.get_or_insert(mac);
-        if dev_arc_managed.origin == Origin::Toml {
+        if dev.origin == Origin::Toml {
             warn!("Tentativa de modificar device estático do TOML: {}", mac);
             return false;
         }
-        drop(dev_arc_managed);
 
-        let mut dev_arc = self.devices.remove(&mac).unwrap();
-        self.unindex_device(&dev_arc);
+        let old_duid = dev.duid.clone();
+        let changed = dev.update_from_fields(hostname, duid, v4_static, v6_suffix, origin);
 
-        let changed = {
-            let dev = Arc::make_mut(&mut dev_arc);
-            let old_duid = dev.duid.clone();
-
-            let changed = dev.update_from_fields(hostname, duid, v4_static, v6_suffix, origin);
-
-            if changed {
-                if dev.duid != old_duid {
-                    if let Some(old) = old_duid {
-                        self.duid_index.remove(&old);
-                    }
-                    if let Some(new) = &dev.duid {
-                        self.duid_index.insert(new.clone(), mac);
-                    }
+        if changed {
+            if dev.duid != old_duid {
+                if let Some(old) = old_duid {
+                    self.duid_index.remove(&old);
                 }
-                self.static_entries
-                    .insert(mac, Self::create_static_entry(mac, dev));
+                if let Some(new) = &dev.duid {
+                    self.duid_index.insert(new.clone(), mac);
+                }
             }
-            changed
-        };
-
-        self.index_device(mac, &dev_arc);
-        self.devices.insert(mac, dev_arc);
+            self.static_entries
+                .insert(mac, Self::create_static_entry(mac, dev));
+        }
         changed
     }
 
@@ -1688,20 +1671,16 @@ impl State {
         self.devices.values().cloned()
     }
 
+    #[device_handler(mac)]
     fn handle_class_hint(&mut self, mac: MacAddr, class: DeviceClass) -> bool {
-        let dev_arc = self.get_or_insert(mac);
-        if dev_arc.class != class {
-            let mut dev_arc = self.devices.remove(&mac).unwrap();
-            {
-                let dev = Arc::make_mut(&mut dev_arc);
-                dev.class = class;
-            }
-            self.devices.insert(mac, dev_arc);
+        if dev.class != class {
+            dev.class = class;
             return true;
         }
         false
     }
 
+    #[device_handler(mac)]
     fn handle_topology_updated(
         &mut self,
         mac: MacAddr,
@@ -1709,25 +1688,18 @@ impl State {
         port: Option<String>,
         ifindex: u32,
     ) -> bool {
-        let dev_arc = self.get_or_insert(mac);
-
-        let needs_update = dev_arc.topology.as_ref().is_none_or(|t| {
+        let needs_update = dev.topology.as_ref().is_none_or(|t| {
             t.parent_mac != parent_mac || t.port != port || t.local_ifindex != ifindex
         });
 
         if needs_update {
-            let mut dev_arc = self.devices.remove(&mac).unwrap();
-            {
-                let dev = Arc::make_mut(&mut dev_arc);
-                dev.topology = Some(TopologyInfo {
-                    parent_mac,
-                    port,
-                    local_ifindex: ifindex,
-                    last_updated: SystemTime::now(),
-                });
-                dev.last_seen = SystemTime::now();
-            }
-            self.devices.insert(mac, dev_arc);
+            dev.topology = Some(TopologyInfo {
+                parent_mac,
+                port,
+                local_ifindex: ifindex,
+                last_updated: SystemTime::now(),
+            });
+            dev.last_seen = SystemTime::now();
             return true;
         }
         false

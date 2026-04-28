@@ -41,7 +41,7 @@ use crate::ndp::utils::{
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+use lanforge_core::service::AsyncService;
 use netlink_packet_core::NetlinkMessage;
 use netlink_sys::SocketAddr;
 use rtnetlink::Handle;
@@ -64,6 +64,14 @@ type NetlinkMessageStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMess
 ///
 /// Maintains synchronization with the `LanforgeContext` by applying
 /// `DeviceUpdate` events for every neighbor state change.
+#[lanforge_macros::lanforge_service(
+    id = "monitor",
+    name = "Neighbor Monitor",
+    critical = true,
+    retries = 0,
+    base_backoff = 2,
+    max_backoff = 30
+)]
 pub struct NeighborMonitor {
     handle: Handle,
     messages: NetlinkMessageStream,
@@ -139,28 +147,6 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
     }
 }
 
-impl LanforgeService for NeighborMonitor {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "monitor",
-            display_name: "Neighbor Monitor",
-            critical: true,
-            max_retries: 0,
-            base_backoff: Duration::from_secs(2),
-            max_backoff: Duration::from_secs(30),
-            stack_kb: 512,
-        }
-    }
-
-    fn describe(&self) -> String {
-        format!("Neighbor Monitor (ifindex: {})", self.target_ifindex)
-    }
-
-    fn on_shutdown(&mut self) -> Result<(), CoreError> {
-        Ok(())
-    }
-}
-
 impl AsyncService for NeighborMonitor {
     async fn run(&mut self) -> Result<(), CoreError> {
         // 0. Wait for Interface Ready (Sanity check)
@@ -221,8 +207,8 @@ impl AsyncService for NeighborMonitor {
                             }
                 }
 
-                Ok(event) = bus_rx.recv() => {
-                    match event.event {
+                Ok(timed_event) = bus_rx.recv() => {
+                    lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::PrefixChanged { gua, ula, .. } => {
                             current_gua = gua;
                             current_ula = ula;
@@ -230,8 +216,7 @@ impl AsyncService for NeighborMonitor {
                         LanforgeEvent::NeighborScanRequested => {
                             self.spawn_subnet_scan("Manual CLI Request");
                         }
-                        _ => {}
-                    }
+                    });
                 }
 
 

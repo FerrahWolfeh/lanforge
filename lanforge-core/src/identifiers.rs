@@ -17,9 +17,9 @@
 //! assert_eq!(duid.duid_type(), "DUID-LL (Link-layer address)");
 //! ```
 
-use serde::{Deserialize, Serialize};
+use lanforge_macros::Identifier;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::{fmt, str::FromStr};
 
 // ---------------------------------------------------------------------------
 // Duid
@@ -49,33 +49,13 @@ use std::{fmt, str::FromStr};
 /// let mac = duid.extract_mac().unwrap();
 /// assert_eq!(mac.to_string(), "00:01:02:03:04:05");
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Identifier)]
 pub struct Duid {
     /// The raw bytes of the DUID.
-    #[serde(
-        serialize_with = "serialize_duid",
-        deserialize_with = "deserialize_duid"
-    )]
     pub bytes: Arc<[u8]>,
 }
 
-/// Serializes a DUID as a colon-separated hex string (e.g., "00:03:00:01:aa:bb:cc:dd:ee:ff").
-///
-/// # Errors
-///
-/// Returns an error if the serializer fails to serialize the string.
-fn serialize_duid<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(
-        &bytes
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<String>>()
-            .join(":"),
-    )
-}
+// Removed serialize_duid helper as it's now handled by the Identifier macro.
 
 impl Duid {
     /// Creates a new DUID from a vector of bytes.
@@ -198,29 +178,7 @@ impl Duid {
     }
 }
 
-impl fmt::Debug for Duid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hex: String = self
-            .bytes
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":");
-        write!(f, "Duid({hex})")
-    }
-}
-
-impl fmt::Display for Duid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hex: String = self
-            .bytes
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":");
-        write!(f, "{hex}")
-    }
-}
+// Display, Debug, and Serde implementations for Duid are now handled by the Identifier macro.
 
 impl std::str::FromStr for Duid {
     type Err = String;
@@ -241,16 +199,7 @@ impl std::str::FromStr for Duid {
     }
 }
 
-/// Deserializes a DUID from a colon-separated hex string.
-fn deserialize_duid<'de, D>(deserializer: D) -> Result<Arc<[u8]>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
-    let s = String::deserialize(deserializer)?;
-    let duid = s.parse::<Duid>().map_err(D::Error::custom)?;
-    Ok(duid.bytes)
-}
+// deserialize_duid helper removed as it's now handled by the Identifier macro.
 
 // ---------------------------------------------------------------------------
 // MacAddr
@@ -274,42 +223,10 @@ where
 /// assert_eq!(mac.0, [0x00, 0xde, 0xad, 0xbe, 0xef, 0x00]);
 /// assert_eq!(mac.to_string(), "00:de:ad:be:ef:00");
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Deserialize, PartialOrd, Ord)]
-pub struct MacAddr(#[serde(deserialize_with = "deserialize_mac")] pub [u8; 6]);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Identifier, PartialOrd, Ord)]
+pub struct MacAddr(pub [u8; 6]);
 
-impl Serialize for MacAddr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serialize_mac(self.0, serializer)
-    }
-}
-
-fn deserialize_mac<'de, D>(deserializer: D) -> Result<[u8; 6], D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    MacAddr::parse(&s)
-        .map(|m| m.0)
-        .ok_or_else(|| serde::de::Error::custom(format!("Invalid MAC address: {s}")))
-}
-
-/// Serializes a MAC address as a colon-separated string.
-///
-/// # Errors
-///
-/// Returns an error if the serializer fails to serialize the string.
-fn serialize_mac<S>(mac: [u8; 6], serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    ))
-}
+// Display, Debug, and Serde implementations for MacAddr are now handled by the Identifier macro.
 
 impl MacAddr {
     /// Parses a colon-separated MAC address string (e.g., "00:11:22:33:44:55").
@@ -395,18 +312,4 @@ impl AsRef<[u8; 6]> for MacAddr {
     }
 }
 
-impl fmt::Display for MacAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
-        )
-    }
-}
-
-impl fmt::Debug for MacAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "MacAddr({self})")
-    }
-}
+// Removed manual Display and Debug implementations for MacAddr.

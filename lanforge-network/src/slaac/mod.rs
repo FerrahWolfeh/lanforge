@@ -16,11 +16,19 @@ use crate::slaac::packet::build_echo_request;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+use lanforge_core::service::AsyncService;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tracing::{debug, info, warn};
 
 /// Active SLAAC Tracker service.
+#[lanforge_macros::lanforge_service(
+    id = "slaac_tracker",
+    name = "SLAAC Tracker",
+    critical = false,
+    retries = 3,
+    base_backoff = 5,
+    max_backoff = 60
+)]
 pub struct SlaacTracker {
     target_ifindex: u32,
     ctx: LanforgeContext,
@@ -35,20 +43,6 @@ impl SlaacTracker {
             target_ifindex,
             ctx,
             socket: None,
-        }
-    }
-}
-
-impl LanforgeService for SlaacTracker {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "slaac_tracker",
-            display_name: "SLAAC Tracker",
-            critical: false,
-            max_retries: 3,
-            base_backoff: Duration::from_secs(5),
-            max_backoff: Duration::from_mins(1),
-            stack_kb: 512,
         }
     }
 }
@@ -87,7 +81,7 @@ impl AsyncService for SlaacTracker {
                 }
 
                 Ok(timed_event) = bus_rx.recv() => {
-                    match timed_event.event {
+                    lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::RsReceived { .. } => {
                             // Device requested RA, will configure SLAAC shortly.
                             let socket_clone = Arc::clone(&socket);
@@ -106,8 +100,7 @@ impl AsyncService for SlaacTracker {
                             self.send_discovery_ping();
                         }
                         LanforgeEvent::Shutdown => break,
-                        _ => {}
-                    }
+                    });
                 }
             }
         }

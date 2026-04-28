@@ -4,9 +4,8 @@
 //! These operations acquire a **write lock** on the state and are exclusive.
 
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr},
     sync::{Arc, atomic::Ordering},
-    time::SystemTime,
 };
 
 use crate::{
@@ -226,57 +225,6 @@ impl LanforgeContext {
         events
     }
 
-    /// Allocates an IPv4 lease for a device.
-    #[must_use]
-    pub fn allocate_v4_lease(&self, mac: MacAddr, ip: Ipv4Addr, expires: SystemTime) -> bool {
-        self.apply(&DeviceUpdate::V4LeaseGranted { mac, ip, expires })
-    }
-
-    /// Grants an IPv6 address lease via `DHCPv6`.
-    #[must_use]
-    pub fn grant_v6_lease(
-        &self,
-        mac: Option<MacAddr>,
-        duid: Duid,
-        iaid: u32,
-        ip: Ipv6Addr,
-        expires: SystemTime,
-    ) -> bool {
-        self.apply(&DeviceUpdate::V6LeaseGranted {
-            mac,
-            duid,
-            iaid,
-            ip,
-            expires,
-        })
-    }
-
-    /// Delegates an IPv6 prefix via `DHCPv6` Prefix Delegation.
-    #[must_use]
-    pub fn delegate_v6_prefix(
-        &self,
-        mac: Option<MacAddr>,
-        duid: Duid,
-        iaid: u32,
-        prefix: Ipv6Addr,
-        len: u8,
-        expires: SystemTime,
-    ) -> bool {
-        self.apply(&DeviceUpdate::V6PrefixAssigned {
-            mac,
-            duid,
-            iaid,
-            prefix,
-            len,
-            expires,
-        })
-    }
-
-    /// Associates a DUID with a MAC address.
-    #[must_use]
-    pub fn associate_duid(&self, mac: Option<MacAddr>, duid: Duid, iaid: u32) -> bool {
-        self.apply(&DeviceUpdate::DuidAssociated { mac, duid, iaid })
-    }
 
     /// Updates or hints a device hostname (e.g., via DHCP or mDNS).
     #[must_use]
@@ -304,21 +252,7 @@ impl LanforgeContext {
         })
     }
 
-    /// Observes a single SLAAC address for a device.
-    #[must_use]
-    pub fn observe_slaac(&self, mac: MacAddr, ip: Ipv6Addr) -> bool {
-        self.apply(&DeviceUpdate::SlaacObserved {
-            mac,
-            addr: ip,
-            is_active: true,
-        })
-    }
 
-    /// Signals a change in interface IP configuration.
-    #[must_use]
-    pub fn signal_interface_update(&self, ifindex: u32, state: InterfaceState) -> bool {
-        self.apply(&DeviceUpdate::InterfaceIpsChanged { ifindex, state })
-    }
 
     /// Signals a global IPv6 GUA change for an interface.
     #[must_use]
@@ -338,11 +272,6 @@ impl LanforgeContext {
         self.apply(&DeviceUpdate::InterfaceIpsChanged { ifindex, state })
     }
 
-    /// Explicitly removes a host from the system.
-    #[must_use]
-    pub fn remove_host(&self, mac: MacAddr) -> bool {
-        self.apply(&DeviceUpdate::HostRemoved { mac })
-    }
 
     /// Releases a `DHCPv4` lease associated with a MAC.
     #[must_use]
@@ -371,11 +300,6 @@ impl LanforgeContext {
         })
     }
 
-    /// Deletes a specific neighbor IP.
-    #[must_use]
-    pub fn delete_ip(&self, ip: IpAddr) -> bool {
-        self.apply(&DeviceUpdate::IpDeleted { ip })
-    }
 
     /// Triggers the background garbage collection process.
     pub fn expire_stale(&self, interval: std::time::Duration) {
@@ -416,10 +340,6 @@ impl LanforgeContext {
         })
     }
 
-    /// Explicitly triggers a rebuild of the high-performance DNS lookup indices.
-    pub fn rebuild_dns_indices(&self) {
-        let _ = self.apply(&DeviceUpdate::RebuildDnsIndices);
-    }
 
     /// Sets the shared DNS statistics.
     pub fn set_dns_stats<T: std::any::Any + Send + Sync + 'static>(&self, stats: Arc<T>) {

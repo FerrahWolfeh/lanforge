@@ -20,12 +20,21 @@ use tracing::{debug, error, info};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+use lanforge_core::service::AsyncService;
 
 use crate::engine::LeaseDb;
 use crate::log_engine::LogDb;
 
 /// Background worker for database operations.
+#[lanforge_macros::lanforge_service(
+    id = "db",
+    name = "Database Worker",
+    critical = true,
+    retries = 5,
+    base_backoff = 1,
+    max_backoff = 30,
+    describe = format!("Database Worker ({})", self.db_url)
+)]
 pub struct DbWorker {
     db_url: String,
     log_db_url: String,
@@ -60,24 +69,6 @@ impl DbWorker {
     }
 }
 
-impl LanforgeService for DbWorker {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "db",
-            display_name: "Database Worker",
-            critical: true,
-            max_retries: 5,
-            base_backoff: Duration::from_secs(1),
-            max_backoff: Duration::from_secs(30),
-            stack_kb: 512,
-        }
-    }
-
-    fn describe(&self) -> String {
-        format!("Database Worker ({})", self.db_url)
-    }
-}
-
 impl AsyncService for DbWorker {
     async fn run(&mut self) -> Result<(), CoreError> {
         let db = LeaseDb::open(&self.db_url).await.map_err(|e| {
@@ -108,7 +99,8 @@ impl AsyncService for DbWorker {
                         }
 
                     // 2. Process specific events
-                    match timed_event.event {
+                    let mut break_loop = false;
+                    lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::DeviceTableDirty => {
                             self.dirty = true;
                         }
@@ -143,7 +135,7 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::Shutdown => {
                             info!("Database worker shutting down...");
                             self.flush_batch(&db).await;
-                            break;
+                            break_loop = true;
                         }
                         #[cfg(feature = "adblock")]
                         LanforgeEvent::DnsQueryBlocked { src_addr, ref domain } => {
@@ -159,7 +151,10 @@ impl AsyncService for DbWorker {
                                 error!("DNS log record error: {e}");
                             }
                         }
-                        _ => {}
+                    });
+
+                    if break_loop {
+                        break;
                     }
                 }
 

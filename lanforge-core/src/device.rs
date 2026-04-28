@@ -21,11 +21,11 @@
 //! A device becomes "worthy" of inclusion in the device table when it has meaningful
 //! information (hostname, IP, or static config).
 
+use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::bus::DeviceChange;
@@ -163,13 +163,16 @@ where
 /// assert!(!Origin::Dynamic.is_static());
 /// assert_eq!(Origin::Cli.symbol(), "·");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr)]
 pub enum Origin {
     /// Configured manually via the `lanforge.toml` file.
+    #[enum_repr(alias = "static")]
     Toml,
     /// Configured or overridden via the CLI control interface.
+    #[enum_repr(alias = "managed_cli")]
     Cli,
     /// Configured via the HTTP API (pre-registration).
+    #[enum_repr(alias = "api")]
     External,
     /// Discovered dynamically on the network (e.g., via DHCP or ARP).
     #[default]
@@ -177,16 +180,6 @@ pub enum Origin {
 }
 
 impl Origin {
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Toml => "toml",
-            Self::Cli => "cli",
-            Self::External => "external",
-            Self::Dynamic => "dynamic",
-        }
-    }
-
     #[must_use]
     pub const fn is_static(&self) -> bool {
         !matches!(self, Self::Dynamic)
@@ -202,19 +195,7 @@ impl Origin {
         }
     }
 }
-
-impl FromStr for Origin {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "toml" | "static" => Ok(Self::Toml),
-            "cli" | "managed_cli" => Ok(Self::Cli),
-            "external" | "api" => Ok(Self::External),
-            "dynamic" => Ok(Self::Dynamic),
-            _ => Err(()),
-        }
-    }
-}
+// as_str(), FromStr, and Display are now handled by EnumRepr.
 
 // ---------------------------------------------------------------------------
 // Device Classification
@@ -224,7 +205,7 @@ impl FromStr for Origin {
 ///
 /// Designed to be memory-efficient (1 byte) for storage in the core state.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, Hash,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, Hash, EnumRepr,
 )]
 #[repr(u8)]
 pub enum DeviceClass {
@@ -232,48 +213,33 @@ pub enum DeviceClass {
     #[default]
     None = 0,
     /// Desktop, Laptop, or general-purpose Server.
+    #[enum_repr(alias = "pc")]
+    #[enum_repr(alias = "server")]
     Computer = 1,
     /// Smartphone or Tablet.
+    #[enum_repr(alias = "phone")]
+    #[enum_repr(alias = "tablet")]
     Mobile = 2,
     /// Printer or Scanner.
+    #[enum_repr(alias = "scanner")]
     Printer = 3,
     /// Smart TV, Streaming Stick, or Audio Speaker.
+    #[enum_repr(alias = "tv")]
+    #[enum_repr(alias = "audio")]
+    #[enum_repr(alias = "speaker")]
     Media = 4,
     /// Smart Home device (`IoT`), Sensors, or Hubs.
+    #[enum_repr(alias = "smarthome")]
+    #[enum_repr(alias = "sensor")]
     IoT = 5,
     /// Network Infrastructure (Switch, Access Point, Router).
+    #[enum_repr(alias = "switch")]
+    #[enum_repr(alias = "router")]
+    #[enum_repr(alias = "ap")]
     Network = 6,
 }
 
-impl DeviceClass {
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Computer => "computer",
-            Self::Mobile => "mobile",
-            Self::Printer => "printer",
-            Self::Media => "media",
-            Self::IoT => "iot",
-            Self::Network => "network",
-        }
-    }
-}
-
-impl FromStr for DeviceClass {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "computer" | "pc" | "server" => Ok(Self::Computer),
-            "mobile" | "phone" | "tablet" => Ok(Self::Mobile),
-            "printer" | "scanner" => Ok(Self::Printer),
-            "media" | "tv" | "audio" | "speaker" => Ok(Self::Media),
-            "iot" | "smarthome" | "sensor" => Ok(Self::IoT),
-            "network" | "switch" | "router" | "ap" => Ok(Self::Network),
-            _ => Ok(Self::None),
-        }
-    }
-}
+// as_str(), FromStr, and Display are now handled by EnumRepr.
 
 // ---------------------------------------------------------------------------
 // Hostname Hierarchy
@@ -291,7 +257,7 @@ impl FromStr for DeviceClass {
 /// | Mdns      | 1     | Multicast DNS discovery          |
 /// | Dhcp      | 2     | DHCP Option 12 (v4) or v6 hint   |
 /// | Static    | 3     | Manual config (CLI/TOML/API)     |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr)]
 pub enum HostnameOrigin {
     /// No hostname discovered or assigned.
     #[default]

@@ -15,7 +15,7 @@ use lanforge_db::worker::DbWorker;
 use lanforge_dns::server::DnsService;
 use lanforge_network::dhcp::v4::Dhcpv4Service;
 use lanforge_network::dhcp::v6::Dhcpv6Service;
-use lanforge_network::ifmon::InterfaceMonitor;
+use lanforge_network::ifmon::AddressMonitor;
 use lanforge_network::lldp::LldpMonitor;
 use lanforge_network::mdns::MdnsProber;
 use lanforge_network::ndp::NeighborMonitor;
@@ -60,90 +60,35 @@ impl Daemon {
         // 1. Core Services (DB, mDNS)
         let db_url = cfg.db_url.clone();
         let log_db_url = cfg.log_db_url.clone();
-        let ctx = self.ctx.clone();
-        self.registry.spawn_async(&self.ctx, move || {
-            DbWorker::new(db_url.clone(), log_db_url.clone(), ctx.clone())
-        });
-
-        let ctx = self.ctx.clone();
-        self.registry
-            .spawn_async(&self.ctx, move || MdnsProber::new(ctx.clone()));
-
-        // 2. Network Monitoring (Interface, Neighbors)
-        let ctx = self.ctx.clone();
-        let h = rt_handle.clone();
-        let m = messages.clone();
-        self.registry.spawn_async(&self.ctx, move || {
-            InterfaceMonitor::new(h.clone(), m.subscribe(), target_ifindex, ctx.clone())
-        });
-
-        let ctx = self.ctx.clone();
-        let h = rt_handle.clone();
-        let m = messages.clone();
-        self.registry.spawn_async(&self.ctx, move || {
-            NeighborMonitor::new(h.clone(), m.subscribe(), target_ifindex, ctx.clone())
-        });
-
-        let ctx = self.ctx.clone();
+        let rt_handle = rt_handle.clone();
+        let messages = messages.clone();
         let ifname = cfg.iface_lan.clone();
-        self.registry.spawn_async(&self.ctx, move || {
-            LldpMonitor::new(ifname.clone(), target_ifindex, ctx.clone())
-        });
 
-        // 3. IPv6 Protocol Services (RA, SLAAC)
-        if cfg.ra_enabled {
-            let ra_cfg = cfg.to_ra_config();
-            let ctx = self.ctx.clone();
-            self.registry.spawn_async(&self.ctx, move || {
-                RaService::new(ra_cfg.clone(), ctx.clone())
-            });
-
-            let ctx = self.ctx.clone();
-            self.registry.spawn_async(&self.ctx, move || {
-                SlaacTracker::new(target_ifindex, ctx.clone())
-            });
-        }
-
-        // 4. Address Assignment (DHCPv4, DHCPv6)
-        if cfg.dhcpv4_enabled {
-            let d4_cfg = cfg.to_dhcpv4_config();
-            let ctx = self.ctx.clone();
-            self.registry.spawn_sync(&self.ctx, move || {
-                Dhcpv4Service::new(d4_cfg.clone(), ctx.clone())
-            });
-        }
-
-        if cfg.dhcpv6_enabled {
-            let d6_cfg = cfg.to_dhcpv6_config();
-            let ctx = self.ctx.clone();
-            self.registry.spawn_sync(&self.ctx, move || {
-                Dhcpv6Service::new(d6_cfg.clone(), ctx.clone())
-            });
-        }
-
-        // 5. Application Services (DNS, API)
-        if cfg.dns_enabled {
-            let dns_cfg = cfg.to_dns_config();
-            let ctx = self.ctx.clone();
-            self.registry.spawn_async(&self.ctx, move || {
-                DnsService::new(dns_cfg.clone(), ctx.clone())
-            });
-        }
-
-        let api_cfg = Arc::new(cfg.to_api_config());
         let ctx = self.ctx.clone();
-        let api_cfg_ctrl = api_cfg.clone();
-        self.registry.spawn_async(&self.ctx, move || {
-            ControlService::new(api_cfg_ctrl.clone(), ctx.clone())
-        });
+        let cfg = cfg.clone();
 
-        if cfg.http_listen.is_some() {
-            let ctx = self.ctx.clone();
-            let api_cfg_http = api_cfg;
-            self.registry.spawn_async(&self.ctx, move || {
-                HttpService::new(api_cfg_http.clone(), ctx.clone())
-            });
-        }
+        lanforge_core::spawn_services!(self.registry, &self.ctx, {
+            async [ctx, db_url, log_db_url] => DbWorker::new(db_url, log_db_url, ctx),
+            async [ctx] => MdnsProber::new(ctx),
+
+            // 2. Network Monitoring (Interface, Neighbors)
+            async [ctx, rt_handle, messages] => AddressMonitor::new(rt_handle, messages.subscribe(), target_ifindex, ctx),
+            async [ctx, rt_handle, messages] => NeighborMonitor::new(rt_handle, messages.subscribe(), target_ifindex, ctx),
+            async [ctx, ifname] => LldpMonitor::new(ifname, target_ifindex, ctx),
+
+            // 3. IPv6 Protocol Services (RA, SLAAC)
+            async [ctx, cfg] if cfg.ra_enabled => RaService::new(cfg.to_ra_config(), ctx),
+            async [ctx] if cfg.ra_enabled => SlaacTracker::new(target_ifindex, ctx),
+
+            // 4. Address Assignment (DHCPv4, DHCPv6)
+            sync  [ctx, cfg] if cfg.dhcpv4_enabled => Dhcpv4Service::new(cfg.to_dhcpv4_config(), ctx),
+            sync  [ctx, cfg] if cfg.dhcpv6_enabled => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
+
+            // 5. Application Services (DNS, API)
+            async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
+            async [ctx, cfg] => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
+            async [ctx, cfg] if cfg.http_listen.is_some() => HttpService::new(Arc::new(cfg.to_api_config()), ctx),
+        });
     }
 
     async fn shutdown(self) -> Result<()> {

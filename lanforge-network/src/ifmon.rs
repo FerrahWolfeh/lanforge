@@ -23,14 +23,13 @@ use futures::stream::TryStreamExt;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+use lanforge_core::service::AsyncService;
 use lanforge_core::state::{DeviceUpdate, InterfaceState};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::packet_route::address::AddressAttribute;
 use std::net::{IpAddr, Ipv6Addr};
-use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
@@ -52,14 +51,23 @@ pub type NetlinkStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMessage
 /// - `initial_scan()` is called during bootstrap to seed `InterfaceState`
 /// - `run()` enters the async event loop, listening for address events and shutdown signals
 /// - On `NewAddress`/`DelAddress` events targeting `target_ifindex`, refreshes the interface
-pub struct InterfaceMonitor {
+#[lanforge_macros::lanforge_service(
+    id = "address_monitor",
+    name = "Address Monitor",
+    critical = true,
+    retries = 0,
+    base_backoff = 2,
+    max_backoff = 30,
+    describe = format!("Address Monitor (ifindex: {})", self.target_ifindex)
+)]
+pub struct AddressMonitor {
     handle: Handle,
     messages: NetlinkStream,
     target_ifindex: u32,
     ctx: LanforgeContext,
 }
 
-impl InterfaceMonitor {
+impl AddressMonitor {
     /// Creates a new `InterfaceMonitor` for the given interface index.
     ///
     /// # Arguments
@@ -150,29 +158,7 @@ impl InterfaceMonitor {
     }
 }
 
-impl LanforgeService for InterfaceMonitor {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "ifmon",
-            display_name: "Interface Monitor",
-            critical: true,
-            max_retries: 0,
-            base_backoff: Duration::from_secs(2),
-            max_backoff: Duration::from_secs(30),
-            stack_kb: 256,
-        }
-    }
-
-    fn describe(&self) -> String {
-        format!("Interface Monitor (ifindex: {})", self.target_ifindex)
-    }
-
-    fn on_shutdown(&mut self) -> Result<(), CoreError> {
-        Ok(())
-    }
-}
-
-impl AsyncService for InterfaceMonitor {
+impl AsyncService for AddressMonitor {
     async fn run(&mut self) -> Result<(), CoreError> {
         let mut bus_rx = self.ctx.bus().subscribe();
 

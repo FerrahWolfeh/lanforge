@@ -10,15 +10,11 @@ use lanforge_core::{
     bus::LanforgeEvent,
     device::{Device, Ipv6AddrOrSuffix, Origin},
     error::CoreError,
-    service::ServiceMeta,
     state::{DeviceUpdate, FieldUpdate},
 };
 use serde::{Deserialize, Serialize};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use std::{
-    net::{Ipv4Addr, SocketAddr},
-    time::Duration,
-};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -44,10 +40,22 @@ pub struct RegisterRequest {
 }
 
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::service::{AsyncService, LanforgeService};
+use lanforge_core::service::AsyncService;
 
 use crate::config::ApiConfig;
 
+#[lanforge_macros::lanforge_service(
+    id = "http",
+    name = "HTTP API",
+    critical = false,
+    retries = 3,
+    base_backoff = 5,
+    max_backoff = 60,
+    describe = format!(
+        "HTTP API on {}",
+        self.cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080")
+    )
+)]
 pub struct HttpService {
     cfg: Arc<ApiConfig>,
     ctx: LanforgeContext,
@@ -56,27 +64,6 @@ pub struct HttpService {
 impl HttpService {
     pub fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
-    }
-}
-
-impl LanforgeService for HttpService {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "http",
-            display_name: "HTTP API",
-            critical: false,
-            max_retries: 3,
-            base_backoff: Duration::from_secs(5),
-            max_backoff: Duration::from_secs(60),
-            stack_kb: 512,
-        }
-    }
-
-    fn describe(&self) -> String {
-        format!(
-            "HTTP API on {}",
-            self.cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080")
-        )
     }
 }
 

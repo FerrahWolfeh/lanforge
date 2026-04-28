@@ -94,13 +94,17 @@ impl Command {
     };
 }
 
+use lanforge_macros::CommandDispatch;
+
 /// The actual action variants for a Command.
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash, CommandDispatch)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum CommandAction {
     /// Retrieve general system status (uptime, versions, service states).
+    #[dispatch(handler = "handle_status", readonly)]
     Status,
     /// List all managed devices with optional filtering.
+    #[dispatch(handler = "handle_devices", args(filter, vendor, method), readonly)]
     Devices {
         /// Filter by hostname, MAC, or IP address.
         filter: Option<String>,
@@ -112,10 +116,13 @@ pub enum CommandAction {
         format: Option<String>,
     },
     /// Request the daemon to reload its configuration from disk.
+    #[dispatch(bus = "ReloadConfig", message = "Reload signal sent successfully")]
     Reload,
     /// Enter 'watch' mode to stream live state changes.
+    #[dispatch(handler = "handle_watch", readonly)]
     Watch,
     /// Stream or fetch logs/events.
+    #[dispatch(handler = "handle_log", args(follow, n), readonly)]
     Log {
         /// If true, keep the connection open and stream new events.
         follow: bool,
@@ -123,10 +130,13 @@ pub enum CommandAction {
         n: Option<usize>,
     },
     /// Force an immediate network scan.
+    #[dispatch(handler = "handle_scan")]
     Scan,
     /// Gracefully shut down the daemon.
+    #[dispatch(bus = "Shutdown", message = "Shutting down gracefully")]
     Shutdown,
     /// Add or update a static host configuration via CLI.
+    #[dispatch(handler = "handle_host_add", args(mac, hostname, v4, v6_suffix))]
     HostAdd {
         /// Target device MAC address.
         mac: Option<String>,
@@ -138,6 +148,7 @@ pub enum CommandAction {
         v6_suffix: Option<String>,
     },
     /// Set a specific field for a host configuration.
+    #[dispatch(handler = "handle_host_set", args(mac, field, value))]
     HostSet {
         /// Target device MAC address.
         mac: String,
@@ -147,13 +158,16 @@ pub enum CommandAction {
         value: String,
     },
     /// Remove a host configuration by MAC.
+    #[dispatch(handler = "handle_host_remove", args(mac))]
     HostRemove {
         /// Target device MAC address.
         mac: String,
     },
     /// List all manually configured hosts.
+    #[dispatch(handler = "handle_hosts", readonly)]
     HostList,
     /// Force a DHCP 'forcerenew' for a specific device.
+    #[dispatch(handler = "handle_lease_renew", args(mac, target))]
     LeaseRenew {
         /// Target device MAC address.
         mac: String,
@@ -161,6 +175,7 @@ pub enum CommandAction {
         target: Option<LeaseTarget>,
     },
     /// Manually release a DHCP lease.
+    #[dispatch(handler = "handle_lease_release", args(mac, target))]
     LeaseRelease {
         /// Target device MAC address.
         mac: String,
@@ -168,29 +183,37 @@ pub enum CommandAction {
         target: Option<LeaseTarget>,
     },
     /// Perform a VACUUM operation on the underlying SQLite database.
+    #[dispatch(bus = "DbVacuum", message = "Vacuum triggered")]
     DbVacuum,
     /// Clear all transient system logs.
+    #[dispatch(bus = "DbLogClean", message = "Log cleanup triggered")]
     DbLogClean,
     /// Remove 'zombie' entries from the database (dynamic devices with no IPs/Hostname).
+    #[dispatch(handler = "handle_db_prune")]
     DbPrune,
     /// Forcefully purge a device from memory and database by its MAC.
+    #[dispatch(handler = "handle_purge", args(mac))]
     Purge {
         /// Target device MAC address.
         mac: String,
     },
     /// Send a Wake-on-LAN magic packet to a target (MAC or Name).
+    #[dispatch(handler = "handle_wol", args(target))]
     Wol {
         /// Target device MAC or Hostname.
         target: String,
     },
     /// Retrieve detailed aggregated information about a device.
+    #[dispatch(handler = "handle_whois", args(target), readonly)]
     Whois {
         /// Target MAC, IP, or Hostname.
         target: String,
     },
     /// Retrieve DNS resolver statistics.
+    #[dispatch(handler = "handle_dns_stats")]
     DnsStats,
     /// Perform a diagnostic DNS query.
+    #[dispatch(handler = "handle_dns_query", args(name, record_type))]
     DnsQuery {
         /// Name to resolve.
         name: String,
@@ -198,34 +221,36 @@ pub enum CommandAction {
         record_type: Option<String>,
     },
     /// Enable or disable the DNS adblocker.
+    #[dispatch(handler = "handle_dns_adblock_set", args(enabled, duration_secs))]
     DnsAdblockSet {
-        /// Whether to enable or disable.
         #[cfg(feature = "adblock")]
+        #[serde(default)]
         enabled: bool,
-        /// Optional duration in seconds to disable it for.
         #[cfg(feature = "adblock")]
         duration_secs: Option<u64>,
     },
-    /// Force a reload of the DNS blocklists.
+    /// Force a reload of the adblock blocklists.
+    #[dispatch(handler = "handle_dns_adblock_reload")]
     DnsAdblockReload,
-    /// Fully dump the main in-memory state (diagnostic).
+    /// Dump the full system context (for debugging).
+    #[dispatch(handler = "handle_context_dump", args(only_devices, only_orphans))]
     ContextDump {
-        /// Only include the main device table.
         #[serde(default)]
         only_devices: bool,
-        /// Only include orphaned IPv6 leases.
         #[serde(default)]
         only_orphans: bool,
     },
-    /// Completely reset and re-seed the database.
+    /// Factory reset the database and in-memory state.
+    #[dispatch(handler = "handle_db_reset")]
     DbReset,
-    /// Retrieve all active DHCP leases.
+    /// List active DHCP leases.
+    #[dispatch(handler = "handle_leases", args(count), readonly)]
     Leases {
-        /// If true, the response should focus on the count.
         #[serde(default)]
         count: bool,
     },
-    /// Retrieve the physical network topology (LLDP).
+    /// Get network topology.
+    #[dispatch(handler = "handle_topology", readonly)]
     Topology,
 }
 

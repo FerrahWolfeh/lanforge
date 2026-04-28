@@ -49,8 +49,20 @@ use crate::dhcp::v4::config::Dhcpv4Config;
 use crate::error::NetworkError;
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{LanforgeService, ServiceMeta, SyncBusReceiver, SyncService};
+use lanforge_core::service::{SyncBusReceiver, SyncService};
 
+#[lanforge_macros::lanforge_service(
+    id = "dhcpv4",
+    name = "DHCPv4 Server",
+    critical = true,
+    retries = 0,
+    base_backoff = 2,
+    max_backoff = 30,
+    describe = format!(
+        "DHCPv4 on {} (range {}–{}, lease {}s)",
+        self.cfg.iface, self.cfg.range_start, self.cfg.range_end, self.cfg.lease_time
+    )
+)]
 pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
     ctx: LanforgeContext,
@@ -60,27 +72,6 @@ impl Dhcpv4Service {
     #[must_use]
     pub const fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
-    }
-}
-
-impl LanforgeService for Dhcpv4Service {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "dhcpv4",
-            display_name: "DHCPv4 Server",
-            critical: true,
-            max_retries: 0,
-            base_backoff: Duration::from_secs(2),
-            max_backoff: Duration::from_secs(30),
-            stack_kb: 512,
-        }
-    }
-
-    fn describe(&self) -> String {
-        format!(
-            "DHCPv4 on {} (range {}–{}, lease {}s)",
-            self.cfg.iface, self.cfg.range_start, self.cfg.range_end, self.cfg.lease_time
-        )
     }
 }
 

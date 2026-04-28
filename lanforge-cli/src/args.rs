@@ -112,9 +112,12 @@ pub struct LanforgeArgs {
     pub socket: String,
 }
 
-#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+use lanforge_macros::CliHandler;
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq, CliHandler)]
 pub enum Command {
     /// List known devices
+    #[handler(DevicesHandler { .. })]
     Devices {
         #[arg(short, long)]
         verbose: bool,
@@ -133,13 +136,16 @@ pub enum Command {
         show_vendor: bool,
     },
     /// Live view reativo via socket (sem polling)
+    #[handler(generic(Watch, true))]
     Watch,
     /// Interactive TUI dashboard
     #[cfg(feature = "tui")]
     Tui,
     /// Service health and general status
+    #[handler(StatusHandler)]
     Status,
     /// `EventBus` interno em tempo real
+    #[handler(LogHandler { .. })]
     Log {
         #[arg(long)]
         follow: bool,
@@ -151,50 +157,61 @@ pub enum Command {
         lines: usize,
     },
     /// Gerenciamento de leases (renew/release)
+    #[handler(LeaseHandler { .. })]
     Lease {
         #[command(subcommand)]
         action: LeaseCommand,
     },
     /// Dispara ciclo NDP imediato com feedback
+    #[handler(generic(Scan, false))]
     Scan,
     /// Gerenciamento de devices customizados
+    #[handler(HostHandler { .. })]
     Host {
         #[command(subcommand)]
         action: HostCommand,
     },
     /// Send reload signal to running daemon (recarrega config estática do TOML)
+    #[handler(generic(Reload, false))]
     Reload,
     /// Gerenciamento de persistência
+    #[handler(DbHandler { .. })]
     Db {
         #[command(subcommand)]
         action: DbCommand,
     },
     /// Forcefully purge a device from memory and database by its MAC
+    #[handler(generic(Purge, { mac }, false))]
     Purge {
         /// MAC address of the device to purge
         mac: String,
     },
     /// Wake-on-LAN magic packet
+    #[handler(WolCommand { .. })]
     Wol {
         /// Target device MAC or Hostname. Run without target for interactive menu.
         target: Option<String>,
     },
     /// Detailed aggregated information for a device
+    #[handler(WhoisHandler { .. })]
     Whois {
         /// Target MAC, IP, or Hostname
         target: String,
     },
     /// DNS resolver statistics and diagnostics
+    #[handler(DnsCommand { .. })]
     Dns {
         #[command(subcommand)]
         action: DnsCommand,
     },
     /// Script-friendly data querying (outputs raw JSON)
+    #[handler(QueryHandler { .. })]
     Query {
         #[command(subcommand)]
         target: QueryTarget,
     },
     /// View network topology hierarchically
+    #[handler(TopologyHandler)]
     Topology,
 }
 

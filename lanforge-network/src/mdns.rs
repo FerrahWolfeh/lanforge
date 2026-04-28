@@ -42,7 +42,7 @@ const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const MDNS_IPV6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+use lanforge_core::service::AsyncService;
 
 enum MdnsCommand {
     ProbeAll,
@@ -53,27 +53,17 @@ enum MdnsCommand {
 ///
 /// Sends commands to the background worker via an `mpsc` channel.
 /// The worker manages the actual socket listeners and packet processing.
+#[lanforge_macros::lanforge_service(
+    id = "mdns",
+    name = "mDNS Prober",
+    critical = false,
+    retries = 0,
+    base_backoff = 2,
+    max_backoff = 30
+)]
 pub struct MdnsProber {
     tx: Sender<MdnsCommand>,
     ctx: LanforgeContext,
-}
-
-impl LanforgeService for MdnsProber {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "mdns",
-            display_name: "mDNS Prober",
-            critical: false,
-            max_retries: 0,
-            base_backoff: Duration::from_secs(2),
-            max_backoff: Duration::from_secs(30),
-            stack_kb: 256,
-        }
-    }
-
-    fn describe(&self) -> String {
-        "mDNS Prober (v4/v6)".to_string()
-    }
 }
 
 impl AsyncService for MdnsProber {

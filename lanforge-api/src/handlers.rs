@@ -10,9 +10,11 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget};
 use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
+use std::str::FromStr;
 
 use crate::api::{
     DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DnsQueryResponse,
@@ -458,7 +460,7 @@ impl ClientContext {
             let mac = dev.mac;
 
             // Fetch history from DB
-            let history: Vec<LeaseHistoryEntry> =
+            let _history: Vec<LeaseHistoryEntry> =
                 if let Ok(db) = LeaseDb::open(&self.cfg.db_url).await {
                     db.get_lease_history(mac).await.unwrap_or_default()
                 } else {
@@ -521,7 +523,10 @@ impl ClientContext {
                 },
             };
 
-            Response::Whois(Box::new(WhoisResponse { entry, history }))
+            Response::Whois(Box::new(WhoisResponse {
+                entry,
+                history: _history,
+            }))
         } else {
             Response::Error {
                 error: format!("Device '{target}' not found"),
@@ -701,6 +706,56 @@ impl ClientContext {
         Response::Leases(crate::api::LeasesResponse { leases: api_leases })
     }
 
+    /// Renews a lease (ForceRenew).
+    pub(crate) async fn handle_lease_renew(
+        &self,
+        mac_str: String,
+        target: Option<LeaseTarget>,
+    ) -> Response {
+        let _mac = match MacAddr::from_str(&mac_str) {
+            Ok(m) => m,
+            Err(e) => {
+                return Response::Error {
+                    error: e.to_string(),
+                };
+            }
+        };
+
+        match target.unwrap_or(LeaseTarget::V4) {
+            LeaseTarget::V4 => Response::Error {
+                error: "Lease renew via API not fully implemented".into(),
+            },
+            _ => Response::Error {
+                error: "V6 renew not implemented".into(),
+            },
+        }
+    }
+
+    /// Releases a lease manually.
+    pub(crate) async fn handle_lease_release(
+        &self,
+        mac_str: String,
+        target: Option<LeaseTarget>,
+    ) -> Response {
+        let _mac = match MacAddr::from_str(&mac_str) {
+            Ok(m) => m,
+            Err(e) => {
+                return Response::Error {
+                    error: e.to_string(),
+                };
+            }
+        };
+
+        match target.unwrap_or(LeaseTarget::V4) {
+            LeaseTarget::V4 => Response::Error {
+                error: "Lease release via API not fully implemented".into(),
+            },
+            _ => Response::Error {
+                error: "V6 release not implemented".into(),
+            },
+        }
+    }
+
     /// Fetches the current topology of the network.
     pub(crate) async fn handle_topology(&self) -> Response {
         let devices = self.ctx.all_devices();
@@ -720,5 +775,175 @@ impl ClientContext {
         }
 
         Response::Topology(TopologyResponse { entries })
+    }
+
+    /// Triggers active network scans.
+    pub(crate) async fn handle_scan(&self) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::ScanRequested);
+        let _ = self.ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
+        Response::Success(SimpleSuccess {
+            message: "Active network scans triggered".to_string(),
+        })
+    }
+
+    /// Adds or updates a static host entry.
+    pub(crate) async fn handle_host_add(
+        &self,
+        mac: Option<String>,
+        hostname: Option<String>,
+        v4: Option<String>,
+        v6_suffix: Option<String>,
+    ) -> Response {
+        if let Some(m) = mac.as_deref().and_then(MacAddr::parse) {
+            let _ = self.ctx.apply(&DeviceUpdate::CliHostUpdated {
+                mac: m,
+                hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                duid: FieldUpdate::NoChange,
+                v4_static: v4
+                    .as_deref()
+                    .and_then(|s| s.parse().ok())
+                    .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                v6_suffix: v6_suffix
+                    .as_deref()
+                    .and_then(Ipv6AddrOrSuffix::parse)
+                    .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                origin: Origin::Cli,
+            });
+            Response::Success(SimpleSuccess {
+                message: "Host added/updated".to_string(),
+            })
+        } else {
+            Response::Error {
+                error: "Invalid or missing MAC".to_string(),
+            }
+        }
+    }
+
+    /// Updates a specific field of a host entry.
+    pub(crate) async fn handle_host_set(
+        &self,
+        mac: String,
+        field: String,
+        value: String,
+    ) -> Response {
+        if let Some(mac_addr) = MacAddr::parse(&mac) {
+            let mut hn = FieldUpdate::NoChange;
+            let mut v4s = FieldUpdate::NoChange;
+            let mut v6s = FieldUpdate::NoChange;
+
+            let err_msg = match field.as_str() {
+                "hostname" => {
+                    hn = FieldUpdate::Set(value);
+                    None
+                }
+                "v4" | "ipv4" => {
+                    if value.is_empty() {
+                        v4s = FieldUpdate::Clear;
+                        None
+                    } else if let Ok(ip) = value.parse() {
+                        v4s = FieldUpdate::Set(ip);
+                        None
+                    } else {
+                        Some("Invalid IPv4")
+                    }
+                }
+                "v6_suffix" | "v6" => {
+                    if value.is_empty() {
+                        v6s = FieldUpdate::Clear;
+                        None
+                    } else if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
+                        v6s = FieldUpdate::Set(suf);
+                        None
+                    } else {
+                        Some("Invalid IPv6 interface ID (suffix) or address")
+                    }
+                }
+                _ => Some("Unknown field"),
+            };
+
+            if let Some(e) = err_msg {
+                Response::Error {
+                    error: e.to_string(),
+                }
+            } else {
+                let _ = self.ctx.apply(&DeviceUpdate::CliHostUpdated {
+                    mac: mac_addr,
+                    hostname: hn,
+                    duid: FieldUpdate::NoChange,
+                    v4_static: v4s,
+                    v6_suffix: v6s,
+                    origin: Origin::Cli,
+                });
+                Response::Success(SimpleSuccess {
+                    message: format!("Host {mac} updated"),
+                })
+            }
+        } else {
+            Response::Error {
+                error: "Invalid MAC".to_string(),
+            }
+        }
+    }
+
+    /// Removes a host entry.
+    pub(crate) async fn handle_host_remove(&self, mac: String) -> Response {
+        if let Some(mac_addr) = MacAddr::parse(&mac) {
+            let _ = self.ctx.remove_host(mac_addr);
+            Response::Success(SimpleSuccess {
+                message: format!("Host {mac} removed"),
+            })
+        } else {
+            Response::Error {
+                error: "Invalid MAC".to_string(),
+            }
+        }
+    }
+
+    /// Prunes 'zombie' entries from the database.
+    pub(crate) async fn handle_db_prune(&self) -> Response {
+        let _ = self.ctx.apply(&DeviceUpdate::PruneZombies);
+        let _ = self.ctx.bus().publish(LanforgeEvent::DbPrune);
+        Response::Success(SimpleSuccess {
+            message: "Pruning triggered".to_string(),
+        })
+    }
+
+    /// Forcefully purges a device from memory and database.
+    pub(crate) async fn handle_purge(&self, mac: String) -> Response {
+        if let Some(mac_addr) = MacAddr::parse(&mac) {
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::DevicePurged { mac: mac_addr });
+            Response::Success(SimpleSuccess {
+                message: format!("Device {mac} purged"),
+            })
+        } else {
+            Response::Error {
+                error: "Invalid MAC".to_string(),
+            }
+        }
+    }
+
+    /// Dummy handler for watch (streaming is handled in server.rs)
+    pub(crate) async fn handle_watch(&self) -> Response {
+        Response::Success(SimpleSuccess {
+            message: "Starting watch stream...".to_string(),
+        })
+    }
+
+    /// Dummy handler for log (streaming is handled in server.rs)
+    pub(crate) async fn handle_log(&self, _follow: bool, n: Option<usize>) -> Response {
+        let n_lines = n.unwrap_or(100);
+        let history_len =
+            if let Ok(db) = lanforge_db::log_engine::LogDb::open(&self.cfg.log_db_url).await {
+                db.get_history(n_lines).await.map(|h| h.len()).unwrap_or(0)
+            } else {
+                0
+            };
+
+        Response::Success(SimpleSuccess {
+            message: format!("Starting event stream ({} historical)...", history_len),
+        })
     }
 }

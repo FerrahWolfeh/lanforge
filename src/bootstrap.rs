@@ -7,7 +7,7 @@ use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::{InterfaceState, State};
 use lanforge_db::engine::LeaseDb;
-use lanforge_network::ifmon::InterfaceMonitor;
+use lanforge_network::ifmon::AddressMonitor;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
 use rtnetlink::new_connection;
@@ -194,7 +194,7 @@ impl Bootstrapper {
         target_ifindex: u32,
         ctx: &LanforgeContext,
     ) -> Result<InterfaceState> {
-        let ifmon_init = InterfaceMonitor::new(
+        let ifmon_init = AddressMonitor::new(
             handle.clone(),
             messages.subscribe(),
             target_ifindex,

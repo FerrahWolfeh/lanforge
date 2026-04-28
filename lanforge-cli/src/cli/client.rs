@@ -4,17 +4,6 @@ use tokio::net::UnixStream;
 
 use crate::args::Command;
 use crate::cli::commands::CliCommand;
-use crate::cli::commands::GenericHandler;
-use crate::cli::commands::db::DbHandler;
-use crate::cli::commands::devices::DevicesHandler;
-use crate::cli::commands::dns::DnsCommand;
-use crate::cli::commands::host::HostHandler;
-use crate::cli::commands::lease::LeaseHandler;
-use crate::cli::commands::log::LogHandler;
-use crate::cli::commands::status::StatusHandler;
-use crate::cli::commands::topology::TopologyHandler;
-use crate::cli::commands::whois::WhoisHandler;
-use crate::cli::commands::wol::WolCommand;
 use lanforge_api::api::{Compression, Encoding, Response};
 
 pub struct ClientOptions {
@@ -31,59 +20,9 @@ pub async fn run_client(command: Command, socket_path: &str, opts: ClientOptions
     let mut reader = BufReader::new(reader);
 
     let mut handler: Box<dyn CliCommand> = match command {
-        Command::Status => Box::new(StatusHandler),
-        Command::Devices {
-            verbose,
-            filter,
-            vendor,
-            method,
-            format,
-            sort,
-            show_vendor,
-        } => Box::new(DevicesHandler {
-            verbose,
-            filter,
-            vendor,
-            method,
-            format,
-            sort,
-            show_vendor,
-        }),
-        Command::Host { action } => Box::new(HostHandler { action }),
-        Command::Lease { action } => Box::new(LeaseHandler { action }),
-        Command::Db { action } => Box::new(DbHandler { action }),
-        Command::Log {
-            follow,
-            verbose,
-            lines,
-        } => Box::new(LogHandler {
-            follow,
-            verbose,
-            lines,
-        }),
-        Command::Reload => Box::new(GenericHandler {
-            cmd: lanforge_api::api::Command::new(lanforge_api::api::CommandAction::Reload),
-            streaming: false,
-        }),
-        Command::Watch => Box::new(GenericHandler {
-            cmd: lanforge_api::api::Command::new(lanforge_api::api::CommandAction::Watch),
-            streaming: true,
-        }),
-        Command::Scan => Box::new(GenericHandler {
-            cmd: lanforge_api::api::Command::new(lanforge_api::api::CommandAction::Scan),
-            streaming: false,
-        }),
-        Command::Purge { mac } => Box::new(GenericHandler {
-            cmd: lanforge_api::api::Command::new(lanforge_api::api::CommandAction::Purge { mac }),
-            streaming: false,
-        }),
-        Command::Wol { target } => Box::new(WolCommand { target }),
-        Command::Whois { target } => Box::new(WhoisHandler { target }),
-        Command::Dns { action } => Box::new(DnsCommand { action }),
-        Command::Query { target } => Box::new(crate::cli::commands::query::QueryHandler { target }),
-        Command::Topology => Box::new(TopologyHandler),
         #[cfg(feature = "tui")]
         Command::Tui => return Err(eyre!("TUI should be handled in main.rs")),
+        cmd => cmd.to_handler(),
     };
 
     let mut control_cmd = match handler.prepare() {

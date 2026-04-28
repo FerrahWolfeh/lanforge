@@ -53,6 +53,7 @@ pub mod context;
 pub mod device;
 pub mod error;
 pub mod identifiers;
+pub mod macros;
 pub mod ndp;
 pub mod service;
 pub mod state;

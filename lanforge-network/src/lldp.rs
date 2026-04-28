@@ -11,12 +11,11 @@
 
 use std::os::unix::io::AsRawFd;
 use std::ptr::from_mut;
-use std::time::Duration;
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+use lanforge_core::service::AsyncService;
 use lanforge_core::state::DeviceUpdate;
 use pnet::packet::Packet;
 use pnet::packet::ethernet::EthernetPacket;
@@ -27,6 +26,14 @@ use tracing::{debug, error, info, warn};
 use crate::error::NetworkError;
 
 /// Monitors LLDP advertisements to discover network topology.
+#[lanforge_macros::lanforge_service(
+    id = "lldp",
+    name = "LLDP Monitor",
+    critical = false,
+    retries = 5,
+    base_backoff = 5,
+    max_backoff = 60
+)]
 pub struct LldpMonitor {
     iface: String,
     ifindex: u32,
@@ -42,24 +49,6 @@ impl LldpMonitor {
             ifindex,
             ctx,
         }
-    }
-}
-
-impl LanforgeService for LldpMonitor {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "lldp",
-            display_name: "LLDP Monitor",
-            critical: false, // Not critical for core operation
-            max_retries: 5,
-            base_backoff: Duration::from_secs(5),
-            max_backoff: Duration::from_mins(1),
-            stack_kb: 256,
-        }
-    }
-
-    fn describe(&self) -> String {
-        format!("LLDP Monitor (iface: {})", self.iface)
     }
 }
 

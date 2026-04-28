@@ -5,7 +5,7 @@ use crate::{
     wire::{WireHeader, WireOptScanner, WireQuestion, qtypes::QType},
 };
 use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
-use lanforge_core::{bus::TimedEvent, service::ServiceMeta};
+use lanforge_core::bus::TimedEvent;
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -45,8 +45,20 @@ pub(crate) struct DnsContext {
 }
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService};
+use lanforge_core::service::AsyncService;
 
+#[lanforge_macros::lanforge_service(
+    id = "dns",
+    name = "DNS Server",
+    critical = true,
+    retries = 0,
+    base_backoff = 2,
+    max_backoff = 30,
+    describe = format!(
+        "DNS on {} (upstream: {:?}, domain: .{})",
+        self.cfg.listen, self.cfg.upstream, self.cfg.search_domain
+    )
+)]
 pub struct DnsService {
     cfg: DnsConfig,
     stats: Arc<DnsStats>,
@@ -257,27 +269,6 @@ impl DnsService {
                 }
             }
         }
-    }
-}
-
-impl LanforgeService for DnsService {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "dns",
-            display_name: "DNS Server",
-            critical: true,
-            max_retries: 0,
-            base_backoff: Duration::from_secs(2),
-            max_backoff: Duration::from_secs(30),
-            stack_kb: 384,
-        }
-    }
-
-    fn describe(&self) -> String {
-        format!(
-            "DNS on {} (upstream: {:?}, domain: .{})",
-            self.cfg.listen, self.cfg.upstream, self.cfg.search_domain
-        )
     }
 }
 

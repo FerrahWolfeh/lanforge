@@ -5,6 +5,7 @@ members = [
     "lanforge-core",
     "lanforge-db",
     "lanforge-dns",
+    "lanforge-macros",
     "lanforge-network",
 ]
 

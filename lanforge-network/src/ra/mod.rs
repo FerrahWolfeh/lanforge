@@ -53,7 +53,7 @@ pub use packet::{build_ra_packet, icmpv6_checksum};
 use crate::error::NetworkError;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta};
+use lanforge_core::service::AsyncService;
 use rand::RngExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
@@ -167,6 +167,14 @@ impl RaState {
     }
 }
 
+#[lanforge_macros::lanforge_service(
+    id = "ra",
+    name = "RA Server",
+    critical = true,
+    retries = 0,
+    base_backoff = 2,
+    max_backoff = 30
+)]
 pub struct RaService {
     cfg: RaConfig,
     ctx: LanforgeContext,
@@ -176,20 +184,6 @@ impl RaService {
     #[must_use]
     pub const fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
-    }
-}
-
-impl LanforgeService for RaService {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
-            id: "ra",
-            display_name: "RA Server",
-            critical: true,
-            max_retries: 0,
-            base_backoff: Duration::from_secs(2),
-            max_backoff: Duration::from_secs(30),
-            stack_kb: 512,
-        }
     }
 }
 
@@ -284,12 +278,17 @@ impl AsyncService for RaService {
                 // 3. EventBus signals
                 res = bus_rx.recv() => {
                     if let Ok(timed_event) = res {
-                        if let Err(e) = Self::handle_bus_event(&timed_event.event, &mut state, &mut next_ra_at) {
-                            if matches!(e, CoreError::Shutdown) {
+                        lanforge_core::match_event!(timed_event, {
+                            LanforgeEvent::PrefixChanged { .. } => {
+                                info!("RA: Prefix change detected — sending immediate RA burst");
+                                state.initial_sent = 0;
+                                next_ra_at = Instant::now();
+                            }
+                            LanforgeEvent::Shutdown => {
+                                info!("RA service: shutdown received");
                                 return Ok(());
                             }
-                            warn!("RA: Bus event error: {e}");
-                        }
+                        });
                     } else {
                         break;
                     }
@@ -409,26 +408,6 @@ impl RaService {
                 guard.clear_ready();
             }
             Err(e) => warn!("RA socket error: {e}"),
-        }
-        Ok(())
-    }
-
-    fn handle_bus_event(
-        event: &LanforgeEvent,
-        state: &mut RaState,
-        next_ra_at: &mut Instant,
-    ) -> Result<(), CoreError> {
-        match event {
-            LanforgeEvent::PrefixChanged { .. } => {
-                info!("RA: Prefix change detected — sending immediate RA burst");
-                state.initial_sent = 0; // Reset startup burst counter
-                *next_ra_at = Instant::now(); // Force immediate send
-            }
-            LanforgeEvent::Shutdown => {
-                info!("RA service: shutdown received");
-                return Err(CoreError::Shutdown);
-            }
-            _ => {}
         }
         Ok(())
     }
