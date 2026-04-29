@@ -9,7 +9,10 @@ use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use lanforge_core::bus::LanforgeEvent;
+#[allow(unused_imports)]
+use lanforge_core::bus::{
+    DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
+};
 use lanforge_core::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget};
 use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
@@ -439,7 +442,7 @@ impl ClientContext {
         let _ = self
             .ctx
             .bus()
-            .publish(LanforgeEvent::WolTriggered { mac, ip_hint });
+            .publish(LanforgeEvent::Network(NetworkEvent::WolTriggered { mac, ip_hint }));
 
         Response::Success(SimpleSuccess {
             message: format!("Wake-on-LAN magic packet queued for {mac}"),
@@ -578,10 +581,10 @@ impl ClientContext {
         enabled: bool,
         duration_secs: Option<u64>,
     ) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::DnsAdblockToggle {
+        let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::AdblockToggle {
             enabled,
             duration_secs,
-        });
+        }));
         Response::Success(SimpleSuccess {
             message: if enabled {
                 "DNS Adblock enabled".to_string()
@@ -608,7 +611,7 @@ impl ClientContext {
     /// Triggers a reload of DNS blocklists.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::DnsAdblockReload);
+        let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
         Response::Success(SimpleSuccess {
             message: "DNS Adblock reload requested".to_string(),
         })
@@ -661,7 +664,7 @@ impl ClientContext {
 
     /// Completely resets and re-seeds the database.
     pub(crate) async fn handle_db_reset(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::DbReset);
+        let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbReset));
         Response::Success(SimpleSuccess {
             message: "Database reset requested. Simulating cold start...".to_string(),
         })
@@ -804,8 +807,8 @@ impl ClientContext {
 
     /// Triggers active network scans.
     pub(crate) async fn handle_scan(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::ScanRequested);
-        let _ = self.ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
+        let _ = self.ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::ScanRequested));
+        let _ = self.ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
         Response::Success(SimpleSuccess {
             message: "Active network scans triggered".to_string(),
         })
@@ -927,7 +930,7 @@ impl ClientContext {
     /// Prunes 'zombie' entries from the database.
     pub(crate) async fn handle_db_prune(&self) -> Response {
         let _ = self.ctx.apply(&DeviceUpdate::PruneZombies);
-        let _ = self.ctx.bus().publish(LanforgeEvent::DbPrune);
+        let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbPrune));
         Response::Success(SimpleSuccess {
             message: "Pruning triggered".to_string(),
         })
@@ -939,7 +942,7 @@ impl ClientContext {
             let _ = self
                 .ctx
                 .bus()
-                .publish(LanforgeEvent::DevicePurged { mac: mac_addr });
+                .publish(LanforgeEvent::Device(DeviceEvent::Purged { mac: mac_addr }));
             Response::Success(SimpleSuccess {
                 message: format!("Device {mac} purged"),
             })
@@ -975,11 +978,11 @@ impl ClientContext {
     /// Sets the API password by hashing it and publishing an update event.
     #[cfg(feature = "http")]
     pub(crate) async fn handle_config_set_password(&self, password: String) -> Response {
-        let hash = crate::auth::hash_password(&password);
+        let password_hash = crate::auth::hash_password(&password);
 
-        let _ = self.ctx.bus().publish(LanforgeEvent::ConfigUpdate {
-            password_hash: hash.clone(),
-        });
+        let _ = self.ctx.bus().publish(LanforgeEvent::System(SystemEvent::ConfigUpdate {
+            password_hash,
+        }));
 
         Response::Success(SimpleSuccess {
             message:
@@ -994,5 +997,37 @@ impl ClientContext {
             error: "HTTP API support not enabled in this build. Recompile with --features http."
                 .to_string(),
         }
+    }
+
+    /// Request the daemon to reload its configuration from disk.
+    pub(crate) async fn handle_reload(&self) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+        Response::Success(SimpleSuccess {
+            message: "Reload signal sent successfully".to_string(),
+        })
+    }
+
+    /// Gracefully shut down the daemon.
+    pub(crate) async fn handle_shutdown(&self) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::System(SystemEvent::Shutdown));
+        Response::Success(SimpleSuccess {
+            message: "Shutting down gracefully".to_string(),
+        })
+    }
+
+    /// Perform a VACUUM operation on the underlying SQLite database.
+    pub(crate) async fn handle_db_vacuum(&self) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbVacuum));
+        Response::Success(SimpleSuccess {
+            message: "Vacuum triggered".to_string(),
+        })
+    }
+
+    /// Clear all transient system logs.
+    pub(crate) async fn handle_db_log_clean(&self) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbLogClean));
+        Response::Success(SimpleSuccess {
+            message: "Log cleanup triggered".to_string(),
+        })
     }
 }

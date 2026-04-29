@@ -21,7 +21,7 @@
 //!
 //! Marked as `critical: false` — failure does not halt the daemon.
 
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::state::DeviceUpdate;
 use pnet::datalink::interfaces;
@@ -215,7 +215,7 @@ fn handle_command(cmd: &MdnsCommand, socket_v4: &UdpSocket, socket_v6: &UdpSocke
 }
 
 fn handle_lanforge_event(event: &LanforgeEvent, tx: &Sender<MdnsCommand>) {
-    if matches!(event, LanforgeEvent::ScanRequested) {
+    if matches!(event, LanforgeEvent::Network(NetworkEvent::ScanRequested)) {
         let _ = tx.try_send(MdnsCommand::ProbeAll);
     }
 }

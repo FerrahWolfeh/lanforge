@@ -33,7 +33,7 @@ pub mod server;
 
 use dhcproto::v4::{Message, Opcode};
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{DeviceChange, LanforgeEvent};
+use lanforge_core::bus::{DeviceChange, DeviceEvent, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::{DeviceUpdate, LeaseTarget};
@@ -223,41 +223,45 @@ impl Dhcpv4Service {
         raw_tx: &mut RawSender,
     ) -> Result<(), CoreError> {
         match event {
-            LanforgeEvent::LeaseRelease {
+            LanforgeEvent::Device(DeviceEvent::LeaseRelease {
                 mac,
                 target: LeaseTarget::V4,
-            } => {
+            }) => {
                 info!("DHCPv4: Forcing release of {} via CLI", mac);
                 let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                 if let Some(i) = ip {
                     server.pool.release(i);
                 }
             }
-            LanforgeEvent::LeaseRenew {
+            LanforgeEvent::Device(DeviceEvent::LeaseRenew {
                 mac,
                 target: LeaseTarget::V4,
-            } => {
+            }) => {
                 let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                 if let Some(ip) = ip {
                     let packet = server.build_forcerenew(*mac, ip);
                     let _ = raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref());
                 }
             }
-            LanforgeEvent::DeviceUpdated {
+            LanforgeEvent::Device(DeviceEvent::Updated {
                 mac,
-                change: DeviceChange::V4StaticChanged { ip },
+                change,
                 ..
-            } => match ip {
-                Some(v) => {
-                    info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
-                    server.pool.mark_declined(*v);
-                    info!("DHCPv4: Handled statically.");
+            }) => {
+                if let DeviceChange::V4StaticChanged { ip } = change.as_ref() {
+                    match ip {
+                        Some(v) => {
+                            info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
+                            server.pool.mark_declined(*v);
+                            info!("DHCPv4: Handled statically.");
+                        }
+                        None => {
+                            info!("DHCPv4: Static reservation cleared for {mac}");
+                        }
+                    }
                 }
-                None => {
-                    info!("DHCPv4: Static reservation cleared for {mac}");
-                }
-            },
-            LanforgeEvent::Shutdown => {
+            }
+            LanforgeEvent::System(SystemEvent::Shutdown) => {
                 info!("DHCPv4: Shutdown received");
                 return Err(CoreError::Shutdown);
             }

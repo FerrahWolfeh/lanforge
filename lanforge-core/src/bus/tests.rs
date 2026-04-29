@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::bus::{DeviceChange, EventBus, LanforgeEvent};
+use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent, StorageEvent};
 use crate::context::LanforgeContext;
 use crate::context::state::{DeviceUpdate, FieldUpdate, State};
 use crate::device::Origin;
@@ -33,21 +33,21 @@ async fn new_device_publishes_discovered_and_updated() {
     assert!(
         events.iter().any(|e: &crate::bus::TimedEvent| matches!(
             e.event,
-            LanforgeEvent::DeviceDiscovered { .. }
+            LanforgeEvent::Device(DeviceEvent::Discovered { .. })
         )),
         "Deve publicar DeviceDiscovered para device novo"
     );
     assert!(
         events.iter().any(|e: &crate::bus::TimedEvent| matches!(
             e.event,
-            LanforgeEvent::DeviceUpdated { .. }
+            LanforgeEvent::Device(DeviceEvent::Updated { .. })
         )),
         "Deve publicar DeviceUpdated"
     );
     assert!(
         events
             .iter()
-            .any(|e: &crate::bus::TimedEvent| matches!(e.event, LanforgeEvent::DeviceTableDirty)),
+            .any(|e: &crate::bus::TimedEvent| matches!(e.event, LanforgeEvent::Storage(StorageEvent::TableDirty))),
         "Deve publicar DeviceTableDirty"
     );
 }
@@ -81,7 +81,7 @@ async fn known_device_does_not_publish_discovered() {
     assert!(
         !events.iter().any(|e: &crate::bus::TimedEvent| matches!(
             e.event,
-            LanforgeEvent::DeviceDiscovered { .. }
+            LanforgeEvent::Device(DeviceEvent::Discovered { .. })
         )),
         "Device já conhecido não deve gerar DeviceDiscovered"
     );
@@ -137,11 +137,10 @@ async fn cli_host_update_publishes_events() {
     assert!(
         events.iter().any(|e| matches!(
             &e.event,
-            LanforgeEvent::DeviceUpdated {
-                mac: _,
-                change: DeviceChange::HostnameChanged { .. },
-                hostname: _
-            }
+            LanforgeEvent::Device(DeviceEvent::Updated {
+                change,
+                ..
+            }) if matches!(**change, DeviceChange::HostnameChanged { .. })
         )),
         "Deve publicar HostnameChanged"
     );
@@ -163,11 +162,10 @@ async fn cli_host_update_publishes_events() {
     assert!(
         events.iter().any(|e| matches!(
             &e.event,
-            LanforgeEvent::DeviceUpdated {
-                mac: _,
-                change: DeviceChange::V4StaticChanged { .. },
-                hostname: _
-            }
+            LanforgeEvent::Device(DeviceEvent::Updated {
+                change,
+                ..
+            }) if matches!(**change, DeviceChange::V4StaticChanged { .. })
         )),
         "Deve publicar V4StaticChanged"
     );

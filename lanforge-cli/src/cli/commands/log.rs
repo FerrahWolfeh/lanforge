@@ -7,7 +7,9 @@ use lanforge_api::api::Response;
 use lanforge_api::api::SimpleSuccess;
 use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_core::bus::TimedEvent;
-use lanforge_core::bus::{DeviceChange, LanforgeEvent};
+use lanforge_core::bus::{
+    DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
+};
 use lanforge_core::state::LeaseTarget;
 
 pub struct LogHandler {
@@ -54,7 +56,7 @@ impl LogHandler {
         let event = &timed_event.event;
 
         match event {
-            LanforgeEvent::DeviceDiscovered { mac, hostname } => {
+            LanforgeEvent::Device(DeviceEvent::Discovered { mac, hostname }) => {
                 let name = hostname
                     .as_deref()
                     .filter(|s| !s.is_empty())
@@ -68,10 +70,10 @@ impl LogHandler {
                     mac.to_string().dimmed()
                 );
             }
-            LanforgeEvent::DnsAdblockToggle {
+            LanforgeEvent::Dns(DnsEvent::AdblockToggle {
                 enabled,
                 duration_secs,
-            } => {
+            }) => {
                 let status = if *enabled {
                     "ENABLED".green().bold()
                 } else {
@@ -82,10 +84,10 @@ impl LogHandler {
                     .unwrap_or_default();
                 println!("[{}] {} DNS Adblocker{}", now, status, suffix);
             }
-            LanforgeEvent::DnsAdblockReload => {
+            LanforgeEvent::Dns(DnsEvent::AdblockReload) => {
                 println!("[{}] {} Reloading blocklists...", now, "DNS".cyan().bold());
             }
-            LanforgeEvent::DnsQueryBlocked { src_addr, domain } => {
+            LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, domain }) => {
                 if self.verbose {
                     println!(
                         "[{}] {} {} -> {}",
@@ -96,17 +98,17 @@ impl LogHandler {
                     );
                 }
             }
-            LanforgeEvent::DeviceUpdated {
+            LanforgeEvent::Device(DeviceEvent::Updated {
                 mac,
                 hostname,
                 change,
-            } => {
+            }) => {
                 let name = hostname
                     .as_deref()
                     .filter(|s| !s.is_empty())
                     .unwrap_or("unknown");
 
-                match change {
+                match change.as_ref() {
                     DeviceChange::StatusChanged { online, .. } => {
                         let status = if *online {
                             "ONLINE".bright_green().bold()
@@ -148,7 +150,7 @@ impl LogHandler {
                     }
                 }
             }
-            LanforgeEvent::DeviceExpired { mac } => {
+            LanforgeEvent::Device(DeviceEvent::Expired { mac }) => {
                 println!(
                     "[{}] {} {} {}",
                     now,
@@ -157,7 +159,7 @@ impl LogHandler {
                     mac.to_string().red()
                 );
             }
-            LanforgeEvent::DevicePurged { mac } => {
+            LanforgeEvent::Device(DeviceEvent::Purged { mac }) => {
                 println!(
                     "[{}] {} {} {}",
                     now,
@@ -166,7 +168,7 @@ impl LogHandler {
                     mac.to_string().red()
                 );
             }
-            LanforgeEvent::WolTriggered { mac, .. } => {
+            LanforgeEvent::Network(NetworkEvent::WolTriggered { mac, .. }) => {
                 println!(
                     "[{}] {} {} {}",
                     now,
@@ -175,12 +177,12 @@ impl LogHandler {
                     mac.to_string().bright_yellow()
                 );
             }
-            LanforgeEvent::PrefixChanged {
+            LanforgeEvent::Network(NetworkEvent::PrefixChanged {
                 gua,
                 preferred,
                 valid,
                 ula,
-            } => {
+            }) => {
                 if let Some(ula) = ula {
                     println!(
                         "[{}] {} {} {:?} (pref={}, valid={})",
@@ -203,7 +205,7 @@ impl LogHandler {
                     );
                 }
             }
-            LanforgeEvent::LeaseRelease { mac, target } => {
+            LanforgeEvent::Device(DeviceEvent::LeaseRelease { mac, target }) => {
                 println!(
                     "[{}] {} {} {} ({:?})",
                     now,
@@ -213,7 +215,7 @@ impl LogHandler {
                     target
                 );
             }
-            LanforgeEvent::LeaseRenew { mac, target } => {
+            LanforgeEvent::Device(DeviceEvent::LeaseRenew { mac, target }) => {
                 println!(
                     "[{}] {} {} {} ({:?})",
                     now,
@@ -223,7 +225,7 @@ impl LogHandler {
                     target
                 );
             }
-            LanforgeEvent::DbVacuum => {
+            LanforgeEvent::Storage(StorageEvent::DbVacuum) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -231,7 +233,7 @@ impl LogHandler {
                     "Database VACUUM requested".dimmed()
                 );
             }
-            LanforgeEvent::ReloadConfig => {
+            LanforgeEvent::System(SystemEvent::ReloadConfig) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -239,7 +241,7 @@ impl LogHandler {
                     "Config reload requested".dimmed()
                 );
             }
-            LanforgeEvent::ScanRequested => {
+            LanforgeEvent::Network(NetworkEvent::ScanRequested) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -247,7 +249,7 @@ impl LogHandler {
                     "mDNS Scan requested".dimmed()
                 );
             }
-            LanforgeEvent::SubnetScanStarted { subnet } => {
+            LanforgeEvent::Network(NetworkEvent::SubnetScanStarted { subnet }) => {
                 println!(
                     "[{}] {} {} {}",
                     now,
@@ -256,7 +258,7 @@ impl LogHandler {
                     subnet.bright_cyan().bold()
                 );
             }
-            LanforgeEvent::NeighborScanRequested => {
+            LanforgeEvent::Network(NetworkEvent::NeighborScanRequested) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -264,7 +266,7 @@ impl LogHandler {
                     "Manual Neighbor Scan (ARP) requested".dimmed()
                 );
             }
-            LanforgeEvent::InterfaceUpdated { ifindex } => {
+            LanforgeEvent::Network(NetworkEvent::InterfaceUpdated { ifindex }) => {
                 println!(
                     "[{}] {} {} (ifindex={})",
                     now,
@@ -273,7 +275,7 @@ impl LogHandler {
                     ifindex
                 );
             }
-            LanforgeEvent::StateReady => {
+            LanforgeEvent::System(SystemEvent::StateReady) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -281,7 +283,7 @@ impl LogHandler {
                     "Internal state ready".white()
                 );
             }
-            LanforgeEvent::DbReady => {
+            LanforgeEvent::System(SystemEvent::DbReady) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -289,7 +291,7 @@ impl LogHandler {
                     "Database engine ready".white()
                 );
             }
-            LanforgeEvent::InterfaceReady => {
+            LanforgeEvent::System(SystemEvent::InterfaceReady) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -297,7 +299,7 @@ impl LogHandler {
                     "Network interfaces ready".white()
                 );
             }
-            LanforgeEvent::ServiceReady { name } => {
+            LanforgeEvent::System(SystemEvent::ServiceReady { name }) => {
                 println!(
                     "[{}] {} {} {}",
                     now,
@@ -306,7 +308,7 @@ impl LogHandler {
                     name.cyan()
                 );
             }
-            LanforgeEvent::SystemReady => {
+            LanforgeEvent::System(SystemEvent::SystemReady) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -314,7 +316,7 @@ impl LogHandler {
                     "System fully operational!".bright_green().bold()
                 );
             }
-            LanforgeEvent::DbLogClean => {
+            LanforgeEvent::Storage(StorageEvent::DbLogClean) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -322,10 +324,10 @@ impl LogHandler {
                     "Transient logs cleared manually".dimmed()
                 );
             }
-            LanforgeEvent::DeviceTableDirty => {
+            LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                 // Ignore these or print subtly if needed
             }
-            LanforgeEvent::DbPrune => {
+            LanforgeEvent::Storage(StorageEvent::DbPrune) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -333,7 +335,7 @@ impl LogHandler {
                     "Zombie devices manually pruned from DB".dimmed()
                 );
             }
-            LanforgeEvent::RsReceived { mac } => {
+            LanforgeEvent::Network(NetworkEvent::RsReceived { mac }) => {
                 println!(
                     "[{}] {} {} ({})",
                     now,
@@ -342,7 +344,7 @@ impl LogHandler {
                     mac
                 );
             }
-            LanforgeEvent::DbReset => {
+            LanforgeEvent::Storage(StorageEvent::DbReset) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -350,7 +352,7 @@ impl LogHandler {
                     "System-wide database reset requested!".red().bold()
                 );
             }
-            LanforgeEvent::DbResetCompleted => {
+            LanforgeEvent::Storage(StorageEvent::DbResetCompleted) => {
                 println!(
                     "[{}] {} {}",
                     now,
@@ -358,7 +360,7 @@ impl LogHandler {
                     "Database reset completed. Reloading state...".bright_green()
                 );
             }
-            LanforgeEvent::ConfigUpdate { .. } => {
+            LanforgeEvent::System(SystemEvent::ConfigUpdate { .. }) => {
                 if self.verbose {
                     println!(
                         "[{}] {} API configuration updated",
@@ -367,7 +369,7 @@ impl LogHandler {
                     );
                 }
             }
-            LanforgeEvent::Shutdown => {
+            LanforgeEvent::System(SystemEvent::Shutdown) => {
                 println!(
                     "[{}] {} {}",
                     now,

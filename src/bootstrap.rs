@@ -1,7 +1,7 @@
 use anyhow::Result;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
-use lanforge_core::bus::{EventBus, LanforgeEvent};
+use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_core::identifiers::MacAddr;
@@ -56,7 +56,7 @@ impl Bootstrapper {
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
-        let _ = bus.publish(LanforgeEvent::StateReady);
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 
         // --- PHASE 2: Netlink Setup ---
         let (handle, messages_rx) = Self::init_netlink()?;
@@ -82,7 +82,7 @@ impl Bootstrapper {
         Self::log_welcome_banner(&cfg, &if_state);
 
         ctx.set_if_ready(true);
-        let _ = bus.publish(LanforgeEvent::InterfaceReady);
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
 
         // --- PHASE 4/5: Handover to Daemon ---
         Ok((

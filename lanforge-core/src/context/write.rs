@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    bus::{DeviceChange, LanforgeEvent},
+    bus::{DeviceChange, DeviceEvent, LanforgeEvent, NetworkEvent, StorageEvent},
     context::{
         LanforgeContext,
         utils::{device_change_of, mac_of},
@@ -142,7 +142,7 @@ impl LanforgeContext {
         for event in events {
             let _ = self.inner.bus.publish(event);
         }
-        let _ = self.inner.bus.publish(LanforgeEvent::DeviceTableDirty);
+        let _ = self.inner.bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
         true
     }
 
@@ -164,10 +164,10 @@ impl LanforgeContext {
             let hostname = dev.as_ref().map(|d| d.hostname.name.clone());
 
             if is_new {
-                events.push(LanforgeEvent::DeviceDiscovered {
+                events.push(LanforgeEvent::Device(DeviceEvent::Discovered {
                     mac,
                     hostname: hostname.clone(),
-                });
+                }));
             }
 
             if let Some(mut change) = change {
@@ -178,28 +178,28 @@ impl LanforgeContext {
                     *hostname = dev.as_ref().map(|d| d.hostname.name.clone());
                 }
 
-                events.push(LanforgeEvent::DeviceUpdated {
+                events.push(LanforgeEvent::Device(DeviceEvent::Updated {
                     mac,
-                    change,
+                    change: Box::new(change),
                     hostname: hostname.clone(),
-                });
+                }));
             }
 
             if let Some(was) = was_online
                 && was != now_online
             {
-                events.push(LanforgeEvent::DeviceUpdated {
+                events.push(LanforgeEvent::Device(DeviceEvent::Updated {
                     mac,
-                    change: DeviceChange::StatusChanged {
+                    change: Box::new(DeviceChange::StatusChanged {
                         online: now_online,
                         hostname: hostname.clone(),
-                    },
+                    }),
                     hostname,
-                });
+                }));
             }
 
             if matches!(update, DeviceUpdate::HostRemoved { .. }) {
-                events.push(LanforgeEvent::DevicePurged { mac });
+                events.push(LanforgeEvent::Device(DeviceEvent::Purged { mac }));
             }
         }
 
@@ -208,17 +208,17 @@ impl LanforgeContext {
             state: update_state,
         } = update
         {
-            events.push(LanforgeEvent::InterfaceUpdated { ifindex: *ifindex });
+            events.push(LanforgeEvent::Network(NetworkEvent::InterfaceUpdated { ifindex: *ifindex }));
             if let Some((prev_gua, prev_ula)) = prev_prefix
                 && ((update_state.gua.is_some() && update_state.gua != prev_gua)
                     || (update_state.ula.is_some() && update_state.ula != prev_ula))
             {
-                events.push(LanforgeEvent::PrefixChanged {
+                events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged {
                     gua: update_state.gua,
                     ula: update_state.ula,
                     preferred: update_state.gua_preferred,
                     valid: update_state.gua_valid,
-                });
+                }));
             }
         }
 
@@ -305,13 +305,13 @@ impl LanforgeContext {
 
         if !dead_leases.is_empty() {
             for (mac, hostname, change) in dead_leases {
-                let _ = self.inner.bus.publish(LanforgeEvent::DeviceUpdated {
+                let _ = self.inner.bus.publish(LanforgeEvent::Device(DeviceEvent::Updated {
                     mac,
                     hostname,
-                    change,
-                });
+                    change: Box::new(change),
+                }));
             }
-            let _ = self.inner.bus.publish(LanforgeEvent::DeviceTableDirty);
+            let _ = self.inner.bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
         }
     }
 

@@ -2,7 +2,9 @@ use crate::app::sd_notify_ready;
 use crate::config::Config;
 
 use anyhow::Result;
-use lanforge_core::bus::{LanforgeEvent, TimedEvent};
+use lanforge_core::bus::{
+    LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent,
+};
 use lanforge_core::context::LanforgeContext;
 use lanforge_network::wol::send_wol_magic_packet;
 
@@ -38,7 +40,7 @@ pub async fn run_event_loop(
     stale_timer.tick().await;
 
     // Initial scan request to kick off discovery across all services
-    let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
+    let _ = ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
 
     info!(
         "Event loop: expecting readiness from {} services: {:?}",
@@ -66,7 +68,7 @@ pub async fn run_event_loop(
             }
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 received, forcing state synchronization...");
-                let _ = ctx.bus().publish(LanforgeEvent::NeighborScanRequested);
+                let _ = ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
             }
             _ = sigterm.recv() => {
                 info!("SIGTERM received — starting graceful shutdown...");
@@ -123,7 +125,7 @@ struct LoopContext<'a> {
 
 fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
     match event {
-        LanforgeEvent::ServiceReady { name }
+        LanforgeEvent::System(SystemEvent::ServiceReady { name })
             if l_ctx.expected_services.contains(&name)
                 && l_ctx.ready_services.insert(name.clone()) =>
         {
@@ -138,12 +140,15 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
                 && l_ctx.ready_services.len() >= l_ctx.expected_services.len()
             {
                 info!("✅ All internal services ready. System fully operational.");
-                let _ = l_ctx.ctx.bus().publish(LanforgeEvent::SystemReady);
+                let _ = l_ctx
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::System(SystemEvent::SystemReady));
                 sd_notify_ready();
                 l_ctx.system_ready_sent = true;
             }
         }
-        LanforgeEvent::PrefixChanged { gua, ula, .. }
+        LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, ula, .. })
             if (l_ctx.state.current_gua != gua || l_ctx.state.current_ula != ula) =>
         {
             info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
@@ -152,22 +157,22 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
             let _ = l_ctx
                 .ctx
                 .bus()
-                .publish(LanforgeEvent::NeighborScanRequested);
+                .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
         }
-        LanforgeEvent::ReloadConfig => {
+        LanforgeEvent::System(SystemEvent::ReloadConfig) => {
             info!("ReloadConfig: Forcing background synchronization...");
             let _ = l_ctx
                 .ctx
                 .bus()
-                .publish(LanforgeEvent::NeighborScanRequested);
+                .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
         }
-        LanforgeEvent::WolTriggered { mac, ip_hint } => {
+        LanforgeEvent::Network(NetworkEvent::WolTriggered { mac, ip_hint }) => {
             handle_wol_event(l_ctx, mac, ip_hint);
         }
-        LanforgeEvent::DbResetCompleted => {
+        LanforgeEvent::Storage(StorageEvent::DbResetCompleted) => {
             handle_db_reset(l_ctx);
         }
-        LanforgeEvent::ConfigUpdate { password_hash } => {
+        LanforgeEvent::System(SystemEvent::ConfigUpdate { password_hash }) => {
             let hash_path = l_ctx.cfg.get_password_hash_path();
             info!(
                 "ConfigUpdate: Saving new API password hash to {:?}...",
@@ -180,7 +185,7 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
                 info!("✅ Configuration updated and saved to {:?}", hash_path);
             }
         }
-        LanforgeEvent::Shutdown => {
+        LanforgeEvent::System(SystemEvent::Shutdown) => {
             debug!("EventLoop: shutdown received via bus");
             return false;
         }
@@ -231,7 +236,7 @@ fn handle_db_reset(l_ctx: &LoopContext) {
     let _ = l_ctx
         .ctx
         .bus()
-        .publish(LanforgeEvent::NeighborScanRequested);
+        .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
 }
 
 struct LoopState {

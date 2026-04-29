@@ -3,84 +3,24 @@
 //! This module uses `tokio::sync::broadcast` to provide a thread-safe,
 //! multi-producer multi-consumer event bus.
 
+pub mod device;
+pub mod dns;
+pub mod network;
+pub mod storage;
+pub mod system;
 #[cfg(test)]
 pub mod tests;
 
-use std::{
-    net::{Ipv4Addr, Ipv6Addr},
-    time::SystemTime,
-};
-
-use tokio::sync::broadcast::{self, Receiver};
-
-use crate::context::state::LeaseTarget;
-use crate::identifiers::MacAddr;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast::{self, Receiver};
 
-// ---------------------------------------------------------------------------
-// DeviceChange — o que mudou num device
-// ---------------------------------------------------------------------------
-
-/// Detailed changes applied to a specific `Device`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeviceChange {
-    /// An IPv4 address was assigned or renewed via `DHCPv4`.
-    V4Assigned { ip: Ipv4Addr },
-
-    /// A dynamic lease expired and was removed from the device.
-    LeaseExpired { target: LeaseTarget },
-
-    /// An IPv6 address was assigned or renewed via `DHCPv6`.
-    V6Assigned { ip: Ipv6Addr, iaid: u32 },
-
-    /// The device was entirely removed from the active table due to inactivity.
-    HostRemoved,
-
-    /// An IPv6 prefix was delegated to the device via `DHCPv6 Prefix Delegation` (`IA_PD`).
-    V6PrefixAssigned {
-        prefix: Ipv6Addr,
-        len: u8,
-        iaid: u32,
-    },
-
-    /// A SLAAC address was observed via Neighbor Discovery (NDP).
-    SlaacObserved { addr: Ipv6Addr },
-
-    /// The device's reachability status has changed.
-    StatusChanged {
-        online: bool,
-        hostname: Option<String>,
-    },
-
-    /// The device's hostname was updated (e.g., via DHCP hint or CLI).
-    HostnameChanged { hostname: String },
-
-    /// A static IPv4 reservation was modified or removed via CLI.
-    V4StaticChanged { ip: Option<Ipv4Addr> },
-
-    /// A static IPv6 Interface ID (suffix) was modified or removed via CLI.
-    V6SuffixChanged {
-        suffix: Option<crate::device::Ipv6AddrOrSuffix>,
-    },
-
-    /// A DUID was successfully associated with this device's MAC.
-    DuidAssociated { duid: crate::identifiers::Duid },
-
-    /// A neighbor was observed via NDP (IPv6) but no SLAAC address was extracted.
-    NdpActivity { ip: Ipv6Addr },
-
-    /// An IPv4 neighbor event (ARP) was observed.
-    ArpActivity { ip: Ipv4Addr },
-
-    /// The device has been classified into a high-level category (e.g., Printer).
-    Classified { class: crate::device::DeviceClass },
-    /// The device's physical or logical topology has changed.
-    TopologyChanged {
-        parent_mac: Option<MacAddr>,
-        port: Option<String>,
-    },
-}
+pub use self::device::{DeviceChange, DeviceEvent};
+pub use self::dns::DnsEvent;
+pub use self::network::NetworkEvent;
+pub use self::storage::StorageEvent;
+pub use self::system::SystemEvent;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimedEvent {
@@ -102,109 +42,50 @@ impl TimedEvent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LanforgeEvent {
-    DeviceDiscovered {
-        mac: MacAddr,
-        hostname: Option<String>,
-    },
-    DeviceUpdated {
-        mac: MacAddr,
-        hostname: Option<String>,
-        change: DeviceChange,
-    },
-    DeviceExpired {
-        mac: MacAddr,
-    },
-    DevicePurged {
-        mac: MacAddr,
-    },
-    PrefixChanged {
-        gua: Option<Ipv6Addr>,
-        ula: Option<Ipv6Addr>,
-        preferred: u32,
-        valid: u32,
-    },
-    InterfaceUpdated {
-        ifindex: u32,
-    },
-    ScanRequested,
-    NeighborScanRequested,
-    SubnetScanStarted {
-        subnet: String,
-    },
-    DeviceTableDirty,
-    ReloadConfig,
-    DbVacuum,
-    DbLogClean,
-    DbPrune,
-    DbReset,
-    DbResetCompleted,
-    LeaseRelease {
-        mac: MacAddr,
-        target: LeaseTarget,
-    },
-    LeaseRenew {
-        mac: MacAddr,
-        target: LeaseTarget,
-    },
-    Shutdown,
-    StateReady,
-    DbReady,
-    InterfaceReady,
-    ServiceReady {
-        name: String,
-    },
-    SystemReady,
-    WolTriggered {
-        mac: MacAddr,
-        ip_hint: Option<Ipv4Addr>,
-    },
-    RsReceived {
-        mac: MacAddr,
-    },
-    #[cfg(feature = "adblock")]
-    DnsAdblockToggle {
-        enabled: bool,
-        duration_secs: Option<u64>,
-    },
-    #[cfg(feature = "adblock")]
-    DnsAdblockReload,
-    #[cfg(feature = "adblock")]
-    DnsQueryBlocked {
-        src_addr: std::net::IpAddr,
-        domain: String,
-    },
-    ConfigUpdate {
-        password_hash: String,
-    },
+    Device(DeviceEvent),
+    Network(NetworkEvent),
+    System(SystemEvent),
+    Storage(StorageEvent),
+    Dns(DnsEvent),
 }
 
 impl TimedEvent {
     #[must_use]
     pub const fn is_loggable(&self) -> bool {
         match &self.event {
-            LanforgeEvent::DeviceDiscovered { .. }
-            | LanforgeEvent::DeviceUpdated { .. }
-            | LanforgeEvent::DeviceExpired { .. }
-            | LanforgeEvent::PrefixChanged { .. }
-            | LanforgeEvent::InterfaceUpdated { .. }
-            | LanforgeEvent::LeaseRelease { .. }
-            | LanforgeEvent::LeaseRenew { .. }
-            | LanforgeEvent::DbVacuum
-            | LanforgeEvent::DbLogClean
-            | LanforgeEvent::DbPrune
-            | LanforgeEvent::DevicePurged { .. }
-            | LanforgeEvent::WolTriggered { .. }
-            | LanforgeEvent::RsReceived { .. }
-            | LanforgeEvent::ReloadConfig
-            | LanforgeEvent::ServiceReady { .. }
-            | LanforgeEvent::SystemReady
-            | LanforgeEvent::ScanRequested
-            | LanforgeEvent::NeighborScanRequested
-            | LanforgeEvent::SubnetScanStarted { .. }
-            | LanforgeEvent::ConfigUpdate { .. } => true,
-            #[cfg(feature = "adblock")]
-            LanforgeEvent::DnsAdblockToggle { .. } | LanforgeEvent::DnsAdblockReload => true,
-            _ => false,
+            LanforgeEvent::Device(e) => match e {
+                DeviceEvent::Discovered { .. }
+                | DeviceEvent::Updated { .. }
+                | DeviceEvent::Expired { .. }
+                | DeviceEvent::Purged { .. }
+                | DeviceEvent::LeaseRelease { .. }
+                | DeviceEvent::LeaseRenew { .. } => true,
+            },
+            LanforgeEvent::Network(e) => match e {
+                NetworkEvent::PrefixChanged { .. }
+                | NetworkEvent::InterfaceUpdated { .. }
+                | NetworkEvent::WolTriggered { .. }
+                | NetworkEvent::RsReceived { .. }
+                | NetworkEvent::ScanRequested
+                | NetworkEvent::NeighborScanRequested
+                | NetworkEvent::SubnetScanStarted { .. } => true,
+            },
+            LanforgeEvent::System(e) => matches!(
+                e,
+                SystemEvent::ReloadConfig
+                    | SystemEvent::ServiceReady { .. }
+                    | SystemEvent::SystemReady
+                    | SystemEvent::ConfigUpdate { .. }
+            ),
+            LanforgeEvent::Storage(e) => matches!(
+                e,
+                StorageEvent::DbVacuum | StorageEvent::DbLogClean | StorageEvent::DbPrune
+            ),
+            LanforgeEvent::Dns(e) => match e {
+                #[cfg(feature = "adblock")]
+                DnsEvent::AdblockToggle { .. } | DnsEvent::AdblockReload => true,
+                _ => false,
+            },
         }
     }
 }

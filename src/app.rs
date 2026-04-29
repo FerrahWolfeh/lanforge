@@ -101,7 +101,7 @@ impl Daemon {
     async fn shutdown(self) -> Result<()> {
         info!("🛑 Starting shutdown sequence...");
         self.ctx.terminate();
-        let _ = self.ctx.bus().publish(LanforgeEvent::Shutdown);
+        let _ = self.ctx.bus().publish(LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown));
 
         tokio::select! {
             _ = tokio::task::spawn_blocking(move || self.registry.wait_all()) => {

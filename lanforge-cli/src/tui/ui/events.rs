@@ -1,7 +1,7 @@
 use crate::tui::state::TuiState;
 use crate::tui::theme;
 use chrono::{DateTime, Utc};
-use lanforge_core::bus::{DeviceChange, LanforgeEvent};
+use lanforge_core::bus::{DeviceChange, DeviceEvent, LanforgeEvent};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -23,17 +23,21 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState, _auto_scroll: bool) {
             let module = e.module.as_deref().unwrap_or("core");
 
             let (event_type, color) = match &e.event {
-                LanforgeEvent::DeviceUpdated { change, .. } => match change {
-                    DeviceChange::V4Assigned { .. } => ("V4   ", theme::MOCHA_BLUE),
-                    DeviceChange::V6Assigned { .. } => ("V6   ", theme::MOCHA_LAVENDER),
-                    DeviceChange::V6PrefixAssigned { .. } => ("PD   ", theme::MOCHA_MAUVE),
-                    DeviceChange::SlaacObserved { .. } => ("SLAAC", theme::MOCHA_TEAL),
-                    DeviceChange::NdpActivity { .. } => ("NDP  ", theme::MOCHA_SAPPHIRE),
-                    DeviceChange::ArpActivity { .. } => ("ARP  ", theme::MOCHA_YELLOW),
-                    _ => ("UPD  ", theme::ACCENT),
-                },
-                LanforgeEvent::DeviceDiscovered { .. } => ("NEW  ", theme::MOCHA_GREEN),
-                LanforgeEvent::DeviceExpired { .. } => ("EXP  ", theme::MOCHA_RED),
+                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => {
+                    match change.as_ref() {
+                        DeviceChange::V4Assigned { .. } => ("V4   ", theme::MOCHA_BLUE),
+                        DeviceChange::V6Assigned { .. } => ("V6   ", theme::MOCHA_LAVENDER),
+                        DeviceChange::V6PrefixAssigned { .. } => ("PD   ", theme::MOCHA_MAUVE),
+                        DeviceChange::SlaacObserved { .. } => ("SLAAC", theme::MOCHA_TEAL),
+                        DeviceChange::NdpActivity { .. } => ("NDP  ", theme::MOCHA_SAPPHIRE),
+                        DeviceChange::ArpActivity { .. } => ("ARP  ", theme::MOCHA_YELLOW),
+                        _ => ("UPD  ", theme::ACCENT),
+                    }
+                }
+                LanforgeEvent::Device(DeviceEvent::Discovered { .. }) => {
+                    ("NEW  ", theme::MOCHA_GREEN)
+                }
+                LanforgeEvent::Device(DeviceEvent::Expired { .. }) => ("EXP  ", theme::MOCHA_RED),
                 _ => ("EV   ", theme::TEXT_DIM),
             };
 

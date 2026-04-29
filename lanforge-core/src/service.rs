@@ -172,7 +172,7 @@ pub trait LanforgeService: Send + Sync {
 ///
 /// Services implementing this trait should:
 /// 1. Use the [`LanforgeContext`] to access the [`EventBus`](crate::bus::EventBus) and global state
-/// 2. Listen for the `LanforgeEvent::Shutdown` signal on the bus to exit `run`
+/// 2. Listen for the `LanforgeEvent::System(SystemEvent::Shutdown)` signal on the bus to exit `run`
 /// 3. Prefer native async I/O (`tokio::net`) over synchronous blocking calls
 /// 4. Handle errors gracefully — unrecoverable errors should return `Err(CoreError)`
 ///
@@ -182,7 +182,7 @@ pub trait LanforgeService: Send + Sync {
 /// use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta, ServiceControl};
 /// use lanforge_core::context::LanforgeContext;
 /// use lanforge_core::error::CoreError;
-/// use lanforge_core::bus::LanforgeEvent;
+/// use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 /// use std::time::Duration;
 ///
 /// struct MyAsyncService {
@@ -210,7 +210,7 @@ pub trait LanforgeService: Send + Sync {
 ///         loop {
 ///             match rx.recv().await {
 ///                 Ok(timed) => {
-///                     if matches!(timed.event, LanforgeEvent::Shutdown) {
+///                     if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
 ///                         break;
 ///                     }
 ///                     // Handle events...
@@ -398,9 +398,9 @@ impl ServiceControl {
             let _ = self
                 .ctx
                 .bus()
-                .publish(crate::bus::LanforgeEvent::ServiceReady {
+                .publish(crate::bus::LanforgeEvent::System(crate::bus::SystemEvent::ServiceReady {
                     name: self.id.to_string(),
-                });
+                }));
         }
     }
 

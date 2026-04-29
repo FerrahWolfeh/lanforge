@@ -3,7 +3,7 @@ use lanforge_core::error::CoreError;
 
 use crate::config::ApiConfig;
 use crate::error::ApiError;
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_db::log_engine::LogDb;
 use std::fs::{self, Permissions};
@@ -100,13 +100,13 @@ impl AsyncService for ControlService {
                 msg = bus_rx.recv() => {
                     if let Ok(timed_event) = msg {
                         lanforge_core::match_event!(timed_event, {
-                            LanforgeEvent::PrefixChanged {gua, .. } => {
+                            LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, .. }) => {
                                 current_gua = gua.map(|ip| ip.to_string());
                             }
-                            LanforgeEvent::ReloadConfig => {
+                            LanforgeEvent::System(SystemEvent::ReloadConfig) => {
                                 last_scan = Instant::now();
                             }
-                            LanforgeEvent::Shutdown => {
+                            LanforgeEvent::System(SystemEvent::Shutdown) => {
                                 debug!("Control: shutdown received");
                                 break;
                             }
@@ -347,7 +347,7 @@ where
 
             let mut rx = ctx.ctx.bus().subscribe();
             while let Ok(msg) = rx.recv().await {
-                if !ctx.ctx.is_running() || matches!(msg.event, LanforgeEvent::Shutdown) {
+                if !ctx.ctx.is_running() || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                     break;
                 }
                 if write_response(
@@ -369,7 +369,7 @@ where
 
             let mut rx = ctx.ctx.bus().subscribe();
             while let Ok(msg) = rx.recv().await {
-                if !ctx.ctx.is_running() || matches!(msg.event, LanforgeEvent::Shutdown) {
+                if !ctx.ctx.is_running() || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                     break;
                 }
                 if write_response(

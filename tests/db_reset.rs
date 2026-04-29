@@ -1,6 +1,6 @@
 use lanforge::config::Config;
 use lanforge_api::server::handle_client;
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, StorageEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::State;
@@ -64,7 +64,7 @@ async fn test_full_db_reset_chain() {
     ctx.wait_for_db().await.expect("DB failed to become ready");
 
     // Force a flush to disk so we have something to reset
-    let _ = ctx.bus().publish(LanforgeEvent::DeviceTableDirty);
+    let _ = ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // 4. Setup Mock Client and API handler
@@ -94,7 +94,7 @@ async fn test_full_db_reset_chain() {
     let mut bus_rx = bus.subscribe();
     tokio::spawn(async move {
         while let Ok(te) = bus_rx.recv().await {
-            if matches!(te.event, LanforgeEvent::DbResetCompleted) {
+            if matches!(te.event, LanforgeEvent::Storage(StorageEvent::DbResetCompleted)) {
                 ctx_loop.reset();
                 let mut state = ctx_loop.write();
                 lanforge::bootstrap::Bootstrapper::reload_static_devices_into_state(

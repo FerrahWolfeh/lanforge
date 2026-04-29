@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::NetworkError;
 use crate::slaac::packet::build_echo_request;
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -84,7 +84,7 @@ impl AsyncService for SlaacTracker {
 
                 Ok(timed_event) = bus_rx.recv() => {
                     lanforge_core::match_event!(timed_event, {
-                        LanforgeEvent::RsReceived { .. } => {
+                        LanforgeEvent::Network(NetworkEvent::RsReceived { .. }) => {
                             // Device requested RA, will configure SLAAC shortly.
                             let socket_clone = Arc::clone(&socket);
                             let ifindex = self.target_ifindex;
@@ -97,11 +97,11 @@ impl AsyncService for SlaacTracker {
                                 }
                             });
                         }
-                        LanforgeEvent::ScanRequested | LanforgeEvent::NeighborScanRequested => {
+                        LanforgeEvent::Network(NetworkEvent::ScanRequested | NetworkEvent::NeighborScanRequested) => {
                             info!("SLAAC Tracker: Discovery requested, triggering sweep");
                             self.send_discovery_ping();
                         }
-                        LanforgeEvent::Shutdown => break,
+                        LanforgeEvent::System(SystemEvent::Shutdown) => break,
                     });
                 }
             }

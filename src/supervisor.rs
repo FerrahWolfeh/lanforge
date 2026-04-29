@@ -17,7 +17,8 @@
 //!          └───────────────────────────┘
 //! ```
 
-use lanforge_core::bus::LanforgeEvent;
+#[allow(unused_imports)]
+use lanforge_core::bus::{LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceControl, SyncBusReceiver, SyncService};
 use std::thread::sleep;
@@ -47,7 +48,7 @@ where
         tokio::select! {
             shutdown = async {
                 while let Ok(e) = bus_rx.recv().await {
-                    if matches!(e.event, LanforgeEvent::Shutdown) {
+                    if matches!(e.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                         return true;
                     }
                 }
@@ -99,7 +100,7 @@ where
                         tokio::select! {
                             () = async {
                                 while let Ok(e) = bus_rx.recv().await {
-                                    if matches!(e.event, LanforgeEvent::Shutdown) {
+                                    if matches!(e.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                                         return;
                                     }
                                 }
@@ -153,7 +154,8 @@ where
                 // but mostly we rely on the broadcast events.
                 match event_rx.recv().await {
                     Ok(event) => {
-                        let is_shutdown = matches!(event.event, LanforgeEvent::Shutdown);
+                        let is_shutdown =
+                            matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown));
                         if tx.send(event).is_err() {
                             break;
                         }
@@ -197,7 +199,7 @@ where
                 if meta.max_retries > 0 && consecutive_failures >= meta.max_retries {
                     if meta.critical {
                         ctx.terminate();
-                        let _ = bus.publish(LanforgeEvent::Shutdown);
+                        let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
                         return;
                     }
                     warn!(
@@ -370,7 +372,7 @@ mod tests {
         // We might get multiple events, we want to see at least one ServiceReady
         for _ in 0..20 {
             if let Ok(event) = sub.recv().await
-                && let LanforgeEvent::ServiceReady { name } = event.event
+                && let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
                 && name == "ref-service"
             {
                 ready = true;
@@ -387,7 +389,7 @@ mod tests {
         );
 
         // 3. Signal Shutdown
-        let _ = bus.publish(LanforgeEvent::Shutdown);
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
 
         // 4. Verify supervisor terminates
         tokio::time::timeout(Duration::from_secs(2), handle)
@@ -425,7 +427,7 @@ mod tests {
             if let Ok(event) =
                 tokio::time::timeout(Duration::from_millis(50), ready_sub.recv()).await
                 && let Ok(e) = event
-                && let LanforgeEvent::ServiceReady { name } = e.event
+                && let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = e.event
                 && name == "test-sync"
             {
                 ready = true;
@@ -436,9 +438,9 @@ mod tests {
         println!("INFO: Service ready, publishing probes");
 
         // 2. Publish two loggable events and a shutdown
-        let _ = bus.publish(LanforgeEvent::DbVacuum);
-        let _ = bus.publish(LanforgeEvent::DbVacuum);
-        let _ = bus.publish(LanforgeEvent::Shutdown);
+        let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::DbVacuum));
+        let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::DbVacuum));
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
 
         // Dá um tempo para a task assíncrona do bridge rotear os eventos pro MPSC
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -488,10 +490,10 @@ mod tests {
             loop {
                 if let Some(e) = bus_rx.recv_timeout(Duration::from_millis(500)) {
                     println!("LOG: TestSyncService received: {:?}", e.event);
-                    if matches!(e.event, LanforgeEvent::Shutdown) {
+                    if matches!(e.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                         break;
                     }
-                    if matches!(e.event, LanforgeEvent::DbVacuum) {
+                    if matches!(e.event, LanforgeEvent::Storage(StorageEvent::DbVacuum)) {
                         self.received.fetch_add(1, Ordering::SeqCst);
                     }
                 } else if !self.ctx.is_running() {

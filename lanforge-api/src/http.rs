@@ -12,7 +12,7 @@ use axum::{
 };
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::{
-    bus::LanforgeEvent,
+    bus::{LanforgeEvent, SystemEvent},
     device::{Device, Ipv6AddrOrSuffix, Origin},
     error::CoreError,
     state::{DeviceUpdate, FieldUpdate},
@@ -143,7 +143,7 @@ impl AsyncService for HttpService {
         let shutdown_signal = async move {
             let mut rx = ctx_shutdown.bus().subscribe();
             while let Ok(event) = rx.recv().await {
-                if !ctx_shutdown.is_running() || matches!(event.event, LanforgeEvent::Shutdown) {
+                if !ctx_shutdown.is_running() || matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                     info!("HTTP: shutdown signal received");
                     break;
                 }

@@ -5,7 +5,7 @@ use crate::{
     wire::{WireHeader, WireOptScanner, WireQuestion, qtypes::QType},
 };
 use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
-use lanforge_core::bus::TimedEvent;
+use lanforge_core::bus::{SystemEvent, TimedEvent};
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -26,7 +26,8 @@ use crate::{
     utils::{extract_local_hostname, fast_lowercase},
     wire::WireResponseWriter,
 };
-use lanforge_core::bus::LanforgeEvent;
+#[allow(unused_imports)]
+use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 
 #[cfg(feature = "adblock")]
 use crate::filter::{AdBlocker, labels_to_domain};
@@ -179,7 +180,7 @@ impl DnsService {
                 tokio::select! {
                     res = rx.recv() => {
                         match res {
-                            Ok(TimedEvent { event: LanforgeEvent::DnsAdblockToggle { enabled, duration_secs }, .. }) => {
+                            Ok(TimedEvent { event: LanforgeEvent::Dns(DnsEvent::AdblockToggle { enabled, duration_secs }), .. }) => {
                                 adblocker.set_enabled(enabled);
                                 if enabled {
                                     reenable_at = None;
@@ -192,7 +193,7 @@ impl DnsService {
                                     info!("Adblock: disabled permanently");
                                 }
                             }
-                            Ok(TimedEvent { event: LanforgeEvent::DnsAdblockReload, .. }) => {
+                            Ok(TimedEvent { event: LanforgeEvent::Dns(DnsEvent::AdblockReload), .. }) => {
                                 let a = Arc::clone(&adblocker);
                                 let u = urls.clone();
                                 let _ = tokio::task::spawn_blocking(move || {
@@ -255,7 +256,7 @@ impl DnsService {
         let ctx_main = self.ctx.clone();
         loop {
             tokio::select! {
-                Ok(TimedEvent { event: LanforgeEvent::Shutdown, .. }) = rx.recv() => {
+                Ok(TimedEvent { event: LanforgeEvent::System(SystemEvent::Shutdown), .. }) = rx.recv() => {
                     info!("DNS service: shutdown received");
                     break;
                 }

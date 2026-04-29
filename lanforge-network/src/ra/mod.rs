@@ -51,7 +51,7 @@ use lanforge_core::context::LanforgeContext;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::NetworkError;
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use rand::RngExt;
@@ -281,12 +281,12 @@ impl AsyncService for RaService {
                 res = bus_rx.recv() => {
                     if let Ok(timed_event) = res {
                         lanforge_core::match_event!(timed_event, {
-                            LanforgeEvent::PrefixChanged { .. } => {
+                            LanforgeEvent::Network(NetworkEvent::PrefixChanged { .. }) => {
                                 info!("RA: Prefix change detected — sending immediate RA burst");
                                 state.initial_sent = 0;
                                 next_ra_at = Instant::now();
                             }
-                            LanforgeEvent::Shutdown => {
+                            LanforgeEvent::System(SystemEvent::Shutdown) => {
                                 info!("RA service: shutdown received");
                                 return Ok(());
                             }
@@ -401,7 +401,10 @@ impl RaService {
                             && let Some(mac) = ctx.lctx.get_mac_by_ip(IpAddr::V6(src))
                         {
                             tracing::event!(target:(module_path!()),tracing::Level::DEBUG,"RS trigger: emitindo RsReceived para {}",mac);
-                            let _ = ctx.lctx.bus().publish(LanforgeEvent::RsReceived { mac });
+                            let _ = ctx
+                                .lctx
+                                .bus()
+                                .publish(LanforgeEvent::Network(NetworkEvent::RsReceived { mac }));
                         }
                     }
                 }

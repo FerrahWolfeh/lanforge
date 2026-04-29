@@ -20,7 +20,7 @@
 //! | `gua_preferred` / `gua_valid` | Lifetime timers from `IFA_CACHEINFO`
 
 use futures::stream::TryStreamExt;
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -190,7 +190,7 @@ impl AsyncService for AddressMonitor {
                 }
 
                 Ok(event) = bus_rx.recv() => {
-                    if matches!(event.event, LanforgeEvent::Shutdown) {
+                    if matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                         break;
                     }
                 }

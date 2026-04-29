@@ -38,7 +38,7 @@ use crate::ndp::utils::{
     extract_neigh_info, get_ipv4_neighbors, get_ipv4_subnet_iterable, get_ipv6_neighbors,
     probe_neighbor,
 };
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -131,9 +131,9 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
                 ip, prefix_len, count
             );
             // Notification via event bus
-            let _ = ctx.bus().publish(LanforgeEvent::SubnetScanStarted {
+            let _ = ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::SubnetScanStarted {
                 subnet: format!("{ip}/{prefix_len}"),
-            });
+            }));
 
             for target_ip in range {
                 if let Err(e) = probe_neighbor(&handle, ifindex, IpAddr::V4(target_ip), None).await
@@ -211,11 +211,11 @@ impl AsyncService for NeighborMonitor {
 
                 Ok(timed_event) = bus_rx.recv() => {
                     lanforge_core::match_event!(timed_event, {
-                        LanforgeEvent::PrefixChanged { gua, ula, .. } => {
+                        LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, ula, .. }) => {
                             current_gua = gua;
                             current_ula = ula;
                         }
-                        LanforgeEvent::NeighborScanRequested => {
+                        LanforgeEvent::Network(NetworkEvent::NeighborScanRequested) => {
                             self.spawn_subnet_scan("Manual CLI Request");
                         }
                     });

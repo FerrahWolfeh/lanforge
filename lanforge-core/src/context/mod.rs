@@ -55,7 +55,7 @@
 //! - **Interface Ready**: Network interfaces are configured
 //! - **Running**: System is operational (false = shutdown)
 
-use crate::bus::{EventBus, LanforgeEvent, TimedEvent};
+use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
 use crate::error::CoreError;
 use crate::state::State;
 use parking_lot::RwLock;
@@ -231,10 +231,10 @@ impl LanforgeContext {
             return;
         }
         while let Ok(timed_event) = rx.recv() {
-            if matches!(timed_event.event, LanforgeEvent::DbReady) {
+            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::DbReady)) {
                 break;
             }
-            if matches!(timed_event.event, LanforgeEvent::Shutdown) || !self.is_running() {
+            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !self.is_running() {
                 break;
             }
         }
@@ -254,10 +254,10 @@ impl LanforgeContext {
             return;
         }
         while let Ok(timed_event) = rx.recv() {
-            if matches!(timed_event.event, LanforgeEvent::InterfaceReady) {
+            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::InterfaceReady)) {
                 break;
             }
-            if matches!(timed_event.event, LanforgeEvent::Shutdown) || !self.is_running() {
+            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !self.is_running() {
                 break;
             }
         }
@@ -278,10 +278,10 @@ impl LanforgeContext {
             return Ok(());
         }
         while let Ok(timed_event) = rx.recv().await {
-            if !self.is_running() || matches!(timed_event.event, LanforgeEvent::Shutdown) {
+            if !self.is_running() || matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                 return Ok(());
             }
-            if matches!(timed_event.event, LanforgeEvent::InterfaceReady) {
+            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::InterfaceReady)) {
                 break;
             }
         }
@@ -303,10 +303,10 @@ impl LanforgeContext {
             return Ok(());
         }
         while let Ok(timed_event) = rx.recv().await {
-            if !self.is_running() || matches!(timed_event.event, LanforgeEvent::Shutdown) {
+            if !self.is_running() || matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                 return Ok(());
             }
-            if matches!(timed_event.event, LanforgeEvent::DbReady) {
+            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::DbReady)) {
                 break;
             }
         }

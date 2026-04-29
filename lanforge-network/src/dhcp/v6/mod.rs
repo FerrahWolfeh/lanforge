@@ -41,7 +41,7 @@ pub mod config;
 pub mod pool;
 pub mod server;
 
-use lanforge_core::bus::{DeviceChange, LanforgeEvent};
+use lanforge_core::bus::{DeviceChange, DeviceEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::IPv6State;
 use lanforge_core::identifiers::{Duid, MacAddr};
@@ -277,44 +277,42 @@ impl Dhcpv6Service {
         socket: &UdpSocket,
     ) -> Result<(), CoreError> {
         match event {
-            LanforgeEvent::LeaseRelease {
+            LanforgeEvent::Device(DeviceEvent::LeaseRelease {
                 mac,
                 target: LeaseTarget::V6 { iaid },
-            } => {
+            }) => {
                 info!("DHCPv6: Forcing release of {} (IAID {}) via CLI", mac, iaid);
             }
-            LanforgeEvent::LeaseRelease {
+            LanforgeEvent::Device(DeviceEvent::LeaseRelease {
                 mac,
                 target: LeaseTarget::V6Prefix { iaid },
-            } => {
+            }) => {
                 info!(
                     "DHCPv6: Forcing release of prefix for {} (IAID {}) via CLI",
                     mac, iaid
                 );
             }
-            LanforgeEvent::DeviceUpdated {
-                mac,
-                change: DeviceChange::V6SuffixChanged { suffix },
-                ..
-            } => {
-                if let Some(s) = suffix {
-                    info!("DHCPv6: New static reservation handled globally for {mac} -> {s}");
-                } else {
-                    info!("DHCPv6: Static reservation cleared globally for {mac}");
+            LanforgeEvent::Device(DeviceEvent::Updated { mac, change, .. }) => {
+                if let DeviceChange::V6SuffixChanged { suffix } = change.as_ref() {
+                    if let Some(s) = suffix {
+                        info!("DHCPv6: New static reservation handled globally for {mac} -> {s}");
+                    } else {
+                        info!("DHCPv6: Static reservation cleared globally for {mac}");
+                    }
                 }
             }
-            LanforgeEvent::PrefixChanged {
+            LanforgeEvent::Network(NetworkEvent::PrefixChanged {
                 gua,
                 ula: _,
                 preferred,
                 valid,
-            } => {
+            }) => {
                 self.handle_prefix_change(server, socket, gua, preferred, valid);
             }
-            LanforgeEvent::LeaseRenew {
+            LanforgeEvent::Device(DeviceEvent::LeaseRenew {
                 mac,
                 target: LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. },
-            } => {
+            }) => {
                 let (duid, target_ip) = {
                     let device = self.ctx.get_device(&mac);
                     let duid = device.as_ref().and_then(|d| d.duid.clone());
@@ -337,7 +335,7 @@ impl Dhcpv6Service {
                     let _ = socket.send_to(&packet, dest_addr);
                 }
             }
-            LanforgeEvent::Shutdown => {
+            LanforgeEvent::System(SystemEvent::Shutdown) => {
                 info!("DHCPv6: Shutdown received");
                 return Err(CoreError::Shutdown);
             }

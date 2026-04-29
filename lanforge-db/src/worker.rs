@@ -17,7 +17,7 @@ use std::time::Duration;
 use tokio::time::{Interval, interval};
 use tracing::{debug, error, info};
 
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{DnsEvent, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -86,7 +86,7 @@ impl AsyncService for DbWorker {
 
         info!("Database worker started");
         self.ctx.set_db_ready(true);
-        let _ = self.ctx.bus().publish(LanforgeEvent::DbReady);
+        let _ = self.ctx.bus().publish(LanforgeEvent::System(SystemEvent::DbReady));
 
         // Explicitly signal readiness to the event loop
         ctrl.signal_ready();
@@ -104,25 +104,25 @@ impl AsyncService for DbWorker {
                     // 2. Process specific events
                     let mut break_loop = false;
                     lanforge_core::match_event!(timed_event, {
-                        LanforgeEvent::DeviceTableDirty => {
+                        LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                             self.dirty = true;
                         }
-                        LanforgeEvent::DbVacuum => {
+                        LanforgeEvent::Storage(StorageEvent::DbVacuum) => {
                             if let Err(e) = db.vacuum().await {
                                 error!("Vacuum error: {e}");
                             }
                         }
-                        LanforgeEvent::DbLogClean => {
+                        LanforgeEvent::Storage(StorageEvent::DbLogClean) => {
                             if let Err(e) = log_db.clear_logs().await {
                                 error!("Log clear error: {e}");
                             }
                         }
-                        LanforgeEvent::DbPrune => {
+                        LanforgeEvent::Storage(StorageEvent::DbPrune) => {
                             if let Err(e) = db.prune_zombies().await {
                                 error!("Prune error: {e}");
                             }
                         }
-                        LanforgeEvent::DbReset => {
+                        LanforgeEvent::Storage(StorageEvent::DbReset) => {
                             info!("Full database reset requested...");
                             self.ctx.set_db_ready(false);
                             if let Err(e) = db.reset().await {
@@ -133,15 +133,15 @@ impl AsyncService for DbWorker {
                             }
                             self.dirty = false;
                             self.ctx.set_db_ready(true);
-                            let _ = self.ctx.bus().publish(LanforgeEvent::DbResetCompleted);
+                            let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbResetCompleted));
                         }
-                        LanforgeEvent::Shutdown => {
+                        LanforgeEvent::System(SystemEvent::Shutdown) => {
                             info!("Database worker shutting down...");
                             self.flush_batch(&db).await;
                             break_loop = true;
                         }
                         #[cfg(feature = "adblock")]
-                        LanforgeEvent::DnsQueryBlocked { src_addr, ref domain } => {
+                        LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, ref domain }) => {
                             let src_mac = self
                                 .ctx
                                 .read()

@@ -2,7 +2,7 @@
 
 use crate::engine::LeaseDb;
 use crate::worker::DbWorker;
-use lanforge_core::bus::{EventBus, LanforgeEvent};
+use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::device::{Device, HostnameOrigin, IPv4State, IPv6State, V4Lease, V6PrefixLease};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::State;
@@ -267,7 +267,7 @@ async fn test_db_worker_lifecycle() {
     for _ in 0..20 {
         if let Ok(timed_ev) = tokio::time::timeout(Duration::from_millis(100), bus_rx.recv()).await
             && let Ok(ev) = timed_ev
-            && matches!(ev.event, LanforgeEvent::DbReady)
+            && matches!(ev.event, LanforgeEvent::System(SystemEvent::DbReady))
         {
             ready = true;
             break;
@@ -276,13 +276,13 @@ async fn test_db_worker_lifecycle() {
     assert!(ready, "Worker failed to signal DbReady");
 
     // Trigger persistence
-    let _ = bus.publish(LanforgeEvent::DeviceTableDirty);
+    let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
 
     // Give some time for persistence
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Shutdown
-    let _ = bus.publish(LanforgeEvent::Shutdown);
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     worker_handle.await.expect("Worker join failed");
 
     // Verify persistence

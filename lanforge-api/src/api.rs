@@ -116,7 +116,7 @@ pub enum CommandAction {
         format: Option<String>,
     },
     /// Request the daemon to reload its configuration from disk.
-    #[dispatch(bus = "ReloadConfig", message = "Reload signal sent successfully")]
+    #[dispatch(handler = "handle_reload")]
     Reload,
     /// Enter 'watch' mode to stream live state changes.
     #[dispatch(handler = "handle_watch", readonly)]
@@ -133,7 +133,7 @@ pub enum CommandAction {
     #[dispatch(handler = "handle_scan")]
     Scan,
     /// Gracefully shut down the daemon.
-    #[dispatch(bus = "Shutdown", message = "Shutting down gracefully")]
+    #[dispatch(handler = "handle_shutdown")]
     Shutdown,
     /// Add or update a static host configuration via CLI.
     #[dispatch(handler = "handle_host_add", args(mac, hostname, v4, v6_suffix))]
@@ -183,10 +183,10 @@ pub enum CommandAction {
         target: Option<LeaseTarget>,
     },
     /// Perform a VACUUM operation on the underlying SQLite database.
-    #[dispatch(bus = "DbVacuum", message = "Vacuum triggered")]
+    #[dispatch(handler = "handle_db_vacuum")]
     DbVacuum,
     /// Clear all transient system logs.
-    #[dispatch(bus = "DbLogClean", message = "Log cleanup triggered")]
+    #[dispatch(handler = "handle_db_log_clean")]
     DbLogClean,
     /// Remove 'zombie' entries from the database (dynamic devices with no IPs/Hostname).
     #[dispatch(handler = "handle_db_prune")]
