@@ -38,13 +38,13 @@ fn mock_config() -> DnsConfig {
 
 // Helpers para testes que operam diretamente no DeviceTable (sem async)
 fn register_test_device(ctx: &LanforgeContext, hostname: &str, mac: MacAddr, ip: Ipv4Addr) {
-    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
         mac,
         ip,
         expires: SystemTime::now() + Duration::from_hours(1),
     });
     if !hostname.is_empty() {
-        let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+        let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
             mac,
             hostname: hostname.to_string(),
         });
@@ -104,19 +104,19 @@ fn test_resolve_local_v6_suffix_merging() {
 
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
 
-    let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "test".to_string(),
     });
 
-    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr: "2001:db8::1".parse().unwrap(),
         is_active: true,
     });
 
     // Directly setup static device via apply to ensure consistency
-    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("test".to_string()),
         duid: FieldUpdate::NoChange,
@@ -161,21 +161,21 @@ fn test_resolve_local_priority_ordering() {
 
     let mac = MacAddr([1, 2, 3, 4, 5, 0x22]);
 
-    let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "priority-test".to_string(),
     });
-    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
         mac,
         ip: "192.168.1.1".parse().unwrap(),
         expires: SystemTime::now() + Duration::from_hours(1),
     });
-    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr: "2001:db8::1".parse().unwrap(),
         is_active: true,
     });
-    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr: "fd00::1".parse().unwrap(),
         is_active: true,
@@ -309,14 +309,14 @@ fn test_dhcp_registration_creates_dns_record() {
     let ip = Ipv4Addr::new(192, 168, 1, 50);
 
     // 1. Simulate DHCPv4 Lease
-    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
         mac,
         ip,
         expires: SystemTime::now() + Duration::from_hours(1),
     });
 
     // 2. Simulate Hostname Hint from DHCP
-    let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "my-device".to_string(),
     });
@@ -353,7 +353,7 @@ fn test_dns_response_contract() {
     let mac = MacAddr([1, 2, 3, 4, 5, 0x99]);
 
     // 1. Static Suffix
-    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("contract-test".to_string()),
         duid: FieldUpdate::NoChange,
@@ -365,12 +365,12 @@ fn test_dns_response_contract() {
     // 2. SLAAC addresses
     let slaac_ula = "fd00::7c5a:23c3:41dc:7d9e".parse().unwrap();
     let slaac_gua = "2001:db8::c8a2:cbd3:9d9e:89c7".parse().unwrap();
-    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr: slaac_ula,
         is_active: true,
     });
-    let _ = ctx.apply(&DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr: slaac_gua,
         is_active: true,
@@ -378,7 +378,7 @@ fn test_dns_response_contract() {
 
     // 3. DHCPv6 Dynamic Lease
     let dynamic_ula = "fd00::33c".parse().unwrap();
-    let _ = ctx.apply(&DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
         mac: Some(mac),
         duid: Duid::generate_ll_from_mac(mac.0),
         iaid: 1,

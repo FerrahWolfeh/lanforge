@@ -37,7 +37,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 1. Add a CLI device
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
-    let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_cli,
         duid: FieldUpdate::NoChange,
         hostname: FieldUpdate::Set("cli-host".to_string()),
@@ -48,7 +48,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 2. Add a Dynamic device
     let mac_dyn = MacAddr::parse("00:00:00:00:00:02").unwrap();
-    let _ = ctx_handle.apply(&DeviceUpdate::V4LeaseGranted {
+    let _ = ctx_handle.apply(DeviceUpdate::V4LeaseGranted {
         mac: mac_dyn,
         ip: "192.168.1.10".parse().unwrap(),
         expires: SystemTime::now() + Duration::from_secs(3600),
@@ -56,7 +56,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
     // 3. Add a TOML device
     let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
-    let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_toml,
         duid: FieldUpdate::NoChange,
         hostname: FieldUpdate::Set("toml-host".to_string()),
@@ -137,7 +137,7 @@ async fn test_dump_command_simulation() {
 
     // 1. Add a device to state
     let mac = MacAddr::parse("00:00:00:00:00:0a").unwrap();
-    let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac,
         duid: FieldUpdate::NoChange,
         hostname: FieldUpdate::Set("dump-target".to_string()),
@@ -208,7 +208,7 @@ async fn test_granular_querying() {
 
     // Add a device
     let mac = MacAddr::parse("00:00:00:00:00:01").unwrap();
-    let _ = ctx_handle.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac,
         duid: FieldUpdate::NoChange,
         hostname: FieldUpdate::Set("host1".to_string()),
@@ -219,7 +219,7 @@ async fn test_granular_querying() {
 
     // Add an orphan
     let ip_v6 = "2001:db8::dead:beef".parse().unwrap();
-    let _ = ctx_handle.apply(&DeviceUpdate::V6LeaseGranted {
+    let _ = ctx_handle.apply(DeviceUpdate::V6LeaseGranted {
         mac: None,
         duid: "00:01:00:01:2d:65:6d:73".parse().unwrap(),
         iaid: 1,

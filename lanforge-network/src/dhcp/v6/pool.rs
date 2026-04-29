@@ -705,7 +705,7 @@ mod tests {
         iaid: u32,
         ip: Ipv6Addr,
     ) {
-        let _ = ctx.apply(&DeviceUpdate::V6LeaseGranted {
+        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
             mac,
             duid: Duid::new(duid.to_vec()),
             iaid,
@@ -715,7 +715,7 @@ mod tests {
     }
 
     fn release_mac(ctx: &LanforgeContext, mac: MacAddr) {
-        let _ = ctx.apply(&DeviceUpdate::HostRemoved { mac });
+        let _ = ctx.apply(DeviceUpdate::HostRemoved { mac });
     }
 
     #[test]
@@ -895,7 +895,7 @@ mod tests {
         let mut pool = Ipv6Pool::new(&Vec::new(), Some(ula), 64);
 
         let static_suffix = Ipv6AddrOrSuffix::parse("::cafe").unwrap();
-        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
             hostname: FieldUpdate::Set("test".to_string()),
             duid: FieldUpdate::NoChange,
@@ -945,7 +945,7 @@ mod tests {
         let static_ip: Ipv6Addr = "fd00::cafe".parse().unwrap();
 
         // 1. Setup static device
-        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
             hostname: FieldUpdate::Set("test".to_string()),
             duid: FieldUpdate::NoChange,
@@ -1085,7 +1085,7 @@ mod tests {
         commit_lease(&ctx, Some(mac(1)), &duid(1), 1, dynamic_ip);
 
         // 2. Set static suffix later
-        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
             hostname: FieldUpdate::Set("test".to_string()),
             duid: FieldUpdate::NoChange,
@@ -1109,7 +1109,7 @@ mod tests {
         pool.set_gua_prefix(gua);
 
         // Setup static device
-        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
             hostname: FieldUpdate::Set("test".to_string()),
             duid: FieldUpdate::NoChange,

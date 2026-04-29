@@ -823,7 +823,7 @@ impl ClientContext {
         v6_suffix: Option<String>,
     ) -> Response {
         if let Some(m) = mac.as_deref().and_then(MacAddr::parse) {
-            let _ = self.ctx.apply(&DeviceUpdate::CliHostUpdated {
+            let _ = self.ctx.apply(DeviceUpdate::CliHostUpdated {
                 mac: m,
                 hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
                 duid: FieldUpdate::NoChange,
@@ -894,7 +894,7 @@ impl ClientContext {
                     error: e.to_string(),
                 }
             } else {
-                let _ = self.ctx.apply(&DeviceUpdate::CliHostUpdated {
+                let _ = self.ctx.apply(DeviceUpdate::CliHostUpdated {
                     mac: mac_addr,
                     hostname: hn,
                     duid: FieldUpdate::NoChange,
@@ -929,7 +929,7 @@ impl ClientContext {
 
     /// Prunes 'zombie' entries from the database.
     pub(crate) async fn handle_db_prune(&self) -> Response {
-        let _ = self.ctx.apply(&DeviceUpdate::PruneZombies);
+        let _ = self.ctx.apply(DeviceUpdate::PruneZombies);
         let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbPrune));
         Response::Success(SimpleSuccess {
             message: "Pruning triggered".to_string(),

@@ -86,7 +86,7 @@ impl AsyncService for LldpMonitor {
                                 "LLDP: Device {} is behind parent {:?} on port {:?}",
                                 src_mac, parent_mac, port
                             );
-                            let _ = self.ctx.apply(&DeviceUpdate::TopologyUpdated {
+                            let _ = self.ctx.apply(DeviceUpdate::TopologyUpdated {
                                 mac: src_mac,
                                 parent_mac,
                                 port,

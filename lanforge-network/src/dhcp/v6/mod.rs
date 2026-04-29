@@ -427,7 +427,7 @@ fn apply_learned_state(
         if assigned_ips.is_empty() {
             if let Some(duid) = learned_duid {
                 // No IPs assigned yet, but IAID is known
-                let _ = ctx.apply(&DeviceUpdate::DuidAssociated {
+                let _ = ctx.apply(DeviceUpdate::DuidAssociated {
                     mac: opt_mac,
                     duid: duid.clone(),
                     iaid,
@@ -437,7 +437,7 @@ fn apply_learned_state(
             // One or more IPs assigned
             for ip in assigned_ips {
                 if let Some(duid) = learned_duid {
-                    let _ = ctx.apply(&DeviceUpdate::V6LeaseGranted {
+                    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
                         mac: opt_mac,
                         duid: duid.clone(),
                         iaid,
@@ -449,7 +449,7 @@ fn apply_learned_state(
                     if let Some(device) = ctx.get_device(&mac)
                         && let Some(duid) = device.duid.clone()
                     {
-                        let _ = ctx.apply(&DeviceUpdate::V6LeaseGranted {
+                        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
                             mac: Some(mac),
                             duid,
                             iaid,
@@ -469,7 +469,7 @@ fn apply_learned_state(
             .and_then(|duid| server.pool.lookup_prefix(ctx, duid, iaid));
 
         if let (Some(duid), Some((prefix, len))) = (learned_duid, assigned_prefix) {
-            let _ = ctx.apply(&DeviceUpdate::V6PrefixAssigned {
+            let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned {
                 mac: opt_mac,
                 duid: duid.clone(),
                 iaid,

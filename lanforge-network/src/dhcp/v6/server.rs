@@ -897,7 +897,7 @@ mod tests {
         };
 
         // Use instance apply instead of global singleton
-        let _ = ctx.apply(&DeviceUpdate::InterfaceIpsChanged { ifindex: 0, state });
+        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged { ifindex: 0, state });
 
         let cfg = Dhcpv6Config {
             enabled: true,

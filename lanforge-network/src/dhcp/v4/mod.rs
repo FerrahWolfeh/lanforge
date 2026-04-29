@@ -189,7 +189,7 @@ impl Dhcpv4Service {
                             let expires = SystemTime::now()
                                 + Duration::from_secs(u64::from(self.cfg.lease_time));
 
-                            let _ = self.ctx.apply(&DeviceUpdate::V4LeaseGranted {
+                            let _ = self.ctx.apply(DeviceUpdate::V4LeaseGranted {
                                 mac,
                                 ip: assigned_ip,
                                 expires,
@@ -200,12 +200,12 @@ impl Dhcpv4Service {
                             {
                                 let _ = self
                                     .ctx
-                                    .apply(&DeviceUpdate::DhcpHostnameHint { mac, hostname });
+                                    .apply(DeviceUpdate::DhcpHostnameHint { mac, hostname });
                             }
                         }
                     }
                     HandleResult::Release { ip: _ } => {
-                        let _ = self.ctx.apply(&DeviceUpdate::LeaseReleased {
+                        let _ = self.ctx.apply(DeviceUpdate::LeaseReleased {
                             mac,
                             target: LeaseTarget::V4,
                         });

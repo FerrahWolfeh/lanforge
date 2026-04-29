@@ -23,7 +23,7 @@
 
 use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -866,6 +866,12 @@ pub struct Device {
     /// Tracks which infrastructure device or local interface this device
     /// is connected to, learned via LLDP or bridge observation.
     pub topology: Option<TopologyInfo>,
+    /// IPv6 neighbors observed via NDP.
+    pub ndp_cache: HashMap<Ipv6Addr, bool>,
+    /// IPv4 neighbors observed via ARP.
+    pub arp_cache: HashMap<Ipv4Addr, bool>,
+    /// SLAAC addresses observed for this device.
+    pub observed_v6: HashMap<Ipv6Addr, bool>,
 }
 
 /// Represents a device's position in the network hierarchy.
@@ -903,6 +909,9 @@ impl Device {
             dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
             class: DeviceClass::None,
             topology: None,
+            ndp_cache: HashMap::new(),
+            arp_cache: HashMap::new(),
+            observed_v6: HashMap::new(),
         }
     }
 
@@ -987,6 +996,42 @@ impl Device {
     #[must_use]
     pub const fn has_any_ip(&self) -> bool {
         self.v4.ip().is_some() || !self.seen_v4.is_empty() || !self.v6.is_empty()
+    }
+
+    /// Returns true if the device is currently associated with the given IP.
+    #[must_use]
+    pub fn has_ip(&self, ip: &std::net::IpAddr) -> bool {
+        match ip {
+            std::net::IpAddr::V4(ip4) => {
+                self.v4.ip() == Some(*ip4) || self.seen_v4.iter().any(|(i, _)| i == ip4)
+            }
+            std::net::IpAddr::V6(ip6) => self.v6.iter().any(|s| s.ip() == Some(*ip6)),
+        }
+    }
+
+    /// Releases a specific lease (v4, v6, or prefix delegation).
+    pub fn release_lease(&mut self, target: &LeaseTarget) -> bool {
+        match target {
+            LeaseTarget::V4 => {
+                if matches!(self.v4, IPv4State::None) {
+                    false
+                } else {
+                    self.v4 = IPv4State::None;
+                    true
+                }
+            }
+            LeaseTarget::V6 { iaid } => {
+                let initial = self.v6.len();
+                self.v6
+                    .retain(|s| !matches!(s, IPv6State::Dynamic(l) if l.iaid == *iaid));
+                self.v6.len() != initial
+            }
+            LeaseTarget::V6Prefix { iaid } => {
+                let initial = self.v6_prefixes.len();
+                self.v6_prefixes.retain(|l| l.iaid != *iaid);
+                self.v6_prefixes.len() != initial
+            }
+        }
     }
 
     pub fn update_from_fields(
@@ -1486,6 +1531,9 @@ mod tests {
             last_seen: SystemTime::now(),
             dns_fallback: "host-010203040506".to_string(),
             topology: None,
+            ndp_cache: std::collections::HashMap::new(),
+            arp_cache: std::collections::HashMap::new(),
+            observed_v6: std::collections::HashMap::new(),
         };
 
         let sorted = dev.all_addresses_sorted(None, None);

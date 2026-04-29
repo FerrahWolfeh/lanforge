@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::bus::{DeviceChange, DeviceEvent, LanforgeEvent};
 use crate::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget, State};
 use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
 use crate::identifiers::{Duid, MacAddr};
@@ -46,8 +47,8 @@ fn apply_update_v4_lease_granted() {
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
     let expires = SystemTime::now() + Duration::from_hours(1);
 
-    let changed = table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
-    assert!(changed);
+    let events = table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+    assert!(!events.is_empty());
 
     let dev = table.devices().next().unwrap();
     assert_eq!(dev.v4.ip().unwrap(), ip);
@@ -62,8 +63,8 @@ fn apply_update_v4_idempotent() {
 
     table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
     // Mesma info novamente — não deve ser dirty
-    let changed = table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
-    assert!(!changed, "Lease idêntico não deveria marcar dirty");
+    let events = table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+    assert!(events.is_empty(), "Lease idêntico não deveria marcar dirty");
 }
 
 #[test]
@@ -74,12 +75,15 @@ fn apply_update_hostname_hint_respects_static() {
     // Simula device estático via API correta
     table.add_static_device(mac, "static-host".to_string(), None, None, None);
 
-    let changed = table.apply_update(DeviceUpdate::DhcpHostnameHint {
+    let events = table.apply_update(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "dynamic-host".to_string(),
     });
 
-    assert!(!changed, "Hint não deve sobrescrever device estático");
+    assert!(
+        events.is_empty(),
+        "Hint não deve sobrescrever device estático"
+    );
     assert_eq!(table.devices().next().unwrap().hostname.name, "static-host");
 }
 
@@ -88,12 +92,12 @@ fn apply_update_hostname_hint_accepted_for_dynamic() {
     let mut table = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    let changed = table.apply_update(DeviceUpdate::DhcpHostnameHint {
+    let events = table.apply_update(DeviceUpdate::DhcpHostnameHint {
         mac,
         hostname: "my-laptop".to_string(),
     });
 
-    assert!(changed);
+    assert!(!events.is_empty());
     assert_eq!(table.devices().next().unwrap().hostname.name, "my-laptop");
 }
 
@@ -103,22 +107,34 @@ fn apply_update_slaac_deduplicates() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let addr: Ipv6Addr = "fd97::1234".parse().unwrap();
 
-    assert!(table.apply_update(DeviceUpdate::SlaacObserved {
-        mac,
-        addr,
-        is_active: true
-    }));
+    assert!(
+        !table
+            .apply_update(DeviceUpdate::SlaacObserved {
+                mac,
+                addr,
+                is_active: true
+            })
+            .is_empty()
+    );
     // Duplicata — não deve marcar dirty
-    assert!(!table.apply_update(DeviceUpdate::SlaacObserved {
-        mac,
-        addr,
-        is_active: true
-    }));
-    assert!(table.apply_update(DeviceUpdate::SlaacObserved {
-        mac,
-        addr: "fd97::5678".parse().unwrap(),
-        is_active: true,
-    }));
+    assert!(
+        table
+            .apply_update(DeviceUpdate::SlaacObserved {
+                mac,
+                addr,
+                is_active: true
+            })
+            .is_empty()
+    );
+    assert!(
+        !table
+            .apply_update(DeviceUpdate::SlaacObserved {
+                mac,
+                addr: "fd97::5678".parse().unwrap(),
+                is_active: true,
+            })
+            .is_empty()
+    );
 
     assert_eq!(table.devices().next().unwrap().v6.len(), 2);
 }
@@ -180,19 +196,27 @@ fn apply_update_lease_released() {
     assert_eq!(dev.v6.len(), 1);
 
     // 1. Release only V4
-    assert!(table.apply_update(DeviceUpdate::LeaseReleased {
-        mac,
-        target: LeaseTarget::V4
-    }));
+    assert!(
+        !table
+            .apply_update(DeviceUpdate::LeaseReleased {
+                mac,
+                target: LeaseTarget::V4
+            })
+            .is_empty()
+    );
     let dev = table.get_device(&mac).unwrap();
     assert!(matches!(dev.v4, IPv4State::None));
     assert_eq!(dev.v6.len(), 1, "V6 should be preserved");
 
     // 2. Release V6 IAID 1
-    assert!(table.apply_update(DeviceUpdate::LeaseReleased {
-        mac,
-        target: LeaseTarget::V6 { iaid: 1 }
-    }));
+    assert!(
+        !table
+            .apply_update(DeviceUpdate::LeaseReleased {
+                mac,
+                target: LeaseTarget::V6 { iaid: 1 }
+            })
+            .is_empty()
+    );
     let dev = table.get_device(&mac).unwrap();
     assert!(
         dev.v6.is_empty(),
@@ -200,10 +224,14 @@ fn apply_update_lease_released() {
     );
 
     // 3. Repeated release should not be dirty
-    assert!(!table.apply_update(DeviceUpdate::LeaseReleased {
-        mac,
-        target: LeaseTarget::V4
-    }));
+    assert!(
+        table
+            .apply_update(DeviceUpdate::LeaseReleased {
+                mac,
+                target: LeaseTarget::V4
+            })
+            .is_empty()
+    );
 }
 
 #[test]
@@ -218,21 +246,29 @@ fn apply_update_duid_associated() {
         hostname: "DuidHost".to_string(),
     });
 
-    assert!(table.apply_update(DeviceUpdate::DuidAssociated {
-        mac: Some(mac),
-        duid: duid.clone(),
-        iaid: 1,
-    }));
+    assert!(
+        !table
+            .apply_update(DeviceUpdate::DuidAssociated {
+                mac: Some(mac),
+                duid: duid.clone(),
+                iaid: 1,
+            })
+            .is_empty()
+    );
 
     let found = table.get_by_duid(&duid).expect("deve encontrar via DUID");
     assert_eq!(found.hostname.name, "DuidHost");
 
     // Mesmo DUID novamente — não dirty
-    assert!(!table.apply_update(DeviceUpdate::DuidAssociated {
-        mac: Some(mac),
-        duid,
-        iaid: 1,
-    }));
+    assert!(
+        table
+            .apply_update(DeviceUpdate::DuidAssociated {
+                mac: Some(mac),
+                duid,
+                iaid: 1,
+            })
+            .is_empty()
+    );
 }
 
 #[test]
@@ -242,11 +278,15 @@ fn apply_update_ndp_seen_not_dirty() {
     let ip: Ipv6Addr = "fe80::1".parse().unwrap();
 
     // NdpSeen nunca marca dirty (só bump de last_seen e cache)
-    assert!(!table.apply_update(DeviceUpdate::NdpSeen {
-        mac,
-        ip,
-        is_active: true
-    }));
+    assert!(
+        table
+            .apply_update(DeviceUpdate::NdpSeen {
+                mac,
+                ip,
+                is_active: true
+            })
+            .is_empty()
+    );
     assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
 }
 
@@ -305,12 +345,12 @@ fn test_orphaned_v6_promotion() {
     assert!(!table.orphaned_v6.is_empty());
 
     // 2. NDP visto para o mesmo IP -> Promove
-    let changed = table.apply_update(DeviceUpdate::NdpSeen {
+    let events = table.apply_update(DeviceUpdate::NdpSeen {
         mac,
         ip,
         is_active: true,
     });
-    assert!(changed);
+    assert!(!events.is_empty());
 
     // Agora deve existir o device com o DUID e IP corretos
     let dev = table.get_device(&mac).expect("Device deve existir");
@@ -332,7 +372,7 @@ fn test_cli_host_updated_sync() {
     });
 
     // 2. Update via CLI (Hostname + Static V4)
-    let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
+    let events = table.apply_update(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("cli-host".to_string()),
         duid: FieldUpdate::NoChange,
@@ -341,7 +381,7 @@ fn test_cli_host_updated_sync() {
         origin: Origin::Cli,
     });
 
-    assert!(changed);
+    assert!(!events.is_empty());
     let dev = table.get_device(&mac).unwrap();
     assert_eq!(dev.hostname.name, "cli-host");
     assert!(
@@ -362,7 +402,7 @@ fn test_cli_host_updated_sync() {
     );
 
     // 4. Partial update (Only hostname)
-    let changed = table.apply_update(DeviceUpdate::CliHostUpdated {
+    let events = table.apply_update(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("new-name".to_string()),
         duid: FieldUpdate::NoChange,
@@ -371,7 +411,7 @@ fn test_cli_host_updated_sync() {
         origin: Origin::Cli,
     });
 
-    assert!(changed);
+    assert!(!events.is_empty());
     let entry = table.static_entries.get(&mac).unwrap();
     assert_eq!(entry.hostname, "new-name");
     assert_eq!(entry.v4_static, Some("192.168.1.10".parse().unwrap())); // Preserved
@@ -404,8 +444,8 @@ fn test_ip_deleted_cleanup() {
     assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
 
     // 2. Delete IP
-    let changed = table.apply_update(DeviceUpdate::IpDeleted { ip: ip.into() });
-    assert!(changed);
+    let events = table.apply_update(DeviceUpdate::IpDeleted { ip: ip.into() });
+    assert!(!events.is_empty());
 
     // 3. Verify cleanup
     assert!(table.get_mac_from_ndp_cache(&ip).is_none());
@@ -532,13 +572,13 @@ fn apply_update_duid_associated_resolves_orphan() {
     assert!(table.get_device(&mac).is_none());
 
     // 2. Recebe associação DUID+IAID+MAC (ex: via Solicit que precedeu o Request, ou via DB)
-    let changed = table.apply_update(DeviceUpdate::DuidAssociated {
+    let events = table.apply_update(DeviceUpdate::DuidAssociated {
         mac: Some(mac),
         duid: duid.clone(),
         iaid,
     });
 
-    assert!(changed);
+    assert!(!events.is_empty());
     assert!(
         !table.orphaned_v6.contains_key(&ip),
         "Órfão deveria ter sido resolvido"
@@ -603,27 +643,39 @@ fn test_filtering_ndp_seen_worthy() {
     let ula_ip: Ipv6Addr = "fd00::1".parse().unwrap();
 
     // 1. NDP Seen com Link-Local em novo MAC -> Não registra
-    assert!(!table.apply_update(DeviceUpdate::NdpSeen {
-        mac,
-        ip: ll_ip,
-        is_active: true
-    }));
+    assert!(
+        table
+            .apply_update(DeviceUpdate::NdpSeen {
+                mac,
+                ip: ll_ip,
+                is_active: true
+            })
+            .is_empty()
+    );
     assert!(table.get_device(&mac).is_none());
 
     // 2. SLAAC Observed com ULA -> Registra
-    assert!(table.apply_update(DeviceUpdate::SlaacObserved {
-        mac,
-        addr: ula_ip,
-        is_active: true
-    }));
+    assert!(
+        !table
+            .apply_update(DeviceUpdate::SlaacObserved {
+                mac,
+                addr: ula_ip,
+                is_active: true
+            })
+            .is_empty()
+    );
     assert!(table.get_device(&mac).is_some());
 
     // 3. Agora que existe, NDP Seen com Link-Local não deve marcar dirty imediatamente (throttle de 300s)
-    assert!(!table.apply_update(DeviceUpdate::NdpSeen {
-        mac,
-        ip: ll_ip,
-        is_active: true
-    }));
+    assert!(
+        table
+            .apply_update(DeviceUpdate::NdpSeen {
+                mac,
+                ip: ll_ip,
+                is_active: true
+            })
+            .is_empty()
+    );
 }
 
 #[test]
@@ -874,7 +926,8 @@ fn test_nud_failed_forces_offline() {
     assert!(dev.is_online());
 
     // Simulate NUD_FAILED
-    state.apply_update(DeviceUpdate::IpOffline { ip });
+    let events = state.apply_update(DeviceUpdate::IpOffline { ip });
+    assert!(!events.is_empty());
     let dev = state.get_device(&mac).unwrap();
     assert!(!dev.is_online(), "NUD_FAILED should force device offline");
 }
@@ -908,11 +961,12 @@ fn test_expire_stale_status_transition() {
     let events = state.expire_stale(Duration::from_mins(10));
 
     // 4. Verify that we got a StatusChanged event
-    let found = events.iter().any(|(_, _, change)| {
-        matches!(
-            change,
-            crate::bus::DeviceChange::StatusChanged { online: false, .. }
-        )
+    let found = events.iter().any(|e| {
+        if let LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) = e {
+            matches!(**change, DeviceChange::StatusChanged { online: false, .. })
+        } else {
+            false
+        }
     });
     assert!(
         found,

@@ -1,7 +1,7 @@
+use crate::context::state::LeaseTarget;
+use crate::identifiers::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
-use crate::identifiers::MacAddr;
-use crate::context::state::LeaseTarget;
 
 /// Detailed changes applied to a specific `Device`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,6 +61,12 @@ pub enum DeviceChange {
         parent_mac: Option<MacAddr>,
         port: Option<String>,
     },
+    /// A specific IP address associated with the device was deleted.
+    IpDeleted { ip: std::net::IpAddr },
+    /// A specific IP address associated with the device went offline.
+    IpOffline { ip: std::net::IpAddr },
+    /// The device was updated via CLI or administrative action.
+    CliHostUpdated,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

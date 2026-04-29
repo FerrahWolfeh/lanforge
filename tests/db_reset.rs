@@ -42,12 +42,15 @@ async fn test_full_db_reset_chain() {
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
 
     // 2. Add some initial state (dynamic and static)
-    let _ = ctx.track_arp_neighbor(mac_dyn, "192.168.1.10".parse().unwrap());
+    let _ = ctx.track_arp_neighbor(
+        mac_dyn,
+        "192.168.1.10".parse::<std::net::Ipv4Addr>().unwrap(),
+    );
     let _ = ctx.add_static_device(
         mac_static,
         "static-host".to_string(),
         None,
-        Some("192.168.1.20".parse().unwrap()),
+        Some("192.168.1.20".parse::<std::net::Ipv4Addr>().unwrap()),
         None,
     );
 
@@ -64,7 +67,9 @@ async fn test_full_db_reset_chain() {
     ctx.wait_for_db().await.expect("DB failed to become ready");
 
     // Force a flush to disk so we have something to reset
-    let _ = ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // 4. Setup Mock Client and API handler
@@ -94,7 +99,10 @@ async fn test_full_db_reset_chain() {
     let mut bus_rx = bus.subscribe();
     tokio::spawn(async move {
         while let Ok(te) = bus_rx.recv().await {
-            if matches!(te.event, LanforgeEvent::Storage(StorageEvent::DbResetCompleted)) {
+            if matches!(
+                te.event,
+                LanforgeEvent::Storage(StorageEvent::DbResetCompleted)
+            ) {
                 ctx_loop.reset();
                 let mut state = ctx_loop.write();
                 lanforge::bootstrap::Bootstrapper::reload_static_devices_into_state(

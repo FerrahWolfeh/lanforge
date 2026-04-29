@@ -616,7 +616,7 @@ mod tests {
         let contested_ip = Ipv4Addr::new(192, 168, 1, 105);
 
         // 1. MAC1 aloca o IP primeiro
-        let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
             mac: mac1,
             ip: contested_ip,
             expires: SystemTime::now() + Duration::from_hours(1),

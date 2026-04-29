@@ -22,7 +22,6 @@
 //! | [`read`]  | Read-only queries (get device by MAC, IP, hostname) |
 //! | [`write`] | State mutations (apply updates, allocate leases) |
 //! | [`state`] | Raw device state and interface storage |
-//! | [`utils`] | Helper functions for update-to-event conversion |
 //!
 //! # Usage Pattern
 //!
@@ -40,7 +39,7 @@
 //! let devices = ctx.all_devices();
 //!
 //! // Write
-//! // ctx.apply(&DeviceUpdate::...);
+//! // ctx.apply(DeviceUpdate::...);
 //! ```
 //!
 //! # Thread Safety
@@ -68,7 +67,6 @@ pub mod read;
 pub mod state;
 #[cfg(test)]
 pub mod tests;
-pub mod utils;
 pub mod write;
 
 use std::sync::atomic::AtomicU64;
@@ -231,10 +229,17 @@ impl LanforgeContext {
             return;
         }
         while let Ok(timed_event) = rx.recv() {
-            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::DbReady)) {
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::DbReady)
+            ) {
                 break;
             }
-            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !self.is_running() {
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::Shutdown)
+            ) || !self.is_running()
+            {
                 break;
             }
         }
@@ -254,10 +259,17 @@ impl LanforgeContext {
             return;
         }
         while let Ok(timed_event) = rx.recv() {
-            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::InterfaceReady)) {
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::InterfaceReady)
+            ) {
                 break;
             }
-            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !self.is_running() {
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::Shutdown)
+            ) || !self.is_running()
+            {
                 break;
             }
         }
@@ -278,10 +290,18 @@ impl LanforgeContext {
             return Ok(());
         }
         while let Ok(timed_event) = rx.recv().await {
-            if !self.is_running() || matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+            if !self.is_running()
+                || matches!(
+                    timed_event.event,
+                    LanforgeEvent::System(SystemEvent::Shutdown)
+                )
+            {
                 return Ok(());
             }
-            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::InterfaceReady)) {
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::InterfaceReady)
+            ) {
                 break;
             }
         }
@@ -303,10 +323,18 @@ impl LanforgeContext {
             return Ok(());
         }
         while let Ok(timed_event) = rx.recv().await {
-            if !self.is_running() || matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+            if !self.is_running()
+                || matches!(
+                    timed_event.event,
+                    LanforgeEvent::System(SystemEvent::Shutdown)
+                )
+            {
                 return Ok(());
             }
-            if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::DbReady)) {
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::DbReady)
+            ) {
                 break;
             }
         }

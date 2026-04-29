@@ -453,6 +453,13 @@ impl LogHandler {
                     port.bright_yellow()
                 )
             }
+            DeviceChange::IpDeleted { ip } => {
+                format!("IP deleted: {}", ip.to_string().red())
+            }
+            DeviceChange::IpOffline { ip } => {
+                format!("IP offline: {}", ip.to_string().yellow())
+            }
+            DeviceChange::CliHostUpdated => "Host updated via CLI".bright_blue().to_string(),
         }
     }
 }

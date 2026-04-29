@@ -277,7 +277,7 @@ mod tests {
 
         let ip1 = p.allocate(&ctx, mac(1), None).unwrap();
         // Simular o LanforgeContext alocando
-        let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
             mac: mac(1),
             ip: ip1,
             expires: SystemTime::now() + Duration::from_hours(1),
@@ -306,7 +306,7 @@ mod tests {
         let declined_ip = Ipv4Addr::new(192, 168, 0, 101);
 
         // Simulamos IP reservado no contexto global
-        let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(99),
             hostname: FieldUpdate::Set("test".to_string()),
             duid: FieldUpdate::NoChange,
@@ -322,7 +322,7 @@ mod tests {
         for i in 0..4 {
             if let Some(ip) = p.allocate(&ctx, mac(i), None) {
                 // Registrar cada um para que NÂO seja pego de novo
-                let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+                let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
                     mac: mac(i),
                     ip,
                     expires: expiry,

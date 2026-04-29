@@ -15,7 +15,7 @@ fn test_topology_update() {
     let port = "Gi0/1".to_string();
 
     // 1. Apply topology update
-    let changed = ctx.apply(&DeviceUpdate::TopologyUpdated {
+    let changed = ctx.apply(DeviceUpdate::TopologyUpdated {
         mac,
         parent_mac: Some(parent_mac),
         port: Some(port.clone()),
@@ -32,7 +32,7 @@ fn test_topology_update() {
     assert_eq!(topo.local_ifindex, 1);
 
     // 3. Apply same update, should not change
-    let changed = ctx.apply(&DeviceUpdate::TopologyUpdated {
+    let changed = ctx.apply(DeviceUpdate::TopologyUpdated {
         mac,
         parent_mac: Some(parent_mac),
         port: Some("Gi0/1".to_string()),
@@ -41,7 +41,7 @@ fn test_topology_update() {
     assert!(!changed);
 
     // 4. Update port
-    let changed = ctx.apply(&DeviceUpdate::TopologyUpdated {
+    let changed = ctx.apply(DeviceUpdate::TopologyUpdated {
         mac,
         parent_mac: Some(parent_mac),
         port: Some("Gi0/2".to_string()),

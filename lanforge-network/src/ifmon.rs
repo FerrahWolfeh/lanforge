@@ -135,7 +135,7 @@ impl AddressMonitor {
 
         // Update global table
         // Update table via injected context
-        let _ = self.ctx.apply(&DeviceUpdate::InterfaceIpsChanged {
+        let _ = self.ctx.apply(DeviceUpdate::InterfaceIpsChanged {
             ifindex,
             state: state.clone(),
         });

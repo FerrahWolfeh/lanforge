@@ -228,32 +228,64 @@ pub fn device_handler(args: TokenStream, input: TokenStream) -> TokenStream {
     let fn_name = &input_fn.sig.ident;
     let fn_vis = &input_fn.vis;
     let fn_args = &input_fn.sig.inputs;
-    let fn_output = &input_fn.sig.output;
+    let _fn_output = &input_fn.sig.output;
     let fn_block = &input_fn.block;
 
     let expanded = quote! {
-        #fn_vis fn #fn_name(#fn_args) #fn_output {
+        #fn_vis fn #fn_name(#fn_args) -> Vec<crate::bus::LanforgeEvent> {
             let m = #mac_ident;
 
+            let is_new = !self.devices.contains_key(&m);
             let mut dev_arc = match self.devices.remove(&m) {
                 Some(d) => d,
                 None => std::sync::Arc::new(crate::device::Device::new(m)),
             };
 
-            let result;
-            {
+            let was_online = dev_arc.is_online();
+
+            let change: Option<crate::bus::DeviceChange> = {
                 let dev = std::sync::Arc::make_mut(&mut dev_arc);
                 self.unindex_device(dev);
 
-                result = (|| {
+                let result = (|| {
                     #fn_block
                 })();
 
                 self.index_device(m, dev);
+                result
+            };
+
+            self.devices.insert(m, dev_arc.clone());
+
+            let mut events = Vec::new();
+            let now_online = dev_arc.is_online();
+            let hostname = Some(dev_arc.hostname.name.clone());
+
+            if is_new {
+                events.push(crate::bus::LanforgeEvent::Device(crate::bus::DeviceEvent::Discovered {
+                    mac: m,
+                    hostname: hostname.clone(),
+                }));
             }
 
-            self.devices.insert(m, dev_arc);
-            result
+            if let Some(c) = change {
+                events.push(crate::bus::LanforgeEvent::Device(crate::bus::DeviceEvent::Updated {
+                    mac: m,
+                    change: Box::new(c),
+                    hostname: hostname.clone(),
+                }));
+            } else if was_online != now_online {
+                events.push(crate::bus::LanforgeEvent::Device(crate::bus::DeviceEvent::Updated {
+                    mac: m,
+                    change: Box::new(crate::bus::DeviceChange::StatusChanged {
+                        online: now_online,
+                        hostname: hostname.clone(),
+                    }),
+                    hostname: hostname.clone(),
+                }));
+            }
+
+            events
         }
     };
 
@@ -272,6 +304,7 @@ pub fn proxy_update_derive(input: TokenStream) -> TokenStream {
             .map(|v| {
                 let ident = &v.ident;
                 let mut method_name = None;
+                let mut defaults = std::collections::HashMap::new();
 
                 for attr in &v.attrs {
                     if attr.path().is_ident("proxy") {
@@ -279,6 +312,17 @@ pub fn proxy_update_derive(input: TokenStream) -> TokenStream {
                             if meta.path.is_ident("method") {
                                 let value: LitStr = meta.value()?.parse()?;
                                 method_name = Some(value.value());
+                            } else if meta.path.is_ident("default") {
+                                let content;
+                                syn::parenthesized!(content in meta.input);
+                                let nested = content.parse_terminated(syn::Meta::parse, syn::Token![,])?;
+                                for m in nested {
+                                    if let syn::Meta::NameValue(nv) = m
+                                        && let Some(id) = nv.path.get_ident() {
+                                            let val = &nv.value;
+                                            defaults.insert(id.to_string(), quote! { #val });
+                                        }
+                                }
                             }
                             Ok(())
                         });
@@ -290,25 +334,35 @@ pub fn proxy_update_derive(input: TokenStream) -> TokenStream {
 
                     match &v.fields {
                         Fields::Named(f) => {
-                            let f_idents = f.named.iter().map(|f| &f.ident);
-                            let f_types = f.named.iter().map(|f| &f.ty);
-                            let f_clones = f.named.iter().map(|f| {
-                                let id = &f.ident;
-                                quote! { #id: #id.clone() }
-                            });
+                            let mut method_args = Vec::new();
+                            let mut variant_fields = Vec::new();
+
+                            for field in &f.named {
+                                let id = field.ident.as_ref().unwrap();
+                                let ty = &field.ty;
+                                
+                                if let Some(def_val) = defaults.get(&id.to_string()) {
+                                    variant_fields.push(quote! { #id: #def_val });
+                                } else {
+                                    method_args.push(quote! { #id: impl Into<#ty> });
+                                    variant_fields.push(quote! { #id: #id.into() });
+                                }
+                            }
+
                             quote! {
                                 /// Automatically generated proxy for DeviceUpdate variant.
                                 #[must_use]
-                                pub fn #m_ident(&self, #(#f_idents: #f_types),*) -> bool {
-                                    self.apply(&DeviceUpdate::#ident { #(#f_clones),* })
+                                pub fn #m_ident(&self, #(#method_args),*) -> bool {
+                                    self.apply(DeviceUpdate::#ident { #(#variant_fields),* })
                                 }
                             }
                         }
                         Fields::Unit => {
                             quote! {
                                 /// Automatically generated proxy for DeviceUpdate variant.
-                                pub fn #m_ident(&self) {
-                                    let _ = self.apply(&DeviceUpdate::#ident);
+                                #[must_use]
+                                pub fn #m_ident(&self) -> bool {
+                                    self.apply(DeviceUpdate::#ident)
                                 }
                             }
                         }
@@ -468,7 +522,7 @@ pub fn command_dispatch_derive(input: TokenStream) -> TokenStream {
 
                 quote! {
                     Self::#ident #pattern => {
-                        let _ = ctx.ctx.apply(&lanforge_core::context::state::DeviceUpdate::#a_ident #fields);
+                        let _ = ctx.ctx.apply(lanforge_core::context::state::DeviceUpdate::#a_ident #fields);
                         crate::api::Response::Success(crate::api::SimpleSuccess {
                             message: #msg.to_string(),
                         })

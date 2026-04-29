@@ -23,7 +23,7 @@ async fn new_device_publishes_discovered_and_updated() {
     let ip: Ipv4Addr = "192.168.0.10".parse().unwrap();
     let expires = SystemTime::now() + Duration::from_hours(1);
 
-    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+    let _ = ctx.apply(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
 
     let mut events = vec![];
     while let Ok(ev) = rx.try_recv() {
@@ -45,9 +45,10 @@ async fn new_device_publishes_discovered_and_updated() {
         "Deve publicar DeviceUpdated"
     );
     assert!(
-        events
-            .iter()
-            .any(|e: &crate::bus::TimedEvent| matches!(e.event, LanforgeEvent::Storage(StorageEvent::TableDirty))),
+        events.iter().any(|e: &crate::bus::TimedEvent| matches!(
+            e.event,
+            LanforgeEvent::Storage(StorageEvent::TableDirty)
+        )),
         "Deve publicar DeviceTableDirty"
     );
 }
@@ -59,7 +60,7 @@ async fn known_device_does_not_publish_discovered() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let expires = SystemTime::now() + Duration::from_hours(1);
 
-    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
         mac,
         ip: "192.168.0.10".parse().unwrap(),
         expires,
@@ -67,7 +68,7 @@ async fn known_device_does_not_publish_discovered() {
 
     let mut rx = bus.subscribe();
 
-    let _ = ctx.apply(&DeviceUpdate::V4LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
         mac,
         ip: "192.168.0.11".parse().unwrap(),
         expires,
@@ -96,7 +97,7 @@ async fn ndp_seen_publishes_nothing() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: std::net::Ipv6Addr = "fe80::1".parse().unwrap();
 
-    let _ = ctx.apply(&DeviceUpdate::NdpSeen {
+    let _ = ctx.apply(DeviceUpdate::NdpSeen {
         mac,
         ip,
         is_active: true,
@@ -120,7 +121,7 @@ async fn cli_host_update_publishes_events() {
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::Set("cli-host".to_string()),
         duid: FieldUpdate::NoChange,
@@ -140,12 +141,12 @@ async fn cli_host_update_publishes_events() {
             LanforgeEvent::Device(DeviceEvent::Updated {
                 change,
                 ..
-            }) if matches!(**change, DeviceChange::HostnameChanged { .. })
+            }) if matches!(**change, DeviceChange::CliHostUpdated)
         )),
-        "Deve publicar HostnameChanged"
+        "Deve publicar CliHostUpdated"
     );
 
-    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
         hostname: FieldUpdate::NoChange,
         duid: FieldUpdate::NoChange,
@@ -165,8 +166,8 @@ async fn cli_host_update_publishes_events() {
             LanforgeEvent::Device(DeviceEvent::Updated {
                 change,
                 ..
-            }) if matches!(**change, DeviceChange::V4StaticChanged { .. })
+            }) if matches!(**change, DeviceChange::CliHostUpdated)
         )),
-        "Deve publicar V4StaticChanged"
+        "Deve publicar CliHostUpdated"
     );
 }

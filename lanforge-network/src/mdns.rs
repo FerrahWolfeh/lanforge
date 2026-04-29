@@ -397,7 +397,7 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
                 if let Some(class) = classify(&h)
                     && let Some(mac) = ctx.get_mac_by_ip(from.ip())
                 {
-                    let _ = ctx.apply(&lanforge_core::context::state::DeviceUpdate::ClassHint {
+                    let _ = ctx.apply(lanforge_core::context::state::DeviceUpdate::ClassHint {
                         mac,
                         class,
                     });
@@ -411,7 +411,7 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
             if let Some(mac) = mac {
                 // If it has a classification hit, apply it
                 if let Some(class) = classify(&h) {
-                    let _ = ctx.apply(&lanforge_core::context::state::DeviceUpdate::ClassHint {
+                    let _ = ctx.apply(lanforge_core::context::state::DeviceUpdate::ClassHint {
                         mac,
                         class,
                     });
@@ -425,7 +425,7 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
                 }
 
                 debug!("mDNS descoberta: {} -> {}", from.ip(), clean_host);
-                let _ = ctx.apply(&DeviceUpdate::DhcpHostnameHint {
+                let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
                     mac,
                     hostname: clean_host.to_string(),
                 });

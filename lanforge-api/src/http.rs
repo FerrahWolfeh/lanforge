@@ -213,7 +213,7 @@ async fn process_registration(ctx: LanforgeContext, req: RegisterRequest) -> imp
         mac_addr, req.hostname, v4_static, v6_suffix
     );
 
-    let _ = ctx.apply(&DeviceUpdate::CliHostUpdated {
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_addr,
         hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
         duid: FieldUpdate::NoChange,

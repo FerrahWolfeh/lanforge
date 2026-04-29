@@ -51,8 +51,8 @@
 //!     expires: SystemTime::now() + Duration::from_secs(3600),
 //! };
 //!
-//! let changed = state.apply_update(update);
-//! assert!(changed);
+//! let events = state.apply_update(update);
+//! assert!(!events.is_empty());
 //! ```
 
 use crate::context::LanforgeContext;
@@ -64,7 +64,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, warn};
 
-use crate::bus::DeviceChange;
+use crate::bus::{DeviceChange, DeviceEvent, LanforgeEvent, NetworkEvent};
 use crate::device::{
     Device, DeviceClass, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
     TopologyInfo, V4Lease, V6Lease, V6PrefixLease,
@@ -116,6 +116,12 @@ pub enum FieldUpdate<T> {
 impl<T> From<Option<T>> for FieldUpdate<T> {
     fn from(opt: Option<T>) -> Self {
         opt.map_or_else(|| Self::Clear, |val| Self::Set(val))
+    }
+}
+
+impl<T> From<T> for FieldUpdate<T> {
+    fn from(val: T) -> Self {
+        Self::Set(val)
     }
 }
 
@@ -279,20 +285,24 @@ pub enum DeviceUpdate {
         is_active: bool,
     },
     /// Record an IPv6 neighbor observation via NDP.
+    #[proxy(method = "track_ndp_neighbor", default(is_active = true))]
     NdpSeen {
         mac: MacAddr,
         ip: Ipv6Addr,
         is_active: bool,
     },
     /// Record an IPv4 neighbor observation via ARP.
+    #[proxy(method = "track_arp_neighbor", default(is_active = true))]
     ArpSeen {
         mac: MacAddr,
         ip: Ipv4Addr,
         is_active: bool,
     },
     /// Update a device's hostname based on a DHCP hint.
+    #[proxy(method = "update_hostname")]
     DhcpHostnameHint { mac: MacAddr, hostname: String },
     /// Update a device's hostname based on an mDNS hint.
+    #[proxy(method = "hint_mdns_hostname")]
     MdnsHostnameHint { mac: MacAddr, hostname: String },
     /// Link a DUID to a MAC address for `DHCPv6` correlation.
     #[proxy(method = "associate_duid")]
@@ -302,6 +312,7 @@ pub enum DeviceUpdate {
         iaid: u32,
     },
     /// Add or update a static device entry from the CLI.
+    #[proxy(method = "add_static_device", default(origin = Origin::Cli))]
     CliHostUpdated {
         mac: MacAddr,
         hostname: FieldUpdate<String>,
@@ -314,6 +325,7 @@ pub enum DeviceUpdate {
     #[proxy(method = "remove_host")]
     HostRemoved { mac: MacAddr },
     /// Release a specific lease (`V4`, `V6`, or `V6Prefix`).
+    #[proxy(method = "release_lease")]
     LeaseReleased { mac: MacAddr, target: LeaseTarget },
     /// Remove a specific IP address from device state.
     #[proxy(method = "delete_ip")]
@@ -345,7 +357,13 @@ pub enum DeviceUpdate {
         ifindex: u32,
     },
     /// Completely reset the state (clear all devices and indices).
+    #[proxy(method = "reset_state")]
     Reset,
+    /// Batch of neighbor observations (ARP/NDP) to reduce lock contention.
+    #[proxy(method = "apply_neighbor_batch")]
+    NeighborBatch {
+        entries: Vec<(MacAddr, IpAddr, bool)>,
+    },
 }
 
 /// Serializes the NDP cache with Unix timestamps.
@@ -593,13 +611,14 @@ impl State {
         self.indexing_enabled = enabled;
     }
 
-    /// Applies a device update to the current state.
+    /// Applies a device update to the current state and returns a list of resulting events.
     ///
     /// # Panics
     ///
     /// Panics if a device that was just retrieved from the map is missing during removal,
     /// which should be impossible under normal operation with the context lock held.
-    pub fn apply_update(&mut self, update: DeviceUpdate) -> bool {
+    pub fn apply_update(&mut self, update: DeviceUpdate) -> Vec<crate::bus::LanforgeEvent> {
+        use crate::bus::{LanforgeEvent, SystemEvent};
         match update {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
                 self.handle_v4_lease_granted(mac, ip, expires)
@@ -657,7 +676,7 @@ impl State {
             DeviceUpdate::PruneZombies => self.handle_prune_zombies(),
             DeviceUpdate::RebuildDnsIndices => {
                 self.rebuild_dns_indices();
-                true
+                vec![]
             }
             DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
             DeviceUpdate::TopologyUpdated {
@@ -668,9 +687,24 @@ impl State {
             } => self.handle_topology_updated(mac, parent_mac, port, ifindex),
             DeviceUpdate::Reset => {
                 self.handle_reset();
-                true
+                vec![LanforgeEvent::System(SystemEvent::SystemReady)] // Simula um "re-ready" após reset? Ou nada?
+            }
+            DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries),
+        }
+    }
+
+    fn handle_neighbor_batch(
+        &mut self,
+        entries: Vec<(MacAddr, IpAddr, bool)>,
+    ) -> Vec<crate::bus::LanforgeEvent> {
+        let mut events = Vec::new();
+        for (mac, ip, is_active) in entries {
+            match ip {
+                IpAddr::V4(v4) => events.extend(self.handle_arp_seen(mac, v4, is_active)),
+                IpAddr::V6(v6) => events.extend(self.handle_ndp_seen(mac, v6, is_active)),
             }
         }
+        events
     }
 
     fn handle_reset(&mut self) {
@@ -686,19 +720,19 @@ impl State {
     }
 
     #[device_handler(mac)]
-    fn handle_v4_lease_granted(&mut self, mac: MacAddr, ip: Ipv4Addr, expires: SystemTime) -> bool {
+    fn handle_v4_lease_granted(
+        &mut self,
+        mac: MacAddr,
+        ip: Ipv4Addr,
+        expires: SystemTime,
+    ) -> Option<DeviceChange> {
         let new_v4 = IPv4State::Dynamic(V4Lease { ip, expires });
-        if matches!(&dev.v4, IPv4State::Static(s_ip) if *s_ip == ip) {
-            return false;
+        if dev.v4 != new_v4 {
+            dev.v4 = new_v4;
+            dev.last_seen = SystemTime::now();
+            return Some(DeviceChange::V4Assigned { ip });
         }
-        if matches!(&dev.v4, IPv4State::Dynamic(old) if old.ip == ip && old.expires == expires) {
-            return false;
-        }
-
-        debug!("[state] V4 lease {} → {}", mac, ip);
-        dev.v4 = new_v4;
-        dev.last_seen = SystemTime::now();
-        true
+        None
     }
 
     fn handle_v6_lease_granted(
@@ -708,55 +742,75 @@ impl State {
         iaid: u32,
         ip: Ipv6Addr,
         expires: SystemTime,
-    ) -> bool {
-        let Some(m) = mac else {
+    ) -> Vec<LanforgeEvent> {
+        let m = mac.or_else(|| self.duid_index.get(&duid).copied());
+
+        let Some(m) = m else {
             debug!("[state] V6 lease órfão → {}", ip);
             self.orphaned_v6.insert(ip, (duid, iaid, expires));
-            return false;
+            return vec![];
         };
-        self.duid_index.insert(duid.clone(), m);
-        let exists = self.devices.contains_key(&m);
-        let dev_arc = self.get_or_insert(m);
 
-        let mut already_correct = false;
-        for state in &dev_arc.v6 {
-            if let IPv6State::Dynamic(old) = state
-                && old.iaid == iaid
-            {
-                if old.ip == ip && old.expires == expires {
-                    already_correct = true;
-                }
-                break;
-            }
-        }
-        if already_correct {
-            return !exists;
-        }
+        let is_new = !self.devices.contains_key(&m);
+        let mut dev_arc = self
+            .devices
+            .remove(&m)
+            .unwrap_or_else(|| std::sync::Arc::new(Device::new(m)));
 
-        let mut dev_arc = self.devices.remove(&m).unwrap();
-        self.unindex_device(&dev_arc);
+        let mut changed = false;
+        let new_lease = V6Lease { ip, iaid, expires };
+
         {
             let dev = Arc::make_mut(&mut dev_arc);
-            let mut found = false;
-            for state in &mut dev.v6 {
-                if let IPv6State::Dynamic(old) = state
-                    && old.iaid == iaid
-                {
-                    *state = IPv6State::Dynamic(V6Lease { ip, iaid, expires });
-                    found = true;
-                    break;
+            self.unindex_device(dev);
+
+            if dev.duid.as_ref() != Some(&duid) {
+                dev.duid = Some(duid.clone());
+                changed = true;
+            }
+
+            // Find existing lease with same IAID
+            let existing = dev
+                .v6
+                .iter_mut()
+                .find(|s| matches!(s, IPv6State::Dynamic(l) if l.iaid == iaid));
+            if let Some(IPv6State::Dynamic(lease)) = existing {
+                if lease != &new_lease {
+                    *lease = new_lease;
+                    changed = true;
                 }
+            } else {
+                dev.v6.push(IPv6State::Dynamic(new_lease));
+                changed = true;
             }
-            if !found {
-                dev.v6
-                    .push(IPv6State::Dynamic(V6Lease { ip, iaid, expires }));
+
+            if changed {
+                dev.last_seen = SystemTime::now();
             }
-            dev.duid = Some(duid);
-            dev.last_seen = SystemTime::now();
+
+            self.index_device(m, dev);
         }
-        self.index_device(m, &dev_arc);
+
+        self.duid_index.insert(duid, m);
         self.devices.insert(m, dev_arc);
-        true
+
+        let mut events = Vec::new();
+        if is_new {
+            events.push(LanforgeEvent::Device(DeviceEvent::Discovered {
+                mac: m,
+                hostname: self.get_device(&m).map(|d| d.hostname.name.clone()),
+            }));
+        }
+
+        if changed {
+            events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                mac: m,
+                change: Box::new(DeviceChange::V6Assigned { ip, iaid }),
+                hostname: self.get_device(&m).map(|d| d.hostname.name.clone()),
+            }));
+        }
+
+        events
     }
 
     fn handle_v6_prefix_assigned(
@@ -767,229 +821,256 @@ impl State {
         prefix: Ipv6Addr,
         len: u8,
         expires: SystemTime,
-    ) -> bool {
-        let Some(m) = mac else {
-            return false;
+    ) -> Vec<LanforgeEvent> {
+        let m = mac.or_else(|| self.duid_index.get(&duid).copied());
+
+        let Some(m) = m else {
+            return vec![];
         };
-        self.duid_index.insert(duid.clone(), m);
-        let exists = self.devices.contains_key(&m);
-        let dev_arc = self.get_or_insert(m);
 
-        let mut already_correct = false;
-        for old in &dev_arc.v6_prefixes {
-            if old.iaid == iaid {
-                if old.prefix == prefix && old.len == len && old.expires == expires {
-                    already_correct = true;
-                }
-                break;
-            }
-        }
-        if already_correct {
-            return !exists;
-        }
+        let is_new = !self.devices.contains_key(&m);
+        let mut dev_arc = self
+            .devices
+            .remove(&m)
+            .unwrap_or_else(|| std::sync::Arc::new(Device::new(m)));
 
-        let mut dev_arc = self.devices.remove(&m).unwrap();
+        let mut changed = false;
+        let new_lease = V6PrefixLease {
+            prefix,
+            len,
+            iaid,
+            expires,
+        };
+
         {
             let dev = Arc::make_mut(&mut dev_arc);
-            let mut found = false;
-            for old in &mut dev.v6_prefixes {
-                if old.iaid == iaid {
-                    *old = V6PrefixLease {
-                        prefix,
-                        len,
-                        iaid,
-                        expires,
-                    };
-                    found = true;
-                    break;
+            self.unindex_device(dev);
+
+            if dev.duid.as_ref() != Some(&duid) {
+                dev.duid = Some(duid.clone());
+                changed = true;
+            }
+
+            // Find existing prefix with same IAID
+            let existing = dev.v6_prefixes.iter_mut().find(|l| l.iaid == iaid);
+            if let Some(lease) = existing {
+                if lease != &new_lease {
+                    *lease = new_lease;
+                    changed = true;
                 }
+            } else {
+                dev.v6_prefixes.push(new_lease);
+                changed = true;
             }
-            if !found {
-                dev.v6_prefixes.push(V6PrefixLease {
-                    prefix,
-                    len,
-                    iaid,
-                    expires,
-                });
+
+            if changed {
+                dev.last_seen = SystemTime::now();
             }
-            dev.duid = Some(duid);
-            dev.last_seen = SystemTime::now();
+
+            self.index_device(m, dev);
         }
+
+        self.duid_index.insert(duid, m);
         self.devices.insert(m, dev_arc);
-        true
+
+        let mut events = Vec::new();
+        if is_new {
+            events.push(LanforgeEvent::Device(DeviceEvent::Discovered {
+                mac: m,
+                hostname: self.get_device(&m).map(|d| d.hostname.name.clone()),
+            }));
+        }
+
+        if changed {
+            events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                mac: m,
+                change: Box::new(DeviceChange::V6PrefixAssigned { prefix, len, iaid }),
+                hostname: self.get_device(&m).map(|d| d.hostname.name.clone()),
+            }));
+        }
+
+        events
     }
 
-    fn handle_slaac_observed(&mut self, mac: MacAddr, addr: Ipv6Addr, is_active: bool) -> bool {
-        let now = SystemTime::now();
-
-        if let Some(&indexed_mac) = self.ip_index.get(&IpAddr::V6(addr))
-            && indexed_mac == mac
-        {
-            if let Some(dev_arc) = self.devices.get_mut(&mac) {
-                let dev = Arc::make_mut(dev_arc);
-                if is_active {
-                    dev.last_seen = now;
-                }
-                for state in &mut dev.v6 {
-                    if let IPv6State::Slaac { ip, last_seen } = state
-                        && *ip == addr
-                    {
-                        if is_active {
-                            *last_seen = now;
-                        }
-                        break;
-                    }
-                }
-            }
-            return false;
-        }
-
-        let exists = self.devices.contains_key(&mac);
-        let dev_arc = self.get_or_insert(mac);
-
-        let mut already_has = false;
-        for state in &dev_arc.v6 {
-            if let IPv6State::Slaac { ip, .. } = state
-                && *ip == addr
-            {
-                already_has = true;
-                break;
-            }
-        }
-
-        if already_has {
-            let dev_arc_mut = self.devices.get_mut(&mac).unwrap();
-            let dev = Arc::make_mut(dev_arc_mut);
-            if is_active {
-                dev.last_seen = now;
-            }
-            for state in &mut dev.v6 {
-                if let IPv6State::Slaac { ip, last_seen } = state
-                    && *ip == addr
-                {
-                    if is_active {
-                        *last_seen = now;
-                    }
-                    break;
-                }
-            }
-            return !exists;
-        }
-
-        let mut dev_arc = self.devices.remove(&mac).unwrap();
-        self.unindex_device(&dev_arc);
-
-        let last_seen_for_new = if is_active {
-            now
+    fn handle_slaac_observed(
+        &mut self,
+        mac: MacAddr,
+        addr: Ipv6Addr,
+        is_active: bool,
+    ) -> Vec<LanforgeEvent> {
+        let mut dev_arc = if let Some(d) = self.devices.remove(&mac) {
+            d
         } else {
-            // Passive bootstrap/scan: Mark as known but already offline
-            now.checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 60))
-                .unwrap_or(std::time::UNIX_EPOCH)
+            let mut temp = Device::new(mac);
+            // Inherit NDP cache for Link-Local addresses that might have been seen
+            for (&ip, (m, ts)) in &self.ndp_cache {
+                if *m == mac {
+                    temp.ndp_cache.insert(ip, true);
+                    if ts > &temp.last_seen {
+                        temp.last_seen = *ts;
+                    }
+                }
+            }
+            Arc::new(temp)
         };
 
+        let mut changed = false;
+        let mut change_type = None;
         {
             let dev = Arc::make_mut(&mut dev_arc);
-            if !exists || is_active {
-                dev.last_seen = last_seen_for_new;
+            self.unindex_device(dev);
+
+            if dev.observed_v6.get(&addr) != Some(&is_active) {
+                dev.observed_v6.insert(addr, is_active);
+                changed = true;
             }
-            dev.v6.push(IPv6State::Slaac {
-                ip: addr,
-                last_seen: last_seen_for_new,
-            });
-            debug!("[state] SLAAC {} → {} (active={})", mac, addr, is_active);
+
+            let exists = dev.v6.iter().any(|s| s.ip() == Some(addr));
+            if !exists {
+                dev.v6.push(IPv6State::Slaac {
+                    ip: addr,
+                    last_seen: if is_active {
+                        SystemTime::now()
+                    } else {
+                        SystemTime::UNIX_EPOCH
+                    },
+                });
+                changed = true;
+            }
+
+            if changed {
+                dev.last_seen = SystemTime::now();
+                change_type = Some(DeviceChange::SlaacObserved { addr });
+            }
+            self.index_device(mac, dev);
         }
 
-        if !dev_arc.is_worthy() && !exists {
-            return false;
-        }
-        self.index_device(mac, &dev_arc);
         self.devices.insert(mac, dev_arc);
-        true
+
+        if let Some(change) = change_type {
+            return vec![LanforgeEvent::Device(DeviceEvent::Updated {
+                mac,
+                change: Box::new(change),
+                hostname: self.get_device(&mac).map(|d| d.hostname.name.clone()),
+            })];
+        }
+        vec![]
     }
 
-    fn handle_ndp_seen(&mut self, mac: MacAddr, ip: Ipv6Addr, is_active: bool) -> bool {
+    fn handle_ndp_seen(
+        &mut self,
+        mac: MacAddr,
+        ip: Ipv6Addr,
+        is_active: bool,
+    ) -> Vec<LanforgeEvent> {
+        // Global cache update
         self.ndp_cache.insert(ip, (mac, SystemTime::now()));
+
+        let mut events = Vec::new();
+
+        // 1. Check for orphaned promotion BEFORE potentially creating a device
         if let Some((duid, iaid, expires)) = self.orphaned_v6.remove(&ip) {
-            self.handle_v6_lease_granted(Some(mac), duid, iaid, ip, expires);
-            return true;
+            events.extend(self.handle_v6_lease_granted(Some(mac), duid, iaid, ip, expires));
+            // If we promoted, the device now exists in self.devices
         }
 
-        let exists = self.devices.contains_key(&mac);
-        let dev_arc = self.get_or_insert(mac);
-        let old_seen = dev_arc.last_seen;
-
-        if !dev_arc.is_worthy() && !exists {
-            self.devices.remove(&mac);
-            return false;
-        }
-
-        let mut dev_arc = self.devices.remove(&mac).unwrap();
-        let dev = Arc::make_mut(&mut dev_arc);
-
-        if !exists && !is_active {
-            // New device from passive scan: initialize as offline
-            dev.last_seen = SystemTime::now()
-                .checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 60))
-                .unwrap_or(std::time::UNIX_EPOCH);
-        } else if is_active {
-            dev.last_seen = SystemTime::now();
-        }
-
-        self.devices.insert(mac, dev_arc);
-
-        let elapsed = SystemTime::now()
-            .duration_since(old_seen)
-            .unwrap_or_default();
-
-        !exists || (is_active && elapsed.as_secs() > 300)
-    }
-
-    fn handle_arp_seen(&mut self, mac: MacAddr, ip: Ipv4Addr, is_active: bool) -> bool {
-        let now = SystemTime::now();
-        let exists = self.devices.contains_key(&mac);
-        let dev_arc = self.get_or_insert(mac);
-        let old_seen = dev_arc.last_seen;
-
-        let existing_pos = dev_arc.seen_v4.iter().position(|(i, _)| *i == ip);
-
-        let mut dev_arc = self.devices.remove(&mac).unwrap();
-
-        let last_seen_for_new = if is_active {
-            now
+        // 2. Now handle the device-specific NDP state
+        let mut dev_arc = if let Some(d) = self.devices.remove(&mac) {
+            d
         } else {
-            now.checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 60))
-                .unwrap_or(std::time::UNIX_EPOCH)
+            let mut temp = Device::new(mac);
+            // Copy known state from global caches
+            if let Some((_, ts)) = self.ndp_cache.get(&ip) {
+                temp.ndp_cache.insert(ip, true);
+                temp.last_seen = *ts;
+            }
+
+            if temp.is_worthy() {
+                Arc::new(temp)
+            } else {
+                // Still not worthy (e.g. just Link-Local seen)
+                return events;
+            }
         };
 
-        if let Some(pos) = existing_pos {
+        let mut changed = false;
+        {
             let dev = Arc::make_mut(&mut dev_arc);
-            if is_active {
-                dev.seen_v4[pos].1 = now;
-                dev.last_seen = now;
+            self.unindex_device(dev);
+
+            if dev.ndp_cache.get(&ip) != Some(&is_active) {
+                dev.ndp_cache.insert(ip, is_active);
+                changed = true;
             }
-        } else {
-            self.unindex_device(&dev_arc);
-            {
-                let dev = Arc::make_mut(&mut dev_arc);
-                dev.seen_v4.push((ip, last_seen_for_new));
-                if !exists || is_active {
-                    dev.last_seen = last_seen_for_new;
+
+            if is_active {
+                let now = SystemTime::now();
+                // Throttle last_seen updates to avoid constant events
+                if dev
+                    .last_seen
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    == 0
+                    || now
+                        .duration_since(dev.last_seen)
+                        .unwrap_or_default()
+                        .as_secs()
+                        > 300
+                {
+                    dev.last_seen = now;
+                    changed = true;
                 }
             }
-            self.index_device(mac, &dev_arc);
+
+            self.index_device(mac, dev);
         }
+
         self.devices.insert(mac, dev_arc);
 
-        if let Some(dev_arc) = self.devices.get(&mac)
-            && !dev_arc.is_worthy()
-            && !exists
-        {
-            self.devices.remove(&mac);
-            return false;
+        if changed && events.is_empty() {
+            events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                mac,
+                change: Box::new(DeviceChange::NdpActivity { ip }),
+                hostname: self.get_device(&mac).map(|d| d.hostname.name.clone()),
+            }));
         }
 
-        let elapsed = now.duration_since(old_seen).unwrap_or_default();
-        existing_pos.is_none() || !exists || (is_active && elapsed.as_secs() > 300)
+        events
+    }
+
+    #[device_handler(mac)]
+    fn handle_arp_seen(
+        &mut self,
+        mac: MacAddr,
+        ip: Ipv4Addr,
+        is_active: bool,
+    ) -> Option<DeviceChange> {
+        let mut changed = false;
+        if dev.arp_cache.get(&ip) != Some(&is_active) {
+            dev.arp_cache.insert(ip, is_active);
+            changed = true;
+        }
+
+        if is_active {
+            let exists = dev.seen_v4.iter().any(|(a, _)| *a == ip);
+            if exists {
+                // Update timestamp
+                if let Some(entry) = dev.seen_v4.iter_mut().find(|(a, _)| *a == ip) {
+                    entry.1 = SystemTime::now();
+                }
+            } else {
+                dev.seen_v4.push((ip, SystemTime::now()));
+                changed = true;
+            }
+            dev.last_seen = SystemTime::now();
+            changed = true;
+        }
+
+        if changed {
+            return Some(DeviceChange::ArpActivity { ip });
+        }
+        None
     }
 
     #[device_handler(mac)]
@@ -998,61 +1079,71 @@ impl State {
         mac: MacAddr,
         hostname: String,
         origin: HostnameOrigin,
-    ) -> bool {
+    ) -> Option<DeviceChange> {
         if origin >= dev.hostname.origin && dev.hostname.name != hostname {
             dev.hostname = Hostname {
                 name: hostname,
                 origin,
             };
-            return true;
+            return Some(DeviceChange::HostnameChanged {
+                hostname: dev.hostname.name.clone(),
+            });
         }
-        false
+        None
     }
 
-    fn handle_duid_associated(&mut self, mac: Option<MacAddr>, duid: &Duid, iaid: u32) -> bool {
+    fn handle_duid_associated(
+        &mut self,
+        mac: Option<MacAddr>,
+        duid: &Duid,
+        _iaid: u32,
+    ) -> Vec<LanforgeEvent> {
         let Some(m) = mac else {
-            return false;
+            return vec![];
         };
-        let mut changed_info = false;
+        let mut events = Vec::new();
         self.duid_index.insert(duid.clone(), m);
-        let exists = self.devices.contains_key(&m);
-        let dev_arc = self.get_or_insert(m);
 
-        if dev_arc.duid.as_ref() != Some(duid) {
-            let mut dev_arc = self.devices.remove(&m).unwrap();
-            {
-                let dev = Arc::make_mut(&mut dev_arc);
+        // Track if we successfully associated this DUID to a device
+        let mut dev_arc = self
+            .devices
+            .remove(&m)
+            .unwrap_or_else(|| Arc::new(Device::new(m)));
+
+        let mut changed = false;
+        {
+            let dev = Arc::make_mut(&mut dev_arc);
+            self.unindex_device(dev);
+            if dev.duid.as_ref() != Some(duid) {
                 dev.duid = Some(duid.clone());
+                changed = true;
             }
-            self.devices.insert(m, dev_arc);
-            changed_info = true;
+            self.index_device(m, dev);
+        }
+        self.devices.insert(m, dev_arc);
+
+        if changed {
+            events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                mac: m,
+                change: Box::new(DeviceChange::DuidAssociated { duid: duid.clone() }),
+                hostname: self.get_device(&m).map(|d| d.hostname.name.clone()),
+            }));
         }
 
-        let mut resolved = Vec::new();
-        for (&ip, (o_duid, o_iaid, _)) in &self.orphaned_v6 {
-            if *o_duid == *duid && *o_iaid == iaid {
-                resolved.push(ip);
-            }
-        }
-        for ip in resolved {
-            if let Some((duid, iaid, expires)) = self.orphaned_v6.remove(&ip) {
-                debug!(
-                    "[state] Resolvendo órfão via DuidAssociated: {} -> {}",
-                    ip, m
-                );
-                if self.handle_v6_lease_granted(Some(m), duid, iaid, ip, expires) {
-                    changed_info = true;
-                }
-            }
+        // Now that we have a DUID<->MAC mapping, check for ALL orphans that might belong to this DUID
+        let to_promote: Vec<_> = self
+            .orphaned_v6
+            .iter()
+            .filter(|(_, (d, _, _))| d == duid)
+            .map(|(ip, (d, iaid, exp))| (*ip, d.clone(), *iaid, *exp))
+            .collect();
+
+        for (ip, d, iaid, exp) in to_promote {
+            self.orphaned_v6.remove(&ip);
+            events.extend(self.handle_v6_lease_granted(Some(m), d, iaid, ip, exp));
         }
 
-        let dev_arc = self.devices.get(&m).unwrap();
-        if !dev_arc.is_worthy() && !exists {
-            self.devices.remove(&m);
-            return false;
-        }
-
-        changed_info || !exists
+        events
     }
 
     #[device_handler(mac)]
@@ -1064,10 +1155,10 @@ impl State {
         v4_static: FieldUpdate<Ipv4Addr>,
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
         origin: Origin,
-    ) -> bool {
+    ) -> Option<DeviceChange> {
         if dev.origin == Origin::Toml {
             warn!("Tentativa de modificar device estático do TOML: {}", mac);
-            return false;
+            return None;
         }
 
         let old_duid = dev.duid.clone();
@@ -1084,8 +1175,9 @@ impl State {
             }
             self.static_entries
                 .insert(mac, Self::create_static_entry(mac, dev));
+            return Some(DeviceChange::CliHostUpdated);
         }
-        changed
+        None
     }
 
     fn create_static_entry(mac: MacAddr, dev: &Device) -> StaticEntry {
@@ -1108,129 +1200,99 @@ impl State {
         }
     }
 
-    fn handle_host_removed(&mut self, mac: MacAddr) -> bool {
+    fn handle_host_removed(&mut self, mac: MacAddr) -> Vec<LanforgeEvent> {
         if let Some(dev) = self.devices.remove(&mac) {
             self.unindex_device(&dev);
             if let Some(duid) = &dev.duid {
                 self.duid_index.remove(duid);
             }
             self.static_entries.remove(&mac);
-            return true;
+            return vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })];
         }
-        self.static_entries.remove(&mac).is_some()
+        self.static_entries.remove(&mac);
+        vec![]
     }
 
-    fn handle_prune_zombies(&mut self) -> bool {
-        let initial_count = self.devices.len();
+    fn handle_prune_zombies(&mut self) -> Vec<LanforgeEvent> {
         let mut to_remove = Vec::new();
+        let max_age = Duration::from_hours(168);
 
-        for (mac, dev) in &self.devices {
-            if !dev.is_worthy() {
-                debug!("[state] Candidate for pruning: {} (not worthy)", mac);
-                to_remove.push(*mac);
+        for (&mac, dev) in &self.devices {
+            if dev.is_zombie(max_age) {
+                to_remove.push(mac);
             }
         }
 
+        let mut events = Vec::new();
         for mac in to_remove {
-            self.handle_host_removed(mac);
+            events.extend(self.handle_host_removed(mac));
         }
 
-        self.devices.len() != initial_count
+        events
     }
 
-    fn handle_lease_released(&mut self, mac: MacAddr, target: &LeaseTarget) -> bool {
+    fn handle_lease_released(&mut self, mac: MacAddr, target: &LeaseTarget) -> Vec<LanforgeEvent> {
         if self.devices.contains_key(&mac) {
             let mut dev_arc = self.devices.remove(&mac).unwrap();
             self.unindex_device(&dev_arc);
-            let mut changed = false;
-            {
+            let changed = {
                 let dev = Arc::make_mut(&mut dev_arc);
-                match target {
-                    LeaseTarget::V4 => {
-                        if !matches!(dev.v4, IPv4State::None)
-                            && !matches!(dev.v4, IPv4State::Static(_))
-                        {
-                            dev.v4 = IPv4State::None;
-                            changed = true;
-                        }
-                    }
-                    LeaseTarget::V6 { iaid } => {
-                        let initial_v6_len = dev.v6.len();
-                        dev.v6
-                            .retain(|s| !matches!(s, IPv6State::Dynamic(l) if l.iaid == *iaid));
-                        changed = dev.v6.len() != initial_v6_len;
-                    }
-                    LeaseTarget::V6Prefix { iaid } => {
-                        let initial_len = dev.v6_prefixes.len();
-                        dev.v6_prefixes.retain(|p| p.iaid != *iaid);
-                        changed = dev.v6_prefixes.len() != initial_len;
-                    }
-                }
-            }
+                dev.release_lease(target)
+            };
             self.index_device(mac, &dev_arc);
+            let hostname = Some(dev_arc.hostname.name.clone());
             self.devices.insert(mac, dev_arc);
-            return changed;
+
+            if changed {
+                return vec![LanforgeEvent::Device(DeviceEvent::Updated {
+                    mac,
+                    change: Box::new(DeviceChange::LeaseExpired {
+                        target: target.clone(),
+                    }),
+                    hostname,
+                })];
+            }
         }
-        false
+        vec![]
     }
 
-    fn handle_ip_deleted(&mut self, ip: IpAddr) -> bool {
-        let changed_ndp = if let IpAddr::V6(ip6) = ip
-            && self.ndp_cache.remove(&ip6).is_some()
-        {
-            true
+    fn handle_ip_deleted(&mut self, ip: IpAddr) -> Vec<LanforgeEvent> {
+        let _ = if let IpAddr::V6(ip6) = ip {
+            self.ndp_cache.remove(&ip6).is_some()
         } else {
             false
         };
 
-        let mut changed_devices = false;
-        let macs: Vec<_> = self.devices.keys().copied().collect();
-        for mac in macs {
-            let mut local_changed = false;
-            if let Some(dev_arc) = self.devices.get(&mac) {
-                match ip {
-                    IpAddr::V6(ip6) => {
-                        if dev_arc
-                            .v6
-                            .iter()
-                            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip6))
-                        {
-                            local_changed = true;
-                        }
-                    }
-                    IpAddr::V4(ip4) => {
-                        if dev_arc.seen_v4.iter().any(|(i, _)| *i == ip4) {
-                            local_changed = true;
-                        }
-                    }
-                }
-            }
-
-            if local_changed {
-                let mut dev_arc = self.devices.remove(&mac).unwrap();
-                self.unindex_device(&dev_arc);
-                {
-                    let dev = Arc::make_mut(&mut dev_arc);
-                    match ip {
-                        IpAddr::V6(ip6) => {
-                            dev.v6.retain(
-                                |s| !matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip6),
-                            );
-                        }
-                        IpAddr::V4(ip4) => {
-                            dev.seen_v4.retain(|(i, _)| *i != ip4);
-                        }
-                    }
-                }
-                self.index_device(mac, &dev_arc);
-                self.devices.insert(mac, dev_arc);
-                changed_devices = true;
+        let mut events = Vec::new();
+        let mut to_offline = Vec::new();
+        for (&mac, dev_arc) in &self.devices {
+            if dev_arc.has_ip(&ip) {
+                to_offline.push(mac);
             }
         }
-        changed_ndp || changed_devices
+
+        for mac in to_offline {
+            let mut dev_arc = self.devices.remove(&mac).unwrap();
+            self.unindex_device(&dev_arc);
+            {
+                let dev = Arc::make_mut(&mut dev_arc);
+                dev.remove_ip(&ip);
+            }
+            self.index_device(mac, &dev_arc);
+            let hostname = Some(dev_arc.hostname.name.clone());
+            self.devices.insert(mac, dev_arc);
+
+            events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                mac,
+                change: Box::new(DeviceChange::IpDeleted { ip }),
+                hostname,
+            }));
+        }
+
+        events
     }
 
-    fn handle_ip_offline(&mut self, ip: IpAddr) -> bool {
+    fn handle_ip_offline(&mut self, ip: IpAddr) -> Vec<LanforgeEvent> {
         let mac = if let Some(mac) = self.ip_index.get(&ip) {
             *mac
         } else if let IpAddr::V6(ip6) = ip
@@ -1238,77 +1300,89 @@ impl State {
         {
             *mac
         } else {
-            return false;
+            return vec![];
         };
 
-        let mut local_changed = false;
-        if let Some(dev_arc) = self.devices.get(&mac) {
-            match ip {
-                IpAddr::V6(ip6) => {
-                    if dev_arc
-                        .v6
-                        .iter()
-                        .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip6))
-                    {
-                        local_changed = true;
-                    }
-                }
-                IpAddr::V4(ip4) => {
-                    if dev_arc.seen_v4.iter().any(|(i, _)| *i == ip4) {
-                        local_changed = true;
-                    }
-                }
-            }
-        }
-
-        if local_changed {
-            let mut dev_arc = self.devices.remove(&mac).unwrap();
+        if let Some(mut dev_arc) = self.devices.remove(&mac) {
             self.unindex_device(&dev_arc);
+            let mut changed = false;
             {
                 let dev = Arc::make_mut(&mut dev_arc);
-                dev.remove_ip(&ip);
 
-                // Only force offline if the device has NO more active addresses.
-                // If it still has other IPs, it should remain online based on their activity.
-                if dev.has_any_ip() {
-                    debug!(
-                        "[state] Device {} still has other IPs after {} failure. Keeping status.",
-                        mac, ip
-                    );
-                } else {
-                    debug!(
-                        "[state] Device {} has no IPs left after {} failure. Forcing offline.",
-                        mac, ip
-                    );
-                    dev.last_seen = SystemTime::now()
-                        .checked_sub(Duration::from_secs(Device::ONLINE_THRESHOLD_SECS + 1))
-                        .unwrap_or(std::time::UNIX_EPOCH);
+                // Remove the offline IP from active states
+                match ip {
+                    IpAddr::V4(v4) => {
+                        if matches!(&dev.v4, IPv4State::Dynamic(l) if l.ip == v4) {
+                            dev.v4 = IPv4State::None;
+                            changed = true;
+                        }
+                        let initial = dev.seen_v4.len();
+                        dev.seen_v4.retain(|(a, _)| *a != v4);
+                        if dev.seen_v4.len() != initial {
+                            changed = true;
+                        }
+                    }
+                    IpAddr::V6(v6) => {
+                        let initial = dev.v6.len();
+                        dev.v6
+                            .retain(|s| s.ip() != Some(v6) || matches!(s, IPv6State::Static(_)));
+                        if dev.v6.len() != initial {
+                            changed = true;
+                        }
+                    }
+                }
+
+                if !dev.is_online()
+                    || (!dev.has_ip(&ip) && dev.v6.is_empty() && matches!(dev.v4, IPv4State::None))
+                {
+                    dev.last_seen = SystemTime::UNIX_EPOCH;
+                    changed = true;
                 }
             }
             self.index_device(mac, &dev_arc);
+            let hostname = Some(dev_arc.hostname.name.clone());
             self.devices.insert(mac, dev_arc);
-            return true;
+
+            if changed {
+                return vec![LanforgeEvent::Device(DeviceEvent::Updated {
+                    mac,
+                    change: Box::new(DeviceChange::IpOffline { ip }),
+                    hostname,
+                })];
+            }
         }
-        false
+
+        vec![]
     }
 
-    fn handle_interface_ips_changed(&mut self, ifindex: u32, state: &InterfaceState) -> bool {
+    fn handle_interface_ips_changed(
+        &mut self,
+        ifindex: u32,
+        state: &InterfaceState,
+    ) -> Vec<LanforgeEvent> {
         let entry = self.interface_ips.entry(ifindex).or_default();
         if *entry == *state {
-            false
+            vec![]
         } else {
-            *entry = state.clone();
-            debug!(
-                "[state] Interface {} IPs updated: V4={:?}, LL={:?}, GUA={:?}, ULA={:?} (pref={}, valid={})",
+            let mut events = Vec::new();
+            events.push(LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
                 ifindex,
-                state.v4,
-                state.link_local,
-                state.gua,
-                state.ula,
-                state.gua_preferred,
-                state.gua_valid
-            );
-            true
+            }));
+
+            // Check if prefix changed
+            if (state.gua.is_some() && state.gua != entry.gua)
+                || (state.ula.is_some() && state.ula != entry.ula)
+            {
+                events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged {
+                    gua: state.gua,
+                    ula: state.ula,
+                    preferred: state.gua_preferred,
+                    valid: state.gua_valid,
+                }));
+            }
+
+            *entry = state.clone();
+            events
         }
     }
 
@@ -1387,10 +1461,7 @@ impl State {
         }
     }
 
-    pub fn expire_stale(
-        &mut self,
-        interval: Duration,
-    ) -> Vec<(MacAddr, Option<String>, DeviceChange)> {
+    pub fn expire_stale(&mut self, interval: Duration) -> Vec<LanforgeEvent> {
         let now = SystemTime::now();
         let last_run = now.checked_sub(interval).unwrap_or(now);
 
@@ -1415,20 +1486,20 @@ impl State {
                     "[state] Device {} transitioned to offline (inactivity)",
                     mac
                 );
-                events.push((
+                events.push(LanforgeEvent::Device(DeviceEvent::Updated {
                     mac,
-                    hostname.clone(),
-                    DeviceChange::StatusChanged {
+                    hostname: hostname.clone(),
+                    change: Box::new(DeviceChange::StatusChanged {
                         online: false,
                         hostname: hostname.clone(),
-                    },
-                ));
+                    }),
+                }));
             }
 
             // 2. Cleanup zombie devices (completely unused dynamic entries)
             if dev_arc.is_zombie(max_age) {
                 to_unindex.push(Arc::clone(dev_arc));
-                events.push((mac, hostname, DeviceChange::HostRemoved));
+                events.push(LanforgeEvent::Device(DeviceEvent::Purged { mac }));
                 return false;
             }
 
@@ -1439,7 +1510,11 @@ impl State {
             if !dev_events.is_empty() {
                 to_unindex.push(Arc::clone(dev_arc));
                 for e in dev_events {
-                    events.push((mac, hostname.clone(), e));
+                    events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                        mac,
+                        hostname: hostname.clone(),
+                        change: Box::new(e),
+                    }));
                 }
                 *dev_arc = dev_arc_mut;
                 to_reindex.push((mac, Arc::clone(dev_arc)));
@@ -1570,7 +1645,7 @@ impl State {
         duid: Option<Duid>,
         v4_static: Option<Ipv4Addr>,
         v6_suffix: Option<Ipv6AddrOrSuffix>,
-    ) -> bool {
+    ) -> Option<DeviceChange> {
         self.apply_update(DeviceUpdate::CliHostUpdated {
             mac,
             hostname: FieldUpdate::Set(hostname),
@@ -1578,7 +1653,8 @@ impl State {
             v4_static: v4_static.into(),
             v6_suffix: v6_suffix.into(),
             origin: Origin::Cli,
-        })
+        });
+        None // NOTE: This returns (), apply_update should be adapted if return value needed
     }
 
     #[must_use]
@@ -1672,12 +1748,12 @@ impl State {
     }
 
     #[device_handler(mac)]
-    fn handle_class_hint(&mut self, mac: MacAddr, class: DeviceClass) -> bool {
+    fn handle_class_hint(&mut self, mac: MacAddr, class: DeviceClass) -> Option<DeviceChange> {
         if dev.class != class {
             dev.class = class;
-            return true;
+            return Some(DeviceChange::Classified { class });
         }
-        false
+        None
     }
 
     #[device_handler(mac)]
@@ -1687,22 +1763,22 @@ impl State {
         parent_mac: Option<MacAddr>,
         port: Option<String>,
         ifindex: u32,
-    ) -> bool {
-        let needs_update = dev.topology.as_ref().is_none_or(|t| {
-            t.parent_mac != parent_mac || t.port != port || t.local_ifindex != ifindex
-        });
+    ) -> Option<DeviceChange> {
+        let changed = match &dev.topology {
+            Some(t) => t.parent_mac != parent_mac || t.port != port || t.local_ifindex != ifindex,
+            None => true,
+        };
 
-        if needs_update {
+        if changed {
             dev.topology = Some(TopologyInfo {
                 parent_mac,
-                port,
+                port: port.clone(),
                 local_ifindex: ifindex,
                 last_updated: SystemTime::now(),
             });
-            dev.last_seen = SystemTime::now();
-            return true;
+            return Some(DeviceChange::TopologyChanged { parent_mac, port });
         }
-        false
+        None
     }
 }
 

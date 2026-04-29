@@ -253,7 +253,7 @@ async fn test_db_worker_lifecycle() {
     let mut worker = DbWorker::new(db_url.clone(), "sqlite::memory:".to_string(), ctx.clone());
 
     let mac = make_mac(0x40);
-    let _ = ctx.update_hostname(mac, "worker-node".into(), HostnameOrigin::Dhcp);
+    let _ = ctx.update_hostname(mac, "worker-node".to_string());
 
     let mut bus_rx = bus.subscribe();
 

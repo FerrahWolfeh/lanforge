@@ -41,6 +41,7 @@ use crate::ndp::utils::{
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
+use lanforge_core::ndp::NeighborEvent;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use netlink_packet_core::NetlinkMessage;
 use netlink_sys::SocketAddr;
@@ -131,9 +132,11 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
                 ip, prefix_len, count
             );
             // Notification via event bus
-            let _ = ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::SubnetScanStarted {
-                subnet: format!("{ip}/{prefix_len}"),
-            }));
+            let _ = ctx
+                .bus()
+                .publish(LanforgeEvent::Network(NetworkEvent::SubnetScanStarted {
+                    subnet: format!("{ip}/{prefix_len}"),
+                }));
 
             for target_ip in range {
                 if let Err(e) = probe_neighbor(&handle, ifindex, IpAddr::V4(target_ip), None).await
@@ -181,12 +184,15 @@ impl AsyncService for NeighborMonitor {
                 if let Some(update) =
                     event.to_device_update(current_gua.as_ref(), current_ula.as_ref())
                 {
-                    let _ = self.ctx.apply(&update);
+                    let _ = self.ctx.apply(update);
                 }
             }
         }
 
         ctrl.signal_ready();
+
+        let mut pending_batch = Vec::new();
+        let mut flush_timer = tokio::time::interval(std::time::Duration::from_millis(100));
 
         loop {
             if !self.ctx.is_running() {
@@ -203,10 +209,32 @@ impl AsyncService for NeighborMonitor {
                     };
                     // A. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg)
-                        && event.ifindex() == self.target_ifindex
-                            && let Some(update) = event.to_device_update(current_gua.as_ref(), current_ula.as_ref()) {
-                                let _ = self.ctx.apply(&update);
+                        && event.ifindex() == self.target_ifindex {
+                            if let NeighborEvent::Added { mac, ip, is_active, .. } = event {
+                                // Optimization: Batch Added events during scans/bursts
+                                pending_batch.push((mac, ip, is_active));
+                                if pending_batch.len() >= 50 {
+                                    let batch = std::mem::take(&mut pending_batch);
+                                    let _ = self.ctx.apply_neighbor_batch(batch);
+                                }
+                            } else {
+                                // Flush pending batch before processing delete/fail to maintain order
+                                if !pending_batch.is_empty() {
+                                    let batch = std::mem::take(&mut pending_batch);
+                                    let _ = self.ctx.apply_neighbor_batch(batch);
+                                }
+                                if let Some(update) = event.to_device_update(current_gua.as_ref(), current_ula.as_ref()) {
+                                    let _ = self.ctx.apply(update);
+                                }
                             }
+                        }
+                }
+
+                _ = flush_timer.tick() => {
+                    if !pending_batch.is_empty() {
+                        let batch = std::mem::take(&mut pending_batch);
+                        let _ = self.ctx.apply_neighbor_batch(batch);
+                    }
                 }
 
                 Ok(timed_event) = bus_rx.recv() => {
@@ -220,8 +248,6 @@ impl AsyncService for NeighborMonitor {
                         }
                     });
                 }
-
-
 
                 else => break,
             }
