@@ -181,8 +181,8 @@ async fn run_mdns_worker(
                     Ok(timed_event) => {
                         handle_lanforge_event(&timed_event.event, &tx);
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        warn!("mDNS Prober: Event bus lagged, continuing");
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(service = "mDNS", lost = n, "Event bus lagged");
                     }
                     Err(_) => break,
                 }

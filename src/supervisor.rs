@@ -22,7 +22,7 @@ use lanforge_core::bus::{LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[cfg(test)]
 const MINIMUM_HEALTHY_UPTIME: Duration = Duration::from_millis(5);
@@ -44,7 +44,7 @@ where
         let name = meta.display_name;
         let start = Instant::now();
 
-        info!("▸ Starting async service: {}", description);
+        debug!("▸ Starting async service: {}", description);
 
         let ctrl = ServiceControl::new(meta.id, ctx.clone());
 
@@ -85,7 +85,7 @@ where
                             );
                             true // Apply backoff
                         } else {
-                            info!("▪ {} exited cleanly after {:.0}s, restarting", description, uptime.as_secs_f64());
+                            debug!("▪ {} exited cleanly after {:.0}s, restarting", description, uptime.as_secs_f64());
                             consecutive_failures = 0;
                             false // No backoff needed
                         }

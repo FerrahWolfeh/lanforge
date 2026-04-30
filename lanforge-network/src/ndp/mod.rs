@@ -168,7 +168,7 @@ impl AsyncService for NeighborMonitor {
         // We perform a simple dump of the kernel's neighbor table for the interface.
         // This is "gentle" because it just sends individual Added events for existing entries.
         {
-            info!("NeighborMonitor: Performing initial neighbor bootstrap...");
+            debug!("NeighborMonitor: Performing initial neighbor bootstrap...");
             let mut bootstrap_events = Vec::new();
 
             match get_ipv4_neighbors(&self.handle, Some(self.target_ifindex)).await {
@@ -202,8 +202,8 @@ impl AsyncService for NeighborMonitor {
             tokio::select! {
                 res = self.messages.recv() => {
                     let Ok((msg, _addr)) = res else {
-                        if matches!(res, Err(broadcast::error::RecvError::Lagged(_))) {
-                            warn!("NeighborMonitor: Netlink broadcast lagged");
+                        if let Err(broadcast::error::RecvError::Lagged(n)) = res {
+                            warn!(service = "NeighborMonitor", lost = n, "Netlink broadcast lagged");
                             continue;
                         }
                         break;
@@ -240,8 +240,8 @@ impl AsyncService for NeighborMonitor {
 
                 res = bus_rx.recv() => {
                     let Ok(timed_event) = res else {
-                        if matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
-                            warn!("NeighborMonitor: Event bus lagged, continuing");
+                        if let Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) = res {
+                            warn!(service = "NeighborMonitor", lost = n, "Event bus lagged");
                             continue;
                         }
                         break; // Channel closed

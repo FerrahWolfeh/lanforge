@@ -31,7 +31,7 @@ use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::packet_route::address::AddressAttribute;
 use std::net::{IpAddr, Ipv6Addr};
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use netlink_sys::SocketAddr;
 
@@ -147,13 +147,13 @@ impl AddressMonitor {
     ///
     /// This ensures the global state is seeded before services like RA/DHCP start.
     pub async fn initial_scan(&self) -> Result<InterfaceState, NetworkError> {
-        info!("InterfaceMonitor: Starting initial interface scan...");
+        debug!("InterfaceMonitor: Starting initial interface scan...");
 
         // We focus on the target interface for the return value,
         // but we could refresh others if needed.
         let state = self.refresh_interface(self.target_ifindex).await?;
 
-        info!("InterfaceMonitor: Initial scan complete.");
+        debug!("InterfaceMonitor: Initial scan complete.");
         Ok(state)
     }
 }
@@ -172,8 +172,8 @@ impl AsyncService for AddressMonitor {
             tokio::select! {
                 res = self.messages.recv() => {
                     let Ok((msg, _addr)) = res else {
-                        if matches!(res, Err(broadcast::error::RecvError::Lagged(_))) {
-                            warn!("InterfaceMonitor: Netlink broadcast lagged, skipping catch-up");
+                        if let Err(broadcast::error::RecvError::Lagged(n)) = res {
+                            warn!(service = "InterfaceMonitor", lost = n, "Netlink broadcast lagged");
                             continue;
                         }
                         break;
@@ -191,8 +191,8 @@ impl AsyncService for AddressMonitor {
 
                 res = bus_rx.recv() => {
                     let Ok(event) = res else {
-                        if matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
-                            warn!("AddressMonitor: Event bus lagged, continuing");
+                        if let Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) = res {
+                            warn!(service = "AddressMonitor", lost = n, "Event bus lagged");
                             continue;
                         }
                         break;

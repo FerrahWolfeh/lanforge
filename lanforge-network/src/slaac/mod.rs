@@ -77,15 +77,15 @@ impl AsyncService for SlaacTracker {
 
             tokio::select! {
                 () = tokio::time::sleep(sleep_duration) => {
-                    info!("SLAAC Tracker: Periodic sweep");
+                    debug!("SLAAC Tracker: Periodic sweep");
                     self.send_discovery_ping();
                     next_sweep = Instant::now() + Duration::from_hours(1); // 60 minutes
                 }
 
                 res = bus_rx.recv() => {
                     let Ok(timed_event) = res else {
-                        if matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
-                            warn!("SLAAC Tracker: Event bus lagged, continuing");
+                        if let Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) = res {
+                            warn!(service = "slaac_tracker", lost = n, "Event bus lagged");
                             continue;
                         }
                         break;

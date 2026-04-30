@@ -293,8 +293,8 @@ impl AsyncService for RaService {
                                 }
                             });
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            warn!("RA Server: Event bus lagged, continuing");
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!(service = "RA Server", lost = n, "Event bus lagged");
                         }
                         Err(_) => break,
                     }
@@ -441,8 +441,9 @@ fn send_ra_internal(
 
     if gua != state.last_gua || ula != state.last_ula {
         info!(
-            "RA: Internal prefix state updated: GUA={:?}, ULA={:?}",
-            gua, ula
+            gua = ?gua,
+            ula = ?ula,
+            "RA: Internal prefix state updated"
         );
         state.last_gua = gua;
         state.last_ula = ula;

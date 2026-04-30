@@ -4,7 +4,7 @@ use std::thread::JoinHandle;
 use crate::supervisor::supervise_async;
 use lanforge_core::{context::LanforgeContext, service::AsyncService};
 use tokio::runtime::Builder;
-use tracing::info;
+use tracing::debug;
 
 /// Centralized registry for Lanforge services.
 ///
@@ -39,7 +39,7 @@ impl ServiceRegistry {
         let name = meta.display_name.to_string();
         self.ids.insert(id);
 
-        info!("Spawning async service thread: {}", name);
+        debug!("Spawning async service thread: {}", name);
 
         let ctx_spawn = ctx.clone();
         let mut builder = std::thread::Builder::new().name(name.clone());

@@ -99,8 +99,8 @@ impl AsyncService for DbWorker {
                 // Event handling
                 res = bus_rx.recv() => {
                     let Ok(timed_event) = res else {
-                        if matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
-                            warn!("DbWorker: Event bus lagged, continuing");
+                        if let Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) = res {
+                            warn!(service = "DbWorker", lost = n, "Event bus lagged");
                             continue;
                         }
                         break;

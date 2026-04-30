@@ -114,8 +114,8 @@ impl AsyncService for ControlService {
                                 }
                             });
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            warn!("Control API: Event bus lagged, continuing");
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!(service = "ControlAPI", lost = n, "Event bus lagged");
                             continue;
                         }
                         Err(_) => break,
