@@ -682,8 +682,8 @@ impl Ipv6Pool {
 mod tests {
     use crate::test_utils::init_test_context;
     use lanforge_core::{
+        context::state::{DeviceUpdate, FieldUpdate},
         device::{Ipv6AddrOrSuffix, Origin},
-        state::{DeviceUpdate, FieldUpdate},
     };
 
     use super::*;

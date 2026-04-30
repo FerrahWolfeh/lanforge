@@ -55,9 +55,9 @@
 //! - **Running**: System is operational (false = shutdown)
 
 use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
+use crate::context::state::State;
 use crate::error::CoreError;
 use crate::identifiers::MacAddr;
-use crate::state::State;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;

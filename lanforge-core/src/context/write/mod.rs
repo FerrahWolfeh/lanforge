@@ -4,8 +4,8 @@ pub(crate) mod device;
 pub(crate) mod network;
 pub(crate) mod storage;
 
-use crate::{
-    context::LanforgeContext,
+use crate::context::{
+    LanforgeContext,
     state::{DeviceUpdate, State},
 };
 use parking_lot::RwLockWriteGuard;

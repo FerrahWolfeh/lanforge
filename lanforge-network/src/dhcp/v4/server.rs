@@ -450,7 +450,7 @@ mod tests {
     use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode};
     use dhcproto::{Decodable, Decoder, Encodable, Encoder};
     use lanforge_core::context::LanforgeContext;
-    use lanforge_core::state::DeviceUpdate;
+    use lanforge_core::context::state::DeviceUpdate;
     use std::net::Ipv4Addr;
     use std::time::{Duration, SystemTime};
 

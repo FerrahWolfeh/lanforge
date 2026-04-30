@@ -1,5 +1,5 @@
-use lanforge_core::bus::TimedEvent;
 use lanforge_core::context::state::LeaseTarget;
+use lanforge_core::{bus::TimedEvent, context::state::State};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -288,7 +288,7 @@ pub enum Response {
     /// Response for a DNS diagnostic query.
     DnsQuery(DnsQueryResponse),
     /// Response for a full context dump.
-    ContextDump(Box<lanforge_core::state::State>),
+    ContextDump(Box<State>),
     /// List of active DHCP leases.
     Leases(LeasesResponse),
     /// Hierarchical physical topology.

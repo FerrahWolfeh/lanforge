@@ -43,9 +43,9 @@ pub mod server;
 
 use lanforge_core::bus::{DeviceChange, DeviceEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::{DeviceUpdate, LeaseTarget};
 use lanforge_core::device::IPv6State;
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::{DeviceUpdate, LeaseTarget};
 use lanforge_core::utils::mac_from_eui64_link_local;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::Arc;

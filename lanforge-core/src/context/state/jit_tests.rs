@@ -1,6 +1,6 @@
+use crate::context::state::{DeviceUpdate, State};
 use crate::device::{Device, Origin};
 use crate::identifiers::MacAddr;
-use crate::state::{DeviceUpdate, State};
 use std::time::{Duration, SystemTime};
 
 #[test]

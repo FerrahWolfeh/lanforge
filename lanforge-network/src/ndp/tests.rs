@@ -1,9 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use lanforge_core::{
+    context::state::DeviceUpdate,
     identifiers::MacAddr,
     ndp::NeighborEvent,
-    state::DeviceUpdate,
     utils::{ip_matches_prefix, mac_from_eui64_link_local},
 };
 use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};

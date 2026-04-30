@@ -145,6 +145,7 @@ where
 mod tests {
     use super::*;
     use lanforge_core::bus::EventBus;
+    use lanforge_core::context::state::State;
     use lanforge_core::error::CoreError;
     use lanforge_core::service::LanforgeService;
     use lanforge_core::service::ServiceControl;
@@ -155,7 +156,7 @@ mod tests {
 
     fn init_test_context() -> LanforgeContext {
         let bus = Arc::new(EventBus::new());
-        let table = lanforge_core::state::State::new();
+        let table = State::new();
         LanforgeContext::new(bus, table, None)
     }
 

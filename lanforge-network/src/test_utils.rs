@@ -1,6 +1,7 @@
 #[cfg(test)]
 use lanforge_core::bus::EventBus;
-use lanforge_core::{context::LanforgeContext, state::State};
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::State;
 use std::sync::Arc;
 
 /// Initializes a fresh `LanforgeContext` for unit tests.

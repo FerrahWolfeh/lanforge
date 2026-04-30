@@ -237,8 +237,8 @@ impl IpPool {
 #[cfg(test)]
 mod tests {
     use lanforge_core::{
+        context::state::{DeviceUpdate, FieldUpdate},
         device::Origin,
-        state::{DeviceUpdate, FieldUpdate},
     };
 
     use super::*;

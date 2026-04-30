@@ -10,7 +10,7 @@ use lanforge_core::bus::TimedEvent;
 use lanforge_core::bus::{
     DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
-use lanforge_core::state::LeaseTarget;
+use lanforge_core::context::state::LeaseTarget;
 
 pub struct LogHandler {
     pub follow: bool,

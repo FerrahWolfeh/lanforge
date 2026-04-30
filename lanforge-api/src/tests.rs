@@ -2,9 +2,9 @@
 
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::{DeviceUpdate, FieldUpdate, State};
 use lanforge_core::device::Origin;
 use lanforge_core::identifiers::MacAddr;
-use lanforge_core::state::{DeviceUpdate, FieldUpdate, State};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 

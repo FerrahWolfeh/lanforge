@@ -4,11 +4,11 @@ use std::path::Path;
 use std::time::SystemTime;
 use tracing::{debug, info};
 
+use lanforge_core::context::state::{DeviceUpdate, State, StaticEntry};
 use lanforge_core::device::{
     Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
 };
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::{DeviceUpdate, State, StaticEntry};
 
 pub mod types;
 pub mod utils;

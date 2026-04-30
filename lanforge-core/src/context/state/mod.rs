@@ -3,7 +3,11 @@
 pub mod cache;
 pub mod handlers;
 pub mod indices;
+#[cfg(test)]
+pub mod jit_tests;
 pub mod network;
+#[cfg(test)]
+pub mod tests;
 
 use crate::bus::{DeviceChange, DeviceEvent, LanforgeEvent};
 use crate::device::{Device, DeviceClass, Ipv6AddrOrSuffix, Origin};

@@ -875,8 +875,8 @@ mod tests {
         v6::{DhcpOptions, IANA, OptionCode},
     };
     use lanforge_core::{
+        context::state::{DeviceUpdate, InterfaceState},
         device::Ipv6AddrOrSuffix,
-        state::{DeviceUpdate, InterfaceState},
     };
     use std::net::{Ipv6Addr, UdpSocket};
 

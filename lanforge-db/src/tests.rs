@@ -3,10 +3,9 @@
 use crate::engine::LeaseDb;
 use crate::worker::DbWorker;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
-use lanforge_core::context::state::DeviceUpdate;
+use lanforge_core::context::state::{DeviceUpdate, State};
 use lanforge_core::device::{Device, HostnameOrigin, IPv4State, IPv6State, V4Lease, V6PrefixLease};
 use lanforge_core::identifiers::{Duid, MacAddr};
-use lanforge_core::state::State;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

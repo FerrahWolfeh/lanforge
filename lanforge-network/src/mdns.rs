@@ -23,7 +23,7 @@
 
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::state::DeviceUpdate;
+use lanforge_core::context::state::DeviceUpdate;
 use pnet::datalink::interfaces;
 use std::fmt::Write;
 use std::io::ErrorKind;

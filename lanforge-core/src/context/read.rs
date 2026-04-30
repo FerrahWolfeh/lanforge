@@ -49,10 +49,10 @@ use std::{
 use parking_lot::RwLockReadGuard;
 
 use crate::{
+    context::state::{InterfaceState, State},
     context::{LanforgeContext, state::StaticRegistry},
     device::Device,
     identifiers::{Duid, MacAddr},
-    state::{InterfaceState, State},
 };
 
 impl LanforgeContext {
