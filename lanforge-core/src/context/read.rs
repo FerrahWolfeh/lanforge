@@ -27,13 +27,12 @@
 //!
 //! ```rust
 //! use lanforge_core::context::LanforgeContext;
-//! use lanforge_core::state::State;
 //! use lanforge_core::bus::EventBus;
 //! use lanforge_core::identifiers::MacAddr;
 //! use std::sync::Arc;
 //!
 //! let bus = Arc::new(EventBus::new());
-//! let ctx = LanforgeContext::new(bus, State::new(), None);
+//! let ctx = LanforgeContext::new(bus, Default::default(), None);
 //!
 //! let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 //! if let Some(device) = ctx.get_device(&mac) {

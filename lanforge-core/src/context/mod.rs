@@ -27,13 +27,12 @@
 //!
 //! ```rust
 //! use lanforge_core::context::LanforgeContext;
-//! use lanforge_core::state::State;
 //! use lanforge_core::bus::EventBus;
 //! use std::sync::Arc;
 //!
 //! let bus = Arc::new(EventBus::new());
-//! let state = State::new();
-//! let ctx = LanforgeContext::new(bus, state, None);
+//! // State is usually initialized via State::new() or from DB
+//! let ctx = LanforgeContext::new(bus, Default::default(), None);
 //!
 //! // Read
 //! let devices = ctx.all_devices();
@@ -197,13 +196,11 @@ impl LanforgeContext {
     ///
     /// ```rust
     /// use lanforge_core::context::LanforgeContext;
-    /// use lanforge_core::state::State;
     /// use lanforge_core::bus::EventBus;
     /// use std::sync::Arc;
     ///
     /// let bus = Arc::new(EventBus::new());
-    /// let state = State::new();
-    /// let ctx = LanforgeContext::new(bus, state, None);
+    /// let ctx = LanforgeContext::new(bus, Default::default(), None);
     ///
     /// assert!(ctx.is_running());
     /// assert!(ctx.target_ifindex().is_none());

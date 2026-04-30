@@ -339,11 +339,7 @@ impl State {
     }
 
     /// Centralized device mutation helper.
-    ///
-    /// Handles the remove -> unindex -> mutate -> reindex -> reinsert cycle
-    /// and emits the appropriate `DeviceEvent::Updated` if a change occurred.
-    /// Also emits `StatusChanged` if the device's online state flipped
-    fn mutate_device(
+    pub(crate) fn mutate_device(
         &mut self,
         mac: MacAddr,
         f: impl FnOnce(&mut Device) -> Option<DeviceChange>,

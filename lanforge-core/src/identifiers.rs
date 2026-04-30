@@ -313,3 +313,51 @@ impl AsRef<[u8; 6]> for MacAddr {
 }
 
 // Removed manual Display and Debug implementations for MacAddr.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mac_parse_display_roundtrip() {
+        let input = "e0:d5:5e:e2:d4:89";
+        let mac = MacAddr::parse(input).expect("should parse");
+        assert_eq!(mac.to_string(), input);
+    }
+
+    #[test]
+    fn mac_parse_uppercase() {
+        let mac = MacAddr::parse("E0:D5:5E:E2:D4:89").unwrap();
+        assert_eq!(mac.to_string(), "e0:d5:5e:e2:d4:89");
+    }
+
+    #[test]
+    fn mac_parse_invalid() {
+        assert!(MacAddr::parse("not-a-mac").is_none());
+        assert!(MacAddr::parse("e0:d5:5e:e2:d4").is_none());
+        assert!(MacAddr::parse("e0:d5:5e:e2:d4:89:ff").is_none());
+    }
+
+    #[test]
+    fn mac_from_array_and_asref() {
+        let arr: [u8; 6] = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let mac = MacAddr::from(arr);
+        assert_eq!(mac.as_ref(), &arr);
+        assert_eq!(mac.to_string(), "aa:bb:cc:dd:ee:ff");
+    }
+
+    #[test]
+    fn duid_from_str_roundtrip() {
+        let input = "00:03:00:01:aa:bb:cc:dd:ee:ff";
+        let duid = Duid::from_str(input).expect("should parse");
+        assert_eq!(duid.to_string(), input);
+    }
+
+    #[test]
+    fn duid_extract_mac() {
+        let mac_raw = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let duid = Duid::generate_ll_from_mac(mac_raw);
+        let extracted = duid.extract_mac().expect("should extract");
+        assert_eq!(extracted.0, mac_raw);
+    }
+}

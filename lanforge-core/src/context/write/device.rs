@@ -1,8 +1,16 @@
 //! Device-specific mutation wrappers.
 
+#[cfg(test)]
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use crate::{context::LanforgeContext, identifiers::MacAddr};
+use crate::context::LanforgeContext;
+use crate::identifiers::MacAddr;
+#[cfg(test)]
+use crate::{
+    device::{Device, Ipv6AddrOrSuffix},
+    identifiers::Duid,
+};
 
 impl LanforgeContext {
     /// Triggers the background garbage collection process.
@@ -30,5 +38,58 @@ impl LanforgeContext {
     ) -> Option<MacAddr> {
         self.write()
             .find_mac_by_hostname_jit(hostname, last_seen_threshold)
+    }
+
+    /// Adds a static device to the registry (test-only helper).
+    #[cfg(test)]
+    pub fn add_static_device(
+        &self,
+        mac: MacAddr,
+        hostname: String,
+        duid: Option<Duid>,
+        v4_static: Option<Ipv4Addr>,
+        v6_suffix: Option<Ipv6AddrOrSuffix>,
+    ) {
+        use crate::context::state::DeviceUpdate;
+
+        let _ = self.apply(DeviceUpdate::CliHostUpdated {
+            mac,
+            hostname: hostname.into(),
+            duid: duid.into(),
+            v4_static: v4_static.into(),
+            v6_suffix: v6_suffix.into(),
+            origin: crate::device::Origin::Cli,
+        });
+    }
+
+    /// Mutates a device directly (test-only helper).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutation closure is not executed, which would
+    /// indicate a logical error in the state transition.
+    #[cfg(test)]
+    pub fn mutate_device<F, R>(&self, mac: MacAddr, f: F) -> R
+    where
+        F: FnOnce(&mut Device) -> R,
+    {
+        let mut res = None;
+        self.write().mutate_device(mac, |dev| {
+            res = Some(f(dev));
+            None // No event emitted by this helper itself
+        });
+        res.expect("mutation failed")
+    }
+
+    /// Sets whether indexing is enabled (test-only helper).
+    #[cfg(test)]
+    pub fn set_indexing_enabled(&self, enabled: bool) {
+        self.write().set_indexing_enabled(enabled);
+    }
+
+    /// Inserts a device directly (test-only helper).
+    #[cfg(test)]
+    pub fn insert_device(&self, mac: MacAddr, dev: Device) {
+        self.write().insert_device(mac, dev);
     }
 }
