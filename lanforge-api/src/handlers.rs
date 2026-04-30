@@ -112,7 +112,7 @@ impl ClientContext {
         status.network.lan_iface.clone_from(&self.cfg.lan_iface);
         if let Some(ifindex) = self.ctx.target_ifindex() {
             let state = self.ctx.read();
-            if let Some(if_ips) = state.interface_ips.get(&ifindex) {
+            if let Some(if_ips) = state.network.interface_ips.get(&ifindex) {
                 if let Some((ip, prefix)) = if_ips.v4 {
                     status.network.lan_ipv4 = Some(ip.to_string());
                     status.network.lan_ipv4_cidr = Some(format!("{}/{}", ip, prefix));
@@ -171,7 +171,7 @@ impl ClientContext {
             slaac_addrs += dev
                 .v6
                 .iter()
-                .filter(|s| matches!(s, IPv6State::Slaac { .. }))
+                .filter(|s| matches!(s, IPv6State::Slaac(..)))
                 .count();
         }
 
@@ -332,10 +332,10 @@ impl ClientContext {
                     LeaseInfo {
                         ip: ip.to_string(),
                         expires: state
-                            .and_then(|s| match s {
-                                IPv6State::Dynamic(l) => Some(format_iso8601(l.expires)),
-                                IPv6State::Static(_) => Some("Static".to_string()),
-                                _ => None,
+                            .map(|s| match s {
+                                IPv6State::Dynamic(l) => format_iso8601(l.expires),
+                                IPv6State::Static(_) => "Static".to_string(),
+                                IPv6State::Slaac(_) => "—".to_string(),
                             })
                             .unwrap_or_else(|| "—".to_string()),
                         reserved: state.is_some_and(|s| matches!(s, IPv6State::Static(_)))
@@ -442,7 +442,10 @@ impl ClientContext {
         let _ = self
             .ctx
             .bus()
-            .publish(LanforgeEvent::Network(NetworkEvent::WolTriggered { mac, ip_hint }));
+            .publish(LanforgeEvent::Network(NetworkEvent::WolTriggered {
+                mac,
+                ip_hint,
+            }));
 
         Response::Success(SimpleSuccess {
             message: format!("Wake-on-LAN magic packet queued for {mac}"),
@@ -581,10 +584,13 @@ impl ClientContext {
         enabled: bool,
         duration_secs: Option<u64>,
     ) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::AdblockToggle {
-            enabled,
-            duration_secs,
-        }));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::AdblockToggle {
+                enabled,
+                duration_secs,
+            }));
         Response::Success(SimpleSuccess {
             message: if enabled {
                 "DNS Adblock enabled".to_string()
@@ -611,7 +617,10 @@ impl ClientContext {
     /// Triggers a reload of DNS blocklists.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
         Response::Success(SimpleSuccess {
             message: "DNS Adblock reload requested".to_string(),
         })
@@ -649,14 +658,14 @@ impl ClientContext {
 
         if only_devices {
             state.static_entries.clear();
-            state.ndp_cache.clear();
-            state.orphaned_v6.clear();
-            state.interface_ips.clear();
+            state.discovery.ndp_cache.clear();
+            state.discovery.orphaned_v6.clear();
+            state.network.interface_ips.clear();
         } else if only_orphans {
             state.devices.clear();
             state.static_entries.clear();
-            state.ndp_cache.clear();
-            state.interface_ips.clear();
+            state.discovery.ndp_cache.clear();
+            state.network.interface_ips.clear();
         }
 
         Response::ContextDump(Box::new(state))
@@ -664,7 +673,10 @@ impl ClientContext {
 
     /// Completely resets and re-seeds the database.
     pub(crate) async fn handle_db_reset(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbReset));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Storage(StorageEvent::DbReset));
         Response::Success(SimpleSuccess {
             message: "Database reset requested. Simulating cold start...".to_string(),
         })
@@ -807,8 +819,14 @@ impl ClientContext {
 
     /// Triggers active network scans.
     pub(crate) async fn handle_scan(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::ScanRequested));
-        let _ = self.ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Network(NetworkEvent::ScanRequested));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
         Response::Success(SimpleSuccess {
             message: "Active network scans triggered".to_string(),
         })
@@ -916,7 +934,7 @@ impl ClientContext {
     /// Removes a host entry.
     pub(crate) async fn handle_host_remove(&self, mac: String) -> Response {
         if let Some(mac_addr) = MacAddr::parse(&mac) {
-            let _ = self.ctx.remove_host(mac_addr);
+            let _ = self.ctx.apply(DeviceUpdate::HostRemoved { mac: mac_addr });
             Response::Success(SimpleSuccess {
                 message: format!("Host {mac} removed"),
             })
@@ -930,7 +948,10 @@ impl ClientContext {
     /// Prunes 'zombie' entries from the database.
     pub(crate) async fn handle_db_prune(&self) -> Response {
         let _ = self.ctx.apply(DeviceUpdate::PruneZombies);
-        let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbPrune));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Storage(StorageEvent::DbPrune));
         Response::Success(SimpleSuccess {
             message: "Pruning triggered".to_string(),
         })
@@ -980,9 +1001,12 @@ impl ClientContext {
     pub(crate) async fn handle_config_set_password(&self, password: String) -> Response {
         let password_hash = crate::auth::hash_password(&password);
 
-        let _ = self.ctx.bus().publish(LanforgeEvent::System(SystemEvent::ConfigUpdate {
-            password_hash,
-        }));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigUpdate {
+                password_hash,
+            }));
 
         Response::Success(SimpleSuccess {
             message:
@@ -1001,7 +1025,10 @@ impl ClientContext {
 
     /// Request the daemon to reload its configuration from disk.
     pub(crate) async fn handle_reload(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
         Response::Success(SimpleSuccess {
             message: "Reload signal sent successfully".to_string(),
         })
@@ -1009,7 +1036,10 @@ impl ClientContext {
 
     /// Gracefully shut down the daemon.
     pub(crate) async fn handle_shutdown(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::System(SystemEvent::Shutdown));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::Shutdown));
         Response::Success(SimpleSuccess {
             message: "Shutting down gracefully".to_string(),
         })
@@ -1017,7 +1047,10 @@ impl ClientContext {
 
     /// Perform a VACUUM operation on the underlying SQLite database.
     pub(crate) async fn handle_db_vacuum(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbVacuum));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Storage(StorageEvent::DbVacuum));
         Response::Success(SimpleSuccess {
             message: "Vacuum triggered".to_string(),
         })
@@ -1025,7 +1058,10 @@ impl ClientContext {
 
     /// Clear all transient system logs.
     pub(crate) async fn handle_db_log_clean(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbLogClean));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Storage(StorageEvent::DbLogClean));
         Response::Success(SimpleSuccess {
             message: "Log cleanup triggered".to_string(),
         })

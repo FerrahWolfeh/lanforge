@@ -49,16 +49,16 @@ pub mod api;
 #[cfg(feature = "http")]
 pub mod auth;
 pub mod config;
+#[cfg(feature = "dot")]
+pub mod dot;
 pub mod error;
 pub mod handlers;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg(feature = "http")]
 pub mod metrics;
-#[cfg(any(feature = "https", feature = "tls"))]
-pub mod tls;
-#[cfg(feature = "dot")]
-pub mod dot;
 pub mod server;
 #[cfg(test)]
 pub mod tests;
+#[cfg(any(feature = "https", feature = "tls"))]
+pub mod tls;

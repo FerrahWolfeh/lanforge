@@ -61,8 +61,12 @@ impl LanforgeContext {
         self.inner.state.read()
     }
 
-    /// Runs a read-only query against the device state.
-    pub fn query<F, R>(&self, f: F) -> R
+    /// Executes a read-only closure with direct access to the State.
+    /// Single lock acquisition for the entire closure scope.
+    ///
+    /// **Prefer this over individual getter methods** when performing
+    /// multiple lookups in a single operation to avoid repeated lock acquisitions.
+    pub fn with_state<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&State) -> R,
     {

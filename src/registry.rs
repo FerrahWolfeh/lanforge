@@ -1,12 +1,9 @@
 use std::collections::HashSet;
 use std::thread::JoinHandle;
 
-use crate::supervisor::{supervise_async, supervise_sync};
-use lanforge_core::{
-    context::LanforgeContext,
-    service::{AsyncService, SyncService},
-};
-use tokio::runtime::{Builder, Handle};
+use crate::supervisor::supervise_async;
+use lanforge_core::{context::LanforgeContext, service::AsyncService};
+use tokio::runtime::Builder;
 use tracing::info;
 
 /// Centralized registry for Lanforge services.
@@ -40,18 +37,17 @@ impl ServiceRegistry {
         let meta = service.meta();
         let id = meta.id.to_string();
         let name = meta.display_name.to_string();
-        let stack_size = meta.stack_kb * 1024;
         self.ids.insert(id);
 
-        info!(
-            "Spawning async service thread: {} (stack: {}KB)",
-            name, meta.stack_kb
-        );
+        info!("Spawning async service thread: {}", name);
 
         let ctx_spawn = ctx.clone();
-        let handle = std::thread::Builder::new()
-            .name(name.clone())
-            .stack_size(stack_size)
+        let mut builder = std::thread::Builder::new().name(name.clone());
+        if meta.stack_kb > 0 {
+            builder = builder.stack_size(meta.stack_kb * 1024);
+        }
+
+        let handle = builder
             .spawn(move || {
                 let rt = Builder::new_current_thread()
                     .enable_all()
@@ -60,37 +56,6 @@ impl ServiceRegistry {
                 rt.block_on(supervise_async(&ctx_spawn, factory));
             })
             .unwrap_or_else(|e| panic!("Failed to spawn async thread for {name}: {e}"));
-
-        self.handles.push(handle);
-    }
-
-    /// Spawns a synchronous service in a dedicated, named OS thread.
-    pub fn spawn_sync<S, F>(&mut self, ctx: &LanforgeContext, factory: F)
-    where
-        S: SyncService + 'static,
-        F: Fn() -> S + Send + Sync + 'static,
-    {
-        let service = factory();
-        let meta = service.meta();
-        let id = meta.id.to_string();
-        let name = meta.display_name.to_string();
-        let stack_size = meta.stack_kb * 1024;
-        let rt_handle = Handle::current();
-        self.ids.insert(id);
-
-        info!(
-            "Spawning sync service thread: {} (stack: {}KB)",
-            name, meta.stack_kb
-        );
-
-        let ctx_spawn = ctx.clone();
-        let handle = std::thread::Builder::new()
-            .name(name.clone())
-            .stack_size(stack_size)
-            .spawn(move || {
-                supervise_sync(&ctx_spawn, &rt_handle, factory);
-            })
-            .unwrap_or_else(|e| panic!("Failed to spawn sync thread for {name}: {e}"));
 
         self.handles.push(handle);
     }

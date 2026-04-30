@@ -161,12 +161,12 @@ pub fn build_tree(
     );
 
     // NDP Cache
-    if !state.ndp_cache.is_empty() {
+    if !state.discovery.ndp_cache.is_empty() {
         let mut ndp_items = Vec::new();
-        let mut ndp_keys: Vec<_> = state.ndp_cache.keys().collect();
+        let mut ndp_keys: Vec<_> = state.discovery.ndp_cache.keys().collect();
         ndp_keys.sort();
         for ip in ndp_keys {
-            let (mac, _) = &state.ndp_cache[ip];
+            let (mac, _) = &state.discovery.ndp_cache[ip];
             let host_info = if let Some(dev) = state.devices.get(mac) {
                 if !dev.hostname.name.is_empty() {
                     format!(" ({})", dev.hostname.name)
@@ -189,7 +189,7 @@ pub fn build_tree(
         state_children.push(
             TreeItem::new(
                 "state.ndp".to_string(),
-                Text::from(format!("ndp_cache ({})", state.ndp_cache.len())),
+                Text::from(format!("ndp_cache ({})", state.discovery.ndp_cache.len())),
                 ndp_items,
             )
             .unwrap(),
@@ -226,12 +226,12 @@ pub fn build_tree(
     }
 
     // Interface IPs
-    if !state.interface_ips.is_empty() {
+    if !state.network.interface_ips.is_empty() {
         let mut if_items = Vec::new();
-        let mut if_keys: Vec<_> = state.interface_ips.keys().collect();
+        let mut if_keys: Vec<_> = state.network.interface_ips.keys().collect();
         if_keys.sort();
         for idx in if_keys {
-            let if_state = &state.interface_ips[idx];
+            let if_state = &state.network.interface_ips[idx];
             if_items.push(TreeItem::new_leaf(
                 format!("if.{}", idx),
                 Text::from(Line::from(vec![
@@ -247,7 +247,10 @@ pub fn build_tree(
         state_children.push(
             TreeItem::new(
                 "state.interfaces".to_string(),
-                Text::from(format!("interface_ips ({})", state.interface_ips.len())),
+                Text::from(format!(
+                    "interface_ips ({})",
+                    state.network.interface_ips.len()
+                )),
                 if_items,
             )
             .unwrap(),

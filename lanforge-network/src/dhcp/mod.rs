@@ -12,10 +12,9 @@
 //!
 //! ## Service Architecture
 //!
-//! Both `DHCPv4` and `DHCPv6` services run as `SyncService` (blocking UDP I/O)
-//! with a 200ms read timeout. This avoids async runtime complexity in the
-//! hot packet processing path. Bus events are processed synchronously between
-//! packet reads.
+//! Both `DHCPv4` and `DHCPv6` services run as `AsyncService` (non-blocking UDP I/O)
+//! via the Tokio runtime. This ensures efficient resource usage and consistent
+//! event handling across all Lanforge services.
 
 pub mod identity;
 pub mod v4;

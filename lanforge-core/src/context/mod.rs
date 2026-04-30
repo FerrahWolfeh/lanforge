@@ -56,11 +56,12 @@
 
 use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
 use crate::error::CoreError;
+use crate::identifiers::MacAddr;
 use crate::state::State;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
 
 pub mod read;
@@ -84,6 +85,68 @@ pub struct EventCounters {
     pub dns_auth_hits: AtomicU64,
     #[cfg(feature = "adblock")]
     pub dns_blocked: AtomicU64,
+}
+
+/// Lightweight handle for service interaction with the event bus.
+///
+/// Provides bus subscription and shutdown detection without requiring
+/// manual `bus().subscribe()` + `is_running()` checks.
+/// Created via [`LanforgeContext::service_handle()`].
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// let mut handle = ctx.service_handle();
+/// loop {
+///     let Some(event) = handle.next_event().await else { break; };
+///     // handle event...
+/// }
+/// ```
+pub struct ServiceHandle {
+    rx: tokio::sync::broadcast::Receiver<TimedEvent>,
+    ctx: LanforgeContext,
+}
+
+impl ServiceHandle {
+    /// Returns the next event, or `None` if the system is shutting down.
+    ///
+    /// Automatically handles:
+    /// - `Shutdown` event detection → returns `None`
+    /// - `is_running()` check → returns `None`
+    /// - Broadcast lag recovery → skips lagged events, continues
+    pub async fn next_event(&mut self) -> Option<TimedEvent> {
+        use tokio::sync::broadcast::error::RecvError;
+        loop {
+            if !self.ctx.is_running() {
+                return None;
+            }
+            match self.rx.recv().await {
+                Ok(te) => {
+                    if matches!(te.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                        return None;
+                    }
+                    return Some(te);
+                }
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    }
+
+    /// Publishes an event to the bus.
+    #[must_use]
+    pub fn publish(&self, event: LanforgeEvent) -> usize {
+        self.ctx.bus().publish(event)
+    }
+}
+
+/// Lightweight snapshot of the state for persistence.
+///
+/// Contains only the data necessary for the database worker to flush
+/// state to disk, avoiding the need to clone the entire `State` struct.
+pub struct PersistenceSnapshot {
+    pub devices: HashMap<MacAddr, Arc<crate::device::Device>>,
+    pub timestamp: SystemTime,
 }
 
 #[derive(Clone)]
@@ -115,7 +178,7 @@ struct LanforgeContextInner {
     /// Timestamp of the last successful database flush.
     last_db_flush: RwLock<Option<SystemTime>>,
     /// Internal counters for event rates.
-    event_counters: Arc<EventCounters>,
+    event_counters: EventCounters,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -157,7 +220,7 @@ impl LanforgeContext {
                 dns_stats: RwLock::new(None),
                 dns_context: RwLock::new(None),
                 last_db_flush: RwLock::new(None),
-                event_counters: Arc::new(EventCounters::default()),
+                event_counters: EventCounters::default(),
             }),
         }
     }
@@ -194,10 +257,27 @@ impl LanforgeContext {
         *self.inner.last_db_flush.read()
     }
 
-    /// Returns a reference to the internal event counters.
+    /// Returns the internal event counters.
     #[must_use]
-    pub fn counters(&self) -> Arc<EventCounters> {
-        self.inner.event_counters.clone()
+    pub fn counters(&self) -> &EventCounters {
+        &self.inner.event_counters
+    }
+
+    /// Creates a lightweight service handle for event-driven services.
+    ///
+    /// The handle provides `next_event()` for the service main loop and
+    /// `publish()` for emitting events. Use this instead of manually calling
+    /// `bus().subscribe()` + `is_running()` in a loop.
+    ///
+    /// **NOTE**: The supervisor (`supervise_async`) still uses its own
+    /// `bus().subscribe()` for the outer shutdown select. This handle is
+    /// for use INSIDE `service.run()`.
+    #[must_use]
+    pub fn service_handle(&self) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe(),
+            ctx: self.clone(),
+        }
     }
 
     /// Increments the DNS blocked queries counter.
@@ -208,6 +288,19 @@ impl LanforgeContext {
             .dns_blocked
             .fetch_add(1, Ordering::Relaxed);
     }
+
+    /// Captures a snapshot of the device registry for database persistence.
+    ///
+    /// This acquires a read lock on the state and clones only the device map
+    /// (shallow clone of Arcs).
+    #[must_use]
+    pub fn snapshot_for_persistence(&self) -> PersistenceSnapshot {
+        let state = self.read();
+        PersistenceSnapshot {
+            devices: state.devices.clone(),
+            timestamp: SystemTime::now(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,130 +308,63 @@ impl LanforgeContext {
 // ---------------------------------------------------------------------------
 
 impl LanforgeContext {
-    /// Blocks the current THREAD (sync) until the database is ready.
-    ///
-    /// This is used by sync services to wait for DB initialization before
-    /// performing database-dependent operations.
-    ///
-    /// Exits early if:
-    /// - DB is already ready
-    /// - Shutdown is requested
-    /// - `self.is_running()` returns false
-    pub fn wait_for_db_sync(&self, rx: &Receiver<TimedEvent>) {
-        if self.is_db_ready() {
-            return;
-        }
-        while let Ok(timed_event) = rx.recv() {
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(SystemEvent::DbReady)
-            ) {
-                break;
-            }
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(SystemEvent::Shutdown)
-            ) || !self.is_running()
-            {
-                break;
-            }
-        }
-    }
-
-    /// Blocks the current THREAD (sync) until network interfaces are ready.
-    ///
-    /// This is used by sync services to wait for interface discovery before
-    /// starting network-dependent operations.
-    ///
-    /// Exits early if:
-    /// - Interfaces are already ready
-    /// - Shutdown is requested
-    /// - `self.is_running()` returns false
-    pub fn wait_for_interfaces_sync(&self, rx: &Receiver<TimedEvent>) {
-        if self.is_if_ready() {
-            return;
-        }
-        while let Ok(timed_event) = rx.recv() {
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(SystemEvent::InterfaceReady)
-            ) {
-                break;
-            }
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(SystemEvent::Shutdown)
-            ) || !self.is_running()
-            {
-                break;
-            }
-        }
-    }
-
-    /// Blocks the current task until network interfaces are ready (async version).
-    ///
-    /// This is the async counterpart to [`wait_for_interfaces_sync`], usable
-    /// from Tokio tasks.
+    /// Blocks until the network interfaces are ready.
     ///
     /// # Errors
     ///
-    /// Currently, this method always returns `Ok(())`. Future versions may return
-    /// `CoreError` if the internal bus becomes unreachable or if a timeout occurs.
+    /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_interfaces(&self) -> Result<(), CoreError> {
-        let mut rx = self.inner.bus.subscribe();
-        if self.is_if_ready() {
-            return Ok(());
-        }
-        while let Ok(timed_event) = rx.recv().await {
-            if !self.is_running()
-                || matches!(
-                    timed_event.event,
-                    LanforgeEvent::System(SystemEvent::Shutdown)
-                )
-            {
-                return Ok(());
-            }
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(SystemEvent::InterfaceReady)
-            ) {
-                break;
-            }
-        }
-        Ok(())
+        self.wait_for_condition(Self::is_if_ready, |event| {
+            matches!(event, LanforgeEvent::System(SystemEvent::InterfaceReady))
+        })
+        .await
     }
 
-    /// Blocks the current task until the database is ready (async version).
-    ///
-    /// This is the async counterpart to [`wait_for_db_sync`], usable
-    /// from Tokio tasks.
+    /// Blocks until the database is ready.
     ///
     /// # Errors
     ///
-    /// Currently, this method always returns `Ok(())`. Future versions may return
-    /// `CoreError` if the internal bus becomes unreachable or if a timeout occurs.
+    /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_db(&self) -> Result<(), CoreError> {
-        let mut rx = self.inner.bus.subscribe();
-        if self.is_db_ready() {
+        self.wait_for_condition(Self::is_db_ready, |event| {
+            matches!(event, LanforgeEvent::System(SystemEvent::DbReady))
+        })
+        .await
+    }
+
+    /// Generic async wait helper. Blocks until `is_ready()` returns true
+    /// or a matching event arrives on the bus.
+    async fn wait_for_condition(
+        &self,
+        is_ready: impl Fn(&Self) -> bool,
+        event_matches: impl Fn(&LanforgeEvent) -> bool,
+    ) -> Result<(), CoreError> {
+        if is_ready(self) {
             return Ok(());
         }
-        while let Ok(timed_event) = rx.recv().await {
-            if !self.is_running()
-                || matches!(
-                    timed_event.event,
-                    LanforgeEvent::System(SystemEvent::Shutdown)
-                )
-            {
+        let mut rx = self.inner.bus.subscribe();
+        loop {
+            // Re-check after subscribing to avoid race
+            if is_ready(self) {
                 return Ok(());
             }
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(SystemEvent::DbReady)
-            ) {
-                break;
+            match rx.recv().await {
+                Ok(timed_event) => {
+                    if !self.is_running()
+                        || matches!(
+                            timed_event.event,
+                            LanforgeEvent::System(SystemEvent::Shutdown)
+                        )
+                    {
+                        return Ok(());
+                    }
+                    if event_matches(&timed_event.event) {
+                        return Ok(());
+                    }
+                }
+                Err(_) => return Ok(()),
             }
         }
-        Ok(())
     }
 
     /// Returns true if this instance is currently running.

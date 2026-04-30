@@ -2,9 +2,7 @@ use crate::app::sd_notify_ready;
 use crate::config::Config;
 
 use anyhow::Result;
-use lanforge_core::bus::{
-    LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent,
-};
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_network::wol::send_wol_magic_packet;
 
@@ -40,7 +38,9 @@ pub async fn run_event_loop(
     stale_timer.tick().await;
 
     // Initial scan request to kick off discovery across all services
-    let _ = ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
 
     info!(
         "Event loop: expecting readiness from {} services: {:?}",
@@ -204,7 +204,7 @@ fn handle_wol_event(
 
     {
         let ctx_read = l_ctx.ctx.read();
-        if let Some(if_ips) = ctx_read.interface_ips.get(&l_ctx.target_ifindex)
+        if let Some(if_ips) = ctx_read.network.interface_ips.get(&l_ctx.target_ifindex)
             && let Some((ip, prefix)) = if_ips.v4
         {
             let ip_u32 = u32::from_be_bytes(ip.octets());

@@ -27,7 +27,7 @@
 //!
 //! ## Service Model
 //!
-//! Runs as `SyncService` (blocking UDP I/O, 200ms timeout) like `DHCPv4`.
+//! Runs as `AsyncService` (non-blocking UDP I/O via tokio) like `DHCPv4`.
 //!
 //! ## Module Structure
 //!
@@ -47,7 +47,6 @@ use lanforge_core::device::IPv6State;
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::{DeviceUpdate, LeaseTarget};
 use lanforge_core::utils::mac_from_eui64_link_local;
-use std::io::ErrorKind;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -63,7 +62,7 @@ use dhcproto::v6::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{ServiceControl, SyncBusReceiver, SyncService};
+use lanforge_core::service::{AsyncService, ServiceControl};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 ///
@@ -96,26 +95,30 @@ impl Dhcpv6Service {
     }
 }
 
-impl SyncService for Dhcpv6Service {
-    fn run(&mut self, ctrl: ServiceControl, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
+impl AsyncService for Dhcpv6Service {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         if !self.config.enabled {
             info!("DHCPv6 is disabled in config.");
             return Ok(());
         }
 
-        let socket = UdpSocket::bind(("::", self.config.port))
+        // Setup socket with multicast BEFORE converting to tokio
+        let std_socket = UdpSocket::bind(("::", self.config.port))
             .map_err(|e| CoreError::Generic(format!("Failed to bind DHCPv6 socket: {e}")))?;
-        socket
-            .set_read_timeout(Some(Duration::from_millis(200)))
-            .map_err(CoreError::Io)?;
 
-        if let Err(e) = socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
+        if let Err(e) = std_socket.join_multicast_v6(&ALL_DHCP_RELAY_AGENTS_AND_SERVERS, 0) {
             warn!("Failed to join ff02::1:2: {e}");
         }
 
+        std_socket.set_nonblocking(true).map_err(CoreError::Io)?;
+
+        let socket = tokio::net::UdpSocket::from_std(std_socket)
+            .map_err(|e| CoreError::Generic(format!("tokio UdpSocket conversion: {e}")))?;
+
         // 1. Wait for DB and Interface Ready
-        bus_rx.wait_for_db();
-        bus_rx.wait_for_interfaces();
+        info!("DHCPv6: Waiting for dependencies (DB and Interfaces)...");
+        self.ctx.wait_for_db().await?;
+        self.ctx.wait_for_interfaces().await?;
 
         // Read interface MAC to generate a legitimate DUID-LL
         let mac_str =
@@ -160,8 +163,6 @@ impl SyncService for Dhcpv6Service {
         }
 
         // 2. Re-sync GUA from global state (honoring configured interface)
-        // This ensures that if the prefix was discovered while we were waiting
-        // for DB/Interfaces, we catch up now.
         if let Some(ifindex) = pnet::datalink::interfaces()
             .iter()
             .find(|i| i.name == self.config.iface)
@@ -184,31 +185,29 @@ impl SyncService for Dhcpv6Service {
         }
 
         let mut buf = [0u8; 2048];
+        let mut handle = self.ctx.service_handle();
+
         info!("DHCPv6 state machine started");
         ctrl.signal_ready();
 
         loop {
-            if !self.ctx.is_running() {
-                break;
-            }
-
-            // 1. Process network packets
-            match socket.recv_from(&mut buf) {
-                Ok((len, peer)) => {
-                    self.handle_incoming_packet(&buf[..len], peer, &mut server, &socket);
-                }
-                Err(ref e)
-                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
-                Err(e) => warn!("DHCPv6 socket error: {e}"),
-            }
-
-            // 2. Process Bus events
-            for event in bus_rx.try_recv_all() {
-                if let Err(e) = self.handle_bus_event(event.event, &mut server, &socket) {
-                    if matches!(e, CoreError::Shutdown) {
-                        return Ok(());
+            tokio::select! {
+                res = socket.recv_from(&mut buf) => {
+                    match res {
+                        Ok((len, peer)) => {
+                            self.handle_incoming_packet(&buf[..len], peer, &mut server, &socket);
+                        }
+                        Err(e) => warn!("DHCPv6 socket error: {e}"),
                     }
-                    warn!("DHCPv6: Bus event error: {e}");
+                }
+                event = handle.next_event() => {
+                    let Some(timed_event) = event else { break; };
+                    if let Err(e) = self.handle_bus_event(timed_event.event, &mut server, &socket) {
+                        if matches!(e, CoreError::Shutdown) {
+                            return Ok(());
+                        }
+                        warn!("DHCPv6: Bus event error: {e}");
+                    }
                 }
             }
         }
@@ -222,7 +221,7 @@ impl Dhcpv6Service {
         payload: &[u8],
         peer: SocketAddr,
         server: &mut Dhcpv6Server,
-        socket: &UdpSocket,
+        socket: &tokio::net::UdpSocket,
     ) {
         let (peer_ip, scope_id) = match peer {
             SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
@@ -257,7 +256,7 @@ impl Dhcpv6Service {
                     self.config.port - 1
                 };
                 let dest_addr = SocketAddrV6::new(dest_ip, client_port, 0, scope_id);
-                let _ = socket.send_to(reply_bytes, dest_addr);
+                let _ = socket.try_send_to(reply_bytes, dest_addr.into());
                 apply_learned_state(
                     &self.ctx,
                     opt_mac,
@@ -274,7 +273,7 @@ impl Dhcpv6Service {
         &self,
         event: LanforgeEvent,
         server: &mut Dhcpv6Server,
-        socket: &UdpSocket,
+        socket: &tokio::net::UdpSocket,
     ) -> Result<(), CoreError> {
         match event {
             LanforgeEvent::Device(DeviceEvent::LeaseRelease {
@@ -332,7 +331,7 @@ impl Dhcpv6Service {
                         self.config.port - 1
                     };
                     let dest_addr = SocketAddrV6::new(ip, client_port, 0, 0);
-                    let _ = socket.send_to(&packet, dest_addr);
+                    let _ = socket.try_send_to(&packet, dest_addr.into());
                 }
             }
             LanforgeEvent::System(SystemEvent::Shutdown) => {
@@ -347,7 +346,7 @@ impl Dhcpv6Service {
     fn handle_prefix_change(
         &self,
         server: &mut Dhcpv6Server,
-        socket: &UdpSocket,
+        socket: &tokio::net::UdpSocket,
         gua: Option<Ipv6Addr>,
         preferred: u32,
         valid: u32,
@@ -393,7 +392,7 @@ impl Dhcpv6Service {
                                     self.config.port - 1
                                 };
                                 let dest_addr = SocketAddrV6::new(ll_ip, client_port, 0, 0);
-                                let _ = socket.send_to(&packet, dest_addr);
+                                let _ = socket.try_send_to(&packet, dest_addr.into());
                             }
                         }
                     }

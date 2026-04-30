@@ -247,7 +247,7 @@ impl Ipv6Pool {
         mac: Option<MacAddr>,
         prefixes: &[Ipv6Addr],
     ) -> Vec<Ipv6Addr> {
-        let mut dev_opt = ctx.query(|t| t.get_by_duid(duid));
+        let mut dev_opt = ctx.with_state(|t| t.get_by_duid(duid));
         if dev_opt.is_none()
             && let Some(m) = mac
         {
@@ -316,7 +316,7 @@ impl Ipv6Pool {
         iaid: u32,
         mac: Option<MacAddr>,
     ) -> Vec<Ipv6Addr> {
-        let mut dev_opt = ctx.query(|t| t.get_by_duid(duid));
+        let mut dev_opt = ctx.with_state(|t| t.get_by_duid(duid));
         if dev_opt.is_none()
             && let Some(m) = mac
         {
@@ -458,7 +458,7 @@ impl Ipv6Pool {
 
     #[must_use]
     pub fn has_binding(&self, ctx: &LanforgeContext, duid: &Duid, iaid: u32) -> bool {
-        let device_opt = ctx.query(|t| t.get_by_duid(duid));
+        let device_opt = ctx.with_state(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for state in &dev.v6 {
@@ -474,7 +474,7 @@ impl Ipv6Pool {
 
     #[must_use]
     pub fn has_prefix_binding(&self, ctx: &LanforgeContext, duid: &Duid, iaid: u32) -> bool {
-        let device_opt = ctx.query(|t| t.get_by_duid(duid));
+        let device_opt = ctx.with_state(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for pref in &dev.v6_prefixes {
@@ -489,7 +489,7 @@ impl Ipv6Pool {
     #[must_use]
     pub fn lookup(&self, ctx: &LanforgeContext, duid: &Duid, iaid: u32) -> Vec<Ipv6Addr> {
         let mut ips = Vec::new();
-        let device_opt = ctx.query(|t| t.get_by_duid(duid));
+        let device_opt = ctx.with_state(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for state in &dev.v6 {
@@ -510,7 +510,7 @@ impl Ipv6Pool {
         duid: &Duid,
         iaid: u32,
     ) -> Option<(Ipv6Addr, u8)> {
-        let device_opt = ctx.query(|t| t.get_by_duid(duid));
+        let device_opt = ctx.with_state(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for pref in &dev.v6_prefixes {
@@ -624,7 +624,7 @@ impl Ipv6Pool {
         _requested: Option<(Ipv6Addr, u8)>,
     ) -> Option<(Ipv6Addr, u8)> {
         // Sticky prefix check globally
-        let device_opt = ctx.query(|t| t.get_by_duid(duid));
+        let device_opt = ctx.with_state(|t| t.get_by_duid(duid));
 
         if let Some(dev) = device_opt {
             for pref in &dev.v6_prefixes {

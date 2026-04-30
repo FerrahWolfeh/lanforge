@@ -62,13 +62,7 @@ pub fn format_v6_state(state: &IPv6State) -> String {
     match state {
         IPv6State::Static(s) => format!("Static({})", s),
         IPv6State::Dynamic(lease) => format!("DHCP({})", lease.ip),
-        IPv6State::Slaac { ip, last_seen } => {
-            format!(
-                "Slaac {{ ip: {}, last_seen: {} }}",
-                ip,
-                format_relative_time(*last_seen)
-            )
-        }
+        IPv6State::Slaac(ip) => format!("SLAAC({})", ip),
     }
 }
 

@@ -59,8 +59,8 @@ impl DbWorker {
             return;
         }
 
-        let table = self.ctx.read().clone();
-        if let Err(e) = db.save_table(&table).await {
+        let snapshot = self.ctx.snapshot_for_persistence();
+        if let Err(e) = db.save_snapshot(&snapshot).await {
             error!("Failed to save device table to database: {e}");
         } else {
             debug!("Device table persisted to database");
@@ -86,7 +86,10 @@ impl AsyncService for DbWorker {
 
         info!("Database worker started");
         self.ctx.set_db_ready(true);
-        let _ = self.ctx.bus().publish(LanforgeEvent::System(SystemEvent::DbReady));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::DbReady));
 
         // Explicitly signal readiness to the event loop
         ctrl.signal_ready();

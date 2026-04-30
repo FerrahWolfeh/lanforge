@@ -26,16 +26,14 @@ pub use self::system::SystemEvent;
 pub struct TimedEvent {
     pub event: LanforgeEvent,
     pub timestamp: SystemTime,
-    pub module: Option<String>,
 }
 
 impl TimedEvent {
     #[must_use]
-    pub fn new(event: LanforgeEvent, module: Option<String>) -> Self {
+    pub fn new(event: LanforgeEvent) -> Self {
         Self {
             event,
             timestamp: SystemTime::now(),
-            module,
         }
     }
 }
@@ -108,19 +106,12 @@ impl EventBus {
 
     #[must_use]
     pub fn publish(&self, event: LanforgeEvent) -> usize {
-        self.tx.send(TimedEvent::new(event, None)).unwrap_or(0)
+        self.tx.send(TimedEvent::new(event)).unwrap_or(0)
     }
 
     #[must_use]
     pub fn publish_timed(&self, event: TimedEvent) -> usize {
         self.tx.send(event).unwrap_or(0)
-    }
-
-    #[must_use]
-    pub fn publish_with_module(&self, event: LanforgeEvent, module: &str) -> usize {
-        self.tx
-            .send(TimedEvent::new(event, Some(module.to_string())))
-            .unwrap_or(0)
     }
 }
 

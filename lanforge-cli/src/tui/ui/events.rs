@@ -20,7 +20,6 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState, _auto_scroll: bool) {
         .rev()
         .map(|e| {
             let ts: DateTime<Utc> = e.timestamp.into();
-            let module = e.module.as_deref().unwrap_or("core");
 
             let (event_type, color) = match &e.event {
                 LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => {
@@ -45,10 +44,6 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState, _auto_scroll: bool) {
                 Span::styled(
                     ts.format("%H:%M:%S ").to_string(),
                     Style::default().fg(theme::TEXT_DIM),
-                ),
-                Span::styled(
-                    format!("{:<6} ", module),
-                    Style::default().fg(theme::MOCHA_PEACH),
                 ),
                 Span::styled(event_type, Style::default().fg(color).bold()),
                 Span::raw(format!(" {:?}", e.event)),

@@ -39,17 +39,17 @@ use lanforge_core::identifiers::MacAddr;
 use lanforge_core::state::{DeviceUpdate, LeaseTarget};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
+use tokio::net::UdpSocket as TokioUdpSocket;
 use tracing::{info, warn};
 
 use raw::RawSender;
 use server::{DhcpServer, HandleResult};
 
 use crate::dhcp::v4::config::Dhcpv4Config;
-use crate::error::NetworkError;
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{ServiceControl, SyncBusReceiver, SyncService};
+use lanforge_core::service::{AsyncService, ServiceControl};
 
 #[lanforge_macros::lanforge_service(
     id = "dhcpv4",
@@ -75,12 +75,12 @@ impl Dhcpv4Service {
     }
 }
 
-impl SyncService for Dhcpv4Service {
-    fn run(&mut self, ctrl: ServiceControl, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
+impl AsyncService for Dhcpv4Service {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         // 1. Wait for DB and Interface Ready
         info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
-        bus_rx.wait_for_db();
-        bus_rx.wait_for_interfaces();
+        self.ctx.wait_for_db().await?;
+        self.ctx.wait_for_interfaces().await?;
 
         let mut server = DhcpServer::new(self.cfg.clone(), self.ctx.clone());
 
@@ -88,11 +88,7 @@ impl SyncService for Dhcpv4Service {
         let registry = self.ctx.get_static_registry();
         server.pool.reserve_statics(registry.v4_ips());
 
-        let socket = bind_dhcp_socket_sync(&self.cfg.iface, self.cfg.port)
-            .map_err(|e| CoreError::Generic(e.to_string()))?;
-        socket
-            .set_read_timeout(Some(Duration::from_millis(200)))
-            .map_err(CoreError::Io)?;
+        let socket = bind_dhcp_socket_async(&self.cfg.iface, self.cfg.port)?;
 
         let mut raw_tx =
             RawSender::new(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -100,39 +96,36 @@ impl SyncService for Dhcpv4Service {
         ctrl.signal_ready();
 
         let mut buf = [0u8; 1500];
-        let mut last_cleanup = Instant::now();
+        let mut handle = self.ctx.service_handle();
+        let mut cleanup_timer = tokio::time::interval(Duration::from_mins(1));
 
         loop {
-            if !self.ctx.is_running() {
-                break;
-            }
-
-            // 1. Process network packets
-            match socket.recv_from(&mut buf) {
-                Ok((len, _)) => {
-                    self.handle_incoming_packet(&buf[..len], &mut server, &mut raw_tx, &socket);
-                }
-                Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut => {}
-                Err(e) => warn!("DHCPv4: recv_from error: {e}"),
-            }
-
-            // 2. Process Bus events
-            for timed_event in bus_rx.try_recv_all() {
-                if let Err(e) = self.handle_bus_event(&timed_event.event, &mut server, &mut raw_tx)
-                {
-                    if matches!(e, CoreError::Shutdown) {
-                        return Ok(());
+            tokio::select! {
+                res = socket.recv_from(&mut buf) => {
+                    match res {
+                        Ok((len, _)) => {
+                            self.handle_incoming_packet(
+                                &buf[..len],
+                                &mut server,
+                                &mut raw_tx,
+                                &socket,
+                            );
+                        }
+                        Err(e) => warn!("DHCPv4: recv_from error: {e}"),
                     }
-                    warn!("DHCPv4: Bus event error: {e}");
                 }
-            }
-
-            // 3. Periodic Cleanup
-            if last_cleanup.elapsed() >= Duration::from_mins(1) {
-                server.pool.cleanup_quarantine(Instant::now());
-                last_cleanup = Instant::now();
+                event = handle.next_event() => {
+                    let Some(timed_event) = event else { break; };
+                    if let Err(e) = self.handle_bus_event(&timed_event.event, &mut server, &mut raw_tx) {
+                        if matches!(e, CoreError::Shutdown) {
+                            return Ok(());
+                        }
+                        warn!("DHCPv4: Bus event error: {e}");
+                    }
+                }
+                _ = cleanup_timer.tick() => {
+                    server.pool.cleanup_quarantine(std::time::Instant::now());
+                }
             }
         }
         Ok(())
@@ -145,7 +138,7 @@ impl Dhcpv4Service {
         data: &[u8],
         server: &mut DhcpServer,
         raw_tx: &mut RawSender,
-        socket: &UdpSocket,
+        socket: &TokioUdpSocket,
     ) {
         if let Ok(msg) = Message::decode(&mut Decoder::new(data))
             && msg.opcode() == Opcode::BootRequest
@@ -182,7 +175,7 @@ impl Dhcpv4Service {
                             );
                         } else {
                             let relay_addr = SocketAddrV4::new(giaddr, self.cfg.port);
-                            let _ = socket.send_to(&packet, relay_addr);
+                            let _ = socket.try_send_to(&packet, relay_addr.into());
                         }
 
                         if let Some(assigned_ip) = server.last_assignment_for() {
@@ -243,11 +236,7 @@ impl Dhcpv4Service {
                     let _ = raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref());
                 }
             }
-            LanforgeEvent::Device(DeviceEvent::Updated {
-                mac,
-                change,
-                ..
-            }) => {
+            LanforgeEvent::Device(DeviceEvent::Updated { mac, change, .. }) => {
                 if let DeviceChange::V4StaticChanged { ip } = change.as_ref() {
                     match ip {
                         Some(v) => {
@@ -271,21 +260,25 @@ impl Dhcpv4Service {
     }
 }
 
-/// Binds UDP with `SO_BROADCAST` and `SO_BINDTODEVICE`. (Sync version)
-fn bind_dhcp_socket_sync(iface: &str, port: u16) -> Result<UdpSocket, NetworkError> {
+/// Binds a tokio UDP socket with `SO_BROADCAST` and `SO_BINDTODEVICE`.
+fn bind_dhcp_socket_async(iface: &str, port: u16) -> Result<TokioUdpSocket, CoreError> {
     let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
 
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| NetworkError::Socket(format!("socket(AF_INET, SOCK_DGRAM): {e}")))?;
+        .map_err(|e| CoreError::Generic(format!("socket(AF_INET, SOCK_DGRAM): {e}")))?;
 
-    sock.set_reuse_address(true)?;
-    sock.set_broadcast(true)?;
-
+    sock.set_reuse_address(true)
+        .map_err(|e| CoreError::Generic(e.to_string()))?;
+    sock.set_broadcast(true)
+        .map_err(|e| CoreError::Generic(e.to_string()))?;
     sock.bind_device(Some(iface.as_bytes()))
-        .map_err(|e| NetworkError::Socket(format!("SO_BINDTODEVICE({iface}): {e}")))?;
-
+        .map_err(|e| CoreError::Generic(format!("SO_BINDTODEVICE({iface}): {e}")))?;
+    sock.set_nonblocking(true)
+        .map_err(|e| CoreError::Generic(e.to_string()))?;
     sock.bind(&socket2::SockAddr::from(addr))
-        .map_err(|e| NetworkError::Socket(format!("bind(0.0.0.0:{port}): {e}")))?;
+        .map_err(|e| CoreError::Generic(format!("bind(0.0.0.0:{port}): {e}")))?;
 
-    Ok(sock.into())
+    let std_socket: UdpSocket = sock.into();
+    TokioUdpSocket::from_std(std_socket)
+        .map_err(|e| CoreError::Generic(format!("tokio UdpSocket conversion: {e}")))
 }

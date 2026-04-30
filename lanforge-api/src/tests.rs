@@ -239,7 +239,7 @@ async fn test_granular_querying() {
     let resp = ctx.handle_context_dump(true, false).await;
     if let Response::ContextDump(state) = resp {
         assert!(!state.devices.is_empty());
-        assert!(state.orphaned_v6.is_empty());
+        assert!(state.discovery.orphaned_v6.is_empty());
     } else {
         panic!("Expected ContextDump");
     }
@@ -248,7 +248,7 @@ async fn test_granular_querying() {
     let resp = ctx.handle_context_dump(false, true).await;
     if let Response::ContextDump(state) = resp {
         assert!(state.devices.is_empty());
-        assert!(!state.orphaned_v6.is_empty());
+        assert!(!state.discovery.orphaned_v6.is_empty());
     } else {
         panic!("Expected ContextDump");
     }

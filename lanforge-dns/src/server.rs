@@ -345,12 +345,7 @@ pub async fn handle_query(
     }
 
     let Some(question) = WireQuestion::parse(data) else {
-        return handle_query_fallback(
-            data,
-            ctx,
-            src_addr,
-        )
-        .await;
+        return handle_query_fallback(data, ctx, src_addr).await;
     };
 
     // PHASE 2: Local Resolution Attempt

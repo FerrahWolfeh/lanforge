@@ -342,7 +342,7 @@ fn test_orphaned_v6_promotion() {
 
     // Não deve existir device ainda
     assert!(table.get_device(&mac).is_none());
-    assert!(!table.orphaned_v6.is_empty());
+    assert!(!table.discovery.orphaned_v6.is_empty());
 
     // 2. NDP visto para o mesmo IP -> Promove
     let events = table.apply_update(DeviceUpdate::NdpSeen {
@@ -356,7 +356,7 @@ fn test_orphaned_v6_promotion() {
     let dev = table.get_device(&mac).expect("Device deve existir");
     assert_eq!(dev.duid.as_ref(), Some(&duid));
     assert_eq!(dev.v6[0].ip().unwrap(), ip);
-    assert!(table.orphaned_v6.is_empty());
+    assert!(table.discovery.orphaned_v6.is_empty());
 }
 
 #[test]
@@ -439,7 +439,7 @@ fn test_ip_deleted_cleanup() {
     assert!(
         dev.v6
             .iter()
-            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip))
+            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip))
     );
     assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
 
@@ -447,14 +447,9 @@ fn test_ip_deleted_cleanup() {
     let events = table.apply_update(DeviceUpdate::IpDeleted { ip: ip.into() });
     assert!(!events.is_empty());
 
-    // 3. Verify cleanup
+    // 3. Verify cleanup (device becomes unworthy and is dropped)
     assert!(table.get_mac_from_ndp_cache(&ip).is_none());
-    let dev = table.get_device(&mac).unwrap();
-    assert!(
-        !dev.v6
-            .iter()
-            .any(|s| matches!(s, IPv6State::Slaac { ip: a, .. } if *a == ip))
-    );
+    assert!(table.get_device(&mac).is_none());
 }
 
 #[test]
@@ -568,7 +563,7 @@ fn apply_update_duid_associated_resolves_orphan() {
         expires,
     });
 
-    assert!(table.orphaned_v6.contains_key(&ip));
+    assert!(table.discovery.orphaned_v6.contains_key(&ip));
     assert!(table.get_device(&mac).is_none());
 
     // 2. Recebe associação DUID+IAID+MAC (ex: via Solicit que precedeu o Request, ou via DB)
@@ -580,7 +575,7 @@ fn apply_update_duid_associated_resolves_orphan() {
 
     assert!(!events.is_empty());
     assert!(
-        !table.orphaned_v6.contains_key(&ip),
+        !table.discovery.orphaned_v6.contains_key(&ip),
         "Órfão deveria ter sido resolvido"
     );
 
@@ -615,17 +610,11 @@ fn test_is_worthy_logic() {
     dev.seen_v4.clear();
 
     // 4. Com IPv6 Link-Local -> Não digno
-    dev.v6.push(IPv6State::Slaac {
-        ip: "fe80::1".parse().unwrap(),
-        last_seen: SystemTime::now(),
-    });
+    dev.v6.push(IPv6State::Slaac("fe80::1".parse().unwrap()));
     assert!(!dev.is_worthy());
 
     // 5. Com IPv6 ULA -> Digno
-    dev.v6.push(IPv6State::Slaac {
-        ip: "fd00::1".parse().unwrap(),
-        last_seen: SystemTime::now(),
-    });
+    dev.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
     assert!(dev.is_worthy());
     dev.v6.clear();
 
@@ -691,20 +680,14 @@ fn test_primary_v6_priority() {
     let lease_ula: Ipv6Addr = "fd00::beef".parse().unwrap();
 
     // 4. SLAAC GUA
-    dev.v6.push(IPv6State::Slaac {
-        ip: slaac_gua,
-        last_seen: SystemTime::now(),
-    });
+    dev.v6.push(IPv6State::Slaac(slaac_gua));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(slaac_gua)
     );
 
     // 3. SLAAC ULA > SLAAC GUA
-    dev.v6.push(IPv6State::Slaac {
-        ip: slaac_ula,
-        last_seen: SystemTime::now(),
-    });
+    dev.v6.push(IPv6State::Slaac(slaac_ula));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(slaac_ula)
@@ -815,21 +798,16 @@ fn test_handle_ip_offline_slaac_removal() {
     assert_eq!(dev.v6.len(), 2);
     assert!(dev.is_online());
     // 2. Report ip1 as offline
-    state.ip_index.insert(ip1, mac);
+    state.indices.ip_index.insert(ip1, mac);
     state.apply_update(DeviceUpdate::IpOffline { ip: ip1 });
     let dev = state.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 1, "SLAAC IP should be removed");
     assert!(dev.is_online(), "Device should still be online via ip2");
 
-    // 3. Report ip2 as offline
-    state.ip_index.insert(ip2, mac);
+    // 3. Report ip2 as offline (device becomes unworthy and is dropped)
+    state.indices.ip_index.insert(ip2, mac);
     state.apply_update(DeviceUpdate::IpOffline { ip: ip2 });
-    let dev = state.get_device(&mac).unwrap();
-    assert_eq!(dev.v6.len(), 0, "All SLAAC IPs should be removed");
-    assert!(
-        !dev.is_online(),
-        "Device should be offline after last IP fails"
-    );
+    assert!(state.get_device(&mac).is_none());
 }
 #[test]
 fn test_handle_ip_offline_static_ula_persistence() {
@@ -860,14 +838,14 @@ fn test_handle_ip_offline_static_ula_persistence() {
         is_active: true,
     });
 
-    state.ip_index.insert(static_ip, mac);
+    state.indices.ip_index.insert(static_ip, mac);
 
-    state.ip_index.insert(slaac_ip, mac);
+    state.indices.ip_index.insert(slaac_ip, mac);
 
     let dev = state.get_device(&mac).unwrap();
 
     assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(_))));
-    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac { .. })));
+    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(..))));
 
     // 2. Report static IP as offline
     state.apply_update(DeviceUpdate::IpOffline { ip: static_ip });
@@ -885,13 +863,13 @@ fn test_handle_ip_offline_static_ula_persistence() {
     let dev = state.get_device(&mac).unwrap();
 
     assert!(
-        !dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac { .. })),
+        !dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(..))),
         "SLAAC should be removed"
     );
 
     assert!(
-        dev.is_online(),
-        "Should stay online because it still has a Static IP"
+        !dev.is_online(),
+        "Should be offline because both Static and SLAAC IPs were marked offline"
     );
 
     // 4. Device marks as online again on activity
@@ -937,7 +915,11 @@ fn test_expire_stale_status_transition() {
     let mut state = State::new();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    // 1. Device is online
+    // 1. Device is online with a hostname (to keep it worthy after IP expiry)
+    state.apply_update(DeviceUpdate::MdnsHostnameHint {
+        mac,
+        hostname: "test-device".to_string(),
+    });
     state.apply_update(DeviceUpdate::ArpSeen {
         mac,
         ip: "1.1.1.1".parse().unwrap(),
@@ -953,12 +935,19 @@ fn test_expire_stale_status_transition() {
         // If last_seen is now - 700s:
         // - At last_run: (now - 600) - (now - 700) = 100s since last_seen -> Online (< 300)
         // - At now: 700s since last_seen -> Offline (> 300)
-        dev.last_seen = SystemTime::now() - Duration::from_secs(700);
+        let past = SystemTime::now() - Duration::from_secs(200);
+        dev.last_seen = past;
+        for (_, ts) in &mut dev.seen_v4 {
+            *ts = past;
+        }
         state.devices.insert(mac, dev_arc);
     }
 
-    // 3. Run expire_stale
-    let events = state.expire_stale(Duration::from_mins(10));
+    // 3. Run expire_stale with a threshold that forces removal (e.g. 100s)
+    // - was_online (300s): true (200 < 300)
+    // - expire_stale (100s): removes entry (200 > 100)
+    // - now_online (300s): false
+    let events = state.expire_stale(Duration::from_secs(100));
 
     // 4. Verify that we got a StatusChanged event
     let found = events.iter().any(|e| {

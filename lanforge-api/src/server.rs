@@ -347,7 +347,9 @@ where
 
             let mut rx = ctx.ctx.bus().subscribe();
             while let Ok(msg) = rx.recv().await {
-                if !ctx.ctx.is_running() || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                if !ctx.ctx.is_running()
+                    || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown))
+                {
                     break;
                 }
                 if write_response(
@@ -369,7 +371,9 @@ where
 
             let mut rx = ctx.ctx.bus().subscribe();
             while let Ok(msg) = rx.recv().await {
-                if !ctx.ctx.is_running() || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                if !ctx.ctx.is_running()
+                    || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown))
+                {
                     break;
                 }
                 if write_response(

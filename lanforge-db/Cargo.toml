@@ -4,7 +4,7 @@ version = "0.5.0"
 edition = "2024"
 
 [features]
-default = ["sqlite", "adblock"]
+default = ["sqlite", "adblock", "postgres"]
 sqlite = ["sqlx/sqlite"]
 postgres = ["sqlx/postgres"]
 adblock = ["lanforge-core/adblock"]

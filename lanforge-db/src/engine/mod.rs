@@ -1,3 +1,4 @@
+use lanforge_core::context::PersistenceSnapshot;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::time::SystemTime;
@@ -167,6 +168,57 @@ impl LeaseDb {
             }
         }
         debug!("State persisted successfully");
+        Ok(())
+    }
+
+    pub async fn save_snapshot(&self, snapshot: &PersistenceSnapshot) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => {
+                let mut tx = p.begin().await.map_err(LeaseDbError::TransactionFailed)?;
+                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac FROM devices")
+                    .fetch_all(&mut *tx)
+                    .await?;
+
+                for device in snapshot.devices.values() {
+                    sqlite::upsert_device(&mut tx, device).await?;
+                }
+
+                for db_mac in db_macs {
+                    if !snapshot.devices.keys().any(|m| m.to_string() == db_mac) {
+                        sqlx::query("DELETE FROM devices WHERE mac = ?")
+                            .bind(&db_mac)
+                            .execute(&mut *tx)
+                            .await?;
+                    }
+                }
+
+                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+            }
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => {
+                let mut tx = p.begin().await.map_err(LeaseDbError::TransactionFailed)?;
+                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac FROM devices")
+                    .fetch_all(&mut *tx)
+                    .await?;
+
+                for device in snapshot.devices.values() {
+                    postgres::upsert_device(&mut tx, device).await?;
+                }
+
+                for db_mac in db_macs {
+                    if !snapshot.devices.keys().any(|m| m.to_string() == db_mac) {
+                        sqlx::query("DELETE FROM devices WHERE mac = $1")
+                            .bind(&db_mac)
+                            .execute(&mut *tx)
+                            .await?;
+                    }
+                }
+
+                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+            }
+        }
+        debug!("Snapshot persisted successfully");
         Ok(())
     }
 

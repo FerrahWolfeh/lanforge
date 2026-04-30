@@ -1,6 +1,6 @@
+use crate::identifiers::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
-use crate::identifiers::MacAddr;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NetworkEvent {

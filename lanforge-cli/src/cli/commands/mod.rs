@@ -1,3 +1,4 @@
+pub mod config;
 pub mod db;
 pub mod devices;
 pub mod dns;
@@ -9,8 +10,8 @@ pub mod status;
 pub mod topology;
 pub mod whois;
 pub mod wol;
-pub mod config;
 
+pub use config::ConfigHandler;
 pub use db::DbHandler;
 pub use devices::DevicesHandler;
 pub use dns::DnsCommand;
@@ -22,7 +23,6 @@ pub use status::StatusHandler;
 pub use topology::TopologyHandler;
 pub use whois::WhoisHandler;
 pub use wol::WolCommand;
-pub use config::ConfigHandler;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;

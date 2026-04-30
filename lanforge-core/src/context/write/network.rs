@@ -1,10 +1,10 @@
 //! Network-specific mutation wrappers.
 
-use std::net::Ipv6Addr;
 use crate::{
     context::LanforgeContext,
     state::{DeviceUpdate, InterfaceState},
 };
+use std::net::Ipv6Addr;
 
 impl LanforgeContext {
     /// Signals a global IPv6 GUA change for an interface.

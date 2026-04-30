@@ -76,7 +76,6 @@ impl LogDb {
             "CREATE TABLE IF NOT EXISTS system_logs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp  INTEGER NOT NULL,
-                module     TEXT,
                 event_json TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
@@ -110,9 +109,8 @@ impl LogDb {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        sqlx::query("INSERT INTO system_logs (timestamp, module, event_json) VALUES (?, ?, ?)")
+        sqlx::query("INSERT INTO system_logs (timestamp, event_json) VALUES (?, ?)")
             .bind(now_secs)
-            .bind(&timed_event.module)
             .bind(json)
             .execute(&self.pool)
             .await?;
@@ -228,24 +226,21 @@ impl LogDb {
     /// Retrieves the most recent log entries.
     pub async fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, LeaseDbError> {
         let limit = limit as i64;
-        let rows = sqlx::query(
-            "SELECT timestamp, module, event_json FROM system_logs ORDER BY id DESC LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT timestamp, event_json FROM system_logs ORDER BY id DESC LIMIT ?")
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?;
 
         let mut entries = Vec::new();
         for row in rows {
             let timestamp: i64 = row.get("timestamp");
-            let module: Option<String> = row.get("module");
             let event_json: String = row.get("event_json");
 
             if let Ok(event) = serde_json::from_str::<LanforgeEvent>(&event_json) {
                 entries.push(TimedEvent {
                     event,
                     timestamp: UNIX_EPOCH + Duration::from_secs(timestamp as u64),
-                    module,
                 });
             }
         }

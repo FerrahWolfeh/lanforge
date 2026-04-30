@@ -195,7 +195,7 @@ async fn persist_slaac_addrs(
     v6: &[IPv6State],
 ) -> Result<(), LeaseDbError> {
     for state in v6 {
-        if let IPv6State::Slaac { ip, .. } = state {
+        if let IPv6State::Slaac(ip) = state {
             let ip_str = ip.to_string();
             sqlx::query(
                 "INSERT INTO slaac_addrs (mac, ip) VALUES ($1, $2) ON CONFLICT(mac, ip) DO NOTHING",

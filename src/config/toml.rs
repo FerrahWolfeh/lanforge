@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::net::Ipv6Addr;
+use std::path::Path;
 use tracing::{info, warn};
 
 /// Root structure of the TOML file.

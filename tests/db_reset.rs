@@ -42,17 +42,20 @@ async fn test_full_db_reset_chain() {
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
 
     // 2. Add some initial state (dynamic and static)
-    let _ = ctx.track_arp_neighbor(
-        mac_dyn,
-        "192.168.1.10".parse::<std::net::Ipv4Addr>().unwrap(),
-    );
-    let _ = ctx.add_static_device(
-        mac_static,
-        "static-host".to_string(),
-        None,
-        Some("192.168.1.20".parse::<std::net::Ipv4Addr>().unwrap()),
-        None,
-    );
+    use lanforge_core::context::state::{DeviceUpdate, FieldUpdate};
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac: mac_dyn,
+        ip: "192.168.1.10".parse::<std::net::Ipv4Addr>().unwrap(),
+        is_active: true,
+    });
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+        mac: mac_static,
+        hostname: FieldUpdate::Set("static-host".to_string()),
+        duid: FieldUpdate::NoChange,
+        v4_static: FieldUpdate::Set("192.168.1.20".parse::<std::net::Ipv4Addr>().unwrap()),
+        v6_suffix: FieldUpdate::NoChange,
+        origin: lanforge_core::device::Origin::Cli,
+    });
 
     // 3. Spawn DbWorker
     let ctx_db = ctx.clone();

@@ -9,7 +9,6 @@
 //! | Trait              | Execution Model | Use Case                        |
 //! |--------------------|-----------------|---------------------------------|
 //! | [`AsyncService`]   | Tokio async task | Network protocols, HTTP APIs    |
-//! | [`SyncService`]    | Dedicated OS thread | Database workers, blocking I/O |
 //!
 //! # Service Lifecycle
 //!
@@ -36,7 +35,7 @@
 //!             max_retries: 3,
 //!             base_backoff: Duration::from_secs(1),
 //!             max_backoff: Duration::from_secs(30),
-//!             stack_kb: 256,
+//!             stack_kb: 0,
 //!         }
 //!     }
 //! }
@@ -50,11 +49,8 @@
 //! }
 //! ```
 
-use crate::bus::TimedEvent;
-use crate::context::LanforgeContext;
 use crate::error::CoreError;
 use std::future::Future;
-use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 /// Supervision metadata for a service.
@@ -72,7 +68,7 @@ use std::time::Duration;
 /// | `max_retries`   | Max restarts before giving up (0 = unlimited)    | 3                   |
 /// | `base_backoff`  | Initial backoff on failure (doubles per retry)   | 1 second            |
 /// | `max_backoff`   | Maximum backoff cap                              | 30 seconds          |
-/// | `stack_kb`      | Stack size for sync service's OS thread (KiB)    | 256                 |
+/// | `max_backoff`   | Maximum backoff cap                              | 30 seconds          |
 ///
 /// # Backoff Strategy
 ///
@@ -97,7 +93,7 @@ use std::time::Duration;
 ///     max_retries: 0,  // Unlimited
 ///     base_backoff: Duration::from_secs(2),
 ///     max_backoff: Duration::from_secs(60),
-///     stack_kb: 512,
+///     stack_kb: 0,
 /// };
 /// ```
 pub struct ServiceMeta {
@@ -121,7 +117,8 @@ pub struct ServiceMeta {
     /// Maximum backoff cap.
     pub max_backoff: Duration,
 
-    /// Stack size for the service's dedicated OS thread, in KiB.
+    /// **DEPRECATED**: Stack size for the service's dedicated OS thread, in KiB.
+    /// This is no longer used since all services are now async.
     pub stack_kb: usize,
 }
 
@@ -136,7 +133,7 @@ pub struct ServiceMeta {
 /// 1. Implement [`meta()`](LanforgeService::meta) to declare supervision config
 /// 2. Optionally override [`describe()`](LanforgeService::describe) for logging
 /// 3. Optionally override [`on_shutdown()`](LanforgeService::on_shutdown) for cleanup
-/// 4. Implement either [`AsyncService`] or [`SyncService`] for execution
+/// 4. Implement [`AsyncService`] for execution
 ///
 /// # Thread Safety
 ///
@@ -198,7 +195,7 @@ pub trait LanforgeService: Send + Sync {
 ///             max_retries: 5,
 ///             base_backoff: Duration::from_secs(1),
 ///             max_backoff: Duration::from_secs(10),
-///             stack_kb: 256,
+///             stack_kb: 0,
 ///         }
 ///     }
 /// }
@@ -230,145 +227,7 @@ pub trait AsyncService: LanforgeService {
     fn run(&mut self, ctrl: ServiceControl) -> impl Future<Output = Result<(), CoreError>> + Send;
 }
 
-/// A thread-safe receiver for `EventBus` events in synchronous contexts.
-///
-/// Wraps the `std::sync::mpsc` channel that the `ServiceRegistry` bridges
-/// from the async `EventBus`. Provides convenience methods for common
-/// patterns like shutdown detection and dependency waiting.
-///
-/// # Usage
-///
-/// This is provided to [`SyncService::run`] by the supervisor — services
-/// should not create their own instances.
-///
-/// # Example
-///
-/// ```rust
-/// use lanforge_core::service::SyncBusReceiver;
-/// use std::time::Duration;
-///
-/// fn process_events(rx: &SyncBusReceiver) {
-///     // Non-blocking drain
-///     let events = rx.try_recv_all();
-///     for event in events {
-///         // Handle event...
-///     }
-///
-///     // Or block with timeout
-///     if let Some(timed) = rx.recv_timeout(Duration::from_secs(1)) {
-///         // Handle event...
-///     }
-/// }
-/// ```
-pub struct SyncBusReceiver {
-    rx: Receiver<TimedEvent>,
-    ctx: LanforgeContext,
-}
-
-impl SyncBusReceiver {
-    #[must_use]
-    pub const fn new(rx: Receiver<TimedEvent>, ctx: LanforgeContext) -> Self {
-        Self { rx, ctx }
-    }
-
-    /// Blocking receive with timeout.
-    #[must_use]
-    pub fn recv_timeout(&self, timeout: Duration) -> Option<TimedEvent> {
-        self.rx.recv_timeout(timeout).ok()
-    }
-
-    /// Non-blocking drain of all pending events.
-    #[must_use]
-    pub fn try_recv_all(&self) -> Vec<TimedEvent> {
-        let mut events = Vec::new();
-        while let Ok(e) = self.rx.try_recv() {
-            events.push(e);
-        }
-        events
-    }
-
-    /// Provides access to the injected `LanforgeContext`.
-    #[must_use]
-    pub const fn ctx(&self) -> &LanforgeContext {
-        &self.ctx
-    }
-
-    /// Blocks until `InterfaceReady` is received (or shutdown).
-    pub fn wait_for_interfaces(&self) {
-        self.ctx.wait_for_interfaces_sync(&self.rx);
-    }
-
-    /// Blocks until `DbReady` is received (or shutdown).
-    pub fn wait_for_db(&self) {
-        self.ctx.wait_for_db_sync(&self.rx);
-    }
-}
-
-/// A service that executes within a dedicated synchronous OS thread.
-///
-/// This trait is for services that must remain purely synchronous (like the DB worker)
-/// or that interact with blocking APIs without a Tokio runtime.
-///
-/// # Guidelines
-///
-/// Services implementing this trait should:
-/// 1. Use the provided [`SyncBusReceiver`] for communication (do not create your own channel)
-/// 2. Check for shutdown signals periodically via [`SyncBusReceiver::recv_timeout`]
-/// 3. Use [`SyncBusReceiver::wait_for_interfaces`] and [`SyncBusReceiver::wait_for_db`]
-///    to wait for dependencies before starting work
-/// 4. Avoid long-running blocking operations that would delay shutdown detection
-///
-/// # Example
-///
-/// ```rust
-/// use lanforge_core::service::{SyncService, LanforgeService, ServiceMeta, SyncBusReceiver, ServiceControl};
-/// use lanforge_core::error::CoreError;
-/// use std::time::Duration;
-///
-/// struct MySyncService;
-///
-/// impl LanforgeService for MySyncService {
-///     fn meta(&self) -> ServiceMeta {
-///         ServiceMeta {
-///             id: "my-sync",
-///             display_name: "My Sync Service",
-///             critical: true,
-///             max_retries: 0,
-///             base_backoff: Duration::from_secs(1),
-///             max_backoff: Duration::from_secs(30),
-///             stack_kb: 512,
-///         }
-///     }
-/// }
-///
-/// impl SyncService for MySyncService {
-///     fn run(&mut self, ctrl: ServiceControl, bus_rx: &SyncBusReceiver) -> Result<(), CoreError> {
-///         ctrl.signal_ready();
-///
-///         // Wait for dependencies
-///         bus_rx.wait_for_interfaces();
-///         bus_rx.wait_for_db();
-///
-///         // Main loop
-///         loop {
-///             if let Some(timed) = bus_rx.recv_timeout(Duration::from_secs(1)) {
-///                 // Handle event or check shutdown
-///             }
-///             // Do work...
-///         }
-///     }
-/// }
-/// ```
-pub trait SyncService: LanforgeService {
-    /// Runs the service's main loop synchronously.
-    ///
-    /// The `bus_rx` receiver is provided by the supervisor/registry — the service
-    /// does not need to create or manage its own bridge channel.
-    ///
-    /// # Errors
-    /// Returns `CoreError` if the service execution fails.
-    fn run(&mut self, ctrl: ServiceControl, bus_rx: &SyncBusReceiver) -> Result<(), CoreError>;
-}
+use crate::context::LanforgeContext;
 
 /// A handle provided to services to control their lifecycle and signal readiness.
 pub struct ServiceControl {
@@ -395,12 +254,11 @@ impl ServiceControl {
             .signaled
             .swap(true, std::sync::atomic::Ordering::SeqCst)
         {
-            let _ = self
-                .ctx
-                .bus()
-                .publish(crate::bus::LanforgeEvent::System(crate::bus::SystemEvent::ServiceReady {
+            let _ = self.ctx.bus().publish(crate::bus::LanforgeEvent::System(
+                crate::bus::SystemEvent::ServiceReady {
                     name: self.id.to_string(),
-                }));
+                },
+            ));
         }
     }
 

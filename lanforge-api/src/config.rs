@@ -43,7 +43,7 @@ pub struct ApiConfig {
     /// Optional address to listen for the HTTP REST API (e.g., "0.0.0.0:8080").
     #[cfg(feature = "http")]
     pub http_listen: Option<String>,
-    
+
     /// Optional address to listen for DNS-over-TLS (e.g., "0.0.0.0:853").
     #[cfg(feature = "dot")]
     pub dot_listen: Option<String>,

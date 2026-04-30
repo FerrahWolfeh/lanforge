@@ -23,7 +23,7 @@ fn test_lazy_indexing_and_jit_promotion() {
     state.apply_update(update);
 
     assert!(state.devices.contains_key(&mac));
-    assert!(!state.name_index.contains_key(hostname));
+    assert!(!state.indices.name_index.contains_key(hostname));
 
     // 2. Perform JIT lookup
     let found_mac = state.find_mac_by_hostname_jit(hostname, None);
@@ -32,7 +32,7 @@ fn test_lazy_indexing_and_jit_promotion() {
     assert_eq!(found_mac, Some(mac));
 
     // Should NOW be promoted to the index
-    assert_eq!(state.name_index.get(hostname), Some(&mac));
+    assert_eq!(state.indices.name_index.get(hostname), Some(&mac));
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn test_static_devices_always_indexed() {
     state.insert_device(mac, dev);
 
     // Should be in index IMMEDIATELY even if indexing_enabled is false
-    assert_eq!(state.name_index.get(hostname), Some(&mac));
+    assert_eq!(state.indices.name_index.get(hostname), Some(&mac));
 }
 
 #[test]

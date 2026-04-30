@@ -23,7 +23,7 @@
 
 use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -31,6 +31,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::bus::DeviceChange;
 use crate::context::state::{FieldUpdate, LeaseTarget};
 use crate::identifiers::{Duid, MacAddr};
+use smallvec::SmallVec;
 
 // ---------------------------------------------------------------------------
 // Helpers for Serde
@@ -123,14 +124,17 @@ where
 /// # Errors
 ///
 /// Returns an error if the deserializer fails to parse the sequence or its elements.
-pub fn deserialize_seen_v4<'de, D>(deserializer: D) -> Result<Vec<(Ipv4Addr, SystemTime)>, D::Error>
+pub fn deserialize_seen_v4<'de, D>(
+    deserializer: D,
+) -> Result<SmallVec<[(Ipv4Addr, SystemTime); 4]>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
+    use serde::Deserialize;
     let raw = Vec::<(Ipv4Addr, u64)>::deserialize(deserializer)?;
     Ok(raw
         .into_iter()
-        .map(|(ip, secs)| (ip, UNIX_EPOCH + Duration::from_secs(secs)))
+        .map(|(ip, secs)| (ip, SystemTime::UNIX_EPOCH + Duration::from_secs(secs)))
         .collect())
 }
 
@@ -456,16 +460,7 @@ pub enum IPv6State {
     Dynamic(V6Lease),
     /// An address observed being used via SLAAC (Stateless Address Autoconfiguration).
     /// These are learned from NDP/neighbor discovery events.
-    Slaac {
-        /// The observed IPv6 address.
-        ip: Ipv6Addr,
-        /// The last time this specific address was observed.
-        #[serde(
-            serialize_with = "serialize_time",
-            deserialize_with = "deserialize_time"
-        )]
-        last_seen: SystemTime,
-    },
+    Slaac(Ipv6Addr),
 }
 
 impl IPv6State {
@@ -476,7 +471,7 @@ impl IPv6State {
     pub fn ip_with_prefix(&self, prefix: Option<Ipv6Addr>) -> Option<Ipv6Addr> {
         match self {
             Self::Dynamic(lease) => Some(lease.ip),
-            Self::Slaac { ip, .. } | Self::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(*ip),
+            Self::Slaac(ip) | Self::Static(Ipv6AddrOrSuffix::Full(ip)) => Some(*ip),
             Self::Static(suf) => prefix.map(|p| Ipv6Addr::from(suf.as_u128(Some(p)))),
         }
     }
@@ -486,10 +481,15 @@ impl IPv6State {
         self.ip_with_prefix(None)
     }
 
-    /// Returns true if the address was assigned via a dynamic `DHCPv6` lease.
     #[must_use]
     pub const fn is_dynamic(&self) -> bool {
         matches!(self, Self::Dynamic(_))
+    }
+
+    #[must_use]
+    pub fn is_link_local(&self) -> bool {
+        self.ip()
+            .is_some_and(|ip| ip.segments()[0] & 0xffc0 == 0xfe80)
     }
 }
 
@@ -823,11 +823,14 @@ pub struct Device {
     /// List of IPv6 connectivity states (SLAAC, `DHCPv6`, etc.).
     ///
     /// A device may have multiple entries (e.g., SLAAC + `DHCPv6`).
-    pub v6: Vec<IPv6State>,
+    pub v6: SmallVec<[IPv6State; 4]>,
     /// List of delegated IPv6 prefixes assigned to this device.
     ///
     /// These come from `DHCPv6` Prefix Delegation (`IA_PD`).
-    pub v6_prefixes: Vec<V6PrefixLease>,
+    pub v6_prefixes: SmallVec<[V6PrefixLease; 2]>,
+    /// Observed IPv6 addresses and their last activity timestamps.
+    #[serde(default)]
+    pub seen_v6: SmallVec<[(Ipv6Addr, SystemTime); 2]>,
 
     /// IPv4 addresses observed via network traffic (`ARP`/`Netlink`).
     ///
@@ -837,7 +840,7 @@ pub struct Device {
         serialize_with = "serialize_seen_v4",
         deserialize_with = "deserialize_seen_v4"
     )]
-    pub seen_v4: Vec<(Ipv4Addr, SystemTime)>,
+    pub seen_v4: SmallVec<[(Ipv4Addr, SystemTime); 4]>,
 
     /// Precise moment when the device was last seen on the network.
     ///
@@ -866,12 +869,6 @@ pub struct Device {
     /// Tracks which infrastructure device or local interface this device
     /// is connected to, learned via LLDP or bridge observation.
     pub topology: Option<TopologyInfo>,
-    /// IPv6 neighbors observed via NDP.
-    pub ndp_cache: HashMap<Ipv6Addr, bool>,
-    /// IPv4 neighbors observed via ARP.
-    pub arp_cache: HashMap<Ipv4Addr, bool>,
-    /// SLAAC addresses observed for this device.
-    pub observed_v6: HashMap<Ipv6Addr, bool>,
 }
 
 /// Represents a device's position in the network hierarchy.
@@ -901,17 +898,306 @@ impl Device {
             origin: Origin::Dynamic,
             managed_at: None,
             v4: IPv4State::None,
-            v6: Vec::new(),
-            v6_prefixes: Vec::new(),
-            seen_v4: Vec::new(),
-            last_seen: SystemTime::now(),
+            v6: SmallVec::new(),
+            v6_prefixes: SmallVec::new(),
+            seen_v4: SmallVec::new(),
+            last_seen: SystemTime::UNIX_EPOCH,
             duid: None,
             dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
             class: DeviceClass::None,
             topology: None,
-            ndp_cache: HashMap::new(),
-            arp_cache: HashMap::new(),
-            observed_v6: HashMap::new(),
+            seen_v6: smallvec::SmallVec::new(),
+        }
+    }
+
+    pub fn associate_duid(&mut self, duid: Duid, _iaid: u32) -> Option<DeviceChange> {
+        if self.duid.as_ref() != Some(&duid) {
+            let change = DeviceChange::DuidAssociated { duid: duid.clone() };
+            self.duid = Some(duid);
+            self.last_seen = SystemTime::now();
+            return Some(change);
+        }
+        None
+    }
+
+    pub fn apply_v4_lease(&mut self, ip: Ipv4Addr, expires: SystemTime) -> Option<DeviceChange> {
+        let new_v4 = IPv4State::Dynamic(V4Lease { ip, expires });
+        if self.v4 != new_v4 {
+            self.v4 = new_v4;
+            self.last_seen = SystemTime::now();
+            return Some(DeviceChange::V4Assigned { ip });
+        }
+        None
+    }
+
+    pub fn apply_v6_lease(
+        &mut self,
+        duid: &Duid,
+        iaid: u32,
+        ip: Ipv6Addr,
+        expires: SystemTime,
+    ) -> Option<DeviceChange> {
+        let mut changed = if self.duid.as_ref() == Some(duid) {
+            false
+        } else {
+            self.duid = Some(duid.clone());
+            true
+        };
+
+        let new_lease = V6Lease { ip, iaid, expires };
+        let existing = self
+            .v6
+            .iter_mut()
+            .find(|s| matches!(s, IPv6State::Dynamic(l) if l.iaid == iaid));
+
+        if let Some(IPv6State::Dynamic(lease)) = existing {
+            if lease != &new_lease {
+                *lease = new_lease;
+                changed = true;
+            }
+        } else {
+            // Check for duplication before push
+            if !self
+                .v6
+                .iter()
+                .any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == ip && l.iaid == iaid))
+            {
+                self.v6.push(IPv6State::Dynamic(new_lease));
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.last_seen = SystemTime::now();
+            return Some(DeviceChange::V6Assigned { ip, iaid });
+        }
+        None
+    }
+
+    pub fn apply_v6_prefix(
+        &mut self,
+        duid: &Duid,
+        iaid: u32,
+        prefix: Ipv6Addr,
+        len: u8,
+        expires: SystemTime,
+    ) -> Option<DeviceChange> {
+        let mut changed = if self.duid.as_ref() == Some(duid) {
+            false
+        } else {
+            self.duid = Some(duid.clone());
+            true
+        };
+
+        let new_lease = V6PrefixLease {
+            prefix,
+            len,
+            iaid,
+            expires,
+        };
+        let existing = self.v6_prefixes.iter_mut().find(|l| l.iaid == iaid);
+
+        if let Some(lease) = existing {
+            if lease != &new_lease {
+                *lease = new_lease;
+                changed = true;
+            }
+        } else {
+            // Check for duplication
+            if !self
+                .v6_prefixes
+                .iter()
+                .any(|l| l.prefix == prefix && l.iaid == iaid)
+            {
+                self.v6_prefixes.push(new_lease);
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.last_seen = SystemTime::now();
+            return Some(DeviceChange::V6PrefixAssigned { prefix, len, iaid });
+        }
+        None
+    }
+
+    pub fn apply_slaac_observation(
+        &mut self,
+        addr: Ipv6Addr,
+        is_active: bool,
+    ) -> Option<DeviceChange> {
+        let mut changed = false;
+        let now = SystemTime::now();
+
+        // 1. Update/Add to seen_v6 observation list
+        if let Some(entry) = self.seen_v6.iter_mut().find(|(a, _)| *a == addr) {
+            let elapsed = now.duration_since(entry.1).unwrap_or(Duration::MAX);
+            let was_active = elapsed < Self::ONLINE_THRESHOLD;
+
+            if is_active != was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
+                entry.1 = if is_active {
+                    now
+                } else {
+                    SystemTime::UNIX_EPOCH
+                };
+                changed = true;
+            }
+        } else {
+            self.seen_v6.push((
+                addr,
+                if is_active {
+                    now
+                } else {
+                    SystemTime::UNIX_EPOCH
+                },
+            ));
+            changed = true;
+        }
+
+        // 2. Ensure it's in the v6 states list if it's not already tracked (Static or Dynamic)
+        if !self.v6.iter().any(|s| s.ip() == Some(addr)) {
+            self.v6.push(IPv6State::Slaac(addr));
+            changed = true;
+        }
+
+        if changed {
+            self.last_seen = self.calculate_last_seen();
+            return Some(DeviceChange::SlaacObserved { addr });
+        }
+        None
+    }
+
+    pub fn apply_arp_observation(&mut self, ip: Ipv4Addr, is_active: bool) -> Option<DeviceChange> {
+        let now = SystemTime::now();
+        let mut changed = false;
+
+        if let Some(entry) = self.seen_v4.iter_mut().find(|(a, _)| *a == ip) {
+            let elapsed = now.duration_since(entry.1).unwrap_or(Duration::MAX);
+            let was_active = elapsed < Self::ONLINE_THRESHOLD;
+
+            // Debounce: update if activity status changed or if debounce interval passed
+            if is_active != was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
+                entry.1 = if is_active {
+                    now
+                } else {
+                    SystemTime::UNIX_EPOCH
+                };
+                changed = true;
+            }
+        } else {
+            self.seen_v4.push((
+                ip,
+                if is_active {
+                    now
+                } else {
+                    SystemTime::UNIX_EPOCH
+                },
+            ));
+            changed = true;
+        }
+
+        if changed {
+            self.last_seen = now;
+            return Some(DeviceChange::ArpActivity { ip });
+        }
+        None
+    }
+
+    pub fn apply_hostname_hint(
+        &mut self,
+        hostname: String,
+        origin: HostnameOrigin,
+    ) -> Option<DeviceChange> {
+        if origin >= self.hostname.origin && self.hostname.name != hostname {
+            self.hostname = Hostname {
+                name: hostname,
+                origin,
+            };
+            return Some(DeviceChange::HostnameChanged {
+                hostname: self.hostname.name.clone(),
+            });
+        }
+        None
+    }
+
+    #[must_use]
+    pub fn needs_expiration_check(&self, now: SystemTime, threshold: Duration) -> bool {
+        if let IPv4State::Dynamic(l) = &self.v4
+            && l.expires < now
+        {
+            return true;
+        }
+        if self.v6.iter().any(|s| match s {
+            IPv6State::Dynamic(l) => l.expires < now,
+            _ => false,
+        }) {
+            return true;
+        }
+        if self.v6_prefixes.iter().any(|p| p.expires < now) {
+            return true;
+        }
+        if self
+            .seen_v4
+            .iter()
+            .any(|(_, ts)| now.duration_since(*ts).unwrap_or_default() > threshold)
+        {
+            return true;
+        }
+        if self
+            .seen_v6
+            .iter()
+            .any(|(_, ts)| now.duration_since(*ts).unwrap_or_default() > threshold)
+        {
+            return true;
+        }
+
+        false
+    }
+
+    #[must_use]
+    pub fn calculate_last_seen(&self) -> SystemTime {
+        let mut latest = SystemTime::UNIX_EPOCH;
+
+        // v4 lease
+        if let IPv4State::Dynamic(l) = &self.v4 {
+            latest = latest.max(l.expires.min(SystemTime::now()));
+        }
+
+        // v4 observations
+        for (_, ts) in &self.seen_v4 {
+            latest = latest.max(*ts);
+        }
+
+        // v6 leases and observations
+        for s in &self.v6 {
+            if let IPv6State::Dynamic(l) = s {
+                latest = latest.max(l.expires.min(SystemTime::now()));
+            }
+        }
+        for (_, ts) in &self.seen_v6 {
+            latest = latest.max(*ts);
+        }
+
+        latest
+    }
+
+    pub fn delete_ip(&mut self, ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(v4) => {
+                if self.v4.ip() == Some(v4) {
+                    self.v4 = IPv4State::None;
+                    true
+                } else {
+                    let initial_len = self.seen_v4.len();
+                    self.seen_v4.retain(|(ip, _)| *ip != v4);
+                    self.seen_v4.len() != initial_len
+                }
+            }
+            IpAddr::V6(v6) => {
+                let initial_len = self.v6.len();
+                self.v6.retain(|s| s.ip() != Some(v6));
+                self.v6.len() != initial_len
+            }
         }
     }
 
@@ -949,23 +1235,27 @@ impl Device {
     /// ```
     #[must_use]
     pub fn is_worthy(&self) -> bool {
-        if self.is_static() || !self.hostname.name.is_empty() {
+        if self.topology.is_some() {
             return true;
         }
-
+        if !self.hostname.name.is_empty() {
+            return true;
+        }
         if !matches!(self.v4, IPv4State::None) || !self.seen_v4.is_empty() {
             return true;
         }
-
-        self.v6.iter().any(|s| {
-            s.ip_with_prefix(None).map_or(
-                matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_))),
-                |ip| {
-                    let class = classify_ipv6(&ip);
-                    matches!(class, IpClassification::Gua | IpClassification::Ula)
-                },
-            )
-        })
+        // v6 addresses: must have at least one non-link-local address
+        if self.v6.iter().any(|s| !s.is_link_local()) {
+            return true;
+        }
+        // Static or managed devices are always worthy
+        if !matches!(self.origin, Origin::Dynamic) || self.managed_at.is_some() {
+            return true;
+        }
+        if self.duid.is_some() {
+            return true;
+        }
+        false
     }
 
     /// Removes a specific IP from the device record.
@@ -986,15 +1276,49 @@ impl Device {
             IpAddr::V6(ip6) => {
                 let initial_v6 = self.v6.len();
                 self.v6
-                    .retain(|s| !matches!(s, IPv6State::Slaac { ip: a, .. } if a == ip6));
+                    .retain(|s| !matches!(s, IPv6State::Slaac(a) if a == ip6));
                 self.v6.len() != initial_v6
             }
         }
     }
 
     /// Returns true if the device has any active IP addresses (v4 or v6).
+    pub fn mark_ip_offline(&mut self, ip: IpAddr) -> bool {
+        let changed = match ip {
+            IpAddr::V4(v4) => {
+                if let Some(entry) = self.seen_v4.iter_mut().find(|(a, _)| *a == v4) {
+                    entry.1 = SystemTime::UNIX_EPOCH;
+                    true
+                } else {
+                    false
+                }
+            }
+            IpAddr::V6(v6) => {
+                let inner_changed =
+                    self.seen_v6
+                        .iter_mut()
+                        .find(|(a, _)| *a == v6)
+                        .is_some_and(|entry| {
+                            *entry = (v6, SystemTime::UNIX_EPOCH);
+                            true
+                        });
+                // Also remove from states if it was SLAAC
+                let initial_v6_len = self.v6.len();
+                self.v6
+                    .retain(|s| s.ip() != Some(v6) || !matches!(s, IPv6State::Slaac(_)));
+
+                inner_changed || self.v6.len() != initial_v6_len
+            }
+        };
+
+        if changed {
+            self.last_seen = self.calculate_last_seen();
+        }
+        changed
+    }
+
     #[must_use]
-    pub const fn has_any_ip(&self) -> bool {
+    pub fn has_any_ip(&self) -> bool {
         self.v4.ip().is_some() || !self.seen_v4.is_empty() || !self.v6.is_empty()
     }
 
@@ -1158,8 +1482,13 @@ impl Device {
                 v6_expired_iaids.push(lease.iaid);
                 false
             }
-            IPv6State::Slaac { last_seen, .. } => {
-                last_seen.elapsed().unwrap_or(std::time::Duration::ZERO) <= ip_expiry_threshold
+            IPv6State::Slaac(ip) => {
+                self.seen_v6
+                    .iter()
+                    .find(|(a, _)| a == ip)
+                    .is_some_and(|entry| {
+                        now.duration_since(entry.1).unwrap_or(Duration::MAX) <= ip_expiry_threshold
+                    })
             }
             _ => true,
         });
@@ -1185,20 +1514,22 @@ impl Device {
             });
         }
 
-        // ARP
+        // ARP cleanup
         self.seen_v4.retain(|(_, ts)| {
-            ts.elapsed().unwrap_or(std::time::Duration::ZERO) <= ip_expiry_threshold
+            now.duration_since(*ts).unwrap_or(std::time::Duration::ZERO) <= ip_expiry_threshold
         });
 
+        // V6 activity cleanup
+        self.seen_v6.retain(|(_, ts)| {
+            now.duration_since(*ts).unwrap_or(std::time::Duration::ZERO) <= ip_expiry_threshold
+        });
+
+        self.last_seen = self.calculate_last_seen();
         events
     }
 
     #[must_use]
     pub fn is_zombie(&self, max_age: std::time::Duration) -> bool {
-        if self.is_static() {
-            return false;
-        }
-
         if !matches!(self.v4, IPv4State::None)
             || !self.v6.is_empty()
             || !self.v6_prefixes.is_empty()
@@ -1219,9 +1550,10 @@ impl Device {
 
 impl Device {
     /// Defines the threshold for a device to be considered "definitely online".
-    /// Returns true if the device was seen within the last 5 minutes.
-    /// Defines the threshold for a device to be considered "definitely online".
-    pub const ONLINE_THRESHOLD_SECS: u64 = 300; // 5 minutes
+    pub const ONLINE_THRESHOLD: Duration = Duration::from_mins(5);
+
+    /// Defines the minimum interval between activity updates to the state bus.
+    pub const ACTIVITY_DEBOUNCE: Duration = Duration::from_mins(1);
 
     /// Returns the device's hostname, or "?" if not available.
     #[must_use]
@@ -1229,17 +1561,23 @@ impl Device {
         self.hostname.display()
     }
 
-    /// Returns true if the device was seen within the last 5 minutes.
     #[must_use]
     pub fn is_online(&self) -> bool {
-        self.is_online_at(SystemTime::now())
+        self.is_online_with_threshold(Self::ONLINE_THRESHOLD)
     }
 
-    /// Returns true if the device was seen within the threshold relative to the given time.
     #[must_use]
-    pub fn is_online_at(&self, now: SystemTime) -> bool {
-        now.duration_since(self.last_seen)
-            .is_ok_and(|d| d.as_secs() < Self::ONLINE_THRESHOLD_SECS)
+    pub fn is_online_with_threshold(&self, threshold: Duration) -> bool {
+        // Active DHCP leases are always online
+        if matches!(self.v4, IPv4State::Dynamic(_)) || self.v6.iter().any(IPv6State::is_dynamic) {
+            return true;
+        }
+
+        // Otherwise, check when we last heard from them (covers ARP/NDP/SLAAC via unified tracking)
+        SystemTime::now()
+            .duration_since(self.last_seen)
+            .unwrap_or(Duration::MAX)
+            < threshold
     }
 
     /// Returns a human-readable primary IPv4 address or "—".
@@ -1292,7 +1630,7 @@ impl Device {
         };
 
         for state in &self.v6 {
-            if let IPv6State::Slaac { ip, .. } = state {
+            if let IPv6State::Slaac(ip) = state {
                 if is_ula(ip) {
                     update_best(3, *ip);
                 } else if matches!(classify_ipv6(ip), IpClassification::Gua) {
@@ -1405,7 +1743,7 @@ impl Device {
         }
 
         // Check SLAAC
-        if self.v6.iter().any(|s| matches!(s, IPv6State::Slaac { .. })) {
+        if self.v6.iter().any(|s| matches!(s, IPv6State::Slaac(..))) {
             return LearningMethod::Slaac;
         }
 
@@ -1419,36 +1757,14 @@ impl Device {
 }
 
 /// The protocol or method by which a device was discovered.
-///
-/// This enum is used for analytics, UI display, and understanding the
-/// network topology.
-///
-/// # Variants
-///
-/// | Variant    | Description                                |
-/// |------------|--------------------------------------------|
-/// | Static     | Manually configured in `lanforge.toml`     |
-/// | Managed    | Manually configured or overridden via CLI  |
-/// | DhcpV4     | Discovered via DHCPv4 lease                |
-/// | DhcpV6     | Discovered via DHCPv6 lease (IA_NA)        |
-/// | Slaac      | Observed via SLAAC (Neighbor Discovery)    |
-/// | NdpArp     | Observed via ARP/Netlink (no DHCP/SLAAC)   |
-/// | Unknown    | Minimal presence, no clear discovery method|
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LearningMethod {
-    /// Manually configured in `lanforge.toml`.
     Static,
-    /// Manually configured or overridden via CLI.
     Managed,
-    /// Discovered via `DHCPv4` lease.
     DhcpV4,
-    /// Discovered via `DHCPv6` lease (`IA_NA`).
     DhcpV6,
-    /// Discovered via Router Advertisement / SLAAC.
     Slaac,
-    /// Discovered via ARP or Neighbor Discovery traffic.
     NdpArp,
-    /// Discovery method could not be determined.
     Unknown,
 }
 
@@ -1516,24 +1832,16 @@ mod tests {
             class: DeviceClass::None,
             duid: None,
             v4: IPv4State::Static("192.168.1.1".parse().unwrap()),
-            v6: vec![
-                IPv6State::Slaac {
-                    ip: "2001:db8::1".parse().unwrap(),
-                    last_seen: SystemTime::now(),
-                },
-                IPv6State::Slaac {
-                    ip: "fd00::1".parse().unwrap(),
-                    last_seen: SystemTime::now(),
-                },
+            v6: smallvec::smallvec![
+                IPv6State::Slaac("2001:db8::1".parse().unwrap()),
+                IPv6State::Slaac("fd00::1".parse().unwrap()),
             ],
-            v6_prefixes: Vec::new(),
-            seen_v4: Vec::new(),
+            v6_prefixes: smallvec::SmallVec::new(),
+            seen_v6: smallvec::SmallVec::new(),
+            seen_v4: smallvec::SmallVec::new(),
             last_seen: SystemTime::now(),
             dns_fallback: "host-010203040506".to_string(),
             topology: None,
-            ndp_cache: std::collections::HashMap::new(),
-            arp_cache: std::collections::HashMap::new(),
-            observed_v6: std::collections::HashMap::new(),
         };
 
         let sorted = dev.all_addresses_sorted(None, None);

@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::Parse;
-use syn::{Data, DeriveInput, Fields, Ident, ItemFn, ItemStruct, LitStr, Meta, parse_macro_input};
+use syn::{Data, DeriveInput, Fields, Ident, ItemStruct, LitStr, Meta, parse_macro_input};
 
 /// Attribute macro that automatically implements `LanforgeService` for a struct.
 ///
@@ -217,174 +217,6 @@ pub fn identifier_derive(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Attribute macro that simplifies device state mutation handlers.
-/// Automatically handles: retrieving device, unindexing, mutation, re-indexing, and insertion.
-#[proc_macro_attribute]
-pub fn device_handler(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args_parsed = parse_macro_input!(args as Ident);
-    let mac_ident = args_parsed;
-
-    let input_fn = parse_macro_input!(input as ItemFn);
-    let fn_name = &input_fn.sig.ident;
-    let fn_vis = &input_fn.vis;
-    let fn_args = &input_fn.sig.inputs;
-    let _fn_output = &input_fn.sig.output;
-    let fn_block = &input_fn.block;
-
-    let expanded = quote! {
-        #fn_vis fn #fn_name(#fn_args) -> Vec<crate::bus::LanforgeEvent> {
-            let m = #mac_ident;
-
-            let is_new = !self.devices.contains_key(&m);
-            let mut dev_arc = match self.devices.remove(&m) {
-                Some(d) => d,
-                None => std::sync::Arc::new(crate::device::Device::new(m)),
-            };
-
-            let was_online = dev_arc.is_online();
-
-            let change: Option<crate::bus::DeviceChange> = {
-                let dev = std::sync::Arc::make_mut(&mut dev_arc);
-                self.unindex_device(dev);
-
-                let result = (|| {
-                    #fn_block
-                })();
-
-                self.index_device(m, dev);
-                result
-            };
-
-            self.devices.insert(m, dev_arc.clone());
-
-            let mut events = Vec::new();
-            let now_online = dev_arc.is_online();
-            let hostname = Some(dev_arc.hostname.name.clone());
-
-            if is_new {
-                events.push(crate::bus::LanforgeEvent::Device(crate::bus::DeviceEvent::Discovered {
-                    mac: m,
-                    hostname: hostname.clone(),
-                }));
-            }
-
-            if let Some(c) = change {
-                events.push(crate::bus::LanforgeEvent::Device(crate::bus::DeviceEvent::Updated {
-                    mac: m,
-                    change: Box::new(c),
-                    hostname: hostname.clone(),
-                }));
-            } else if was_online != now_online {
-                events.push(crate::bus::LanforgeEvent::Device(crate::bus::DeviceEvent::Updated {
-                    mac: m,
-                    change: Box::new(crate::bus::DeviceChange::StatusChanged {
-                        online: now_online,
-                        hostname: hostname.clone(),
-                    }),
-                    hostname: hostname.clone(),
-                }));
-            }
-
-            events
-        }
-    };
-
-    expanded.into()
-}
-
-/// Derive macro for generating ProxyUpdate methods in LanforgeContext.
-#[proc_macro_derive(ProxyUpdate, attributes(proxy))]
-pub fn proxy_update_derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let _name = input.ident;
-
-    let variants = if let Data::Enum(data) = input.data {
-        data.variants
-            .iter()
-            .map(|v| {
-                let ident = &v.ident;
-                let mut method_name = None;
-                let mut defaults = std::collections::HashMap::new();
-
-                for attr in &v.attrs {
-                    if attr.path().is_ident("proxy") {
-                        let _ = attr.parse_nested_meta(|meta| {
-                            if meta.path.is_ident("method") {
-                                let value: LitStr = meta.value()?.parse()?;
-                                method_name = Some(value.value());
-                            } else if meta.path.is_ident("default") {
-                                let content;
-                                syn::parenthesized!(content in meta.input);
-                                let nested = content.parse_terminated(syn::Meta::parse, syn::Token![,])?;
-                                for m in nested {
-                                    if let syn::Meta::NameValue(nv) = m
-                                        && let Some(id) = nv.path.get_ident() {
-                                            let val = &nv.value;
-                                            defaults.insert(id.to_string(), quote! { #val });
-                                        }
-                                }
-                            }
-                            Ok(())
-                        });
-                    }
-                }
-
-                if let Some(m) = method_name {
-                    let m_ident = Ident::new(&m, ident.span());
-
-                    match &v.fields {
-                        Fields::Named(f) => {
-                            let mut method_args = Vec::new();
-                            let mut variant_fields = Vec::new();
-
-                            for field in &f.named {
-                                let id = field.ident.as_ref().unwrap();
-                                let ty = &field.ty;
-                                
-                                if let Some(def_val) = defaults.get(&id.to_string()) {
-                                    variant_fields.push(quote! { #id: #def_val });
-                                } else {
-                                    method_args.push(quote! { #id: impl Into<#ty> });
-                                    variant_fields.push(quote! { #id: #id.into() });
-                                }
-                            }
-
-                            quote! {
-                                /// Automatically generated proxy for DeviceUpdate variant.
-                                #[must_use]
-                                pub fn #m_ident(&self, #(#method_args),*) -> bool {
-                                    self.apply(DeviceUpdate::#ident { #(#variant_fields),* })
-                                }
-                            }
-                        }
-                        Fields::Unit => {
-                            quote! {
-                                /// Automatically generated proxy for DeviceUpdate variant.
-                                #[must_use]
-                                pub fn #m_ident(&self) -> bool {
-                                    self.apply(DeviceUpdate::#ident)
-                                }
-                            }
-                        }
-                        _ => quote! {},
-                    }
-                } else {
-                    quote! {}
-                }
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-
-    quote! {
-        impl LanforgeContext {
-            #(#variants)*
-        }
-    }
-    .into()
-}
-
 #[proc_macro_derive(CommandDispatch, attributes(dispatch))]
 pub fn command_dispatch_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -485,7 +317,6 @@ pub fn command_dispatch_derive(input: TokenStream) -> TokenStream {
             } else if let Some(b) = bus_event {
                 let b_ident = Ident::new(&b, ident.span());
                 let msg = success_msg.unwrap_or_else(|| format!("{} action executed", ident));
-                
                 let fields = match &v.fields {
                     Fields::Named(f) => {
                         let f_mappings = f.named.iter().map(|f| {
@@ -650,4 +481,77 @@ pub fn cli_handler_derive(input: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+/// Derive macro for generating the apply_update dispatch logic in State.
+#[proc_macro_derive(UpdateDispatch, attributes(handler))]
+pub fn update_dispatch_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = input.ident;
+
+    let variants =
+        if let Data::Enum(data) = input.data {
+            data.variants.iter().map(|v| {
+            let ident = &v.ident;
+            let mut handler_name = None;
+
+            for attr in &v.attrs {
+                if attr.path().is_ident("handler")
+                    && let Ok(lit) = attr.parse_args::<LitStr>() {
+                        handler_name = Some(lit.value());
+                    }
+            }
+
+            // Fallback: convert VariantName to handle_variant_name
+            let h_ident = if let Some(h) = handler_name {
+                Ident::new(&h, ident.span())
+            } else {
+                let snake = to_snake_case(&ident.to_string());
+                Ident::new(&format!("handle_{}", snake), ident.span())
+            };
+
+            match &v.fields {
+                Fields::Named(f) => {
+                    let field_names: Vec<_> = f.named.iter().map(|f| &f.ident).collect();
+                    quote! {
+                        #name::#ident { #(#field_names),* } => self.#h_ident(#(#field_names),*),
+                    }
+                }
+                Fields::Unit => {
+                    quote! {
+                        #name::#ident => self.#h_ident(),
+                    }
+                }
+                _ => quote! {},
+            }
+        }).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+    quote! {
+        impl State {
+            pub fn apply_update(&mut self, update: #name) -> Vec<crate::bus::LanforgeEvent> {
+                match update {
+                    #(#variants)*
+                }
+            }
+        }
+    }
+    .into()
+}
+
+fn to_snake_case(s: &str) -> String {
+    let mut snake = String::new();
+    for (i, ch) in s.char_indices() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                snake.push('_');
+            }
+            snake.push(ch.to_ascii_lowercase());
+        } else {
+            snake.push(ch);
+        }
+    }
+    snake
 }

@@ -40,6 +40,7 @@ use crate::ndp::utils::{
 };
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::DeviceUpdate;
 use lanforge_core::error::CoreError;
 use lanforge_core::ndp::NeighborEvent;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -215,13 +216,13 @@ impl AsyncService for NeighborMonitor {
                                 pending_batch.push((mac, ip, is_active));
                                 if pending_batch.len() >= 50 {
                                     let batch = std::mem::take(&mut pending_batch);
-                                    let _ = self.ctx.apply_neighbor_batch(batch);
+                                    let _ = self.ctx.apply(DeviceUpdate::NeighborBatch { entries: batch });
                                 }
                             } else {
                                 // Flush pending batch before processing delete/fail to maintain order
                                 if !pending_batch.is_empty() {
                                     let batch = std::mem::take(&mut pending_batch);
-                                    let _ = self.ctx.apply_neighbor_batch(batch);
+                                    let _ = self.ctx.apply(DeviceUpdate::NeighborBatch { entries: batch });
                                 }
                                 if let Some(update) = event.to_device_update(current_gua.as_ref(), current_ula.as_ref()) {
                                     let _ = self.ctx.apply(update);
@@ -233,7 +234,7 @@ impl AsyncService for NeighborMonitor {
                 _ = flush_timer.tick() => {
                     if !pending_batch.is_empty() {
                         let batch = std::mem::take(&mut pending_batch);
-                        let _ = self.ctx.apply_neighbor_batch(batch);
+                        let _ = self.ctx.apply(DeviceUpdate::NeighborBatch { entries: batch });
                     }
                 }
 

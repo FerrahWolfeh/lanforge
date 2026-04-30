@@ -83,8 +83,8 @@ impl Daemon {
             async [ctx] if cfg.ra_enabled => SlaacTracker::new(target_ifindex, ctx),
 
             // 4. Address Assignment (DHCPv4, DHCPv6)
-            sync  [ctx, cfg] if cfg.dhcpv4_enabled => Dhcpv4Service::new(cfg.to_dhcpv4_config(), ctx),
-            sync  [ctx, cfg] if cfg.dhcpv6_enabled => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
+            async [ctx, cfg] if cfg.dhcpv4_enabled => Dhcpv4Service::new(cfg.to_dhcpv4_config(), ctx),
+            async [ctx, cfg] if cfg.dhcpv6_enabled => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
 
             // 5. Application Services (DNS, API)
             async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
@@ -101,7 +101,9 @@ impl Daemon {
     async fn shutdown(self) -> Result<()> {
         info!("🛑 Starting shutdown sequence...");
         self.ctx.terminate();
-        let _ = self.ctx.bus().publish(LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown));
+        let _ = self.ctx.bus().publish(LanforgeEvent::System(
+            lanforge_core::bus::SystemEvent::Shutdown,
+        ));
 
         tokio::select! {
             _ = tokio::task::spawn_blocking(move || self.registry.wait_all()) => {

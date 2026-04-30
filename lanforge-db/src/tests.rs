@@ -3,6 +3,7 @@
 use crate::engine::LeaseDb;
 use crate::worker::DbWorker;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
+use lanforge_core::context::state::DeviceUpdate;
 use lanforge_core::device::{Device, HostnameOrigin, IPv4State, IPv6State, V4Lease, V6PrefixLease};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::state::State;
@@ -60,12 +61,7 @@ async fn test_complex_device_roundtrip() {
     });
 
     // IPv6 State (SLAAC)
-    dev.v6.push(IPv6State::Slaac {
-        ip: "fd00::1".parse().unwrap(),
-        last_seen: SystemTime::now(),
-    });
-
-    // IPv6 Prefix Delegation
+    dev.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
     dev.v6_prefixes.push(V6PrefixLease {
         prefix: "2001:db8:beef::".parse().unwrap(),
         len: 64,
@@ -253,7 +249,10 @@ async fn test_db_worker_lifecycle() {
     let mut worker = DbWorker::new(db_url.clone(), "sqlite::memory:".to_string(), ctx.clone());
 
     let mac = make_mac(0x40);
-    let _ = ctx.update_hostname(mac, "worker-node".to_string());
+    let _ = ctx.apply(DeviceUpdate::MdnsHostnameHint {
+        mac,
+        hostname: "worker-node".to_string(),
+    });
 
     let mut bus_rx = bus.subscribe();
 
