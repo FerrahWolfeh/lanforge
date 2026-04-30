@@ -82,7 +82,8 @@ impl DbWorker {
         let res = if self.dirty {
             // Full flush requested
             let snapshot = self.ctx.snapshot_for_persistence();
-            db.save_snapshot(&snapshot).await
+            let len = snapshot.devices.len();
+            db.save_snapshot(&snapshot).await.map(|()| len)
         } else {
             // Incremental flush
             let dirty_devices: Vec<Arc<Device>> = {
@@ -93,6 +94,7 @@ impl DbWorker {
                     .collect()
             };
 
+            let count = dirty_devices.len();
             let mut result = Ok(());
             for device in dirty_devices {
                 if let Err(e) = db.upsert_device(&device).await {
@@ -100,22 +102,33 @@ impl DbWorker {
                     break;
                 }
             }
-            result
+            result.map(|()| count)
         };
 
-        if let Err(e) = res {
-            error!("Failed to save device table to database: {e}");
-        } else {
-            debug!(
-                "Main DB flushed ({} devices)",
-                if self.dirty {
-                    "all".to_string()
-                } else {
-                    self.dirty_macs.len().to_string()
+        match res {
+            Err(e) => {
+                error!("Failed to save device table to database: {e}");
+            }
+            Ok(count) => {
+                if count > 0 {
+                    let _ = self
+                        .ctx
+                        .bus()
+                        .publish(LanforgeEvent::Storage(StorageEvent::DbWrite {
+                            devices: count,
+                        }));
+                    debug!(
+                        "Main DB flushed ({} devices)",
+                        if self.dirty {
+                            "all".to_string()
+                        } else {
+                            count.to_string()
+                        }
+                    );
                 }
-            );
-            self.dirty = false;
-            self.dirty_macs.clear();
+                self.dirty = false;
+                self.dirty_macs.clear();
+            }
         }
     }
 }

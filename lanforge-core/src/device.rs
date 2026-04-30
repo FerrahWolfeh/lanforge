@@ -1027,6 +1027,7 @@ impl Device {
         is_active: bool,
     ) -> Option<DeviceChange> {
         let mut changed = false;
+        let mut is_new_slaac = false;
         let now = SystemTime::now();
 
         // 1. Update/Add to seen_v6 observation list
@@ -1058,13 +1059,19 @@ impl Device {
         if !self.v6.iter().any(|s| s.ip() == Some(addr)) {
             self.v6.push(IPv6State::Slaac(addr));
             changed = true;
+            is_new_slaac = true;
         }
 
         if changed {
             self.last_seen = self.calculate_last_seen();
-            return Some(DeviceChange::SlaacObserved { addr });
+            if is_new_slaac {
+                Some(DeviceChange::SlaacObserved { addr })
+            } else {
+                Some(DeviceChange::NdpActivity { ip: addr })
+            }
+        } else {
+            None
         }
-        None
     }
 
     pub fn apply_arp_observation(&mut self, ip: Ipv4Addr, is_active: bool) -> Option<DeviceChange> {

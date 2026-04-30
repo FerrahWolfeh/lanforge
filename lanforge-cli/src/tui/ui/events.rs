@@ -1,7 +1,7 @@
 use crate::tui::state::TuiState;
 use crate::tui::theme;
 use chrono::{DateTime, Utc};
-use lanforge_core::bus::{DeviceChange, DeviceEvent, LanforgeEvent};
+use lanforge_core::bus::{DeviceChange, DeviceEvent, LanforgeEvent, StorageEvent};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -37,6 +37,9 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState, _auto_scroll: bool) {
                     ("NEW  ", theme::MOCHA_GREEN)
                 }
                 LanforgeEvent::Device(DeviceEvent::Expired { .. }) => ("EXP  ", theme::MOCHA_RED),
+                LanforgeEvent::Storage(StorageEvent::DbWrite { .. }) => {
+                    ("DB   ", theme::MOCHA_YELLOW)
+                }
                 _ => ("EV   ", theme::TEXT_DIM),
             };
 

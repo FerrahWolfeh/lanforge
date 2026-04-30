@@ -327,6 +327,15 @@ impl LogHandler {
             LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                 // Ignore these or print subtly if needed
             }
+            LanforgeEvent::Storage(StorageEvent::DbWrite { devices }) => {
+                println!(
+                    "[{}] {} {} ({} devices)",
+                    now,
+                    "SYS".yellow().bold(),
+                    "Main database persisted".white(),
+                    devices
+                );
+            }
             LanforgeEvent::Storage(StorageEvent::DbPrune) => {
                 println!(
                     "[{}] {} {}",
@@ -398,7 +407,11 @@ impl LogHandler {
                 format!("{} expired", target_str).dimmed().to_string()
             }
             DeviceChange::SlaacObserved { addr } => {
-                format!("SLAAC observed: {}", addr.to_string().bright_magenta())
+                format!(
+                    "{} {}",
+                    "New SLAAC discovered:".bold(),
+                    addr.to_string().bright_magenta()
+                )
             }
             DeviceChange::HostnameChanged { hostname } => format!("Hostname: {}", hostname.bold()),
             DeviceChange::V4StaticChanged { ip } => match ip {
@@ -424,7 +437,7 @@ impl LogHandler {
             }
             DeviceChange::HostRemoved => "Host removed".red().to_string(),
             DeviceChange::NdpActivity { ip } => {
-                format!("Neighbor seen at {}", ip.to_string().bright_magenta())
+                format!("IPv6 activity at {}", ip.to_string().bright_magenta())
             }
             DeviceChange::ArpActivity { ip } => {
                 format!("Neighbor seen at {}", ip.to_string().bright_cyan())

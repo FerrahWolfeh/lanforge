@@ -8,4 +8,5 @@ pub enum StorageEvent {
     DbReset,
     DbResetCompleted,
     TableDirty,
+    DbWrite { devices: usize },
 }
