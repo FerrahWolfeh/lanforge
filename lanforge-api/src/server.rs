@@ -1,4 +1,4 @@
-use crate::api::{Command, Response};
+use crate::api::{Command, Compression, Encoding, Response};
 use lanforge_core::error::CoreError;
 
 use crate::config::ApiConfig;
@@ -7,6 +7,7 @@ use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_db::log_engine::LogDb;
 use std::fs::{self, Permissions};
+use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, split,
 };
 use tokio::net::{TcpListener, UnixListener};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use lanforge_core::service::{AsyncService, ServiceControl};
 
@@ -98,19 +99,26 @@ impl AsyncService for ControlService {
             tokio::select! {
                 // Monitora mudanças de prefixo GUA para reportar no 'status'
                 msg = bus_rx.recv() => {
-                    if let Ok(timed_event) = msg {
-                        lanforge_core::match_event!(timed_event, {
-                            LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, .. }) => {
-                                current_gua = gua.map(|ip| ip.to_string());
-                            }
-                            LanforgeEvent::System(SystemEvent::ReloadConfig) => {
-                                last_scan = Instant::now();
-                            }
-                            LanforgeEvent::System(SystemEvent::Shutdown) => {
-                                debug!("Control: shutdown received");
-                                break;
-                            }
-                        });
+                    match msg {
+                        Ok(timed_event) => {
+                            lanforge_core::match_event!(timed_event, {
+                                LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, .. }) => {
+                                    current_gua = gua.map(|ip| ip.to_string());
+                                }
+                                LanforgeEvent::System(SystemEvent::ReloadConfig) => {
+                                    last_scan = Instant::now();
+                                }
+                                LanforgeEvent::System(SystemEvent::Shutdown) => {
+                                    debug!("Control: shutdown received");
+                                    break;
+                                }
+                            });
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            warn!("Control API: Event bus lagged, continuing");
+                            continue;
+                        }
+                        Err(_) => break,
                     }
                 }
 
@@ -199,23 +207,23 @@ pub struct ClientContext {
 async fn write_response<W>(
     writer: &mut W,
     response: &Response,
-    encoding: crate::api::Encoding,
-    compression: crate::api::Compression,
+    encoding: Encoding,
+    compression: Compression,
 ) -> Result<(), ApiError>
 where
     W: AsyncWrite + Unpin,
 {
     let data = match encoding {
-        crate::api::Encoding::Json => {
+        Encoding::Json => {
             let mut s = serde_json::to_string(response)?;
             s.push('\n');
             s.into_bytes()
         }
-        crate::api::Encoding::Bincode => bincode::serialize(response)
+        Encoding::Bincode => bincode::serialize(response)
             .map_err(|e| ApiError::Bincode(format!("Bincode serialize error: {}", e)))?,
     };
 
-    let data = if compression == crate::api::Compression::Zstd {
+    let data = if compression == Compression::Zstd {
         #[cfg(feature = "zstd")]
         {
             zstd::stream::encode_all(&data[..], 3).map_err(|e| ApiError::Zstd(e.to_string()))?
@@ -232,7 +240,7 @@ where
 
     // Framing: Bincode or Compressed responses are length-prefixed (u32 BE).
     // JSON remains line-based unless compressed.
-    if encoding == crate::api::Encoding::Bincode || compression != crate::api::Compression::None {
+    if encoding == Encoding::Bincode || compression != Compression::None {
         let len = data.len() as u32;
         writer.write_all(&len.to_be_bytes()).await?;
     }
@@ -275,13 +283,13 @@ where
             }
             (
                 serde_json::from_str::<Command>(trim_line).map_err(ApiError::from),
-                crate::api::Encoding::Json,
+                Encoding::Json,
             )
         } else {
             // Bincode framed protocol (u32 BE length prefix)
             let mut len_bytes = [0u8; 4];
             if let Err(e) = reader.read_exact(&mut len_bytes).await {
-                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                if e.kind() == ErrorKind::UnexpectedEof {
                     break;
                 }
                 return Err(ApiError::Io(e));
@@ -291,7 +299,7 @@ where
             reader.read_exact(&mut buf).await?;
             (
                 bincode::deserialize::<Command>(&buf).map_err(|e| ApiError::Bincode(e.to_string())),
-                crate::api::Encoding::Bincode,
+                Encoding::Bincode,
             )
         };
 
@@ -301,20 +309,15 @@ where
                 let err_resp = Response::Error {
                     error: format!("Invalid command: {e}"),
                 };
-                let _ = write_response(
-                    &mut writer,
-                    &err_resp,
-                    req_encoding,
-                    crate::api::Compression::None,
-                )
-                .await;
+                let _ =
+                    write_response(&mut writer, &err_resp, req_encoding, Compression::None).await;
                 continue;
             }
         };
 
         // Determine response encoding and compression
         let resp_encoding = req.encoding.unwrap_or(req_encoding);
-        let resp_compression = req.compression.unwrap_or(crate::api::Compression::None);
+        let resp_compression = req.compression.unwrap_or(Compression::None);
 
         use crate::api::CommandAction;
 

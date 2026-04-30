@@ -189,13 +189,18 @@ impl AsyncService for AddressMonitor {
                         }
                 }
 
-                Ok(event) = bus_rx.recv() => {
+                res = bus_rx.recv() => {
+                    let Ok(event) = res else {
+                        if matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
+                            warn!("AddressMonitor: Event bus lagged, continuing");
+                            continue;
+                        }
+                        break;
+                    };
                     if matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                         break;
                     }
                 }
-
-                else => break,
             }
         }
 

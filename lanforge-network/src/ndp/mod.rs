@@ -238,7 +238,14 @@ impl AsyncService for NeighborMonitor {
                     }
                 }
 
-                Ok(timed_event) = bus_rx.recv() => {
+                res = bus_rx.recv() => {
+                    let Ok(timed_event) = res else {
+                        if matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
+                            warn!("NeighborMonitor: Event bus lagged, continuing");
+                            continue;
+                        }
+                        break; // Channel closed
+                    };
                     lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, ula, .. }) => {
                             current_gua = gua;
@@ -249,8 +256,6 @@ impl AsyncService for NeighborMonitor {
                         }
                     });
                 }
-
-                else => break,
             }
         }
 

@@ -176,9 +176,15 @@ async fn run_mdns_worker(
         }
 
         tokio::select! {
-            event = bus_rx.recv() => {
-                if let Ok(timed_event) = event {
-                    handle_lanforge_event(&timed_event.event, &tx);
+            res = bus_rx.recv() => {
+                match res {
+                    Ok(timed_event) => {
+                        handle_lanforge_event(&timed_event.event, &tx);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        warn!("mDNS Prober: Event bus lagged, continuing");
+                    }
+                    Err(_) => break,
                 }
             }
             cmd = rx.recv() => {

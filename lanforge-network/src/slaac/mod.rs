@@ -82,7 +82,14 @@ impl AsyncService for SlaacTracker {
                     next_sweep = Instant::now() + Duration::from_hours(1); // 60 minutes
                 }
 
-                Ok(timed_event) = bus_rx.recv() => {
+                res = bus_rx.recv() => {
+                    let Ok(timed_event) = res else {
+                        if matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
+                            warn!("SLAAC Tracker: Event bus lagged, continuing");
+                            continue;
+                        }
+                        break;
+                    };
                     lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::Network(NetworkEvent::RsReceived { .. }) => {
                             // Device requested RA, will configure SLAAC shortly.

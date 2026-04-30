@@ -279,20 +279,24 @@ impl AsyncService for RaService {
 
                 // 3. EventBus signals
                 res = bus_rx.recv() => {
-                    if let Ok(timed_event) = res {
-                        lanforge_core::match_event!(timed_event, {
-                            LanforgeEvent::Network(NetworkEvent::PrefixChanged { .. }) => {
-                                info!("RA: Prefix change detected — sending immediate RA burst");
-                                state.initial_sent = 0;
-                                next_ra_at = Instant::now();
-                            }
-                            LanforgeEvent::System(SystemEvent::Shutdown) => {
-                                info!("RA service: shutdown received");
-                                return Ok(());
-                            }
-                        });
-                    } else {
-                        break;
+                    match res {
+                        Ok(timed_event) => {
+                            lanforge_core::match_event!(timed_event, {
+                                LanforgeEvent::Network(NetworkEvent::PrefixChanged { .. }) => {
+                                    info!("RA: Prefix change detected — sending immediate RA burst");
+                                    state.initial_sent = 0;
+                                    next_ra_at = Instant::now();
+                                }
+                                LanforgeEvent::System(SystemEvent::Shutdown) => {
+                                    info!("RA service: shutdown received");
+                                    return Ok(());
+                                }
+                            });
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            warn!("RA Server: Event bus lagged, continuing");
+                        }
+                        Err(_) => break,
                     }
                 }
             }

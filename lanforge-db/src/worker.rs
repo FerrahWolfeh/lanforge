@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 use tokio::time::{Interval, interval};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use lanforge_core::bus::{DnsEvent, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
@@ -97,7 +97,14 @@ impl AsyncService for DbWorker {
         loop {
             tokio::select! {
                 // Event handling
-                Ok(timed_event) = bus_rx.recv() => {
+                res = bus_rx.recv() => {
+                    let Ok(timed_event) = res else {
+                        if matches!(res, Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) {
+                            warn!("DbWorker: Event bus lagged, continuing");
+                            continue;
+                        }
+                        break;
+                    };
                     // 1. Record in log database if loggable
                     if timed_event.is_loggable()
                         && let Err(e) = log_db.record_log(&timed_event).await {
