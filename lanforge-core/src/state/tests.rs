@@ -387,7 +387,7 @@ fn test_cli_host_updated_sync() {
     assert!(
         matches!(dev.v4, IPv4State::Static(ip) if ip == "192.168.1.10".parse::<Ipv4Addr>().unwrap())
     );
-    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b)) if *b == [0,0,0,0,0,0,0,0x10])));
+    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == [0,0,0,0,0,0,0,0x10])));
     assert!(dev.is_static());
 
     // 3. Verify static_entries sync
@@ -439,7 +439,7 @@ fn test_ip_deleted_cleanup() {
     assert!(
         dev.v6
             .iter()
-            .any(|s| matches!(s, IPv6State::Slaac(a) if *a == ip))
+            .any(|s| matches!(s, IPv6State::Slaac(a, _) if *a == ip))
     );
     assert_eq!(table.get_mac_from_ndp_cache(&ip), Some(mac));
 
@@ -610,17 +610,25 @@ fn test_is_worthy_logic() {
     dev.seen_v4.clear();
 
     // 4. Com IPv6 Link-Local -> Não digno
-    dev.v6.push(IPv6State::Slaac("fe80::1".parse().unwrap()));
+    dev.v6.push(IPv6State::Slaac(
+        "fe80::1".parse().unwrap(),
+        SystemTime::now(),
+    ));
     assert!(!dev.is_worthy());
 
     // 5. Com IPv6 ULA -> Digno
-    dev.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
+    dev.v6.push(IPv6State::Slaac(
+        "fd00::1".parse().unwrap(),
+        SystemTime::now(),
+    ));
     assert!(dev.is_worthy());
     dev.v6.clear();
 
     // 6. Com Suffix (Intencional) -> Digno
-    dev.v6
-        .push(IPv6State::Static(Ipv6AddrOrSuffix::parse("::1").unwrap()));
+    dev.v6.push(IPv6State::Static(
+        Ipv6AddrOrSuffix::parse("::1").unwrap(),
+        SystemTime::now(),
+    ));
     assert!(dev.is_worthy());
 }
 
@@ -680,14 +688,14 @@ fn test_primary_v6_priority() {
     let lease_ula: Ipv6Addr = "fd00::beef".parse().unwrap();
 
     // 4. SLAAC GUA
-    dev.v6.push(IPv6State::Slaac(slaac_gua));
+    dev.v6.push(IPv6State::Slaac(slaac_gua, SystemTime::now()));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(slaac_gua)
     );
 
     // 3. SLAAC ULA > SLAAC GUA
-    dev.v6.push(IPv6State::Slaac(slaac_ula));
+    dev.v6.push(IPv6State::Slaac(slaac_ula, SystemTime::now()));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(slaac_ula)
@@ -698,6 +706,7 @@ fn test_primary_v6_priority() {
         ip: lease_gua,
         iaid: 1,
         expires: SystemTime::now(),
+        last_seen: SystemTime::now(),
     }));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
@@ -709,6 +718,7 @@ fn test_primary_v6_priority() {
         ip: lease_ula,
         iaid: 2,
         expires: SystemTime::now(),
+        last_seen: SystemTime::now(),
     }));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
@@ -717,9 +727,10 @@ fn test_primary_v6_priority() {
 
     // Teste de Suffix
     let mut dev_suffix = Device::new(mac);
-    dev_suffix
-        .v6
-        .push(IPv6State::Static(Ipv6AddrOrSuffix::parse("::42").unwrap()));
+    dev_suffix.v6.push(IPv6State::Static(
+        Ipv6AddrOrSuffix::parse("::42").unwrap(),
+        SystemTime::now(),
+    ));
     // Sem prefixo -> None
     assert_eq!(dev_suffix.primary_v6(None, None), None);
     // Com GUA prefix -> Gera GUA (Priority 2)
@@ -844,7 +855,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
 
     let dev = state.get_device(&mac).unwrap();
 
-    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(_))));
+    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(_, _))));
     assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(..))));
 
     // 2. Report static IP as offline
@@ -852,7 +863,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
     let dev = state.get_device(&mac).unwrap();
 
     assert!(
-        dev.v6.iter().any(|s| matches!(s, IPv6State::Static(_))),
+        dev.v6.iter().any(|s| matches!(s, IPv6State::Static(_, _))),
         "Static IP must NOT be removed"
     );
 

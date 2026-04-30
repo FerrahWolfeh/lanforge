@@ -43,13 +43,17 @@ async fn upsert_base_device(
             IPv4State::Static(ip) => Some(ip.to_string()),
             _ => None,
         },
-        v6_suffix: device.v6.iter().find_map(|s| {
-            if let IPv6State::Static(suf) = s {
-                Some(suf.to_string())
-            } else {
-                None
-            }
-        }),
+        v6_suffix: device
+            .v6
+            .iter()
+            .filter(|s| !matches!(s, IPv6State::Slaac(..)))
+            .find_map(|s| {
+                if let IPv6State::Static(suf, _) = s {
+                    Some(suf.to_string())
+                } else {
+                    None
+                }
+            }),
         parent_mac: device
             .topology
             .as_ref()
@@ -195,7 +199,7 @@ async fn persist_slaac_addrs(
     v6: &[IPv6State],
 ) -> Result<(), LeaseDbError> {
     for state in v6 {
-        if let IPv6State::Slaac(ip) = state {
+        if let IPv6State::Slaac(ip, _) = state {
             let ip_str = ip.to_string();
             sqlx::query(
                 "INSERT INTO slaac_addrs (mac, ip) VALUES ($1, $2) ON CONFLICT(mac, ip) DO NOTHING",

@@ -60,9 +60,9 @@ pub fn format_uptime(secs: u64) -> String {
 /// Formats an IPv6State into a clean string.
 pub fn format_v6_state(state: &IPv6State) -> String {
     match state {
-        IPv6State::Static(s) => format!("Static({})", s),
+        IPv6State::Static(s, _) => format!("Static({})", s),
         IPv6State::Dynamic(lease) => format!("DHCP({})", lease.ip),
-        IPv6State::Slaac(ip) => format!("SLAAC({})", ip),
+        IPv6State::Slaac(ip, _) => format!("SLAAC({})", ip),
     }
 }
 

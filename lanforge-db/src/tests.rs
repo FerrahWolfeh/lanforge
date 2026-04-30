@@ -61,7 +61,10 @@ async fn test_complex_device_roundtrip() {
     });
 
     // IPv6 State (SLAAC)
-    dev.v6.push(IPv6State::Slaac("fd00::1".parse().unwrap()));
+    dev.v6.push(IPv6State::Slaac(
+        "fd00::1".parse().unwrap(),
+        SystemTime::now(),
+    ));
     dev.v6_prefixes.push(V6PrefixLease {
         prefix: "2001:db8:beef::".parse().unwrap(),
         len: 64,

@@ -261,7 +261,7 @@ impl Ipv6Pool {
         let mut ips = Vec::new();
         for prefix in prefixes {
             for state in &dev.v6 {
-                if let IPv6State::Static(suffix) = state {
+                if let IPv6State::Static(suffix, _) = state {
                     let ip = self.construct_addr(*prefix, suffix);
                     if Self::is_on_prefix(&ip, prefix) && !ips.contains(&ip) {
                         ips.push(ip);

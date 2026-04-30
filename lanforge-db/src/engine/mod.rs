@@ -362,7 +362,7 @@ impl LeaseDb {
                 if let Some(v6) = &row.v6_suffix
                     && let Some(suf) = Ipv6AddrOrSuffix::parse(v6)
                 {
-                    device.v6.push(IPv6State::Static(suf));
+                    device.v6.push(IPv6State::Static(suf, device.last_seen));
                 }
                 if let Some(bytes) = &row.duid {
                     device.duid = Some(Duid::new(bytes.clone()));
@@ -389,7 +389,7 @@ impl LeaseDb {
                                 _ => None,
                             },
                             v6_suffix: device.v6.iter().find_map(|s| {
-                                if let IPv6State::Static(suffix) = s {
+                                if let IPv6State::Static(suffix, _) = s {
                                     Some(suffix.clone())
                                 } else {
                                     None

@@ -201,8 +201,8 @@ impl State {
                 dev.v4 = IPv4State::Static(v4);
             }
             if let FieldUpdate::Set(v6) = v6_suffix {
-                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_)));
-                dev.v6.push(IPv6State::Static(v6));
+                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+                dev.v6.push(IPv6State::Static(v6, SystemTime::now()));
             }
             dev.origin = origin;
             dev.managed_at = Some(SystemTime::now());
@@ -219,7 +219,7 @@ impl State {
                     duid: dev.duid.clone(),
                     v4_static: dev.v4.ip(),
                     v6_suffix: dev.v6.iter().find_map(|s| match s {
-                        IPv6State::Static(s) => Some(s.clone()),
+                        IPv6State::Static(s, _) => Some(s.clone()),
                         _ => None,
                     }),
                     origin,

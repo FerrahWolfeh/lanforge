@@ -334,11 +334,11 @@ impl ClientContext {
                         expires: state
                             .map(|s| match s {
                                 IPv6State::Dynamic(l) => format_iso8601(l.expires),
-                                IPv6State::Static(_) => "Static".to_string(),
-                                IPv6State::Slaac(_) => "—".to_string(),
+                                IPv6State::Static(_, _) => "Static".to_string(),
+                                IPv6State::Slaac(_, _) => "—".to_string(),
                             })
                             .unwrap_or_else(|| "—".to_string()),
-                        reserved: state.is_some_and(|s| matches!(s, IPv6State::Static(_)))
+                        reserved: state.is_some_and(|s| matches!(s, IPv6State::Static(_, _)))
                             || dev.is_static(),
                     }
                 }),
@@ -350,7 +350,7 @@ impl ClientContext {
                                 addr: ip.to_string(),
                                 kind: get_v6_kind(&ip).to_string(),
                             });
-                        } else if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_)) = state {
+                        } else if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_), _) = state {
                             if let Some(ip) = ula_prefix.and_then(|p| state.ip_with_prefix(Some(p)))
                             {
                                 list.push(Ipv6Entry {
@@ -402,7 +402,7 @@ impl ClientContext {
                     _ => None,
                 },
                 v6_suffix: dev.v6.iter().find_map(|s| {
-                    if let IPv6State::Static(suffix) = s {
+                    if let IPv6State::Static(suffix, _) = s {
                         Some(suffix.to_string())
                     } else {
                         None
