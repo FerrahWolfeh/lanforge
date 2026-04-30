@@ -48,31 +48,38 @@ pub async fn run_tui(
 
     // Spawn input & tick handler
     let tx = event_tx.clone();
-    tokio::spawn(async move {
+    let input_handle = tokio::spawn(async move {
         loop {
-            if ct_event::poll(Duration::from_millis(100)).unwrap()
-                && let ct_event::Event::Key(key) = ct_event::read().unwrap()
-            {
-                let _ = tx.send(AppEvent::Key(key)).await;
+            match ct_event::poll(Duration::from_millis(100)) {
+                Ok(true) => {
+                    if let Ok(ct_event::Event::Key(key)) = ct_event::read() {
+                        let _ = tx.send(AppEvent::Key(key)).await;
+                    }
+                }
+                Ok(false) => {}
+                Err(_) => break,
             }
             let _ = tx.send(AppEvent::Tick).await;
         }
     });
 
+    let mut background_handles = Vec::new();
+    background_handles.push(input_handle);
+
     // Spawn daemon connection tasks
     #[cfg(feature = "remote")]
     if let Some(remote_client) = remote {
         let tx = event_tx.clone();
-        tokio::spawn(async move {
+        background_handles.push(tokio::spawn(async move {
             remote_daemon_loop(remote_client, tx).await;
-        });
+        }));
     }
 
     if let Some(socket) = socket_path {
         let tx = event_tx.clone();
-        tokio::spawn(async move {
+        background_handles.push(tokio::spawn(async move {
             daemon_loop(socket, tx).await;
-        });
+        }));
     }
 
     let mut app = TuiApp::new();
@@ -104,6 +111,11 @@ pub async fn run_tui(
         }
     }
 
+    // Abort background tasks
+    for handle in background_handles {
+        handle.abort();
+    }
+
     // Restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -114,13 +126,12 @@ pub async fn run_tui(
 
 #[cfg(feature = "remote")]
 async fn remote_daemon_loop(client: crate::cli::remote::RemoteClient, tx: mpsc::Sender<AppEvent>) {
-    let mut last_refresh = Instant::now() - Duration::from_secs(10);
     let client = Arc::new(client);
 
     // 1. WebSocket Connection (persistent)
     let ws_tx = tx.clone();
     let ws_client = client.clone();
-    tokio::spawn(async move {
+    let ws_task = async move {
         loop {
             if let Ok(mut rx) = ws_client.connect_ws().await {
                 while let Some(resp) = rx.recv().await {
@@ -131,45 +142,54 @@ async fn remote_daemon_loop(client: crate::cli::remote::RemoteClient, tx: mpsc::
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
-    });
+    };
 
     // 2. Fetch Connection (periodic)
-    loop {
-        if last_refresh.elapsed() >= Duration::from_secs(5) {
-            // Status
-            if let Ok(Response::Status(s)) = client.send(Command::STATUS).await {
-                let _ = tx.send(AppEvent::StatusUpdate(s)).await;
-            }
+    let fetch_tx = tx.clone();
+    let fetch_client = client.clone();
+    let fetch_task = async move {
+        let mut last_refresh = Instant::now() - Duration::from_secs(10);
+        loop {
+            if last_refresh.elapsed() >= Duration::from_secs(5) {
+                // Status
+                if let Ok(Response::Status(s)) = fetch_client.send(Command::STATUS).await {
+                    let _ = fetch_tx.send(AppEvent::StatusUpdate(s)).await;
+                }
 
-            // State (ContextDump)
-            let cmd = Command::new(CommandAction::ContextDump {
-                only_devices: false,
-                only_orphans: false,
-            });
-            if let Ok(Response::ContextDump(s)) = client.send(cmd).await {
-                let _ = tx.send(AppEvent::StateUpdate(s)).await;
-            }
+                // State (ContextDump)
+                let cmd = Command::new(CommandAction::ContextDump {
+                    only_devices: false,
+                    only_orphans: false,
+                });
+                if let Ok(Response::ContextDump(s)) = fetch_client.send(cmd).await {
+                    let _ = fetch_tx.send(AppEvent::StateUpdate(s)).await;
+                }
 
-            // DNS Stats
-            if let Ok(Response::DnsStats(s)) =
-                client.send(Command::new(CommandAction::DnsStats)).await
-            {
-                let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
-            }
+                // DNS Stats
+                if let Ok(Response::DnsStats(s)) = fetch_client
+                    .send(Command::new(CommandAction::DnsStats))
+                    .await
+                {
+                    let _ = fetch_tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+                }
 
-            last_refresh = Instant::now();
+                last_refresh = Instant::now();
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+
+    tokio::select! {
+        _ = ws_task => {}
+        _ = fetch_task => {}
     }
 }
 
 async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {
-    let mut last_refresh = Instant::now() - Duration::from_secs(10);
-
     // 1. Watch Connection (persistent)
     let watch_tx = tx.clone();
     let watch_socket = socket_path.clone();
-    tokio::spawn(async move {
+    let watch_task = async move {
         loop {
             if let Ok(mut stream) = UnixStream::connect(&watch_socket).await {
                 let (reader, mut writer) = stream.split();
@@ -194,56 +214,66 @@ async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
-    });
+    };
 
     // 2. Fetch Connection (periodic)
-    loop {
-        if last_refresh.elapsed() >= Duration::from_secs(5) {
-            if let Ok(mut stream) = UnixStream::connect(&socket_path).await {
-                let (reader, mut writer) = stream.split();
-                let mut reader = BufReader::new(reader);
+    let fetch_socket = socket_path.clone();
+    let fetch_tx = tx.clone();
+    let fetch_task = async move {
+        let mut last_refresh = Instant::now() - Duration::from_secs(10);
+        loop {
+            if last_refresh.elapsed() >= Duration::from_secs(5) {
+                if let Ok(mut stream) = UnixStream::connect(&fetch_socket).await {
+                    let (reader, mut writer) = stream.split();
+                    let mut reader = BufReader::new(reader);
 
-                // Status
-                let mut cmd = Command::new(CommandAction::Status);
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::Status(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
-                    let _ = tx.send(AppEvent::StatusUpdate(s)).await;
-                }
+                    // Status
+                    let mut cmd = Command::new(CommandAction::Status);
+                    cmd.encoding = Some(Encoding::Json);
+                    if write_request(&mut writer, &cmd, Encoding::Json)
+                        .await
+                        .is_ok()
+                        && let Ok(Some(Response::Status(s))) =
+                            read_response(&mut reader, Encoding::Json, Compression::None).await
+                    {
+                        let _ = fetch_tx.send(AppEvent::StatusUpdate(s)).await;
+                    }
 
-                // State (ContextDump)
-                let mut cmd = Command::new(CommandAction::ContextDump {
-                    only_devices: false,
-                    only_orphans: false,
-                });
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::ContextDump(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
-                    let _ = tx.send(AppEvent::StateUpdate(s)).await;
-                }
+                    // State (ContextDump)
+                    let mut cmd = Command::new(CommandAction::ContextDump {
+                        only_devices: false,
+                        only_orphans: false,
+                    });
+                    cmd.encoding = Some(Encoding::Json);
+                    if write_request(&mut writer, &cmd, Encoding::Json)
+                        .await
+                        .is_ok()
+                        && let Ok(Some(Response::ContextDump(s))) =
+                            read_response(&mut reader, Encoding::Json, Compression::None).await
+                    {
+                        let _ = fetch_tx.send(AppEvent::StateUpdate(s)).await;
+                    }
 
-                // DNS Stats
-                let mut cmd = Command::new(CommandAction::DnsStats);
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::DnsStats(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
-                    let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+                    // DNS Stats
+                    let mut cmd = Command::new(CommandAction::DnsStats);
+                    cmd.encoding = Some(Encoding::Json);
+                    if write_request(&mut writer, &cmd, Encoding::Json)
+                        .await
+                        .is_ok()
+                        && let Ok(Some(Response::DnsStats(s))) =
+                            read_response(&mut reader, Encoding::Json, Compression::None).await
+                    {
+                        let _ = fetch_tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+                    }
                 }
+                last_refresh = Instant::now();
             }
-            last_refresh = Instant::now();
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+
+    tokio::select! {
+        _ = watch_task => {}
+        _ = fetch_task => {}
     }
 }
