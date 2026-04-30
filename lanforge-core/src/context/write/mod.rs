@@ -178,13 +178,17 @@ impl LanforgeContext {
                 ref port,
                 ifindex,
             } => {
-                let state = self.inner.state.read();
-                if let Some(dev) = state.devices.get(&mac)
-                    && let Some(old) = &dev.topology
-                    && old.parent_mac == parent_mac
-                    && &old.port == port
-                    && old.local_ifindex == ifindex
-                {
+                let is_redundant = {
+                    let state = self.inner.state.read();
+                    state.devices.get(&mac).is_some_and(|dev| {
+                        dev.topology.as_ref().is_some_and(|old| {
+                            old.parent_mac == parent_mac
+                                && &old.port == port
+                                && old.local_ifindex == ifindex
+                        })
+                    })
+                };
+                if is_redundant {
                     return None;
                 }
                 Some(update)
