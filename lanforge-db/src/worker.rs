@@ -13,14 +13,20 @@
 //!
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
+use lanforge_core::device::Device;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{Interval, interval};
 use tracing::{debug, error, info, warn};
 
-use lanforge_core::bus::{DnsEvent, LanforgeEvent, StorageEvent, SystemEvent};
+use lanforge_core::bus::{
+    DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
+};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
+use lanforge_core::identifiers::MacAddr;
 use lanforge_core::service::{AsyncService, ServiceControl};
+use std::collections::HashSet;
 
 use crate::engine::LeaseDb;
 use crate::log_engine::LogDb;
@@ -40,6 +46,8 @@ pub struct DbWorker {
     log_db_url: String,
     ctx: LanforgeContext,
     dirty: bool,
+    dirty_macs: HashSet<MacAddr>,
+    log_buffer: Vec<TimedEvent>,
 }
 
 impl DbWorker {
@@ -50,21 +58,64 @@ impl DbWorker {
             log_db_url,
             ctx,
             dirty: false,
+            dirty_macs: HashSet::new(),
+            log_buffer: Vec::with_capacity(128),
         }
     }
 
     /// Flushes the current device table to the persistent database.
-    async fn flush_batch(&mut self, db: &LeaseDb) {
-        if !self.dirty {
+    async fn flush_batch(&mut self, db: &LeaseDb, log_db: &LogDb) {
+        // 1. Flush Logs
+        if !self.log_buffer.is_empty() {
+            if let Err(e) = log_db.record_logs_batch(&self.log_buffer).await {
+                error!("Failed to flush log batch: {e}");
+            } else {
+                self.log_buffer.clear();
+            }
+        }
+
+        // 2. Flush Main DB
+        if !self.dirty && self.dirty_macs.is_empty() {
             return;
         }
 
-        let snapshot = self.ctx.snapshot_for_persistence();
-        if let Err(e) = db.save_snapshot(&snapshot).await {
+        let res = if self.dirty {
+            // Full flush requested
+            let snapshot = self.ctx.snapshot_for_persistence();
+            db.save_snapshot(&snapshot).await
+        } else {
+            // Incremental flush
+            let dirty_devices: Vec<Arc<Device>> = {
+                let state = self.ctx.read();
+                self.dirty_macs
+                    .iter()
+                    .filter_map(|mac| state.devices.get(mac).cloned())
+                    .collect()
+            };
+
+            let mut result = Ok(());
+            for device in dirty_devices {
+                if let Err(e) = db.upsert_device(&device).await {
+                    result = Err(e);
+                    break;
+                }
+            }
+            result
+        };
+
+        if let Err(e) = res {
             error!("Failed to save device table to database: {e}");
         } else {
-            debug!("Device table persisted to database");
+            debug!(
+                "Main DB flushed ({} devices)",
+                if self.dirty {
+                    "all".to_string()
+                } else {
+                    self.dirty_macs.len().to_string()
+                }
+            );
             self.dirty = false;
+            self.dirty_macs.clear();
         }
     }
 }
@@ -106,14 +157,35 @@ impl AsyncService for DbWorker {
                         break;
                     };
                     // 1. Record in log database if loggable
-                    if timed_event.is_loggable()
-                        && let Err(e) = log_db.record_log(&timed_event).await {
-                            error!("Log record error: {e}");
+                    if timed_event.is_loggable() {
+                        self.log_buffer.push(timed_event.clone());
+                        if self.log_buffer.len() >= 100 {
+                            if let Err(e) = log_db.record_logs_batch(&self.log_buffer).await {
+                                error!("Immediate log flush error: {e}");
+                            } else {
+                                self.log_buffer.clear();
+                            }
                         }
+                    }
 
                     // 2. Process specific events
                     let mut break_loop = false;
                     lanforge_core::match_event!(timed_event, {
+                        LanforgeEvent::Device(DeviceEvent::Updated { mac, ref change, .. }) => {
+                            if change.is_persistent() {
+                                self.dirty_macs.insert(mac);
+                            }
+                        }
+                        LanforgeEvent::Device(DeviceEvent::Discovered { mac, .. })
+                        | LanforgeEvent::Device(DeviceEvent::Expired { mac, .. }) => {
+                            self.dirty_macs.insert(mac);
+                        }
+                        LanforgeEvent::Device(DeviceEvent::Purged { mac }) => {
+                            // Removing a device requires a full sync or special handling in the DB
+                            // For now, let's just trigger a full sync if a device is purged
+                            self.dirty = true;
+                            self.dirty_macs.remove(&mac);
+                        }
                         LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                             self.dirty = true;
                         }
@@ -147,7 +219,7 @@ impl AsyncService for DbWorker {
                         }
                         LanforgeEvent::System(SystemEvent::Shutdown) => {
                             info!("Database worker shutting down...");
-                            self.flush_batch(&db).await;
+                            self.flush_batch(&db, &log_db).await;
                             break_loop = true;
                         }
                         #[cfg(feature = "adblock")]
@@ -173,7 +245,7 @@ impl AsyncService for DbWorker {
 
                 // Periodic flush
                 _ = flush_interval.tick() => {
-                    self.flush_batch(&db).await;
+                    self.flush_batch(&db, &log_db).await;
                 }
             }
         }

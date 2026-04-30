@@ -102,22 +102,43 @@ impl LogDb {
 
     /// Records a new event in the log history.
     pub async fn record_log(&self, timed_event: &TimedEvent) -> Result<(), LeaseDbError> {
-        let json = serde_json::to_string(&timed_event.event)
-            .map_err(|e| LeaseDbError::Migration("event serialization".into(), e.to_string()))?;
+        self.record_logs_batch(std::slice::from_ref(timed_event))
+            .await
+    }
 
-        let now_secs = timed_event
-            .timestamp
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+    /// Records multiple events in a single transaction.
+    pub async fn record_logs_batch(&self, events: &[TimedEvent]) -> Result<(), LeaseDbError> {
+        if events.is_empty() {
+            return Ok(());
+        }
 
-        sqlx::query("INSERT INTO system_logs (timestamp, event_json) VALUES (?, ?)")
-            .bind(now_secs)
-            .bind(json)
-            .execute(&self.pool)
-            .await?;
+        let mut tx = self.pool.begin().await?;
 
-        self.maybe_prune(now_secs).await?;
+        let mut last_timestamp = 0;
+        for timed_event in events {
+            let json = serde_json::to_string(&timed_event.event).map_err(|e| {
+                LeaseDbError::Migration("event serialization".into(), e.to_string())
+            })?;
+
+            let now_secs = timed_event
+                .timestamp
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            last_timestamp = now_secs;
+
+            sqlx::query("INSERT INTO system_logs (timestamp, event_json) VALUES (?, ?)")
+                .bind(now_secs)
+                .bind(json)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+
+        if last_timestamp > 0 {
+            self.maybe_prune(last_timestamp).await?;
+        }
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent, StorageEvent};
+use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent};
 use crate::context::LanforgeContext;
 use crate::context::state::{DeviceUpdate, FieldUpdate, State};
 use crate::device::Origin;
@@ -43,13 +43,6 @@ async fn new_device_publishes_discovered_and_updated() {
             LanforgeEvent::Device(DeviceEvent::Updated { .. })
         )),
         "Deve publicar DeviceUpdated"
-    );
-    assert!(
-        events.iter().any(|e: &crate::bus::TimedEvent| matches!(
-            e.event,
-            LanforgeEvent::Storage(StorageEvent::TableDirty)
-        )),
-        "Deve publicar DeviceTableDirty"
     );
 }
 

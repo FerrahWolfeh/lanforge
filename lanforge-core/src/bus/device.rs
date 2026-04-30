@@ -68,6 +68,38 @@ pub enum DeviceChange {
     CliHostUpdated,
 }
 
+impl DeviceChange {
+    /// Returns true if this change represents a significant state modification
+    /// that should be persisted to the main database immediately.
+    ///
+    /// Minor changes like activity timestamps or transient status updates
+    /// return false to avoid excessive main DB writes.
+    #[must_use]
+    pub const fn is_persistent(&self) -> bool {
+        match self {
+            Self::V4Assigned { .. }
+            | Self::V6Assigned { .. }
+            | Self::V6PrefixAssigned { .. }
+            | Self::LeaseExpired { .. }
+            | Self::HostnameChanged { .. }
+            | Self::V4StaticChanged { .. }
+            | Self::V6SuffixChanged { .. }
+            | Self::DuidAssociated { .. }
+            | Self::Classified { .. }
+            | Self::CliHostUpdated
+            | Self::IpDeleted { .. }
+            | Self::SlaacObserved { .. }
+            | Self::TopologyChanged { .. } => true,
+
+            Self::ArpActivity { .. }
+            | Self::NdpActivity { .. }
+            | Self::StatusChanged { .. }
+            | Self::IpOffline { .. }
+            | Self::HostRemoved => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DeviceEvent {
     Discovered {

@@ -2,11 +2,7 @@
 
 use std::time::Duration;
 
-use crate::{
-    bus::{LanforgeEvent, StorageEvent},
-    context::LanforgeContext,
-    identifiers::MacAddr,
-};
+use crate::{context::LanforgeContext, identifiers::MacAddr};
 
 impl LanforgeContext {
     /// Triggers the background garbage collection process.
@@ -21,7 +17,6 @@ impl LanforgeContext {
             for event in events {
                 let _ = bus.publish(event);
             }
-            let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
         }
     }
 

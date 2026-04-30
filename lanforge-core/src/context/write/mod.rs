@@ -5,7 +5,6 @@ pub(crate) mod network;
 pub(crate) mod storage;
 
 use crate::{
-    bus::{LanforgeEvent, StorageEvent},
     context::LanforgeContext,
     state::{DeviceUpdate, State},
 };
@@ -96,9 +95,6 @@ impl LanforgeContext {
         for event in events {
             let _ = bus.publish(event);
         }
-
-        // Signal that storage is dirty (state changed)
-        let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
 
         true
     }
