@@ -1112,7 +1112,7 @@ impl Device {
         }
 
         if changed {
-            self.last_seen = now;
+            self.last_seen = self.calculate_last_seen();
             return Some(DeviceChange::ArpActivity { ip });
         }
         None
@@ -1165,7 +1165,7 @@ impl Device {
 
     #[must_use]
     pub fn calculate_last_seen(&self) -> SystemTime {
-        let mut latest = SystemTime::UNIX_EPOCH;
+        let mut latest = self.last_seen;
 
         // v4 lease
         if let IPv4State::Dynamic(l) = &self.v4 {
@@ -1860,5 +1860,28 @@ mod tests {
         assert_eq!(sorted[0], "fd00::1".parse::<IpAddr>().unwrap());
         assert_eq!(sorted[1], "192.168.1.1".parse::<IpAddr>().unwrap());
         assert_eq!(sorted[2], "2001:db8::1".parse::<IpAddr>().unwrap());
+    }
+    #[test]
+    fn test_calculate_last_seen_preserves_baseline() {
+        let past = SystemTime::now() - Duration::from_hours(1); // 1 hour ago
+        let mut dev = Device::new(MacAddr([1, 2, 3, 4, 5, 6]));
+
+        // Initially UNIX_EPOCH
+        assert_eq!(dev.calculate_last_seen(), SystemTime::UNIX_EPOCH);
+
+        // Manually set baseline (e.g. from DB hydration)
+        dev.last_seen = past;
+        assert_eq!(dev.calculate_last_seen(), past);
+
+        // Add an observation with UNIX_EPOCH
+        dev.apply_arp_observation("192.168.1.1".parse().unwrap(), false);
+
+        // Should STILL be 'past', not UNIX_EPOCH
+        assert_eq!(dev.calculate_last_seen(), past);
+
+        // Add a recent observation
+        let now = SystemTime::now();
+        dev.apply_arp_observation("192.168.1.1".parse().unwrap(), true);
+        assert!(dev.calculate_last_seen() >= now);
     }
 }

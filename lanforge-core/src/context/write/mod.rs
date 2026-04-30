@@ -17,18 +17,38 @@ impl LanforgeContext {
         self.inner.state.write()
     }
     /// Applies a state mutation to the context.
-    ///
-    /// This is the central entry point for all state changes. It manages:
-    /// 1. Metric counters for discovery rates
-    /// 2. Write-locking the state
-    /// 3. Executing the state mutation logic
-    /// 4. Publishing resulting events to the bus
-    ///
-    /// Returns `true` if any change occurred, `false` otherwise.
     #[must_use]
     pub fn apply(&self, update: DeviceUpdate) -> bool {
-        // 1. Update Metrics (Pre-apply based on intent)
-        match &update {
+        // 1. Update Metrics
+        self.update_metrics(&update);
+
+        // 2. Fast-path for redundant activity updates (Debounce)
+        let Some(update) = self.debounce_update(update) else {
+            return true;
+        };
+
+        // 3. Apply to State
+        let events = {
+            let mut state = self.inner.state.write();
+            state.apply_update(update)
+        };
+
+        if events.is_empty() {
+            return false;
+        }
+
+        // 4. Publish Events
+        let bus = self.bus();
+        for event in events {
+            let _ = bus.publish(event);
+        }
+
+        true
+    }
+
+    /// Internal helper to update discovery metrics based on incoming updates.
+    fn update_metrics(&self, update: &DeviceUpdate) {
+        match update {
             DeviceUpdate::ArpSeen { .. } => {
                 self.inner
                     .event_counters
@@ -79,23 +99,74 @@ impl LanforgeContext {
             }
             _ => {}
         }
+    }
 
-        // 2. Apply to State
-        let events = {
-            let mut state = self.inner.state.write();
-            state.apply_update(update)
-        };
+    /// Internal helper to perform fast-path debounce checks.
+    /// Returns `None` if the update was skipped, or `Some(update)` (possibly filtered) to proceed.
+    fn debounce_update(&self, update: DeviceUpdate) -> Option<DeviceUpdate> {
+        match update {
+            DeviceUpdate::ArpSeen { mac, ip, is_active } => {
+                let should_skip = {
+                    let state = self.inner.state.read();
+                    state.devices.get(&mac).is_some_and(|dev| {
+                        let recently_seen = dev.last_seen.elapsed().unwrap_or_default()
+                            < crate::device::Device::ACTIVITY_DEBOUNCE;
+                        let has_ip = dev.seen_v4.iter().any(|(a, _)| *a == ip);
+                        recently_seen && has_ip
+                    })
+                };
+                if should_skip {
+                    None
+                } else {
+                    Some(DeviceUpdate::ArpSeen { mac, ip, is_active })
+                }
+            }
+            DeviceUpdate::NdpSeen { mac, ip, is_active } => {
+                let should_skip = {
+                    let state = self.inner.state.read();
+                    state.devices.get(&mac).is_some_and(|dev| {
+                        let recently_seen = dev.last_seen.elapsed().unwrap_or_default()
+                            < crate::device::Device::ACTIVITY_DEBOUNCE;
+                        let has_ip = dev.v6.iter().any(|s| s.ip() == Some(ip));
+                        recently_seen && has_ip
+                    })
+                };
+                if should_skip {
+                    None
+                } else {
+                    Some(DeviceUpdate::NdpSeen { mac, ip, is_active })
+                }
+            }
+            DeviceUpdate::NeighborBatch { entries } => {
+                let filtered: Vec<_> = {
+                    let state = self.inner.state.read();
+                    entries
+                        .into_iter()
+                        .filter(|(mac, ip, _)| {
+                            state.devices.get(mac).is_none_or(|dev| {
+                                let recently_seen = dev.last_seen.elapsed().unwrap_or_default()
+                                    < crate::device::Device::ACTIVITY_DEBOUNCE;
+                                let has_ip = match ip {
+                                    std::net::IpAddr::V4(v4) => {
+                                        dev.seen_v4.iter().any(|(a, _)| a == v4)
+                                    }
+                                    std::net::IpAddr::V6(v6) => {
+                                        dev.v6.iter().any(|s| s.ip() == Some(*v6))
+                                    }
+                                };
+                                !(recently_seen && has_ip)
+                            })
+                        })
+                        .collect()
+                };
 
-        if events.is_empty() {
-            return false;
+                if filtered.is_empty() {
+                    None
+                } else {
+                    Some(DeviceUpdate::NeighborBatch { entries: filtered })
+                }
+            }
+            _ => Some(update),
         }
-
-        // 3. Publish Events
-        let bus = self.bus();
-        for event in events {
-            let _ = bus.publish(event);
-        }
-
-        true
     }
 }

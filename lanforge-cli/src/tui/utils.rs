@@ -19,6 +19,9 @@ pub fn get_class_icon(class: DeviceClass) -> &'static str {
 /// Formats SystemTime into a human-readable relative duration string (e.g., "2m ago")
 /// or "now" if very recent.
 pub fn format_relative_time(st: SystemTime) -> String {
+    if st == SystemTime::UNIX_EPOCH {
+        return "never".to_string();
+    }
     let now = SystemTime::now();
     match now.duration_since(st) {
         Ok(d) => {

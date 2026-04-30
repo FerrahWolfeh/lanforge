@@ -24,7 +24,7 @@ pub use topology::TopologyHandler;
 pub use whois::WhoisHandler;
 pub use wol::WolCommand;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use color_eyre::eyre::Result;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
@@ -91,6 +91,9 @@ pub fn format_uptime(secs: u64) -> String {
 
 pub fn format_short_relative(iso: &str) -> String {
     if let Ok(dt) = DateTime::parse_from_rfc3339(iso) {
+        if dt.year() <= 1970 {
+            return "never".to_string();
+        }
         let now = Utc::now();
         let diff = dt.with_timezone(&Utc).signed_duration_since(now);
 
@@ -125,6 +128,9 @@ pub fn format_short_relative(iso: &str) -> String {
 
 pub fn format_relative_iso8601(iso: &str) -> String {
     if let Ok(dt) = DateTime::parse_from_rfc3339(iso) {
+        if dt.year() <= 1970 {
+            return "never".to_string();
+        }
         let now = Utc::now();
         let diff = dt.with_timezone(&Utc).signed_duration_since(now);
 
