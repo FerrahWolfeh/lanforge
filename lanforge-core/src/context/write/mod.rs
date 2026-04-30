@@ -19,12 +19,18 @@ impl LanforgeContext {
     /// Applies a state mutation to the context.
     #[must_use]
     pub fn apply(&self, update: DeviceUpdate) -> bool {
+        !self.apply_with_events(update).is_empty()
+    }
+
+    /// Applies a state mutation and returns any events that were published to the bus.
+    #[must_use]
+    pub fn apply_with_events(&self, update: DeviceUpdate) -> Vec<crate::bus::LanforgeEvent> {
         // 1. Update Metrics
         self.update_metrics(&update);
 
         // 2. Fast-path for redundant activity updates (Debounce)
         let Some(update) = self.debounce_update(update) else {
-            return true;
+            return Vec::new();
         };
 
         // 3. Apply to State
@@ -34,16 +40,16 @@ impl LanforgeContext {
         };
 
         if events.is_empty() {
-            return false;
+            return Vec::new();
         }
 
         // 4. Publish Events
         let bus = self.bus();
-        for event in events {
-            let _ = bus.publish(event);
+        for event in &events {
+            let _ = bus.publish(event.clone());
         }
 
-        true
+        events
     }
 
     /// Internal helper to update discovery metrics based on incoming updates.
@@ -165,6 +171,23 @@ impl LanforgeContext {
                 } else {
                     Some(DeviceUpdate::NeighborBatch { entries: filtered })
                 }
+            }
+            DeviceUpdate::TopologyUpdated {
+                mac,
+                parent_mac,
+                ref port,
+                ifindex,
+            } => {
+                let state = self.inner.state.read();
+                if let Some(dev) = state.devices.get(&mac)
+                    && let Some(old) = &dev.topology
+                    && old.parent_mac == parent_mac
+                    && &old.port == port
+                    && old.local_ifindex == ifindex
+                {
+                    return None;
+                }
+                Some(update)
             }
             _ => Some(update),
         }

@@ -369,6 +369,13 @@ pub struct V4Lease {
         deserialize_with = "deserialize_time"
     )]
     pub expires: SystemTime,
+    /// The last time activity was observed for this lease.
+    #[serde(
+        default = "SystemTime::now",
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
+    pub last_seen: SystemTime,
 }
 
 /// Represents an active `DHCPv6` `IA_NA` (Non-temporary Address) lease.
@@ -533,6 +540,23 @@ pub enum Ipv6AddrOrSuffix {
 }
 
 impl Ipv6AddrOrSuffix {
+    /// Checks if the given address matches this configuration.
+    #[must_use]
+    pub fn matches(&self, addr: Ipv6Addr) -> bool {
+        match self {
+            Self::Full(ip) => *ip == addr,
+            Self::Suffix(suffix) => {
+                let segs = addr.segments();
+                let mut addr_suffix = [0u8; 8];
+                addr_suffix[0..2].copy_from_slice(&segs[4].to_be_bytes());
+                addr_suffix[2..4].copy_from_slice(&segs[5].to_be_bytes());
+                addr_suffix[4..6].copy_from_slice(&segs[6].to_be_bytes());
+                addr_suffix[6..8].copy_from_slice(&segs[7].to_be_bytes());
+                &addr_suffix == suffix
+            }
+        }
+    }
+
     /// Parses a string into either a Full IPv6 address or a Suffix.
     ///
     /// # Rules
@@ -545,11 +569,6 @@ impl Ipv6AddrOrSuffix {
             return None;
         }
         if let Ok(ip) = s.parse::<Ipv6Addr>() {
-            // Se for um endereço completo mas que começa com ::, pode ser um sufixo mal formatado no TOML?
-            // "::1" parses as Ipv6Addr. We should decide if it's Full or Suffix.
-            // Regra: se tem mais que 4 grupos ou não começa com ::, é Full.
-            // Mas Ipv6Addr::parse é guloso.
-            // Vamos checar se o endereço tem zero nos primeiros 64 bits.
             let segs = ip.segments();
             if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 {
                 let mut bytes = [0u8; 8];
@@ -561,8 +580,6 @@ impl Ipv6AddrOrSuffix {
             }
             return Some(Self::Full(ip));
         }
-
-        // Caso "1", "beef", "dead:beef" (sem o ::)
 
         if s.split(':').count() > 4 {
             return None;
@@ -923,13 +940,35 @@ impl Device {
     }
 
     pub fn apply_v4_lease(&mut self, ip: Ipv4Addr, expires: SystemTime) -> Option<DeviceChange> {
-        let new_v4 = IPv4State::Dynamic(V4Lease { ip, expires });
-        if self.v4 != new_v4 {
-            self.v4 = new_v4;
-            self.last_seen = SystemTime::now();
-            return Some(DeviceChange::V4Assigned { ip });
+        let now = SystemTime::now();
+        let mut changed = false;
+
+        match &mut self.v4 {
+            IPv4State::Dynamic(lease) if lease.ip == ip && lease.expires == expires => {
+                // Idempotent for persistent state, but bump activity
+                if now.duration_since(lease.last_seen).unwrap_or(Duration::MAX)
+                    > Self::ACTIVITY_DEBOUNCE
+                {
+                    lease.last_seen = now;
+                    self.last_seen = self.calculate_last_seen();
+                }
+            }
+            _ => {
+                self.v4 = IPv4State::Dynamic(V4Lease {
+                    ip,
+                    expires,
+                    last_seen: now,
+                });
+                self.last_seen = self.calculate_last_seen();
+                changed = true;
+            }
         }
-        None
+
+        if changed {
+            Some(DeviceChange::V4Assigned { ip })
+        } else {
+            None
+        }
     }
 
     pub fn apply_v6_lease(
@@ -1043,7 +1082,10 @@ impl Device {
         };
 
         // Check if we already have this address in any form (Static, Dynamic, or SLAAC)
-        let existing_index = self.v6.iter().position(|s| s.ip() == Some(addr));
+        let existing_index = self.v6.iter().position(|s| match s {
+            IPv6State::Static(s, _) => s.matches(addr),
+            _ => s.ip() == Some(addr),
+        });
 
         if let Some(idx) = existing_index {
             match &mut self.v6[idx] {
@@ -1165,11 +1207,12 @@ impl Device {
 
     #[must_use]
     pub fn calculate_last_seen(&self) -> SystemTime {
-        let mut latest = self.last_seen;
+        let mut latest = SystemTime::UNIX_EPOCH;
+        let _now = SystemTime::now();
 
         // v4 lease
         if let IPv4State::Dynamic(l) = &self.v4 {
-            latest = latest.max(l.expires.min(SystemTime::now()));
+            latest = latest.max(l.last_seen);
         }
 
         // v4 observations
@@ -1181,7 +1224,6 @@ impl Device {
         for s in &self.v6 {
             match s {
                 IPv6State::Dynamic(l) => {
-                    latest = latest.max(l.expires.min(SystemTime::now()));
                     latest = latest.max(l.last_seen);
                 }
                 IPv6State::Slaac(_, ts) | IPv6State::Static(_, ts) => {
@@ -1861,27 +1903,24 @@ mod tests {
         assert_eq!(sorted[1], "192.168.1.1".parse::<IpAddr>().unwrap());
         assert_eq!(sorted[2], "2001:db8::1".parse::<IpAddr>().unwrap());
     }
+
     #[test]
-    fn test_calculate_last_seen_preserves_baseline() {
-        let past = SystemTime::now() - Duration::from_hours(1); // 1 hour ago
+    fn test_ipv6_suffix_matches_discovered_slaac() {
         let mut dev = Device::new(MacAddr([1, 2, 3, 4, 5, 6]));
 
-        // Initially UNIX_EPOCH
-        assert_eq!(dev.calculate_last_seen(), SystemTime::UNIX_EPOCH);
+        // Configure a static suffix ::1
+        let suffix = Ipv6AddrOrSuffix::parse("::1").unwrap();
+        // Make the entry "old" so it triggers a debounce update
+        let past = SystemTime::now() - Duration::from_hours(1);
+        dev.v6.push(IPv6State::Static(suffix, past));
 
-        // Manually set baseline (e.g. from DB hydration)
-        dev.last_seen = past;
-        assert_eq!(dev.calculate_last_seen(), past);
+        // Observe a SLAAC IP matching the suffix
+        let gual_ip = "2804:bdc:50ae:f700::1".parse::<Ipv6Addr>().unwrap();
 
-        // Add an observation with UNIX_EPOCH
-        dev.apply_arp_observation("192.168.1.1".parse().unwrap(), false);
+        let change = dev.apply_slaac_observation(gual_ip, true);
 
-        // Should STILL be 'past', not UNIX_EPOCH
-        assert_eq!(dev.calculate_last_seen(), past);
-
-        // Add a recent observation
-        let now = SystemTime::now();
-        dev.apply_arp_observation("192.168.1.1".parse().unwrap(), true);
-        assert!(dev.calculate_last_seen() >= now);
+        // Should be NdpActivity (non-persistent), NOT SlaacObserved (persistent)
+        assert!(matches!(change, Some(DeviceChange::NdpActivity { .. })));
+        assert_eq!(dev.v6.len(), 1); // No new entry added
     }
 }

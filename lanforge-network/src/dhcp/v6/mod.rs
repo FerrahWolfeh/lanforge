@@ -41,7 +41,9 @@ pub mod config;
 pub mod pool;
 pub mod server;
 
-use lanforge_core::bus::{DeviceChange, DeviceEvent, LanforgeEvent, NetworkEvent, SystemEvent};
+use lanforge_core::bus::{
+    DeviceChange, DeviceEvent, DhcpV6MessageType, LanforgeEvent, NetworkEvent, SystemEvent,
+};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::{DeviceUpdate, LeaseTarget};
 use lanforge_core::device::IPv6State;
@@ -244,6 +246,18 @@ impl Dhcpv6Service {
 
             if resolved_mac.is_none() {
                 resolved_mac = mac_from_eui64_link_local(&peer_ip);
+            }
+
+            // Diagnostic: Publish DHCPv6 Transaction
+            if let Some(mac) = resolved_mac {
+                let _ =
+                    self.ctx
+                        .bus()
+                        .publish(LanforgeEvent::Device(DeviceEvent::DhcpV6Transaction {
+                            mac,
+                            msg_type: DhcpV6MessageType::from(u8::from(msg.msg_type())),
+                            details: None,
+                        }));
             }
 
             let handle_res = server.handle_packet(&msg, peer_ip, resolved_mac, &mut resp_vec);

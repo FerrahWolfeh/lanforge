@@ -225,6 +225,38 @@ impl LogHandler {
                     target
                 );
             }
+            LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction { mac, msg_type, .. }) => {
+                println!(
+                    "[{}] {} {} for {}",
+                    now,
+                    "DHCP4".blue().bold(),
+                    format!("{:?}", msg_type).bright_magenta().bold(),
+                    mac.to_string().yellow()
+                );
+            }
+            LanforgeEvent::Device(DeviceEvent::DhcpV6Transaction { mac, msg_type, .. }) => {
+                println!(
+                    "[{}] {} {} for {}",
+                    now,
+                    "DHCP6".magenta().bold(),
+                    format!("{:?}", msg_type).bright_magenta().bold(),
+                    mac.to_string().yellow()
+                );
+            }
+            LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary {
+                total,
+                new,
+                duration_ms,
+            }) => {
+                println!(
+                    "[{}] {} Scan: {} total, {} new in {}ms",
+                    now,
+                    "SCAN".cyan().bold(),
+                    total,
+                    new.to_string().green().bold(),
+                    duration_ms
+                );
+            }
             LanforgeEvent::Storage(StorageEvent::DbVacuum) => {
                 println!(
                     "[{}] {} {}",

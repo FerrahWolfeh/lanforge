@@ -100,6 +100,102 @@ impl DeviceChange {
     }
 }
 
+/// Lightweight representation of `DHCPv4` message types for diagnostics.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DhcpV4MessageType {
+    Discover,
+    Offer,
+    Request,
+    Decline,
+    Ack,
+    Nak,
+    Release,
+    Inform,
+    ForceRenew,
+    LeaseQuery,
+    LeaseUnassigned,
+    LeaseUnknown,
+    LeaseActive,
+    BulkLeaseQuery,
+    LeaseQueryDone,
+    LeaseQueryStatus,
+    Tls,
+    Unknown(u8),
+}
+
+impl From<u8> for DhcpV4MessageType {
+    fn from(v: u8) -> Self {
+        match v {
+            1 => Self::Discover,
+            2 => Self::Offer,
+            3 => Self::Request,
+            4 => Self::Decline,
+            5 => Self::Ack,
+            6 => Self::Nak,
+            7 => Self::Release,
+            8 => Self::Inform,
+            9 => Self::ForceRenew,
+            10 => Self::LeaseQuery,
+            11 => Self::LeaseUnassigned,
+            12 => Self::LeaseUnknown,
+            13 => Self::LeaseActive,
+            14 => Self::BulkLeaseQuery,
+            15 => Self::LeaseQueryDone,
+            16 => Self::LeaseQueryStatus,
+            17 => Self::Tls,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+/// Lightweight representation of `DHCPv6` message types for diagnostics.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DhcpV6MessageType {
+    Solicit,
+    Advertise,
+    Request,
+    Confirm,
+    Renew,
+    Rebind,
+    Reply,
+    Release,
+    Decline,
+    Reconfigure,
+    InformationRequest,
+    RelayForw,
+    RelayRepl,
+    LeaseQuery,
+    LeaseQueryReply,
+    LeaseQueryData,
+    LeaseQueryDone,
+    Unknown(u8),
+}
+
+impl From<u8> for DhcpV6MessageType {
+    fn from(v: u8) -> Self {
+        match v {
+            1 => Self::Solicit,
+            2 => Self::Advertise,
+            3 => Self::Request,
+            4 => Self::Confirm,
+            5 => Self::Renew,
+            6 => Self::Rebind,
+            7 => Self::Reply,
+            8 => Self::Release,
+            9 => Self::Decline,
+            10 => Self::Reconfigure,
+            11 => Self::InformationRequest,
+            12 => Self::RelayForw,
+            13 => Self::RelayRepl,
+            14 => Self::LeaseQuery,
+            15 => Self::LeaseQueryReply,
+            16 => Self::LeaseQueryData,
+            17 => Self::LeaseQueryDone,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DeviceEvent {
     Discovered {
@@ -124,5 +220,23 @@ pub enum DeviceEvent {
     LeaseRenew {
         mac: MacAddr,
         target: LeaseTarget,
+    },
+    /// A `DHCPv4` message was received or sent (Discover, Offer, etc.)
+    DhcpV4Transaction {
+        mac: MacAddr,
+        msg_type: DhcpV4MessageType,
+        details: Option<String>,
+    },
+    /// A `DHCPv6` message was received or sent (Solicit, Advertise, etc.)
+    DhcpV6Transaction {
+        mac: MacAddr,
+        msg_type: DhcpV6MessageType,
+        details: Option<String>,
+    },
+    /// Summary of a background neighbor scan batch.
+    NeighborBatchSummary {
+        total: usize,
+        new: usize,
+        duration_ms: u64,
     },
 }

@@ -384,12 +384,14 @@ impl State {
                 last_updated: SystemTime::now(),
             };
 
-            if let Some(old) = &dev.topology
-                && old.parent_mac == new_topo.parent_mac
-                && old.port == new_topo.port
-                && old.local_ifindex == new_topo.local_ifindex
-            {
-                return None;
+            if let Some(old) = &dev.topology {
+                let same_topo = old.parent_mac == new_topo.parent_mac
+                    && old.port == new_topo.port
+                    && old.local_ifindex == new_topo.local_ifindex;
+
+                if same_topo {
+                    return None;
+                }
             }
 
             dev.topology = Some(new_topo);

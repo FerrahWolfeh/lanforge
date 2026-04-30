@@ -38,10 +38,11 @@ use crate::ndp::utils::{
     extract_neigh_info, get_ipv4_neighbors, get_ipv4_subnet_iterable, get_ipv6_neighbors,
     probe_neighbor,
 };
-use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
+use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::DeviceUpdate;
 use lanforge_core::error::CoreError;
+use lanforge_core::identifiers::MacAddr;
 use lanforge_core::ndp::NeighborEvent;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use netlink_packet_core::NetlinkMessage;
@@ -51,7 +52,7 @@ use rtnetlink::packet_route::RouteNetlinkMessage;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
@@ -98,6 +99,32 @@ impl NeighborMonitor {
             ctx,
             scan_in_progress: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    fn flush_neighbor_batch(&self, batch: Vec<(MacAddr, IpAddr, bool)>) {
+        let start = Instant::now();
+        let total = batch.len();
+
+        // Apply to state and collect returned events
+        let events = self
+            .ctx
+            .apply_with_events(DeviceUpdate::NeighborBatch { entries: batch });
+
+        // Diagnostic: Publish summary of the batch
+        let duration = start.elapsed();
+        let new_count = events
+            .iter()
+            .filter(|e| matches!(e, LanforgeEvent::Device(DeviceEvent::Discovered { .. })))
+            .count();
+
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary {
+                total,
+                new: new_count,
+                duration_ms: u64::try_from(duration.as_millis()).unwrap_or_default(),
+            }));
     }
 
     fn spawn_subnet_scan(&self, source: &str) {
@@ -216,13 +243,13 @@ impl AsyncService for NeighborMonitor {
                                 pending_batch.push((mac, ip, is_active));
                                 if pending_batch.len() >= 50 {
                                     let batch = std::mem::take(&mut pending_batch);
-                                    let _ = self.ctx.apply(DeviceUpdate::NeighborBatch { entries: batch });
+                                    self.flush_neighbor_batch(batch);
                                 }
                             } else {
                                 // Flush pending batch before processing delete/fail to maintain order
                                 if !pending_batch.is_empty() {
                                     let batch = std::mem::take(&mut pending_batch);
-                                    let _ = self.ctx.apply(DeviceUpdate::NeighborBatch { entries: batch });
+                                    self.flush_neighbor_batch(batch);
                                 }
                                 if let Some(update) = event.to_device_update(current_gua.as_ref(), current_ula.as_ref()) {
                                     let _ = self.ctx.apply(update);
@@ -234,7 +261,7 @@ impl AsyncService for NeighborMonitor {
                 _ = flush_timer.tick() => {
                     if !pending_batch.is_empty() {
                         let batch = std::mem::take(&mut pending_batch);
-                        let _ = self.ctx.apply(DeviceUpdate::NeighborBatch { entries: batch });
+                        self.flush_neighbor_batch(batch);
                     }
                 }
 

@@ -16,7 +16,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::{self, Receiver};
 
-pub use self::device::{DeviceChange, DeviceEvent};
+pub use self::device::{DeviceChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType};
 pub use self::dns::DnsEvent;
 pub use self::network::NetworkEvent;
 pub use self::storage::StorageEvent;
@@ -57,7 +57,10 @@ impl TimedEvent {
                 | DeviceEvent::Expired { .. }
                 | DeviceEvent::Purged { .. }
                 | DeviceEvent::LeaseRelease { .. }
-                | DeviceEvent::LeaseRenew { .. } => true,
+                | DeviceEvent::LeaseRenew { .. }
+                | DeviceEvent::DhcpV4Transaction { .. }
+                | DeviceEvent::DhcpV6Transaction { .. }
+                | DeviceEvent::NeighborBatchSummary { .. } => true,
             },
             LanforgeEvent::Network(e) => match e {
                 NetworkEvent::PrefixChanged { .. }

@@ -57,6 +57,7 @@ async fn test_complex_device_roundtrip() {
     dev.v4 = IPv4State::Dynamic(V4Lease {
         ip: Ipv4Addr::new(192, 168, 1, 50),
         expires: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
+        last_seen: SystemTime::now(),
     });
 
     // IPv6 State (SLAAC)
@@ -119,6 +120,7 @@ async fn test_cascading_delete() {
     dev.v4 = IPv4State::Dynamic(V4Lease {
         ip: Ipv4Addr::new(10, 0, 0, 5),
         expires: UNIX_EPOCH + Duration::from_secs(2_000_000_000),
+        last_seen: SystemTime::now(),
     });
     table.devices.insert(mac, Arc::new(dev));
     db.save_table(&table).await.unwrap();

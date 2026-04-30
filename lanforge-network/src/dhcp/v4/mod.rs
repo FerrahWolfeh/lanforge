@@ -31,9 +31,11 @@ pub mod pool;
 pub mod raw;
 pub mod server;
 
-use dhcproto::v4::{Message, Opcode};
+use dhcproto::v4::{DhcpOption, Message, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{DeviceChange, DeviceEvent, LanforgeEvent, SystemEvent};
+use lanforge_core::bus::{
+    DeviceChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent,
+};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::{DeviceUpdate, LeaseTarget};
 use lanforge_core::identifiers::MacAddr;
@@ -148,6 +150,18 @@ impl Dhcpv4Service {
                 let mac = MacAddr([
                     chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
                 ]);
+
+                // Diagnostic: Publish DHCPv4 Transaction
+                if let Some(DhcpOption::MessageType(t)) = msg.opts().get(OptionCode::MessageType) {
+                    let _ = self.ctx.bus().publish(LanforgeEvent::Device(
+                        DeviceEvent::DhcpV4Transaction {
+                            mac,
+                            msg_type: DhcpV4MessageType::from(u8::from(*t)),
+                            details: None,
+                        },
+                    ));
+                }
+
                 let handle_res = {
                     let device = self.ctx.get_device(&mac);
                     server.handle_packet(data, device)
