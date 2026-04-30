@@ -13,6 +13,8 @@
 //! Pruning runs at most once every 60 seconds to avoid overhead.
 
 use serde_json;
+use std::fs::{OpenOptions, create_dir_all};
+use std::net::IpAddr;
 use std::path::Path;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -20,14 +22,14 @@ use tracing::{debug, info};
 
 use crate::LeaseDbError;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
-use sqlx::Row;
+use sqlx::{Row, SqlitePool};
 
 /// A SQLite-backed log store for transient system events.
 ///
 /// Designed for in-memory storage where data loss on reboot is acceptable
 /// but high write throughput and zero disk wear are essential.
 pub struct LogDb {
-    pool: sqlx::SqlitePool,
+    pool: SqlitePool,
     last_prune: Mutex<Instant>,
 }
 
@@ -48,13 +50,13 @@ impl LogDb {
                 && !parent.as_os_str().is_empty()
                 && !parent.exists()
             {
-                let _ = std::fs::create_dir_all(parent);
+                let _ = create_dir_all(parent);
             }
 
             // Manually create the file if it doesn't exist to avoid "unable to open database file"
             if !path.exists() {
                 debug!("Creating new log database file: {}", path_str);
-                let _ = std::fs::OpenOptions::new()
+                let _ = OpenOptions::new()
                     .write(true)
                     .create(true)
                     .truncate(true)
@@ -62,7 +64,7 @@ impl LogDb {
             }
         }
 
-        let pool = sqlx::SqlitePool::connect(url).await?;
+        let pool = SqlitePool::connect(url).await?;
 
         // Initialize PRAGMAs for performance and reliability
         sqlx::query("PRAGMA journal_mode=WAL")
@@ -123,7 +125,7 @@ impl LogDb {
     pub async fn record_dns_block(
         &self,
         timed_event: &TimedEvent,
-        src_ip: std::net::IpAddr,
+        src_ip: IpAddr,
         domain: &str,
         src_mac: Option<String>,
     ) -> Result<(), LeaseDbError> {

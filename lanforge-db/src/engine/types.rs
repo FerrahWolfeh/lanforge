@@ -14,7 +14,9 @@ impl Pool {
         if url.starts_with("sqlite:") {
             #[cfg(feature = "sqlite")]
             {
-                Ok(Self::Sqlite(sqlx::SqlitePool::connect(url).await?))
+                use sqlx::SqlitePool;
+
+                Ok(Self::Sqlite(SqlitePool::connect(url).await?))
             }
             #[cfg(not(feature = "sqlite"))]
             {

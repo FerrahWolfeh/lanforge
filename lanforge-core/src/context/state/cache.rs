@@ -1,4 +1,5 @@
 use crate::identifiers::{Duid, MacAddr};
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
@@ -43,7 +44,6 @@ where
     S: serde::Serializer,
     H: std::hash::BuildHasher,
 {
-    use serde::ser::SerializeMap;
     let mut map = serializer.serialize_map(Some(cache.len()))?;
     for (ip, (mac, time)) in cache {
         let elapsed = time
@@ -90,7 +90,6 @@ where
     S: serde::Serializer,
     H: std::hash::BuildHasher,
 {
-    use serde::ser::SerializeMap;
     let mut map = serializer.serialize_map(Some(orphaned.len()))?;
     for (ip, (duid, iaid, time)) in orphaned {
         let elapsed = time

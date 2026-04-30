@@ -1,7 +1,8 @@
-use crate::context::state::LeaseTarget;
-use crate::identifiers::MacAddr;
+use crate::device::DeviceClass;
+use crate::identifiers::{Duid, MacAddr};
+use crate::{context::state::LeaseTarget, device::Ipv6AddrOrSuffix};
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Detailed changes applied to a specific `Device`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,12 +42,10 @@ pub enum DeviceChange {
     V4StaticChanged { ip: Option<Ipv4Addr> },
 
     /// A static IPv6 Interface ID (suffix) was modified or removed via CLI.
-    V6SuffixChanged {
-        suffix: Option<crate::device::Ipv6AddrOrSuffix>,
-    },
+    V6SuffixChanged { suffix: Option<Ipv6AddrOrSuffix> },
 
     /// A DUID was successfully associated with this device's MAC.
-    DuidAssociated { duid: crate::identifiers::Duid },
+    DuidAssociated { duid: Duid },
 
     /// A neighbor was observed via NDP (IPv6) but no SLAAC address was extracted.
     NdpActivity { ip: Ipv6Addr },
@@ -55,16 +54,16 @@ pub enum DeviceChange {
     ArpActivity { ip: Ipv4Addr },
 
     /// The device has been classified into a high-level category (e.g., Printer).
-    Classified { class: crate::device::DeviceClass },
+    Classified { class: DeviceClass },
     /// The device's physical or logical topology has changed.
     TopologyChanged {
         parent_mac: Option<MacAddr>,
         port: Option<String>,
     },
     /// A specific IP address associated with the device was deleted.
-    IpDeleted { ip: std::net::IpAddr },
+    IpDeleted { ip: IpAddr },
     /// A specific IP address associated with the device went offline.
-    IpOffline { ip: std::net::IpAddr },
+    IpOffline { ip: IpAddr },
     /// The device was updated via CLI or administrative action.
     CliHostUpdated,
 }

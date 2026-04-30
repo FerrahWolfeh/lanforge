@@ -1,13 +1,19 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize, de::Error};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    hash::{BuildHasher, Hash},
+    net::{Ipv4Addr, Ipv6Addr},
+    str::FromStr,
+};
 
 /// Network interface IP configuration state.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InterfaceState {
-    pub v4: Option<(std::net::Ipv4Addr, u8)>,
-    pub link_local: Option<std::net::Ipv6Addr>,
-    pub gua: Option<std::net::Ipv6Addr>,
-    pub ula: Option<std::net::Ipv6Addr>,
+    pub v4: Option<(Ipv4Addr, u8)>,
+    pub link_local: Option<Ipv6Addr>,
+    pub gua: Option<Ipv6Addr>,
+    pub ula: Option<Ipv6Addr>,
     pub gua_preferred: u32,
     pub gua_valid: u32,
 }
@@ -40,9 +46,9 @@ pub fn serialize_int_map<S, K, V, H>(
 ) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
-    K: std::fmt::Display + std::hash::Hash + Eq,
+    K: Display + Hash + Eq,
     V: Serialize,
-    H: std::hash::BuildHasher,
+    H: BuildHasher,
 {
     use serde::ser::SerializeMap;
     let mut s = serializer.serialize_map(Some(map.len()))?;
@@ -60,15 +66,15 @@ where
 pub fn deserialize_int_map<'de, D, K, V, H>(deserializer: D) -> Result<HashMap<K, V, H>, D::Error>
 where
     D: serde::Deserializer<'de>,
-    K: std::str::FromStr + std::hash::Hash + Eq,
-    K::Err: std::fmt::Display,
+    K: FromStr + Hash + Eq,
+    K::Err: Display,
     V: Deserialize<'de>,
-    H: std::hash::BuildHasher + Default,
+    H: BuildHasher + Default,
 {
     let raw = HashMap::<String, V, H>::deserialize(deserializer)?;
     let mut res = HashMap::with_capacity_and_hasher(raw.len(), H::default());
     for (k, v) in raw {
-        let key = k.parse::<K>().map_err(serde::de::Error::custom)?;
+        let key = k.parse::<K>().map_err(Error::custom)?;
         res.insert(key, v);
     }
     Ok(res)

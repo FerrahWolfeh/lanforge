@@ -49,8 +49,11 @@
 //! }
 //! ```
 
+use crate::bus::{LanforgeEvent, SystemEvent};
 use crate::error::CoreError;
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Supervision metadata for a service.
@@ -233,7 +236,7 @@ use crate::context::LanforgeContext;
 pub struct ServiceControl {
     id: &'static str,
     ctx: LanforgeContext,
-    signaled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    signaled: Arc<AtomicBool>,
 }
 
 impl ServiceControl {
@@ -243,22 +246,20 @@ impl ServiceControl {
         Self {
             id,
             ctx,
-            signaled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            signaled: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Signals that the service is now fully initialized and ready to handle traffic.
     /// This is idempotent; multiple calls will only result in one signal.
     pub fn signal_ready(&self) {
-        if !self
-            .signaled
-            .swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
-            let _ = self.ctx.bus().publish(crate::bus::LanforgeEvent::System(
-                crate::bus::SystemEvent::ServiceReady {
+        if !self.signaled.swap(true, Ordering::SeqCst) {
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
                     name: self.id.to_string(),
-                },
-            ));
+                }));
         }
     }
 

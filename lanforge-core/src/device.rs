@@ -22,7 +22,8 @@
 //! information (hostname, IP, or static config).
 
 use lanforge_macros::EnumRepr;
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -44,7 +45,7 @@ use smallvec::SmallVec;
 /// Returns an error if the serializer fails to serialize the timestamp.
 pub fn serialize_time_opt<S>(time: &Option<SystemTime>, serializer: S) -> Result<S::Ok, S::Error>
 where
-    S: serde::Serializer,
+    S: Serializer,
 {
     match time {
         Some(t) => {
@@ -62,7 +63,7 @@ where
 /// Returns an error if the serializer fails to serialize the timestamp.
 pub fn serialize_time<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
 where
-    S: serde::Serializer,
+    S: Serializer,
 {
     let elapsed = time
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -80,9 +81,8 @@ pub fn serialize_seen_v4<S>(
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
-    S: serde::Serializer,
+    S: Serializer,
 {
-    use serde::ser::SerializeSeq;
     let mut seq = serializer.serialize_seq(Some(seen.len()))?;
     for (ip, time) in seen {
         let elapsed = time
@@ -100,7 +100,7 @@ where
 /// Returns an error if the deserializer fails to parse the timestamp.
 pub fn deserialize_time<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     let secs = u64::deserialize(deserializer)?;
     Ok(UNIX_EPOCH + Duration::from_secs(secs))
@@ -113,7 +113,7 @@ where
 /// Returns an error if the deserializer fails to parse the timestamp.
 pub fn deserialize_time_opt<'de, D>(deserializer: D) -> Result<Option<SystemTime>, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     let opt_secs = Option::<u64>::deserialize(deserializer)?;
     Ok(opt_secs.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)))
@@ -128,7 +128,7 @@ pub fn deserialize_seen_v4<'de, D>(
     deserializer: D,
 ) -> Result<SmallVec<[(Ipv4Addr, SystemTime); 4]>, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     use serde::Deserialize;
     let raw = Vec::<(Ipv4Addr, u64)>::deserialize(deserializer)?;
@@ -1461,7 +1461,7 @@ impl Device {
     pub fn expire_stale_inner(
         &mut self,
         now: SystemTime,
-        ip_expiry_threshold: std::time::Duration,
+        ip_expiry_threshold: Duration,
     ) -> Vec<DeviceChange> {
         let mut events = Vec::new();
 
@@ -1516,12 +1516,12 @@ impl Device {
 
         // ARP cleanup
         self.seen_v4.retain(|(_, ts)| {
-            now.duration_since(*ts).unwrap_or(std::time::Duration::ZERO) <= ip_expiry_threshold
+            now.duration_since(*ts).unwrap_or(Duration::ZERO) <= ip_expiry_threshold
         });
 
         // V6 activity cleanup
         self.seen_v6.retain(|(_, ts)| {
-            now.duration_since(*ts).unwrap_or(std::time::Duration::ZERO) <= ip_expiry_threshold
+            now.duration_since(*ts).unwrap_or(Duration::ZERO) <= ip_expiry_threshold
         });
 
         self.last_seen = self.calculate_last_seen();
@@ -1529,7 +1529,7 @@ impl Device {
     }
 
     #[must_use]
-    pub fn is_zombie(&self, max_age: std::time::Duration) -> bool {
+    pub fn is_zombie(&self, max_age: Duration) -> bool {
         if !matches!(self.v4, IPv4State::None)
             || !self.v6.is_empty()
             || !self.v6_prefixes.is_empty()
@@ -1537,10 +1537,7 @@ impl Device {
             return false;
         }
 
-        self.last_seen
-            .elapsed()
-            .unwrap_or(std::time::Duration::ZERO)
-            > max_age
+        self.last_seen.elapsed().unwrap_or(Duration::ZERO) > max_age
     }
 }
 
@@ -1789,6 +1786,8 @@ const fn is_ula(addr: &Ipv6Addr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::SmallVec;
+
     use super::*;
 
     #[test]
@@ -1832,13 +1831,13 @@ mod tests {
             class: DeviceClass::None,
             duid: None,
             v4: IPv4State::Static("192.168.1.1".parse().unwrap()),
-            v6: smallvec::smallvec![
+            v6: SmallVec::from_iter([
                 IPv6State::Slaac("2001:db8::1".parse().unwrap()),
                 IPv6State::Slaac("fd00::1".parse().unwrap()),
-            ],
-            v6_prefixes: smallvec::SmallVec::new(),
-            seen_v6: smallvec::SmallVec::new(),
-            seen_v4: smallvec::SmallVec::new(),
+            ]),
+            v6_prefixes: SmallVec::new(),
+            seen_v6: SmallVec::new(),
+            seen_v4: SmallVec::new(),
             last_seen: SystemTime::now(),
             dns_fallback: "host-010203040506".to_string(),
             topology: None,

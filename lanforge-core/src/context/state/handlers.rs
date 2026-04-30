@@ -7,7 +7,8 @@ use crate::context::state::{
     DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
 use crate::device::{
-    Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, TopologyInfo,
+    Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Ipv6AddrOrSuffix, Origin,
+    TopologyInfo, classify_ipv6,
 };
 use crate::identifiers::{Duid, MacAddr};
 
@@ -95,9 +96,7 @@ impl State {
             if let Some(c) = dev.apply_slaac_observation(ip, is_active) {
                 // If it's Link-Local and we are already worthy, don't trigger a dirty update.
                 // This keeps NdpSeen events quiet for background traffic.
-                if crate::device::classify_ipv6(&ip) == crate::device::IpClassification::LinkLocal
-                    && dev.is_worthy()
-                {
+                if classify_ipv6(&ip) == IpClassification::LinkLocal && dev.is_worthy() {
                     return change;
                 }
 

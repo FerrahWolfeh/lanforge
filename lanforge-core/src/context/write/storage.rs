@@ -1,6 +1,7 @@
 //! Storage and lifecycle state management.
 
 use crate::{context::LanforgeContext, state::DeviceUpdate};
+use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -21,13 +22,13 @@ impl LanforgeContext {
     }
 
     /// Sets the shared DNS statistics.
-    pub fn set_dns_stats<T: std::any::Any + Send + Sync + 'static>(&self, stats: Arc<T>) {
-        *self.inner.dns_stats.write() = Some(stats as Arc<dyn std::any::Any + Send + Sync>);
+    pub fn set_dns_stats<T: Any + Send + Sync + 'static>(&self, stats: Arc<T>) {
+        *self.inner.dns_stats.write() = Some(stats as Arc<dyn Any + Send + Sync>);
     }
 
     /// Sets the shared DNS context.
-    pub fn set_dns_context<T: std::any::Any + Send + Sync + 'static>(&self, ctx: Arc<T>) {
-        *self.inner.dns_context.write() = Some(ctx as Arc<dyn std::any::Any + Send + Sync>);
+    pub fn set_dns_context<T: Any + Send + Sync + 'static>(&self, ctx: Arc<T>) {
+        *self.inner.dns_context.write() = Some(ctx as Arc<dyn Any + Send + Sync>);
     }
 
     /// Completely resets the in-memory state.

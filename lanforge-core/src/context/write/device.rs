@@ -1,5 +1,7 @@
 //! Device-specific mutation wrappers.
 
+use std::time::Duration;
+
 use crate::{
     bus::{LanforgeEvent, StorageEvent},
     context::LanforgeContext,
@@ -8,7 +10,7 @@ use crate::{
 
 impl LanforgeContext {
     /// Triggers the background garbage collection process.
-    pub fn expire_stale(&self, interval: std::time::Duration) {
+    pub fn expire_stale(&self, interval: Duration) {
         let events = {
             let mut state = self.inner.state.write();
             state.expire_stale(interval)
@@ -29,7 +31,7 @@ impl LanforgeContext {
     pub fn find_mac_by_hostname_jit(
         &self,
         hostname: &str,
-        last_seen_threshold: Option<std::time::Duration>,
+        last_seen_threshold: Option<Duration>,
     ) -> Option<MacAddr> {
         self.write()
             .find_mac_by_hostname_jit(hostname, last_seen_threshold)

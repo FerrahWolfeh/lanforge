@@ -63,6 +63,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::RecvError;
 
 pub mod read;
 pub mod state;
@@ -103,7 +105,7 @@ pub struct EventCounters {
 /// }
 /// ```
 pub struct ServiceHandle {
-    rx: tokio::sync::broadcast::Receiver<TimedEvent>,
+    rx: Receiver<TimedEvent>,
     ctx: LanforgeContext,
 }
 
@@ -115,7 +117,6 @@ impl ServiceHandle {
     /// - `is_running()` check → returns `None`
     /// - Broadcast lag recovery → skips lagged events, continues
     pub async fn next_event(&mut self) -> Option<TimedEvent> {
-        use tokio::sync::broadcast::error::RecvError;
         loop {
             if !self.ctx.is_running() {
                 return None;

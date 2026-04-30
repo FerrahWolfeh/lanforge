@@ -5,7 +5,7 @@ use crate::context::LanforgeContext;
 use crate::context::state::{DeviceUpdate, FieldUpdate, State};
 use crate::device::Origin;
 use crate::identifiers::MacAddr;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -95,7 +95,7 @@ async fn ndp_seen_publishes_nothing() {
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-    let ip: std::net::Ipv6Addr = "fe80::1".parse().unwrap();
+    let ip: Ipv6Addr = "fe80::1".parse().unwrap();
 
     let _ = ctx.apply(DeviceUpdate::NdpSeen {
         mac,
