@@ -76,6 +76,7 @@ pub struct DeviceRow {
     pub parent_port: Option<String>,
     pub local_ifindex: i64,
     pub topo_updated: i64,
+    pub boot_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -67,11 +67,12 @@ async fn upsert_base_device(
             .topology
             .as_ref()
             .map_or(0, |t| system_time_to_unix(t.last_updated)),
+        boot_file: device.boot_file.clone(),
     };
 
     sqlx::query(
-        "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated, boot_file)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          ON CONFLICT(mac) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             hostname_origin = EXCLUDED.hostname_origin,
@@ -85,7 +86,8 @@ async fn upsert_base_device(
             parent_mac = EXCLUDED.parent_mac,
             parent_port = EXCLUDED.parent_port,
             local_ifindex = EXCLUDED.local_ifindex,
-            topo_updated = EXCLUDED.topo_updated"
+            topo_updated = EXCLUDED.topo_updated,
+            boot_file = EXCLUDED.boot_file"
     )
     .bind(&row.mac)
     .bind(&row.hostname)
@@ -101,6 +103,7 @@ async fn upsert_base_device(
     .bind(&row.parent_port)
     .bind(row.local_ifindex)
     .bind(row.topo_updated)
+    .bind(&row.boot_file)
     .execute(&mut **tx).await?;
 
     Ok(())
@@ -235,7 +238,7 @@ async fn persist_seen_v4(
 
 pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, LeaseDbError> {
     sqlx::query_as::<_, DeviceRow>(
-        "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated FROM devices"
+        "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated, boot_file FROM devices"
     )
     .fetch_all(pool)
     .await

@@ -123,6 +123,7 @@ fn test_resolve_local_v6_suffix_merging() {
         v4_static: FieldUpdate::NoChange,
         v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::beef").unwrap()),
         origin: Origin::Cli,
+        boot_file: FieldUpdate::NoChange,
     });
 
     let mut query = Message::query();
@@ -360,6 +361,7 @@ fn test_dns_response_contract() {
         v4_static: FieldUpdate::NoChange,
         v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::1057:cafe").unwrap()),
         origin: Origin::Cli,
+        boot_file: FieldUpdate::NoChange,
     });
 
     // 2. SLAAC addresses

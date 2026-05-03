@@ -121,6 +121,7 @@ async fn cli_host_update_publishes_events() {
         v4_static: FieldUpdate::NoChange,
         v6_suffix: FieldUpdate::NoChange,
         origin: Origin::Cli,
+        boot_file: FieldUpdate::NoChange,
     });
 
     let mut events = vec![];
@@ -146,6 +147,7 @@ async fn cli_host_update_publishes_events() {
         v4_static: FieldUpdate::Set("1.2.3.4".parse().unwrap()),
         v6_suffix: FieldUpdate::NoChange,
         origin: Origin::Cli,
+        boot_file: FieldUpdate::NoChange,
     });
 
     let mut events = vec![];

@@ -57,6 +57,7 @@ pub struct StaticEntry {
     pub duid: Option<Duid>,
     pub v4_static: Option<Ipv4Addr>,
     pub v6_suffix: Option<Ipv6AddrOrSuffix>,
+    pub boot_file: Option<String>,
     pub origin: Origin,
 }
 
@@ -129,6 +130,7 @@ pub enum DeviceUpdate {
         duid: FieldUpdate<Duid>,
         v4_static: FieldUpdate<Ipv4Addr>,
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
+        boot_file: FieldUpdate<String>,
         origin: Origin,
     },
     HostRemoved {
@@ -302,6 +304,7 @@ impl State {
         duid: Option<Duid>,
         v4_static: Option<Ipv4Addr>,
         v6_suffix: Option<Ipv6AddrOrSuffix>,
+        boot_file: Option<String>,
     ) {
         self.apply_update(DeviceUpdate::CliHostUpdated {
             mac,
@@ -309,6 +312,7 @@ impl State {
             duid: duid.into(),
             v4_static: v4_static.into(),
             v6_suffix: v6_suffix.into(),
+            boot_file: boot_file.into(),
             origin: Origin::Cli,
         });
     }

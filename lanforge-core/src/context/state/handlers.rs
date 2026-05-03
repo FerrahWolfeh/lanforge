@@ -185,6 +185,7 @@ impl State {
         duid: FieldUpdate<Duid>,
         v4_static: FieldUpdate<Ipv4Addr>,
         v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
+        boot_file: FieldUpdate<String>,
         origin: Origin,
     ) -> Vec<LanforgeEvent> {
         let events = self.mutate_device(mac, |dev| {
@@ -204,6 +205,11 @@ impl State {
                 dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
                 dev.v6.push(IPv6State::Static(v6, SystemTime::now()));
             }
+            if let FieldUpdate::Set(bf) = boot_file {
+                dev.boot_file = Some(bf);
+            } else if boot_file == FieldUpdate::Clear {
+                dev.boot_file = None;
+            }
             dev.origin = origin;
             dev.managed_at = Some(SystemTime::now());
             Some(DeviceChange::CliHostUpdated)
@@ -222,6 +228,7 @@ impl State {
                         IPv6State::Static(s, _) => Some(s.clone()),
                         _ => None,
                     }),
+                    boot_file: dev.boot_file.clone(),
                     origin,
                 },
             );

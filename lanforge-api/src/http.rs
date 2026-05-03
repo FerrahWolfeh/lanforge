@@ -13,9 +13,9 @@ use axum::{
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
+    context::state::{DeviceUpdate, FieldUpdate},
     device::{Device, Ipv6AddrOrSuffix, Origin},
     error::CoreError,
-    state::{DeviceUpdate, FieldUpdate},
 };
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -54,6 +54,8 @@ pub struct RegisterRequest {
     pub ip: Option<String>,
     /// IPv6 Interface ID / Suffix (optional).
     pub v6_suffix: Option<String>,
+    /// Custom boot file URL or path (optional).
+    pub boot_file: Option<String>,
 }
 
 #[lanforge_macros::lanforge_service(
@@ -107,6 +109,11 @@ impl AsyncService for HttpService {
             .route("/status", get(handle_status))
             .route("/metrics", get(handle_metrics))
             .route("/login", post(handle_login));
+
+        if let Some(boot_dir) = &cfg.boot_dir {
+            info!("📂 Serving boot files from {}", boot_dir);
+            app = app.nest_service("/boot", tower_http::services::ServeDir::new(boot_dir));
+        }
 
         #[cfg(feature = "doh")]
         {
@@ -222,6 +229,7 @@ async fn process_registration(ctx: LanforgeContext, req: RegisterRequest) -> imp
         v4_static: FieldUpdate::from(v4_static),
         v6_suffix: FieldUpdate::from(v6_suffix),
         origin: Origin::External,
+        boot_file: req.boot_file.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
     });
 
     (

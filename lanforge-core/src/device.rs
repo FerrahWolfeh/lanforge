@@ -889,6 +889,8 @@ pub struct Device {
     /// Tracks which infrastructure device or local interface this device
     /// is connected to, learned via LLDP or bridge observation.
     pub topology: Option<TopologyInfo>,
+    /// Custom boot file for PXE/HTTP boot.
+    pub boot_file: Option<String>,
 }
 
 /// Represents a device's position in the network hierarchy.
@@ -926,6 +928,7 @@ impl Device {
             dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
             class: DeviceClass::None,
             topology: None,
+            boot_file: None,
         }
     }
 
@@ -1895,6 +1898,7 @@ mod tests {
             last_seen: SystemTime::now(),
             dns_fallback: "host-010203040506".to_string(),
             topology: None,
+            boot_file: None,
         };
 
         let sorted = dev.all_addresses_sorted(None, None);

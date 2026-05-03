@@ -64,6 +64,8 @@ pub struct ApiConfig {
     /// Native TLS private key (Path or raw PEM).
     #[cfg(any(feature = "https", feature = "tls"))]
     pub tls_key: Option<String>,
+    /// Path to the directory containing boot files (PXE/HTTP boot).
+    pub boot_dir: Option<String>,
 }
 
 #[cfg(test)]
@@ -96,6 +98,7 @@ impl ApiConfig {
             tls_cert: None,
             #[cfg(any(feature = "https", feature = "tls"))]
             tls_key: None,
+            boot_dir: None,
         }
     }
 }

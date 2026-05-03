@@ -326,6 +326,16 @@ impl DhcpServer {
         }
     }
 
+    fn get_arch(msg: &Message) -> Option<u16> {
+        match msg.opts().get(93.into()) {
+            Some(DhcpOption::Unknown(u)) if u.data().len() >= 2 => {
+                Some(u16::from_be_bytes([u.data()[0], u.data()[1]]))
+            }
+            Some(DhcpOption::ClientSystemArchitecture(arch)) => Some(u16::from(*arch)),
+            _ => None,
+        }
+    }
+
     fn build_reply(&self, request: &Message, msg_type: MessageType, yiaddr: Ipv4Addr) -> Vec<u8> {
         let mut reply = Message::default();
 
@@ -370,6 +380,9 @@ impl DhcpServer {
             // T1 = 50% of lease time, T2 = 87.5%
             opts.insert(DhcpOption::Renewal(self.cfg.lease_time / 2));
             opts.insert(DhcpOption::Rebinding(self.cfg.lease_time * 7 / 8));
+
+            // Hybrid PXE / HTTP Boot Support
+            self.add_boot_options(request, opts);
         }
 
         let mut buf = Vec::with_capacity(576);
@@ -378,6 +391,44 @@ impl DhcpServer {
             .encode(&mut enc)
             .expect("DHCP message encoding should not fail");
         buf
+    }
+
+    fn add_boot_options(&self, request: &Message, opts: &mut v4::DhcpOptions) {
+        let vendor_class = Self::get_vendor_class(request);
+        let arch = Self::get_arch(request);
+
+        // UEFI HTTP Boot (Arch 15 or 16, or Vendor Class contains HTTPClient)
+        let is_http_boot = vendor_class
+            .as_ref()
+            .is_some_and(|v| v.contains("HTTPClient"))
+            || matches!(arch, Some(15 | 16));
+
+        let chaddr = request.chaddr();
+        let mac = MacAddr::from_slice(&chaddr[..6]).unwrap_or(MacAddr::ZERO);
+        let dev = self.ctx.get_device(&mac);
+        let boot_file = dev
+            .as_ref()
+            .and_then(|d| d.boot_file.clone())
+            .or_else(|| self.cfg.boot_file.clone());
+
+        if let Some(file) = boot_file {
+            if is_http_boot {
+                // UEFI HTTP Boot: Option 67 is a full URL
+                let url = format!("http://{}/boot/{}", self.cfg.server_id, file);
+                opts.insert(DhcpOption::BootfileName(url.into_bytes()));
+                opts.insert(DhcpOption::ClassIdentifier(b"HTTPClient".to_vec()));
+            } else {
+                // Traditional PXE: Option 67 is a filename
+                opts.insert(DhcpOption::BootfileName(file.into_bytes()));
+                if let Some(tftp) = &self.cfg.tftp_server {
+                    opts.insert(DhcpOption::TFTPServerName(tftp.as_bytes().to_vec()));
+                } else {
+                    opts.insert(DhcpOption::TFTPServerName(
+                        self.cfg.server_id.to_string().into_bytes(),
+                    ));
+                }
+            }
+        }
     }
 
     fn send_nak(&self, request: &Message, message: &str) -> HandleResult {
@@ -447,10 +498,12 @@ impl DhcpServer {
 mod tests {
     use super::*;
     use crate::test_utils::init_test_context;
-    use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode};
+    use dhcproto::v4::{Architecture, DhcpOption, Message, MessageType, Opcode};
     use dhcproto::{Decodable, Decoder, Encodable, Encoder};
     use lanforge_core::context::LanforgeContext;
     use lanforge_core::context::state::DeviceUpdate;
+    use lanforge_core::context::state::FieldUpdate;
+    use lanforge_core::device::Origin;
     use std::net::Ipv4Addr;
     use std::time::{Duration, SystemTime};
 
@@ -471,6 +524,8 @@ mod tests {
             domain_name: Some("lanforge.local".to_string()),
             search_domains: vec!["lanforge.local".to_string()],
             port: 67,
+            tftp_server: None,
+            boot_file: None,
         }
     }
 
@@ -749,5 +804,65 @@ mod tests {
         } else {
             panic!("Missing ServerIdentifier option");
         }
+    }
+
+    #[test]
+    fn test_boot_options() {
+        let (mut srv, _ctx) = dummy_server();
+        srv.cfg.tftp_server = Some("1.2.3.4".into());
+        srv.cfg.boot_file = Some("global.efi".into());
+
+        let mac = dummy_mac();
+        let mut request = Message::default();
+        request.set_opcode(Opcode::BootRequest);
+        request.set_xid(123);
+        request.set_chaddr(&mac.0);
+        request
+            .opts_mut()
+            .insert(DhcpOption::MessageType(MessageType::Discover));
+
+        let mut reply_opts = v4::DhcpOptions::new();
+
+        // 1. Global config only
+        srv.add_boot_options(&request, &mut reply_opts);
+        assert_eq!(
+            reply_opts.get(66.into()),
+            Some(&DhcpOption::TFTPServerName(b"1.2.3.4".to_vec()))
+        );
+        assert_eq!(
+            reply_opts.get(67.into()),
+            Some(&DhcpOption::BootfileName(b"global.efi".to_vec()))
+        );
+
+        // 2. Per-device override
+        let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac,
+            hostname: FieldUpdate::Set("host".to_string()),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::Set("custom.efi".to_string()),
+        });
+
+        let mut reply_opts = v4::DhcpOptions::new();
+        srv.add_boot_options(&request, &mut reply_opts);
+        assert_eq!(
+            reply_opts.get(v4::OptionCode::BootfileName),
+            Some(&DhcpOption::BootfileName(b"custom.efi".to_vec()))
+        );
+
+        // 3. UEFI HTTP Boot detection (arch 16)
+        request
+            .opts_mut()
+            .insert(DhcpOption::ClientSystemArchitecture(Architecture::Unknown(
+                16,
+            ))); // UEFI HTTP
+        let mut reply_opts = v4::DhcpOptions::new();
+        srv.add_boot_options(&request, &mut reply_opts);
+        assert!(
+            reply_opts.get(v4::OptionCode::ClassIdentifier).is_some(),
+            "Missing Class Identifier (Option 60)"
+        );
     }
 }

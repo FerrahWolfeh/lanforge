@@ -66,6 +66,7 @@ pub struct Config {
     pub control_socket: String,
     pub log_db: String,
     pub log_db_url: String,
+    pub boot_dir: Option<String>,
 
     // RA
     pub ra_enabled: bool,
@@ -95,6 +96,7 @@ pub struct Config {
     pub http_listen: Option<String>,
     pub auth_toml: toml::AuthCfg,
     pub http_toml: toml::HttpCfg,
+    pub tftp_toml: toml::TftpCfg,
     pub config_path: String,
 }
 
@@ -160,6 +162,7 @@ impl Config {
             } else {
                 toml_cfg.general.get_log_db_url()
             },
+            boot_dir: toml_cfg.general.boot_dir.clone(),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: RaCfg {
@@ -205,6 +208,7 @@ impl Config {
                 .or(toml_cfg.http.listen.clone()),
             auth_toml: toml_cfg.auth,
             http_toml: toml_cfg.http,
+            tftp_toml: toml_cfg.tftp,
             config_path: cli.config,
         }
     }
@@ -335,6 +339,8 @@ impl Config {
             domain_name: self.search_domains.first().cloned(),
             search_domains: self.search_domains.clone(),
             port: self.dhcpv4_port,
+            tftp_server: self.dhcpv4_toml.tftp_server.clone(),
+            boot_file: self.dhcpv4_toml.boot_file.clone(),
         }
     }
 
@@ -425,6 +431,7 @@ impl Config {
                     },
                 ),
             search_domains: self.search_domains.clone(),
+            boot_file: self.dhcpv6_toml.boot_file.clone(),
         }
     }
 
@@ -541,6 +548,9 @@ impl Config {
             tls_cert: self.http_toml.tls_cert.clone(),
             #[cfg(any(feature = "https", feature = "tls"))]
             tls_key: self.http_toml.tls_key.clone(),
+            boot_dir: self.http_listen.as_ref().and_then(|_| {
+                self.tftp_toml.root_dir.clone().or_else(|| self.boot_dir.clone())
+            }),
         }
     }
 }
@@ -557,6 +567,7 @@ impl Default for Config {
             control_socket: "/run/lanforge/control.sock".to_string(),
             log_db: "/run/lanforge/log.db".to_string(),
             log_db_url: "sqlite://:memory:".to_string(),
+            boot_dir: None,
             ra_enabled: true,
             ra_toml: RaCfg::default(),
             dhcpv4_enabled: true,
@@ -575,6 +586,7 @@ impl Default for Config {
             http_listen: None,
             auth_toml: toml::AuthCfg::default(),
             http_toml: toml::HttpCfg::default(),
+            tftp_toml: toml::TftpCfg::default(),
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
         }
     }

@@ -854,6 +854,7 @@ impl ClientContext {
                     .and_then(Ipv6AddrOrSuffix::parse)
                     .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
                 origin: Origin::Cli,
+                boot_file: FieldUpdate::NoChange,
             });
             Response::Success(SimpleSuccess {
                 message: "Host added/updated".to_string(),
@@ -876,6 +877,7 @@ impl ClientContext {
             let mut hn = FieldUpdate::NoChange;
             let mut v4s = FieldUpdate::NoChange;
             let mut v6s = FieldUpdate::NoChange;
+            let mut bfs = FieldUpdate::NoChange;
 
             let err_msg = match field.as_str() {
                 "hostname" => {
@@ -904,6 +906,14 @@ impl ClientContext {
                         Some("Invalid IPv6 interface ID (suffix) or address")
                     }
                 }
+                "boot_file" | "boot" => {
+                    if value.is_empty() {
+                        bfs = FieldUpdate::Clear;
+                    } else {
+                        bfs = FieldUpdate::Set(value);
+                    }
+                    None
+                }
                 _ => Some("Unknown field"),
             };
 
@@ -919,6 +929,7 @@ impl ClientContext {
                     v4_static: v4s,
                     v6_suffix: v6s,
                     origin: Origin::Cli,
+                    boot_file: bfs,
                 });
                 Response::Success(SimpleSuccess {
                     message: format!("Host {mac} updated"),

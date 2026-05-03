@@ -47,6 +47,8 @@ pub struct Dhcpv6Config {
     pub dns_servers: Vec<Ipv6Addr>,
     /// Search domains to announce to clients (`DHCPv6` Option 24).
     pub search_domains: Vec<String>,
+    /// Global boot file name (Option 59).
+    pub boot_file: Option<String>,
 }
 
 impl Default for Dhcpv6Config {
@@ -61,6 +63,7 @@ impl Default for Dhcpv6Config {
             pools: Vec::new(),
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
+            boot_file: None,
         }
     }
 }

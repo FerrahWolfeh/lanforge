@@ -22,6 +22,7 @@ use lanforge_network::mdns::MdnsProber;
 use lanforge_network::ndp::NeighborMonitor;
 use lanforge_network::ra::RaService;
 use lanforge_network::slaac::SlaacTracker;
+use lanforge_tftp::TftpService;
 
 /// The central application controller for the Lanforge daemon.
 pub struct Daemon {
@@ -95,6 +96,12 @@ impl Daemon {
 
             #[cfg(feature = "dot")]
             async [ctx, cfg] if cfg.dns_toml.dot_listen.is_some() => lanforge_api::dot::DotService::new(Arc::new(cfg.to_api_config()), ctx),
+
+            async [ctx, cfg] if cfg.tftp_toml.enabled => TftpService::new(
+                ctx,
+                cfg.tftp_toml.listen.clone(),
+                cfg.tftp_toml.root_dir.as_ref().and_then(|r| r.parse().ok()).or_else(|| cfg.boot_dir.as_ref().and_then(|r| r.parse().ok())).unwrap_or_else(|| "/var/lib/lanforge/boot".into())
+            ),
         });
     }
 

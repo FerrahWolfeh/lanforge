@@ -7,7 +7,7 @@ members = [
     "lanforge-db",
     "lanforge-dns",
     "lanforge-macros",
-    "lanforge-network",
+    "lanforge-network", "lanforge-tftp",
 ]
 resolver = "3"
 

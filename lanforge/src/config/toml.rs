@@ -13,6 +13,7 @@ pub struct TomlConfig {
     pub dns: DnsCfg,
     pub auth: AuthCfg,
     pub http: HttpCfg,
+    pub tftp: TftpCfg,
     #[serde(default)]
     pub devices: Vec<StaticDeviceCfg>,
 }
@@ -34,6 +35,8 @@ pub struct DhcpV4Cfg {
     pub router: String,
     pub dns: Vec<String>,
     pub subnet_mask: Option<String>,
+    pub tftp_server: Option<String>,
+    pub boot_file: Option<String>,
     /// @deprecated use `[general].search_domains` instead. will be removed in the future.
     pub domain_name: Option<String>,
 }
@@ -48,6 +51,8 @@ impl Default for DhcpV4Cfg {
             router: "192.168.0.1".into(),
             dns: vec!["192.168.0.1".into()],
             subnet_mask: None,
+            tftp_server: None,
+            boot_file: None,
             domain_name: None,
         }
     }
@@ -60,6 +65,7 @@ pub struct DhcpV6Cfg {
     pub lease_time: u32,
     pub range_start: Option<String>,
     pub range_end: Option<String>,
+    pub boot_file: Option<String>,
     #[serde(default)]
     pub pools: Vec<DhcpV6PoolCfg>,
 }
@@ -78,6 +84,7 @@ impl Default for DhcpV6Cfg {
             lease_time: 86400,
             range_start: None,
             range_end: None,
+            boot_file: None,
             pools: Vec::new(),
         }
     }
@@ -103,6 +110,8 @@ pub struct GeneralCfg {
     pub control_socket: String,
     /// HTTP REST API listen address (e.g. "0.0.0.0:8080").
     pub http_listen: Option<String>,
+    /// Path to the directory containing boot files (PXE/HTTP boot).
+    pub boot_dir: Option<String>,
     /// Global list of search domains.
     pub search_domains: Option<Vec<String>>,
     /// @deprecated Path to the `SQLite` log database file. Use `log_db_url` instead.
@@ -145,6 +154,7 @@ impl Default for GeneralCfg {
             fallback_mins: 60,
             control_socket: "/run/lanforge/control.sock".into(),
             http_listen: None,
+            boot_dir: None,
             search_domains: None,
             log_db: ":memory:".into(),
             log_db_url: None,
@@ -247,6 +257,7 @@ pub struct StaticDeviceCfg {
     pub duid: Option<String>,
     pub v4_ip: Option<String>,
     pub v6_suffix: Option<String>,
+    pub boot_file: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
@@ -261,6 +272,24 @@ pub struct HttpCfg {
     pub listen: Option<String>,
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(default)]
+pub struct TftpCfg {
+    pub enabled: bool,
+    pub listen: String,
+    pub root_dir: Option<String>,
+}
+
+impl Default for TftpCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "0.0.0.0:69".into(),
+            root_dir: None,
+        }
+    }
 }
 
 /// Load and parse the TOML config file, or return defaults if missing.

@@ -50,7 +50,7 @@ fn apply_update_hostname_hint_respects_static() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
     // Simula device estático via API correta
-    ctx.add_static_device(mac, "static-host".to_string(), None, None, None);
+    ctx.add_static_device(mac, "static-host".to_string(), None, None, None, None);
 
     let changed = ctx.apply(DeviceUpdate::DhcpHostnameHint {
         mac,
@@ -351,6 +351,7 @@ fn test_cli_host_updated_sync() {
         v4_static: FieldUpdate::Set("192.168.1.10".parse().unwrap()),
         v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::10").unwrap()),
         origin: Origin::Cli,
+        boot_file: FieldUpdate::NoChange,
     });
 
     assert!(changed);
@@ -383,6 +384,7 @@ fn test_cli_host_updated_sync() {
         v4_static: FieldUpdate::NoChange, // No change
         v6_suffix: FieldUpdate::NoChange, // No change
         origin: Origin::Cli,
+        boot_file: FieldUpdate::NoChange,
     });
 
     assert!(changed);
@@ -747,11 +749,12 @@ fn test_static_registry_validation() {
         None,
         Some(ip1),
         Some(suf1.clone()),
+        None,
     );
 
     // 2. Add conflicting registrations for mac2
     // mac2 tries to claim the same IPv4 and IPv6 suffix as mac1
-    ctx.add_static_device(mac2, "host2".to_string(), None, Some(ip1), Some(suf1));
+    ctx.add_static_device(mac2, "host2".to_string(), None, Some(ip1), Some(suf1), None);
 
     // 3. Get registry - should perform collision detection
     let registry = ctx.get_static_registry();
@@ -824,6 +827,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
             IpAddr::V4(_) => unreachable!(),
         })),
         origin: Origin::Cli,
+        boot_file: FieldUpdate::NoChange,
     });
 
     let _ = ctx.apply(DeviceUpdate::SlaacObserved {

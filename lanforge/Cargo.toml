@@ -76,6 +76,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
     "fmt",
     "ansi",
 ] }
+lanforge-tftp = { version = "0.1.0", path = "../lanforge-tftp" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "io-util"] }

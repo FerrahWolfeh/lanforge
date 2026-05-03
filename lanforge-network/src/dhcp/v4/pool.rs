@@ -313,6 +313,7 @@ mod tests {
             v4_static: FieldUpdate::Set(reserved_ip),
             v6_suffix: FieldUpdate::NoChange,
             origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
         });
 
         p.mark_declined(declined_ip);

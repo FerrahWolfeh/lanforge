@@ -49,16 +49,19 @@ impl LanforgeContext {
         duid: Option<Duid>,
         v4_static: Option<Ipv4Addr>,
         v6_suffix: Option<Ipv6AddrOrSuffix>,
+        boot_file: Option<String>,
     ) {
-        use crate::context::state::DeviceUpdate;
+        use crate::context::state::{DeviceUpdate, FieldUpdate};
+        use crate::device::Origin;
 
         let _ = self.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            hostname: hostname.into(),
-            duid: duid.into(),
-            v4_static: v4_static.into(),
-            v6_suffix: v6_suffix.into(),
-            origin: crate::device::Origin::Cli,
+            hostname: FieldUpdate::from(Some(hostname)),
+            duid: FieldUpdate::from(duid),
+            v4_static: FieldUpdate::from(v4_static),
+            v6_suffix: FieldUpdate::from(v6_suffix),
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::from(boot_file),
         });
     }
 

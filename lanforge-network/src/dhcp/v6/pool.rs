@@ -902,6 +902,7 @@ mod tests {
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(static_suffix),
             origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
         });
 
         let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
@@ -952,6 +953,7 @@ mod tests {
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(static_suffix),
             origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
         });
 
         // 2. Allocate first time
@@ -1092,6 +1094,7 @@ mod tests {
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
             origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
         });
 
         // 3. Re-allocate -> must return static address, NOT the sticky dynamic one
@@ -1116,6 +1119,7 @@ mod tests {
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
             origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
         });
 
         // Allocate -> must return suffix on both ULA and GUA

@@ -229,6 +229,9 @@ pub struct MacAddr(pub [u8; 6]);
 // Display, Debug, and Serde implementations for MacAddr are now handled by the Identifier macro.
 
 impl MacAddr {
+    /// All-zeros MAC address (00:00:00:00:00:00).
+    pub const ZERO: Self = Self([0u8; 6]);
+
     /// Parses a colon-separated MAC address string (e.g., "00:11:22:33:44:55").
     ///
     /// Returns `None` if the string is not exactly 6 colon-separated hex bytes.

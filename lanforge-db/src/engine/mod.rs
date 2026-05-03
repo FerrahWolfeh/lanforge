@@ -353,6 +353,7 @@ impl LeaseDb {
                     _ => Origin::Dynamic,
                 };
                 device.managed_at = row.managed_at.map(unix_to_system_time);
+                device.boot_file.clone_from(&row.boot_file);
 
                 if let Some(v4) = &row.v4_static
                     && let Ok(ip) = v4.parse::<Ipv4Addr>()
@@ -396,6 +397,7 @@ impl LeaseDb {
                                 }
                             }),
                             origin: device.origin,
+                            boot_file: device.boot_file.clone(),
                         },
                     );
                 }

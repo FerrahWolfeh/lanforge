@@ -35,6 +35,7 @@ async fn test_full_db_reset_chain() {
         duid: None,
         v4_ip: Some("192.168.1.20".to_string()),
         v6_suffix: None,
+        boot_file: None,
     });
     let cfg = Arc::new(cfg);
 
@@ -55,6 +56,7 @@ async fn test_full_db_reset_chain() {
         v4_static: FieldUpdate::Set("192.168.1.20".parse::<std::net::Ipv4Addr>().unwrap()),
         v6_suffix: FieldUpdate::NoChange,
         origin: lanforge_core::device::Origin::Cli,
+        boot_file: FieldUpdate::NoChange,
     });
 
     // 3. Spawn DbWorker

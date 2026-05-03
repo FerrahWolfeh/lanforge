@@ -1,0 +1,67 @@
+# Lanforge Example Configuration
+# Reference for Hybrid PXE/HTTP Boot and other features
+
+[general]
+# LAN interface where the daemon listens.
+iface_lan = "end0"
+# Database connection URL. Supports SQLite and PostgreSQL.
+db_url = "sqlite:///var/lib/lanforge/leases.db"
+# Path to the directory containing boot files (PXE/HTTP boot).
+# These files are served via both TFTP and HTTP (/boot route).
+boot_dir = "/var/lib/lanforge/boot"
+# Wait time before processing network events.
+debounce_secs = 2
+# HTTP REST API listen address.
+http_listen = "0.0.0.0:8080"
+# Global search domains for DHCP and RA.
+search_domains = ["lan", "home.arpa"]
+
+[tftp]
+# Enable the built-in TFTP server for classic PXE boot.
+enabled = true
+# Address and port to listen on.
+listen = "0.0.0.0:69"
+# Optional: Override the root directory for TFTP specifically.
+# If not set, it defaults to [general].boot_dir.
+# root_dir = "/var/lib/lanforge/tftp_root"
+
+[dhcp.v4]
+# Enable DHCPv4 server.
+enabled = true
+range_start = "192.168.1.100"
+range_end = "192.168.1.250"
+lease_time = 86400
+router = "192.168.1.1"
+dns = ["192.168.1.1"]
+# Optional: TFTP server address sent to clients (Option 66).
+# If not set, typically defaults to the router address.
+tftp_server = "192.168.1.1"
+# Optional: Default boot file name (Option 67).
+boot_file = "ipxe.efi"
+
+[dhcp.v6]
+# Enable DHCPv6 server.
+enabled = true
+lease_time = 86400
+# Optional: Default Bootfile URL (Option 59) for UEFI HTTP Boot.
+boot_file = "http://[fd97:f00d:cafe::1]:8080/boot/ipxe.efi"
+
+[ra]
+# Enable Router Advertisements (IPv6).
+enabled = true
+managed = true
+other_config = true
+
+[dns]
+# Enable the internal DNS server.
+enabled = true
+listen = "0.0.0.0:5300"
+# Upstream DNS resolver.
+upstream = "1.1.1.1:53"
+
+[[devices]]
+# Example of a static device with a custom boot file override.
+mac = "00:11:22:33:44:55"
+hostname = "special-server"
+v4_ip = "192.168.1.10"
+boot_file = "custom-pxe-image.efi"

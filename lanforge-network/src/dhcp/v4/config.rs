@@ -30,6 +30,10 @@ pub struct Dhcpv4Config {
     pub search_domains: Vec<String>,
     /// UDP port to listen on (default: 67).
     pub port: u16,
+    /// TFTP server address (Option 66).
+    pub tftp_server: Option<String>,
+    /// Boot file name (Option 67).
+    pub boot_file: Option<String>,
 }
 
 impl Default for Dhcpv4Config {
@@ -46,6 +50,8 @@ impl Default for Dhcpv4Config {
             domain_name: None,
             search_domains: Vec::new(),
             port: 67,
+            tftp_server: None,
+            boot_file: None,
         }
     }
 }

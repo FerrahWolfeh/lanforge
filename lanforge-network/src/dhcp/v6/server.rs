@@ -268,6 +268,7 @@ impl Dhcpv6Server {
         }
 
         self.add_dns_options(&mut reply);
+        self.add_boot_options(&mut reply, identity);
         let mut ias = AssignedIAs::default();
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             ias.na.push(iana.id);
@@ -500,6 +501,7 @@ impl Dhcpv6Server {
         }
 
         self.add_dns_options(&mut reply);
+        self.add_boot_options(&mut reply, identity);
         let mut ias = AssignedIAs::default();
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             ias.na.push(iana.id);
@@ -686,6 +688,7 @@ impl Dhcpv6Server {
     ) -> HandleResult<'a> {
         let mut reply = self.base_reply(msg, MessageType::Reply, client_duid);
         self.add_dns_options(&mut reply);
+        self.add_boot_options(&mut reply, None);
         HandleResult::Reply(
             encode_msg(&reply, buf),
             peer,
@@ -810,6 +813,34 @@ impl Dhcpv6Server {
         }
     }
 
+    fn add_boot_options(&self, reply: &mut Message, identity: Option<&DeviceIdentity>) {
+        let mac = identity.map(|i| i.mac);
+        let dev = mac.and_then(|m| self.ctx.get_device(&m));
+        let boot_file = dev
+            .as_ref()
+            .and_then(|d| d.boot_file.clone())
+            .or_else(|| self.cfg.boot_file.clone());
+
+        if let Some(file) = boot_file {
+            // For DHCPv6 HTTP Boot, we construct a URL.
+            // Constructing a reliable URL is tricky without knowing the server's own IP on this interface.
+            // We'll use a placeholder [::1] for now, or we can try to guess from the pool.
+            let server_ip = self
+                .cfg
+                .ula_prefix
+                .unwrap_or(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1));
+            let url = format!("http://[{server_ip}]:8080/boot/{file}");
+
+            // Option 59 (Bootfile URL)
+            reply
+                .opts_mut()
+                .insert(DhcpOption::Unknown(dhcproto::v6::UnknownOption::new(
+                    59.into(),
+                    url.into_bytes(),
+                )));
+        }
+    }
+
     /// Returns the last assignment for a given DUID and IAID.
     #[must_use]
     pub fn last_assignment_for(&self, duid: &Duid, iaid: u32) -> Vec<Ipv6Addr> {
@@ -875,8 +906,8 @@ mod tests {
         v6::{DhcpOptions, IANA, OptionCode},
     };
     use lanforge_core::{
-        context::state::{DeviceUpdate, InterfaceState},
-        device::Ipv6AddrOrSuffix,
+        context::state::{DeviceUpdate, FieldUpdate, InterfaceState},
+        device::{Device, Ipv6AddrOrSuffix, Origin},
     };
     use std::net::{Ipv6Addr, UdpSocket};
 
@@ -913,6 +944,7 @@ mod tests {
             }],
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
+            boot_file: None,
         };
         let pool = Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, 64);
         let server_duid = Duid::new(vec![
@@ -966,6 +998,7 @@ mod tests {
             pools: Vec::new(),
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
+            boot_file: None,
         };
         let pool = Ipv6Pool::new(&Vec::new(), None, 64);
         let sock = UdpSocket::bind("::0:0").unwrap();
@@ -1211,6 +1244,7 @@ mod tests {
             pools: Vec::new(),
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
+            boot_file: None,
         };
         let pool = Ipv6Pool::new(&Vec::new(), Some(ula), 48);
         let sock = UdpSocket::bind("::0:0").unwrap();
@@ -1282,6 +1316,48 @@ mod tests {
         assert_eq!(
             opts.get(OptionCode::ReconfMsg),
             Some(&DhcpOption::ReconfMsg(MessageType::Renew))
+        );
+    }
+
+    #[test]
+    fn test_boot_options() {
+        let mut srv = dummy_server();
+        srv.cfg.boot_file = Some("http://[fd00::1]/boot/ipxe.efi".into());
+
+        let mac = dummy_mac();
+        let mut reply = Message::new(MessageType::Reply);
+        reply.set_xid([1, 2, 3]);
+
+        // 1. Global config
+        srv.add_boot_options(&mut reply, None);
+        assert!(
+            reply.opts().get(OptionCode::Unknown(59)).is_some(),
+            "Missing Bootfile URL (Option 59)"
+        );
+
+        // 2. Per-device override
+        let mut dev = Device::new(mac);
+        dev.hostname.name = "host".to_string();
+        dev.origin = Origin::Cli;
+        dev.boot_file = Some("http://custom/boot.efi".into());
+        // Register it so srv.ctx can find it
+        let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac,
+            hostname: FieldUpdate::Set("host".to_string()),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::Set("http://custom/boot.efi".to_string()),
+        });
+
+        let identity = DeviceIdentity::new(mac, None, None);
+        let mut reply = Message::new(MessageType::Reply);
+        reply.set_xid([0, 1, 2]);
+        srv.add_boot_options(&mut reply, Some(&identity));
+        assert!(
+            reply.opts().get(OptionCode::Unknown(59)).is_some(),
+            "Missing custom Bootfile URL (Option 59)"
         );
     }
 }
