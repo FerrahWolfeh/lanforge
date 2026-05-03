@@ -259,7 +259,7 @@ impl State {
                 registry.v4.entry(v4).or_insert(entry.mac);
             }
             if let Some(v6) = &entry.v6_suffix {
-                registry.v6.entry(v6.clone()).or_insert(entry.mac);
+                registry.v6.entry(*v6).or_insert(entry.mac);
             }
         }
         registry
@@ -461,7 +461,7 @@ impl StaticRegistry {
     }
 
     pub fn v6_reservations(&self) -> impl Iterator<Item = Ipv6AddrOrSuffix> + '_ {
-        self.v6.keys().cloned()
+        self.v6.keys().copied()
     }
 }
 

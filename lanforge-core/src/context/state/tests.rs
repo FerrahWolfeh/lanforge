@@ -747,14 +747,7 @@ fn test_static_registry_validation() {
     let suf1 = Ipv6AddrOrSuffix::parse("::100").unwrap();
 
     // 1. Setup normal registrations
-    ctx.add_static_device(
-        mac1,
-        "host1".to_string(),
-        None,
-        Some(ip1),
-        Some(suf1.clone()),
-        None,
-    );
+    ctx.add_static_device(mac1, "host1".to_string(), None, Some(ip1), Some(suf1), None);
 
     // 2. Add conflicting registrations for mac2
     // mac2 tries to claim the same IPv4 and IPv6 suffix as mac1

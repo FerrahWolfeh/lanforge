@@ -219,7 +219,7 @@ impl State {
                     duid: dev.duid.clone(),
                     v4_static: dev.v4.ip(),
                     v6_suffix: dev.v6.iter().find_map(|s| match s {
-                        IPv6State::Static(s, _) => Some(s.clone()),
+                        IPv6State::Static(s, _) => Some(*s),
                         _ => None,
                     }),
                     boot_file: dev.boot_file.clone(),

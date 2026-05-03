@@ -6,7 +6,7 @@ use tracing::{debug, info};
 
 use lanforge_core::context::state::{DeviceUpdate, State, StaticEntry};
 use lanforge_core::device::{
-    Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
+    Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, TopologyInfo,
 };
 use lanforge_core::identifiers::{Duid, MacAddr};
 
@@ -370,7 +370,7 @@ impl LeaseDb {
                 }
 
                 if row.topo_updated > 0 {
-                    device.topology = Some(lanforge_core::device::TopologyInfo {
+                    device.topology = Some(TopologyInfo {
                         parent_mac: row.parent_mac.as_ref().and_then(|m| MacAddr::parse(m)),
                         port: row.parent_port.clone(),
                         local_ifindex: u32::try_from(row.local_ifindex).unwrap_or(0),
@@ -391,7 +391,7 @@ impl LeaseDb {
                             },
                             v6_suffix: device.v6.iter().find_map(|s| {
                                 if let IPv6State::Static(suffix, _) = s {
-                                    Some(suffix.clone())
+                                    Some(*suffix)
                                 } else {
                                     None
                                 }

@@ -531,7 +531,8 @@ impl IPv6State {
 /// let suffix = Ipv6AddrOrSuffix::parse("aabb:ccff:fedd:eeff").unwrap();
 /// assert!(matches!(suffix, Ipv6AddrOrSuffix::Suffix(_)));
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(try_from = "String", into = "String")]
 pub enum Ipv6AddrOrSuffix {
     /// A complete 128-bit IPv6 address.
     Full(Ipv6Addr),
@@ -635,6 +636,19 @@ impl fmt::Display for Ipv6AddrOrSuffix {
                 ip.fmt(f)
             }
         }
+    }
+}
+
+impl TryFrom<String> for Ipv6AddrOrSuffix {
+    type Error = String;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::parse(&s).ok_or_else(|| format!("Invalid IPv6 address or suffix: {s}"))
+    }
+}
+
+impl From<Ipv6AddrOrSuffix> for String {
+    fn from(val: Ipv6AddrOrSuffix) -> Self {
+        val.to_string()
     }
 }
 
