@@ -1,0 +1,27 @@
+# DHCPv6 Service Configuration Example
+
+[dhcp.v6]
+# Whether the DHCPv6 service is enabled.
+enabled = true
+
+# Default lease time (seconds). Default: 86400 (24h)
+lease_time = 86400
+
+# Address pools
+[[dhcp.v6.pools]]
+# Dynamic range based on suffix (relative to current prefix)
+range_start = "::1000"
+range_end = "::2000"
+
+# [[dhcp.v6.pools]]
+# Static CIDR pool
+# address = "fd00::dead:beef/128"
+
+# DNS servers (Option 23)
+dns_servers = ["fd00::1"]
+
+# Search domains (Option 24)
+search_domains = ["lan"]
+
+# Global boot file name (Option 59)
+# boot_file = "http://192.168.1.1/boot/ipxe.efi"

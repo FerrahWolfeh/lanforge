@@ -28,6 +28,7 @@ hickory-proto = { version = "0.26.0", features = [
     "mdns",
 ], default-features = false }
 roaring = "0.11.3"
+serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
 tokio = { version = "1.51.0", features = ["full"] }

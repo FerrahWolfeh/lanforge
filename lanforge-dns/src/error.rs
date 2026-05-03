@@ -57,6 +57,7 @@ pub enum DnsError {
     #[error("TLS error: {0}")]
     Tls(String),
     /// TLS PEM parsing error.
+    #[cfg(feature = "dot")]
     #[error("TLS PEM parsing error: {0}")]
     TlsPem(#[from] rustls_pki_types::pem::Error),
 }

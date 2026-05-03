@@ -3,14 +3,22 @@
 //! Defines the `LAN` interface, address pool range, and `DHCP` options
 //! (`router`, `DNS`, `domain name`, `search domains`).
 
+use lanforge_macros::ServiceConfig;
+use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 
 /// `DHCPv4` server configuration — built from the `[dhcp.v4]` TOML section.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
+#[config(key = "dhcp.v4")]
+#[serde(default)]
 pub struct Dhcpv4Config {
+    /// Whether the `DHCPv4` service is enabled.
+    pub enabled: bool,
     /// Network interface to listen on (e.g., `"eth0"`).
+    #[serde(skip)]
     pub iface: String,
     /// Server IP — used as `server_id` (Option 54) and `siaddr` in replies.
+    #[serde(skip)]
     pub server_id: Ipv4Addr,
     /// Start of the dynamic IP range (inclusive).
     pub range_start: Ipv4Addr,
@@ -39,6 +47,7 @@ pub struct Dhcpv4Config {
 impl Default for Dhcpv4Config {
     fn default() -> Self {
         Self {
+            enabled: false,
             iface: "end0".into(),
             server_id: Ipv4Addr::new(192, 168, 0, 1),
             range_start: Ipv4Addr::new(192, 168, 0, 100),

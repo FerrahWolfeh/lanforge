@@ -1,0 +1,37 @@
+# DNS Service Configuration Example
+
+[dns]
+# Whether the DNS service is enabled.
+enabled = true
+
+# Socket address to listen on (e.g., "0.0.0.0:53").
+# Default: "0.0.0.0:5300"
+listen = "0.0.0.0:53"
+
+# Upstream resolver for non-local queries.
+# Protocols: udp:// (default) or tls:// (DoT)
+# Examples: "8.8.8.8:53", "tls://dns.google:853"
+upstream = "tls://1.1.1.1:853"
+
+# Local search domain suffix.
+# Default: "lan"
+search_domain = "lan"
+
+# Default TTL (in seconds) for locally generated DNS records.
+# Default: 60
+ttl = 300
+
+# Micro-adblocker settings (requires 'adblock' feature)
+adblock_enabled = false
+adblock_urls = [
+    "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+]
+
+# How many days a device can be offline before its DNS entry is hidden.
+# Default: 7
+last_seen_threshold_days = 14
+
+# DNS-over-TLS (DoT) listener
+# dot_listen = "0.0.0.0:853"
+# tls_cert = "/etc/lanforge/certs/dns.crt"
+# tls_key = "/etc/lanforge/certs/dns.key"

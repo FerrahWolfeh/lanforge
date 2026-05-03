@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::net::Ipv4Addr;
 #[cfg(feature = "debug-commands")]
 use clap::Subcommand;
 
@@ -90,11 +91,11 @@ pub struct CliArgs {
 
     /// First IP of the `DHCPv4` pool.
     #[arg(long, env = "LANFORGE_DHCPV4_START")]
-    pub dhcpv4_range_start: Option<String>,
+    pub dhcpv4_range_start: Option<Ipv4Addr>,
 
     /// Last IP of the `DHCPv4` pool.
     #[arg(long, env = "LANFORGE_DHCPV4_END")]
-    pub dhcpv4_range_end: Option<String>,
+    pub dhcpv4_range_end: Option<Ipv4Addr>,
 
     /// Default lease time (seconds).
     #[arg(long, env = "LANFORGE_DHCPV4_LEASE")]

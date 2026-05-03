@@ -2311,6 +2311,7 @@ dependencies = [
  "rand 0.10.1",
  "roaring",
  "rtnetlink",
+ "serde",
  "socket2",
  "thiserror 2.0.18",
  "tokio",

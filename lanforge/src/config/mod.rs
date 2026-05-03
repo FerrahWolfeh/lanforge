@@ -30,20 +30,15 @@ pub use args::CliArgs;
 #[cfg(feature = "debug-commands")]
 pub use args::Command;
 use lanforge_api::config::ApiConfig;
-use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_dns::DnsConfig;
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
-use lanforge_network::dhcp::v6::config::{Dhcpv6Config, Dhcpv6PoolConfig};
-use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
-pub use toml::{
-    DhcpV4Cfg, DhcpV6Cfg, DnsCfg, RaCfg, StaticDeviceCfg, load_devices_only, load_toml,
-};
+use lanforge_network::dhcp::v6::config::Dhcpv6Config;
+use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig};
+pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
 
 use clap::Parser;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-use tracing::warn;
 
 // ---------------------------------------------------------------------------
 // Config unificada (resultado do merge TOML + CLI overrides)
@@ -70,19 +65,19 @@ pub struct Config {
 
     // RA
     pub ra_enabled: bool,
-    pub ra_toml: RaCfg,
+    pub ra_toml: lanforge_network::ra::RaServiceConfig,
 
     // DHCPv4
     pub dhcpv4_enabled: bool,
-    pub dhcpv4_toml: DhcpV4Cfg,
+    pub dhcpv4_toml: Dhcpv4Config,
 
     // DHCPv6
     pub dhcpv6_enabled: bool,
-    pub dhcpv6_toml: DhcpV6Cfg,
+    pub dhcpv6_toml: Dhcpv6Config,
 
     // DNS
     pub dns_enabled: bool,
-    pub dns_toml: DnsCfg,
+    pub dns_toml: lanforge_dns::DnsConfig,
     pub search_domains: Vec<String>,
 
     // static devices
@@ -131,7 +126,7 @@ impl Config {
             }
             // 4. Default "lan" if completely empty
             if domains.is_empty() {
-                domains.push(toml_cfg.dns.search_domain.clone());
+                domains.push("lan".to_string());
             }
             domains
         };
@@ -165,33 +160,52 @@ impl Config {
             boot_dir: toml_cfg.general.boot_dir.clone(),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
-            ra_toml: RaCfg {
-                managed: cli.ra_managed.unwrap_or(toml_cfg.ra.managed),
-                other_config: cli.ra_other_config.unwrap_or(toml_cfg.ra.other_config),
-                max_interval: cli.ra_max_interval.unwrap_or(toml_cfg.ra.max_interval),
-                ..toml_cfg.ra
+            ra_toml: {
+                let mut r = toml_cfg.ra;
+                if let Some(managed) = cli.ra_managed {
+                    r.managed = managed;
+                }
+                if let Some(other) = cli.ra_other_config {
+                    r.other_config = other;
+                }
+                if let Some(max_interval) = cli.ra_max_interval {
+                    r.max_interval = max_interval;
+                }
+                r
             },
 
             dhcpv4_enabled: cli.dhcpv4_enabled.unwrap_or(toml_cfg.dhcp.v4.enabled),
-            dhcpv4_toml: DhcpV4Cfg {
-                range_start: cli
-                    .dhcpv4_range_start
-                    .unwrap_or(toml_cfg.dhcp.v4.range_start),
-                range_end: cli.dhcpv4_range_end.unwrap_or(toml_cfg.dhcp.v4.range_end),
-                lease_time: cli
-                    .dhcpv4_lease_time
-                    .map_or(toml_cfg.dhcp.v4.lease_time, u64::from),
-                ..toml_cfg.dhcp.v4
+            dhcpv4_toml: {
+                let mut d = toml_cfg.dhcp.v4;
+                if let Some(start) = cli.dhcpv4_range_start {
+                    d.range_start = start;
+                }
+                if let Some(end) = cli.dhcpv4_range_end {
+                    d.range_end = end;
+                }
+                if let Some(lt) = cli.dhcpv4_lease_time {
+                    d.lease_time = lt;
+                }
+                d
             },
 
             dhcpv6_enabled: cli.dhcpv6_enabled.unwrap_or(toml_cfg.dhcp.v6.enabled),
             dhcpv6_toml: toml_cfg.dhcp.v6,
 
             dns_enabled: cli.dns_enabled.unwrap_or(toml_cfg.dns.enabled),
-            dns_toml: DnsCfg {
-                listen: cli.dns_listen.unwrap_or(toml_cfg.dns.listen),
-                upstream: cli.dns_upstream.or(toml_cfg.dns.upstream),
-                ..toml_cfg.dns
+            dns_toml: {
+                let mut d = toml_cfg.dns;
+                if let Some(listen) = cli.dns_listen
+                    && let Ok(addr) = listen.parse()
+                {
+                    d.listen = addr;
+                }
+                if let Some(upstream) = cli.dns_upstream
+                    && let Ok(target) = upstream.parse()
+                {
+                    d.upstream = Some(target);
+                }
+                d
             },
             search_domains,
 
@@ -221,298 +235,116 @@ impl Config {
             .join("api_password.hash")
     }
 
-    /// Parses a CIDR string (e.g., "`fd00::/48`") into an `Ipv6Addr` and a prefix length.
-    fn parse_cidr(s: &str) -> Option<(Ipv6Addr, u8)> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.is_empty() {
-            return None;
-        }
-        let addr = parts[0].parse().ok()?;
-        let len = if parts.len() > 1 {
-            parts[1].parse().ok()?
-        } else {
-            64
-        };
-        Some((addr, len))
-    }
-
     /// Builds an `RaConfig` from the merged configuration.
     pub fn to_ra_config(&self) -> RaConfig {
-        let mut prefixes = Vec::new();
+        let mut cfg = self.ra_toml.to_ra_config(self.iface_lan.clone());
 
-        for p in &self.ra_toml.prefix {
-            match p.source.as_str() {
-                "ula" => {
-                    if let Some(ref addr_str) = p.address
-                        && let Some((addr, len)) = Self::parse_cidr(addr_str)
-                    {
-                        prefixes.push(PrefixConfig {
-                            source: PrefixSource::Static(addr),
-                            prefix_len: len,
-                            ..PrefixConfig::ula(&addr.to_string())
-                        });
-                    }
-                }
-                "auto_gua" => {
-                    prefixes.push(PrefixConfig::gua_dynamic());
-                }
-                other => {
-                    warn!("[config] Unknown RA prefix source: '{other}', ignoring");
-                }
-            }
+        // Overrides
+        cfg.managed = self.ra_toml.managed; // Should be handled by to_ra_config but for safety
+
+        // Ensure at least one prefix exists if none configured
+        if cfg.prefixes.is_empty() {
+            cfg.prefixes.push(PrefixConfig::gua_dynamic());
         }
 
-        // If no prefixes configured, default to auto_gua
-        if prefixes.is_empty() {
-            prefixes.push(PrefixConfig::gua_dynamic());
-        }
-
-        let rdnss: Vec<RdnssConfig> = self
-            .ra_toml
-            .rdnss
-            .iter()
-            .filter(|r| !r.servers.is_empty())
-            .map(|r| {
-                r.lifetime.map_or_else(
-                    || RdnssConfig::new(r.servers.clone()),
-                    |lt| {
-                        RdnssConfig::with_lifetime(
-                            r.servers.clone(),
-                            u32::try_from(lt).unwrap_or(u32::MAX),
-                        )
-                    },
-                )
-            })
-            .collect();
-
-        RaConfig {
-            iface: self.iface_lan.clone(),
-            managed: self.ra_toml.managed,
-            other_config: self.ra_toml.other_config,
-            max_interval: Duration::from_secs(self.ra_toml.max_interval),
-            router_lifetime: self.ra_toml.router_lifetime.map(Duration::from_secs),
-            mtu: self.ra_toml.mtu,
-            prefixes,
-            rdnss,
-            dnssl: vec![DnsslConfig {
+        // Add default search domains if none in RA config
+        if cfg.dnssl.is_empty() && !self.search_domains.is_empty() {
+            cfg.dnssl.push(DnsslConfig {
                 domains: self.search_domains.clone(),
                 lifetime: None,
-            }],
-            ..Default::default()
+            });
         }
+
+        cfg
     }
 
     /// Builds a `Dhcpv4Config` from the merged configuration.
     pub fn to_dhcpv4_config(&self) -> Dhcpv4Config {
-        let parse_ip = |s: &str, default: Ipv4Addr| -> Ipv4Addr {
-            s.parse().unwrap_or_else(|_| {
-                warn!("[config] Invalid IPv4 '{s}', using {default}");
-                default
-            })
-        };
+        let mut cfg = self.dhcpv4_toml.clone();
 
-        let server_id = parse_ip(&self.dhcpv4_toml.router, Ipv4Addr::new(192, 168, 0, 1));
+        // Injected fields
+        cfg.enabled = self.dhcpv4_enabled;
+        cfg.iface = self.iface_lan.clone();
+        cfg.server_id = cfg.router; // Use router IP as server ID by default
+        cfg.port = self.dhcpv4_port;
 
-        Dhcpv4Config {
-            iface: self.iface_lan.clone(),
-            server_id,
-            range_start: parse_ip(
-                &self.dhcpv4_toml.range_start,
-                Ipv4Addr::new(192, 168, 0, 100),
-            ),
-            range_end: parse_ip(&self.dhcpv4_toml.range_end, Ipv4Addr::new(192, 168, 0, 254)),
-            lease_time: u32::try_from(self.dhcpv4_toml.lease_time).unwrap_or(u32::MAX),
-            router: server_id,
-            dns: self
-                .dhcpv4_toml
-                .dns
-                .iter()
-                .map(|s| parse_ip(s, Ipv4Addr::new(192, 168, 0, 1)))
-                .collect(),
-            subnet_mask: self
-                .dhcpv4_toml
-                .subnet_mask
-                .as_deref()
-                .map_or(Ipv4Addr::new(255, 255, 255, 0), |s| {
-                    parse_ip(s, Ipv4Addr::new(255, 255, 255, 0))
-                }),
-            domain_name: self.search_domains.first().cloned(),
-            search_domains: self.search_domains.clone(),
-            port: self.dhcpv4_port,
-            tftp_server: self.dhcpv4_toml.tftp_server.clone(),
-            boot_file: self.dhcpv4_toml.boot_file.clone(),
+        // Option 15 & 119
+        if cfg.domain_name.is_none() {
+            cfg.domain_name = self.search_domains.first().cloned();
         }
+        cfg.search_domains = self.search_domains.clone();
+
+        cfg
     }
 
     /// Builds a `Dhcpv6Config` from the merged configuration.
     pub fn to_dhcpv6_config(&self) -> Dhcpv6Config {
-        let mut ula_prefix = None;
+        let mut cfg = self.dhcpv6_toml.clone();
 
-        let ula_prefix_len = if let Some(p) = self.ra_toml.prefix.iter().find(|p| p.source == "ula")
-            && let Some(addr_str) = &p.address
-            && let Some((addr, len)) = Self::parse_cidr(addr_str)
-        {
-            ula_prefix = Some(addr);
-            len
-        } else {
-            64
-        };
+        // Injected fields
+        cfg.enabled = self.dhcpv6_enabled;
+        cfg.iface = self.iface_lan.clone();
+        cfg.port = self.dhcpv6_port;
 
-        let mut pools = Vec::new();
-
-        // 1. Legacy support: if range_start/end are present in TOML, convert them to a pool
-        if let (Some(start_s), Some(end_s)) =
-            (&self.dhcpv6_toml.range_start, &self.dhcpv6_toml.range_end)
-            && let (Some(start), Some(end)) = (
-                Ipv6AddrOrSuffix::parse(start_s),
-                Ipv6AddrOrSuffix::parse(end_s),
-            )
-        {
-            pools.push(Dhcpv6PoolConfig {
-                range_start: Some(start),
-                range_end: Some(end),
-                address: None,
-            });
-        }
-
-        // 2. New multi-pool support
-        for p in &self.dhcpv6_toml.pools {
-            if let Some(addr_str) = &p.address {
-                if p.range_start.is_some() || p.range_end.is_some() {
-                    warn!(
-                        "[config] DHCPv6 pool has both 'address' (CIDR) and 'range_start/end'. Prioritizing CIDR."
-                    );
-                }
-                pools.push(Dhcpv6PoolConfig {
-                    range_start: None,
-                    range_end: None,
-                    address: Some(addr_str.clone()),
-                });
-            } else if let (Some(start_s), Some(end_s)) = (&p.range_start, &p.range_end) {
-                if let (Some(start), Some(end)) = (
-                    Ipv6AddrOrSuffix::parse(start_s),
-                    Ipv6AddrOrSuffix::parse(end_s),
-                ) {
-                    pools.push(Dhcpv6PoolConfig {
-                        range_start: Some(start),
-                        range_end: Some(end),
-                        address: None,
-                    });
-                }
-            } else {
-                warn!(
-                    "[config] DHCPv6 pool missing both 'address' (CIDR) and 'range_start/end', ignoring."
-                );
+        // Prefix detection
+        if let Some(p) = self.ra_toml.prefixes.iter().find(|p| {
+            p.source == PrefixSource::AutoGua || matches!(p.source, PrefixSource::Static(_))
+        }) {
+            if let PrefixSource::Static(addr) = p.source {
+                cfg.ula_prefix = Some(addr);
             }
+            cfg.ula_prefix_len = p.prefix_len;
+        } else {
+            cfg.ula_prefix_len = 64;
         }
 
-        Dhcpv6Config {
-            enabled: self.dhcpv6_enabled,
-            iface: self.iface_lan.clone(),
-            lease_time: self.dhcpv6_toml.lease_time,
-            ula_prefix,
-            ula_prefix_len,
-            port: self.dhcpv6_port,
-            pools,
-            dns_servers: self
-                .dns_toml
-                .upstream
-                .as_deref()
-                .and_then(|s| s.parse::<SocketAddr>().ok())
-                .map_or_else(
-                    || {
-                        // If no upstream, we might want to suggest ourselves if we have a ULA
-                        ula_prefix.map(|ip| vec![ip]).unwrap_or_default()
-                    },
-                    |sa| match sa {
-                        SocketAddr::V6(v6) => vec![*v6.ip()],
-
-                        SocketAddr::V4(_) => vec![],
-                    },
-                ),
-            search_domains: self.search_domains.clone(),
-            boot_file: self.dhcpv6_toml.boot_file.clone(),
+        // DNS Servers
+        if cfg.dns_servers.is_empty() {
+            cfg.dns_servers = self.dns_toml.upstream.as_ref().map_or_else(
+                || cfg.ula_prefix.map(|ip| vec![ip]).unwrap_or_default(),
+                |target| match target.addr {
+                    SocketAddr::V6(v6) => vec![*v6.ip()],
+                    SocketAddr::V4(_) => vec![],
+                },
+            );
         }
+
+        if cfg.search_domains.is_empty() {
+            cfg.search_domains = self.search_domains.clone();
+        }
+
+        cfg
     }
 
     /// Builds a `DnsConfig` from the merged configuration.
     pub fn to_dns_config(&self) -> DnsConfig {
-        let parse_addr = |s: &str, default: &str| -> SocketAddr {
-            s.parse().unwrap_or_else(|_| {
-                warn!("[config] Invalid DNS address '{s}', using {default}");
-                default.parse().unwrap()
-            })
-        };
+        let mut cfg = self.dns_toml.clone();
 
-        let ula_prefix = self.ra_toml.prefix.iter().find_map(|p| {
-            if p.source == "ula" {
-                p.address
-                    .as_deref()
-                    .and_then(Self::parse_cidr)
-                    .map(|(addr, _)| addr)
-            } else {
-                None
-            }
-        });
+        // Overrides
+        cfg.enabled = self.dns_enabled;
+        if let Some(p) = self.dns_port {
+            cfg.listen.set_port(p);
+        }
 
-        let multi_search_labels: Vec<Vec<Vec<u8>>> = self
+        // Search labels
+        cfg.multi_search_labels = self
             .search_domains
             .iter()
             .map(|d| d.split('.').map(|s| s.as_bytes().to_vec()).collect())
             .collect();
 
-        DnsConfig {
-            enabled: self.dns_enabled,
-            listen: {
-                let mut addr = parse_addr(&self.dns_toml.listen, "0.0.0.0:5300");
-                if let Some(p) = self.dns_port {
-                    addr.set_port(p);
+        // Prefix detection (if not explicitly set in DNS config)
+        if cfg.ula_prefix.is_none() {
+            cfg.ula_prefix = self.ra_toml.prefixes.iter().find_map(|p| {
+                if let PrefixSource::Static(addr) = p.source {
+                    Some(addr)
+                } else {
+                    None
                 }
-                addr
-            },
-            dot_listen: self.dns_toml.dot_listen.as_deref().map(|s| parse_addr(s, "0.0.0.0:853")),
-            tls_cert: self.dns_toml.tls_cert.clone(),
-            tls_key: self.dns_toml.tls_key.clone(),
-            upstream: self
-                .dns_toml
-                .upstream
-                .as_deref()
-                .map(|s| {
-                    if let Some(stripped) = s.strip_prefix("tls://") {
-                        // tls://dns.google:853 OR tls://8.8.8.8:853
-                        let (hostname, addr_str) = if let Some(pos) = stripped.find(':') {
-                             let (h, _p) = stripped.split_at(pos);
-                             (Some(h.to_string()), stripped)
-                        } else {
-                             (Some(stripped.to_string()), stripped) // This might be wrong if no port, but parse_addr handles default
-                        };
-
-                        let addr = parse_addr(addr_str, "8.8.8.8:853");
-                        lanforge_dns::config::UpstreamTarget {
-                            addr,
-                            protocol: lanforge_dns::config::UpstreamProtocol::Tls,
-                            hostname,
-                        }
-                    } else {
-                        let addr_str = s.strip_prefix("udp://").unwrap_or(s);
-                        lanforge_dns::config::UpstreamTarget {
-                            addr: parse_addr(addr_str, "1.1.1.1:53"),
-                            protocol: lanforge_dns::config::UpstreamProtocol::Udp,
-                            hostname: None,
-                        }
-                    }
-                }),
-            search_domain: self.dns_toml.search_domain.clone(),
-            ula_prefix,
-            gua_prefix: None,
-            ttl: self.dns_toml.ttl,
-            multi_search_labels,
-            #[cfg(feature = "adblock")]
-            adblock_enabled: self.dns_toml.adblock_enabled,
-            #[cfg(feature = "adblock")]
-            adblock_urls: self.dns_toml.adblock_urls.clone(),
-            last_seen_threshold_days: self.dns_toml.last_seen_threshold_days,
+            });
         }
+
+        cfg
     }
 
     /// Builds an `ApiConfig` for the control service.
@@ -527,9 +359,9 @@ impl Config {
             socket_path: self.control_socket.clone(),
             lan_iface: self.iface_lan.clone(),
             ra_enabled: self.ra_enabled,
-            ula_prefix: self.ra_toml.prefix.iter().find_map(|p| {
-                if p.source == "ula" {
-                    p.address.clone()
+            ula_prefix: self.ra_toml.prefixes.iter().find_map(|p| {
+                if let PrefixSource::Static(addr) = p.source {
+                    Some(addr.to_string())
                 } else {
                     None
                 }
@@ -537,14 +369,14 @@ impl Config {
             dhcp_v4_enabled: self.dhcpv4_enabled,
             dhcp_v6_enabled: self.dhcpv6_enabled,
             dns_enabled: self.dns_enabled,
-            dns_upstream: self.dns_toml.upstream.clone(),
+            dns_upstream: self.dns_toml.upstream.as_ref().map(|u| u.clone().into()),
             db_path: self.leases_db.clone(),
             db_url: self.db_url.clone(),
             log_db_path: self.log_db.clone(),
             log_db_url: self.log_db_url.clone(),
             tcp_port: self.api_port,
             http_listen: self.http_listen.clone(),
-            dot_listen: self.dns_toml.dot_listen.clone(),
+            dot_listen: self.dns_toml.dot_listen.map(|addr| addr.to_string()),
             dhcp_v4_range_size: {
                 let v4 = self.to_dhcpv4_config();
                 u32::from(v4.range_end) - u32::from(v4.range_start) + 1
@@ -570,7 +402,10 @@ impl Config {
             tls_cert: self.http_toml.tls_cert.clone(),
             tls_key: self.http_toml.tls_key.clone(),
             boot_dir: self.http_listen.as_ref().and_then(|_| {
-                self.tftp_toml.root_dir.clone().or_else(|| self.boot_dir.clone())
+                self.tftp_toml
+                    .root_dir
+                    .clone()
+                    .or_else(|| self.boot_dir.clone())
             }),
         }
     }
@@ -590,13 +425,13 @@ impl Default for Config {
             log_db_url: "sqlite://:memory:".to_string(),
             boot_dir: None,
             ra_enabled: true,
-            ra_toml: RaCfg::default(),
+            ra_toml: lanforge_network::ra::RaServiceConfig::default(),
             dhcpv4_enabled: true,
-            dhcpv4_toml: DhcpV4Cfg::default(),
+            dhcpv4_toml: lanforge_network::dhcp::v4::config::Dhcpv4Config::default(),
             dhcpv6_enabled: true,
-            dhcpv6_toml: DhcpV6Cfg::default(),
+            dhcpv6_toml: lanforge_network::dhcp::v6::config::Dhcpv6Config::default(),
             dns_enabled: true,
-            dns_toml: DnsCfg::default(),
+            dns_toml: lanforge_dns::DnsConfig::default(),
             search_domains: vec!["lan".to_string()],
             devices: Vec::new(),
             devices_file: None,

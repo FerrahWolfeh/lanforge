@@ -4,6 +4,8 @@
 //! fixed ranges, floating suffix ranges, or single static addresses.
 
 use std::net::Ipv6Addr;
+use serde::{Deserialize, Serialize};
+use lanforge_macros::ServiceConfig;
 
 use lanforge_core::device::Ipv6AddrOrSuffix;
 
@@ -12,7 +14,7 @@ use lanforge_core::device::Ipv6AddrOrSuffix;
 /// Pools can be defined as:
 /// - **Fixed range**: explicit `range_start`/`range_end` suffixes
 /// - **Single address**: static `address` string (CIDR notation)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Dhcpv6PoolConfig {
     /// Lower bound suffix for the pool range (relative to prefix).
     pub range_start: Option<Ipv6AddrOrSuffix>,
@@ -27,19 +29,25 @@ pub struct Dhcpv6PoolConfig {
 /// Supports both `IA_NA` (non-temporary addresses) and `IA_PD` (prefix delegation).
 /// The `ula_prefix` enables Unique Local Address assignment in addition to
 /// Global Unicast Addresses learned from RA.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, ServiceConfig)]
+#[config(key = "dhcp.v6")]
+#[serde(default)]
 pub struct Dhcpv6Config {
     /// Whether the `DHCPv6` service is enabled.
     pub enabled: bool,
     /// Network interface to listen on.
+    #[serde(skip)]
     pub iface: String,
     /// Lease time in seconds.
     pub lease_time: u32,
     /// Local Unique Address (ULA) prefix (`fd00::/8`) to announce.
+    #[serde(skip)]
     pub ula_prefix: Option<Ipv6Addr>,
     /// Prefix length of the ULA (typically 64).
+    #[serde(skip)]
     pub ula_prefix_len: u8,
     /// UDP port to listen on (default: 547, per RFC 8415).
+    #[serde(skip)]
     pub port: u16,
     /// Multiple pools for address assignment (ULA + GUA).
     pub pools: Vec<Dhcpv6PoolConfig>,

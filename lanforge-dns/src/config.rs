@@ -4,10 +4,14 @@
 //! DNS service, including listen address, upstream resolver, search domains,
 //! and IPv6 prefix settings.
 
+use lanforge_macros::ServiceConfig;
+use serde::{Deserialize, Serialize};
 use std::net::{Ipv6Addr, SocketAddr};
+use std::str::FromStr;
 
 /// Supported protocols for upstream DNS forwarding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum UpstreamProtocol {
     /// Standard DNS over UDP (with TCP fallback).
     Udp,
@@ -16,7 +20,8 @@ pub enum UpstreamProtocol {
 }
 
 /// An upstream resolver target with protocol and optional hostname for verification.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct UpstreamTarget {
     /// The IP address and port of the upstream resolver.
     pub addr: SocketAddr,
@@ -26,18 +31,61 @@ pub struct UpstreamTarget {
     pub hostname: Option<String>,
 }
 
+impl FromStr for UpstreamTarget {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(stripped) = s.strip_prefix("tls://") {
+            let (hostname, addr_str) = stripped.find(':').map_or_else(
+                || (Some(stripped.to_string()), stripped),
+                |pos| {
+                    let (h, _) = stripped.split_at(pos);
+                    (Some(h.to_string()), stripped)
+                },
+            );
+
+            let addr = addr_str
+                .parse()
+                .map_err(|e| format!("Invalid TLS address '{addr_str}': {e}"))?;
+            Ok(Self {
+                addr,
+                protocol: UpstreamProtocol::Tls,
+                hostname,
+            })
+        } else {
+            let addr_str = s.strip_prefix("udp://").unwrap_or(s);
+            let addr = addr_str
+                .parse()
+                .map_err(|e| format!("Invalid UDP address '{addr_str}': {e}"))?;
+            Ok(Self {
+                addr,
+                protocol: UpstreamProtocol::Udp,
+                hostname: None,
+            })
+        }
+    }
+}
+
+impl From<UpstreamTarget> for String {
+    fn from(target: UpstreamTarget) -> Self {
+        match target.protocol {
+            UpstreamProtocol::Tls => format!("tls://{}", target.addr),
+            UpstreamProtocol::Udp => format!("udp://{}", target.addr),
+        }
+    }
+}
+
+impl TryFrom<String> for UpstreamTarget {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_str(&value)
+    }
+}
+
 /// Configuration for the DNS service.
-///
-/// # Key Fields
-///
-/// | Field | Purpose |
-/// | :--- | :--- |
-/// | `listen` | Socket address to bind UDP/TCP listeners |
-/// | `upstream` | Upstream resolver for non-local queries (e.g., Unbound) |
-/// | `search_domain` | Local domain suffix (e.g., `"lan"`) |
-/// | `ula_prefix` / `gua_prefix` | IPv6 prefixes for address generation fallback |
-/// | `multi_search_labels` | Multiple domain support (list of label lists) |
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
+#[config(key = "dns")]
+#[serde(default)]
 pub struct DnsConfig {
     /// Whether the DNS service is enabled.
     pub enabled: bool,
@@ -58,6 +106,7 @@ pub struct DnsConfig {
     pub ttl: u32,
     /// Pre-parsed search domain labels for zero-allocation hostname matching.
     /// Default: `[[b"lan"]]`.
+    #[serde(skip)]
     pub multi_search_labels: Vec<Vec<Vec<u8>>>,
     #[cfg(feature = "adblock")]
     /// Whether the micro-adblocker is enabled.

@@ -555,3 +555,36 @@ fn to_snake_case(s: &str) -> String {
     }
     snake
 }
+
+/// Derive macro for generating `ServiceConfig` implementations.
+///
+/// # Attributes
+/// - `#[config(key = "dns")]`: Specifies the TOML section key (required).
+#[proc_macro_derive(ServiceConfig, attributes(config))]
+pub fn service_config_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = input.ident;
+
+    let mut key = None;
+
+    for attr in &input.attrs {
+        if attr.path().is_ident("config") {
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("key") {
+                    let value: LitStr = meta.value()?.parse()?;
+                    key = Some(value.value());
+                }
+                Ok(())
+            });
+        }
+    }
+
+    let key = key.expect("ServiceConfig requires a 'key' attribute (e.g., #[config(key = \"dns\")])");
+
+    quote! {
+        impl lanforge_core::config::ServiceConfig for #name {
+            const KEY: &'static str = #key;
+        }
+    }
+    .into()
+}

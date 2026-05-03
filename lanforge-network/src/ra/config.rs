@@ -6,7 +6,9 @@
 //! - RFC 8106         — RDNSS and DNSSL
 
 use crate::error::NetworkError;
-use std::{net::Ipv6Addr, time::Duration};
+use lanforge_macros::ServiceConfig;
+use serde::{Deserialize, Serialize};
+use std::{net::Ipv6Addr, str::FromStr, time::Duration};
 
 // ---------------------------------------------------------------------------
 // RFC 4861 §6.2.1 Constants
@@ -33,7 +35,8 @@ pub const LIFETIME_INFINITY: u32 = u32::MAX;
 
 /// Default router priority (RFC 4191 §2.1).
 /// Influences which router is preferred when multiple are present on the network.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RouterPriority {
     Low,
     #[default]
@@ -57,12 +60,73 @@ impl RouterPriority {
 ///
 /// Maps to the `ValidLifetime` and `PreferredLifetime` fields
 /// in the Prefix Information Option (RFC 4861 §4.6.2).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "String", into = "String")]
 pub enum PrefixLifetime {
     /// Finite lifetime in seconds.
     Secs(u32),
     /// Infinite lifetime (`0xFFFF_FFFF`).
     Infinity,
+}
+
+impl FromStr for PrefixLifetime {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("infinity") || s.eq_ignore_ascii_case("infinite") {
+            Ok(Self::Infinity)
+        } else if let Ok(secs) = s.parse::<u32>() {
+            Ok(Self::Secs(secs))
+        } else {
+            // Try parsing as duration string (e.g. "24h")
+            let dur = parse_duration(s)?;
+            Ok(Self::Secs(
+                u32::try_from(dur.as_secs()).map_err(|_| "Duration too long".to_string())?,
+            ))
+        }
+    }
+}
+
+impl From<PrefixLifetime> for String {
+    fn from(lt: PrefixLifetime) -> Self {
+        match lt {
+            PrefixLifetime::Infinity => "infinity".to_string(),
+            PrefixLifetime::Secs(s) => s.to_string(),
+        }
+    }
+}
+
+impl TryFrom<String> for PrefixLifetime {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_str(&value)
+    }
+}
+
+fn parse_duration(s: &str) -> Result<Duration, String> {
+    if s.is_empty() {
+        return Err("Empty duration".to_string());
+    }
+
+    let (num_part, unit_part) = s.split_at(s.find(|c: char| !c.is_numeric()).unwrap_or(s.len()));
+    let num: u64 = num_part
+        .parse()
+        .map_err(|_| format!("Invalid number in duration '{s}'"))?;
+
+    match unit_part.to_lowercase().as_str() {
+        "s" | "" => Ok(Duration::from_secs(num)),
+        "m" => Ok(Duration::from_secs(num * 60)),
+        "h" => Ok(Duration::from_secs(num * 3600)),
+        "d" => Ok(Duration::from_secs(num * 86400)),
+        "w" => Ok(Duration::from_secs(num * 86400 * 7)),
+        _ => Err(format!("Unknown duration unit '{unit_part}'")),
+    }
+}
+
+impl Default for PrefixLifetime {
+    fn default() -> Self {
+        Self::Secs(0)
+    }
 }
 
 impl PrefixLifetime {
@@ -77,13 +141,15 @@ impl PrefixLifetime {
 }
 
 /// Source of the IPv6 address for the Prefix Information option.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum PrefixSource {
     /// Static prefix — explicit address (e.g., a fixed ULA).
     Static(Ipv6Addr),
     /// Automatically detects the GUA (`2000::/3`) assigned to the interface.
     /// Equivalent to `prefix ::/64` in radvd with dynamic resolution.
     /// If no GUA is assigned, the option is silently omitted.
+    #[default]
     AutoGua,
 }
 
@@ -98,7 +164,8 @@ pub enum PrefixSource {
 /// | L | `on_link` | Clients treat addresses in this prefix as on-link neighbors |
 /// | A | `autonomous` | Enables SLAAC — clients autoconfigure addresses via EUI-64 |
 /// | R | `router_addr` | This address is the router's own address (Mobile IPv6, RFC 3775) |
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
 pub struct PrefixConfig {
     pub source: PrefixSource,
     /// Prefix length in bits. For SLAAC, this must be 64.
@@ -145,7 +212,8 @@ impl PrefixConfig {
 
 /// DNS Servers via RDNSS (RFC 8106 §3.1, option type 25).
 /// Essential for clients that ignore `DHCPv6` (e.g., Android, many `IoT` devices).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
 pub struct RdnssConfig {
     pub servers: Vec<Ipv6Addr>,
     /// None → 2 × `MaxRtrAdvInterval` (RFC 8106 §5.1: recommended minimum to
@@ -174,7 +242,8 @@ impl RdnssConfig {
 /// DNS Search Lists via DNSSL (RFC 8106 §3.2, option type 31).
 ///
 /// Provides domain search suffixes to clients without requiring `DHCPv6`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
 pub struct DnsslConfig {
     /// Domain names (e.g., `["lan", "home.arpa"]`).
     pub domains: Vec<String>,
@@ -185,7 +254,9 @@ pub struct DnsslConfig {
 /// Full RA service configuration for an interface.
 ///
 /// Maps directly to RA packet fields and options per RFC 4861 and RFC 8106.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
+#[config(key = "ra")]
+#[serde(default)]
 pub struct RaConfig {
     /// Network interface name (e.g., `"eth0"`).
     pub iface: String,
@@ -221,6 +292,44 @@ pub struct RaConfig {
     pub rdnss: Vec<RdnssConfig>,
     /// DNS search lists via DNSSL (Option type 31).
     pub dnssl: Vec<DnsslConfig>,
+}
+
+/// Simplified RA configuration used in the TOML file.
+#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig, Default)]
+#[config(key = "ra")]
+#[serde(default)]
+pub struct RaServiceConfig {
+    pub enabled: bool,
+    pub managed: bool,
+    pub other_config: bool,
+    pub max_interval: u64,
+    pub router_lifetime: Option<u64>,
+    pub mtu: Option<u32>,
+    #[serde(rename = "prefix")]
+    pub prefixes: Vec<PrefixConfig>,
+    #[serde(rename = "rdnss")]
+    pub rdnss: Vec<RdnssConfig>,
+    #[serde(rename = "dnssl")]
+    pub dnssl: Vec<DnsslConfig>,
+}
+
+impl RaServiceConfig {
+    pub fn to_ra_config(&self, iface: String) -> RaConfig {
+        RaConfig {
+            iface,
+            managed: self.managed,
+            other_config: self.other_config,
+            hop_limit: 64,
+            priority: RouterPriority::Medium,
+            max_interval: Duration::from_secs(self.max_interval),
+            min_interval: None,
+            router_lifetime: self.router_lifetime.map(Duration::from_secs),
+            mtu: self.mtu,
+            prefixes: self.prefixes.clone(),
+            rdnss: self.rdnss.clone(),
+            dnssl: self.dnssl.clone(),
+        }
+    }
 }
 
 impl Default for RaConfig {

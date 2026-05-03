@@ -512,6 +512,7 @@ mod tests {
 
     fn dummy_config() -> Dhcpv4Config {
         Dhcpv4Config {
+            enabled: true,
             iface: "eth0".to_string(),
             range_start: Ipv4Addr::new(192, 168, 1, 100),
             range_end: Ipv4Addr::new(192, 168, 1, 200),

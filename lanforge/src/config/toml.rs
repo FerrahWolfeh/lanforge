@@ -1,5 +1,6 @@
+use lanforge_network::dhcp::{v4::config::Dhcpv4Config, v6::config::Dhcpv6Config};
 use serde::{Deserialize, Serialize};
-use std::net::Ipv6Addr;
+
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -8,9 +9,9 @@ use tracing::{info, warn};
 #[serde(default)]
 pub struct TomlConfig {
     pub general: GeneralCfg,
-    pub ra: RaCfg,
+    pub ra: lanforge_network::ra::RaServiceConfig,
     pub dhcp: DhcpCfg,
-    pub dns: DnsCfg,
+    pub dns: lanforge_dns::DnsConfig,
     pub auth: AuthCfg,
     pub http: HttpCfg,
     pub tftp: TftpCfg,
@@ -21,74 +22,11 @@ pub struct TomlConfig {
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct DhcpCfg {
-    pub v4: DhcpV4Cfg,
-    pub v6: DhcpV6Cfg,
+    pub v4: Dhcpv4Config,
+    pub v6: Dhcpv6Config,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(default)]
-pub struct DhcpV4Cfg {
-    pub enabled: bool,
-    pub range_start: String,
-    pub range_end: String,
-    pub lease_time: u64,
-    pub router: String,
-    pub dns: Vec<String>,
-    pub subnet_mask: Option<String>,
-    pub tftp_server: Option<String>,
-    pub boot_file: Option<String>,
-    /// @deprecated use `[general].search_domains` instead. will be removed in the future.
-    pub domain_name: Option<String>,
-}
-
-impl Default for DhcpV4Cfg {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            range_start: "192.168.0.100".into(),
-            range_end: "192.168.0.254".into(),
-            lease_time: 86400,
-            router: "192.168.0.1".into(),
-            dns: vec!["192.168.0.1".into()],
-            subnet_mask: None,
-            tftp_server: None,
-            boot_file: None,
-            domain_name: None,
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(default)]
-pub struct DhcpV6Cfg {
-    pub enabled: bool,
-    pub lease_time: u32,
-    pub range_start: Option<String>,
-    pub range_end: Option<String>,
-    pub boot_file: Option<String>,
-    #[serde(default)]
-    pub pools: Vec<DhcpV6PoolCfg>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct DhcpV6PoolCfg {
-    pub range_start: Option<String>,
-    pub range_end: Option<String>,
-    pub address: Option<String>,
-}
-
-impl Default for DhcpV6Cfg {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            lease_time: 86400,
-            range_start: None,
-            range_end: None,
-            boot_file: None,
-            pools: Vec::new(),
-        }
-    }
-}
+// DhcpV4Cfg and DhcpV6Cfg have been replaced by lanforge_network equivalents
 
 /// General system configuration.
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -162,98 +100,9 @@ impl Default for GeneralCfg {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(default)]
-pub struct RaCfg {
-    pub enabled: bool,
-    pub managed: bool,
-    pub other_config: bool,
-    pub max_interval: u64,
-    pub router_lifetime: Option<u64>,
-    pub mtu: Option<u32>,
-    #[serde(default)]
-    pub prefix: Vec<RaPrefixCfg>,
-    #[serde(default)]
-    pub rdnss: Vec<RaRdnssCfg>,
-}
+// RaCfg has been replaced by lanforge_network::ra::RaServiceConfig
 
-impl Default for RaCfg {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            managed: true,
-            other_config: true,
-            max_interval: 100,
-            router_lifetime: None,
-            mtu: None,
-            prefix: Vec::new(),
-            rdnss: Vec::new(),
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone, Default)]
-pub struct RaPrefixCfg {
-    pub source: String,
-    pub address: Option<String>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct RaRdnssCfg {
-    pub servers: Vec<Ipv6Addr>,
-    pub lifetime: Option<u64>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(default)]
-pub struct DnsCfg {
-    pub enabled: bool,
-    /// Address and port where the DNS server listens (e.g. "0.0.0.0:5300")
-    pub listen: String,
-    /// Upstream resolver for non-LAN queries, typically Unbound (e.g. "127.0.0.1:5335")
-    pub upstream: Option<String>,
-    /// @deprecated use `[general].search_domains` instead. will be removed in the future.
-    pub search_domain: String,
-    /// LAN responses TTL in seconds
-    pub ttl: u32,
-    /// Whether the micro-adblocker is enabled.
-    #[serde(default)]
-    pub adblock_enabled: bool,
-    /// List of URLs to fetch blocklists from.
-    #[serde(default)]
-    pub adblock_urls: Vec<String>,
-    /// Address and port for DNS-over-TLS (e.g. "0.0.0.0:853")
-    pub dot_listen: Option<String>,
-    /// TLS certificate path for DoT.
-    pub tls_cert: Option<String>,
-    /// TLS private key path for DoT.
-    pub tls_key: Option<String>,
-    /// How many days a device can be offline before its DNS entry is hidden.
-    #[serde(default = "default_threshold_days")]
-    pub last_seen_threshold_days: u32,
-}
-
-fn default_threshold_days() -> u32 {
-    7
-}
-
-impl Default for DnsCfg {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            listen: "0.0.0.0:5300".into(),
-            upstream: None,
-            search_domain: "lan".into(),
-            ttl: 60,
-            adblock_enabled: false,
-            adblock_urls: Vec::new(),
-            dot_listen: None,
-            tls_cert: None,
-            tls_key: None,
-            last_seen_threshold_days: 7,
-        }
-    }
-}
+// DnsCfg has been replaced by lanforge_dns::DnsConfig
 
 /// Static device — read from `[[devices]]` in the TOML.
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -377,7 +226,7 @@ mod tests {
         let default_cfg = TomlConfig::default();
         assert_eq!(default_cfg.general.iface_lan, "end0");
         assert!(!default_cfg.ra.enabled);
-        assert_eq!(default_cfg.dns.listen, "0.0.0.0:5300");
+        assert_eq!(default_cfg.dns.listen.to_string(), "0.0.0.0:53");
     }
 
     #[test]
