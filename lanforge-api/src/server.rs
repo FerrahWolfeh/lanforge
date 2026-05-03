@@ -226,11 +226,11 @@ where
     let data = if compression == Compression::Zstd {
         #[cfg(feature = "zstd")]
         {
-            zstd::stream::encode_all(&data[..], 3).map_err(|e| ApiError::Zstd(e.to_string()))?
+            zstd::stream::encode_all(&data[..], 3).map_err(|e| crate::error::ApiError::Zstd(e.to_string()))?
         }
         #[cfg(not(feature = "zstd"))]
         {
-            return Err(ApiError::Zstd(
+            return Err(crate::error::ApiError::Zstd(
                 "Zstd support not enabled in this binary".into(),
             ));
         }

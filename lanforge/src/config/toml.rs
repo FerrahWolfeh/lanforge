@@ -224,6 +224,10 @@ pub struct DnsCfg {
     pub adblock_urls: Vec<String>,
     /// Address and port for DNS-over-TLS (e.g. "0.0.0.0:853")
     pub dot_listen: Option<String>,
+    /// TLS certificate path for DoT.
+    pub tls_cert: Option<String>,
+    /// TLS private key path for DoT.
+    pub tls_key: Option<String>,
     /// How many days a device can be offline before its DNS entry is hidden.
     #[serde(default = "default_threshold_days")]
     pub last_seen_threshold_days: u32,
@@ -244,6 +248,8 @@ impl Default for DnsCfg {
             adblock_enabled: false,
             adblock_urls: Vec::new(),
             dot_listen: None,
+            tls_cert: None,
+            tls_key: None,
             last_seen_threshold_days: 7,
         }
     }

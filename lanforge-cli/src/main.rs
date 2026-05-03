@@ -17,17 +17,24 @@ async fn main() -> Result<()> {
         Cli::Lanforge(args) => {
             if let Some(cmd) = args.command {
                 if let Some(remote_url) = &args.remote {
-                    #[cfg(feature = "remote")]
                     {
-                        use crate::cli::remote::RemoteClient;
+                        use lanforge_http::RemoteClient;
                         let mut client = RemoteClient::new(remote_url.clone(), args.token.clone());
                         if let Some(pwd) = &args.password {
-                            client.login(pwd).await?;
+                            client
+                                .login(pwd)
+                                .await
+                                .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
                         }
 
                         #[cfg(feature = "tui")]
                         if cmd == Command::Tui {
-                            return crate::tui::run_tui(None, Some(client)).await;
+                            return crate::tui::run_tui(
+                                None,
+                                #[cfg(feature = "remote")]
+                                Some(client),
+                            )
+                            .await;
                         }
 
                         let mut handler = match cmd {
@@ -37,16 +44,12 @@ async fn main() -> Result<()> {
                         };
 
                         let control_cmd = handler.prepare()?;
-                        let resp = client.send(control_cmd).await?;
+                        let resp = client
+                            .send(control_cmd)
+                            .await
+                            .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
                         let _ = handler.on_response(&resp)?;
                         return Ok(());
-                    }
-                    #[cfg(not(feature = "remote"))]
-                    {
-                        let _ = remote_url;
-                        return Err(color_eyre::eyre::eyre!(
-                            "Remote support not enabled. Recompile with --features remote."
-                        ));
                     }
                 }
 

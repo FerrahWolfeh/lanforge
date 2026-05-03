@@ -237,7 +237,7 @@ impl IpPool {
 #[cfg(test)]
 mod tests {
     use lanforge_core::{
-        context::state::{DeviceUpdate, FieldUpdate},
+        context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate},
         device::Origin,
     };
 
@@ -308,12 +308,14 @@ mod tests {
         // Simulamos IP reservado no contexto global
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(99),
-            hostname: FieldUpdate::Set("test".to_string()),
-            duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::Set(reserved_ip),
-            v6_suffix: FieldUpdate::NoChange,
-            origin: Origin::Cli,
-            boot_file: FieldUpdate::NoChange,
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("test".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::Set(reserved_ip),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Cli,
+                boot_file: FieldUpdate::NoChange,
+            },
         });
 
         p.mark_declined(declined_ip);

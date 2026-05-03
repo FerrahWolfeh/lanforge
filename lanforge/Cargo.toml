@@ -17,22 +17,18 @@ sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]
 adblock = [
     "lanforge-dns/adblock",
-    "lanforge-api/adblock",
     "lanforge-db/adblock",
 ]
-http = ["lanforge-api/http"]
-dot = ["lanforge-api/dot"]
-https = ["lanforge-api/https"]
-doh = ["lanforge-api/doh"]
-tls = ["lanforge-api/tls"]
+http = ["lanforge-http/server"]
+dot = ["lanforge-dns/dot"]
+https = ["lanforge-http/server"]
+doh = ["lanforge-http/doh"]
 zstd = ["lanforge-api/zstd"]
 full = [
     "http",
     "dot",
     "https",
     "doh",
-    "tls",
-    "zstd",
     "adblock",
     "postgres",
     "sqlite",
@@ -45,6 +41,7 @@ lanforge-db = { path = "../lanforge-db" }
 lanforge-dns = { path = "../lanforge-dns" }
 lanforge-network = { path = "../lanforge-network" }
 lanforge-api = { path = "../lanforge-api" }
+lanforge-http = { path = "../lanforge-http", optional = true }
 
 # Async & runtime
 tokio = { version = "1", features = [

@@ -9,8 +9,14 @@ serde = { version = "1.0.228", features = ["derive", "rc"] }
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", features = ["macros", "sync"] }
 tracing = "0.1.44"
+argon2 = "0.5.3"
+rand = "0.8.6"
 lanforge-macros = { path = "../lanforge-macros" }
-smallvec = { version = "1.15.1", features = ["union", "const_generics", "serde"] }
+smallvec = { version = "1.15.1", features = [
+    "union",
+    "const_generics",
+    "serde",
+] }
 
 [dev-dependencies]
 tokio = { version = "1.50.0", features = ["macros", "sync", "rt-multi-thread"] }
@@ -18,3 +24,8 @@ tokio = { version = "1.50.0", features = ["macros", "sync", "rt-multi-thread"] }
 [features]
 adblock = []
 default = []
+
+[lints.clippy]
+nursery = "warn"
+all = "warn"
+pedantic = "warn"

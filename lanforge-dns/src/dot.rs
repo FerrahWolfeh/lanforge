@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -8,23 +9,23 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 
-use crate::config::ApiConfig;
-use crate::tls::load_tls_config;
+use crate::config::DnsConfig;
+use crate::tls_utils::load_tls_config;
 
 #[lanforge_macros::lanforge_service(
     id = "dot",
     name = "DNS over TLS",
     critical = false,
-    describe = format!("DoT on {}", self.cfg.dot_listen.as_deref().unwrap_or("853"))
+    describe = format!("DoT on {}", self.cfg.dot_listen.map_or_else(|| "853".to_string(), |a| a.to_string()))
 )]
 pub struct DotService {
-    cfg: Arc<ApiConfig>,
+    cfg: Arc<DnsConfig>,
     ctx: LanforgeContext,
 }
 
 impl DotService {
     #[must_use]
-    pub fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
+    pub const fn new(cfg: Arc<DnsConfig>, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
 }
@@ -43,12 +44,12 @@ impl AsyncService for DotService {
         })?;
 
         let tls_config = load_tls_config(cert, key)
-            .map_err(|e| CoreError::Generic(format!("Failed to load TLS config: {}", e)))?;
+            .map_err(|e| CoreError::Generic(format!("Failed to load TLS config: {e}")))?;
 
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
         let listener = TcpListener::bind(addr_str)
             .await
-            .map_err(|e| CoreError::Generic(format!("DoT bind error: {}", e)))?;
+            .map_err(|e| CoreError::Generic(format!("DoT bind error: {e}")))?;
 
         info!("🚀 DoT listening on tls://{}", addr_str);
         ctrl.signal_ready();
@@ -88,9 +89,9 @@ async fn handle_dot_connection(
     stream: tokio::net::TcpStream,
     acceptor: tokio_rustls::TlsAcceptor,
     ctx: LanforgeContext,
-    _peer: std::net::SocketAddr,
+    peer: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use lanforge_dns::server::{DnsContext, handle_query};
+    use crate::server::{DnsContext, handle_query};
 
     let mut tls_stream = acceptor.accept(stream).await?;
 
@@ -117,7 +118,7 @@ async fn handle_dot_connection(
             .downcast_ref::<DnsContext>()
             .ok_or("Invalid DNS context")?;
 
-        if let Some(response) = handle_query(&query_buf, dns_ctx, _peer.ip()).await? {
+        if let Some(response) = handle_query(&query_buf, dns_ctx, peer.ip()).await? {
             let resp_len = u16::try_from(response.len())?.to_be_bytes();
             tls_stream.write_all(&resp_len).await?;
             tls_stream.write_all(&response).await?;

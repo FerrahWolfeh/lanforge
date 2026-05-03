@@ -52,4 +52,11 @@ pub enum DnsError {
     /// The message may be truncated, malformed, or contain unsupported features.
     #[error("Zero-alloc wire parser failure")]
     WireParseError,
+
+    /// TLS configuration or handshake error.
+    #[error("TLS error: {0}")]
+    Tls(String),
+    /// TLS PEM parsing error.
+    #[error("TLS PEM parsing error: {0}")]
+    TlsPem(#[from] rustls_pki_types::pem::Error),
 }

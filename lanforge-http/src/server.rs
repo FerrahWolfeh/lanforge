@@ -1,5 +1,4 @@
-use crate::api::{Command, Response};
-use crate::server::ClientContext;
+use crate::error::{HttpError, Result as HttpResult};
 use axum::{
     Json, Router,
     extract::{
@@ -7,13 +6,15 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response as AxumResponse},
     routing::{get, post},
 };
+use lanforge_api::api::{Command, Response};
+use lanforge_api::server::ClientContext;
 use lanforge_core::identifiers::MacAddr;
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
-    context::state::{DeviceUpdate, FieldUpdate},
+    context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate},
     device::{Device, Ipv6AddrOrSuffix, Origin},
     error::CoreError,
 };
@@ -26,7 +27,7 @@ use tracing::{error, info};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceControl};
 
-use crate::config::ApiConfig;
+use lanforge_api::config::ApiConfig;
 
 /// State shared across Axum handlers.
 #[derive(Clone)]
@@ -76,7 +77,8 @@ pub struct HttpService {
 }
 
 impl HttpService {
-    pub fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
+    #[must_use]
+    pub const fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
 }
@@ -87,10 +89,7 @@ impl AsyncService for HttpService {
 
         let listen_addr = cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080");
         let addr: SocketAddr = listen_addr.parse().map_err(|e| {
-            CoreError::Generic(format!(
-                "Invalid http_listen address '{}': {}",
-                listen_addr, e
-            ))
+            CoreError::Generic(format!("Invalid http_listen address '{listen_addr}': {e}"))
         })?;
 
         let state = AppState {
@@ -132,7 +131,7 @@ impl AsyncService for HttpService {
         let app = app.with_state(state);
 
         let maybe_tls_config = if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
-            match crate::tls::load_tls_config(cert, key) {
+            match lanforge_dns::tls_utils::load_tls_config(cert, key) {
                 Ok(config) => Some(config),
                 Err(e) => {
                     error!(
@@ -168,17 +167,17 @@ impl AsyncService for HttpService {
                 .handle(axum_server::Handle::new()) // For graceful shutdown if needed, but we use .serve
                 .serve(app.into_make_service())
                 .await
-                .map_err(|e| CoreError::Generic(format!("HTTPS server error: {}", e)))?;
+                .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))?;
         } else {
             info!("🚀 HTTP API listening on http://{}", addr);
             let tcp_listener = TcpListener::bind(&addr)
                 .await
-                .map_err(|e| CoreError::Generic(format!("Failed to bind to {}: {}", addr, e)))?;
+                .map_err(|e| CoreError::Generic(format!("Failed to bind to {addr}: {e}")))?;
 
             axum::serve(tcp_listener, app)
                 .with_graceful_shutdown(shutdown_signal)
                 .await
-                .map_err(|e| CoreError::Generic(format!("Axum server error: {}", e)))?;
+                .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))?;
         }
 
         Ok(())
@@ -193,25 +192,22 @@ async fn handle_register_get(
     State(state): State<AppState>,
     Query(payload): Query<RegisterRequest>,
 ) -> impl IntoResponse {
-    process_registration(state.ctx, payload).await
+    process_registration(&state.ctx, payload)
 }
 
 async fn handle_register_post(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> impl IntoResponse {
-    process_registration(state.ctx, payload).await
+    process_registration(&state.ctx, payload)
 }
 
-async fn process_registration(ctx: LanforgeContext, req: RegisterRequest) -> impl IntoResponse {
-    let mac_addr = match MacAddr::parse(&req.mac) {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Invalid MAC address format" })),
-            );
-        }
+fn process_registration(ctx: &LanforgeContext, req: RegisterRequest) -> impl IntoResponse + use<> {
+    let Some(mac_addr) = MacAddr::parse(&req.mac) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid MAC address format" })),
+        );
     };
 
     let v4_static = req.ip.and_then(|s| s.parse::<Ipv4Addr>().ok());
@@ -224,12 +220,16 @@ async fn process_registration(ctx: LanforgeContext, req: RegisterRequest) -> imp
 
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_addr,
-        hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-        duid: FieldUpdate::NoChange,
-        v4_static: FieldUpdate::from(v4_static),
-        v6_suffix: FieldUpdate::from(v6_suffix),
-        origin: Origin::External,
-        boot_file: req.boot_file.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+        update: CliHostUpdate {
+            hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::from(v4_static),
+            v6_suffix: FieldUpdate::from(v6_suffix),
+            origin: Origin::External,
+            boot_file: req
+                .boot_file
+                .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+        },
     });
 
     (
@@ -277,14 +277,39 @@ async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
-async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
+async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoResponse> {
     let uptime = state.start_time.elapsed().as_secs();
     let body = crate::metrics::generate_metrics(&state.ctx, &state.cfg, uptime);
 
     axum::response::Response::builder()
         .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
         .body(axum::body::Body::from(body))
-        .unwrap()
+        .map_err(|e| HttpError::Internal(format!("Failed to build metrics response: {e}")))
+}
+
+// Implement IntoResponse for HttpError to provide consistent JSON errors
+impl IntoResponse for HttpError {
+    fn into_response(self) -> AxumResponse {
+        let (status, message) = match self {
+            Self::Auth(msg) => (StatusCode::UNAUTHORIZED, msg),
+            Self::Rpc { status, message } => {
+                let code =
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                (code, message)
+            }
+            Self::Jwt(e) => (StatusCode::UNAUTHORIZED, e.to_string()),
+            Self::Core(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+        };
+
+        let body = Json(serde_json::json!({
+            "error": message,
+            "status": status.as_u16()
+        }));
+
+        (status, body).into_response()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -299,32 +324,24 @@ pub struct LoginRequest {
 async fn handle_login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> impl IntoResponse {
-    let hash = match &state.cfg.auth_password_hash {
-        Some(h) => h,
-        None => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(
-                    serde_json::json!({ "error": "Authentication not configured on this daemon" }),
-                ),
-            );
-        }
+) -> HttpResult<impl IntoResponse> {
+    let Some(hash) = &state.cfg.auth_password_hash else {
+        return Ok((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Authentication not configured on this daemon" })),
+        )
+            .into_response());
     };
 
-    if crate::auth::verify_password(hash, &payload.password) {
-        match state.auth.generate_token("admin") {
-            Ok(token) => (StatusCode::OK, Json(serde_json::json!({ "token": token }))),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("Token generation failed: {e}") })),
-            ),
-        }
+    if lanforge_core::utils::auth::verify_password(hash, &payload.password) {
+        let token = state.auth.generate_token("admin")?;
+        Ok((StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response())
     } else {
-        (
+        Ok((
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid password" })),
         )
+            .into_response())
     }
 }
 
@@ -363,10 +380,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             event = rx.recv() => {
                 match event {
                     Ok(timed_event) => {
-                        let json = match serde_json::to_string(&Response::Event(timed_event)) {
-                            Ok(j) => j,
-                            Err(_) => continue,
-                        };
+                        let Ok(json) = serde_json::to_string(&Response::Event(timed_event)) else { continue };
                         if socket.send(Message::Text(json.into())).await.is_err() {
                             break;
                         }

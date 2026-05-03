@@ -906,7 +906,7 @@ mod tests {
         v6::{DhcpOptions, IANA, OptionCode},
     };
     use lanforge_core::{
-        context::state::{DeviceUpdate, FieldUpdate, InterfaceState},
+        context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState},
         device::{Device, Ipv6AddrOrSuffix, Origin},
     };
     use std::net::{Ipv6Addr, UdpSocket};
@@ -1343,12 +1343,14 @@ mod tests {
         // Register it so srv.ctx can find it
         let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            hostname: FieldUpdate::Set("host".to_string()),
-            duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::NoChange,
-            v6_suffix: FieldUpdate::NoChange,
-            origin: Origin::Cli,
-            boot_file: FieldUpdate::Set("http://custom/boot.efi".to_string()),
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("host".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::NoChange,
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Cli,
+                boot_file: FieldUpdate::Set("http://custom/boot.efi".to_string()),
+            },
         });
 
         let identity = DeviceIdentity::new(mac, None, None);

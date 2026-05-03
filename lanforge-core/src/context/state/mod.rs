@@ -61,6 +61,16 @@ pub struct StaticEntry {
     pub origin: Origin,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CliHostUpdate {
+    pub hostname: FieldUpdate<String>,
+    pub duid: FieldUpdate<Duid>,
+    pub v4_static: FieldUpdate<Ipv4Addr>,
+    pub v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
+    pub boot_file: FieldUpdate<String>,
+    pub origin: Origin,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum LeaseTarget {
     V4,
@@ -126,12 +136,7 @@ pub enum DeviceUpdate {
     },
     CliHostUpdated {
         mac: MacAddr,
-        hostname: FieldUpdate<String>,
-        duid: FieldUpdate<Duid>,
-        v4_static: FieldUpdate<Ipv4Addr>,
-        v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
-        boot_file: FieldUpdate<String>,
-        origin: Origin,
+        update: CliHostUpdate,
     },
     HostRemoved {
         mac: MacAddr,
@@ -308,12 +313,14 @@ impl State {
     ) {
         self.apply_update(DeviceUpdate::CliHostUpdated {
             mac,
-            hostname: hostname.into(),
-            duid: duid.into(),
-            v4_static: v4_static.into(),
-            v6_suffix: v6_suffix.into(),
-            boot_file: boot_file.into(),
-            origin: Origin::Cli,
+            update: CliHostUpdate {
+                hostname: hostname.into(),
+                duid: duid.into(),
+                v4_static: v4_static.into(),
+                v6_suffix: v6_suffix.into(),
+                boot_file: boot_file.into(),
+                origin: Origin::Cli,
+            },
         });
     }
 

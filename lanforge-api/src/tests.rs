@@ -2,7 +2,7 @@
 
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::context::state::{DeviceUpdate, FieldUpdate, State};
+use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, State};
 use lanforge_core::device::Origin;
 use lanforge_core::identifiers::MacAddr;
 use std::sync::Arc;
@@ -39,12 +39,14 @@ async fn test_host_list_returns_static_and_cli_only() {
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
     let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_cli,
-        duid: FieldUpdate::NoChange,
-        hostname: FieldUpdate::Set("cli-host".to_string()),
-        v4_static: FieldUpdate::NoChange,
-        v6_suffix: FieldUpdate::NoChange,
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            duid: FieldUpdate::NoChange,
+            hostname: FieldUpdate::Set("cli-host".to_string()),
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     // 2. Add a Dynamic device
@@ -59,12 +61,14 @@ async fn test_host_list_returns_static_and_cli_only() {
     let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
     let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_toml,
-        duid: FieldUpdate::NoChange,
-        hostname: FieldUpdate::Set("toml-host".to_string()),
-        v4_static: FieldUpdate::Set("192.168.1.5".parse().unwrap()),
-        v6_suffix: FieldUpdate::NoChange,
-        origin: Origin::Toml,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            duid: FieldUpdate::NoChange,
+            hostname: FieldUpdate::Set("toml-host".to_string()),
+            v4_static: FieldUpdate::Set("192.168.1.5".parse().unwrap()),
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Toml,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     // 4. handle_hosts (called by HostList) should return ONLY CLI and TOML
@@ -141,12 +145,14 @@ async fn test_dump_command_simulation() {
     let mac = MacAddr::parse("00:00:00:00:00:0a").unwrap();
     let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        duid: FieldUpdate::NoChange,
-        hostname: FieldUpdate::Set("dump-target".to_string()),
-        v4_static: FieldUpdate::NoChange,
-        v6_suffix: FieldUpdate::NoChange,
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            duid: FieldUpdate::NoChange,
+            hostname: FieldUpdate::Set("dump-target".to_string()),
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     let ctx = ClientContext {
@@ -213,12 +219,14 @@ async fn test_granular_querying() {
     let mac = MacAddr::parse("00:00:00:00:00:01").unwrap();
     let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        duid: FieldUpdate::NoChange,
-        hostname: FieldUpdate::Set("host1".to_string()),
-        v4_static: FieldUpdate::NoChange,
-        v6_suffix: FieldUpdate::NoChange,
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            duid: FieldUpdate::NoChange,
+            hostname: FieldUpdate::Set("host1".to_string()),
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     // Add an orphan

@@ -2,7 +2,7 @@
 
 use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent};
 use crate::context::LanforgeContext;
-use crate::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget};
+use crate::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
 use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
 use crate::identifiers::{Duid, MacAddr};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -346,12 +346,14 @@ fn test_cli_host_updated_sync() {
     // 2. Update via CLI (Hostname + Static V4)
     let changed = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: FieldUpdate::Set("cli-host".to_string()),
-        duid: FieldUpdate::NoChange,
-        v4_static: FieldUpdate::Set("192.168.1.10".parse().unwrap()),
-        v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::10").unwrap()),
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::Set("cli-host".to_string()),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::Set("192.168.1.10".parse().unwrap()),
+            v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::10").unwrap()),
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     assert!(changed);
@@ -379,12 +381,14 @@ fn test_cli_host_updated_sync() {
     // 4. Partial update (Only hostname)
     let changed = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: FieldUpdate::Set("new-name".to_string()),
-        duid: FieldUpdate::NoChange,
-        v4_static: FieldUpdate::NoChange, // No change
-        v6_suffix: FieldUpdate::NoChange, // No change
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::Set("new-name".to_string()),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange, // No change
+            v6_suffix: FieldUpdate::NoChange, // No change
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     assert!(changed);
@@ -819,15 +823,17 @@ fn test_handle_ip_offline_static_ula_persistence() {
     // 1. Add device with Static ULA and SLAAC
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: FieldUpdate::NoChange,
-        duid: FieldUpdate::NoChange,
-        v4_static: FieldUpdate::NoChange,
-        v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::Full(match static_ip {
-            IpAddr::V6(a) => a,
-            IpAddr::V4(_) => unreachable!(),
-        })),
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::NoChange,
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::Full(match static_ip {
+                IpAddr::V6(a) => a,
+                IpAddr::V4(_) => unreachable!(),
+            })),
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     let _ = ctx.apply(DeviceUpdate::SlaacObserved {

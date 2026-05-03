@@ -4,11 +4,10 @@ use std::time::{Duration, SystemTime};
 
 use crate::bus::{DeviceChange, DeviceEvent, LanforgeEvent, NetworkEvent};
 use crate::context::state::{
-    DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
+    CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
 use crate::device::{
-    Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Ipv6AddrOrSuffix, Origin,
-    TopologyInfo, classify_ipv6,
+    Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, TopologyInfo, classify_ipv6,
 };
 use crate::identifiers::{Duid, MacAddr};
 
@@ -181,36 +180,31 @@ impl State {
     pub(crate) fn handle_cli_host_updated(
         &mut self,
         mac: MacAddr,
-        hostname: FieldUpdate<String>,
-        duid: FieldUpdate<Duid>,
-        v4_static: FieldUpdate<Ipv4Addr>,
-        v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
-        boot_file: FieldUpdate<String>,
-        origin: Origin,
+        update: CliHostUpdate,
     ) -> Vec<LanforgeEvent> {
         let events = self.mutate_device(mac, |dev| {
-            if let FieldUpdate::Set(h) = hostname {
+            if let FieldUpdate::Set(h) = update.hostname {
                 dev.hostname = Hostname {
                     name: h,
                     origin: HostnameOrigin::Static,
                 };
             }
-            if let FieldUpdate::Set(d) = duid {
+            if let FieldUpdate::Set(d) = update.duid {
                 dev.duid = Some(d);
             }
-            if let FieldUpdate::Set(v4) = v4_static {
+            if let FieldUpdate::Set(v4) = update.v4_static {
                 dev.v4 = IPv4State::Static(v4);
             }
-            if let FieldUpdate::Set(v6) = v6_suffix {
+            if let FieldUpdate::Set(v6) = update.v6_suffix {
                 dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
                 dev.v6.push(IPv6State::Static(v6, SystemTime::now()));
             }
-            if let FieldUpdate::Set(bf) = boot_file {
+            if let FieldUpdate::Set(bf) = update.boot_file {
                 dev.boot_file = Some(bf);
-            } else if boot_file == FieldUpdate::Clear {
+            } else if update.boot_file == FieldUpdate::Clear {
                 dev.boot_file = None;
             }
-            dev.origin = origin;
+            dev.origin = update.origin;
             dev.managed_at = Some(SystemTime::now());
             Some(DeviceChange::CliHostUpdated)
         });
@@ -229,7 +223,7 @@ impl State {
                         _ => None,
                     }),
                     boot_file: dev.boot_file.clone(),
-                    origin,
+                    origin: update.origin,
                 },
             );
         }

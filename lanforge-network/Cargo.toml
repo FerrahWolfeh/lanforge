@@ -31,3 +31,10 @@ roaring = "0.11.3"
 
 [dev-dependencies]
 tokio = { version = "1.51.0", features = ["full"] }
+
+[lints.clippy]
+nursery = "warn"
+all = "warn"
+pedantic = "warn"
+missing_panics_doc = "allow"
+missing_errors_doc = "allow"

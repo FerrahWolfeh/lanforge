@@ -59,10 +59,6 @@ pub enum ApiError {
     #[error("TLS error: {0}")]
     Tls(String),
 
-    #[cfg(feature = "tls")]
-    /// PEM parsing error.
-    #[error("PEM error: {0}")]
-    Pem(#[from] rustls_pki_types::pem::Error),
     /// Generic error string.
     #[error("API error: {0}")]
     Generic(String),

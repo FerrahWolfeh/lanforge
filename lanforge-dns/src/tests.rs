@@ -3,7 +3,7 @@ use hickory_proto::rr::rdata::opt::EdnsOption;
 use hickory_proto::rr::{Name, RData, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use lanforge_core::bus::EventBus;
-use lanforge_core::context::state::{DeviceUpdate, FieldUpdate, State};
+use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, State};
 use lanforge_core::device::{Device, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use std::collections::HashSet;
@@ -118,12 +118,14 @@ fn test_resolve_local_v6_suffix_merging() {
     // Directly setup static device via apply to ensure consistency
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: FieldUpdate::Set("test".to_string()),
-        duid: FieldUpdate::NoChange,
-        v4_static: FieldUpdate::NoChange,
-        v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::beef").unwrap()),
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::Set("test".to_string()),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::beef").unwrap()),
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     let mut query = Message::query();
@@ -228,7 +230,11 @@ async fn test_adblock_integration() {
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();
     cfg.adblock_enabled = true;
-    cfg.upstream = Some("8.8.8.8:53".parse().unwrap());
+    cfg.upstream = Some(crate::config::UpstreamTarget {
+        addr: "8.8.8.8:53".parse().unwrap(),
+        protocol: crate::config::UpstreamProtocol::Udp,
+        hostname: None,
+    });
 
     let adblocker = Arc::new(AdBlocker::new());
     let mut list = std::collections::HashSet::new();
@@ -356,12 +362,14 @@ fn test_dns_response_contract() {
     // 1. Static Suffix
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: FieldUpdate::Set("contract-test".to_string()),
-        duid: FieldUpdate::NoChange,
-        v4_static: FieldUpdate::NoChange,
-        v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::1057:cafe").unwrap()),
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::Set("contract-test".to_string()),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::1057:cafe").unwrap()),
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     // 2. SLAAC addresses

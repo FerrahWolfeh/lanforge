@@ -1,0 +1,63 @@
+[package]
+name = "lanforge-http"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lanforge-core = { path = "../lanforge-core" }
+lanforge-api = { path = "../lanforge-api" }
+lanforge-dns = { path = "../lanforge-dns" }
+lanforge-macros = { path = "../lanforge-macros" }
+
+# Server dependencies
+axum = { version = "0.8.8", features = ["ws"], optional = true }
+tower-http = { version = "0.6.8", features = [
+    "cors",
+    "fs",
+    "trace",
+], optional = true }
+argon2 = { version = "0.5.3", optional = true }
+jsonwebtoken = { version = "10.3.0", optional = true, default-features = false, features = ["use_pem", "rust_crypto"] }
+axum-server = { version = "0.8.0", optional = true, features = [
+    "rustls",
+    "tls-rustls",
+] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1.44"
+url = { version = "2.5.4", optional = true }
+rand = "0.8.6"
+chrono = { version = "0.4.44", features = ["serde"] }
+thiserror = "2.0.18"
+async-trait = "0.1.86"
+base64 = { version = "0.22.1", optional = true }
+futures = { version = "0.3.31", optional = true }
+
+# Client dependencies
+reqwest = { version = "0.12", features = ["json"], optional = true }
+
+[features]
+default = ["server"]
+server = [
+    "dep:axum",
+    "dep:tower-http",
+    "dep:argon2",
+    "dep:jsonwebtoken",
+    "dep:axum-server",
+    "dep:futures",
+    "lanforge-dns/dot",
+]
+remote = ["dep:reqwest", "dep:url"]
+doh = ["server", "dep:base64"]
+
+[dev-dependencies]
+tower = { version = "0.5.2", features = ["util"] }
+http-body-util = "0.1.2"
+tokio = { version = "1", features = ["full", "test-util"] }
+[lints.clippy]
+nursery = "warn"
+all = "warn"
+pedantic = "warn"
+missing_panics_doc = "allow"
+missing_errors_doc = "allow"

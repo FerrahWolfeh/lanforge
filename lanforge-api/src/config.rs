@@ -41,11 +41,9 @@ pub struct ApiConfig {
     pub tcp_port: Option<u16>,
 
     /// Optional address to listen for the HTTP REST API (e.g., "0.0.0.0:8080").
-    #[cfg(feature = "http")]
     pub http_listen: Option<String>,
 
     /// Optional address to listen for DNS-over-TLS (e.g., "0.0.0.0:853").
-    #[cfg(feature = "dot")]
     pub dot_listen: Option<String>,
 
     /// Total number of addresses in the DHCPv4 dynamic pool.
@@ -54,15 +52,12 @@ pub struct ApiConfig {
     pub dhcp_v6_pool_size: Option<u64>,
 
     /// Secure hash of the API password.
-    #[cfg(feature = "http")]
     pub auth_password_hash: Option<String>,
 
     /// Native TLS certificate (Path or raw PEM).
-    #[cfg(any(feature = "https", feature = "tls"))]
     pub tls_cert: Option<String>,
 
     /// Native TLS private key (Path or raw PEM).
-    #[cfg(any(feature = "https", feature = "tls"))]
     pub tls_key: Option<String>,
     /// Path to the directory containing boot files (PXE/HTTP boot).
     pub boot_dir: Option<String>,
@@ -86,17 +81,12 @@ impl ApiConfig {
             log_db_path: "/tmp/lanforge_logs.db".to_string(),
             log_db_url: "sqlite:///tmp/lanforge_logs.db".to_string(),
             tcp_port: None,
-            #[cfg(feature = "http")]
             http_listen: None,
-            #[cfg(feature = "dot")]
             dot_listen: None,
             dhcp_v4_range_size: 100,
             dhcp_v6_pool_size: Some(100),
-            #[cfg(feature = "http")]
             auth_password_hash: None,
-            #[cfg(any(feature = "https", feature = "tls"))]
             tls_cert: None,
-            #[cfg(any(feature = "https", feature = "tls"))]
             tls_key: None,
             boot_dir: None,
         }

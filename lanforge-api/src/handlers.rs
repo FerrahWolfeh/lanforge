@@ -13,7 +13,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
-use lanforge_core::context::state::{DeviceUpdate, FieldUpdate, LeaseTarget};
+use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
 use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
@@ -26,8 +26,7 @@ use crate::api::{
     TopologyResponse, WhoisResponse,
 };
 
-#[cfg(feature = "http")]
-use crate::api::ServiceStatusInfo;
+// Moved to lanforge-http
 
 use crate::server::ClientContext;
 
@@ -221,9 +220,8 @@ impl ClientContext {
         status.services.mdns_prober.state = "active".to_string();
         status.services.iface_monitor.state = "online".to_string();
         status.services.control_api.state = "online".to_string();
-        #[cfg(feature = "http")]
         if self.cfg.http_listen.is_some() {
-            status.services.http_api = Some(ServiceStatusInfo {
+            status.services.http_api = Some(crate::api::ServiceStatusInfo {
                 state: "online".to_string(),
             });
         }
@@ -843,18 +841,20 @@ impl ClientContext {
         if let Some(m) = mac.as_deref().and_then(MacAddr::parse) {
             let _ = self.ctx.apply(DeviceUpdate::CliHostUpdated {
                 mac: m,
-                hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-                duid: FieldUpdate::NoChange,
-                v4_static: v4
-                    .as_deref()
-                    .and_then(|s| s.parse().ok())
-                    .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-                v6_suffix: v6_suffix
-                    .as_deref()
-                    .and_then(Ipv6AddrOrSuffix::parse)
-                    .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-                origin: Origin::Cli,
-                boot_file: FieldUpdate::NoChange,
+                update: CliHostUpdate {
+                    hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                    duid: FieldUpdate::NoChange,
+                    v4_static: v4
+                        .as_deref()
+                        .and_then(|s| s.parse().ok())
+                        .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                    v6_suffix: v6_suffix
+                        .as_deref()
+                        .and_then(Ipv6AddrOrSuffix::parse)
+                        .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                    origin: Origin::Cli,
+                    boot_file: FieldUpdate::NoChange,
+                },
             });
             Response::Success(SimpleSuccess {
                 message: "Host added/updated".to_string(),
@@ -924,12 +924,14 @@ impl ClientContext {
             } else {
                 let _ = self.ctx.apply(DeviceUpdate::CliHostUpdated {
                     mac: mac_addr,
-                    hostname: hn,
-                    duid: FieldUpdate::NoChange,
-                    v4_static: v4s,
-                    v6_suffix: v6s,
-                    origin: Origin::Cli,
-                    boot_file: bfs,
+                    update: CliHostUpdate {
+                        hostname: hn,
+                        duid: FieldUpdate::NoChange,
+                        v4_static: v4s,
+                        v6_suffix: v6s,
+                        origin: Origin::Cli,
+                        boot_file: bfs,
+                    },
                 });
                 Response::Success(SimpleSuccess {
                     message: format!("Host {mac} updated"),
@@ -1008,9 +1010,8 @@ impl ClientContext {
     }
 
     /// Sets the API password by hashing it and publishing an update event.
-    #[cfg(feature = "http")]
     pub(crate) async fn handle_config_set_password(&self, password: String) -> Response {
-        let password_hash = crate::auth::hash_password(&password);
+        let password_hash = lanforge_core::utils::auth::hash_password(&password);
 
         let _ = self
             .ctx
@@ -1024,14 +1025,6 @@ impl ClientContext {
                 "API password updated successfully. Changes will be persisted to lanforge.toml."
                     .to_string(),
         })
-    }
-
-    #[cfg(not(feature = "http"))]
-    pub(crate) async fn handle_config_set_password(&self, _password: String) -> Response {
-        Response::Error {
-            error: "HTTP API support not enabled in this build. Recompile with --features http."
-                .to_string(),
-        }
     }
 
     /// Request the daemon to reload its configuration from disk.

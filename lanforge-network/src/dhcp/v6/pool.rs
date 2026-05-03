@@ -682,7 +682,7 @@ impl Ipv6Pool {
 mod tests {
     use crate::test_utils::init_test_context;
     use lanforge_core::{
-        context::state::{DeviceUpdate, FieldUpdate},
+        context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate},
         device::{Ipv6AddrOrSuffix, Origin},
     };
 
@@ -897,12 +897,14 @@ mod tests {
         let static_suffix = Ipv6AddrOrSuffix::parse("::cafe").unwrap();
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
-            hostname: FieldUpdate::Set("test".to_string()),
-            duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::NoChange,
-            v6_suffix: FieldUpdate::Set(static_suffix),
-            origin: Origin::Cli,
-            boot_file: FieldUpdate::NoChange,
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("test".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::NoChange,
+                v6_suffix: FieldUpdate::Set(static_suffix),
+                origin: Origin::Cli,
+                boot_file: FieldUpdate::NoChange,
+            },
         });
 
         let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
@@ -948,12 +950,14 @@ mod tests {
         // 1. Setup static device
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
-            hostname: FieldUpdate::Set("test".to_string()),
-            duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::NoChange,
-            v6_suffix: FieldUpdate::Set(static_suffix),
-            origin: Origin::Cli,
-            boot_file: FieldUpdate::NoChange,
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("test".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::NoChange,
+                v6_suffix: FieldUpdate::Set(static_suffix),
+                origin: Origin::Cli,
+                boot_file: FieldUpdate::NoChange,
+            },
         });
 
         // 2. Allocate first time
@@ -1089,12 +1093,14 @@ mod tests {
         // 2. Set static suffix later
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
-            hostname: FieldUpdate::Set("test".to_string()),
-            duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::NoChange,
-            v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
-            origin: Origin::Cli,
-            boot_file: FieldUpdate::NoChange,
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("test".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::NoChange,
+                v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
+                origin: Origin::Cli,
+                boot_file: FieldUpdate::NoChange,
+            },
         });
 
         // 3. Re-allocate -> must return static address, NOT the sticky dynamic one
@@ -1114,12 +1120,14 @@ mod tests {
         // Setup static device
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
-            hostname: FieldUpdate::Set("test".to_string()),
-            duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::NoChange,
-            v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
-            origin: Origin::Cli,
-            boot_file: FieldUpdate::NoChange,
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("test".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::NoChange,
+                v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
+                origin: Origin::Cli,
+                boot_file: FieldUpdate::NoChange,
+            },
         });
 
         // Allocate -> must return suffix on both ULA and GUA

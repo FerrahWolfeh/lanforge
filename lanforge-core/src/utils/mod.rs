@@ -189,3 +189,4 @@ pub const fn is_slaac_iid(ip: &Ipv6Addr, mac: &MacAddr) -> bool {
 
     true
 }
+pub mod auth;

@@ -6,6 +6,26 @@
 
 use std::net::{Ipv6Addr, SocketAddr};
 
+/// Supported protocols for upstream DNS forwarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamProtocol {
+    /// Standard DNS over UDP (with TCP fallback).
+    Udp,
+    /// DNS over TLS (`DoT`).
+    Tls,
+}
+
+/// An upstream resolver target with protocol and optional hostname for verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamTarget {
+    /// The IP address and port of the upstream resolver.
+    pub addr: SocketAddr,
+    /// The protocol to use for forwarding.
+    pub protocol: UpstreamProtocol,
+    /// Optional hostname for TLS SNI and certificate validation (required for `DoT`).
+    pub hostname: Option<String>,
+}
+
 /// Configuration for the DNS service.
 ///
 /// # Key Fields
@@ -23,9 +43,9 @@ pub struct DnsConfig {
     pub enabled: bool,
     /// Socket address to listen on for both UDP and TCP (e.g., `0.0.0.0:53`).
     pub listen: SocketAddr,
-    /// Upstream resolver address (e.g., Unbound at `127.0.0.1:5335`).
+    /// Upstream resolver target (IP, protocol, hostname).
     /// If `None`, non-local queries return `REFUSED`.
-    pub upstream: Option<SocketAddr>,
+    pub upstream: Option<UpstreamTarget>,
     /// Local search domain suffix (e.g., `"lan"`). Queries for `host.lan`
     /// are resolved locally; others are forwarded upstream.
     pub search_domain: String,
@@ -47,6 +67,13 @@ pub struct DnsConfig {
     pub adblock_urls: Vec<String>,
     /// How many days a device can be offline before its DNS entry is hidden.
     pub last_seen_threshold_days: u32,
+
+    /// Optional socket address to listen for DNS-over-TLS (`DoT`).
+    pub dot_listen: Option<SocketAddr>,
+    /// Path to the TLS certificate for `DoT`.
+    pub tls_cert: Option<String>,
+    /// Path to the TLS private key for `DoT`.
+    pub tls_key: Option<String>,
 }
 
 impl Default for DnsConfig {
@@ -65,6 +92,9 @@ impl Default for DnsConfig {
             #[cfg(feature = "adblock")]
             adblock_urls: Vec::new(),
             last_seen_threshold_days: 7,
+            dot_listen: None,
+            tls_cert: None,
+            tls_key: None,
         }
     }
 }

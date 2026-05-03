@@ -2,7 +2,7 @@
 
 use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent};
 use crate::context::LanforgeContext;
-use crate::context::state::{DeviceUpdate, FieldUpdate, State};
+use crate::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, State};
 use crate::device::Origin;
 use crate::identifiers::MacAddr;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -116,12 +116,14 @@ async fn cli_host_update_publishes_events() {
 
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: FieldUpdate::Set("cli-host".to_string()),
-        duid: FieldUpdate::NoChange,
-        v4_static: FieldUpdate::NoChange,
-        v6_suffix: FieldUpdate::NoChange,
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::Set("cli-host".to_string()),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     let mut events = vec![];
@@ -142,12 +144,14 @@ async fn cli_host_update_publishes_events() {
 
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        hostname: FieldUpdate::NoChange,
-        duid: FieldUpdate::NoChange,
-        v4_static: FieldUpdate::Set("1.2.3.4".parse().unwrap()),
-        v6_suffix: FieldUpdate::NoChange,
-        origin: Origin::Cli,
-        boot_file: FieldUpdate::NoChange,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::NoChange,
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::Set("1.2.3.4".parse().unwrap()),
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Cli,
+            boot_file: FieldUpdate::NoChange,
+        },
     });
 
     let mut events = vec![];

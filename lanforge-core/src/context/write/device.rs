@@ -56,12 +56,14 @@ impl LanforgeContext {
 
         let _ = self.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            hostname: FieldUpdate::from(Some(hostname)),
-            duid: FieldUpdate::from(duid),
-            v4_static: FieldUpdate::from(v4_static),
-            v6_suffix: FieldUpdate::from(v6_suffix),
-            origin: Origin::Cli,
-            boot_file: FieldUpdate::from(boot_file),
+            update: crate::context::state::CliHostUpdate {
+                hostname: FieldUpdate::from(Some(hostname)),
+                duid: FieldUpdate::from(duid),
+                v4_static: FieldUpdate::from(v4_static),
+                v6_suffix: FieldUpdate::from(v6_suffix),
+                origin: Origin::Cli,
+                boot_file: FieldUpdate::from(boot_file),
+            },
         });
     }
 

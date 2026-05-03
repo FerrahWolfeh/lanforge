@@ -10,7 +10,7 @@ use crate::bootstrap::BootstrapResult;
 use crate::event_loop::run_event_loop;
 use crate::registry::ServiceRegistry;
 #[cfg(feature = "http")]
-use lanforge_api::http::HttpService;
+use lanforge_http::HttpService;
 use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
 use lanforge_dns::server::DnsService;
@@ -93,9 +93,6 @@ impl Daemon {
 
             #[cfg(feature = "http")]
             async [ctx, cfg] if cfg.http_listen.is_some() => HttpService::new(Arc::new(cfg.to_api_config()), ctx),
-
-            #[cfg(feature = "dot")]
-            async [ctx, cfg] if cfg.dns_toml.dot_listen.is_some() => lanforge_api::dot::DotService::new(Arc::new(cfg.to_api_config()), ctx),
 
             async [ctx, cfg] if cfg.tftp_toml.enabled => TftpService::new(
                 ctx,

@@ -11,5 +11,18 @@ lanforge-macros = { version = "0.1.0", path = "../lanforge-macros" }
 smallvec = "1.15.1"
 smol_str = "0.3.6"
 thiserror = "2.0.18"
-tokio = { version = "1.52.1", features = ["net", "io-util", "macros", "sync", "fs", "time", "rt"] }
+tokio = { version = "1.52.1", features = [
+    "net",
+    "io-util",
+    "macros",
+    "sync",
+    "fs",
+    "time",
+    "rt",
+] }
 tracing = "0.1.44"
+
+[lints.clippy]
+nursery = "warn"
+all = "warn"
+pedantic = "warn"

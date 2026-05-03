@@ -1,7 +1,4 @@
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-};
+use crate::error::{HttpError, Result as HttpResult};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,6 +17,7 @@ pub struct AuthManager {
 }
 
 impl AuthManager {
+    #[must_use]
     pub fn new() -> Self {
         // Generate a random 32-byte secret for this session.
         // Tokens will not survive a daemon restart.
@@ -30,22 +28,23 @@ impl AuthManager {
         }
     }
 
-    pub fn generate_token(&self, username: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    pub fn generate_token(&self, username: &str) -> HttpResult<String> {
         let expiration = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| HttpError::Time(e.to_string()))?
             .as_secs()
             + 86400; // 24 hours
 
         let claims = Claims {
             sub: username.to_string(),
-            exp: expiration as usize,
+            exp: usize::try_from(expiration)
+                .map_err(|_| HttpError::Time("Expiration timestamp too large".into()))?,
         };
 
-        encode(&Header::default(), &claims, &self.encoding_key)
+        Ok(encode(&Header::default(), &claims, &self.encoding_key)?)
     }
 
-    pub fn validate_token(&self, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+    pub fn validate_token(&self, token: &str) -> HttpResult<Claims> {
         let validation = Validation::default();
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation)?;
         Ok(token_data.claims)
@@ -58,30 +57,12 @@ impl Default for AuthManager {
     }
 }
 
-/// Hashes a plaintext password using Argon2id.
-pub fn hash_password(password: &str) -> String {
-    let salt = SaltString::generate(&mut rand::thread_rng());
-    let argon2 = Argon2::default();
-    argon2
-        .hash_password(password.as_bytes(), &salt)
-        .expect("Failed to hash password")
-        .to_string()
-}
-
-/// Verifies a plaintext password against an Argon2id hash.
-pub fn verify_password(hash: &str, password: &str) -> bool {
-    let parsed_hash = match PasswordHash::new(hash) {
-        Ok(h) => h,
-        Err(_) => return false,
-    };
-    Argon2::default()
-        .verify_password(password.as_bytes(), &parsed_hash)
-        .is_ok()
-}
+// Using lanforge_core::utils::auth::hash_password
+// Using lanforge_core::utils::auth::verify_password
 
 use axum::{
     extract::{FromRef, FromRequestParts},
-    http::{StatusCode, request::Parts},
+    http::request::Parts,
 };
 
 impl<S> FromRequestParts<S> for Claims
@@ -89,9 +70,9 @@ where
     S: Send + Sync,
     AuthManager: FromRef<S>,
 {
-    type Rejection = (StatusCode, &'static str);
+    type Rejection = HttpError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
 
         // Extract the token from the Authorization header
@@ -99,16 +80,16 @@ where
             .headers
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
-            .ok_or((StatusCode::UNAUTHORIZED, "Missing Authorization header"))?;
+            .ok_or(HttpError::Auth("Missing Authorization header".into()))?;
 
         if !auth_header.starts_with("Bearer ") {
-            return Err((StatusCode::UNAUTHORIZED, "Invalid Authorization header"));
+            return Err(HttpError::Auth("Invalid Authorization header".into()));
         }
 
         let token = &auth_header[7..];
 
         auth_manager
             .validate_token(token)
-            .map_err(|_| (StatusCode::UNAUTHORIZED, "Invalid or expired token"))
+            .map_err(|_| HttpError::Auth("Invalid or expired token".into()))
     }
 }

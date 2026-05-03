@@ -54,11 +54,11 @@
 //! | [`stats`] | `DnsStats` — atomic counters for requests, cache hits, auth queries, etc. |
 //! | [`config`] | `DnsConfig` — listen address, upstream, search domain, prefixes |
 //! | [`error`] | `DnsError` — I/O, protocol, wire parse, timeout errors |
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
-#![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
 pub mod cache;
 pub mod config;
+#[cfg(feature = "dot")]
+pub mod dot;
 pub mod error;
 #[cfg(feature = "adblock")]
 pub mod filter;
@@ -66,6 +66,8 @@ pub mod resolver;
 pub mod response;
 pub mod server;
 pub mod stats;
+#[cfg(feature = "dot")]
+pub mod tls_utils;
 pub mod upstream;
 pub mod utils;
 pub mod wire;
@@ -75,5 +77,7 @@ mod tests;
 
 // Re-exports for convenience and compatibility
 pub use config::DnsConfig;
+#[cfg(feature = "dot")]
+pub use dot::DotService;
 pub use error::DnsError;
 pub use server::DnsService;

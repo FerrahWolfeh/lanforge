@@ -27,7 +27,7 @@ use crate::tui::event::AppEvent;
 
 pub async fn run_tui(
     socket_path: Option<String>,
-    #[cfg(feature = "remote")] remote: Option<crate::cli::remote::RemoteClient>,
+    #[cfg(feature = "remote")] remote: Option<lanforge_http::RemoteClient>,
 ) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
@@ -125,7 +125,7 @@ pub async fn run_tui(
 }
 
 #[cfg(feature = "remote")]
-async fn remote_daemon_loop(client: crate::cli::remote::RemoteClient, tx: mpsc::Sender<AppEvent>) {
+async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sender<AppEvent>) {
     let client = Arc::new(client);
 
     // 1. WebSocket Connection (persistent)
@@ -133,7 +133,7 @@ async fn remote_daemon_loop(client: crate::cli::remote::RemoteClient, tx: mpsc::
     let ws_client = client.clone();
     let ws_task = async move {
         loop {
-            if let Ok(mut rx) = ws_client.connect_ws().await {
+            if let Ok(mut rx) = ws_client.connect_ws() {
                 while let Some(resp) = rx.recv().await {
                     if let Response::Event(event) = resp {
                         let _ = ws_tx.send(AppEvent::DaemonEvent(event)).await;

@@ -47,7 +47,6 @@
 //!
 //! All state is protected by `parking_lot::RwLock` inside an `Arc<LanforgeContextInner>`.
 //! The [`EventBus`](bus::EventBus) uses `tokio::sync::broadcast` for async event distribution.
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod bus;
 pub mod context;
 pub mod device;

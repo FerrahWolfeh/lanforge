@@ -5,6 +5,7 @@
 //! Responses are cached using [`DnsCache`](crate::cache::DnsCache).
 
 use crate::cache::DnsCache;
+use crate::config::{UpstreamProtocol, UpstreamTarget};
 use crate::error::DnsError;
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
@@ -43,20 +44,21 @@ impl UpstreamManager {
     ///
     /// The listener continuously reads from the shared socket and routes
     /// responses to pending queries based on DNS message ID.
-    pub async fn new(upstream: SocketAddr) -> Result<Arc<Self>, DnsError> {
+    pub async fn new(target: &UpstreamTarget) -> Result<Arc<Self>, DnsError> {
         let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
         let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
         let cache = Arc::new(DnsCache::new(DNS_CACHE_SIZE));
 
         let s = Arc::clone(&socket);
         let p = Arc::clone(&pending);
+        let upstream_addr = target.addr;
 
         // Centralized listening task for upstream UDP responses.
         tokio::spawn(async move {
             let mut buf = vec![0u8; 4096];
             loop {
                 if let Ok((len, src)) = s.recv_from(&mut buf).await {
-                    if src != upstream {
+                    if src != upstream_addr {
                         continue;
                     }
                     if len >= 2 {
@@ -81,16 +83,15 @@ impl UpstreamManager {
         }))
     }
 
-    /// Forwards a DNS query to the upstream resolver via UDP with TCP fallback.
+    /// Forwards a DNS query to the upstream resolver.
     ///
     /// # Flow
     ///
     /// 1. Check the local cache — return cached response if found
-    /// 2. Assign a unique internal ID to avoid collisions between clients
-    /// 3. Send via UDP and wait for response (3s timeout)
-    /// 4. If response is truncated (TC flag), fall back to TCP
-    /// 5. Restore the original query ID before returning and caching
-    pub async fn forward(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
+    /// 2. If protocol is UDP, use UDP with TCP fallback
+    /// 3. If protocol is TLS, use DNS-over-TLS
+    /// 4. Restore the original query ID before returning and caching
+    pub async fn forward(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
         let query = Message::from_bytes(data)?;
 
         // 1. Try the cache first
@@ -98,15 +99,40 @@ impl UpstreamManager {
             return Ok(cached_resp);
         }
 
-        // 2. Try UDP
         let orig_id = query.metadata.id;
-        let mut forward_query = query.clone();
+
+        let resp_bytes = match target.protocol {
+            UpstreamProtocol::Udp => self.forward_udp(data, target.addr).await?,
+            UpstreamProtocol::Tls => self.forward_dot(data, target).await?,
+        };
+
+        // Restore original query ID before returning and caching
+        if let Ok(mut resp) = Message::from_bytes(&resp_bytes) {
+            resp.metadata.id = orig_id;
+            let final_bytes = resp.to_bytes()?;
+            self.cache.insert(&query, &resp, final_bytes.clone());
+            Ok(final_bytes)
+        } else {
+            let mut raw = resp_bytes;
+            if raw.len() >= 2 {
+                let id_bytes = orig_id.to_be_bytes();
+                raw[0] = id_bytes[0];
+                raw[1] = id_bytes[1];
+            }
+            Ok(raw)
+        }
+    }
+
+    async fn forward_udp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
+        let query = Message::from_bytes(data)?;
+
+        let mut query = query.clone();
 
         // Maps to a unique internal ID to avoid collisions between multiple LAN clients
         let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        forward_query.metadata.id = internal_id;
+        query.metadata.id = internal_id;
 
-        let data_to_send = forward_query.to_bytes()?;
+        let data_to_send = query.to_bytes()?;
         let (tx, rx) = oneshot::channel();
 
         {
@@ -140,23 +166,70 @@ impl UpstreamManager {
 
         match udp_result {
             Ok(resp_bytes) => {
-                // Restore original query ID before returning and caching
-                if let Ok(mut resp) = Message::from_bytes(&resp_bytes) {
-                    resp.metadata.id = orig_id;
-                    let final_bytes = resp.to_bytes()?;
-                    self.cache.insert(&query, &resp, final_bytes.clone());
-                    Ok(final_bytes)
-                } else {
-                    let mut raw = resp_bytes;
-                    if raw.len() >= 2 {
-                        let id_bytes = orig_id.to_be_bytes();
-                        raw[0] = id_bytes[0];
-                        raw[1] = id_bytes[1];
+                if let Ok(resp) = Message::from_bytes(&resp_bytes) {
+                    if resp.metadata.truncation {
+                        trace!("UDP response truncated, attempting TCP fallback");
+                        self.forward_tcp(data, upstream).await
+                    } else {
+                        Ok(resp_bytes)
                     }
-                    Ok(raw)
+                } else {
+                    Ok(resp_bytes)
                 }
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// DNS-over-TLS (`DoT`) forwarding.
+    async fn forward_dot(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
+        #[cfg(not(feature = "dot"))]
+        {
+            let _ = (data, target);
+            return Err(DnsError::Tls("DoT feature not enabled".to_string()));
+        }
+
+        #[cfg(feature = "dot")]
+        {
+            use rustls_pki_types::ServerName;
+            use tokio_rustls::TlsConnector;
+
+            let hostname = target.hostname.as_deref().unwrap_or("dns.google");
+            let server_name = ServerName::try_from(hostname)
+                .map_err(|e| DnsError::Tls(format!("Invalid upstream hostname: {e}")))?
+                .to_owned();
+
+            let mut root_cert_store = rustls::RootCertStore::empty();
+            root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+            let config = rustls::ClientConfig::builder()
+                .with_root_certificates(root_cert_store)
+                .with_no_client_auth();
+
+            let connector = TlsConnector::from(Arc::new(config));
+            let tcp_stream = timeout(Duration::from_secs(5), TcpStream::connect(target.addr))
+                .await
+                .map_err(|_| DnsError::UpstreamTimeout)??;
+
+            let mut tls_stream = connector.connect(server_name, tcp_stream).await?;
+
+            timeout(Duration::from_secs(5), async {
+                let len = u16::try_from(data.len()).unwrap_or(u16::MAX).to_be_bytes();
+                tls_stream.write_all(&len).await?;
+                tls_stream.write_all(data).await?;
+
+                let mut len_buf = [0u8; 2];
+                tls_stream.read_exact(&mut len_buf).await?;
+                let resp_len = u16::from_be_bytes(len_buf) as usize;
+
+                let mut resp_buf = vec![0u8; resp_len];
+                tls_stream.read_exact(&mut resp_buf).await?;
+
+                Ok::<Vec<u8>, Error>(resp_buf)
+            })
+            .await
+            .map_err(|_| DnsError::UpstreamTimeout)?
+            .map_err(DnsError::Io)
         }
     }
 
@@ -194,8 +267,8 @@ impl UpstreamManager {
 /// Convenience function to forward a query to the upstream resolver.
 pub async fn forward_to_upstream(
     data: &[u8],
-    upstream: SocketAddr,
+    target: &UpstreamTarget,
     manager: &UpstreamManager,
 ) -> Result<Vec<u8>, DnsError> {
-    manager.forward(data, upstream).await
+    manager.forward(data, target).await
 }

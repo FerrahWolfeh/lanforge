@@ -94,9 +94,9 @@ impl DnsService {
 
     /// Initializes a `DnsContext` for manual query handling.
     pub async fn init_dns_context(&self) -> Result<Arc<DnsContext>, CoreError> {
-        let upstream_mgr = if let Some(upstream) = self.cfg.upstream {
+        let upstream_mgr = if let Some(target) = &self.cfg.upstream {
             Some(
-                UpstreamManager::new(upstream)
+                UpstreamManager::new(target)
                     .await
                     .map_err(|e| CoreError::Generic(e.to_string()))?,
             )
@@ -298,6 +298,19 @@ impl AsyncService for DnsService {
         #[cfg(feature = "adblock")]
         let adblock_task = self.spawn_adblock_manager(&dns_ctx);
 
+        #[cfg(feature = "dot")]
+        let dot_task = if self.cfg.dot_listen.is_some() {
+            let mut dot_svc = crate::dot::DotService::new(Arc::new(self.cfg.clone()), self.ctx.clone());
+            let dot_ctrl = ctrl.clone(); // In reality we might want a separate control, but for subtask it's okay
+            Some(tokio::spawn(async move {
+                if let Err(e) = dot_svc.run(dot_ctrl).await {
+                    tracing::error!("DoT Service error: {}", e);
+                }
+            }))
+        } else {
+            None
+        };
+
         // 5. Enter main process loop
         self.wait_for_shutdown(rx).await;
 
@@ -306,6 +319,8 @@ impl AsyncService for DnsService {
         tcp_task.abort();
         #[cfg(feature = "adblock")]
         adblock_task.abort();
+        #[cfg(feature = "dot")]
+        if let Some(t) = dot_task { t.abort(); }
         Ok(())
     }
 }
@@ -381,9 +396,9 @@ pub async fn handle_query(
     }
 
     // PHASE 3: Recursive Forwarding
-    if let (Some(upstream), Some(mgr)) = (ctx.cfg.upstream, &ctx.upstream_mgr) {
+    if let (Some(target), Some(mgr)) = (&ctx.cfg.upstream, &ctx.upstream_mgr) {
         ctx.stats.inc_recursive();
-        forward_to_upstream(data, upstream, mgr).await.map(Some)
+        forward_to_upstream(data, target, mgr).await.map(Some)
     } else {
         let edns = WireOptScanner::scan(data, &header, &question);
         let ra = ctx.cfg.upstream.is_some();
@@ -490,9 +505,9 @@ async fn handle_query_fallback(
         }
     }
 
-    if let (Some(upstream), Some(mgr)) = (ctx.cfg.upstream, &ctx.upstream_mgr) {
+    if let (Some(target), Some(mgr)) = (&ctx.cfg.upstream, &ctx.upstream_mgr) {
         ctx.stats.inc_recursive();
-        forward_to_upstream(data, upstream, mgr).await.map(Some)
+        forward_to_upstream(data, target, mgr).await.map(Some)
     } else {
         Ok(Some(rb.nxdomain()?))
     }

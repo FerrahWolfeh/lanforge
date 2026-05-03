@@ -470,11 +470,38 @@ impl Config {
                 }
                 addr
             },
+            dot_listen: self.dns_toml.dot_listen.as_deref().map(|s| parse_addr(s, "0.0.0.0:853")),
+            tls_cert: self.dns_toml.tls_cert.clone(),
+            tls_key: self.dns_toml.tls_key.clone(),
             upstream: self
                 .dns_toml
                 .upstream
                 .as_deref()
-                .map(|s| parse_addr(s, "127.0.0.1:5335")),
+                .map(|s| {
+                    if let Some(stripped) = s.strip_prefix("tls://") {
+                        // tls://dns.google:853 OR tls://8.8.8.8:853
+                        let (hostname, addr_str) = if let Some(pos) = stripped.find(':') {
+                             let (h, _p) = stripped.split_at(pos);
+                             (Some(h.to_string()), stripped)
+                        } else {
+                             (Some(stripped.to_string()), stripped) // This might be wrong if no port, but parse_addr handles default
+                        };
+
+                        let addr = parse_addr(addr_str, "8.8.8.8:853");
+                        lanforge_dns::config::UpstreamTarget {
+                            addr,
+                            protocol: lanforge_dns::config::UpstreamProtocol::Tls,
+                            hostname,
+                        }
+                    } else {
+                        let addr_str = s.strip_prefix("udp://").unwrap_or(s);
+                        lanforge_dns::config::UpstreamTarget {
+                            addr: parse_addr(addr_str, "1.1.1.1:53"),
+                            protocol: lanforge_dns::config::UpstreamProtocol::Udp,
+                            hostname: None,
+                        }
+                    }
+                }),
             search_domain: self.dns_toml.search_domain.clone(),
             ula_prefix,
             gua_prefix: None,
@@ -491,7 +518,6 @@ impl Config {
     /// Builds an `ApiConfig` for the control service.
     pub fn to_api_config(&self) -> ApiConfig {
         // Resolve password hash from dedicated file, falling back to TOML
-        #[cfg(feature = "http")]
         let auth_password_hash = std::fs::read_to_string(self.get_password_hash_path())
             .map(|s| s.trim().to_string())
             .ok()
@@ -517,9 +543,7 @@ impl Config {
             log_db_path: self.log_db.clone(),
             log_db_url: self.log_db_url.clone(),
             tcp_port: self.api_port,
-            #[cfg(feature = "http")]
             http_listen: self.http_listen.clone(),
-            #[cfg(feature = "dot")]
             dot_listen: self.dns_toml.dot_listen.clone(),
             dhcp_v4_range_size: {
                 let v4 = self.to_dhcpv4_config();
@@ -542,11 +566,8 @@ impl Config {
                 }
                 if finite { Some(total) } else { None }
             },
-            #[cfg(feature = "http")]
             auth_password_hash,
-            #[cfg(any(feature = "https", feature = "tls"))]
             tls_cert: self.http_toml.tls_cert.clone(),
-            #[cfg(any(feature = "https", feature = "tls"))]
             tls_key: self.http_toml.tls_key.clone(),
             boot_dir: self.http_listen.as_ref().and_then(|_| {
                 self.tftp_toml.root_dir.clone().or_else(|| self.boot_dir.clone())

@@ -233,6 +233,7 @@ pub trait AsyncService: LanforgeService {
 use crate::context::LanforgeContext;
 
 /// A handle provided to services to control their lifecycle and signal readiness.
+#[derive(Clone)]
 pub struct ServiceControl {
     id: &'static str,
     ctx: LanforgeContext,

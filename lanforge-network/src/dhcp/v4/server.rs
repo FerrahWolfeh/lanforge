@@ -501,8 +501,7 @@ mod tests {
     use dhcproto::v4::{Architecture, DhcpOption, Message, MessageType, Opcode};
     use dhcproto::{Decodable, Decoder, Encodable, Encoder};
     use lanforge_core::context::LanforgeContext;
-    use lanforge_core::context::state::DeviceUpdate;
-    use lanforge_core::context::state::FieldUpdate;
+    use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate};
     use lanforge_core::device::Origin;
     use std::net::Ipv4Addr;
     use std::time::{Duration, SystemTime};
@@ -837,12 +836,14 @@ mod tests {
         // 2. Per-device override
         let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            hostname: FieldUpdate::Set("host".to_string()),
-            duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::NoChange,
-            v6_suffix: FieldUpdate::NoChange,
-            origin: Origin::Cli,
-            boot_file: FieldUpdate::Set("custom.efi".to_string()),
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("host".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::NoChange,
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Cli,
+                boot_file: FieldUpdate::Set("custom.efi".to_string()),
+            },
         });
 
         let mut reply_opts = v4::DhcpOptions::new();
