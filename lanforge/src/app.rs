@@ -60,31 +60,31 @@ impl Daemon {
     }
 
     fn validate_features(&self) {
-        let cfg = &self.bootstrap.cfg;
+        let _cfg = &self.bootstrap.cfg;
 
         #[cfg(not(feature = "dot"))]
-        if cfg.dns_toml.dot_enabled {
+        if _cfg.dns_toml.dot_enabled {
             tracing::error!(
                 "❌ Feature 'dot' (DNS-over-TLS) is enabled in configuration but not compiled in the binary!"
             );
         }
 
         #[cfg(not(feature = "doq"))]
-        if cfg.dns_toml.doq_enabled {
+        if _cfg.dns_toml.doq_enabled {
             tracing::error!(
                 "❌ Feature 'doq' (DNS-over-QUIC) is enabled in configuration but not compiled in the binary!"
             );
         }
 
         #[cfg(not(feature = "http"))]
-        if cfg.http_toml.enabled {
+        if _cfg.http_toml.enabled {
             tracing::error!(
                 "❌ Feature 'http' (REST API / Metrics) is enabled in configuration but not compiled in the binary!"
             );
         }
 
         #[cfg(not(feature = "adblock"))]
-        if cfg.dns_enabled && cfg.dns_toml.adblock_enabled {
+        if _cfg.dns_enabled && _cfg.dns_toml.adblock_enabled {
             tracing::error!(
                 "❌ Feature 'adblock' is enabled in configuration but not compiled in the binary!"
             );
@@ -99,7 +99,8 @@ impl Daemon {
         }
 
         #[cfg(not(feature = "postgres"))]
-        if cfg.database.url.starts_with("postgres") || cfg.database.url.starts_with("postgresql") {
+        if _cfg.database.url.starts_with("postgres") || _cfg.database.url.starts_with("postgresql")
+        {
             tracing::error!(
                 "❌ Database URL suggests PostgreSQL but feature 'postgres' is not compiled in!"
             );

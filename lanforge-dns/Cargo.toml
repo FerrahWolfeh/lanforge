@@ -42,6 +42,7 @@ default = []
 
 [dev-dependencies]
 tokio = { version = "1.50.0", features = ["io-util", "net", "rt", "time"] }
+hickory-client = "0.25.2"
 
 [lints.clippy]
 nursery = "warn"

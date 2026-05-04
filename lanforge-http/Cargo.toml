@@ -63,6 +63,7 @@ doh = ["server", "dep:base64"]
 tower = { version = "0.5.2", features = ["util"] }
 http-body-util = "0.1.2"
 tokio = { version = "1", features = ["full", "test-util"] }
+reqwest = { version = "0.13.3", features = ["json"] }
 
 [lints.clippy]
 nursery = "warn"

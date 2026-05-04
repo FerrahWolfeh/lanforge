@@ -80,7 +80,7 @@ where
             .headers
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
-            .ok_or(HttpError::Auth("Missing Authorization header".into()))?;
+            .ok_or_else(|| HttpError::Auth("Missing Authorization header".into()))?;
 
         if !auth_header.starts_with("Bearer ") {
             return Err(HttpError::Auth("Invalid Authorization header".into()));
