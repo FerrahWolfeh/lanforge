@@ -17,6 +17,8 @@ pub enum UpstreamProtocol {
     Udp,
     /// DNS over TLS (`DoT`).
     Tls,
+    /// DNS over QUIC (`DoQ`).
+    Quic,
 }
 
 /// An upstream resolver target with protocol and optional hostname for verification.
@@ -61,6 +63,15 @@ impl FromStr for UpstreamTarget {
                 protocol: UpstreamProtocol::Tls,
                 hostname,
             })
+        } else if let Some(stripped) = s.strip_prefix("quic://") {
+            let addr = stripped
+                .parse()
+                .map_err(|e| format!("Invalid QUIC address '{stripped}': {e}"))?;
+            Ok(Self {
+                addr,
+                protocol: UpstreamProtocol::Quic,
+                hostname: None,
+            })
         } else {
             let addr_str = s.strip_prefix("udp://").unwrap_or(s);
             let addr = addr_str
@@ -79,6 +90,7 @@ impl From<UpstreamTarget> for String {
     fn from(target: UpstreamTarget) -> Self {
         match target.protocol {
             UpstreamProtocol::Tls => format!("tls://{}", target.addr),
+            UpstreamProtocol::Quic => format!("quic://{}", target.addr),
             UpstreamProtocol::Udp => format!("udp://{}", target.addr),
         }
     }
@@ -140,6 +152,11 @@ pub struct DnsConfig {
     /// Path to the TLS private key for `DoT`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_key: Option<String>,
+    /// Optional socket address to listen for DNS-over-QUIC (`DoQ`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doq_listen: Option<SocketAddr>,
+    /// Whether `DoQ` is explicitly enabled.
+    pub doq_enabled: bool,
 }
 
 impl Default for DnsConfig {
@@ -162,6 +179,8 @@ impl Default for DnsConfig {
             dot_enabled: false,
             tls_cert: None,
             tls_key: None,
+            doq_listen: None,
+            doq_enabled: false,
         }
     }
 }

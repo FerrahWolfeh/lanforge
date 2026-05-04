@@ -12,6 +12,10 @@ use crate::registry::ServiceRegistry;
 use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
 use lanforge_dns::server::DnsService;
+#[cfg(feature = "dot")]
+use lanforge_dns::DotService;
+#[cfg(feature = "doq")]
+use lanforge_dns::DoqService;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
 use lanforge_network::dhcp::v4::Dhcpv4Service;
@@ -93,6 +97,12 @@ impl Daemon {
 
             // 5. Application Services (DNS, API, TFTP)
             async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
+
+            #[cfg(feature = "dot")]
+            async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.dot_enabled => DotService::new(Arc::new(cfg.to_dns_config()), ctx),
+
+            #[cfg(feature = "doq")]
+            async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.doq_enabled => DoqService::new(Arc::new(cfg.to_dns_config()), ctx),
             async [ctx, cfg] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
 
             #[cfg(feature = "http")]

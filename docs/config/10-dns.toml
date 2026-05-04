@@ -26,7 +26,7 @@ priority = 20
 adblock_enabled = true
 adblock_urls = [
     "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-    "https://adaway.org/hosts.txt"
+    "https://adaway.org/hosts.txt",
 ]
 
 # How many days a device can be offline before its DNS entry is hidden.
@@ -36,7 +36,14 @@ last_seen_threshold_days = 7
 ttl = 60
 
 # --- DNS-over-TLS (DoT) ---
+# RFC 7766 compliant DNS over TLS. Requires 'dot' feature.
 dot_enabled = true
 dot_listen = "0.0.0.0:853"
 # tls_cert = "/etc/lanforge/certs/dns.crt" # Optional override
 # tls_key = "/etc/lanforge/certs/dns.key"  # Optional override
+
+# --- DNS-over-QUIC (DoQ) ---
+# RFC 9250 compliant DNS over QUIC. Requires 'doq' feature.
+doq_enabled = false
+doq_listen = "0.0.0.0:853"
+# Both DoT and DoQ share the same tls_cert and tls_key.

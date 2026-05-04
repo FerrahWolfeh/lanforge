@@ -78,12 +78,12 @@ impl ClientContext {
                 compression: {
                     #[cfg(feature = "zstd")]
                     {
+                        use crate::api::Compression;
                         vec![Compression::None, Compression::Zstd]
                     }
                     #[cfg(not(feature = "zstd"))]
                     {
                         use crate::api::Compression;
-
                         vec![Compression::None]
                     }
                 },

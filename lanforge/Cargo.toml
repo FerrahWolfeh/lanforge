@@ -21,12 +21,14 @@ adblock = [
 ]
 http = ["lanforge-http/server"]
 dot = ["lanforge-dns/dot"]
+doq = ["lanforge-dns/doq"]
 https = ["lanforge-http/server"]
 doh = ["lanforge-http/doh"]
 zstd = ["lanforge-api/zstd"]
 full = [
     "http",
     "dot",
+    "doq",
     "https",
     "doh",
     "adblock",

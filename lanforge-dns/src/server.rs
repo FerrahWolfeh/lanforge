@@ -403,7 +403,7 @@ pub async fn handle_query(
             adblocker.inc_ip_stats(src_addr);
 
             let edns = WireOptScanner::scan(data, &header, &question);
-            let ra = ctx.cfg.upstream.is_some();
+            let ra = !ctx.cfg.upstreams.is_empty();
             return Ok(Some(WireResponseWriter::write_error_response(
                 data,
                 &question,

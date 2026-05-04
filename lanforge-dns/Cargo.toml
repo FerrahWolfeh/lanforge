@@ -20,7 +20,11 @@ parking_lot = "0.12.5"
 rustls = { version = "0.23.22", optional = true, features = ["ring", "std"] }
 rustls-pki-types = { version = "1.11.0", features = ["std"], optional = true }
 tokio-rustls = { version = "0.26.1", optional = true }
-webpki-roots = { version = "0.26.8", optional = true }
+webpki-roots = { version = "1.0.7", optional = true }
+quinn = { version = "0.11.9", features = [
+    "rustls",
+    "runtime-tokio",
+], optional = true }
 
 [features]
 adblock = ["dep:ureq", "dep:dashmap", "lanforge-core/adblock"]
@@ -30,6 +34,7 @@ dot = [
     "dep:tokio-rustls",
     "dep:webpki-roots",
 ]
+doq = ["dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 default = []
 
 [dev-dependencies]

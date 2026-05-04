@@ -109,6 +109,17 @@ impl UpstreamManager {
         let resp_bytes = match target.protocol {
             UpstreamProtocol::Udp => self.forward_udp(data, target.addr).await?,
             UpstreamProtocol::Tls => self.forward_dot(data, target).await?,
+            UpstreamProtocol::Quic => {
+                #[cfg(feature = "doq")]
+                {
+                    self.forward_doq(data, target).await?
+                }
+                #[cfg(not(feature = "doq"))]
+                {
+                    let _ = (data, target);
+                    return Err(DnsError::Tls("DoQ feature not enabled".to_string()));
+                }
+            }
         };
 
         // Restore original query ID before returning and caching
@@ -226,6 +237,65 @@ impl UpstreamManager {
             .map_err(|_| DnsError::UpstreamTimeout)?
             .map_err(DnsError::Io)
         }
+    }
+
+    /// DNS-over-QUIC (`DoQ`) forwarding.
+    #[cfg(feature = "doq")]
+    async fn forward_doq(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
+        use quinn::{ClientConfig, Endpoint, TransportConfig};
+        use rustls::RootCertStore;
+        use rustls_pki_types::ServerName;
+
+        let hostname = target.hostname.as_deref().unwrap_or("dns.google");
+        let _server_name = ServerName::try_from(hostname)
+            .map_err(|e| DnsError::Tls(format!("Invalid upstream hostname: {e}")))?
+            .to_owned();
+
+        let mut root_cert_store = RootCertStore::empty();
+        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+        let mut tls_config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+        tls_config.alpn_protocols = vec![b"doq".to_vec()];
+
+        let mut transport_config = TransportConfig::default();
+        transport_config.max_idle_timeout(Some(Duration::from_secs(5).try_into().unwrap()));
+
+        let mut client_config = ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+                .map_err(|e| DnsError::Tls(format!("QUIC config error: {e}")))?,
+        ));
+        client_config.transport_config(Arc::new(transport_config));
+
+        let client_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let mut endpoint = Endpoint::client(client_addr).map_err(DnsError::Io)?;
+        endpoint.set_default_client_config(client_config);
+
+        let conn = endpoint
+            .connect(target.addr, hostname)
+            .map_err(|e| DnsError::Tls(e.to_string()))?;
+        let conn = timeout(Duration::from_secs(5), conn)
+            .await
+            .map_err(|_| DnsError::UpstreamTimeout)?
+            .map_err(|e| DnsError::Tls(e.to_string()))?;
+
+        let (mut send, mut recv) = conn
+            .open_bi()
+            .await
+            .map_err(|e| DnsError::Tls(e.to_string()))?;
+
+        send.write_all(data)
+            .await
+            .map_err(|e| DnsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        send.finish()
+            .map_err(|e| DnsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+
+        let resp = recv
+            .read_to_end(4096)
+            .await
+            .map_err(|e| DnsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        Ok(resp)
     }
 
     /// TCP fallback for large DNS responses (e.g., DNSSEC or many records).

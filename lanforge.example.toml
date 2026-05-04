@@ -145,6 +145,10 @@ dot_listen = "0.0.0.0:853"
 # tls_cert = "/etc/lanforge/certs/dns.crt"
 # tls_key = "/etc/lanforge/certs/dns.key"
 
+# DNS-over-QUIC (DoQ)
+doq_enabled = false
+doq_listen = "0.0.0.0:853"
+
 # DNS Micro-Adblocker (if enabled at compile time)
 adblock_enabled = true
 adblock_urls = [

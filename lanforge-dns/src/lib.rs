@@ -72,6 +72,9 @@ pub mod upstream;
 pub mod utils;
 pub mod wire;
 
+#[cfg(feature = "doq")]
+pub mod doq;
+
 #[cfg(test)]
 mod tests;
 
@@ -79,5 +82,7 @@ mod tests;
 pub use config::{DnsConfig, PrioritizedUpstream};
 #[cfg(feature = "dot")]
 pub use dot::DotService;
+#[cfg(feature = "doq")]
+pub use doq::DoqService;
 pub use error::DnsError;
 pub use server::DnsService;

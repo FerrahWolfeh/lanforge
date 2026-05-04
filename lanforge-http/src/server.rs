@@ -15,7 +15,6 @@ use axum::{
 #[cfg(feature = "doh")]
 use axum::{
     body::Bytes,
-    extract::Query,
     http::{HeaderMap, Method},
 };
 use axum_server::tls_rustls::RustlsConfig;
