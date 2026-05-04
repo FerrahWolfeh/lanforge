@@ -1,4 +1,13 @@
-use lanforge_network::dhcp::{v4::config::Dhcpv4Config, v6::config::Dhcpv6Config};
+use lanforge_api::config::{ApiConfig, HttpConfig};
+use lanforge_db::config::DatabaseConfig;
+use lanforge_dns::DnsConfig;
+use lanforge_network::{
+    dhcp::{v4::config::Dhcpv4Config, v6::config::Dhcpv6Config},
+    mdns::MdnsConfig,
+    ndp::config::MonitorConfig,
+    ra::RaServiceConfig,
+};
+use lanforge_tftp::config::TftpConfig;
 use serde::{Deserialize, Serialize};
 
 use std::path::Path;
@@ -8,13 +17,16 @@ use tracing::{info, warn};
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct TomlConfig {
-    pub general: GeneralCfg,
-    pub ra: lanforge_network::ra::RaServiceConfig,
+    pub system: SystemCfg,
+    pub database: DatabaseConfig,
+    pub ra: RaServiceConfig,
     pub dhcp: DhcpCfg,
-    pub dns: lanforge_dns::DnsConfig,
-    pub auth: AuthCfg,
-    pub http: HttpCfg,
-    pub tftp: TftpCfg,
+    pub dns: DnsConfig,
+    pub monitor: MonitorConfig,
+    pub mdns: MdnsConfig,
+    pub api: ApiConfig,
+    pub http: HttpConfig,
+    pub tftp: TftpConfig,
     #[serde(default)]
     pub devices: Vec<StaticDeviceCfg>,
 }
@@ -28,77 +40,40 @@ pub struct DhcpCfg {
 
 // DhcpV4Cfg and DhcpV6Cfg have been replaced by lanforge_network equivalents
 
-/// General system configuration.
+/// System-wide global configuration.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
-pub struct GeneralCfg {
+pub struct SystemCfg {
     /// LAN interface where the daemon listens.
-    pub iface_lan: String,
-    /// @deprecated Path to the `SQLite` database file (leases). Use `db_url` instead.
-    pub leases_db: String,
-    /// Database connection URL (e.g. `sqlite:///var/lib/lanforge/leases.db` or `postgresql://user:pass@host/db`).
-    pub db_url: Option<String>,
+    pub iface: String,
     /// "Target" IPv6 prefix to identify local devices (SLAAC).
     pub target_prefix: String,
     /// Wait time before processing network events.
     pub debounce_secs: u64,
-    /// Fallback scan interval.
-    pub fallback_mins: u64,
-    /// Socket path for the CLI.
-    pub control_socket: String,
-    /// HTTP REST API listen address (e.g. "0.0.0.0:8080").
-    pub http_listen: Option<String>,
-    /// Path to the directory containing boot files (PXE/HTTP boot).
-    pub boot_dir: Option<String>,
     /// Global list of search domains.
-    pub search_domains: Option<Vec<String>>,
-    /// @deprecated Path to the `SQLite` log database file. Use `log_db_url` instead.
-    pub log_db: String,
-    /// Log database connection URL.
-    pub log_db_url: Option<String>,
+    pub search_domains: Vec<String>,
+    /// Global TLS certificate path (inherited by DNS/HTTP).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_cert: Option<String>,
+    /// Global TLS private key path (inherited by DNS/HTTP).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_key: Option<String>,
 }
 
-impl GeneralCfg {
-    /// Returns the resolved database URL, prioritizing `db_url` over `leases_db`.
-    pub fn get_db_url(&self) -> String {
-        self.db_url
-            .as_ref()
-            .map_or_else(|| format!("sqlite://{}", self.leases_db), Clone::clone)
-    }
-
-    /// Returns the resolved log database URL, prioritizing `log_db_url` over `log_db`.
-    pub fn get_log_db_url(&self) -> String {
-        self.log_db_url.as_ref().map_or_else(
-            || {
-                if self.log_db == ":memory:" {
-                    "sqlite::memory:?cache=shared".to_string()
-                } else {
-                    format!("sqlite://{}", self.log_db)
-                }
-            },
-            Clone::clone,
-        )
-    }
-}
-
-impl Default for GeneralCfg {
+impl Default for SystemCfg {
     fn default() -> Self {
         Self {
-            iface_lan: "end0".into(),
-            leases_db: "/var/lib/lanforge/leases.db".into(),
-            db_url: None,
+            iface: "end0".into(),
             target_prefix: "fd97:f00d:cafe:3731".into(),
             debounce_secs: 2,
-            fallback_mins: 60,
-            control_socket: "/run/lanforge/control.sock".into(),
-            http_listen: None,
-            boot_dir: None,
-            search_domains: None,
-            log_db: ":memory:".into(),
-            log_db_url: None,
+            search_domains: Vec::new(),
+            tls_cert: None,
+            tls_key: None,
         }
     }
 }
+
+// GeneralCfg was removed in favor of SystemCfg and DatabaseConfig
 
 // RaCfg has been replaced by lanforge_network::ra::RaServiceConfig
 
@@ -115,37 +90,7 @@ pub struct StaticDeviceCfg {
     pub boot_file: Option<String>,
 }
 
-#[derive(Deserialize, Serialize, Debug, Default, Clone)]
-#[serde(default)]
-pub struct AuthCfg {
-    pub password_hash: Option<String>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Default, Clone)]
-#[serde(default)]
-pub struct HttpCfg {
-    pub listen: Option<String>,
-    pub tls_cert: Option<String>,
-    pub tls_key: Option<String>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-#[serde(default)]
-pub struct TftpCfg {
-    pub enabled: bool,
-    pub listen: String,
-    pub root_dir: Option<String>,
-}
-
-impl Default for TftpCfg {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            listen: "0.0.0.0:69".into(),
-            root_dir: None,
-        }
-    }
-}
+// AuthCfg, HttpCfg, and TftpCfg are now handled by their respective crate configs or merged into api/tftp
 
 /// Load and parse the TOML config file, or return defaults if missing.
 pub fn load_toml(path: &str) -> TomlConfig {
@@ -224,7 +169,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let default_cfg = TomlConfig::default();
-        assert_eq!(default_cfg.general.iface_lan, "end0");
+        assert_eq!(default_cfg.system.iface, "end0");
         assert!(!default_cfg.ra.enabled);
         assert_eq!(default_cfg.dns.listen.to_string(), "0.0.0.0:53");
     }
@@ -233,6 +178,6 @@ mod tests {
     fn test_parse_empty_toml() {
         let content = "";
         let cfg: TomlConfig = toml::from_str(content).unwrap_or_default();
-        assert_eq!(cfg.general.iface_lan, "end0"); // should fallback to default values
+        assert_eq!(cfg.system.iface, "end0"); // should fallback to default values
     }
 }

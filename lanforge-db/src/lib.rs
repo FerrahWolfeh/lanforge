@@ -52,6 +52,7 @@ compile_error!("Either 'sqlite' or 'postgres' feature must be enabled for lanfor
 
 #[warn(clippy::all, clippy::nursery, clippy::pedantic)]
 #[allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+pub mod config;
 pub mod engine;
 pub mod error;
 pub mod log_engine;

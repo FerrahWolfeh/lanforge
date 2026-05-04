@@ -1,0 +1,29 @@
+# Lanforge System Configuration
+# This file handles the core networking and persistence settings.
+
+[system]
+# Primary interface for all LAN operations.
+iface = "end0"
+
+# Global search domains used across DNS and DHCP modules.
+search_domains = ["lan", "homelab.local"]
+
+# Global TLS certificate and key (inherited by DNS and HTTP).
+# tls_cert = "/etc/lanforge/certs/lanforge.crt"
+# tls_key = "/etc/lanforge/certs/lanforge.key"
+
+# IPv6 tracking prefix for local device identification.
+target_prefix = "fd00:cafe:f00d::"
+
+# Event bus debouncing (seconds) to prevent thrashing.
+debounce_secs = 2
+
+[database]
+# Main persistence (SQLite or PostgreSQL supported).
+url = "sqlite:///var/lib/lanforge/lanforge.db"
+
+# Transient log storage (separate from main DB for performance).
+log_url = "sqlite:///tmp/lanforge-logs.db"
+
+# Flushing interval for in-memory state persistence.
+flush_interval = 60

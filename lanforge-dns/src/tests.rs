@@ -30,7 +30,7 @@ fn init_test_context() -> LanforgeContext {
 // Helper para gerar um DnsConfig pronto para os testes do Fast Path
 fn mock_config() -> DnsConfig {
     DnsConfig {
-        search_domain: "lan".to_string(),
+        search_domains: vec!["lan".to_string()],
         multi_search_labels: vec![vec![b"lan".to_vec()]],
         ..Default::default()
     }
@@ -209,7 +209,7 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     let data = query.to_bytes().unwrap();
     let ctx = DnsContext {
         cfg,
-        upstream_mgr: None,
+        upstreams: Vec::new(),
         stats: Arc::new(DnsStats::default()),
         ctx: ctx_instance,
         #[cfg(feature = "adblock")]
@@ -230,11 +230,14 @@ async fn test_adblock_integration() {
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();
     cfg.adblock_enabled = true;
-    cfg.upstream = Some(crate::config::UpstreamTarget {
-        addr: "8.8.8.8:53".parse().unwrap(),
-        protocol: crate::config::UpstreamProtocol::Udp,
-        hostname: None,
-    });
+    cfg.upstreams = vec![PrioritizedUpstream {
+        target: crate::config::UpstreamTarget {
+            addr: "8.8.8.8:53".parse().unwrap(),
+            protocol: crate::config::UpstreamProtocol::Udp,
+            hostname: None,
+        },
+        priority: 10,
+    }];
 
     let adblocker = Arc::new(AdBlocker::new());
     let mut list = std::collections::HashSet::new();
@@ -244,7 +247,7 @@ async fn test_adblock_integration() {
 
     let ctx = DnsContext {
         cfg,
-        upstream_mgr: None,
+        upstreams: Vec::new(),
         stats: Arc::new(DnsStats::default()),
         ctx: ctx_instance,
         adblocker: Some(adblocker),

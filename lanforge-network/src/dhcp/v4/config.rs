@@ -5,7 +5,17 @@
 
 use lanforge_macros::ServiceConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
+
+/// Configuration for a single `DHCPv4` address pool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dhcpv4PoolConfig {
+    /// Start of the dynamic IP range (inclusive).
+    pub range_start: Ipv4Addr,
+    /// End of the dynamic IP range (inclusive).
+    pub range_end: Ipv4Addr,
+}
 
 /// `DHCPv4` server configuration — built from the `[dhcp.v4]` TOML section.
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
@@ -20,10 +30,15 @@ pub struct Dhcpv4Config {
     /// Server IP — used as `server_id` (Option 54) and `siaddr` in replies.
     #[serde(skip)]
     pub server_id: Ipv4Addr,
-    /// Start of the dynamic IP range (inclusive).
-    pub range_start: Ipv4Addr,
-    /// End of the dynamic IP range (inclusive).
-    pub range_end: Ipv4Addr,
+
+    /// Legacy: Start of the dynamic IP range (inclusive).
+    pub range_start: Option<Ipv4Addr>,
+    /// Legacy: End of the dynamic IP range (inclusive).
+    pub range_end: Option<Ipv4Addr>,
+
+    /// Multiple pools for address assignment.
+    pub pools: Vec<Dhcpv4PoolConfig>,
+
     /// Lease time in seconds (default: 86400 = 24h).
     pub lease_time: u32,
     /// Default gateway announced to clients (Option 3 — Router).
@@ -42,6 +57,8 @@ pub struct Dhcpv4Config {
     pub tftp_server: Option<String>,
     /// Boot file name (Option 67).
     pub boot_file: Option<String>,
+    /// Custom DHCP options (key = option number, value = hex string).
+    pub options: HashMap<u8, String>,
 }
 
 impl Default for Dhcpv4Config {
@@ -50,8 +67,9 @@ impl Default for Dhcpv4Config {
             enabled: false,
             iface: "end0".into(),
             server_id: Ipv4Addr::new(192, 168, 0, 1),
-            range_start: Ipv4Addr::new(192, 168, 0, 100),
-            range_end: Ipv4Addr::new(192, 168, 0, 254),
+            range_start: None,
+            range_end: None,
+            pools: Vec::new(),
             lease_time: 86400,
             router: Ipv4Addr::new(192, 168, 0, 1),
             dns: vec![Ipv4Addr::new(192, 168, 0, 1)],
@@ -61,6 +79,22 @@ impl Default for Dhcpv4Config {
             port: 67,
             tftp_server: None,
             boot_file: None,
+            options: HashMap::new(),
         }
+    }
+}
+
+impl Dhcpv4Config {
+    /// Returns all configured pools, including the legacy range if present.
+    #[must_use]
+    pub fn get_effective_pools(&self) -> Vec<Dhcpv4PoolConfig> {
+        let mut pools = self.pools.clone();
+        if let (Some(start), Some(end)) = (self.range_start, self.range_end) {
+            pools.push(Dhcpv4PoolConfig {
+                range_start: start,
+                range_end: end,
+            });
+        }
+        pools
     }
 }

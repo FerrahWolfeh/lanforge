@@ -104,6 +104,7 @@ async fn test_app_state_creation() {
         tls_cert: None,
         tls_key: None,
         boot_dir: None,
+        ..ApiConfig::default()
     });
     let state = AppState {
         cfg,

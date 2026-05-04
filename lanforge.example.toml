@@ -1,67 +1,186 @@
-# Lanforge Example Configuration
-# Reference for Hybrid PXE/HTTP Boot and other features
+# Lanforge Master Reference Configuration
+# Version: 0.13.0
+# This file documents all available sections and options.
 
-[general]
-# LAN interface where the daemon listens.
-iface_lan = "end0"
-# Database connection URL. Supports SQLite and PostgreSQL.
-db_url = "sqlite:///var/lib/lanforge/leases.db"
-# Path to the directory containing boot files (PXE/HTTP boot).
-# These files are served via both TFTP and HTTP (/boot route).
-boot_dir = "/var/lib/lanforge/boot"
-# Wait time before processing network events.
-debounce_secs = 2
-# HTTP REST API listen address.
-http_listen = "0.0.0.0:8080"
-# Global search domains for DHCP and RA.
+[system]
+# LAN interface where the daemon listens for all services.
+iface = "end0"
+# "Target" IPv6 prefix to identify local devices in SLAAC tracking.
+target_prefix = "fd97:f00d:cafe:3731"
+# Global search domains used by DHCPv4, DHCPv6, and RA.
 search_domains = ["lan", "home.arpa"]
+# Wait time before processing network events (prevents flapping).
+debounce_secs = 2
+# Global TLS certificate and key (inherited by DNS and HTTP).
+# tls_cert = "/etc/lanforge/certs/lanforge.crt"
+# tls_key = "/etc/lanforge/certs/lanforge.key"
 
-[tftp]
-# Enable the built-in TFTP server for classic PXE boot.
-enabled = true
-# Address and port to listen on.
-listen = "0.0.0.0:69"
-# Optional: Override the root directory for TFTP specifically.
-# If not set, it defaults to [general].boot_dir.
-# root_dir = "/var/lib/lanforge/tftp_root"
+[database]
+# Primary database for leases and persistent device state.
+url = "sqlite:///var/lib/lanforge/lanforge.db"
+# Transient database for logs and metrics.
+log_url = "sqlite:///tmp/lanforge-logs.db"
+# How often to flush in-memory state to disk (seconds).
+flush_interval = 60
 
-[dhcp.v4]
-# Enable DHCPv4 server.
+[api]
+# Enable the Unix Domain Socket control API.
 enabled = true
-range_start = "192.168.1.100"
-range_end = "192.168.1.250"
-lease_time = 86400
-router = "192.168.1.1"
-dns = ["192.168.1.1"]
-# Optional: TFTP server address sent to clients (Option 66).
-# If not set, typically defaults to the router address.
-tftp_server = "192.168.1.1"
-# Optional: Default boot file name (Option 67).
-boot_file = "ipxe.efi"
+# Path to the control socket.
+socket_path = "/var/run/lanforge.sock"
+# Optional TCP port for remote debugging (not recommended for production).
+# tcp_port = 50051
 
-[dhcp.v6]
-# Enable DHCPv6 server.
+[http]
+# Enable the REST API and Prometheus metrics exporter.
 enabled = true
-lease_time = 86400
-# Optional: Default Bootfile URL (Option 59) for UEFI HTTP Boot.
-boot_file = "http://[fd97:f00d:cafe::1]:8080/boot/ipxe.efi"
+# Listen address for the HTTP service.
+listen = "0.0.0.0:8080"
+# Enable HTTPS (inherits global system TLS if paths are omitted).
+https_enabled = false
+# Enable DNS-over-HTTPS (DoH).
+doh_enabled = false
+# tls_cert = "/etc/lanforge/certs/http.crt"
+# tls_key = "/etc/lanforge/certs/http.key"
 
 [ra]
 # Enable Router Advertisements (IPv6).
 enabled = true
+# M-flag: Clients should use DHCPv6 for address assignment.
 managed = true
+# O-flag: Clients should use DHCPv6 for options (DNS, etc.).
 other_config = true
+# Suggested hop limit for clients' unicast traffic (default: 64, 0 = unspecified).
+# hop_limit = 64
+# Maximum interval between advertisements (seconds).
+max_interval = 200
+# Advertisement lifetime (seconds). 0 = not a default gateway.
+# lifetime = 600
+
+# Prefix Information Option (PIO)
+[[ra.prefix]]
+source = "ula"
+address = "fd97:f00d:cafe:3731::"
+on_link = true
+autonomous = true
+
+[[ra.prefix]]
+source = "auto_gua" # Dynamically detects GUA from interface
+
+# Recursive DNS Server (RDNSS)
+[[ra.rdnss]]
+servers = ["fd97:f00d:cafe:3731::1"]
+lifetime = 600
+
+# DNS Search List (DNSSL)
+[[ra.dnssl]]
+domains = ["lan"]
+lifetime = 600
+
+[dhcp.v4]
+enabled = true
+lease_time = 86400
+# Default gateway announced to clients.
+router = "192.168.1.1"
+# DNS servers announced to clients.
+dns = ["192.168.1.1"]
+# Subnet mask (Option 1).
+subnet_mask = "255.255.255.0"
+# --- Network Boot (PXE/HTTP) ---
+# For traditional PXE (BIOS/UEFI), this is the filename (Option 67).
+# For UEFI HTTP Boot, this is auto-expanded to http://[server_ip]/boot/filename
+# and served alongside Option 60 = "HTTPClient".
+# boot_file = "ipxe.efi"
+
+# TFTP server for traditional PXE boot (Option 66). Defaults to server_id if unset.
+# tftp_server = "192.168.1.1"
+
+# Address pools for dynamic assignment.
+[[dhcp.v4.pools]]
+range_start = "192.168.1.100"
+range_end = "192.168.1.250"
+
+# Custom DHCPv4 options using typed prefixes:
+# - 's:' or 'ascii:' for strings
+# - 'ip:' for IPv4/IPv6 addresses
+# - 'hex:' for raw hex bytes (default)
+# [dhcp.v4.options]
+# 42 = "ip:192.168.1.1"    # NTP Server (Option 42)
+# 114 = "s:http://captive" # Captive Portal (Option 114)
+
+[dhcp.v6]
+enabled = true
+lease_time = 86400
+# DNS servers (Option 23).
+dns_servers = ["fd97:f00d:cafe:3731::1"]
+# Search domains (Option 24).
+search_domains = ["lan"]
+
+# HTTP Boot file (Option 59).
+# If a filename is provided, it's auto-expanded to http://[server_ip]:8080/boot/filename
+# If a full URL (http://...) is provided, it's used as-is.
+# boot_file = "ipxe.efi"
+
+# Custom DHCPv6 options (same typed prefixes as v4)
+# [dhcp.v6.options]
+# 7 = "ip:fd97:f00d:cafe::1" # Log Server
+
+[[dhcp.v6.pools]]
+# Pool based on suffixes (applies to both ULA and GUA).
+range_start = "::100"
+range_end = "::1fff"
 
 [dns]
-# Enable the internal DNS server.
 enabled = true
-listen = "0.0.0.0:5300"
-# Upstream DNS resolver.
-upstream = "1.1.1.1:53"
+# Standard DNS listen address (UDP/TCP).
+listen = "0.0.0.0:53"
+# Default TTL for local records.
+ttl = 60
+# Days to hide inactive devices from DNS.
+last_seen_threshold_days = 7
+
+# DNS-over-TLS (DoT)
+dot_enabled = false
+dot_listen = "0.0.0.0:853"
+# tls_cert = "/etc/lanforge/certs/dns.crt"
+# tls_key = "/etc/lanforge/certs/dns.key"
+
+# DNS Micro-Adblocker (if enabled at compile time)
+adblock_enabled = true
+adblock_urls = [
+    "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+]
+
+# Prioritized upstreams for recursion.
+[[dns.upstreams]]
+target = "tls://1.1.1.1:853"
+priority = 10
+[[dns.upstreams]]
+target = "udp://8.8.8.8:53"
+priority = 20
+
+[mdns]
+# Actively probe for hostnames and device classes via mDNS.
+enabled = true
+probe_interval = 3600
+
+[monitor]
+enabled = true
+# Pacing between probes during a network scan (ms).
+scan_pacing_ms = 100
+# How long to wait before marking a neighbor as stale (seconds).
+stale_timeout_secs = 3600
+
+[tftp]
+enabled = true
+# Root directory for PXE boot files.
+root_dir = "/var/lib/lanforge/tftp"
+listen_addr = "0.0.0.0:69"
 
 [[devices]]
-# Example of a static device with a custom boot file override.
+# Static device reservation example.
 mac = "00:11:22:33:44:55"
-hostname = "special-server"
+hostname = "nas"
 v4_ip = "192.168.1.10"
-boot_file = "custom-pxe-image.efi"
+v6_suffix = "::10"
+# boot_file = "custom-pxe.efi"

@@ -4,6 +4,7 @@ use crate::config::Config;
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::identifiers::MacAddr;
 use lanforge_network::wol::send_wol_magic_packet;
 
 use std::collections::HashSet;
@@ -194,11 +195,7 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
     true
 }
 
-fn handle_wol_event(
-    l_ctx: &LoopContext,
-    mac: lanforge_core::identifiers::MacAddr,
-    ip_hint: Option<Ipv4Addr>,
-) {
+fn handle_wol_event(l_ctx: &LoopContext, mac: MacAddr, ip_hint: Option<Ipv4Addr>) {
     info!("WOL: Triggering for {mac} (hint: {ip_hint:?})");
     let mut directed_broadcast = None;
 
@@ -214,7 +211,8 @@ fn handle_wol_event(
         }
     }
 
-    if let Err(e) = send_wol_magic_packet(mac, &l_ctx.cfg.iface_lan, directed_broadcast, ip_hint) {
+    if let Err(e) = send_wol_magic_packet(mac, &l_ctx.cfg.system.iface, directed_broadcast, ip_hint)
+    {
         error!("❌ Error sending WOL packet: {e}");
     } else {
         info!(

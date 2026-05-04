@@ -106,7 +106,7 @@ impl DhcpServer {
     /// Creates a new DHCP server with an empty pool seeded from the config range.
     #[must_use]
     pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
-        let pool = IpPool::new(cfg.range_start, cfg.range_end);
+        let pool = IpPool::new(cfg.get_effective_pools());
         Self {
             cfg,
             pool,
@@ -383,6 +383,9 @@ impl DhcpServer {
 
             // Hybrid PXE / HTTP Boot Support
             self.add_boot_options(request, opts);
+
+            // Custom Options
+            self.add_custom_options(opts);
         }
 
         let mut buf = Vec::with_capacity(576);
@@ -427,6 +430,17 @@ impl DhcpServer {
                         self.cfg.server_id.to_string().into_bytes(),
                     ));
                 }
+            }
+        }
+    }
+
+    fn add_custom_options(&self, opts: &mut v4::DhcpOptions) {
+        for (code, val) in &self.cfg.options {
+            if let Some(data) = crate::dhcp::options::parse_typed_option(val) {
+                opts.insert(DhcpOption::Unknown(v4::UnknownOption::new(
+                    (*code).into(),
+                    data,
+                )));
             }
         }
     }
@@ -503,6 +517,7 @@ mod tests {
     use lanforge_core::context::LanforgeContext;
     use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate};
     use lanforge_core::device::Origin;
+    use std::collections::HashMap;
     use std::net::Ipv4Addr;
     use std::time::{Duration, SystemTime};
 
@@ -514,8 +529,9 @@ mod tests {
         Dhcpv4Config {
             enabled: true,
             iface: "eth0".to_string(),
-            range_start: Ipv4Addr::new(192, 168, 1, 100),
-            range_end: Ipv4Addr::new(192, 168, 1, 200),
+            range_start: Some(Ipv4Addr::new(192, 168, 1, 100)),
+            range_end: Some(Ipv4Addr::new(192, 168, 1, 200)),
+            pools: Vec::new(),
             lease_time: 3600,
             router: Ipv4Addr::new(192, 168, 1, 1),
             dns: vec![Ipv4Addr::new(1, 1, 1, 1)],
@@ -526,6 +542,7 @@ mod tests {
             port: 67,
             tftp_server: None,
             boot_file: None,
+            options: HashMap::new(),
         }
     }
 

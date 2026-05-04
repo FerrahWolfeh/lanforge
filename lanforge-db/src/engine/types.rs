@@ -10,13 +10,29 @@ pub enum Pool {
 }
 
 impl Pool {
-    pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
+    pub async fn connect(
+        url: &str,
+        max_conns: u32,
+        min_conns: u32,
+    ) -> Result<Self, sqlx::Error> {
         if url.starts_with("sqlite:") {
             #[cfg(feature = "sqlite")]
             {
-                use sqlx::SqlitePool;
+                use sqlx::sqlite::SqliteConnectOptions;
+                use std::str::FromStr;
 
-                Ok(Self::Sqlite(SqlitePool::connect(url).await?))
+                let opts = SqliteConnectOptions::from_str(url)?
+                    .create_if_missing(true)
+                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .foreign_keys(true);
+
+                let pool = sqlx::sqlite::SqlitePoolOptions::new()
+                    .max_connections(max_conns)
+                    .min_connections(min_conns)
+                    .connect_with(opts)
+                    .await?;
+
+                Ok(Self::Sqlite(pool))
             }
             #[cfg(not(feature = "sqlite"))]
             {
@@ -27,7 +43,12 @@ impl Pool {
         } else {
             #[cfg(feature = "postgres")]
             {
-                Ok(Self::Postgres(sqlx::PgPool::connect(url).await?))
+                let pool = sqlx::postgres::PgPoolOptions::new()
+                    .max_connections(max_conns)
+                    .min_connections(min_conns)
+                    .connect(url)
+                    .await?;
+                Ok(Self::Postgres(pool))
             }
             #[cfg(not(feature = "postgres"))]
             {

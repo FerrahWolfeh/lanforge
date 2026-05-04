@@ -1,0 +1,31 @@
+# Lanforge DHCPv4 Configuration
+# Features: Multi-pool support, dnsmasq-style typed options.
+
+[dhcp.v4]
+enabled = true
+lease_time = 86400
+router = "192.168.1.1"
+subnet_mask = "255.255.255.0"
+
+# Global DNS for all pools.
+dns = ["192.168.1.1"]
+
+# Custom DHCP options using dnsmasq-style prefixes.
+[dhcp.v4.options]
+# 43: Vendor Specific (String)
+43 = "s:lanforge-provision"
+# 150: TFTP Server List (IP)
+150 = "ip:192.168.1.10"
+# 160: Captive Portal URL
+160 = "ascii:http://lan.lanforge/login"
+# Raw Hex (Default)
+224 = "00aabbcc"
+
+# Address Pools
+[[dhcp.v4.pools]]
+range_start = "192.168.1.100"
+range_end = "192.168.1.200"
+
+[[dhcp.v4.pools]]
+range_start = "192.168.1.210"
+range_end = "192.168.1.250"

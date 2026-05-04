@@ -30,10 +30,12 @@
 //!
 //! Marked as `critical: true` — failure halts the daemon.
 
+pub mod config;
 #[cfg(test)]
 pub mod tests;
 pub mod utils;
 
+use crate::ndp::config::MonitorConfig;
 use crate::ndp::utils::{
     extract_neigh_info, get_ipv4_neighbors, get_ipv4_subnet_iterable, get_ipv6_neighbors,
     probe_neighbor,
@@ -76,6 +78,7 @@ type NetlinkMessageStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMess
     max_backoff = 30
 )]
 pub struct NeighborMonitor {
+    cfg: MonitorConfig,
     handle: Handle,
     messages: NetlinkMessageStream,
     target_ifindex: u32,
@@ -87,12 +90,14 @@ impl NeighborMonitor {
     /// Creates a new `NeighborMonitor` for the given interface.
     #[must_use]
     pub fn new(
+        cfg: MonitorConfig,
         handle: Handle,
         messages: NetlinkMessageStream,
         target_ifindex: u32,
         ctx: LanforgeContext,
     ) -> Self {
         Self {
+            cfg,
             handle,
             messages,
             target_ifindex,
@@ -140,16 +145,17 @@ impl NeighborMonitor {
         let ctx = self.ctx.clone();
         let ifindex = self.target_ifindex;
         let in_progress = self.scan_in_progress.clone();
+        let pacing = Duration::from_millis(self.cfg.scan_pacing_ms);
 
         tokio::spawn(async move {
             in_progress.store(true, Ordering::SeqCst);
-            run_subnet_scan_task(handle, ctx, ifindex).await;
+            run_subnet_scan_task(handle, ctx, ifindex, pacing).await;
             in_progress.store(false, Ordering::SeqCst);
         });
     }
 }
 
-async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32) {
+async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32, pacing: Duration) {
     let interface_state = ctx.get_interface_state(ifindex);
     if let Some((ip, prefix_len)) = interface_state.v4 {
         let range = get_ipv4_subnet_iterable(ip, prefix_len);
@@ -171,8 +177,8 @@ async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32
                 {
                     debug!("NeighborMonitor: ARP probe failed for {target_ip}: {e}");
                 }
-                // Pacing for manual scan: 10ms between addresses to avoid CPU spikes
-                sleep(Duration::from_millis(10)).await;
+                // Pacing for manual scan: from config to avoid CPU spikes
+                sleep(pacing).await;
             }
         }
     }
@@ -220,7 +226,7 @@ impl AsyncService for NeighborMonitor {
         ctrl.signal_ready();
 
         let mut pending_batch = Vec::new();
-        let mut flush_timer = tokio::time::interval(std::time::Duration::from_millis(100));
+        let mut flush_timer = tokio::time::interval(std::time::Duration::from_millis(self.cfg.batch_interval_ms));
 
         loop {
             if !self.ctx.is_running() {

@@ -1,0 +1,10 @@
+# Lanforge mDNS Prober Configuration
+# Actively probes the network for hostnames and device classifications.
+
+[mdns]
+# Whether background mDNS probing is enabled.
+enabled = true
+
+# Interval for periodic full network probes (seconds).
+# Default: 3600 (1 hour). Probing too often can cause multicast noise.
+probe_interval = 3600

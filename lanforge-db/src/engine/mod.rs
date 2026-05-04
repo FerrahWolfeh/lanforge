@@ -27,7 +27,8 @@ pub struct LeaseDb {
 }
 
 impl LeaseDb {
-    pub async fn open(url: &str) -> Result<Self, LeaseDbError> {
+    pub async fn open(cfg: &crate::config::DatabaseConfig) -> Result<Self, LeaseDbError> {
+        let url = &cfg.url;
         // Ensure parent directory exists for local SQLite files
         if url.starts_with("sqlite:") && !url.contains(":memory:") {
             let path_str = url
@@ -56,7 +57,7 @@ impl LeaseDb {
             }
         }
 
-        let pool = Pool::connect(url)
+        let pool = Pool::connect(url, cfg.max_connections, cfg.min_connections)
             .await
             .map_err(|e| LeaseDbError::ConnectionOpen(Path::new(url).to_path_buf(), e))?;
 

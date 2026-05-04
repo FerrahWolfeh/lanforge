@@ -1,0 +1,46 @@
+# Lanforge Router Advertisement (RA) Configuration
+# Implements ICMPv6 RA (RFC 4861) for IPv6 auto-configuration.
+
+[ra]
+enabled = true
+
+# M-Flag: Managed Address Configuration (clients should use DHCPv6).
+managed = true
+
+# O-Flag: Other Configuration (clients should use DHCPv6 for DNS/options).
+other_config = true
+
+# MaxRtrAdvInterval (seconds).
+max_interval = 600
+
+# Router lifetime (seconds). 0 means this router is not a default gateway.
+lifetime = 1800
+
+# MTU to announce on this link.
+mtu = 1500
+
+# HOP Limit for IPv6 packets.
+hop_limit = 64
+
+# --- IPv6 Prefixes ---
+[[ra.prefix]]
+# Source can be "ula", "gua", or "auto_gua" (detects from interface).
+source = "ula"
+address = "fd00:cafe:f00d::/64"
+on_link = true
+autonomous = true
+
+[[ra.prefix]]
+source = "auto_gua"
+on_link = true
+autonomous = true
+
+# --- Recursive DNS Servers (RDNSS) ---
+[[ra.rdnss]]
+servers = ["fd00:cafe:f00d::1"]
+lifetime = 600
+
+# --- DNS Search List (DNSSL) ---
+[[ra.dnssl]]
+domains = ["lan", "local"]
+lifetime = 600

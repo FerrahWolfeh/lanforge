@@ -1,0 +1,21 @@
+# Lanforge DHCPv6 Configuration
+# Features: IA_NA address assignment, IA_PD prefix delegation.
+
+[dhcp.v6]
+enabled = true
+lease_time = 86400
+
+# DNS Servers announced to clients.
+dns_servers = ["fd00::1"]
+
+# HTTP Boot file URL.
+boot_file = "http://[fd00::1]/boot/grub.efi"
+
+# Custom DHCPv6 options (optional).
+[dhcp.v6.options]
+# 59 = "s:http://[fd00::1]/boot/grub.efi" (Legacy way)
+
+# Address Pools (SLAAC-compatible suffixes)
+[[dhcp.v6.pools]]
+range_start = "::100"
+range_end = "::ffff"

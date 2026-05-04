@@ -13,7 +13,7 @@ use tokio::{
     sync::broadcast::Receiver,
     task::JoinHandle,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     config::DnsConfig, resolver::LocalResolver, stats::DnsStats, utils::extract_local_hostname_wire,
@@ -38,7 +38,8 @@ use crate::filter::{AdBlocker, labels_to_domain};
 /// reducing atomic reference counting overhead in the fast path.
 pub struct DnsContext {
     pub cfg: DnsConfig,
-    pub upstream_mgr: Option<Arc<UpstreamManager>>,
+    /// List of upstream managers, one per target, sorted by priority.
+    pub upstreams: Vec<Arc<UpstreamManager>>,
     pub stats: Arc<DnsStats>,
     pub ctx: lanforge_core::context::LanforgeContext,
     #[cfg(feature = "adblock")]
@@ -56,8 +57,8 @@ use lanforge_core::service::{AsyncService, ServiceControl};
     base_backoff = 2,
     max_backoff = 30,
     describe = format!(
-        "DNS on {} (upstream: {:?}, domain: .{})",
-        self.cfg.listen, self.cfg.upstream, self.cfg.search_domain
+        "DNS on {} ({} upstreams, domains: {:?})",
+        self.cfg.listen, self.cfg.upstreams.len(), self.cfg.search_domains
     )
 )]
 pub struct DnsService {
@@ -94,18 +95,15 @@ impl DnsService {
 
     /// Initializes a `DnsContext` for manual query handling.
     pub async fn init_dns_context(&self) -> Result<Arc<DnsContext>, CoreError> {
-        let upstream_mgr = if let Some(target) = &self.cfg.upstream {
-            Some(
-                UpstreamManager::new(target)
-                    .await
-                    .map_err(|e| CoreError::Generic(e.to_string()))?,
-            )
-        } else {
-            None
-        };
+        let mut upstreams = Vec::new();
+        for prioritized in &self.cfg.upstreams {
+            if let Ok(mgr) = UpstreamManager::new(&prioritized.target).await {
+                upstreams.push(mgr);
+            }
+        }
 
         #[cfg(feature = "adblock")]
-        let adblocker = if self.cfg.adblock_enabled && self.cfg.upstream.is_some() {
+        let adblocker = if self.cfg.adblock_enabled && !upstreams.is_empty() {
             Some(Arc::new(AdBlocker::new()))
         } else {
             None
@@ -113,7 +111,7 @@ impl DnsService {
 
         Ok(Arc::new(DnsContext {
             cfg: self.cfg.clone(),
-            upstream_mgr,
+            upstreams,
             stats: Arc::clone(&self.stats),
             ctx: self.ctx.clone(),
             #[cfg(feature = "adblock")]
@@ -299,15 +297,25 @@ impl AsyncService for DnsService {
         let adblock_task = self.spawn_adblock_manager(&dns_ctx);
 
         #[cfg(feature = "dot")]
-        let dot_task = if self.cfg.dot_listen.is_some() {
-            let mut dot_svc = crate::dot::DotService::new(Arc::new(self.cfg.clone()), self.ctx.clone());
-            let dot_ctrl = ctrl.clone(); // In reality we might want a separate control, but for subtask it's okay
+        let dot_task = if self.cfg.dot_enabled
+            && let Some(listen_addr) = self.cfg.dot_listen
+        {
+            use crate::dot::DotService;
+
+            info!("DoT: Starting listener on {}", listen_addr);
+            let mut dot_svc = DotService::new(Arc::new(self.cfg.clone()), self.ctx.clone());
+            let dot_ctrl = ctrl.clone();
             Some(tokio::spawn(async move {
                 if let Err(e) = dot_svc.run(dot_ctrl).await {
                     tracing::error!("DoT Service error: {}", e);
                 }
             }))
         } else {
+            if self.cfg.dot_listen.is_some() && !self.cfg.dot_enabled {
+                warn!(
+                    "DoT: Listener address configured but dot_enabled = false. Service inactive."
+                );
+            }
             None
         };
 
@@ -320,7 +328,9 @@ impl AsyncService for DnsService {
         #[cfg(feature = "adblock")]
         adblock_task.abort();
         #[cfg(feature = "dot")]
-        if let Some(t) = dot_task { t.abort(); }
+        if let Some(t) = dot_task {
+            t.abort();
+        }
         Ok(())
     }
 }
@@ -396,20 +406,24 @@ pub async fn handle_query(
     }
 
     // PHASE 3: Recursive Forwarding
-    if let (Some(target), Some(mgr)) = (&ctx.cfg.upstream, &ctx.upstream_mgr) {
+    if !ctx.upstreams.is_empty() {
         ctx.stats.inc_recursive();
-        forward_to_upstream(data, target, mgr).await.map(Some)
-    } else {
-        let edns = WireOptScanner::scan(data, &header, &question);
-        let ra = ctx.cfg.upstream.is_some();
-        Ok(Some(WireResponseWriter::write_error_response(
-            data,
-            &question,
-            3,
-            edns.as_ref(),
-            ra,
-        )))
+        for mgr in &ctx.upstreams {
+            if let Ok(resp) = forward_to_upstream(data, &mgr.target, mgr).await {
+                return Ok(Some(resp));
+            }
+        }
     }
+
+    let edns = WireOptScanner::scan(data, &header, &question);
+    let ra = !ctx.upstreams.is_empty();
+    Ok(Some(WireResponseWriter::write_error_response(
+        data,
+        &question,
+        3, // NXDOMAIN (or ServFail if upstreams failed? RFC says NXDOMAIN is fine if we are authoritative for nothing)
+        edns.as_ref(),
+        ra,
+    )))
 }
 
 /// Helper function for local resolution using wire-parsed data.
@@ -505,10 +519,14 @@ async fn handle_query_fallback(
         }
     }
 
-    if let (Some(target), Some(mgr)) = (&ctx.cfg.upstream, &ctx.upstream_mgr) {
+    if !ctx.upstreams.is_empty() {
         ctx.stats.inc_recursive();
-        forward_to_upstream(data, target, mgr).await.map(Some)
-    } else {
-        Ok(Some(rb.nxdomain()?))
+        for mgr in &ctx.upstreams {
+            if let Ok(resp) = forward_to_upstream(data, &mgr.target, mgr).await {
+                return Ok(Some(resp));
+            }
+        }
     }
+
+    Ok(Some(rb.nxdomain()?))
 }

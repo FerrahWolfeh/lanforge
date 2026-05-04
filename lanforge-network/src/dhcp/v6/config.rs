@@ -3,9 +3,10 @@
 //! Supports multi-prefix operation (`ULA` + `GUA`) with flexible pool definitions:
 //! fixed ranges, floating suffix ranges, or single static addresses.
 
-use std::net::Ipv6Addr;
-use serde::{Deserialize, Serialize};
 use lanforge_macros::ServiceConfig;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::Ipv6Addr;
 
 use lanforge_core::device::Ipv6AddrOrSuffix;
 
@@ -57,6 +58,8 @@ pub struct Dhcpv6Config {
     pub search_domains: Vec<String>,
     /// Global boot file name (Option 59).
     pub boot_file: Option<String>,
+    /// Custom `DHCPv6` options (key = option number, value = hex string).
+    pub options: HashMap<u16, String>,
 }
 
 impl Default for Dhcpv6Config {
@@ -72,6 +75,7 @@ impl Default for Dhcpv6Config {
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
             boot_file: None,
+            options: HashMap::new(),
         }
     }
 }

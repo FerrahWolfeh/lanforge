@@ -49,10 +49,8 @@ use roaring::RoaringBitmap;
 /// - Respects static reservations by removing them from the available set
 /// - Quarantines `DECLINEd` IPs for 2 hours to avoid conflict storms
 pub struct IpPool {
-    /// Range start (inclusive), as `u32` in network byte order.
-    start: u32,
-    /// Range end (inclusive), as `u32` in network byte order.
-    end: u32,
+    /// Configured pools (ranges).
+    pools: Vec<crate::dhcp::v4::config::Dhcpv4PoolConfig>,
     /// IPs rejected via DECLINE with quarantine timestamp.
     declined: HashMap<Ipv4Addr, Instant>,
     /// Bitmap of free IPs — efficient O(1) insert/remove, O(log n) select.
@@ -60,18 +58,16 @@ pub struct IpPool {
 }
 
 impl IpPool {
-    /// Creates a new pool with all IPs in `[start, end]` marked as available.
+    /// Creates a new pool from a list of range configurations.
     #[must_use]
-    pub fn new(start: Ipv4Addr, end: Ipv4Addr) -> Self {
-        let s = u32::from(start);
-        let e = u32::from(end);
-
+    pub fn new(pools: Vec<crate::dhcp::v4::config::Dhcpv4PoolConfig>) -> Self {
         let mut available = RoaringBitmap::new();
-        available.insert_range(s..=e);
+        for pool in &pools {
+            available.insert_range(u32::from(pool.range_start)..=u32::from(pool.range_end));
+        }
 
         Self {
-            start: s,
-            end: e,
+            pools,
             declined: HashMap::new(),
             available,
         }
@@ -151,11 +147,17 @@ impl IpPool {
         }
 
         // 3.5. Garbage Collection: If pool is empty, scan for naturally expired leases
-        for i in self.start..=self.end {
-            let ip = Ipv4Addr::from(i);
-            if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() && !self.declined.contains_key(&ip) {
-                self.add_to_available(ip);
+        let mut recovered = Vec::new();
+        for pool in &self.pools {
+            for i in u32::from(pool.range_start)..=u32::from(pool.range_end) {
+                let ip = Ipv4Addr::from(i);
+                if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() && !self.declined.contains_key(&ip) {
+                    recovered.push(ip);
+                }
             }
+        }
+        for ip in recovered {
+            self.add_to_available(ip);
         }
 
         // Second pass after GC
@@ -226,11 +228,12 @@ impl IpPool {
         self.available.contains(u32::from(ip))
     }
 
-    /// Check if an IP is within the dynamic range.
+    /// Check if an IP is within any of the configured dynamic ranges.
     #[must_use]
     pub fn is_in_range(&self, ip: Ipv4Addr) -> bool {
-        let raw = u32::from(ip);
-        raw >= self.start && raw <= self.end
+        self.pools
+            .iter()
+            .any(|p| ip >= p.range_start && ip <= p.range_end)
     }
 }
 
@@ -242,6 +245,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::dhcp::v4::config::Dhcpv4PoolConfig;
     use std::time::{Duration, SystemTime};
 
     use crate::test_utils::init_test_context;
@@ -249,10 +253,10 @@ mod tests {
     fn pool() -> (IpPool, LanforgeContext) {
         let ctx = init_test_context();
         (
-            IpPool::new(
-                Ipv4Addr::new(192, 168, 0, 100),
-                Ipv4Addr::new(192, 168, 0, 105),
-            ),
+            IpPool::new(vec![Dhcpv4PoolConfig {
+                range_start: Ipv4Addr::new(192, 168, 0, 100),
+                range_end: Ipv4Addr::new(192, 168, 0, 105),
+            }]),
             ctx,
         )
     }
@@ -359,10 +363,10 @@ mod tests {
     #[test]
     fn test_cleanup_declined_quarantine() {
         let _ctx = init_test_context();
-        let mut p = IpPool::new(
-            Ipv4Addr::new(192, 168, 1, 100),
-            Ipv4Addr::new(192, 168, 1, 100),
-        );
+        let mut p = IpPool::new(vec![Dhcpv4PoolConfig {
+            range_start: Ipv4Addr::new(192, 168, 1, 100),
+            range_end: Ipv4Addr::new(192, 168, 1, 100),
+        }]);
         let ip = Ipv4Addr::new(192, 168, 1, 100);
 
         // 1. Marca como declined

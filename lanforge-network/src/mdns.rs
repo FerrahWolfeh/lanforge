@@ -21,6 +21,29 @@
 //!
 //! Marked as `critical: false` — failure does not halt the daemon.
 
+use lanforge_macros::ServiceConfig;
+use serde::{Deserialize, Serialize};
+
+/// Configuration for the mDNS prober.
+#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
+#[config(key = "mdns")]
+#[serde(default)]
+pub struct MdnsConfig {
+    /// Whether background mDNS probing is enabled.
+    pub enabled: bool,
+    /// Interval for periodic full network probes (seconds).
+    pub probe_interval: u64,
+}
+
+impl Default for MdnsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            probe_interval: 3600, // 1 hour
+        }
+    }
+}
+
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::DeviceUpdate;
@@ -62,6 +85,7 @@ enum MdnsCommand {
     max_backoff = 30
 )]
 pub struct MdnsProber {
+    cfg: MdnsConfig,
     tx: Sender<MdnsCommand>,
     ctx: LanforgeContext,
 }
@@ -73,7 +97,7 @@ impl AsyncService for MdnsProber {
 
         ctrl.signal_ready();
 
-        if let Err(e) = run_mdns_worker(self.ctx.clone(), rx, tx).await {
+        if let Err(e) = run_mdns_worker(self.cfg.clone(), self.ctx.clone(), rx, tx).await {
             error!("mDNS worker fatal error: {e}");
             return Err(CoreError::Generic(e.to_string()));
         }
@@ -82,11 +106,11 @@ impl AsyncService for MdnsProber {
 }
 
 impl MdnsProber {
-    /// Creates a new `MdnsProber` (command channel is unconnected until `run()` is called).
+    /// Creates a new `MdnsProber`.
     #[must_use]
-    pub fn new(ctx: LanforgeContext) -> Self {
+    pub fn new(cfg: MdnsConfig, ctx: LanforgeContext) -> Self {
         let (tx, _) = mpsc::channel(32);
-        Self { tx, ctx }
+        Self { cfg, tx, ctx }
     }
 
     /// Requests a full mDNS broadcast probe across all interfaces.
@@ -101,6 +125,7 @@ impl MdnsProber {
 }
 
 async fn run_mdns_worker(
+    cfg: MdnsConfig,
     ctx: LanforgeContext,
     mut rx: Receiver<MdnsCommand>,
     tx: Sender<MdnsCommand>,
@@ -169,6 +194,11 @@ async fn run_mdns_worker(
     });
 
     let mut bus_rx = bus.subscribe();
+    let mut probe_timer = tokio::time::interval(Duration::from_secs(cfg.probe_interval));
+
+    if cfg.enabled {
+        let _ = tx.try_send(MdnsCommand::ProbeAll);
+    }
 
     loop {
         if !ctx.is_running() {
@@ -200,8 +230,10 @@ async fn run_mdns_worker(
                     handle_mdns_packet(&ctx_clone, &data_vec, addr);
                 });
             }
-            () = tokio::time::sleep(Duration::from_millis(500)) => {
-                // Periodic flag check if idle
+            _ = probe_timer.tick() => {
+                if cfg.enabled {
+                    let _ = tx.try_send(MdnsCommand::ProbeAll);
+                }
             }
         }
     }

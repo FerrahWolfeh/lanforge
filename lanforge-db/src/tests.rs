@@ -20,9 +20,12 @@ fn make_mac(last: u8) -> MacAddr {
 }
 
 async fn create_test_db() -> LeaseDb {
-    LeaseDb::open_in_memory()
-        .await
-        .expect("Failed to create in-memory test database")
+    LeaseDb::open(&crate::config::DatabaseConfig {
+        url: "sqlite::memory:".to_string(),
+        ..Default::default()
+    })
+    .await
+    .expect("Failed to create in-memory test database")
 }
 
 fn create_test_device(mac_last: u8, hostname: &str) -> Device {
@@ -250,7 +253,14 @@ async fn test_db_worker_lifecycle() {
     let table = State::new();
     let ctx = LanforgeContext::new(bus.clone(), table, None);
 
-    let mut worker = DbWorker::new(db_url.clone(), "sqlite::memory:".to_string(), ctx.clone());
+    let mut worker = DbWorker::new(
+        crate::config::DatabaseConfig {
+            url: db_url.clone(),
+            log_url: "sqlite::memory:".to_string(),
+            ..Default::default()
+        },
+        ctx.clone(),
+    );
 
     let mac = make_mac(0x40);
     let _ = ctx.apply(DeviceUpdate::MdnsHostnameHint {
@@ -289,7 +299,12 @@ async fn test_db_worker_lifecycle() {
     worker_handle.await.expect("Worker join failed");
 
     // Verify persistence
-    let db = LeaseDb::open(&db_url).await.expect("Failed to reopen DB");
+    let db = LeaseDb::open(&crate::config::DatabaseConfig {
+        url: db_url.clone(),
+        ..Default::default()
+    })
+    .await
+    .expect("Failed to reopen DB");
     let loaded = db.load_table().await.unwrap();
     let dev = loaded
         .devices

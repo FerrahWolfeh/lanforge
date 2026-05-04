@@ -41,7 +41,7 @@ impl<'a> ResponseBuilder<'a> {
     pub fn base(&self) -> Message {
         let mut resp = Message::new(self.query.metadata.id, MessageType::Response, OpCode::Query);
         resp.metadata.authoritative = true;
-        resp.metadata.recursion_available = self.cfg.upstream.is_some();
+        resp.metadata.recursion_available = !self.cfg.upstreams.is_empty();
         resp.add_queries(self.query.queries.iter().cloned());
 
         if let Some(edns) = &self.query.edns {
@@ -54,12 +54,15 @@ impl<'a> ResponseBuilder<'a> {
     ///
     /// Required for NXDOMAIN and NODATA responses per RFC 1035.
     pub fn add_soa(&self, resp: &mut Message) {
-        let name = Name::from_str(&format!("{}.", self.cfg.search_domain))
-            .unwrap_or_else(|_| Name::root());
-        let mname = Name::from_str(&format!("ns.{}.", self.cfg.search_domain))
-            .unwrap_or_else(|_| Name::root());
-        let rname = Name::from_str(&format!("hostmaster.{}.", self.cfg.search_domain))
-            .unwrap_or_else(|_| Name::root());
+        let domain = self
+            .cfg
+            .search_domains
+            .first()
+            .map_or("lan", |d| d.as_str());
+        let name = Name::from_str(&format!("{domain}.")).unwrap_or_else(|_| Name::root());
+        let mname = Name::from_str(&format!("ns.{domain}.")).unwrap_or_else(|_| Name::root());
+        let rname =
+            Name::from_str(&format!("hostmaster.{domain}.")).unwrap_or_else(|_| Name::root());
         let soa = SOA::new(mname, rname, 1, 7200, 3600, 1_209_600, 3600);
         resp.authorities
             .push(Record::from_rdata(name, 3600, RData::SOA(soa)));

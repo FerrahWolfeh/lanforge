@@ -280,7 +280,12 @@ pub struct RaConfig {
     /// `RouterLifetime`: None → 3 × `MaxRtrAdvInterval`.
     /// 0 → This router is not a default gateway.
     /// RFC 4861: must be 0 or in the range [`MaxRtrAdvInterval`, 9000s].
-    pub router_lifetime: Option<Duration>,
+    pub lifetime: Option<Duration>,
+
+    /// `ReachableTime`: RFC 4861 §4.2 — 0 = unspecified.
+    pub reachable_time: u32,
+    /// `RetransTimer`: RFC 4861 §4.2 — 0 = unspecified.
+    pub retrans_timer: u32,
 
     /// MTU to announce (Option type 5, RFC 4861 §4.6.4).
     /// Relevant when WAN bandwidth has an MTU < 1500 (e.g., `PPPoE` = 1492 bytes).
@@ -300,10 +305,13 @@ pub struct RaConfig {
 #[serde(default)]
 pub struct RaServiceConfig {
     pub enabled: bool,
-    pub managed: bool,
-    pub other_config: bool,
+    pub managed: Option<bool>,
+    pub other_config: Option<bool>,
+    pub hop_limit: Option<u8>,
     pub max_interval: u64,
-    pub router_lifetime: Option<u64>,
+    pub lifetime: Option<u64>,
+    pub reachable_time: Option<u32>,
+    pub retrans_timer: Option<u32>,
     pub mtu: Option<u32>,
     #[serde(rename = "prefix")]
     pub prefixes: Vec<PrefixConfig>,
@@ -317,13 +325,15 @@ impl RaServiceConfig {
     pub fn to_ra_config(&self, iface: String) -> RaConfig {
         RaConfig {
             iface,
-            managed: self.managed,
-            other_config: self.other_config,
-            hop_limit: 64,
+            managed: self.managed.unwrap_or(false),
+            other_config: self.other_config.unwrap_or(false),
+            hop_limit: self.hop_limit.unwrap_or(64),
             priority: RouterPriority::Medium,
             max_interval: Duration::from_secs(self.max_interval),
             min_interval: None,
-            router_lifetime: self.router_lifetime.map(Duration::from_secs),
+            lifetime: self.lifetime.map(Duration::from_secs),
+            reachable_time: self.reachable_time.unwrap_or(0),
+            retrans_timer: self.retrans_timer.unwrap_or(0),
             mtu: self.mtu,
             prefixes: self.prefixes.clone(),
             rdnss: self.rdnss.clone(),
@@ -342,7 +352,9 @@ impl Default for RaConfig {
             priority: RouterPriority::Medium,
             max_interval: Duration::from_secs(200),
             min_interval: None,
-            router_lifetime: None,
+            lifetime: None,
+            reachable_time: 0,
+            retrans_timer: 0,
             mtu: None,
             prefixes: Vec::new(),
             rdnss: Vec::new(),
@@ -366,7 +378,7 @@ impl RaConfig {
     /// Calculates effective `RouterLifetime`.
     #[must_use]
     pub fn effective_router_lifetime(&self) -> Duration {
-        self.router_lifetime.unwrap_or_else(|| {
+        self.lifetime.unwrap_or_else(|| {
             Duration::from_secs(self.max_interval.as_secs() * DEFAULT_ROUTER_LIFETIME_MULTIPLIER)
         })
     }
@@ -413,7 +425,7 @@ impl RaConfig {
         let rl = self.effective_router_lifetime().as_secs();
         if rl != 0 && (rl < max || rl > 9000) {
             return Err(NetworkError::Config(format!(
-                "router_lifetime={rl}s must be 0 or in range [max_interval={max}s, 9000s] (RFC 4861 §4.2)"
+                "lifetime={rl}s must be 0 or in range [max_interval={max}s, 9000s] (RFC 4861 §4.2)"
             )));
         }
 

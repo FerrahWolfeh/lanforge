@@ -1,0 +1,24 @@
+# Lanforge API & HTTP Configuration
+# These are independent modules in the new architecture.
+
+[api]
+# Local CLI control via Unix Socket.
+enabled = true
+socket_path = "/var/run/lanforge.sock"
+
+# Shared authentication password hash (Argon2 or similar).
+# auth_password_hash = "$argon2id$..."
+
+[http]
+# REST API and Prometheus metrics exporter.
+enabled = true
+listen = "0.0.0.0:8080"
+
+# Secure the API with HTTPS.
+https_enabled = true
+
+# DNS-over-HTTPS (DoH)
+doh_enabled = true
+
+# tls_cert = "/etc/lanforge/cert.pem" # Optional override
+# tls_key = "/etc/lanforge/key.pem"   # Optional override

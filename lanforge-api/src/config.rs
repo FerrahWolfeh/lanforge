@@ -1,94 +1,147 @@
+use std::net::SocketAddr;
+
+use lanforge_db::config::DatabaseConfig;
+use lanforge_macros::ServiceConfig;
+use serde::{Deserialize, Serialize};
+
 /// Configuration for the Unix Domain Socket (UDS) control service.
-///
-/// This struct is defined within the API crate to allow isolated use,
-/// independent of the main daemon's internal configuration structures.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
+#[config(key = "api")]
+#[serde(default)]
 pub struct ApiConfig {
+    /// Whether the control API is enabled.
+    pub enabled: bool,
+    /// Whether the HTTP API is enabled.
+    pub http_enabled: bool,
     /// Filesystem path to the Unix socket (e.g., "/run/lanforge/control.sock").
     pub socket_path: String,
-
-    /// Name of the LAN interface reported in status (e.g., "eth0").
-    pub lan_iface: String,
-
-    /// Whether Router Advertisements (RA) are enabled.
-    pub ra_enabled: bool,
-
-    /// The announced ULA prefix (e.g., "fd00::/64"), if any.
-    pub ula_prefix: Option<String>,
-
-    /// Whether the DHCPv4 service is enabled.
-    pub dhcp_v4_enabled: bool,
-
-    /// Whether the DHCPv6 service is enabled.
-    pub dhcp_v6_enabled: bool,
-
-    /// Whether the DNS service is enabled.
-    pub dns_enabled: bool,
-
-    /// The configured upstream DNS resolver.
-    pub dns_upstream: Option<String>,
-
-    /// Path to the SQLite database (used for calculating file size stats).
-    pub db_path: String,
-    /// Database connection URL.
-    pub db_url: String,
-    /// Path to the SQLite database for logs (history).
-    pub log_db_path: String,
-    /// Log database connection URL.
-    pub log_db_url: String,
-
     /// Optional TCP port for the control API (debug).
     pub tcp_port: Option<u16>,
+    /// Optional listen address for the HTTP API (reporting only).
+    pub http_listen: Option<SocketAddr>,
 
-    /// Optional address to listen for the HTTP REST API (e.g., "0.0.0.0:8080").
-    pub http_listen: Option<String>,
-
-    /// Optional address to listen for DNS-over-TLS (e.g., "0.0.0.0:853").
-    pub dot_listen: Option<String>,
-
-    /// Total number of addresses in the DHCPv4 dynamic pool.
-    pub dhcp_v4_range_size: u32,
-    /// Total number of addresses in the DHCPv6 dynamic pool (if finite).
-    pub dhcp_v6_pool_size: Option<u64>,
-
-    /// Secure hash of the API password.
+    /// Secure hash of the API password (shared with HTTP).
     pub auth_password_hash: Option<String>,
 
-    /// Native TLS certificate (Path or raw PEM).
-    pub tls_cert: Option<String>,
+    /// Database configuration for status reporting.
+    #[serde(skip)]
+    pub database: DatabaseConfig,
 
-    /// Native TLS private key (Path or raw PEM).
-    pub tls_key: Option<String>,
-    /// Path to the directory containing boot files (PXE/HTTP boot).
+    // --- Reporting / Status fields ---
+    #[serde(skip)]
+    pub db_path: String,
+    #[serde(skip)]
+    pub db_url: String,
+    #[serde(skip)]
+    pub log_db_url: String,
+    #[serde(skip)]
+    pub lan_iface: String,
+    #[serde(skip)]
+    pub ula_prefix: Option<String>,
+    #[serde(skip)]
+    pub ra_enabled: bool,
+    #[serde(skip)]
+    pub dhcp_v4_enabled: bool,
+    #[serde(skip)]
+    pub dhcp_v4_range_size: u32,
+    #[serde(skip)]
+    pub dhcp_v6_enabled: bool,
+    #[serde(skip)]
+    pub dhcp_v6_pool_size: Option<u64>,
+    #[serde(skip)]
+    pub dns_enabled: bool,
+    #[serde(skip)]
+    pub dns_upstream: Option<String>,
+    #[serde(skip)]
     pub boot_dir: Option<String>,
+    #[serde(skip)]
+    pub tls_cert: Option<String>,
+    #[serde(skip)]
+    pub tls_key: Option<String>,
+    #[serde(skip)]
+    pub log_db_path: String,
+    #[serde(skip)]
+    pub dot_listen: Option<SocketAddr>,
+    #[serde(skip)]
+    pub dot_enabled: bool,
+    #[serde(skip)]
+    pub doh_enabled: bool,
+    #[serde(skip)]
+    pub https_enabled: bool,
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            http_enabled: false,
+            socket_path: "/run/lanforge/control.sock".to_string(),
+            tcp_port: None,
+            http_listen: None,
+            auth_password_hash: None,
+            database: DatabaseConfig::default(),
+            db_path: String::new(),
+            db_url: String::new(),
+            log_db_url: String::new(),
+            lan_iface: "eth0".to_string(),
+            ula_prefix: None,
+            ra_enabled: false,
+            dhcp_v4_enabled: false,
+            dhcp_v4_range_size: 0,
+            dhcp_v6_enabled: false,
+            dhcp_v6_pool_size: None,
+            dns_enabled: false,
+            dns_upstream: None,
+            boot_dir: None,
+            tls_cert: None,
+            tls_key: None,
+            log_db_path: String::new(),
+            dot_listen: None,
+            dot_enabled: false,
+            doh_enabled: false,
+            https_enabled: false,
+        }
+    }
+}
+
+/// Configuration for the REST API and Metrics HTTP service.
+#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
+#[config(key = "http")]
+#[serde(default)]
+pub struct HttpConfig {
+    /// Whether the HTTP service is enabled.
+    pub enabled: bool,
+    /// Listen address (e.g., "0.0.0.0:8080").
+    pub listen: SocketAddr,
+    /// Whether HTTPS is explicitly enabled.
+    pub https_enabled: bool,
+    /// Whether `DoH` (DNS-over-HTTPS) is explicitly enabled.
+    pub doh_enabled: bool,
+    /// TLS certificate path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_cert: Option<String>,
+    /// TLS private key path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_key: Option<String>,
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "0.0.0.0:8080".parse().unwrap(),
+            https_enabled: false,
+            doh_enabled: false,
+            tls_cert: None,
+            tls_key: None,
+        }
+    }
 }
 
 #[cfg(test)]
 impl ApiConfig {
     /// Creates a dummy configuration for testing purposes.
     pub fn dummy() -> Self {
-        Self {
-            socket_path: "/tmp/lanforge.sock".to_string(),
-            lan_iface: "eth0".to_string(),
-            ra_enabled: true,
-            ula_prefix: None,
-            dhcp_v4_enabled: true,
-            dhcp_v6_enabled: true,
-            dns_enabled: true,
-            dns_upstream: None,
-            db_path: "/tmp/leases.db".to_string(),
-            db_url: "sqlite:///tmp/leases.db".to_string(),
-            log_db_path: "/tmp/lanforge_logs.db".to_string(),
-            log_db_url: "sqlite:///tmp/lanforge_logs.db".to_string(),
-            tcp_port: None,
-            http_listen: None,
-            dot_listen: None,
-            dhcp_v4_range_size: 100,
-            dhcp_v6_pool_size: Some(100),
-            auth_password_hash: None,
-            tls_cert: None,
-            tls_key: None,
-            boot_dir: None,
-        }
+        Self::default()
     }
 }

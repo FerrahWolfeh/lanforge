@@ -269,6 +269,7 @@ impl Dhcpv6Server {
 
         self.add_dns_options(&mut reply);
         self.add_boot_options(&mut reply, identity);
+        self.add_custom_options(&mut reply);
         let mut ias = AssignedIAs::default();
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             ias.na.push(iana.id);
@@ -689,6 +690,7 @@ impl Dhcpv6Server {
         let mut reply = self.base_reply(msg, MessageType::Reply, client_duid);
         self.add_dns_options(&mut reply);
         self.add_boot_options(&mut reply, None);
+        self.add_custom_options(&mut reply);
         HandleResult::Reply(
             encode_msg(&reply, buf),
             peer,
@@ -822,14 +824,16 @@ impl Dhcpv6Server {
             .or_else(|| self.cfg.boot_file.clone());
 
         if let Some(file) = boot_file {
-            // For DHCPv6 HTTP Boot, we construct a URL.
-            // Constructing a reliable URL is tricky without knowing the server's own IP on this interface.
-            // We'll use a placeholder [::1] for now, or we can try to guess from the pool.
-            let server_ip = self
-                .cfg
-                .ula_prefix
-                .unwrap_or(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1));
-            let url = format!("http://[{server_ip}]:8080/boot/{file}");
+            let url = if file.starts_with("http://") || file.starts_with("https://") {
+                file
+            } else {
+                // For DHCPv6 HTTP Boot, we construct a URL.
+                let server_ip = self
+                    .cfg
+                    .ula_prefix
+                    .unwrap_or(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1));
+                format!("http://[{server_ip}]:8080/boot/{file}")
+            };
 
             // Option 59 (Bootfile URL)
             reply
@@ -838,6 +842,19 @@ impl Dhcpv6Server {
                     59.into(),
                     url.into_bytes(),
                 )));
+        }
+    }
+
+    fn add_custom_options(&self, reply: &mut Message) {
+        for (code, val) in &self.cfg.options {
+            if let Some(data) = crate::dhcp::options::parse_typed_option(val) {
+                reply
+                    .opts_mut()
+                    .insert(DhcpOption::Unknown(dhcproto::v6::UnknownOption::new(
+                        (*code).into(),
+                        data,
+                    )));
+            }
         }
     }
 
@@ -909,6 +926,7 @@ mod tests {
         context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState},
         device::{Device, Ipv6AddrOrSuffix, Origin},
     };
+    use std::collections::HashMap;
     use std::net::{Ipv6Addr, UdpSocket};
 
     fn dummy_server() -> Dhcpv6Server {
@@ -945,6 +963,7 @@ mod tests {
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
             boot_file: None,
+            options: HashMap::new(),
         };
         let pool = Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, 64);
         let server_duid = Duid::new(vec![
@@ -999,6 +1018,7 @@ mod tests {
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
             boot_file: None,
+            options: HashMap::new(),
         };
         let pool = Ipv6Pool::new(&Vec::new(), None, 64);
         let sock = UdpSocket::bind("::0:0").unwrap();
@@ -1245,6 +1265,7 @@ mod tests {
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
             boot_file: None,
+            options: HashMap::new(),
         };
         let pool = Ipv6Pool::new(&Vec::new(), Some(ula), 48);
         let sock = UdpSocket::bind("::0:0").unwrap();

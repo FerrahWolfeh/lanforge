@@ -117,7 +117,7 @@ impl Bootstrapper {
     }
 
     async fn init_device_table(cfg: &Config) -> Result<State> {
-        let db = LeaseDb::open(&cfg.db_url).await.map_err(|e| {
+        let db = LeaseDb::open(&cfg.database).await.map_err(|e| {
             error!("❌ Erro fatal abrindo leases DB: {e}");
             e
         })?;
@@ -127,7 +127,7 @@ impl Bootstrapper {
             State::new()
         });
 
-        info!("📦 Database loaded: {}", cfg.db_url);
+        info!("📦 Database loaded: {}", cfg.database.url);
         Self::reload_static_devices_into_state(&mut table, cfg);
 
         // Trigger early collision validation and logging
@@ -162,9 +162,9 @@ impl Bootstrapper {
         let interfaces = interfaces();
         interfaces
             .iter()
-            .find(|iface| iface.name == cfg.iface_lan)
+            .find(|iface| iface.name == cfg.system.iface)
             .map(|iface| iface.index)
-            .ok_or_else(|| anyhow::anyhow!("Interface '{}' not found", cfg.iface_lan))
+            .ok_or_else(|| anyhow::anyhow!("Interface '{}' not found", cfg.system.iface))
     }
 
     fn init_netlink() -> Result<(rtnetlink::Handle, NetlinkRawReceiver)> {
@@ -210,7 +210,7 @@ impl Bootstrapper {
         info!("╔══════════════════════════════════════════╗");
         info!("║         Lanforge Network Daemon          ║");
         info!("╠══════════════════════════════════════════╣");
-        info!("║  Interface : {:<27} ║", cfg.iface_lan);
+        info!("║  Interface : {:<27} ║", cfg.system.iface);
         if let Some(ll) = if_state.link_local {
             info!("║  Link-Local: {:<27} ║", ll);
         }

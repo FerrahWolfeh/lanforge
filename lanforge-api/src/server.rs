@@ -325,7 +325,7 @@ where
 
         if let CommandAction::Log { follow, n } = req.action {
             let n_lines = n.unwrap_or(100);
-            let history = if let Ok(db) = LogDb::open(&ctx.cfg.log_db_url).await {
+            let history = if let Ok(db) = LogDb::open(&ctx.cfg.database.log_url).await {
                 db.get_history(n_lines).await.unwrap_or_default()
             } else {
                 Vec::new()

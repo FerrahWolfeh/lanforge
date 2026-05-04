@@ -76,7 +76,7 @@ pub mod wire;
 mod tests;
 
 // Re-exports for convenience and compatibility
-pub use config::DnsConfig;
+pub use config::{DnsConfig, PrioritizedUpstream};
 #[cfg(feature = "dot")]
 pub use dot::DotService;
 pub use error::DnsError;

@@ -17,5 +17,6 @@
 //! event handling across all Lanforge services.
 
 pub mod identity;
+pub mod options;
 pub mod v4;
 pub mod v6;

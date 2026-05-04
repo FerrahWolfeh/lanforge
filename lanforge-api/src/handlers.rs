@@ -16,14 +16,16 @@ use lanforge_core::bus::{
 use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
 use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
+use lanforge_core::utils::auth::hash_password;
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
+use lanforge_db::log_engine::LogDb;
 use std::str::FromStr;
 
 use crate::api::{
-    DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DnsQueryResponse,
-    DnsStatsResponse, HostConfigEntry, HostsResponse, Ipv6Entry, LeaseInfo, NetworkStatus,
-    ResourcesStatus, Response, ServicesStatus, SimpleSuccess, StatusResponse, TopologyEntry,
-    TopologyResponse, WhoisResponse,
+    Capabilities, DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats,
+    DnsQueryResponse, DnsStatsResponse, Encoding, HostConfigEntry, HostsResponse, Ipv6Entry,
+    LeaseEntry, LeaseInfo, LeaseKind, LeasesResponse, NetworkStatus, ResourcesStatus, Response,
+    ServicesStatus, SimpleSuccess, StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse,
 };
 
 // Moved to lanforge-http
@@ -71,16 +73,18 @@ impl ClientContext {
             network: NetworkStatus::default(),
             resources: ResourcesStatus::default(),
             devices: DevicesStats::default(),
-            capabilities: crate::api::Capabilities {
-                encodings: vec![crate::api::Encoding::Json, crate::api::Encoding::Bincode],
+            capabilities: Capabilities {
+                encodings: vec![Encoding::Json, Encoding::Bincode],
                 compression: {
                     #[cfg(feature = "zstd")]
                     {
-                        vec![crate::api::Compression::None, crate::api::Compression::Zstd]
+                        vec![Compression::None, Compression::Zstd]
                     }
                     #[cfg(not(feature = "zstd"))]
                     {
-                        vec![crate::api::Compression::None]
+                        use crate::api::Compression;
+
+                        vec![Compression::None]
                     }
                 },
             },
@@ -220,7 +224,7 @@ impl ClientContext {
         status.services.mdns_prober.state = "active".to_string();
         status.services.iface_monitor.state = "online".to_string();
         status.services.control_api.state = "online".to_string();
-        if self.cfg.http_listen.is_some() {
+        if self.cfg.http_enabled {
             status.services.http_api = Some(crate::api::ServiceStatusInfo {
                 state: "online".to_string(),
             });
@@ -470,7 +474,7 @@ impl ClientContext {
 
             // Fetch history from DB
             let _history: Vec<LeaseHistoryEntry> =
-                if let Ok(db) = LeaseDb::open(&self.cfg.db_url).await {
+                if let Ok(db) = LeaseDb::open(&self.cfg.database).await {
                     db.get_lease_history(mac).await.unwrap_or_default()
                 } else {
                     Vec::new()
@@ -692,11 +696,11 @@ impl ClientContext {
 
             // DHCPv4
             if let IPv4State::Dynamic(lease) = &dev.v4 {
-                api_leases.push(crate::api::LeaseEntry {
+                api_leases.push(LeaseEntry {
                     mac: mac.clone(),
                     hostname: hostname.clone(),
                     address: lease.ip.to_string(),
-                    kind: crate::api::LeaseKind::V4,
+                    kind: LeaseKind::V4,
                     expires: format_iso8601(lease.expires),
                     remaining_secs: lease
                         .expires
@@ -709,11 +713,11 @@ impl ClientContext {
             // DHCPv6 IA_NA
             for v6 in &dev.v6 {
                 if let IPv6State::Dynamic(lease) = v6 {
-                    api_leases.push(crate::api::LeaseEntry {
+                    api_leases.push(LeaseEntry {
                         mac: mac.clone(),
                         hostname: hostname.clone(),
                         address: lease.ip.to_string(),
-                        kind: crate::api::LeaseKind::V6,
+                        kind: LeaseKind::V6,
                         expires: format_iso8601(lease.expires),
                         remaining_secs: lease
                             .expires
@@ -726,11 +730,11 @@ impl ClientContext {
 
             // DHCPv6 IA_PD (Prefix Delegation)
             for prefix in &dev.v6_prefixes {
-                api_leases.push(crate::api::LeaseEntry {
+                api_leases.push(LeaseEntry {
                     mac: mac.clone(),
                     hostname: hostname.clone(),
                     address: format!("{}/{}", prefix.prefix, prefix.len),
-                    kind: crate::api::LeaseKind::V6Prefix,
+                    kind: LeaseKind::V6Prefix,
                     expires: format_iso8601(prefix.expires),
                     remaining_secs: prefix
                         .expires
@@ -741,7 +745,7 @@ impl ClientContext {
             }
         }
 
-        Response::Leases(crate::api::LeasesResponse { leases: api_leases })
+        Response::Leases(LeasesResponse { leases: api_leases })
     }
 
     /// Renews a lease (ForceRenew).
@@ -997,12 +1001,11 @@ impl ClientContext {
     /// Dummy handler for log (streaming is handled in server.rs)
     pub(crate) async fn handle_log(&self, _follow: bool, n: Option<usize>) -> Response {
         let n_lines = n.unwrap_or(100);
-        let history_len =
-            if let Ok(db) = lanforge_db::log_engine::LogDb::open(&self.cfg.log_db_url).await {
-                db.get_history(n_lines).await.map(|h| h.len()).unwrap_or(0)
-            } else {
-                0
-            };
+        let history_len = if let Ok(db) = LogDb::open(&self.cfg.log_db_url).await {
+            db.get_history(n_lines).await.map(|h| h.len()).unwrap_or(0)
+        } else {
+            0
+        };
 
         Response::Success(SimpleSuccess {
             message: format!("Starting event stream ({} historical)...", history_len),
@@ -1011,7 +1014,7 @@ impl ClientContext {
 
     /// Sets the API password by hashing it and publishing an update event.
     pub(crate) async fn handle_config_set_password(&self, password: String) -> Response {
-        let password_hash = lanforge_core::utils::auth::hash_password(&password);
+        let password_hash = hash_password(&password);
 
         let _ = self
             .ctx

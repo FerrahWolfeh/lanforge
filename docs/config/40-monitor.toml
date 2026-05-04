@@ -1,0 +1,19 @@
+# Lanforge Network Monitor Configuration
+# Handles interface monitoring, ARP/NDP scanning, and stale device detection.
+
+[monitor]
+# IMPORTANT: Setting enabled to false saves memory but CRIPPLES discovery.
+# Lanforge will NOT be able to passively detect new IPv6 devices or update 
+# 'last_seen' timers for devices that don't use DHCP.
+enabled = true
+
+# Pacing between ARP/NDP probes during a subnet scan (milliseconds).
+# Lower values make scans faster but more CPU-intensive.
+scan_pacing_ms = 10
+
+# Batching interval for neighbor events (milliseconds).
+batch_interval_ms = 100
+
+# After this duration, inactive devices are marked as offline.
+# This also affects garbage collection and stale lease cleanup.
+stale_timeout_secs = 3600

@@ -1,0 +1,14 @@
+# Lanforge TFTP Configuration
+# Lightweight TFTP server specifically for PXE/Network boot orchestration.
+
+[tftp]
+enabled = true
+
+# The directory to serve files from.
+root_dir = "/var/lib/lanforge/tftp"
+
+# UDP port to listen on (Default: 69).
+port = 69
+
+# Whether to allow overwriting files (not recommended for PXE).
+read_only = true

@@ -61,8 +61,8 @@ use lanforge_core::service::{AsyncService, ServiceControl};
     base_backoff = 2,
     max_backoff = 30,
     describe = format!(
-        "DHCPv4 on {} (range {}–{}, lease {}s)",
-        self.cfg.iface, self.cfg.range_start, self.cfg.range_end, self.cfg.lease_time
+        "DHCPv4 on {} ({} pools, lease {}s)",
+        self.cfg.iface, self.cfg.get_effective_pools().len(), self.cfg.lease_time
     )
 )]
 pub struct Dhcpv4Service {

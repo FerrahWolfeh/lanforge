@@ -1,13 +1,20 @@
+use lanforge::bootstrap::Bootstrapper;
 use lanforge::config::Config;
-use lanforge_api::server::handle_client;
-use lanforge_core::bus::{LanforgeEvent, StorageEvent};
+use lanforge::config::toml::StaticDeviceCfg;
+use lanforge_api::server::{ClientContext, handle_client};
+use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_core::device::Origin;
 use lanforge_core::identifiers::MacAddr;
+use lanforge_core::service::ServiceControl;
+use lanforge_db::config::DatabaseConfig;
 use lanforge_db::worker::DbWorker;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
+use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_full_db_reset_chain() {
@@ -24,12 +31,14 @@ async fn test_full_db_reset_chain() {
     let mac_static = MacAddr::parse("00:00:00:00:00:02").unwrap();
 
     let mut cfg = Config {
-        db_url: db_url.clone(),
-        log_db_url: log_db_url.clone(),
-        leases_db: db_path.to_string_lossy().to_string(),
-        ..Default::default()
+        database: DatabaseConfig {
+            url: db_url.clone(),
+            log_url: log_db_url.clone(),
+            ..Default::default()
+        },
+        ..Config::default()
     };
-    cfg.devices.push(lanforge::config::toml::StaticDeviceCfg {
+    cfg.devices.push(StaticDeviceCfg {
         mac: mac_static.to_string(),
         hostname: "static-host".to_string(),
         duid: None,
@@ -39,14 +48,14 @@ async fn test_full_db_reset_chain() {
     });
     let cfg = Arc::new(cfg);
 
-    let bus = Arc::new(lanforge_core::bus::EventBus::new());
+    let bus = Arc::new(EventBus::new());
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
 
     // 2. Add some initial state (dynamic and static)
     use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate};
     let _ = ctx.apply(DeviceUpdate::ArpSeen {
         mac: mac_dyn,
-        ip: "192.168.1.10".parse::<std::net::Ipv4Addr>().unwrap(),
+        ip: "192.168.1.10".parse::<Ipv4Addr>().unwrap(),
         is_active: true,
     });
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
@@ -54,17 +63,24 @@ async fn test_full_db_reset_chain() {
         update: CliHostUpdate {
             hostname: FieldUpdate::Set("static-host".to_string()),
             duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::Set("192.168.1.20".parse::<std::net::Ipv4Addr>().unwrap()),
+            v4_static: FieldUpdate::Set("192.168.1.20".parse::<Ipv4Addr>().unwrap()),
             v6_suffix: FieldUpdate::NoChange,
-            origin: lanforge_core::device::Origin::Cli,
+            origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
         },
     });
 
     // 3. Spawn DbWorker
     let ctx_db = ctx.clone();
-    let mut db_worker = DbWorker::new(db_url, log_db_url, ctx_db);
-    let ctrl = lanforge_core::service::ServiceControl::new("db", ctx.clone());
+    let mut db_worker = DbWorker::new(
+        DatabaseConfig {
+            url: db_url,
+            log_url: log_db_url,
+            ..Default::default()
+        },
+        ctx_db,
+    );
+    let ctrl = ServiceControl::new("db", ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
         let _ = db_worker.run(ctrl).await;
@@ -77,7 +93,7 @@ async fn test_full_db_reset_chain() {
     let _ = ctx
         .bus()
         .publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // 4. Setup Mock Client and API handler
     let (client, server) = duplex(1024);
@@ -85,7 +101,7 @@ async fn test_full_db_reset_chain() {
     let api_cfg = Arc::new(cfg.to_api_config());
 
     // We need a dummy ClientContext
-    let client_ctx = lanforge_api::server::ClientContext {
+    let client_ctx = ClientContext {
         ctx: ctx_api,
         cfg: api_cfg,
         uptime_secs: 0,
@@ -112,9 +128,7 @@ async fn test_full_db_reset_chain() {
             ) {
                 ctx_loop.reset();
                 let mut state = ctx_loop.write();
-                lanforge::bootstrap::Bootstrapper::reload_static_devices_into_state(
-                    &mut state, &cfg_loop,
-                );
+                Bootstrapper::reload_static_devices_into_state(&mut state, &cfg_loop);
                 break;
             }
         }
@@ -136,7 +150,7 @@ async fn test_full_db_reset_chain() {
 
     // 7. Verify result
     // Wait for the chain to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    sleep(Duration::from_millis(1000)).await;
 
     let state = ctx.read();
     assert!(

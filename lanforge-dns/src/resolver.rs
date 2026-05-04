@@ -99,7 +99,12 @@ impl<'a> LocalResolver<'a> {
                 .replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "-")
         };
 
-        let fqdn = format!("{}.{}.", host, self.cfg.search_domain);
+        let domain = self
+            .cfg
+            .search_domains
+            .first()
+            .map_or("lan", |d| d.as_str());
+        let fqdn = format!("{host}.{domain}.");
         let ptr_name = Name::from_str(&fqdn).unwrap_or_else(|_| Name::root());
 
         let record = Record::from_rdata(name, self.cfg.ttl, RData::PTR(PTR(ptr_name)));

@@ -19,7 +19,7 @@ use lanforge_core::{
     error::CoreError,
 };
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -68,7 +68,7 @@ pub struct RegisterRequest {
     max_backoff = 60,
     describe = format!(
         "HTTP API on {}",
-        self.cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080")
+        self.cfg.http_listen.map_or_else(|| "0.0.0.0:8080".to_string(), |a| a.to_string())
     )
 )]
 pub struct HttpService {
@@ -87,10 +87,9 @@ impl AsyncService for HttpService {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
 
-        let listen_addr = cfg.http_listen.as_deref().unwrap_or("0.0.0.0:8080");
-        let addr: SocketAddr = listen_addr.parse().map_err(|e| {
-            CoreError::Generic(format!("Invalid http_listen address '{listen_addr}': {e}"))
-        })?;
+        let addr = cfg
+            .http_listen
+            .unwrap_or_else(|| "0.0.0.0:8080".parse().unwrap());
 
         let state = AppState {
             cfg: cfg.clone(),
@@ -116,7 +115,9 @@ impl AsyncService for HttpService {
 
         #[cfg(feature = "doh")]
         {
-            app = app.route("/dns-query", get(handle_dns_query).post(handle_dns_query));
+            if cfg.doh_enabled {
+                app = app.route("/dns-query", get(handle_dns_query).post(handle_dns_query));
+            }
         }
 
         if cfg.auth_password_hash.is_some() {
@@ -130,7 +131,10 @@ impl AsyncService for HttpService {
 
         let app = app.with_state(state);
 
-        let maybe_tls_config = if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
+        let maybe_tls_config = if cfg.https_enabled
+            && let Some(cert) = &cfg.tls_cert
+            && let Some(key) = &cfg.tls_key
+        {
             match lanforge_dns::tls_utils::load_tls_config(cert, key) {
                 Ok(config) => Some(config),
                 Err(e) => {
@@ -142,6 +146,11 @@ impl AsyncService for HttpService {
                 }
             }
         } else {
+            if cfg.https_enabled && (cfg.tls_cert.is_none() || cfg.tls_key.is_none()) {
+                tracing::warn!(
+                    "HTTPS: Enabled in config but tls_cert/tls_key paths are missing. Falling back to HTTP."
+                );
+            }
             None
         };
 

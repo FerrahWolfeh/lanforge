@@ -2301,6 +2301,7 @@ version = "0.11.0"
 dependencies = [
  "dhcproto",
  "futures",
+ "hex",
  "hickory-proto 0.26.0",
  "lanforge-core",
  "lanforge-macros",
@@ -2326,6 +2327,7 @@ dependencies = [
  "futures",
  "lanforge-core",
  "lanforge-macros",
+ "serde",
  "smallvec",
  "smol_str",
  "thiserror 2.0.18",

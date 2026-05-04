@@ -131,6 +131,30 @@ pub struct CliArgs {
     #[arg(short = 'p', long, env = "LANFORGE_DNS_PORT")]
     pub dns_port: Option<u16>,
 
+    /// DNS-over-TLS listen address (e.g. 0.0.0.0:853).
+    #[arg(long, env = "LANFORGE_DNS_DOT_LISTEN")]
+    pub dns_dot_listen: Option<String>,
+
+    /// Path to the TLS certificate for DNS-over-TLS.
+    #[arg(long, env = "LANFORGE_DNS_TLS_CERT")]
+    pub dns_tls_cert: Option<String>,
+
+    /// Path to the TLS private key for DNS-over-TLS.
+    #[arg(long, env = "LANFORGE_DNS_TLS_KEY")]
+    pub dns_tls_key: Option<String>,
+
+    /// Enable or disable the DNS adblocker.
+    #[arg(long, env = "LANFORGE_DNS_ADBLOCK")]
+    pub dns_adblock_enabled: Option<bool>,
+
+    /// Default TTL for locally generated DNS records.
+    #[arg(long, env = "LANFORGE_DNS_TTL")]
+    pub dns_ttl: Option<u32>,
+
+    /// Threshold in days to hide inactive devices from DNS.
+    #[arg(long, env = "LANFORGE_DNS_LAST_SEEN")]
+    pub dns_last_seen: Option<u32>,
+
     // ── API / Control ─────────────────────────────────────────────────────
     /// Path to the UDS control socket.
     #[arg(long, env = "LANFORGE_CONTROL_SOCKET")]

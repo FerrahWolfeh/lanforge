@@ -31,6 +31,15 @@ pub struct UpstreamTarget {
     pub hostname: Option<String>,
 }
 
+/// An upstream target with an associated priority for failover/load-balancing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrioritizedUpstream {
+    /// The target resolver.
+    pub target: UpstreamTarget,
+    /// Priority (lower is higher priority).
+    pub priority: u32,
+}
+
 impl FromStr for UpstreamTarget {
     type Err = String;
 
@@ -91,37 +100,45 @@ pub struct DnsConfig {
     pub enabled: bool,
     /// Socket address to listen on for both UDP and TCP (e.g., `0.0.0.0:53`).
     pub listen: SocketAddr,
-    /// Upstream resolver target (IP, protocol, hostname).
-    /// If `None`, non-local queries return `REFUSED`.
-    pub upstream: Option<UpstreamTarget>,
-    /// Local search domain suffix (e.g., `"lan"`). Queries for `host.lan`
-    /// are resolved locally; others are forwarded upstream.
-    pub search_domain: String,
-    /// ULA (Unique Local Address) prefix for IPv6 resolution (e.g., `fd00::`).
+    /// Upstream resolver targets with priorities.
+    /// If empty, non-local queries return `REFUSED`.
+    pub upstreams: Vec<PrioritizedUpstream>,
+    /// Local search domain suffixes (e.g., `["lan", "home.arpa"]`). Queries for
+    /// these domains are resolved locally; others are forwarded upstream.
+    pub search_domains: Vec<String>,
+
     /// Used to construct full addresses from 8-byte suffixes.
     pub ula_prefix: Option<Ipv6Addr>,
     /// GUA (Global Unicast Address) prefix for IPv6 resolution (e.g., `2001:db8::`).
     pub gua_prefix: Option<Ipv6Addr>,
     /// Default TTL (in seconds) for locally generated DNS records.
     pub ttl: u32,
+
     /// Pre-parsed search domain labels for zero-allocation hostname matching.
     /// Default: `[[b"lan"]]`.
     #[serde(skip)]
     pub multi_search_labels: Vec<Vec<Vec<u8>>>,
+
     #[cfg(feature = "adblock")]
     /// Whether the micro-adblocker is enabled.
     pub adblock_enabled: bool,
     #[cfg(feature = "adblock")]
     /// List of URLs to fetch blocklists from.
     pub adblock_urls: Vec<String>,
+
     /// How many days a device can be offline before its DNS entry is hidden.
     pub last_seen_threshold_days: u32,
 
     /// Optional socket address to listen for DNS-over-TLS (`DoT`).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dot_listen: Option<SocketAddr>,
+    /// Whether `DoT` is explicitly enabled.
+    pub dot_enabled: bool,
     /// Path to the TLS certificate for `DoT`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_cert: Option<String>,
     /// Path to the TLS private key for `DoT`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_key: Option<String>,
 }
 
@@ -130,8 +147,8 @@ impl Default for DnsConfig {
         Self {
             enabled: true,
             listen: "0.0.0.0:53".parse().unwrap(),
-            upstream: None,
-            search_domain: "lan".into(),
+            upstreams: Vec::new(),
+            search_domains: vec!["lan".to_string()],
             ula_prefix: None,
             gua_prefix: None,
             ttl: 60,
@@ -142,6 +159,7 @@ impl Default for DnsConfig {
             adblock_urls: Vec::new(),
             last_seen_threshold_days: 7,
             dot_listen: None,
+            dot_enabled: false,
             tls_cert: None,
             tls_key: None,
         }

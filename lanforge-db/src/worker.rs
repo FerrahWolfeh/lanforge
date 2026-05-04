@@ -39,11 +39,10 @@ use crate::log_engine::LogDb;
     retries = 5,
     base_backoff = 1,
     max_backoff = 30,
-    describe = format!("Database Worker ({})", self.db_url)
+    describe = format!("Database Worker ({})", self.cfg.url)
 )]
 pub struct DbWorker {
-    db_url: String,
-    log_db_url: String,
+    cfg: crate::config::DatabaseConfig,
     ctx: LanforgeContext,
     dirty: bool,
     dirty_macs: HashSet<MacAddr>,
@@ -52,10 +51,9 @@ pub struct DbWorker {
 
 impl DbWorker {
     /// Creates a new `DbWorker` for the specified databases.
-    pub fn new(db_url: String, log_db_url: String, ctx: LanforgeContext) -> Self {
+    pub fn new(cfg: crate::config::DatabaseConfig, ctx: LanforgeContext) -> Self {
         Self {
-            db_url,
-            log_db_url,
+            cfg,
             ctx,
             dirty: false,
             dirty_macs: HashSet::new(),
@@ -135,18 +133,18 @@ impl DbWorker {
 
 impl AsyncService for DbWorker {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        let db = LeaseDb::open(&self.db_url).await.map_err(|e| {
+        let db = LeaseDb::open(&self.cfg).await.map_err(|e| {
             error!("Failed to open lease database: {e}");
             CoreError::Generic(e.to_string())
         })?;
 
-        let log_db = LogDb::open(&self.log_db_url).await.map_err(|e| {
-            error!("Failed to open log database {}: {e}", self.log_db_url);
+        let log_db = LogDb::open(&self.cfg.log_url).await.map_err(|e| {
+            error!("Failed to open log database {}: {e}", self.cfg.log_url);
             CoreError::Generic(e.to_string())
         })?;
 
         let mut bus_rx = self.ctx.bus().subscribe();
-        let mut flush_interval: Interval = interval(Duration::from_secs(5));
+        let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
 
         info!("Database worker started");
         self.ctx.set_db_ready(true);

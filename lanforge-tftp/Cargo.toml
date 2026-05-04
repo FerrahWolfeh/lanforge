@@ -8,6 +8,7 @@ bytes = "1.11.1"
 futures = "0.3.32"
 lanforge-core = { version = "0.11.0", path = "../lanforge-core" }
 lanforge-macros = { version = "0.1.0", path = "../lanforge-macros" }
+serde = { version = "1.0.228", features = ["derive"] }
 smallvec = "1.15.1"
 smol_str = "0.3.6"
 thiserror = "2.0.18"

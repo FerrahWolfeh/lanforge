@@ -60,8 +60,8 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
 
     let rl = cfg.effective_router_lifetime().as_secs().min(9000) as u16;
     p.extend(rl.to_be_bytes());
-    p.extend(0u32.to_be_bytes()); // reachable_time  (0 = unspecified)
-    p.extend(0u32.to_be_bytes()); // retrans_timer   (0 = unspecified)
+    p.extend(cfg.reachable_time.to_be_bytes());
+    p.extend(cfg.retrans_timer.to_be_bytes());
 
     // ── Option 1: Source Link-Layer Address (RFC 4861 §4.6.1) ─────────────
     // Mandatory in multicast RAs; allows clients to update their NDP cache.
@@ -301,20 +301,18 @@ mod tests {
     #[test]
     fn config_validation_router_lifetime() {
         let mut cfg = RaConfig {
-            max_interval: Duration::from_secs(100),
+            lifetime: Some(Duration::from_secs(50)),
             ..Default::default()
         };
-        // lifetime < max_interval → inválido
-        cfg.router_lifetime = Some(Duration::from_secs(50));
-        assert!(cfg.validate().is_err());
-        // 0 sempre é válido
-        cfg.router_lifetime = Some(Duration::from_secs(0));
-        assert!(cfg.validate().is_ok());
-        // acima de 9000 → inválido
-        cfg.router_lifetime = Some(Duration::from_secs(9001));
-        assert!(cfg.validate().is_err());
-        // None → calculado como 3 × max_interval = 300s → válido
-        cfg.router_lifetime = None;
+        assert!(cfg.validate().is_err()); // too low
+
+        cfg.lifetime = Some(Duration::from_secs(0));
+        assert!(cfg.validate().is_ok()); // zero is valid (not a default router)
+
+        cfg.lifetime = Some(Duration::from_secs(9001));
+        assert!(cfg.validate().is_err()); // too high
+
+        cfg.lifetime = None;
         assert!(cfg.validate().is_ok());
     }
 

@@ -29,16 +29,23 @@ pub mod toml;
 pub use args::CliArgs;
 #[cfg(feature = "debug-commands")]
 pub use args::Command;
-use lanforge_api::config::ApiConfig;
-use lanforge_dns::DnsConfig;
+use lanforge_api::config::{ApiConfig, HttpConfig};
+use lanforge_core::device::Ipv6AddrOrSuffix;
+use lanforge_db::config::DatabaseConfig;
+use lanforge_dns::{DnsConfig, PrioritizedUpstream};
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
 use lanforge_network::dhcp::v6::config::Dhcpv6Config;
-use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig};
+use lanforge_network::mdns::MdnsConfig;
+use lanforge_network::ndp::config::MonitorConfig;
+use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
+use lanforge_tftp::config::TftpConfig;
 pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
 
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+
+use crate::config::toml::SystemCfg;
 
 // ---------------------------------------------------------------------------
 // Config unificada (resultado do merge TOML + CLI overrides)
@@ -54,18 +61,12 @@ pub struct Config {
     // general
     #[cfg(feature = "debug-commands")]
     pub command: Command,
-    pub iface_lan: String,
-    pub leases_db: String,
-    pub db_url: String,
-    pub fallback_mins: u64,
-    pub control_socket: String,
-    pub log_db: String,
-    pub log_db_url: String,
-    pub boot_dir: Option<String>,
+    pub system: SystemCfg,
+    pub database: DatabaseConfig,
 
     // RA
     pub ra_enabled: bool,
-    pub ra_toml: lanforge_network::ra::RaServiceConfig,
+    pub ra_toml: RaServiceConfig,
 
     // DHCPv4
     pub dhcpv4_enabled: bool,
@@ -77,21 +78,22 @@ pub struct Config {
 
     // DNS
     pub dns_enabled: bool,
-    pub dns_toml: lanforge_dns::DnsConfig,
+    pub dns_toml: DnsConfig,
     pub search_domains: Vec<String>,
+
+    // Monitor & mDNS
+    pub monitor_toml: MonitorConfig,
+    pub mdns_toml: MdnsConfig,
+
+    // API, HTTP & TFTP
+    pub api_toml: ApiConfig,
+    pub http_toml: HttpConfig,
+    pub tftp_toml: TftpConfig,
 
     // static devices
     pub devices: Vec<StaticDeviceCfg>,
     pub devices_file: Option<String>,
 
-    pub dhcpv4_port: u16,
-    pub dhcpv6_port: u16,
-    pub dns_port: Option<u16>,
-    pub api_port: Option<u16>,
-    pub http_listen: Option<String>,
-    pub auth_toml: toml::AuthCfg,
-    pub http_toml: toml::HttpCfg,
-    pub tftp_toml: toml::TftpCfg,
     pub config_path: String,
 }
 
@@ -100,23 +102,60 @@ impl Config {
     pub fn load() -> Self {
         let cli = CliArgs::parse();
 
-        // toml::load_toml instead of local if we were explicit, but we imported `load_toml`
-        let toml_cfg = load_toml(&cli.config);
+        // 1. Load main config
+        let mut toml_cfg = load_toml(&cli.config);
+
+        // 2. Load modular configs from /etc/lanforge/conf.d/ or same dir as main config
+        let config_dir = Path::new(&cli.config)
+            .parent()
+            .unwrap_or(Path::new("/etc/lanforge"));
+
+        // We look for files like "dhcp.toml", "dns.toml", etc.
+        let service_files = [
+            ("database.toml", "database"),
+            ("ra.toml", "ra"),
+            ("dhcp.toml", "dhcp"),
+            ("dns.toml", "dns"),
+            ("monitor.toml", "monitor"),
+            ("mdns.toml", "mdns"),
+            ("api.toml", "api"),
+            ("http.toml", "http"),
+            ("tftp.toml", "tftp"),
+        ];
+
+        for (filename, _key) in service_files {
+            let path = config_dir.join(filename);
+            if path.exists() {
+                let extra = load_toml(path.to_str().unwrap());
+                // Simple merge: if the service-specific file exists, it replaces that section
+                match filename {
+                    "database.toml" => toml_cfg.database = extra.database,
+                    "ra.toml" => toml_cfg.ra = extra.ra,
+                    "dhcp.toml" => toml_cfg.dhcp = extra.dhcp,
+                    "dns.toml" => toml_cfg.dns = extra.dns,
+                    "monitor.toml" => toml_cfg.monitor = extra.monitor,
+                    "mdns.toml" => toml_cfg.mdns = extra.mdns,
+                    "api.toml" => toml_cfg.api = extra.api,
+                    "http.toml" => toml_cfg.http = extra.http,
+                    "tftp.toml" => toml_cfg.tftp = extra.tftp,
+                    _ => {}
+                }
+            }
+        }
 
         let search_domains = {
             let mut domains = Vec::new();
-            // 1. Unified search_domains from [general]
-            if let Some(ref d) = toml_cfg.general.search_domains {
-                for dom in d {
-                    if !domains.contains(dom) {
-                        domains.push(dom.clone());
-                    }
+            // 1. Unified search_domains from [system]
+            for dom in &toml_cfg.system.search_domains {
+                if !domains.contains(dom) {
+                    domains.push(dom.clone());
                 }
             }
-            // 2. Legacy search_domain from [dns] (if not default "lan")
-            if toml_cfg.dns.search_domain != "lan" && !domains.contains(&toml_cfg.dns.search_domain)
-            {
-                domains.push(toml_cfg.dns.search_domain.clone());
+            // 2. search_domains from [dns]
+            for dom in &toml_cfg.dns.search_domains {
+                if !domains.contains(dom) {
+                    domains.push(dom.clone());
+                }
             }
             // 3. Legacy domain_name from [dhcp.v4]
             if let Some(ref d) = toml_cfg.dhcp.v4.domain_name
@@ -134,39 +173,29 @@ impl Config {
         Self {
             #[cfg(feature = "debug-commands")]
             command: cli.command.unwrap_or(Command::Run { only: None }),
-            iface_lan: cli
-                .iface_lan
-                .unwrap_or_else(|| toml_cfg.general.iface_lan.clone()),
-            leases_db: cli
-                .db_path
-                .unwrap_or_else(|| toml_cfg.general.leases_db.clone()),
-            db_url: if let Some(url) = cli.db_url {
-                url
-            } else {
-                toml_cfg.general.get_db_url()
+            system: {
+                let mut s = toml_cfg.system;
+                if let Some(ref iface) = cli.iface_lan {
+                    s.iface = iface.clone();
+                }
+                s
             },
-            fallback_mins: cli.fallback_mins.unwrap_or(toml_cfg.general.fallback_mins),
-            control_socket: cli
-                .control_socket
-                .unwrap_or_else(|| toml_cfg.general.control_socket.clone()),
-            log_db: cli
-                .log_db
-                .unwrap_or_else(|| toml_cfg.general.log_db.clone()),
-            log_db_url: if let Some(url) = cli.log_db_url {
-                url
-            } else {
-                toml_cfg.general.get_log_db_url()
+            database: {
+                let mut db = toml_cfg.database;
+                if let Some(ref url) = cli.db_url {
+                    db.url = url.clone();
+                }
+                db
             },
-            boot_dir: toml_cfg.general.boot_dir.clone(),
 
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: {
                 let mut r = toml_cfg.ra;
                 if let Some(managed) = cli.ra_managed {
-                    r.managed = managed;
+                    r.managed = Some(managed);
                 }
                 if let Some(other) = cli.ra_other_config {
-                    r.other_config = other;
+                    r.other_config = Some(other);
                 }
                 if let Some(max_interval) = cli.ra_max_interval {
                     r.max_interval = max_interval;
@@ -178,10 +207,10 @@ impl Config {
             dhcpv4_toml: {
                 let mut d = toml_cfg.dhcp.v4;
                 if let Some(start) = cli.dhcpv4_range_start {
-                    d.range_start = start;
+                    d.range_start = Some(start);
                 }
                 if let Some(end) = cli.dhcpv4_range_end {
-                    d.range_end = end;
+                    d.range_end = Some(end);
                 }
                 if let Some(lt) = cli.dhcpv4_lease_time {
                     d.lease_time = lt;
@@ -203,26 +232,45 @@ impl Config {
                 if let Some(upstream) = cli.dns_upstream
                     && let Ok(target) = upstream.parse()
                 {
-                    d.upstream = Some(target);
+                    d.upstreams = vec![PrioritizedUpstream { target, priority: 1 }];
+                }
+                if let Some(port) = cli.dns_port {
+                    d.listen.set_port(port);
+                }
+                if let Some(dot_listen) = cli.dns_dot_listen
+                    && let Ok(addr) = dot_listen.parse()
+                {
+                    d.dot_listen = Some(addr);
+                }
+                if let Some(cert) = cli.dns_tls_cert {
+                    d.tls_cert = Some(cert);
+                }
+                if let Some(key) = cli.dns_tls_key {
+                    d.tls_key = Some(key);
+                }
+                #[cfg(feature = "adblock")]
+                if let Some(adblock) = cli.dns_adblock_enabled {
+                    d.adblock_enabled = adblock;
+                }
+                if let Some(ttl) = cli.dns_ttl {
+                    d.ttl = ttl;
+                }
+                if let Some(threshold) = cli.dns_last_seen {
+                    d.last_seen_threshold_days = threshold;
                 }
                 d
             },
             search_domains,
 
+            monitor_toml: toml_cfg.monitor,
+            mdns_toml: toml_cfg.mdns,
+            api_toml: toml_cfg.api,
+            http_toml: toml_cfg.http,
+            tftp_toml: toml_cfg.tftp,
+
             devices: toml_cfg.devices,
             devices_file: cli.devices_file,
 
-            dhcpv4_port: cli.dhcpv4_port.unwrap_or(67),
-            dhcpv6_port: cli.dhcpv6_port.unwrap_or(547),
-            dns_port: cli.dns_port,
-            api_port: cli.control_port,
-            http_listen: cli
-                .http_listen
-                .or(toml_cfg.general.http_listen)
-                .or(toml_cfg.http.listen.clone()),
-            auth_toml: toml_cfg.auth,
-            http_toml: toml_cfg.http,
-            tftp_toml: toml_cfg.tftp,
             config_path: cli.config,
         }
     }
@@ -237,10 +285,14 @@ impl Config {
 
     /// Builds an `RaConfig` from the merged configuration.
     pub fn to_ra_config(&self) -> RaConfig {
-        let mut cfg = self.ra_toml.to_ra_config(self.iface_lan.clone());
+        let mut cfg = self.ra_toml.to_ra_config(self.system.iface.clone());
 
-        // Overrides
-        cfg.managed = self.ra_toml.managed; // Should be handled by to_ra_config but for safety
+        // Intelligent Defaults for RA flags:
+        // If managed/other are not explicitly configured, derive from DHCPv6 presence
+        let has_v6_pools = !self.dhcpv6_toml.pools.is_empty();
+
+        cfg.managed = self.ra_toml.managed.unwrap_or(has_v6_pools);
+        cfg.other_config = self.ra_toml.other_config.unwrap_or(has_v6_pools);
 
         // Ensure at least one prefix exists if none configured
         if cfg.prefixes.is_empty() {
@@ -264,9 +316,8 @@ impl Config {
 
         // Injected fields
         cfg.enabled = self.dhcpv4_enabled;
-        cfg.iface = self.iface_lan.clone();
+        cfg.iface = self.system.iface.clone();
         cfg.server_id = cfg.router; // Use router IP as server ID by default
-        cfg.port = self.dhcpv4_port;
 
         // Option 15 & 119
         if cfg.domain_name.is_none() {
@@ -283,8 +334,7 @@ impl Config {
 
         // Injected fields
         cfg.enabled = self.dhcpv6_enabled;
-        cfg.iface = self.iface_lan.clone();
-        cfg.port = self.dhcpv6_port;
+        cfg.iface = self.system.iface.clone();
 
         // Prefix detection
         if let Some(p) = self.ra_toml.prefixes.iter().find(|p| {
@@ -300,9 +350,9 @@ impl Config {
 
         // DNS Servers
         if cfg.dns_servers.is_empty() {
-            cfg.dns_servers = self.dns_toml.upstream.as_ref().map_or_else(
+            cfg.dns_servers = self.dns_toml.upstreams.first().map_or_else(
                 || cfg.ula_prefix.map(|ip| vec![ip]).unwrap_or_default(),
-                |target| match target.addr {
+                |u| match u.target.addr {
                     SocketAddr::V6(v6) => vec![*v6.ip()],
                     SocketAddr::V4(_) => vec![],
                 },
@@ -322,8 +372,13 @@ impl Config {
 
         // Overrides
         cfg.enabled = self.dns_enabled;
-        if let Some(p) = self.dns_port {
-            cfg.listen.set_port(p);
+
+        // TLS Inheritance
+        if cfg.tls_cert.is_none() {
+            cfg.tls_cert = self.system.tls_cert.clone();
+        }
+        if cfg.tls_key.is_none() {
+            cfg.tls_key = self.system.tls_key.clone();
         }
 
         // Search labels
@@ -353,61 +408,86 @@ impl Config {
         let auth_password_hash = std::fs::read_to_string(self.get_password_hash_path())
             .map(|s| s.trim().to_string())
             .ok()
-            .or_else(|| self.auth_toml.password_hash.clone());
+            .or_else(|| self.api_toml.auth_password_hash.clone());
 
-        ApiConfig {
-            socket_path: self.control_socket.clone(),
-            lan_iface: self.iface_lan.clone(),
-            ra_enabled: self.ra_enabled,
-            ula_prefix: self.ra_toml.prefixes.iter().find_map(|p| {
-                if let PrefixSource::Static(addr) = p.source {
-                    Some(addr.to_string())
-                } else {
-                    None
+        let mut cfg = self.api_toml.clone();
+        cfg.auth_password_hash = auth_password_hash;
+        cfg.database = self.database.clone();
+        cfg.http_enabled = self.http_toml.enabled;
+        cfg.http_listen = Some(self.http_toml.listen);
+
+        // Reporting fields
+        cfg.db_url = self.database.url.clone();
+        cfg.log_db_url = self.database.log_url.clone();
+        cfg.db_path = if self.database.url.starts_with("sqlite://") {
+            self.database
+                .url
+                .strip_prefix("sqlite://")
+                .unwrap_or(&self.database.url)
+                .to_string()
+        } else {
+            self.database.url.clone()
+        };
+        cfg.lan_iface = self.system.iface.clone();
+        cfg.ula_prefix = if !self.system.target_prefix.starts_with("fe80") {
+            Some(self.system.target_prefix.clone())
+        } else {
+            None
+        };
+        cfg.ra_enabled = self.ra_enabled;
+        cfg.dhcp_v4_enabled = self.dhcpv4_enabled;
+        cfg.dhcp_v4_range_size = self
+            .dhcpv4_toml
+            .pools
+            .iter()
+            .map(|p| {
+                let start = u32::from(p.range_start);
+                let end = u32::from(p.range_end);
+                end.saturating_sub(start).saturating_add(1)
+            })
+            .sum();
+        cfg.dhcp_v6_enabled = self.dhcpv6_enabled;
+        cfg.dhcp_v6_pool_size = self
+            .dhcpv6_toml
+            .pools
+            .iter()
+            .map(|p| match (&p.range_start, &p.range_end) {
+                (Some(Ipv6AddrOrSuffix::Full(s)), Some(Ipv6AddrOrSuffix::Full(e))) => {
+                    let start = u128::from_be_bytes(s.octets());
+                    let end = u128::from_be_bytes(e.octets());
+                    Some(end.saturating_sub(start).saturating_add(1) as u64)
                 }
-            }),
-            dhcp_v4_enabled: self.dhcpv4_enabled,
-            dhcp_v6_enabled: self.dhcpv6_enabled,
-            dns_enabled: self.dns_enabled,
-            dns_upstream: self.dns_toml.upstream.as_ref().map(|u| u.clone().into()),
-            db_path: self.leases_db.clone(),
-            db_url: self.db_url.clone(),
-            log_db_path: self.log_db.clone(),
-            log_db_url: self.log_db_url.clone(),
-            tcp_port: self.api_port,
-            http_listen: self.http_listen.clone(),
-            dot_listen: self.dns_toml.dot_listen.map(|addr| addr.to_string()),
-            dhcp_v4_range_size: {
-                let v4 = self.to_dhcpv4_config();
-                u32::from(v4.range_end) - u32::from(v4.range_start) + 1
-            },
-            dhcp_v6_pool_size: {
-                let v6 = self.to_dhcpv6_config();
-                let mut total = 0;
-                let mut finite = true;
-                for p in &v6.pools {
-                    if let (Some(start), Some(end)) = (&p.range_start, &p.range_end) {
-                        // Very rough approximation for IPv6 range size
-                        let s = start.as_u128(None);
-                        let e = end.as_u128(None);
-                        total += u64::try_from(e - s + 1).unwrap_or(u64::MAX);
-                    } else {
-                        finite = false;
-                        break;
-                    }
-                }
-                if finite { Some(total) } else { None }
-            },
-            auth_password_hash,
-            tls_cert: self.http_toml.tls_cert.clone(),
-            tls_key: self.http_toml.tls_key.clone(),
-            boot_dir: self.http_listen.as_ref().and_then(|_| {
-                self.tftp_toml
-                    .root_dir
-                    .clone()
-                    .or_else(|| self.boot_dir.clone())
-            }),
-        }
+                _ => None,
+            })
+            .sum();
+        cfg.dns_enabled = self.dns_enabled;
+        cfg.dns_upstream = self
+            .dns_toml
+            .upstreams
+            .first()
+            .map(|u| format!("{} (prio {})", String::from(u.target.clone()), u.priority));
+        cfg.boot_dir = Some(self.tftp_toml.root_dir.to_string_lossy().to_string());
+        
+        // Inherit TLS from system if not set in HTTP
+        cfg.tls_cert = self.http_toml.tls_cert.clone().or_else(|| self.system.tls_cert.clone());
+        cfg.tls_key = self.http_toml.tls_key.clone().or_else(|| self.system.tls_key.clone());
+        
+        cfg.dot_listen = self.dns_toml.dot_listen;
+        cfg.dot_enabled = self.dns_toml.dot_enabled;
+        cfg.doh_enabled = self.http_toml.doh_enabled;
+        cfg.https_enabled = self.http_toml.https_enabled;
+
+        cfg.log_db_path = if self.database.log_url.starts_with("sqlite://") {
+            self.database
+                .log_url
+                .strip_prefix("sqlite://")
+                .unwrap_or(&self.database.log_url)
+                .to_string()
+        } else {
+            self.database.log_url.clone()
+        };
+
+        cfg
     }
 }
 
@@ -416,33 +496,24 @@ impl Default for Config {
         Self {
             #[cfg(feature = "debug-commands")]
             command: args::Command::Run { only: None },
-            iface_lan: "lo".to_string(),
-            leases_db: "lanforge.db".to_string(),
-            db_url: "sqlite://lanforge.db".to_string(),
-            fallback_mins: 60,
-            control_socket: "/run/lanforge/control.sock".to_string(),
-            log_db: "/run/lanforge/log.db".to_string(),
-            log_db_url: "sqlite://:memory:".to_string(),
-            boot_dir: None,
+            system: SystemCfg::default(),
+            database: DatabaseConfig::default(),
             ra_enabled: true,
-            ra_toml: lanforge_network::ra::RaServiceConfig::default(),
+            ra_toml: RaServiceConfig::default(),
             dhcpv4_enabled: true,
-            dhcpv4_toml: lanforge_network::dhcp::v4::config::Dhcpv4Config::default(),
+            dhcpv4_toml: Dhcpv4Config::default(),
             dhcpv6_enabled: true,
-            dhcpv6_toml: lanforge_network::dhcp::v6::config::Dhcpv6Config::default(),
+            dhcpv6_toml: Dhcpv6Config::default(),
             dns_enabled: true,
-            dns_toml: lanforge_dns::DnsConfig::default(),
+            dns_toml: DnsConfig::default(),
             search_domains: vec!["lan".to_string()],
+            monitor_toml: MonitorConfig::default(),
+            mdns_toml: MdnsConfig::default(),
+            api_toml: ApiConfig::default(),
+            http_toml: HttpConfig::default(),
+            tftp_toml: TftpConfig::default(),
             devices: Vec::new(),
             devices_file: None,
-            dhcpv4_port: 67,
-            dhcpv6_port: 547,
-            dns_port: Some(5300),
-            api_port: None,
-            http_listen: None,
-            auth_toml: toml::AuthCfg::default(),
-            http_toml: toml::HttpCfg::default(),
-            tftp_toml: toml::TftpCfg::default(),
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
         }
     }

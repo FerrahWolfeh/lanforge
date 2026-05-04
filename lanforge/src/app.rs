@@ -1,5 +1,5 @@
 use anyhow::Result;
-use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use std::os::unix::net::UnixDatagram;
 use std::sync::Arc;
@@ -9,11 +9,11 @@ use tracing::{debug, info};
 use crate::bootstrap::BootstrapResult;
 use crate::event_loop::run_event_loop;
 use crate::registry::ServiceRegistry;
-#[cfg(feature = "http")]
-use lanforge_http::HttpService;
 use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
 use lanforge_dns::server::DnsService;
+#[cfg(feature = "http")]
+use lanforge_http::HttpService;
 use lanforge_network::dhcp::v4::Dhcpv4Service;
 use lanforge_network::dhcp::v6::Dhcpv6Service;
 use lanforge_network::ifmon::AddressMonitor;
@@ -60,23 +60,27 @@ impl Daemon {
         let rt_handle = &self.bootstrap.rt_handle;
         let messages = &self.bootstrap.messages;
 
+        if !cfg.monitor_toml.enabled {
+            tracing::warn!(
+                "⚠️  Neighbor Monitor is DISABLED. Passive device discovery and 'last_seen' tracking will be unavailable."
+            );
+        }
+
         // 1. Core Services (DB, mDNS)
-        let db_url = cfg.db_url.clone();
-        let log_db_url = cfg.log_db_url.clone();
         let rt_handle = rt_handle.clone();
         let messages = messages.clone();
-        let ifname = cfg.iface_lan.clone();
+        let ifname = cfg.system.iface.clone();
 
         let ctx = self.ctx.clone();
         let cfg = cfg.clone();
 
         lanforge_core::spawn_services!(self.registry, &self.ctx, {
-            async [ctx, db_url, log_db_url] => DbWorker::new(db_url, log_db_url, ctx),
-            async [ctx] => MdnsProber::new(ctx),
+            async [ctx, cfg] => DbWorker::new(cfg.database.clone(), ctx),
+            async [ctx, cfg] if cfg.mdns_toml.enabled => MdnsProber::new(cfg.mdns_toml.clone(), ctx),
 
-            // 2. Network Monitoring (Interface, Neighbors)
+            // 2. Network Monitoring (Interface, Neighbors, LLDP)
             async [ctx, rt_handle, messages] => AddressMonitor::new(rt_handle, messages.subscribe(), target_ifindex, ctx),
-            async [ctx, rt_handle, messages] => NeighborMonitor::new(rt_handle, messages.subscribe(), target_ifindex, ctx),
+            async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => NeighborMonitor::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), target_ifindex, ctx),
             async [ctx, ifname] => LldpMonitor::new(ifname, target_ifindex, ctx),
 
             // 3. IPv6 Protocol Services (RA, SLAAC)
@@ -87,17 +91,16 @@ impl Daemon {
             async [ctx, cfg] if cfg.dhcpv4_enabled => Dhcpv4Service::new(cfg.to_dhcpv4_config(), ctx),
             async [ctx, cfg] if cfg.dhcpv6_enabled => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
 
-            // 5. Application Services (DNS, API)
+            // 5. Application Services (DNS, API, TFTP)
             async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
-            async [ctx, cfg] => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
+            async [ctx, cfg] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
 
             #[cfg(feature = "http")]
-            async [ctx, cfg] if cfg.http_listen.is_some() => HttpService::new(Arc::new(cfg.to_api_config()), ctx),
+            async [ctx, cfg] if cfg.http_toml.enabled => HttpService::new(Arc::new(cfg.to_api_config()), ctx),
 
             async [ctx, cfg] if cfg.tftp_toml.enabled => TftpService::new(
                 ctx,
-                cfg.tftp_toml.listen.clone(),
-                cfg.tftp_toml.root_dir.as_ref().and_then(|r| r.parse().ok()).or_else(|| cfg.boot_dir.as_ref().and_then(|r| r.parse().ok())).unwrap_or_else(|| "/var/lib/lanforge/boot".into())
+                cfg.tftp_toml.clone(),
             ),
         });
     }
@@ -105,9 +108,10 @@ impl Daemon {
     async fn shutdown(self) -> Result<()> {
         info!("🛑 Starting shutdown sequence...");
         self.ctx.terminate();
-        let _ = self.ctx.bus().publish(LanforgeEvent::System(
-            lanforge_core::bus::SystemEvent::Shutdown,
-        ));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::Shutdown));
 
         tokio::select! {
             _ = tokio::task::spawn_blocking(move || self.registry.wait_all()) => {

@@ -1,0 +1,42 @@
+# Lanforge DNS Configuration
+# Features: Zero-allocation wire parser, prioritized failover upstreams, adblocker.
+
+[dns]
+enabled = true
+listen = "0.0.0.0:53"
+
+# Multiple search domains for local resolution.
+search_domains = ["lan", "local"]
+
+# --- MODE 1: Recursive Forwarder (with prioritized upstreams) ---
+# Format: { target = "proto://ip:port", priority = number } (Lower priority is tried first)
+[[dns.upstreams]]
+target = "tls://1.1.1.1:853"
+priority = 10
+
+[[dns.upstreams]]
+target = "udp://8.8.8.8:53"
+priority = 20
+
+# --- MODE 2: Authoritative Only ---
+# To disable forwarding and only resolve local names, leave [[dns.upstreams]] empty.
+# upstreams = []
+
+# --- Adblocker (Requires 'adblock' feature) ---
+adblock_enabled = true
+adblock_urls = [
+    "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+    "https://adaway.org/hosts.txt"
+]
+
+# How many days a device can be offline before its DNS entry is hidden.
+last_seen_threshold_days = 7
+
+# Default TTL for local records (seconds).
+ttl = 60
+
+# --- DNS-over-TLS (DoT) ---
+dot_enabled = true
+dot_listen = "0.0.0.0:853"
+# tls_cert = "/etc/lanforge/certs/dns.crt" # Optional override
+# tls_key = "/etc/lanforge/certs/dns.key"  # Optional override

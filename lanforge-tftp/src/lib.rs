@@ -1,9 +1,11 @@
+pub mod config;
+
+use crate::config::TftpConfig;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::fs::File;
@@ -24,35 +26,30 @@ pub enum TftpError {
     id = "tftp",
     name = "TFTP Server",
     critical = false,
-    describe = format!("TFTP Server on {}", self.listen_addr)
+    describe = format!("TFTP Server on {}", self.cfg.listen_addr)
 )]
 pub struct TftpService {
     ctx: LanforgeContext,
-    listen_addr: String,
-    root_dir: PathBuf,
+    cfg: TftpConfig,
 }
 
 impl TftpService {
     #[must_use]
-    pub const fn new(ctx: LanforgeContext, listen_addr: String, root_dir: PathBuf) -> Self {
-        Self {
-            ctx,
-            listen_addr,
-            root_dir,
-        }
+    pub const fn new(ctx: LanforgeContext, cfg: TftpConfig) -> Self {
+        Self { ctx, cfg }
     }
 }
 
 impl AsyncService for TftpService {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        let socket = UdpSocket::bind(&self.listen_addr).await.map_err(|e| {
+        let socket = UdpSocket::bind(&self.cfg.listen_addr).await.map_err(|e| {
             CoreError::Generic(format!(
                 "Failed to bind TFTP to {}: {}",
-                self.listen_addr, e
+                self.cfg.listen_addr, e
             ))
         })?;
 
-        info!("🚀 TFTP Server listening on {}", self.listen_addr);
+        info!("🚀 TFTP Server listening on {}", self.cfg.listen_addr);
         ctrl.signal_ready();
 
         let mut buf = [0u8; 1024];
@@ -66,9 +63,9 @@ impl AsyncService for TftpService {
                         Ok((size, src)) => {
                             let data = buf[..size].to_vec();
                             let socket_clone = socket.clone();
-                            let root = self.root_dir.clone();
+                            let cfg_clone = self.cfg.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_packet(socket_clone, src, data, root).await {
+                                if let Err(e) = handle_packet(socket_clone, src, data, cfg_clone).await {
                                     debug!("TFTP error handling request from {}: {}", src, e);
                                 }
                             });
@@ -99,7 +96,7 @@ async fn handle_packet(
     socket: Arc<UdpSocket>,
     src: SocketAddr,
     data: Vec<u8>,
-    root: PathBuf,
+    cfg: TftpConfig,
 ) -> Result<(), TftpError> {
     if data.len() < 4 {
         return Ok(());
@@ -109,7 +106,7 @@ async fn handle_packet(
     match opcode {
         1 => {
             // RRQ
-            handle_rrq(socket, src, &data[2..], root).await
+            handle_rrq(socket, src, &data[2..], cfg).await
         }
         _ => {
             // We only support RRQ for now
@@ -122,7 +119,7 @@ async fn handle_rrq(
     socket: Arc<UdpSocket>,
     src: SocketAddr,
     data: &[u8],
-    root: PathBuf,
+    cfg: TftpConfig,
 ) -> Result<(), TftpError> {
     let mut parts = data.split(|&b| b == 0);
     let filename_bytes = parts
@@ -131,8 +128,8 @@ async fn handle_rrq(
     let filename = String::from_utf8_lossy(filename_bytes).to_string();
 
     // Security: prevent path traversal
-    let path = root.join(&filename);
-    if !path.starts_with(&root) {
+    let path = cfg.root_dir.join(&filename);
+    if !path.starts_with(&cfg.root_dir) {
         return send_error(&socket, src, 2, "Access violation").await;
     }
 
@@ -144,7 +141,7 @@ async fn handle_rrq(
 
     let mut file = File::open(path).await?;
     let mut block_num: u16 = 1;
-    let mut buffer = [0u8; 512];
+    let mut buffer = vec![0u8; cfg.block_size as usize];
 
     // TFTP uses a new port for the transfer (TID)
     let session_socket = UdpSocket::bind("0.0.0.0:0").await?;
@@ -165,7 +162,7 @@ async fn handle_rrq(
             // Wait for ACK
             let mut ack_buf = [0u8; 4];
             if let Ok(Ok((4, _))) = timeout(
-                Duration::from_secs(3),
+                Duration::from_secs(cfg.timeout),
                 session_socket.recv_from(&mut ack_buf),
             )
             .await
@@ -177,14 +174,14 @@ async fn handle_rrq(
                 }
             } else {
                 retries += 1;
-                if retries > 3 {
+                if retries > cfg.max_retries {
                     return Err(TftpError::Protocol("Transfer timed out".into()));
                 }
                 debug!("TFTP: Retrying block {} to {}", block_num, src);
             }
         }
 
-        if n < 512 {
+        if n < cfg.block_size as usize {
             break; // End of file
         }
         block_num = block_num.wrapping_add(1);
@@ -219,8 +216,13 @@ mod tests {
     fn test_tftp_service_new() {
         let bus = Arc::new(EventBus::new());
         let ctx = LanforgeContext::new(bus, State::new(), None);
-        let service = TftpService::new(ctx, "127.0.0.1:0".into(), PathBuf::from("/tmp"));
-        assert_eq!(service.listen_addr, "127.0.0.1:0");
-        assert_eq!(service.root_dir, PathBuf::from("/tmp"));
+        let cfg = TftpConfig {
+            listen_addr: "127.0.0.1:0".into(),
+            root_dir: PathBuf::from("/tmp"),
+            ..Default::default()
+        };
+        let service = TftpService::new(ctx, cfg);
+        assert_eq!(service.cfg.listen_addr, "127.0.0.1:0");
+        assert_eq!(service.cfg.root_dir, PathBuf::from("/tmp"));
     }
 }

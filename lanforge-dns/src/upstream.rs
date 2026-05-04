@@ -37,6 +37,8 @@ pub struct UpstreamManager {
     pub(crate) next_id: AtomicU16,
     /// Cache of upstream responses with TTL-based expiry.
     pub(crate) cache: Arc<DnsCache>,
+    /// The specific upstream target this manager handles.
+    pub target: UpstreamTarget,
 }
 
 impl UpstreamManager {
@@ -80,6 +82,7 @@ impl UpstreamManager {
             pending,
             next_id: AtomicU16::new(1),
             cache,
+            target: target.clone(),
         }))
     }
 
