@@ -7,8 +7,9 @@
 use crate::cache::DnsCache;
 use crate::config::{UpstreamProtocol, UpstreamTarget};
 use crate::error::DnsError;
+use crate::wire::{WireHeader, WireQuestion};
 use hickory_proto::op::Message;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use hickory_proto::serialize::binary::BinDecodable;
 use std::collections::HashMap;
 use std::io::Error;
 use std::net::SocketAddr;
@@ -95,14 +96,15 @@ impl UpstreamManager {
     /// 3. If protocol is TLS, use DNS-over-TLS
     /// 4. Restore the original query ID before returning and caching
     pub async fn forward(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
-        let query = Message::from_bytes(data)?;
+        let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
+        let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
 
         // 1. Try the cache first
-        if let Some(cached_resp) = self.cache.get(&query) {
+        if let Some(cached_resp) = self.cache.get_wire(data, &question) {
             return Ok(cached_resp);
         }
 
-        let orig_id = query.metadata.id;
+        let orig_id = header.id();
 
         let resp_bytes = match target.protocol {
             UpstreamProtocol::Udp => self.forward_udp(data, target.addr).await?,
@@ -110,10 +112,20 @@ impl UpstreamManager {
         };
 
         // Restore original query ID before returning and caching
-        if let Ok(mut resp) = Message::from_bytes(&resp_bytes) {
-            resp.metadata.id = orig_id;
-            let final_bytes = resp.to_bytes()?;
-            self.cache.insert(&query, &resp, final_bytes.clone());
+        if let Ok(resp) = Message::from_bytes(&resp_bytes) {
+            let mut final_bytes = resp_bytes;
+            if final_bytes.len() >= 2 {
+                let id_bytes = orig_id.to_be_bytes();
+                final_bytes[0] = id_bytes[0];
+                final_bytes[1] = id_bytes[1];
+            }
+
+            let key = crate::cache::CacheKey {
+                qname: question.qname_raw().to_vec(),
+                qtype: question.qtype(),
+                qclass: question.qclass(),
+            };
+            self.cache.insert(key, &resp, final_bytes.clone());
             Ok(final_bytes)
         } else {
             let mut raw = resp_bytes;
@@ -127,15 +139,12 @@ impl UpstreamManager {
     }
 
     async fn forward_udp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
-        let query = Message::from_bytes(data)?;
-
-        let mut query = query.clone();
-
         // Maps to a unique internal ID to avoid collisions between multiple LAN clients
         let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        query.metadata.id = internal_id;
 
-        let data_to_send = query.to_bytes()?;
+        let mut data_to_send = data.to_vec();
+        WireHeader::patch_id(&mut data_to_send, internal_id);
+
         let (tx, rx) = oneshot::channel();
 
         {
@@ -148,16 +157,13 @@ impl UpstreamManager {
         let udp_result: Result<Vec<u8>, DnsError> = match timeout(Duration::from_secs(3), rx).await
         {
             Ok(Ok(resp_bytes)) => {
-                if let Ok(resp) = Message::from_bytes(&resp_bytes) {
-                    // RFC 1035: If TC (truncated) flag is set, fall back to TCP
-                    if resp.metadata.truncation {
-                        trace!("UDP response truncated, attempting TCP fallback");
-                        self.forward_tcp(data, upstream).await
-                    } else {
-                        Ok(resp_bytes)
-                    }
+                let header = WireHeader::parse(&resp_bytes).ok_or(DnsError::WireParseError)?;
+                // RFC 1035: If TC (truncated) flag is set, fall back to TCP
+                if header.tc() {
+                    trace!("UDP response truncated, attempting TCP fallback");
+                    self.forward_tcp(data, upstream).await
                 } else {
-                    Err(DnsError::UdpDecode("Corrupt UDP response".to_string()))
+                    Ok(resp_bytes)
                 }
             }
             Ok(Err(_)) => Err(DnsError::ChannelClosed),
@@ -167,21 +173,7 @@ impl UpstreamManager {
             }
         };
 
-        match udp_result {
-            Ok(resp_bytes) => {
-                if let Ok(resp) = Message::from_bytes(&resp_bytes) {
-                    if resp.metadata.truncation {
-                        trace!("UDP response truncated, attempting TCP fallback");
-                        self.forward_tcp(data, upstream).await
-                    } else {
-                        Ok(resp_bytes)
-                    }
-                } else {
-                    Ok(resp_bytes)
-                }
-            }
-            Err(e) => Err(e),
-        }
+        udp_result
     }
 
     /// DNS-over-TLS (`DoT`) forwarding.

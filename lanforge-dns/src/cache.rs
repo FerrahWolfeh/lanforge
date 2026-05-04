@@ -12,20 +12,22 @@
 //! - **TTL extraction:** The minimum TTL from all answer/NS/additional records is used
 //! - **ID rewriting:** On cache hit, the query ID is patched in-place (bytes 0-1)
 
-use hickory_proto::op::Message;
-use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
+use hickory_proto::rr::RData;
+use hickory_proto::{op::Message, serialize::binary::BinEncodable};
 use moka::Expiry;
 use moka::sync::Cache;
 use std::time::{Duration, Instant};
 
+use crate::wire::WireQuestion;
+
 /// Cache key for DNS responses.
 ///
-/// Uniquely identifies a query by its name, type, and class.
+/// Uniquely identifies a query by its raw QNAME bytes, type, and class.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct CacheKey {
-    pub name: Name,
-    pub qtype: RecordType,
-    pub qclass: DNSClass,
+    pub qname: Vec<u8>,
+    pub qtype: u16,
+    pub qclass: u16,
 }
 
 /// A cached DNS response with its pre-computed TTL.
@@ -112,19 +114,39 @@ impl DnsCache {
     pub fn get(&self, query: &Message) -> Option<Vec<u8>> {
         let question = query.queries.first()?;
         let key = CacheKey {
-            name: question.name().clone(),
-            qtype: question.query_type(),
-            qclass: question.query_class(),
+            qname: question.name().to_bytes().ok()?,
+            qtype: question.query_type().into(),
+            qclass: question.query_class().into(),
         };
 
-        // Clone is unavoidable since we need to mutate the ID bytes,
-        // but cloning ~100 bytes is far faster than full parsing.
         let mut owned_data = self.cache.get(&key)?.data;
 
         if owned_data.len() >= 2 {
             let id_bytes = query.id.to_be_bytes();
             owned_data[0] = id_bytes[0];
             owned_data[1] = id_bytes[1];
+        }
+
+        Some(owned_data)
+    }
+
+    /// Optimized lookup using wire-parsed question data.
+    ///
+    /// Avoids full Message parsing for cache hits.
+    #[must_use]
+    pub fn get_wire(&self, data: &[u8], question: &WireQuestion<'_>) -> Option<Vec<u8>> {
+        let key = CacheKey {
+            qname: question.qname_raw().to_vec(),
+            qtype: question.qtype(),
+            qclass: question.qclass(),
+        };
+
+        let mut owned_data = self.cache.get(&key)?.data;
+
+        if owned_data.len() >= 2 {
+            // Patch ID directly from the wire data
+            owned_data[0] = data[0];
+            owned_data[1] = data[1];
         }
 
         Some(owned_data)
@@ -137,11 +159,7 @@ impl DnsCache {
     /// SOA record per RFC 2308.
     ///
     /// TTL is clamped to a range of 5-3600 seconds.
-    pub fn insert(&self, query: &Message, response_msg: &Message, response_data: Vec<u8>) {
-        let Some(question) = query.queries.first() else {
-            return;
-        };
-
+    pub fn insert(&self, key: CacheKey, response_msg: &Message, response_data: Vec<u8>) {
         let mut min_ttl = 3600;
         let mut found = false;
 
@@ -169,12 +187,6 @@ impl DnsCache {
                 }
             }
         }
-
-        let key = CacheKey {
-            name: question.name().clone(),
-            qtype: question.query_type(),
-            qclass: question.query_class(),
-        };
 
         let cached_response = CachedResponse {
             data: response_data,

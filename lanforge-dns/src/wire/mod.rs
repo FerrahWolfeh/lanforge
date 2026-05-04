@@ -42,6 +42,12 @@ impl<'a> WireHeader<'a> {
 
     #[inline]
     #[must_use]
+    pub fn tc(&self) -> bool {
+        (self.data[2] & 0x02) != 0
+    }
+
+    #[inline]
+    #[must_use]
     pub fn qdcount(&self) -> u16 {
         u16::from_be_bytes([self.data[4], self.data[5]])
     }
@@ -50,6 +56,16 @@ impl<'a> WireHeader<'a> {
     #[must_use]
     pub fn arcount(&self) -> u16 {
         u16::from_be_bytes([self.data[10], self.data[11]])
+    }
+
+    /// Patches the DNS message ID in-place.
+    #[inline]
+    pub fn patch_id(data: &mut [u8], new_id: u16) {
+        if data.len() >= 2 {
+            let bytes = new_id.to_be_bytes();
+            data[0] = bytes[0];
+            data[1] = bytes[1];
+        }
     }
 }
 
@@ -110,6 +126,21 @@ impl<'a> WireQuestion<'a> {
         self.qtype
     }
 
+    /// Returns the raw QCLASS field.
+    #[inline]
+    #[must_use]
+    pub const fn qclass(&self) -> u16 {
+        // QCLASS is 2 bytes after QTYPE (which starts at qname_end)
+        u16::from_be_bytes([self.data[self.qname_end + 2], self.data[self.qname_end + 3]])
+    }
+
+    /// Returns the raw QNAME slice (including label lengths and the null terminator).
+    #[inline]
+    #[must_use]
+    pub fn qname_raw(&self) -> &'a [u8] {
+        &self.data[12..=self.qname_end]
+    }
+
     /// Returns an iterator over the labels in the QNAME.
     ///
     /// # Example
@@ -160,6 +191,7 @@ impl<'a> Iterator for WireLabelIter<'a> {
 }
 
 /// Scans for an EDNS OPT record without parsing the entire OPT RR.
+#[derive(Clone, Copy)]
 pub struct WireOptScanner {
     /// The maximum message size the requester can handle.
     pub max_payload: u16,

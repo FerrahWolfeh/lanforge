@@ -3,23 +3,35 @@
 //! Constructs DNS response messages using Hickory-DNS `Message` for
 //! correctness and EDNS compatibility.
 
-use crate::error::DnsError;
+use crate::{error::DnsError, wire::WireOptScanner};
 use hickory_proto::{
-    op::{Message, MessageType, OpCode, ResponseCode},
-    rr::{Name, RData, Record, rdata::SOA},
+    op::{Edns, Message, MessageType, OpCode, Query, ResponseCode},
+    rr::{Name, RData, Record, RecordType, rdata::SOA},
     serialize::binary::BinEncodable,
 };
 use std::str::FromStr;
 
 use crate::config::DnsConfig;
 
+/// Metadata required to construct a DNS response.
+#[derive(Clone)]
+pub enum QueryMetadata<'a> {
+    Full(&'a Message),
+    Wire {
+        id: u16,
+        qname: Name,
+        qtype: RecordType,
+        edns: Option<WireOptScanner>,
+    },
+}
+
 /// Builder for DNS response messages.
 ///
-/// Wraps a query message and configuration to produce properly formatted
-/// DNS responses with correct flags, EDNS preservation, and SOA records
-/// for NXDOMAIN/NODATA responses.
+/// Wraps a query message or its metadata and configuration to produce properly
+/// formatted DNS responses with correct flags, EDNS preservation, and SOA records.
+#[derive(Clone)]
 pub struct ResponseBuilder<'a> {
-    query: &'a Message,
+    query: QueryMetadata<'a>,
     cfg: &'a DnsConfig,
 }
 
@@ -27,7 +39,30 @@ impl<'a> ResponseBuilder<'a> {
     /// Creates a new response builder from the given query and config.
     #[must_use]
     pub const fn new(query: &'a Message, cfg: &'a DnsConfig) -> Self {
-        Self { query, cfg }
+        Self {
+            query: QueryMetadata::Full(query),
+            cfg,
+        }
+    }
+
+    /// Creates a new response builder from wire-parsed metadata.
+    #[must_use]
+    pub const fn from_wire(
+        id: u16,
+        qname: Name,
+        qtype: RecordType,
+        edns: Option<WireOptScanner>,
+        cfg: &'a DnsConfig,
+    ) -> Self {
+        Self {
+            query: QueryMetadata::Wire {
+                id,
+                qname,
+                qtype,
+                edns,
+            },
+            cfg,
+        }
     }
 
     /// Constructs the base response message with standard flags.
@@ -39,15 +74,36 @@ impl<'a> ResponseBuilder<'a> {
     /// - Copies query section and EDNS extensions
     #[must_use]
     pub fn base(&self) -> Message {
-        let mut resp = Message::new(self.query.metadata.id, MessageType::Response, OpCode::Query);
-        resp.metadata.authoritative = true;
-        resp.metadata.recursion_available = !self.cfg.upstreams.is_empty();
-        resp.add_queries(self.query.queries.iter().cloned());
-
-        if let Some(edns) = &self.query.edns {
-            resp.set_edns(edns.clone());
+        match &self.query {
+            QueryMetadata::Full(query) => {
+                let mut resp =
+                    Message::new(query.metadata.id, MessageType::Response, OpCode::Query);
+                resp.metadata.authoritative = true;
+                resp.metadata.recursion_available = !self.cfg.upstreams.is_empty();
+                resp.add_queries(query.queries.iter().cloned());
+                if let Some(edns) = &query.edns {
+                    resp.set_edns(edns.clone());
+                }
+                resp
+            }
+            QueryMetadata::Wire {
+                id,
+                qname,
+                qtype,
+                edns,
+            } => {
+                let mut resp = Message::new(*id, MessageType::Response, OpCode::Query);
+                resp.metadata.authoritative = true;
+                resp.metadata.recursion_available = !self.cfg.upstreams.is_empty();
+                resp.add_query(Query::query(qname.clone(), *qtype));
+                if let Some(scanner) = edns {
+                    let mut opt = Edns::new();
+                    opt.set_max_payload(scanner.max_payload);
+                    resp.set_edns(opt);
+                }
+                resp
+            }
         }
-        resp
     }
 
     /// Adds an SOA (Start of Authority) record to the authority section.
@@ -106,5 +162,18 @@ impl<'a> ResponseBuilder<'a> {
         resp.metadata.response_code = ResponseCode::NoError;
         resp.add_answers(answers);
         Ok(resp.to_bytes()?)
+    }
+
+    /// Returns the QNAME of the query.
+    #[must_use]
+    pub fn qname(&self) -> &Name {
+        match &self.query {
+            QueryMetadata::Full(query) => query
+                .queries
+                .first()
+                .map(Query::name)
+                .expect("Malformed query: no question section"),
+            QueryMetadata::Wire { qname, .. } => qname,
+        }
     }
 }

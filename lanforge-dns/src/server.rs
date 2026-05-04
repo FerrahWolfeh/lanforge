@@ -4,7 +4,11 @@ use crate::{
     stats::DnsStatsSnapshot,
     wire::{WireHeader, WireOptScanner, WireQuestion, qtypes::QType},
 };
-use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
+use hickory_proto::{
+    op::Message,
+    rr::{Name, RecordType},
+    serialize::binary::BinDecodable,
+};
 use lanforge_core::{
     bus::{SystemEvent, TimedEvent},
     context::LanforgeContext,
@@ -16,7 +20,7 @@ use tokio::{
     sync::broadcast::Receiver,
     task::JoinHandle,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::{
     config::DnsConfig, resolver::LocalResolver, stats::DnsStats, utils::extract_local_hostname_wire,
@@ -315,6 +319,8 @@ impl AsyncService for DnsService {
             }))
         } else {
             if self.cfg.dot_listen.is_some() && !self.cfg.dot_enabled {
+                use tracing::warn;
+
                 warn!(
                     "DoT: Listener address configured but dot_enabled = false. Service inactive."
                 );
@@ -377,7 +383,7 @@ pub async fn handle_query(
     };
 
     // PHASE 2: Local Resolution Attempt
-    if let Some(resp) = resolve_local_wire(data, &question, ctx)? {
+    if let Some(resp) = resolve_local_wire(data, &header, &question, ctx)? {
         ctx.stats.inc_auth();
         ctx.stats.inc_cache_hit();
         return Ok(Some(resp));
@@ -432,6 +438,7 @@ pub async fn handle_query(
 /// Helper function for local resolution using wire-parsed data.
 fn resolve_local_wire(
     data: &[u8],
+    header: &WireHeader,
     question: &WireQuestion<'_>,
     ctx: &DnsContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
@@ -445,9 +452,18 @@ fn resolve_local_wire(
                 extract_local_hostname_wire(&mut labels, &ctx.cfg.multi_search_labels)
             {
                 let safe_hostname = fast_lowercase(hostname_slice);
-                let query = Message::from_bytes(data)?;
+                let qname = Name::from_bytes(question.qname_raw())?;
+                let edns = WireOptScanner::scan(data, header, question);
+                let rb = ResponseBuilder::from_wire(
+                    header.id(),
+                    qname,
+                    RecordType::from(raw_qtype),
+                    edns,
+                    &ctx.cfg,
+                );
+
                 let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ip(
-                    &query,
+                    &rb,
                     &safe_hostname,
                     RecordType::from(raw_qtype),
                 )?;
@@ -456,9 +472,18 @@ fn resolve_local_wire(
         }
         QType::PTR => {
             if let Some(_target_ip) = parse_arpa_wire(question.labels()) {
-                let query = Message::from_bytes(data)?;
-                let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone())
-                    .resolve_ptr(&query, query.queries[0].name())?;
+                let qname = Name::from_bytes(question.qname_raw())?;
+                let edns = WireOptScanner::scan(data, header, question);
+                let rb = ResponseBuilder::from_wire(
+                    header.id(),
+                    qname.clone(),
+                    RecordType::from(raw_qtype),
+                    edns,
+                    &ctx.cfg,
+                );
+
+                let resp =
+                    LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ptr(&rb, &qname)?;
                 if let Some(r) = resp {
                     return Ok(Some(r));
                 }
@@ -491,14 +516,14 @@ async fn handle_query_fallback(
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();
             let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ip(
-                &query,
+                &rb,
                 &safe_hostname,
                 qtype,
             )?;
             return Ok(Some(resp));
         }
     } else if qtype == RecordType::PTR {
-        let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ptr(&query, qname)?;
+        let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ptr(&rb, qname)?;
         if let Some(response) = resp {
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();

@@ -54,16 +54,17 @@ fn register_test_device(ctx: &LanforgeContext, hostname: &str, mac: MacAddr, ip:
 // Legacy functions for tests only
 pub fn resolve_local(
     query: &Message,
-    device: &Device,
+    _device: &Device,
     qtype: RecordType,
     cfg: &DnsConfig,
     ctx: LanforgeContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     let resolver = LocalResolver::new(cfg, ctx);
-    if let Some(records) = resolver.resolve_local(query, device, qtype) {
-        Ok(Some(ResponseBuilder::new(query, cfg).success(records)?))
+    let rb = ResponseBuilder::new(query, cfg);
+    if let Some(records) = resolver.resolve_local(rb.qname(), qtype) {
+        Ok(Some(rb.success(records)?))
     } else {
-        Ok(Some(ResponseBuilder::new(query, cfg).empty_noerror()?))
+        Ok(Some(rb.empty_noerror()?))
     }
 }
 
@@ -305,7 +306,7 @@ fn test_local_resolver_direct_api() {
         RecordType::A,
     ));
     let resp_bytes = resolver
-        .resolve_ip(&query, "direct", RecordType::A)
+        .resolve_ip(&ResponseBuilder::new(&query, &cfg), "direct", RecordType::A)
         .unwrap();
     let resp = Message::from_bytes(&resp_bytes).unwrap();
     assert_eq!(resp.response_code, ResponseCode::NoError);
@@ -337,7 +338,11 @@ fn test_dhcp_registration_creates_dns_record() {
 
     let resp_bytes = {
         LocalResolver::new(&cfg, ctx)
-            .resolve_ip(&query, "my-device", RecordType::A)
+            .resolve_ip(
+                &ResponseBuilder::new(&query, &cfg),
+                "my-device",
+                RecordType::A,
+            )
             .unwrap()
     };
     let resp = Message::from_bytes(&resp_bytes).unwrap();
