@@ -145,7 +145,9 @@ impl PrefixLifetime {
 #[serde(rename_all = "snake_case")]
 pub enum PrefixSource {
     /// Static prefix — explicit address (e.g., a fixed ULA).
-    Static(Ipv6Addr),
+    Static,
+    /// Alias for Static, often used for ULAs.
+    Ula,
     /// Automatically detects the GUA (`2000::/3`) assigned to the interface.
     /// Equivalent to `prefix ::/64` in radvd with dynamic resolution.
     /// If no GUA is assigned, the option is silently omitted.
@@ -168,6 +170,9 @@ pub enum PrefixSource {
 #[serde(default)]
 pub struct PrefixConfig {
     pub source: PrefixSource,
+    /// IPv6 address or prefix (e.g., "`fd00::/64`").
+    /// Required when source is "static" or "ula".
+    pub address: Option<String>,
     /// Prefix length in bits. For SLAAC, this must be 64.
     pub prefix_len: u8,
     /// L=1 (on-link): clients can communicate directly within this prefix.
@@ -185,7 +190,8 @@ impl PrefixConfig {
     #[must_use]
     pub fn ula(prefix: &str) -> Self {
         Self {
-            source: PrefixSource::Static(prefix.parse().expect("Invalid ULA address")),
+            source: PrefixSource::Ula,
+            address: Some(prefix.to_string()),
             prefix_len: 64,
             on_link: true,
             autonomous: true,
@@ -200,6 +206,7 @@ impl PrefixConfig {
     pub const fn gua_dynamic() -> Self {
         Self {
             source: PrefixSource::AutoGua,
+            address: None,
             prefix_len: 64,
             on_link: true,
             autonomous: true,
@@ -207,6 +214,15 @@ impl PrefixConfig {
             valid_lifetime: PrefixLifetime::Secs(DEFAULT_VALID_LIFETIME_SECS),
             preferred_lifetime: PrefixLifetime::Secs(DEFAULT_PREFERRED_LIFETIME_SECS),
         }
+    }
+
+    /// Resolves the IPv6 address from the `address` field, handling CIDR notation.
+    #[must_use]
+    pub fn resolved_address(&self) -> Option<Ipv6Addr> {
+        self.address.as_ref().and_then(|s| {
+            let addr_part = s.split('/').next()?;
+            addr_part.parse().ok()
+        })
     }
 }
 

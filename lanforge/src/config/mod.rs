@@ -338,9 +338,9 @@ impl Config {
 
         // Prefix detection
         if let Some(p) = self.ra_toml.prefixes.iter().find(|p| {
-            p.source == PrefixSource::AutoGua || matches!(p.source, PrefixSource::Static(_))
+            p.source == PrefixSource::AutoGua || p.source == PrefixSource::Static || p.source == PrefixSource::Ula
         }) {
-            if let PrefixSource::Static(addr) = p.source {
+            if let Some(addr) = p.resolved_address() {
                 cfg.ula_prefix = Some(addr);
             }
             cfg.ula_prefix_len = p.prefix_len;
@@ -390,13 +390,7 @@ impl Config {
 
         // Prefix detection (if not explicitly set in DNS config)
         if cfg.ula_prefix.is_none() {
-            cfg.ula_prefix = self.ra_toml.prefixes.iter().find_map(|p| {
-                if let PrefixSource::Static(addr) = p.source {
-                    Some(addr)
-                } else {
-                    None
-                }
-            });
+            cfg.ula_prefix = self.ra_toml.prefixes.iter().find_map(|p| p.resolved_address());
         }
 
         cfg

@@ -81,8 +81,8 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
 
     // ── Option 3: Prefix Information (RFC 4861 §4.6.2) ────────────────────
     for pc in &cfg.prefixes {
-        let addr = match &pc.source {
-            PrefixSource::Static(a) => Some(*a),
+        let addr = match pc.source {
+            PrefixSource::Static | PrefixSource::Ula => pc.resolved_address(),
             PrefixSource::AutoGua => gua_prefix.copied(),
         };
         if let Some(addr) = addr {

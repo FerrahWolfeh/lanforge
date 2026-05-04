@@ -102,31 +102,75 @@ pub fn load_toml(path: &str) -> TomlConfig {
         return TomlConfig::default();
     }
 
-    match std::fs::read_to_string(path) {
-        Ok(content) => match toml::from_str::<TomlConfig>(&content) {
-            Ok(cfg) => {
-                info!("[config] Loaded config from '{path}'");
-                info!(
-                    "[config]   {} static device(s), RA {}",
-                    cfg.devices.len(),
-                    if cfg.ra.enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                );
-                cfg
-            }
-            Err(e) => {
-                warn!("[config] Failed to parse '{path}': {e} — using defaults");
-                TomlConfig::default()
-            }
-        },
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
         Err(e) => {
             warn!("[config] Failed to read '{path}': {e} — using defaults");
-            TomlConfig::default()
+            return TomlConfig::default();
+        }
+    };
+
+    // Try parsing the whole thing first (fast path)
+    match toml::from_str::<TomlConfig>(&content) {
+        Ok(cfg) => {
+            info!("[config] Loaded config from '{path}'");
+            info!(
+                "[config]   {} static device(s), RA {}",
+                cfg.devices.len(),
+                if cfg.ra.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            return cfg;
+        }
+        Err(e) => {
+            warn!("[config] Failed to parse '{path}' as a whole: {e}");
+            warn!("[config] Attempting to recover valid sections individually...");
         }
     }
+
+    // Slow path: parse as a generic value and extract known sections
+    let value: toml::Value = match toml::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("[config] Critical syntax error in '{path}': {e} — using absolute defaults");
+            return TomlConfig::default();
+        }
+    };
+
+    let mut cfg = TomlConfig::default();
+
+    // Helper for section-by-section loading
+    fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
+        if let Some(sec_val) = v.get(key) {
+            match T::deserialize(sec_val.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("[config]   - [FAIL] Section [{key}]: {e} (using defaults for this section)");
+                    T::default()
+                }
+            }
+        } else {
+            T::default()
+        }
+    }
+
+    cfg.system = load_section(&value, "system");
+    cfg.database = load_section(&value, "database");
+    cfg.ra = load_section(&value, "ra");
+    cfg.dhcp = load_section(&value, "dhcp");
+    cfg.dns = load_section(&value, "dns");
+    cfg.monitor = load_section(&value, "monitor");
+    cfg.mdns = load_section(&value, "mdns");
+    cfg.api = load_section(&value, "api");
+    cfg.http = load_section(&value, "http");
+    cfg.tftp = load_section(&value, "tftp");
+    cfg.devices = load_section(&value, "devices");
+
+    info!("[config] Partial config recovery complete");
+    cfg
 }
 
 /// Load only the devices section from a TOML file for debugging.
@@ -179,5 +223,32 @@ mod tests {
         let content = "";
         let cfg: TomlConfig = toml::from_str(content).unwrap_or_default();
         assert_eq!(cfg.system.iface, "end0"); // should fallback to default values
+    }
+
+    #[test]
+    fn test_partial_recovery_logic() {
+        let content = r#"
+[system]
+iface = "eth42"
+
+[ra]
+source = "broken" # Invalid variant
+"#;
+        let value: toml::Value = toml::from_str(content).unwrap();
+        
+        // Helper for section-by-section loading (copy-pasted from load_toml for testing)
+        fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
+            if let Some(sec_val) = v.get(key) {
+                T::deserialize(sec_val.clone()).unwrap_or_default()
+            } else {
+                T::default()
+            }
+        }
+
+        let system: SystemCfg = load_section(&value, "system");
+        let ra: RaServiceConfig = load_section(&value, "ra");
+
+        assert_eq!(system.iface, "eth42");
+        assert!(!ra.enabled); // Should be default
     }
 }
