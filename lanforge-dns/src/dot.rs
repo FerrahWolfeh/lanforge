@@ -2,7 +2,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info};
 
 use lanforge_core::context::LanforgeContext;
@@ -10,6 +11,7 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 
 use crate::config::DnsConfig;
+use crate::server::{DnsContext, handle_query};
 use crate::tls_utils::load_tls_config;
 
 #[lanforge_macros::lanforge_service(
@@ -46,7 +48,7 @@ impl AsyncService for DotService {
         let tls_config = load_tls_config(cert, key)
             .map_err(|e| CoreError::Generic(format!("Failed to load TLS config: {e}")))?;
 
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
+        let acceptor = TlsAcceptor::from(Arc::new(tls_config));
         let listener = TcpListener::bind(addr_str)
             .await
             .map_err(|e| CoreError::Generic(format!("DoT bind error: {e}")))?;
@@ -86,13 +88,11 @@ impl AsyncService for DotService {
 }
 
 async fn handle_dot_connection(
-    stream: tokio::net::TcpStream,
-    acceptor: tokio_rustls::TlsAcceptor,
+    stream: TcpStream,
+    acceptor: TlsAcceptor,
     ctx: LanforgeContext,
     peer: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use crate::server::{DnsContext, handle_query};
-
     let mut tls_stream = acceptor.accept(stream).await?;
 
     // DNS over TCP/TLS uses a 2-byte length prefix

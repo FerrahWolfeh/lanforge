@@ -28,6 +28,7 @@ use lanforge_core::identifiers::MacAddr;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use std::collections::HashSet;
 
+use crate::config::DatabaseConfig;
 use crate::engine::LeaseDb;
 use crate::log_engine::LogDb;
 
@@ -42,7 +43,7 @@ use crate::log_engine::LogDb;
     describe = format!("Database Worker ({})", self.cfg.url)
 )]
 pub struct DbWorker {
-    cfg: crate::config::DatabaseConfig,
+    cfg: DatabaseConfig,
     ctx: LanforgeContext,
     dirty: bool,
     dirty_macs: HashSet<MacAddr>,
@@ -51,7 +52,7 @@ pub struct DbWorker {
 
 impl DbWorker {
     /// Creates a new `DbWorker` for the specified databases.
-    pub fn new(cfg: crate::config::DatabaseConfig, ctx: LanforgeContext) -> Self {
+    pub fn new(cfg: DatabaseConfig, ctx: LanforgeContext) -> Self {
         Self {
             cfg,
             ctx,

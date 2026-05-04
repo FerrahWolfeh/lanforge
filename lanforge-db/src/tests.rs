@@ -1,11 +1,14 @@
 #![cfg(test)]
 
-use crate::engine::LeaseDb;
+use crate::config::DatabaseConfig;
+use crate::engine::{LeaseAction, LeaseDb};
 use crate::worker::DbWorker;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::{DeviceUpdate, State};
 use lanforge_core::device::{Device, HostnameOrigin, IPv4State, IPv6State, V4Lease, V6PrefixLease};
 use lanforge_core::identifiers::{Duid, MacAddr};
+use lanforge_core::service::{AsyncService, ServiceControl};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -20,7 +23,7 @@ fn make_mac(last: u8) -> MacAddr {
 }
 
 async fn create_test_db() -> LeaseDb {
-    LeaseDb::open(&crate::config::DatabaseConfig {
+    LeaseDb::open(&DatabaseConfig {
         url: "sqlite::memory:".to_string(),
         ..Default::default()
     })
@@ -205,24 +208,14 @@ async fn test_lease_history_recording() {
     let db = create_test_db().await;
     let mac = make_mac(0x30);
 
-    db.record_lease_event(
-        mac,
-        "192.168.1.10",
-        "dhcpv4",
-        crate::engine::LeaseAction::Assigned,
-    )
-    .await
-    .unwrap();
+    db.record_lease_event(mac, "192.168.1.10", "dhcpv4", LeaseAction::Assigned)
+        .await
+        .unwrap();
     // Use >1s sleep because timestamps are in seconds
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    db.record_lease_event(
-        mac,
-        "192.168.1.10",
-        "dhcpv4",
-        crate::engine::LeaseAction::Renewed,
-    )
-    .await
-    .unwrap();
+    db.record_lease_event(mac, "192.168.1.10", "dhcpv4", LeaseAction::Renewed)
+        .await
+        .unwrap();
 
     let history = db
         .get_lease_history(mac)
@@ -230,8 +223,8 @@ async fn test_lease_history_recording() {
         .expect("Failed to get history");
     assert_eq!(history.len(), 2);
     // DESC order means Renewed (newest) comes first
-    assert_eq!(history[0].action, crate::engine::LeaseAction::Renewed);
-    assert_eq!(history[1].action, crate::engine::LeaseAction::Assigned);
+    assert_eq!(history[0].action, LeaseAction::Renewed);
+    assert_eq!(history[1].action, LeaseAction::Assigned);
 }
 
 // ---------------------------------------------------------------------------
@@ -240,9 +233,6 @@ async fn test_lease_history_recording() {
 
 #[tokio::test]
 async fn test_db_worker_lifecycle() {
-    use lanforge_core::context::LanforgeContext;
-    use lanforge_core::service::{AsyncService, ServiceControl};
-
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("worker.db");
     // SQLx requires the file to exist for SQLite if not configured otherwise
@@ -254,7 +244,7 @@ async fn test_db_worker_lifecycle() {
     let ctx = LanforgeContext::new(bus.clone(), table, None);
 
     let mut worker = DbWorker::new(
-        crate::config::DatabaseConfig {
+        DatabaseConfig {
             url: db_url.clone(),
             log_url: "sqlite::memory:".to_string(),
             ..Default::default()
@@ -299,7 +289,7 @@ async fn test_db_worker_lifecycle() {
     worker_handle.await.expect("Worker join failed");
 
     // Verify persistence
-    let db = LeaseDb::open(&crate::config::DatabaseConfig {
+    let db = LeaseDb::open(&DatabaseConfig {
         url: db_url.clone(),
         ..Default::default()
     })

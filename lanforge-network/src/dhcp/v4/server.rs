@@ -32,7 +32,7 @@
 //! | Decline | Mark IP as conflicted (2h quarantine) | None |
 //! | Inform | Provide config options (no IP) | Ack |
 
-use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode};
+use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Device;
@@ -45,6 +45,7 @@ use tracing::{debug, info, warn};
 use super::config::Dhcpv4Config;
 use super::pool::IpPool;
 use crate::dhcp::identity::DeviceIdentity;
+use crate::dhcp::options::parse_typed_option;
 
 /// Outcome of processing a DHCP message from a client.
 pub enum HandleResult {
@@ -436,8 +437,8 @@ impl DhcpServer {
 
     fn add_custom_options(&self, opts: &mut v4::DhcpOptions) {
         for (code, val) in &self.cfg.options {
-            if let Some(data) = crate::dhcp::options::parse_typed_option(val) {
-                opts.insert(DhcpOption::Unknown(v4::UnknownOption::new(
+            if let Some(data) = parse_typed_option(val) {
+                opts.insert(DhcpOption::Unknown(UnknownOption::new(
                     (*code).into(),
                     data,
                 )));

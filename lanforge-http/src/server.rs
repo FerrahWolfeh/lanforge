@@ -1,4 +1,7 @@
-use crate::error::{HttpError, Result as HttpResult};
+use crate::{
+    auth::{AuthManager, Claims},
+    error::{HttpError, Result as HttpResult},
+};
 use axum::{
     Json, Router,
     extract::{
@@ -9,6 +12,13 @@ use axum::{
     response::{IntoResponse, Response as AxumResponse},
     routing::{get, post},
 };
+#[cfg(feature = "doh")]
+use axum::{
+    body::Bytes,
+    extract::Query,
+    http::{HeaderMap, Method},
+};
+use axum_server::tls_rustls::RustlsConfig;
 use lanforge_api::api::{Command, Response};
 use lanforge_api::server::ClientContext;
 use lanforge_core::identifiers::MacAddr;
@@ -18,10 +28,12 @@ use lanforge_core::{
     device::{Device, Ipv6AddrOrSuffix, Origin},
     error::CoreError,
 };
+use lanforge_dns::tls_utils;
 use serde::{Deserialize, Serialize};
-use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::{net::Ipv4Addr, time::Instant};
 use tokio::net::TcpListener;
+use tower_http::services::ServeDir;
 use tracing::{error, info};
 
 use lanforge_core::context::LanforgeContext;
@@ -34,11 +46,11 @@ use lanforge_api::config::ApiConfig;
 pub struct AppState {
     pub cfg: Arc<ApiConfig>,
     pub ctx: LanforgeContext,
-    pub auth: Arc<crate::auth::AuthManager>,
-    pub start_time: std::time::Instant,
+    pub auth: Arc<AuthManager>,
+    pub start_time: Instant,
 }
 
-impl axum::extract::FromRef<AppState> for crate::auth::AuthManager {
+impl axum::extract::FromRef<AppState> for AuthManager {
     fn from_ref(state: &AppState) -> Self {
         (*state.auth).clone()
     }
@@ -94,8 +106,8 @@ impl AsyncService for HttpService {
         let state = AppState {
             cfg: cfg.clone(),
             ctx: self.ctx.clone(),
-            auth: Arc::new(crate::auth::AuthManager::new()),
-            start_time: std::time::Instant::now(),
+            auth: Arc::new(AuthManager::new()),
+            start_time: Instant::now(),
         };
 
         let mut app = Router::new()
@@ -110,7 +122,7 @@ impl AsyncService for HttpService {
 
         if let Some(boot_dir) = &cfg.boot_dir {
             info!("📂 Serving boot files from {}", boot_dir);
-            app = app.nest_service("/boot", tower_http::services::ServeDir::new(boot_dir));
+            app = app.nest_service("/boot", ServeDir::new(boot_dir));
         }
 
         #[cfg(feature = "doh")]
@@ -135,7 +147,7 @@ impl AsyncService for HttpService {
             && let Some(cert) = &cfg.tls_cert
             && let Some(key) = &cfg.tls_key
         {
-            match lanforge_dns::tls_utils::load_tls_config(cert, key) {
+            match tls_utils::load_tls_config(cert, key) {
                 Ok(config) => Some(config),
                 Err(e) => {
                     error!(
@@ -171,7 +183,7 @@ impl AsyncService for HttpService {
 
         if let Some(tls_config) = maybe_tls_config {
             info!("🚀 HTTPS API listening on https://{}", addr);
-            let config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls_config));
+            let config = RustlsConfig::from_config(Arc::new(tls_config));
             axum_server::bind_rustls(addr, config)
                 .handle(axum_server::Handle::new()) // For graceful shutdown if needed, but we use .serve
                 .serve(app.into_make_service())
@@ -356,7 +368,7 @@ async fn handle_login(
 
 async fn handle_rpc(
     State(state): State<AppState>,
-    _claims: crate::auth::Claims,
+    _claims: Claims,
     Json(cmd): Json<Command>,
 ) -> impl IntoResponse {
     let ctx = ClientContext {
@@ -373,7 +385,7 @@ async fn handle_rpc(
 
 async fn handle_ws(
     State(state): State<AppState>,
-    _claims: crate::auth::Claims,
+    _claims: Claims,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
@@ -420,15 +432,15 @@ pub struct DnsQueryParams {
 #[cfg(feature = "doh")]
 async fn handle_dns_query(
     State(state): State<AppState>,
-    axum::extract::Query(params): axum::extract::Query<DnsQueryParams>,
-    method: axum::http::Method,
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
+    Query(params): Query<DnsQueryParams>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use lanforge_dns::server::{DnsContext, handle_query};
 
-    let query_data = if method == axum::http::Method::GET {
+    let query_data = if method == Method::GET {
         let Some(dns_base64) = params.dns else {
             return (StatusCode::BAD_REQUEST, "Missing dns parameter").into_response();
         };

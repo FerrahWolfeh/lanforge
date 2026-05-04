@@ -5,8 +5,11 @@ use crate::{
     wire::{WireHeader, WireOptScanner, WireQuestion, qtypes::QType},
 };
 use hickory_proto::{op::Message, rr::RecordType, serialize::binary::BinDecodable};
-use lanforge_core::bus::{SystemEvent, TimedEvent};
-use std::{sync::Arc, time::Duration};
+use lanforge_core::{
+    bus::{SystemEvent, TimedEvent},
+    context::LanforgeContext,
+};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UdpSocket},
@@ -41,7 +44,7 @@ pub struct DnsContext {
     /// List of upstream managers, one per target, sorted by priority.
     pub upstreams: Vec<Arc<UpstreamManager>>,
     pub stats: Arc<DnsStats>,
-    pub ctx: lanforge_core::context::LanforgeContext,
+    pub ctx: LanforgeContext,
     #[cfg(feature = "adblock")]
     pub adblocker: Option<Arc<AdBlocker>>,
 }
@@ -64,12 +67,12 @@ use lanforge_core::service::{AsyncService, ServiceControl};
 pub struct DnsService {
     cfg: DnsConfig,
     stats: Arc<DnsStats>,
-    ctx: lanforge_core::context::LanforgeContext,
+    ctx: LanforgeContext,
 }
 
 impl DnsService {
     #[must_use]
-    pub fn new(cfg: DnsConfig, ctx: lanforge_core::context::LanforgeContext) -> Self {
+    pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
         let stats = Arc::new(DnsStats::new());
         ctx.set_dns_stats(Arc::clone(&stats));
         Self { cfg, stats, ctx }
@@ -355,7 +358,7 @@ impl AsyncService for DnsService {
 pub async fn handle_query(
     data: &[u8],
     ctx: &DnsContext,
-    src_addr: std::net::IpAddr,
+    src_addr: IpAddr,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     ctx.stats.inc_requests();
 
@@ -470,7 +473,7 @@ fn resolve_local_wire(
 async fn handle_query_fallback(
     data: &[u8],
     ctx: &DnsContext,
-    src_addr: std::net::IpAddr,
+    src_addr: IpAddr,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     let _ = src_addr;
 

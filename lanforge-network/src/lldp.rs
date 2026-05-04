@@ -9,6 +9,7 @@
 //! 2. Parse Chassis ID (Parent MAC) and Port ID (Parent Port).
 //! 3. Apply `DeviceUpdate::TopologyUpdated` to the central context.
 
+use std::mem::MaybeUninit;
 use std::os::unix::io::AsRawFd;
 use std::ptr::from_mut;
 
@@ -73,7 +74,7 @@ impl AsyncService for LldpMonitor {
 
             let mut guard = async_fd.readable().await.map_err(CoreError::Io)?;
             let uninit_buf =
-                unsafe { &mut *(from_mut(&mut buf).cast::<[std::mem::MaybeUninit<u8>; 2048]>()) };
+                unsafe { &mut *(from_mut(&mut buf).cast::<[MaybeUninit<u8>; 2048]>()) };
 
             match guard.get_inner().recv(uninit_buf) {
                 Ok(n) if n > 0 => {

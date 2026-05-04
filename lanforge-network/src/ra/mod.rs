@@ -340,7 +340,7 @@ impl RaService {
         buf: &mut [u8],
         ctx: RaContext<'_>,
         state: &mut RaState,
-    ) -> std::result::Result<(), CoreError> {
+    ) -> Result<(), CoreError> {
         let mut guard = res.map_err(CoreError::Io)?;
         let res = guard
             .get_inner()

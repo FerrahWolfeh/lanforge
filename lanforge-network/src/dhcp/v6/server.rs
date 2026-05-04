@@ -40,7 +40,7 @@
 
 use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,
-    Status, StatusCode,
+    Status, StatusCode, UnknownOption,
 };
 use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
@@ -838,7 +838,7 @@ impl Dhcpv6Server {
             // Option 59 (Bootfile URL)
             reply
                 .opts_mut()
-                .insert(DhcpOption::Unknown(dhcproto::v6::UnknownOption::new(
+                .insert(DhcpOption::Unknown(UnknownOption::new(
                     59.into(),
                     url.into_bytes(),
                 )));
@@ -850,7 +850,7 @@ impl Dhcpv6Server {
             if let Some(data) = crate::dhcp::options::parse_typed_option(val) {
                 reply
                     .opts_mut()
-                    .insert(DhcpOption::Unknown(dhcproto::v6::UnknownOption::new(
+                    .insert(DhcpOption::Unknown(UnknownOption::new(
                         (*code).into(),
                         data,
                     )));

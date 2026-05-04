@@ -41,6 +41,8 @@ use lanforge_core::context::LanforgeContext;
 
 use roaring::RoaringBitmap;
 
+use crate::dhcp::v4::config::Dhcpv4PoolConfig;
+
 /// Dynamic IPv4 address pool backed by a roaring bitmap.
 ///
 /// # Allocation Guarantees
@@ -50,7 +52,7 @@ use roaring::RoaringBitmap;
 /// - Quarantines `DECLINEd` IPs for 2 hours to avoid conflict storms
 pub struct IpPool {
     /// Configured pools (ranges).
-    pools: Vec<crate::dhcp::v4::config::Dhcpv4PoolConfig>,
+    pools: Vec<Dhcpv4PoolConfig>,
     /// IPs rejected via DECLINE with quarantine timestamp.
     declined: HashMap<Ipv4Addr, Instant>,
     /// Bitmap of free IPs — efficient O(1) insert/remove, O(log n) select.
@@ -60,7 +62,7 @@ pub struct IpPool {
 impl IpPool {
     /// Creates a new pool from a list of range configurations.
     #[must_use]
-    pub fn new(pools: Vec<crate::dhcp::v4::config::Dhcpv4PoolConfig>) -> Self {
+    pub fn new(pools: Vec<Dhcpv4PoolConfig>) -> Self {
         let mut available = RoaringBitmap::new();
         for pool in &pools {
             available.insert_range(u32::from(pool.range_start)..=u32::from(pool.range_end));

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rustls::ServerConfig;
+use rustls::crypto::ring;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
@@ -16,7 +17,7 @@ pub struct TlsAcceptor {
 /// Loads a TLS configuration from either filesystem paths or raw PEM strings.
 pub fn load_tls_config(cert_input: &str, key_input: &str) -> Result<ServerConfig, DnsError> {
     // Initialize the default crypto provider (Ring)
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = ring::default_provider().install_default();
 
     let certs = load_certs(cert_input)?;
     let key = load_private_key(key_input)?;

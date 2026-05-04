@@ -10,23 +10,19 @@ pub enum Pool {
 }
 
 impl Pool {
-    pub async fn connect(
-        url: &str,
-        max_conns: u32,
-        min_conns: u32,
-    ) -> Result<Self, sqlx::Error> {
+    pub async fn connect(url: &str, max_conns: u32, min_conns: u32) -> Result<Self, sqlx::Error> {
         if url.starts_with("sqlite:") {
             #[cfg(feature = "sqlite")]
             {
-                use sqlx::sqlite::SqliteConnectOptions;
+                use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
                 use std::str::FromStr;
 
                 let opts = SqliteConnectOptions::from_str(url)?
                     .create_if_missing(true)
-                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .journal_mode(SqliteJournalMode::Wal)
                     .foreign_keys(true);
 
-                let pool = sqlx::sqlite::SqlitePoolOptions::new()
+                let pool = SqlitePoolOptions::new()
                     .max_connections(max_conns)
                     .min_connections(min_conns)
                     .connect_with(opts)

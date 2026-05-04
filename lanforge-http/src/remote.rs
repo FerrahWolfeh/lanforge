@@ -1,5 +1,6 @@
 use lanforge_api::api::{Command, Response};
 use reqwest::Client as HttpClient;
+use tokio::sync::mpsc::Receiver;
 use tracing::info;
 
 use crate::error::{HttpError, Result};
@@ -83,7 +84,7 @@ impl RemoteClient {
     /// Establishes a WebSocket connection for streaming events.
     /// Note: This currently requires tokio-tungstenite which is not yet in lanforge-http deps.
     /// Simplified for now to return an error unless we add the dependency.
-    pub fn connect_ws(&self) -> Result<tokio::sync::mpsc::Receiver<Response>> {
+    pub fn connect_ws(&self) -> Result<Receiver<Response>> {
         Err(HttpError::Internal(
             "WebSocket streaming not yet implemented in this crate version".to_string(),
         ))

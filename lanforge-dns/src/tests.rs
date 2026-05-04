@@ -83,7 +83,7 @@ fn resolve_local_matches_question_name_exactly() {
 
     let mut query = Message::query();
     let name = Name::from_str("solarium.lan.").unwrap();
-    query.add_query(hickory_proto::op::Query::query(name.clone(), RecordType::A));
+    query.add_query(Query::query(name.clone(), RecordType::A));
 
     let device = ctx.get_device(&mac).unwrap();
     let result = resolve_local(&query, &device, RecordType::A, &cfg, ctx).unwrap();
@@ -300,7 +300,7 @@ fn test_local_resolver_direct_api() {
     register_test_device(&ctx, "direct", mac, Ipv4Addr::new(10, 10, 10, 10));
     let resolver = crate::resolver::LocalResolver::new(&cfg, ctx);
     let mut query = Message::query();
-    query.add_query(hickory_proto::op::Query::query(
+    query.add_query(Query::query(
         Name::from_str("direct.lan.").unwrap(),
         RecordType::A,
     ));

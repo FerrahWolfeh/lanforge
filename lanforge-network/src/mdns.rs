@@ -21,6 +21,7 @@
 //!
 //! Marked as `critical: false` — failure does not halt the daemon.
 
+use lanforge_core::device::DeviceClass;
 use lanforge_macros::ServiceConfig;
 use serde::{Deserialize, Serialize};
 
@@ -398,22 +399,22 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
     }
 
     // Passive Classification Mapping
-    let classify = |name: &str| -> Option<lanforge_core::device::DeviceClass> {
+    let classify = |name: &str| -> Option<DeviceClass> {
         let n = name.to_lowercase();
         if n.contains("printer") || n.contains("_ipp") || n.contains("_pdl-datastream") {
-            Some(lanforge_core::device::DeviceClass::Printer)
+            Some(DeviceClass::Printer)
         } else if n.contains("_airplay")
             || n.contains("_googlecast")
             || n.contains("_spotify")
             || n.contains("_raop")
         {
-            Some(lanforge_core::device::DeviceClass::Media)
+            Some(DeviceClass::Media)
         } else if n.contains("_hap") || n.contains("_miio") || n.contains("_homekit") {
-            Some(lanforge_core::device::DeviceClass::IoT)
+            Some(DeviceClass::IoT)
         } else if n.contains("_ssh") || n.contains("_smb") || n.contains("_afp") {
-            Some(lanforge_core::device::DeviceClass::Computer)
+            Some(DeviceClass::Computer)
         } else if n.contains("_ubnt") || n.contains("_unifi") || n.contains("_mikrotik") {
-            Some(lanforge_core::device::DeviceClass::Network)
+            Some(DeviceClass::Network)
         } else {
             None
         }
@@ -435,10 +436,7 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
                 if let Some(class) = classify(&h)
                     && let Some(mac) = ctx.get_mac_by_ip(from.ip())
                 {
-                    let _ = ctx.apply(lanforge_core::context::state::DeviceUpdate::ClassHint {
-                        mac,
-                        class,
-                    });
+                    let _ = ctx.apply(DeviceUpdate::ClassHint { mac, class });
                 }
                 continue;
             }
@@ -449,10 +447,7 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
             if let Some(mac) = mac {
                 // If it has a classification hit, apply it
                 if let Some(class) = classify(&h) {
-                    let _ = ctx.apply(lanforge_core::context::state::DeviceUpdate::ClassHint {
-                        mac,
-                        class,
-                    });
+                    let _ = ctx.apply(DeviceUpdate::ClassHint { mac, class });
                 }
 
                 // If it already has a hostname, skip update to avoid useless noise

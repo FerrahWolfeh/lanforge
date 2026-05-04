@@ -56,7 +56,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
-use tokio::time::sleep;
+use tokio::time::{interval, sleep};
 use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,12 @@ impl NeighborMonitor {
     }
 }
 
-async fn run_subnet_scan_task(handle: Handle, ctx: LanforgeContext, ifindex: u32, pacing: Duration) {
+async fn run_subnet_scan_task(
+    handle: Handle,
+    ctx: LanforgeContext,
+    ifindex: u32,
+    pacing: Duration,
+) {
     let interface_state = ctx.get_interface_state(ifindex);
     if let Some((ip, prefix_len)) = interface_state.v4 {
         let range = get_ipv4_subnet_iterable(ip, prefix_len);
@@ -226,7 +231,7 @@ impl AsyncService for NeighborMonitor {
         ctrl.signal_ready();
 
         let mut pending_batch = Vec::new();
-        let mut flush_timer = tokio::time::interval(std::time::Duration::from_millis(self.cfg.batch_interval_ms));
+        let mut flush_timer = interval(Duration::from_millis(self.cfg.batch_interval_ms));
 
         loop {
             if !self.ctx.is_running() {
