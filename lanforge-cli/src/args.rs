@@ -112,14 +112,17 @@ pub struct LanforgeArgs {
     pub socket: String,
 
     /// Remote URL of the Lanforge daemon (e.g. https://192.168.1.1:8080)
+    #[cfg(feature = "remote")]
     #[arg(long, global = true, env = "LANFORGE_REMOTE_URL")]
     pub remote: Option<String>,
 
     /// Authentication token for remote connection.
+    #[cfg(feature = "remote")]
     #[arg(long, global = true, env = "LANFORGE_TOKEN")]
     pub token: Option<String>,
 
     /// Password for remote connection (used to obtain a token).
+    #[cfg(feature = "remote")]
     #[arg(long, global = true, env = "LANFORGE_PASSWORD")]
     pub password: Option<String>,
 }

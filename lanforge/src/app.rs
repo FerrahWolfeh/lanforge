@@ -11,11 +11,11 @@ use crate::event_loop::run_event_loop;
 use crate::registry::ServiceRegistry;
 use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
-use lanforge_dns::server::DnsService;
-#[cfg(feature = "dot")]
-use lanforge_dns::DotService;
 #[cfg(feature = "doq")]
 use lanforge_dns::DoqService;
+#[cfg(feature = "dot")]
+use lanforge_dns::DotService;
+use lanforge_dns::server::DnsService;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
 use lanforge_network::dhcp::v4::Dhcpv4Service;
@@ -50,12 +50,60 @@ impl Daemon {
         let bus = self.ctx.bus();
         let bus_rx = bus.subscribe();
 
+        self.validate_features();
         self.spawn_services();
         let expected = self.registry.registered_ids();
 
         run_event_loop(self.bootstrap.clone(), self.ctx.clone(), bus_rx, expected).await?;
 
         self.shutdown().await
+    }
+
+    fn validate_features(&self) {
+        let cfg = &self.bootstrap.cfg;
+
+        #[cfg(not(feature = "dot"))]
+        if cfg.dns_toml.dot_enabled {
+            tracing::error!(
+                "❌ Feature 'dot' (DNS-over-TLS) is enabled in configuration but not compiled in the binary!"
+            );
+        }
+
+        #[cfg(not(feature = "doq"))]
+        if cfg.dns_toml.doq_enabled {
+            tracing::error!(
+                "❌ Feature 'doq' (DNS-over-QUIC) is enabled in configuration but not compiled in the binary!"
+            );
+        }
+
+        #[cfg(not(feature = "http"))]
+        if cfg.http_toml.enabled {
+            tracing::error!(
+                "❌ Feature 'http' (REST API / Metrics) is enabled in configuration but not compiled in the binary!"
+            );
+        }
+
+        #[cfg(not(feature = "adblock"))]
+        if cfg.dns_enabled && cfg.dns_toml.adblock_enabled {
+            tracing::error!(
+                "❌ Feature 'adblock' is enabled in configuration but not compiled in the binary!"
+            );
+        }
+
+        // Database checks
+        #[cfg(not(feature = "sqlite"))]
+        if cfg.database.url.starts_with("sqlite") {
+            tracing::error!(
+                "❌ Database URL suggests SQLite but feature 'sqlite' is not compiled in!"
+            );
+        }
+
+        #[cfg(not(feature = "postgres"))]
+        if cfg.database.url.starts_with("postgres") || cfg.database.url.starts_with("postgresql") {
+            tracing::error!(
+                "❌ Database URL suggests PostgreSQL but feature 'postgres' is not compiled in!"
+            );
+        }
     }
 
     fn spawn_services(&mut self) {

@@ -16,6 +16,7 @@ async fn main() -> Result<()> {
     match cli {
         Cli::Lanforge(args) => {
             if let Some(cmd) = args.command {
+                #[cfg(feature = "remote")]
                 if let Some(remote_url) = &args.remote {
                     {
                         use lanforge_http::RemoteClient;
@@ -31,7 +32,6 @@ async fn main() -> Result<()> {
                         if cmd == Command::Tui {
                             return crate::tui::run_tui(
                                 None,
-                                #[cfg(feature = "remote")]
                                 Some(client),
                             )
                             .await;

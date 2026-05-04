@@ -13,24 +13,32 @@ path = "src/main.rs"
 [features]
 default = ["sqlite"]
 debug-commands = []
+
+# Database Backends
 sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]
+
+# Networking Protocols
+http = ["dep:lanforge-http", "lanforge-http/server"]
+https = ["dep:lanforge-http", "lanforge-http/server"]
+doh = ["dep:lanforge-http", "lanforge-http/doh"]
+dot = ["lanforge-dns/dot"]
+doq = ["lanforge-dns/doq"]
+
+# Core Features
 adblock = [
     "lanforge-dns/adblock",
     "lanforge-db/adblock",
 ]
-http = ["lanforge-http/server"]
-dot = ["lanforge-dns/dot"]
-doq = ["lanforge-dns/doq"]
-https = ["lanforge-http/server"]
-doh = ["lanforge-http/doh"]
 zstd = ["lanforge-api/zstd"]
+
+# Meta-features
 full = [
     "http",
-    "dot",
-    "doq",
     "https",
     "doh",
+    "dot",
+    "doq",
     "adblock",
     "postgres",
     "sqlite",

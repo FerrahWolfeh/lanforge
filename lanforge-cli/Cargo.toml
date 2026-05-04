@@ -12,11 +12,12 @@ name = "lanforge"
 path = "src/main.rs"
 
 [features]
-default = ["sqlite", "zstd", "tui"]
+default = ["sqlite", "zstd", "tui", "remote"]
 sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]
 zstd = ["dep:zstd"]
 remote = [
+    "dep:lanforge-http",
     "dep:reqwest",
     "dep:tokio-tungstenite",
     "dep:url",
@@ -38,7 +39,7 @@ serde_json = "1.0.149"
 tokio = { version = "1.50.0", features = ["full"] }
 tracing = "0.1.44"
 lanforge-api = { path = "../lanforge-api" }
-lanforge-http = { path = "../lanforge-http", features = ["remote"] }
+lanforge-http = { path = "../lanforge-http", features = ["remote"], optional = true }
 lanforge-core = { path = "../lanforge-core" }
 lanforge-db = { path = "../lanforge-db" }
 lanforge-macros = { path = "../lanforge-macros" }

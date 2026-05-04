@@ -104,6 +104,7 @@ impl TryFrom<String> for UpstreamTarget {
 }
 
 /// Configuration for the DNS service.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
 #[config(key = "dns")]
 #[serde(default)]
@@ -131,10 +132,8 @@ pub struct DnsConfig {
     #[serde(skip)]
     pub multi_search_labels: Vec<Vec<Vec<u8>>>,
 
-    #[cfg(feature = "adblock")]
     /// Whether the micro-adblocker is enabled.
     pub adblock_enabled: bool,
-    #[cfg(feature = "adblock")]
     /// List of URLs to fetch blocklists from.
     pub adblock_urls: Vec<String>,
 
@@ -170,9 +169,7 @@ impl Default for DnsConfig {
             gua_prefix: None,
             ttl: 60,
             multi_search_labels: vec![vec![b"lan".to_vec()]],
-            #[cfg(feature = "adblock")]
             adblock_enabled: false,
-            #[cfg(feature = "adblock")]
             adblock_urls: Vec::new(),
             last_seen_threshold_days: 7,
             dot_listen: None,
