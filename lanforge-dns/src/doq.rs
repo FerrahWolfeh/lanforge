@@ -1,6 +1,6 @@
+use quinn::{Endpoint, ServerConfig, TransportConfig};
 use std::sync::Arc;
 use std::time::Duration;
-use quinn::{Endpoint, ServerConfig, TransportConfig};
 use tracing::{debug, info};
 
 use lanforge_core::context::LanforgeContext;

@@ -1,7 +1,7 @@
 use clap::Parser;
-use std::net::Ipv4Addr;
 #[cfg(feature = "debug-commands")]
 use clap::Subcommand;
+use std::net::Ipv4Addr;
 
 #[cfg(feature = "debug-commands")]
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

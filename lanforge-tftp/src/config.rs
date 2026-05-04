@@ -1,7 +1,7 @@
 //! Configuration for the TFTP server.
 
-use serde::{Deserialize, Serialize};
 use lanforge_macros::ServiceConfig;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Configuration for the TFTP service.

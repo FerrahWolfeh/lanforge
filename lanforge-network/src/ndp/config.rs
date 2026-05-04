@@ -1,7 +1,7 @@
 //! Configuration for the neighbor monitor and network tuning.
 
-use serde::{Deserialize, Serialize};
 use lanforge_macros::ServiceConfig;
+use serde::{Deserialize, Serialize};
 
 /// Configuration for the network monitor and internal tuning.
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
@@ -12,10 +12,10 @@ pub struct MonitorConfig {
     pub enabled: bool,
     /// Pacing between ARP/NDP probes during a subnet scan (milliseconds).
     pub scan_pacing_ms: u64,
-    
+
     /// Interval for batching neighbor events before applying updates (milliseconds).
     pub batch_interval_ms: u64,
-    
+
     /// Seconds after which a neighbor is considered stale if no activity is detected.
     pub stale_timeout_secs: u64,
 }

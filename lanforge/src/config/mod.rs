@@ -232,7 +232,10 @@ impl Config {
                 if let Some(upstream) = cli.dns_upstream
                     && let Ok(target) = upstream.parse()
                 {
-                    d.upstreams = vec![PrioritizedUpstream { target, priority: 1 }];
+                    d.upstreams = vec![PrioritizedUpstream {
+                        target,
+                        priority: 1,
+                    }];
                 }
                 if let Some(port) = cli.dns_port {
                     d.listen.set_port(port);
@@ -338,7 +341,9 @@ impl Config {
 
         // Prefix detection
         if let Some(p) = self.ra_toml.prefixes.iter().find(|p| {
-            p.source == PrefixSource::AutoGua || p.source == PrefixSource::Static || p.source == PrefixSource::Ula
+            p.source == PrefixSource::AutoGua
+                || p.source == PrefixSource::Static
+                || p.source == PrefixSource::Ula
         }) {
             if let Some(addr) = p.resolved_address() {
                 cfg.ula_prefix = Some(addr);
@@ -390,7 +395,11 @@ impl Config {
 
         // Prefix detection (if not explicitly set in DNS config)
         if cfg.ula_prefix.is_none() {
-            cfg.ula_prefix = self.ra_toml.prefixes.iter().find_map(|p| p.resolved_address());
+            cfg.ula_prefix = self
+                .ra_toml
+                .prefixes
+                .iter()
+                .find_map(|p| p.resolved_address());
         }
 
         cfg
@@ -461,11 +470,19 @@ impl Config {
             .first()
             .map(|u| format!("{} (prio {})", String::from(u.target.clone()), u.priority));
         cfg.boot_dir = Some(self.tftp_toml.root_dir.to_string_lossy().to_string());
-        
+
         // Inherit TLS from system if not set in HTTP
-        cfg.tls_cert = self.http_toml.tls_cert.clone().or_else(|| self.system.tls_cert.clone());
-        cfg.tls_key = self.http_toml.tls_key.clone().or_else(|| self.system.tls_key.clone());
-        
+        cfg.tls_cert = self
+            .http_toml
+            .tls_cert
+            .clone()
+            .or_else(|| self.system.tls_cert.clone());
+        cfg.tls_key = self
+            .http_toml
+            .tls_key
+            .clone()
+            .or_else(|| self.system.tls_key.clone());
+
         cfg.dot_listen = self.dns_toml.dot_listen;
         cfg.dot_enabled = self.dns_toml.dot_enabled;
         cfg.doh_enabled = self.http_toml.doh_enabled;

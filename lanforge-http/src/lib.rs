@@ -9,10 +9,10 @@ pub mod remote;
 #[cfg(feature = "server")]
 pub mod server;
 
-#[cfg(feature = "server")]
-pub use server::HttpService;
 #[cfg(feature = "remote")]
 pub use remote::RemoteClient;
+#[cfg(feature = "server")]
+pub use server::HttpService;
 
 #[cfg(test)]
 mod tests;

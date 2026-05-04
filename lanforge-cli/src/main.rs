@@ -30,11 +30,7 @@ async fn main() -> Result<()> {
 
                         #[cfg(feature = "tui")]
                         if cmd == Command::Tui {
-                            return crate::tui::run_tui(
-                                None,
-                                Some(client),
-                            )
-                            .await;
+                            return crate::tui::run_tui(None, Some(client)).await;
                         }
 
                         let mut handler = match cmd {

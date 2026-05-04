@@ -148,7 +148,9 @@ pub fn load_toml(path: &str) -> TomlConfig {
             match T::deserialize(sec_val.clone()) {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!("[config]   - [FAIL] Section [{key}]: {e} (using defaults for this section)");
+                    warn!(
+                        "[config]   - [FAIL] Section [{key}]: {e} (using defaults for this section)"
+                    );
                     T::default()
                 }
             }
@@ -235,7 +237,7 @@ iface = "eth42"
 source = "broken" # Invalid variant
 "#;
         let value: toml::Value = toml::from_str(content).unwrap();
-        
+
         // Helper for section-by-section loading (copy-pasted from load_toml for testing)
         fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
             if let Some(sec_val) = v.get(key) {

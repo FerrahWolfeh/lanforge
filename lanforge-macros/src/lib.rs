@@ -579,7 +579,8 @@ pub fn service_config_derive(input: TokenStream) -> TokenStream {
         }
     }
 
-    let key = key.expect("ServiceConfig requires a 'key' attribute (e.g., #[config(key = \"dns\")])");
+    let key =
+        key.expect("ServiceConfig requires a 'key' attribute (e.g., #[config(key = \"dns\")])");
 
     quote! {
         impl lanforge_core::config::ServiceConfig for #name {
