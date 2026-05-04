@@ -92,12 +92,9 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
 
     // ── Option 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
     let rdnss_lt = |rd: &RdnssConfig| -> u32 {
-        u32::try_from(
-            rd.lifetime
-                .unwrap_or_else(|| cfg.max_interval * 2)
-                .as_secs(),
-        )
-        .unwrap_or(u32::MAX)
+        rd.lifetime.unwrap_or_else(|| {
+            u32::try_from(cfg.max_interval.as_secs() * 2).unwrap_or(u32::MAX)
+        })
     };
 
     for rdnss in &cfg.rdnss {
@@ -117,12 +114,9 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
 
     // ── Option 31: DNSSL (RFC 8106 §3.2) ─────────────────────────────────
     let dnssl_lt = |ds: &DnsslConfig| -> u32 {
-        u32::try_from(
-            ds.lifetime
-                .unwrap_or_else(|| cfg.max_interval * 2)
-                .as_secs(),
-        )
-        .unwrap_or(u32::MAX)
+        ds.lifetime.unwrap_or_else(|| {
+            u32::try_from(cfg.max_interval.as_secs() * 2).unwrap_or(u32::MAX)
+        })
     };
 
     for dnssl in &cfg.dnssl {

@@ -166,7 +166,7 @@ pub enum PrefixSource {
 /// | L | `on_link` | Clients treat addresses in this prefix as on-link neighbors |
 /// | A | `autonomous` | Enables SLAAC — clients autoconfigure addresses via EUI-64 |
 /// | R | `router_addr` | This address is the router's own address (Mobile IPv6, RFC 3775) |
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PrefixConfig {
     pub source: PrefixSource,
@@ -183,6 +183,12 @@ pub struct PrefixConfig {
     pub router_addr: bool,
     pub valid_lifetime: PrefixLifetime,
     pub preferred_lifetime: PrefixLifetime,
+}
+
+impl Default for PrefixConfig {
+    fn default() -> Self {
+        Self::gua_dynamic()
+    }
 }
 
 impl PrefixConfig {
@@ -232,9 +238,10 @@ impl PrefixConfig {
 #[serde(default)]
 pub struct RdnssConfig {
     pub servers: Vec<Ipv6Addr>,
+    /// Lifetime in seconds.
     /// None → 2 × `MaxRtrAdvInterval` (RFC 8106 §5.1: recommended minimum to
     /// survive lost RAs; in practice, use >= 6 × `MaxRtrAdvInterval`).
-    pub lifetime: Option<Duration>,
+    pub lifetime: Option<u32>,
 }
 
 impl RdnssConfig {
@@ -250,7 +257,7 @@ impl RdnssConfig {
     pub const fn with_lifetime(servers: Vec<Ipv6Addr>, secs: u32) -> Self {
         Self {
             servers,
-            lifetime: Some(Duration::from_secs(secs as u64)),
+            lifetime: Some(secs),
         }
     }
 }
@@ -263,8 +270,9 @@ impl RdnssConfig {
 pub struct DnsslConfig {
     /// Domain names (e.g., `["lan", "home.arpa"]`).
     pub domains: Vec<String>,
+    /// Lifetime in seconds.
     /// None → same policy as RDNSS (2 × `MaxRtrAdvInterval`).
-    pub lifetime: Option<Duration>,
+    pub lifetime: Option<u32>,
 }
 
 /// Full RA service configuration for an interface.
