@@ -8,8 +8,11 @@ default = ["sqlite", "adblock"]
 sqlite = ["sqlx/sqlite"]
 postgres = ["sqlx/postgres"]
 adblock = ["lanforge-core/adblock"]
+hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc", "lanforge-core/hotpath-alloc"]
 
 [dependencies]
+hotpath = { workspace = true, optional = true }
 # rusqlite = { version = "0.39.0", features = ["bundled"] }
 sqlx = { version = "0.8", features = [
     "runtime-tokio",

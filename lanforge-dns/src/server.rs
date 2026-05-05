@@ -361,6 +361,7 @@ impl AsyncService for DnsService {
 ///     Local2 -->|Found| Return
 ///     Local2 -->|Not Found| Upstream
 /// ```
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub async fn handle_query(
     data: &[u8],
     ctx: &DnsContext,

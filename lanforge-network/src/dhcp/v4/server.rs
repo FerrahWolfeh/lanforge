@@ -122,6 +122,7 @@ impl DhcpServer {
     /// the appropriate handler (Discover, Request, Release, Decline, Inform).
     /// The result (`HandleResult`) contains the response packet or signals
     /// a release/ignore action.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn handle_packet(&mut self, data: &[u8], device: Option<Arc<Device>>) -> HandleResult {
         self.last_assigned_ip = None;
         let msg = match Message::decode(&mut Decoder::new(data)) {

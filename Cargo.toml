@@ -13,6 +13,11 @@ members = [
 ]
 resolver = "3"
 
+[workspace.dependencies]
+hotpath = { version = "0.15", default-features = false }
+tikv-jemallocator = { version = "0.6", features = ["profiling"] }
+
+
 
 [profile.release]
 opt-level = 3

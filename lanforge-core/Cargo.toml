@@ -11,7 +11,9 @@ tokio = { version = "1.50.0", features = ["macros", "sync"] }
 tracing = "0.1.44"
 argon2 = "0.5.3"
 rand = "0.8.6"
+hotpath = { workspace = true, optional = true }
 lanforge-macros = { path = "../lanforge-macros" }
+
 smallvec = { version = "1.15.1", features = [
     "union",
     "const_generics",
@@ -23,7 +25,10 @@ tokio = { version = "1.50.0", features = ["macros", "sync", "rt-multi-thread"] }
 
 [features]
 adblock = []
+hotpath = ["dep:hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 default = []
+
 
 [lints.clippy]
 nursery = "warn"

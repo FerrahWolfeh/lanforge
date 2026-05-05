@@ -14,6 +14,28 @@ path = "src/main.rs"
 default = ["sqlite"]
 debug-commands = []
 
+# Profiling & Diagnostics
+hotpath = [
+    "dep:hotpath",
+    "hotpath/hotpath",
+    "hotpath/threads",
+    "lanforge-core/hotpath",
+    "lanforge-dns/hotpath",
+    "lanforge-network/hotpath",
+    "lanforge-db/hotpath",
+]
+hotpath-mcp = ["hotpath", "hotpath/hotpath-mcp"]
+hotpath-alloc = [
+    "hotpath",
+    "hotpath/hotpath-alloc",
+    "lanforge-core/hotpath-alloc",
+    "lanforge-dns/hotpath-alloc",
+    "lanforge-network/hotpath-alloc",
+    "lanforge-db/hotpath-alloc",
+]
+jemalloc = ["dep:tikv-jemallocator"]
+
+
 # Database Backends
 sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]
@@ -84,6 +106,9 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
     "ansi",
 ] }
 lanforge-tftp = { version = "0.1.0", path = "../lanforge-tftp" }
+hotpath = { workspace = true, optional = true }
+tikv-jemallocator = { workspace = true, optional = true }
+
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "io-util"] }

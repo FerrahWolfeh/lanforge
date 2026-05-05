@@ -24,6 +24,7 @@ impl LanforgeContext {
 
     /// Applies a state mutation and returns any events that were published to the bus.
     #[must_use]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn apply_with_events(&self, update: DeviceUpdate) -> Vec<crate::bus::LanforgeEvent> {
         // 1. Update Metrics
         self.update_metrics(&update);

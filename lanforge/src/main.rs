@@ -12,6 +12,10 @@ use lanforge::bootstrap::Bootstrapper;
 use tokio::runtime::Builder;
 use tracing_subscriber::EnvFilter;
 
+#[cfg(all(feature = "jemalloc", not(feature = "hotpath-alloc")))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 fn main() -> Result<()> {
     let rt = Builder::new_current_thread()
         .enable_all()
@@ -35,6 +39,10 @@ async fn async_main() -> Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    // 1.1 Setup Profiling
+    #[cfg(feature = "hotpath")]
+    let _hotpath = hotpath::HotpathGuardBuilder::new("lanforged").build();
 
     // 2. Run Bootstrap
     let (bootstrap, ctx) = Bootstrapper::run().await?;

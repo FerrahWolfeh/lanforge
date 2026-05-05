@@ -334,6 +334,7 @@ impl RaService {
         }
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn handle_rs_packet(
         &self,
         res: io::Result<AsyncFdReadyGuard<'_, Socket>>,
@@ -422,6 +423,7 @@ impl RaService {
     }
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn send_ra_internal(
     lctx: &LanforgeContext,
     socket: &AsyncFd<Socket>,

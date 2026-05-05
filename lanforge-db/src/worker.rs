@@ -63,6 +63,7 @@ impl DbWorker {
     }
 
     /// Flushes the current device table to the persistent database.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn flush_batch(&mut self, db: &LeaseDb, log_db: &LogDb) {
         // 1. Flush Logs
         if !self.log_buffer.is_empty() {

@@ -14,6 +14,8 @@ tokio = { version = "1.52.1", features = ["io-util", "net", "time", "rt"] }
 tracing = "0.1.44"
 thiserror = "2.0.18"
 serde = { version = "1.0.228", features = ["derive"] }
+hotpath = { workspace = true, optional = true }
+
 ureq = { version = "3.3.0", optional = true }
 dashmap = { version = "6.1.0", optional = true }
 parking_lot = "0.12.5"
@@ -38,7 +40,10 @@ dot = [
     "dep:webpki-roots",
 ]
 doq = ["dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc", "lanforge-core/hotpath-alloc"]
 default = []
+
 
 [dev-dependencies]
 tokio = { version = "1.50.0", features = ["io-util", "net", "rt", "time"] }

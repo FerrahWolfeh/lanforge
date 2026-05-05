@@ -30,6 +30,13 @@ hickory-proto = { version = "0.26.0", features = [
 roaring = "0.11.3"
 serde = { version = "1.0.228", features = ["derive"] }
 hex = "0.4.3"
+hotpath = { workspace = true, optional = true }
+
+
+[features]
+hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc", "lanforge-core/hotpath-alloc"]
+default = []
 
 [dev-dependencies]
 tokio = { version = "1.51.0", features = ["full"] }
