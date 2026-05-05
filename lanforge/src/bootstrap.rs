@@ -27,7 +27,7 @@ type NetlinkRawMessage = (NetlinkMessage<RouteNetlinkMessage>, SocketAddr);
 type NetlinkMessages = broadcast::Sender<NetlinkRawMessage>;
 type NetlinkRawReceiver = UnboundedReceiver<NetlinkRawMessage>;
 
-const NETLINK_BROADCAST_CAPACITY: usize = 256;
+const NETLINK_BROADCAST_CAPACITY: usize = 1024;
 
 #[derive(Clone)]
 pub struct BootstrapResult {

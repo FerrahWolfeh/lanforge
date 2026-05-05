@@ -127,6 +127,7 @@ impl Default for AdBlocker {
 ///
 /// Performs a single allocation for the resulting string.
 #[must_use]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn labels_to_domain(labels: WireLabelIter<'_>) -> String {
     let mut domain = String::with_capacity(64);
     for label in labels {

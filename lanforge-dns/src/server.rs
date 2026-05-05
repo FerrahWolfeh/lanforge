@@ -13,7 +13,7 @@ use lanforge_core::{
     bus::{SystemEvent, TimedEvent},
     context::LanforgeContext,
 };
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UdpSocket},
@@ -51,6 +51,11 @@ pub struct DnsContext {
     pub ctx: LanforgeContext,
     #[cfg(feature = "adblock")]
     pub adblocker: Option<Arc<AdBlocker>>,
+
+    // Pre-computed SOA names for NXDOMAIN/NODATA responses
+    pub soa_zone: Name,
+    pub soa_master_ns: Name,
+    pub soa_mailbox: Name,
 }
 
 use lanforge_core::error::CoreError;
@@ -116,6 +121,18 @@ impl DnsService {
             None
         };
 
+        let domain_base = self
+            .cfg
+            .search_domains
+            .first()
+            .map_or("lan", |d| d.as_str());
+
+        let soa_zone = Name::from_str(&format!("{domain_base}.")).unwrap_or_else(|_| Name::root());
+        let soa_master_ns =
+            Name::from_str(&format!("ns.{domain_base}.")).unwrap_or_else(|_| Name::root());
+        let soa_mailbox =
+            Name::from_str(&format!("hostmaster.{domain_base}.")).unwrap_or_else(|_| Name::root());
+
         Ok(Arc::new(DnsContext {
             cfg: self.cfg.clone(),
             upstreams,
@@ -123,6 +140,9 @@ impl DnsService {
             ctx: self.ctx.clone(),
             #[cfg(feature = "adblock")]
             adblocker,
+            soa_zone,
+            soa_master_ns,
+            soa_mailbox,
         }))
     }
 
@@ -460,7 +480,7 @@ fn resolve_local_wire(
                     qname,
                     RecordType::from(raw_qtype),
                     edns,
-                    &ctx.cfg,
+                    ctx,
                 );
 
                 let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ip(
@@ -480,7 +500,7 @@ fn resolve_local_wire(
                     qname.clone(),
                     RecordType::from(raw_qtype),
                     edns,
-                    &ctx.cfg,
+                    ctx,
                 );
 
                 let resp =
@@ -496,6 +516,7 @@ fn resolve_local_wire(
 }
 
 /// Fallback logic for queries that are too complex for the zero-alloc wire parser.
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 async fn handle_query_fallback(
     data: &[u8],
     ctx: &DnsContext,
@@ -506,7 +527,7 @@ async fn handle_query_fallback(
     let Ok(query) = Message::from_bytes(data) else {
         return Ok(None);
     };
-    let rb = ResponseBuilder::new(&query, &ctx.cfg);
+    let rb = ResponseBuilder::new(&query, ctx);
     let question = query.queries.first().ok_or(DnsError::WireParseError)?;
     let qname = question.name();
     let qtype = question.query_type();

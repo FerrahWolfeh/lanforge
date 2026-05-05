@@ -37,6 +37,31 @@ fn mock_config() -> DnsConfig {
 }
 
 // Helpers para testes que operam diretamente no DeviceTable (sem async)
+fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
+    let domain_base = cfg
+        .search_domains
+        .first()
+        .map_or_else(|| "lan".to_string(), |d| d.clone());
+
+    let soa_zone = Name::from_str(&format!("{domain_base}.")).unwrap_or_else(|_| Name::root());
+    let soa_master_ns =
+        Name::from_str(&format!("ns.{domain_base}.")).unwrap_or_else(|_| Name::root());
+    let soa_mailbox =
+        Name::from_str(&format!("hostmaster.{domain_base}.")).unwrap_or_else(|_| Name::root());
+
+    DnsContext {
+        cfg,
+        upstreams: Vec::new(),
+        stats: Arc::new(DnsStats::default()),
+        ctx,
+        #[cfg(feature = "adblock")]
+        adblocker: None,
+        soa_zone,
+        soa_master_ns,
+        soa_mailbox,
+    }
+}
+
 fn register_test_device(ctx: &LanforgeContext, hostname: &str, mac: MacAddr, ip: Ipv4Addr) {
     let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
         mac,
@@ -59,8 +84,9 @@ pub fn resolve_local(
     cfg: &DnsConfig,
     ctx: LanforgeContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
+    let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
     let resolver = LocalResolver::new(cfg, ctx);
-    let rb = ResponseBuilder::new(query, cfg);
+    let rb = ResponseBuilder::new(query, &dns_ctx);
     if let Some(records) = resolver.resolve_local(rb.qname(), qtype) {
         Ok(Some(rb.success(records)?))
     } else {
@@ -208,14 +234,7 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     let name = Name::from_str("fantasma.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::A));
     let data = query.to_bytes().unwrap();
-    let ctx = DnsContext {
-        cfg,
-        upstreams: Vec::new(),
-        stats: Arc::new(DnsStats::default()),
-        ctx: ctx_instance,
-        #[cfg(feature = "adblock")]
-        adblocker: None,
-    };
+    let ctx = mock_dns_context(ctx_instance, cfg);
     let resp_bytes = handle_query(&data, &ctx, "127.0.0.1".parse().unwrap())
         .await
         .unwrap()
@@ -289,7 +308,8 @@ fn test_edns0_is_preserved() {
         .options_mut()
         .insert(EdnsOption::Unknown(123, vec![1, 2, 3]));
     query.set_edns(extensions);
-    let resp = ResponseBuilder::new(&query, &cfg).base();
+    let dns_ctx = mock_dns_context(init_test_context(), cfg);
+    let resp = ResponseBuilder::new(&query, &dns_ctx).base();
     assert!(resp.edns.is_some());
 }
 
@@ -299,14 +319,19 @@ fn test_local_resolver_direct_api() {
     let cfg = mock_config();
     let mac = MacAddr([1, 2, 3, 4, 5, 0x33]);
     register_test_device(&ctx, "direct", mac, Ipv4Addr::new(10, 10, 10, 10));
-    let resolver = crate::resolver::LocalResolver::new(&cfg, ctx);
     let mut query = Message::query();
     query.add_query(Query::query(
         Name::from_str("direct.lan.").unwrap(),
         RecordType::A,
     ));
+    let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
+    let resolver = crate::resolver::LocalResolver::new(&cfg, ctx);
     let resp_bytes = resolver
-        .resolve_ip(&ResponseBuilder::new(&query, &cfg), "direct", RecordType::A)
+        .resolve_ip(
+            &ResponseBuilder::new(&query, &dns_ctx),
+            "direct",
+            RecordType::A,
+        )
         .unwrap();
     let resp = Message::from_bytes(&resp_bytes).unwrap();
     assert_eq!(resp.response_code, ResponseCode::NoError);
@@ -337,9 +362,10 @@ fn test_dhcp_registration_creates_dns_record() {
     query.add_query(Query::query(name, RecordType::A));
 
     let resp_bytes = {
-        LocalResolver::new(&cfg, ctx)
+        let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
+        LocalResolver::new(&cfg, ctx.clone())
             .resolve_ip(
-                &ResponseBuilder::new(&query, &cfg),
+                &ResponseBuilder::new(&query, &dns_ctx),
                 "my-device",
                 RecordType::A,
             )

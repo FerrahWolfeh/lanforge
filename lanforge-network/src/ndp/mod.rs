@@ -106,6 +106,7 @@ impl NeighborMonitor {
         }
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn flush_neighbor_batch(&self, batch: Vec<(MacAddr, IpAddr, bool)>) {
         let start = Instant::now();
         let total = batch.len();

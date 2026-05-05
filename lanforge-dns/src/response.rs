@@ -9,9 +9,8 @@ use hickory_proto::{
     rr::{Name, RData, Record, RecordType, rdata::SOA},
     serialize::binary::BinEncodable,
 };
-use std::str::FromStr;
 
-use crate::config::DnsConfig;
+use crate::server::DnsContext;
 
 /// Metadata required to construct a DNS response.
 #[derive(Clone)]
@@ -32,16 +31,16 @@ pub enum QueryMetadata<'a> {
 #[derive(Clone)]
 pub struct ResponseBuilder<'a> {
     query: QueryMetadata<'a>,
-    cfg: &'a DnsConfig,
+    ctx: &'a DnsContext,
 }
 
 impl<'a> ResponseBuilder<'a> {
     /// Creates a new response builder from the given query and config.
     #[must_use]
-    pub const fn new(query: &'a Message, cfg: &'a DnsConfig) -> Self {
+    pub const fn new(query: &'a Message, ctx: &'a DnsContext) -> Self {
         Self {
             query: QueryMetadata::Full(query),
-            cfg,
+            ctx,
         }
     }
 
@@ -52,7 +51,7 @@ impl<'a> ResponseBuilder<'a> {
         qname: Name,
         qtype: RecordType,
         edns: Option<WireOptScanner>,
-        cfg: &'a DnsConfig,
+        ctx: &'a DnsContext,
     ) -> Self {
         Self {
             query: QueryMetadata::Wire {
@@ -61,7 +60,7 @@ impl<'a> ResponseBuilder<'a> {
                 qtype,
                 edns,
             },
-            cfg,
+            ctx,
         }
     }
 
@@ -79,7 +78,7 @@ impl<'a> ResponseBuilder<'a> {
                 let mut resp =
                     Message::new(query.metadata.id, MessageType::Response, OpCode::Query);
                 resp.metadata.authoritative = true;
-                resp.metadata.recursion_available = !self.cfg.upstreams.is_empty();
+                resp.metadata.recursion_available = !self.ctx.upstreams.is_empty();
                 resp.add_queries(query.queries.iter().cloned());
                 if let Some(edns) = &query.edns {
                     resp.set_edns(edns.clone());
@@ -94,7 +93,7 @@ impl<'a> ResponseBuilder<'a> {
             } => {
                 let mut resp = Message::new(*id, MessageType::Response, OpCode::Query);
                 resp.metadata.authoritative = true;
-                resp.metadata.recursion_available = !self.cfg.upstreams.is_empty();
+                resp.metadata.recursion_available = !self.ctx.upstreams.is_empty();
                 resp.add_query(Query::query(qname.clone(), *qtype));
                 if let Some(scanner) = edns {
                     let mut opt = Edns::new();
@@ -110,18 +109,19 @@ impl<'a> ResponseBuilder<'a> {
     ///
     /// Required for NXDOMAIN and NODATA responses per RFC 1035.
     pub fn add_soa(&self, resp: &mut Message) {
-        let domain = self
-            .cfg
-            .search_domains
-            .first()
-            .map_or("lan", |d| d.as_str());
-        let name = Name::from_str(&format!("{domain}.")).unwrap_or_else(|_| Name::root());
-        let mname = Name::from_str(&format!("ns.{domain}.")).unwrap_or_else(|_| Name::root());
-        let rname =
-            Name::from_str(&format!("hostmaster.{domain}.")).unwrap_or_else(|_| Name::root());
-        let soa = SOA::new(mname, rname, 1, 7200, 3600, 1_209_600, 3600);
-        resp.authorities
-            .push(Record::from_rdata(name, 3600, RData::SOA(soa)));
+        resp.authorities.push(Record::from_rdata(
+            self.ctx.soa_zone.clone(),
+            3600,
+            RData::SOA(SOA::new(
+                self.ctx.soa_master_ns.clone(),
+                self.ctx.soa_mailbox.clone(),
+                1,
+                7200,
+                3600,
+                1_209_600,
+                3600,
+            )),
+        ));
     }
 
     /// Builds an NXDOMAIN response (domain does not exist).
