@@ -1,4 +1,5 @@
 use lanforge_core::context::PersistenceSnapshot;
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::time::SystemTime;
@@ -132,12 +133,15 @@ impl LeaseDb {
                     .fetch_all(&mut *tx)
                     .await?;
 
+                let snapshot_macs: HashSet<String> =
+                    table.devices().map(|d| d.mac.to_string()).collect();
+
                 for device in table.devices() {
                     sqlite::upsert_device(&mut tx, &device).await?;
                 }
 
                 for db_mac in db_macs {
-                    if !table.devices().any(|d| d.mac.to_string() == db_mac) {
+                    if !snapshot_macs.contains(&db_mac) {
                         sqlx::query("DELETE FROM devices WHERE mac = ?")
                             .bind(&db_mac)
                             .execute(&mut *tx)
@@ -153,12 +157,15 @@ impl LeaseDb {
                     .fetch_all(&mut *tx)
                     .await?;
 
+                let snapshot_macs: HashSet<String> =
+                    table.devices().map(|d| d.mac.to_string()).collect();
+
                 for device in table.devices() {
                     postgres::upsert_device(&mut tx, &device).await?;
                 }
 
                 for db_mac in db_macs {
-                    if !table.devices().any(|d| d.mac.to_string() == db_mac) {
+                    if !snapshot_macs.contains(&db_mac) {
                         sqlx::query("DELETE FROM devices WHERE mac = $1")
                             .bind(&db_mac)
                             .execute(&mut *tx)
@@ -181,12 +188,15 @@ impl LeaseDb {
                     .fetch_all(&mut *tx)
                     .await?;
 
+                let snapshot_macs: HashSet<String> =
+                    snapshot.devices.keys().map(|m| m.to_string()).collect();
+
                 for device in snapshot.devices.values() {
                     sqlite::upsert_device(&mut tx, device).await?;
                 }
 
                 for db_mac in db_macs {
-                    if !snapshot.devices.keys().any(|m| m.to_string() == db_mac) {
+                    if !snapshot_macs.contains(&db_mac) {
                         sqlx::query("DELETE FROM devices WHERE mac = ?")
                             .bind(&db_mac)
                             .execute(&mut *tx)
@@ -203,12 +213,15 @@ impl LeaseDb {
                     .fetch_all(&mut *tx)
                     .await?;
 
+                let snapshot_macs: HashSet<String> =
+                    snapshot.devices.keys().map(|m| m.to_string()).collect();
+
                 for device in snapshot.devices.values() {
                     postgres::upsert_device(&mut tx, device).await?;
                 }
 
                 for db_mac in db_macs {
-                    if !snapshot.devices.keys().any(|m| m.to_string() == db_mac) {
+                    if !snapshot_macs.contains(&db_mac) {
                         sqlx::query("DELETE FROM devices WHERE mac = $1")
                             .bind(&db_mac)
                             .execute(&mut *tx)
