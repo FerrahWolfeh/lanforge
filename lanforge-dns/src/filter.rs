@@ -137,7 +137,8 @@ pub fn labels_to_domain(labels: WireLabelIter<'_>) -> String {
             domain.push_str(s);
         }
     }
-    domain.to_ascii_lowercase()
+    domain.make_ascii_lowercase();
+    domain
 }
 
 #[cfg(test)]

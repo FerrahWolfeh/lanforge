@@ -539,7 +539,12 @@ async fn handle_query_fallback(
     if let Some(adblocker) = &ctx.adblocker
         && adblocker.is_enabled()
     {
-        let domain = qname.to_string().trim_end_matches('.').to_ascii_lowercase();
+        let mut domain = qname.to_string();
+        if domain.ends_with('.') {
+            domain.pop();
+        }
+        domain.make_ascii_lowercase();
+
         if adblocker.should_block(&domain) {
             ctx.stats.inc_blocked();
             ctx.ctx.inc_dns_blocked();
