@@ -27,7 +27,7 @@ impl Default for DatabaseConfig {
         Self {
             url: "sqlite:///var/lib/lanforge/lanforge.db".to_string(),
             log_url: "sqlite:///tmp/lanforge-logs.db".to_string(),
-            flush_interval: 5,
+            flush_interval: 60,
             max_connections: 10,
             min_connections: 2,
         }

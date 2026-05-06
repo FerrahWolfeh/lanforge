@@ -11,7 +11,7 @@ pub async fn upsert_device(
 ) -> Result<(), LeaseDbError> {
     let mac_str = device.mac.to_string();
 
-    upsert_base_device(tx, device, &mac_str).await?;
+    upsert_base_device_internal(tx, device, &mac_str).await?;
 
     // Clear child tables
     clear_child_tables(tx, &mac_str).await?;
@@ -26,7 +26,15 @@ pub async fn upsert_device(
     Ok(())
 }
 
-async fn upsert_base_device(
+pub async fn upsert_base_device_only(
+    tx: &mut Transaction<'_, Sqlite>,
+    device: &Device,
+) -> Result<(), LeaseDbError> {
+    let mac_str = device.mac.to_string();
+    upsert_base_device_internal(tx, device, &mac_str).await
+}
+
+async fn upsert_base_device_internal(
     tx: &mut Transaction<'_, Sqlite>,
     device: &Device,
     mac_str: &str,

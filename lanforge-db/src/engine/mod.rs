@@ -71,6 +71,12 @@ impl LeaseDb {
                     .map_err(|e| {
                         LeaseDbError::Migration("setting WAL mode".into(), e.to_string())
                     })?;
+                sqlx::query("PRAGMA synchronous=NORMAL")
+                    .execute(p)
+                    .await
+                    .map_err(|e| {
+                        LeaseDbError::Migration("setting synchronous=NORMAL".into(), e.to_string())
+                    })?;
                 sqlx::query("PRAGMA foreign_keys=ON")
                     .execute(p)
                     .await
@@ -248,6 +254,56 @@ impl LeaseDb {
             Pool::Postgres(p) => {
                 let mut tx = p.begin().await?;
                 postgres::upsert_device(&mut tx, device).await?;
+                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn upsert_base_device_only(&self, device: &Device) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => {
+                let mut tx = p.begin().await?;
+                sqlite::upsert_base_device_only(&mut tx, device).await?;
+                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+            }
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => {
+                let mut tx = p.begin().await?;
+                postgres::upsert_base_device_only(&mut tx, device).await?;
+                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn delete_devices(&self, macs: &[MacAddr]) -> Result<(), LeaseDbError> {
+        if macs.is_empty() {
+            return Ok(());
+        }
+
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => {
+                let mut tx = p.begin().await?;
+                for mac in macs {
+                    sqlx::query("DELETE FROM devices WHERE mac = ?")
+                        .bind(mac.to_string())
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+            }
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => {
+                let mut tx = p.begin().await?;
+                for mac in macs {
+                    sqlx::query("DELETE FROM devices WHERE mac = $1")
+                        .bind(mac.to_string())
+                        .execute(&mut *tx)
+                        .await?;
+                }
                 tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
             }
         }

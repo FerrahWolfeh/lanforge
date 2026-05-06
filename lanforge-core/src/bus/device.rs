@@ -98,6 +98,22 @@ impl DeviceChange {
             | Self::HostRemoved => false,
         }
     }
+
+    /// Returns true if this change represents a modification to lease state
+    /// (DHCPv4, DHCPv6, SLAAC, or V6Prefix) that requires full child table sync.
+    #[must_use]
+    pub const fn is_lease_change(&self) -> bool {
+        matches!(
+            self,
+            Self::V4Assigned { .. }
+                | Self::V6Assigned { .. }
+                | Self::V6PrefixAssigned { .. }
+                | Self::LeaseExpired { .. }
+                | Self::SlaacObserved { .. }
+                | Self::V4StaticChanged { .. }
+                | Self::V6SuffixChanged { .. }
+        )
+    }
 }
 
 /// Lightweight representation of `DHCPv4` message types for diagnostics.

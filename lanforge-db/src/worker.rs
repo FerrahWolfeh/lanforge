@@ -13,8 +13,6 @@
 //!
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
-use lanforge_core::device::Device;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{Interval, interval};
 use tracing::{debug, error, info, warn};
@@ -47,6 +45,8 @@ pub struct DbWorker {
     ctx: LanforgeContext,
     dirty: bool,
     dirty_macs: HashSet<MacAddr>,
+    dirty_lease_macs: HashSet<MacAddr>,
+    purged_macs: HashSet<MacAddr>,
     log_buffer: Vec<TimedEvent>,
     json_buf: String,
 }
@@ -59,6 +59,8 @@ impl DbWorker {
             ctx,
             dirty: false,
             dirty_macs: HashSet::new(),
+            dirty_lease_macs: HashSet::new(),
+            purged_macs: HashSet::new(),
             log_buffer: Vec::with_capacity(128),
             json_buf: String::with_capacity(4096),
         }
@@ -69,7 +71,10 @@ impl DbWorker {
     async fn flush_batch(&mut self, db: &LeaseDb, log_db: &LogDb) {
         // 1. Flush Logs
         if !self.log_buffer.is_empty() {
-            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.json_buf).await {
+            if let Err(e) = log_db
+                .record_logs_batch(&self.log_buffer, &mut self.json_buf)
+                .await
+            {
                 error!("Failed to flush log batch: {e}");
             } else {
                 self.log_buffer.clear();
@@ -77,33 +82,64 @@ impl DbWorker {
         }
 
         // 2. Flush Main DB
-        if !self.dirty && self.dirty_macs.is_empty() {
+        if !self.dirty && self.dirty_macs.is_empty() && self.purged_macs.is_empty() {
             return;
         }
 
         let res = if self.dirty {
-            // Full flush requested
+            // Full flush requested (rare)
             let snapshot = self.ctx.snapshot_for_persistence();
             let len = snapshot.devices.len();
             db.save_snapshot(&snapshot).await.map(|()| len)
         } else {
-            // Incremental flush
-            let dirty_devices: Vec<Arc<Device>> = {
+            // Incremental flush (common)
+            let (lease_devices, base_devices) = {
                 let state = self.ctx.read();
-                self.dirty_macs
-                    .iter()
-                    .filter_map(|mac| state.devices.get(mac).cloned())
-                    .collect()
+                let mut lease = Vec::new();
+                let mut base = Vec::new();
+                for mac in &self.dirty_macs {
+                    if let Some(device) = state.devices.get(mac).cloned() {
+                        if self.dirty_lease_macs.contains(mac) {
+                            lease.push(device);
+                        } else {
+                            base.push(device);
+                        }
+                    }
+                }
+                (lease, base)
             };
 
-            let count = dirty_devices.len();
+            let purges: Vec<MacAddr> = self.purged_macs.iter().copied().collect();
+            let count = lease_devices.len() + base_devices.len() + purges.len();
+
             let mut result = Ok(());
-            for device in dirty_devices {
-                if let Err(e) = db.upsert_device(&device).await {
+            // 1. Perform purges
+            if !purges.is_empty() {
+                if let Err(e) = db.delete_devices(&purges).await {
                     result = Err(e);
-                    break;
                 }
             }
+
+            // 2. Perform lease updates (heavy)
+            if result.is_ok() {
+                for device in lease_devices {
+                    if let Err(e) = db.upsert_device(&device).await {
+                        result = Err(e);
+                        break;
+                    }
+                }
+            }
+
+            // 3. Perform base updates (light)
+            if result.is_ok() {
+                for device in base_devices {
+                    if let Err(e) = db.upsert_base_device_only(&device).await {
+                        result = Err(e);
+                        break;
+                    }
+                }
+            }
+
             result.map(|()| count)
         };
 
@@ -112,6 +148,11 @@ impl DbWorker {
                 error!("Failed to save device table to database: {e}");
             }
             Ok(count) => {
+                self.dirty = false;
+                self.dirty_macs.clear();
+                self.dirty_lease_macs.clear();
+                self.purged_macs.clear();
+
                 if count > 0 {
                     let _ = self
                         .ctx
@@ -186,17 +227,23 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::Device(DeviceEvent::Updated { mac, ref change, .. }) => {
                             if change.is_persistent() {
                                 self.dirty_macs.insert(mac);
+                                if change.is_lease_change() {
+                                    self.dirty_lease_macs.insert(mac);
+                                }
+                                // If it was previously purged, it's now alive again
+                                self.purged_macs.remove(&mac);
                             }
                         }
                         LanforgeEvent::Device(DeviceEvent::Discovered { mac, .. })
                         | LanforgeEvent::Device(DeviceEvent::Expired { mac, .. }) => {
                             self.dirty_macs.insert(mac);
+                            self.dirty_lease_macs.insert(mac);
+                            self.purged_macs.remove(&mac);
                         }
                         LanforgeEvent::Device(DeviceEvent::Purged { mac }) => {
-                            // Removing a device requires a full sync or special handling in the DB
-                            // For now, let's just trigger a full sync if a device is purged
-                            self.dirty = true;
+                            self.purged_macs.insert(mac);
                             self.dirty_macs.remove(&mac);
+                            self.dirty_lease_macs.remove(&mac);
                         }
                         LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                             self.dirty = true;
