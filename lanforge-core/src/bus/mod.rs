@@ -23,8 +23,8 @@ pub use self::storage::StorageEvent;
 pub use self::system::SystemEvent;
 pub use smallvec::SmallVec;
 
-/// Reusable event collection that avoids heap allocation for the common case (1-2 events).
-pub type EventVec = SmallVec<[LanforgeEvent; 2]>;
+/// Reusable event collection that avoids heap allocation for the common case (up to 8 events).
+pub type EventVec = SmallVec<[LanforgeEvent; 8]>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimedEvent {

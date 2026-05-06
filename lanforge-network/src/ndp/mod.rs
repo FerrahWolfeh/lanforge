@@ -231,7 +231,7 @@ impl AsyncService for NeighborMonitor {
 
         ctrl.signal_ready();
 
-        let mut pending_batch = Vec::new();
+        let mut pending_batch = Vec::with_capacity(50);
         let mut flush_timer = interval(Duration::from_millis(self.cfg.batch_interval_ms));
 
         loop {
@@ -254,7 +254,7 @@ impl AsyncService for NeighborMonitor {
                                 // Optimization: Batch Added events during scans/bursts
                                 pending_batch.push((mac, ip, is_active));
                                 if pending_batch.len() >= 50 {
-                                    let batch = std::mem::take(&mut pending_batch);
+                                    let batch = std::mem::replace(&mut pending_batch, Vec::with_capacity(50));
                                     self.flush_neighbor_batch(batch);
                                 }
                             } else {
@@ -272,7 +272,7 @@ impl AsyncService for NeighborMonitor {
 
                 _ = flush_timer.tick() => {
                     if !pending_batch.is_empty() {
-                        let batch = std::mem::take(&mut pending_batch);
+                        let batch = std::mem::replace(&mut pending_batch, Vec::with_capacity(50));
                         self.flush_neighbor_batch(batch);
                     }
                 }

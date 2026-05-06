@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
-use crate::bus::{DeviceChange, DeviceEvent, LanforgeEvent, NetworkEvent};
+use crate::bus::{DeviceChange, DeviceEvent, EventVec, LanforgeEvent, NetworkEvent};
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
@@ -17,7 +17,7 @@ impl State {
         mac: MacAddr,
         ip: Ipv4Addr,
         expires: SystemTime,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         self.mutate_device(mac, |dev| dev.apply_v4_lease(ip, expires))
     }
 
@@ -28,14 +28,14 @@ impl State {
         iaid: u32,
         ip: Ipv6Addr,
         expires: SystemTime,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         let m = if let Some(m) = mac {
             m
         } else if let Some(m) = self.indices.duid_index.get(&duid) {
             *m
         } else {
             self.discovery.orphaned_v6.insert(ip, (duid, iaid, expires));
-            return crate::bus::EventVec::new();
+            return EventVec::new();
         };
 
         self.mutate_device(m, |dev| dev.apply_v6_lease(&duid, iaid, ip, expires))
@@ -50,13 +50,13 @@ impl State {
         prefix: Ipv6Addr,
         len: u8,
         expires: SystemTime,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         let m = if let Some(m) = mac {
             m
         } else if let Some(m) = self.indices.duid_index.get(&duid) {
             *m
         } else {
-            return crate::bus::EventVec::new(); // IA_PD usually requires a prior IA_NA to link DUID to MAC
+            return EventVec::new(); // IA_PD usually requires a prior IA_NA to link DUID to MAC
         };
 
         self.mutate_device(m, |dev| {
@@ -64,21 +64,23 @@ impl State {
         })
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_slaac_observed(
         &mut self,
         mac: MacAddr,
         addr: Ipv6Addr,
         is_active: bool,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         self.mutate_device(mac, |dev| dev.apply_slaac_observation(addr, is_active))
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_ndp_seen(
         &mut self,
         mac: MacAddr,
         ip: Ipv6Addr,
         is_active: bool,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         self.discovery
             .ndp_cache
             .insert(ip, (mac, SystemTime::now()));
@@ -107,30 +109,23 @@ impl State {
         })
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_arp_seen(
         &mut self,
         mac: MacAddr,
         ip: Ipv4Addr,
         is_active: bool,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         self.mutate_device(mac, |dev| dev.apply_arp_observation(ip, is_active))
     }
 
-    pub(crate) fn handle_hostname_hint_dhcp(
-        &mut self,
-        mac: MacAddr,
-        hostname: String,
-    ) -> crate::bus::EventVec {
+    pub(crate) fn handle_hostname_hint_dhcp(&mut self, mac: MacAddr, hostname: String) -> EventVec {
         self.mutate_device(mac, |dev| {
             dev.apply_hostname_hint(hostname, HostnameOrigin::Dhcp)
         })
     }
 
-    pub(crate) fn handle_hostname_hint_mdns(
-        &mut self,
-        mac: MacAddr,
-        hostname: String,
-    ) -> crate::bus::EventVec {
+    pub(crate) fn handle_hostname_hint_mdns(&mut self, mac: MacAddr, hostname: String) -> EventVec {
         self.mutate_device(mac, |dev| {
             dev.apply_hostname_hint(hostname, HostnameOrigin::Mdns)
         })
@@ -141,13 +136,13 @@ impl State {
         mac: Option<MacAddr>,
         duid: Duid,
         iaid: u32,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         let mac = if let Some(m) = mac {
             m
         } else if let Some(m) = self.indices.duid_index.get(&duid) {
             *m
         } else {
-            return crate::bus::EventVec::new();
+            return EventVec::new();
         };
 
         // Find all orphans for this DUID
@@ -181,7 +176,7 @@ impl State {
         &mut self,
         mac: MacAddr,
         update: CliHostUpdate,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         let events = self.mutate_device(mac, |dev| {
             if let FieldUpdate::Set(h) = update.hostname {
                 dev.hostname = Hostname {
@@ -231,7 +226,7 @@ impl State {
         events
     }
 
-    pub(crate) fn handle_host_removed(&mut self, mac: MacAddr) -> crate::bus::EventVec {
+    pub(crate) fn handle_host_removed(&mut self, mac: MacAddr) -> EventVec {
         if let Some(dev) = self.devices.remove(&mac) {
             self.indices.unindex_device(&dev);
             if let Some(duid) = &dev.duid {
@@ -240,14 +235,10 @@ impl State {
             self.static_entries.remove(&mac);
             return vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })].into();
         }
-        crate::bus::EventVec::new()
+        EventVec::new()
     }
 
-    pub(crate) fn handle_lease_released(
-        &mut self,
-        mac: MacAddr,
-        target: LeaseTarget,
-    ) -> crate::bus::EventVec {
+    pub(crate) fn handle_lease_released(&mut self, mac: MacAddr, target: LeaseTarget) -> EventVec {
         self.mutate_device(mac, |dev| {
             let changed = match target {
                 LeaseTarget::V4 => {
@@ -279,7 +270,7 @@ impl State {
         })
     }
 
-    pub(crate) fn handle_ip_deleted(&mut self, ip: IpAddr) -> crate::bus::EventVec {
+    pub(crate) fn handle_ip_deleted(&mut self, ip: IpAddr) -> EventVec {
         let mac = self.indices.ip_index.get(&ip).copied();
         if let Some(mac) = mac {
             let events = self.mutate_device(mac, |dev| {
@@ -297,13 +288,13 @@ impl State {
 
             events
         } else {
-            crate::bus::EventVec::new()
+            EventVec::new()
         }
     }
 
-    pub(crate) fn handle_ip_offline(&mut self, ip: IpAddr) -> crate::bus::EventVec {
+    pub(crate) fn handle_ip_offline(&mut self, ip: IpAddr) -> EventVec {
         let mac = self.indices.ip_index.get(&ip).copied();
-        mac.map_or_else(crate::bus::EventVec::new, |mac| {
+        mac.map_or_else(EventVec::new, |mac| {
             self.mutate_device(mac, |dev| {
                 if dev.mark_ip_offline(ip) {
                     Some(DeviceChange::IpOffline { ip })
@@ -318,14 +309,15 @@ impl State {
         &mut self,
         ifindex: u32,
         state: InterfaceState,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         self.network.interface_ips.insert(ifindex, state);
         vec![LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
             ifindex,
-        })].into()
+        })]
+        .into()
     }
 
-    pub(crate) fn handle_prune_zombies(&mut self) -> crate::bus::EventVec {
+    pub(crate) fn handle_prune_zombies(&mut self) -> EventVec {
         let max_age = Duration::from_hours(1);
         let mut removed = Vec::new();
         self.devices.retain(|mac, dev| {
@@ -344,22 +336,18 @@ impl State {
                 .map(|mac| LanforgeEvent::Device(DeviceEvent::Purged { mac }))
                 .collect();
         }
-        crate::bus::EventVec::new()
+        EventVec::new()
     }
 
-    pub(crate) fn handle_rebuild_dns_indices(&mut self) -> crate::bus::EventVec {
+    pub(crate) fn handle_rebuild_dns_indices(&mut self) -> EventVec {
         self.indices.clear();
         for (mac, dev) in &self.devices {
             self.indices.index_device(*mac, dev);
         }
-        crate::bus::EventVec::new()
+        EventVec::new()
     }
 
-    pub(crate) fn handle_class_hint(
-        &mut self,
-        mac: MacAddr,
-        class: DeviceClass,
-    ) -> crate::bus::EventVec {
+    pub(crate) fn handle_class_hint(&mut self, mac: MacAddr, class: DeviceClass) -> EventVec {
         self.mutate_device(mac, |dev| {
             if dev.class == class {
                 None
@@ -376,7 +364,7 @@ impl State {
         parent_mac: Option<MacAddr>,
         port: Option<String>,
         ifindex: u32,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         self.mutate_device(mac, |dev| {
             let new_topo = TopologyInfo {
                 parent_mac,
@@ -400,51 +388,81 @@ impl State {
         })
     }
 
-    pub(crate) fn handle_reset(&mut self) -> crate::bus::EventVec {
+    pub(crate) fn handle_reset(&mut self) -> EventVec {
         self.devices.clear();
         self.static_entries.clear();
         self.indices.clear();
         self.discovery.clear();
         self.network.clear();
-        crate::bus::EventVec::new()
+        EventVec::new()
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_neighbor_batch(
         &mut self,
         entries: Vec<(MacAddr, IpAddr, bool)>,
-    ) -> crate::bus::EventVec {
-        let mut grouped: HashMap<MacAddr, crate::bus::SmallVec<[(IpAddr, bool); 4]>> = HashMap::with_capacity(4);
+    ) -> EventVec {
+        if entries.is_empty() {
+            return EventVec::new();
+        }
+
+        // FAST-PATH: If all entries belong to the same MAC (very common during discovery bursts for one device)
+        let first_mac = entries[0].0;
+        if entries.iter().all(|(mac, _, _)| *mac == first_mac) {
+            let events = self.mutate_device(first_mac, |dev| {
+                let mut first_change = None;
+                for (_, ip, active) in &entries {
+                    let change = match ip {
+                        IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
+                        IpAddr::V6(v6) => dev.apply_slaac_observation(*v6, *active),
+                    };
+                    if let Some(c) = change
+                        && first_change.is_none()
+                    {
+                        first_change = Some(c);
+                    }
+                }
+                first_change
+            });
+
+            // Update discovery cache
+            for (_, ip, _) in &entries {
+                if let IpAddr::V6(v6) = ip {
+                    self.discovery
+                        .ndp_cache
+                        .insert(*v6, (first_mac, SystemTime::now()));
+                }
+            }
+            return events;
+        }
+
+        // SLOW-PATH: Multiple MACs in the same batch
+        let mut grouped: HashMap<MacAddr, crate::bus::SmallVec<[(IpAddr, bool); 4]>> =
+            HashMap::with_capacity(4);
         for (mac, ip, active) in entries {
             grouped.entry(mac).or_default().push((ip, active));
         }
-        let mut events = crate::bus::EventVec::new();
+
+        let mut events = EventVec::new();
         for (mac, updates) in &grouped {
             let mac = *mac;
             let mut dev_events = self.mutate_device(mac, |dev| {
                 let mut first_change = None;
                 for (ip, active) in updates {
-                    match ip {
-                        IpAddr::V4(v4) => {
-                            if let Some(c) = dev.apply_arp_observation(*v4, *active)
-                                && first_change.is_none()
-                            {
-                                first_change = Some(c);
-                            }
-                        }
-                        IpAddr::V6(v6) => {
-                            if let Some(c) = dev.apply_slaac_observation(*v6, *active)
-                                && first_change.is_none()
-                            {
-                                first_change = Some(c);
-                            }
-                        }
+                    let change = match ip {
+                        IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
+                        IpAddr::V6(v6) => dev.apply_slaac_observation(*v6, *active),
+                    };
+                    if let Some(c) = change
+                        && first_change.is_none()
+                    {
+                        first_change = Some(c);
                     }
                 }
                 first_change
             });
             events.append(&mut dev_events);
 
-            // Re-handle NDP cache update
             for (ip, _) in updates {
                 if let IpAddr::V6(v6) = ip {
                     self.discovery
@@ -456,9 +474,9 @@ impl State {
         events
     }
 
-    pub fn expire_stale(&mut self, ip_expiry_threshold: Duration) -> crate::bus::EventVec {
+    pub fn expire_stale(&mut self, ip_expiry_threshold: Duration) -> EventVec {
         let now = SystemTime::now();
-        let mut events = crate::bus::EventVec::new();
+        let mut events = EventVec::new();
 
         let macs: Vec<MacAddr> = self.devices.keys().copied().collect();
         for mac in macs {

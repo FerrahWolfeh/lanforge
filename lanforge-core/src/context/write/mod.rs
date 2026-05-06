@@ -4,12 +4,15 @@ pub(crate) mod device;
 pub(crate) mod network;
 pub(crate) mod storage;
 
-use crate::context::{
-    LanforgeContext,
-    state::{DeviceUpdate, State},
+use crate::{
+    context::{
+        LanforgeContext,
+        state::{DeviceUpdate, State},
+    },
+    device::Device,
 };
 use parking_lot::RwLockWriteGuard;
-use std::sync::atomic::Ordering;
+use std::{net::IpAddr, sync::atomic::Ordering};
 
 impl LanforgeContext {
     /// Provides direct write access to the underlying device state.
@@ -89,13 +92,13 @@ impl LanforgeContext {
             DeviceUpdate::NeighborBatch { entries } => {
                 for (_, ip, _) in entries {
                     match ip {
-                        std::net::IpAddr::V4(_) => {
+                        IpAddr::V4(_) => {
                             self.inner
                                 .event_counters
                                 .arp_seen
                                 .fetch_add(1, Ordering::Relaxed);
                         }
-                        std::net::IpAddr::V6(_) => {
+                        IpAddr::V6(_) => {
                             self.inner
                                 .event_counters
                                 .ndp_seen
@@ -110,14 +113,15 @@ impl LanforgeContext {
 
     /// Internal helper to perform fast-path debounce checks.
     /// Returns `None` if the update was skipped, or `Some(update)` (possibly filtered) to proceed.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn debounce_update(&self, update: DeviceUpdate) -> Option<DeviceUpdate> {
         match update {
             DeviceUpdate::ArpSeen { mac, ip, is_active } => {
                 let should_skip = {
                     let state = self.inner.state.read();
                     state.devices.get(&mac).is_some_and(|dev| {
-                        let recently_seen = dev.last_seen.elapsed().unwrap_or_default()
-                            < crate::device::Device::ACTIVITY_DEBOUNCE;
+                        let recently_seen =
+                            dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
                         let has_ip = dev.seen_v4.iter().any(|(a, _)| *a == ip);
                         recently_seen && has_ip
                     })
@@ -132,8 +136,8 @@ impl LanforgeContext {
                 let should_skip = {
                     let state = self.inner.state.read();
                     state.devices.get(&mac).is_some_and(|dev| {
-                        let recently_seen = dev.last_seen.elapsed().unwrap_or_default()
-                            < crate::device::Device::ACTIVITY_DEBOUNCE;
+                        let recently_seen =
+                            dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
                         let has_ip = dev.v6.iter().any(|s| s.ip() == Some(ip));
                         recently_seen && has_ip
                     })
@@ -144,33 +148,24 @@ impl LanforgeContext {
                     Some(DeviceUpdate::NdpSeen { mac, ip, is_active })
                 }
             }
-            DeviceUpdate::NeighborBatch { entries } => {
-                let filtered: Vec<_> = {
-                    let state = self.inner.state.read();
-                    entries
-                        .into_iter()
-                        .filter(|(mac, ip, _)| {
-                            state.devices.get(mac).is_none_or(|dev| {
-                                let recently_seen = dev.last_seen.elapsed().unwrap_or_default()
-                                    < crate::device::Device::ACTIVITY_DEBOUNCE;
-                                let has_ip = match ip {
-                                    std::net::IpAddr::V4(v4) => {
-                                        dev.seen_v4.iter().any(|(a, _)| a == v4)
-                                    }
-                                    std::net::IpAddr::V6(v6) => {
-                                        dev.v6.iter().any(|s| s.ip() == Some(*v6))
-                                    }
-                                };
-                                !(recently_seen && has_ip)
-                            })
-                        })
-                        .collect()
-                };
+            DeviceUpdate::NeighborBatch { mut entries } => {
+                let state = self.inner.state.read();
+                entries.retain(|(mac, ip, _)| {
+                    state.devices.get(mac).is_none_or(|dev| {
+                        let recently_seen =
+                            dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
+                        let has_ip = match ip {
+                            IpAddr::V4(v4) => dev.seen_v4.iter().any(|(a, _)| a == v4),
+                            IpAddr::V6(v6) => dev.v6.iter().any(|s| s.ip() == Some(*v6)),
+                        };
+                        !(recently_seen && has_ip)
+                    })
+                });
 
-                if filtered.is_empty() {
+                if entries.is_empty() {
                     None
                 } else {
-                    Some(DeviceUpdate::NeighborBatch { entries: filtered })
+                    Some(DeviceUpdate::NeighborBatch { entries })
                 }
             }
             DeviceUpdate::TopologyUpdated {
