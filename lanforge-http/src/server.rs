@@ -473,13 +473,14 @@ async fn handle_dns_query(
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or_else(|| "127.0.0.1".parse().unwrap());
 
-    match handle_query(&query_data, dns_ctx, _src_ip).await {
-        Ok(Some(response)) => (
+    let mut resp_buf = Vec::with_capacity(512);
+    match handle_query(&query_data, dns_ctx, _src_ip, &mut resp_buf).await {
+        Ok(true) => (
             [(axum::http::header::CONTENT_TYPE, "application/dns-message")],
-            response,
+            resp_buf,
         )
             .into_response(),
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

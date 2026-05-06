@@ -3,6 +3,8 @@
 //! Constructs DNS response messages using Hickory-DNS `Message` for
 //! correctness and EDNS compatibility.
 
+use std::net::IpAddr;
+
 use crate::{error::DnsError, wire::WireOptScanner};
 use hickory_proto::{
     op::{Edns, Message, MessageType, OpCode, Query, ResponseCode},
@@ -153,6 +155,36 @@ impl<'a> ResponseBuilder<'a> {
     pub fn formerr(&self) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();
         resp.metadata.response_code = ResponseCode::FormErr;
+        Ok(resp.to_bytes()?)
+    }
+
+    /// Builds a successful response with the given answer records.
+    /// Builds a successful response with the given IP addresses.
+    pub fn success_ips(&self, ips: impl IntoIterator<Item = IpAddr>) -> Result<Vec<u8>, DnsError> {
+        let mut resp = self.base();
+        let qname = self.qname();
+        for ip in ips {
+            let rdata = match ip {
+                IpAddr::V4(v4) => RData::A(v4.into()),
+                IpAddr::V6(v6) => RData::AAAA(v6.into()),
+            };
+            resp.add_answer(Record::from_rdata(qname.clone(), self.ctx.cfg.ttl, rdata));
+        }
+        Ok(resp.to_bytes()?)
+    }
+
+    /// Builds a successful response with a PTR record.
+    pub fn success_ptr(&self, host: &str, domain: &str) -> Result<Vec<u8>, DnsError> {
+        use std::str::FromStr;
+        let mut resp = self.base();
+        let qname = self.qname();
+        let fqdn = format!("{host}.{domain}.");
+        let ptr_name = Name::from_str(&fqdn).unwrap_or_else(|_| Name::root());
+        resp.add_answer(Record::from_rdata(
+            qname.clone(),
+            self.ctx.cfg.ttl,
+            RData::PTR(hickory_proto::rr::rdata::PTR(ptr_name)),
+        ));
         Ok(resp.to_bytes()?)
     }
 

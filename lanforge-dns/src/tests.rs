@@ -7,7 +7,7 @@ use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, St
 use lanforge_core::device::{Device, Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::{Duid, MacAddr};
 use std::collections::HashSet;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -235,11 +235,12 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     query.add_query(Query::query(name, RecordType::A));
     let data = query.to_bytes().unwrap();
     let ctx = mock_dns_context(ctx_instance, cfg);
-    let resp_bytes = handle_query(&data, &ctx, "127.0.0.1".parse().unwrap())
+    let mut resp_buf = Vec::new();
+    let has_resp = handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
         .await
-        .unwrap()
-        .expect("Deve retornar uma resposta DNS");
-    let resp = Message::from_bytes(&resp_bytes).unwrap();
+        .unwrap();
+    assert!(has_resp);
+    let resp = Message::from_bytes(&resp_buf).unwrap();
     assert_eq!(resp.response_code, ResponseCode::NXDomain);
 }
 
@@ -280,12 +281,13 @@ async fn test_adblock_integration() {
     ));
     let data = query.to_bytes().unwrap();
 
-    let resp_bytes = handle_query(&data, &ctx, "192.168.1.1".parse().unwrap())
+    let mut resp_buf = Vec::new();
+    let has_resp = handle_query(&data, &ctx, "192.168.1.1".parse().unwrap(), &mut resp_buf)
         .await
-        .unwrap()
-        .expect("Should return a response");
+        .unwrap();
+    assert!(has_resp);
 
-    let resp = Message::from_bytes(&resp_bytes).unwrap();
+    let resp = Message::from_bytes(&resp_buf).unwrap();
     assert_eq!(resp.response_code, ResponseCode::NXDomain);
     assert_eq!(
         ctx.stats
@@ -324,17 +326,11 @@ fn test_local_resolver_direct_api() {
         Name::from_str("direct.lan.").unwrap(),
         RecordType::A,
     ));
-    let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
-    let resolver = crate::resolver::LocalResolver::new(&cfg, &ctx);
-    let resp_bytes = resolver
-        .resolve_ip(
-            &ResponseBuilder::new(&query, &dns_ctx),
-            "direct",
-            RecordType::A,
-        )
-        .unwrap();
-    let resp = Message::from_bytes(&resp_bytes).unwrap();
-    assert_eq!(resp.response_code, ResponseCode::NoError);
+    let resolver = LocalResolver::new(&cfg, &ctx);
+    let ips = resolver
+        .resolve_ip("direct", RecordType::A)
+        .expect("Should resolve host 'direct'");
+    assert_eq!(ips.as_slice(), &[IpAddr::V4(Ipv4Addr::new(10, 10, 10, 10))]);
 }
 
 #[test]
@@ -361,25 +357,14 @@ fn test_dhcp_registration_creates_dns_record() {
     let name = Name::from_str("my-device.lan.").unwrap();
     query.add_query(Query::query(name, RecordType::A));
 
-    let resp_bytes = {
-        let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
+    let ips = {
         LocalResolver::new(&cfg, &ctx)
-            .resolve_ip(
-                &ResponseBuilder::new(&query, &dns_ctx),
-                "my-device",
-                RecordType::A,
-            )
-            .unwrap()
+            .resolve_ip("my-device", RecordType::A)
+            .expect("Should resolve host 'my-device'")
     };
-    let resp = Message::from_bytes(&resp_bytes).unwrap();
 
-    assert_eq!(resp.response_code, ResponseCode::NoError);
-    assert_eq!(resp.answers.len(), 1);
-    if let RData::A(resolved_ip) = &resp.answers[0].data {
-        assert_eq!(**resolved_ip, ip);
-    } else {
-        panic!("Wrong RData type");
-    }
+    assert_eq!(ips.len(), 1);
+    assert_eq!(ips[0], IpAddr::V4(ip));
 }
 
 #[test]

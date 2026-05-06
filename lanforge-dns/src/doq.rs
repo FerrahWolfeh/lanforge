@@ -132,14 +132,15 @@ async fn handle_doq_connection(
                         None => return,
                     };
 
-                    match handle_query(&query_buf, dns_ctx, peer.ip()).await {
-                        Ok(Some(response)) => {
-                            if let Err(e) = send.write_all(&response).await {
+                    let mut resp_buf = Vec::with_capacity(512);
+                    match handle_query(&query_buf, dns_ctx, peer.ip(), &mut resp_buf).await {
+                        Ok(true) => {
+                            if let Err(e) = send.write_all(&resp_buf).await {
                                 debug!("DoQ stream write error: {}", e);
                             }
                             let _ = send.finish();
                         }
-                        Ok(None) => {}
+                        Ok(false) => {}
                         Err(e) => {
                             debug!("DoQ handle_query error: {}", e);
                         }

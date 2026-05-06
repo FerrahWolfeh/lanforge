@@ -172,12 +172,13 @@ impl DnsService {
         let ctx_udp = self.ctx.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 4096];
+            let mut resp_buf = Vec::with_capacity(512);
             loop {
                 tokio::select! {
                     res = sock.recv_from(&mut buf) => {
                         let Ok((len, src)) = res else { continue; };
-                        if let Ok(Some(response)) = handle_query(&buf[..len], &dns_ctx, src.ip()).await {
-                            let _ = sock.send_to(&response, src).await;
+                        if let Ok(true) = handle_query(&buf[..len], &dns_ctx, src.ip(), &mut resp_buf).await {
+                            let _ = sock.send_to(&resp_buf, src).await;
                         }
                     }
                     () = tokio::time::sleep(Duration::from_millis(100)) => {
@@ -281,10 +282,11 @@ impl DnsService {
                                     let mut query_buf = vec![0u8; len];
                                     stream.read_exact(&mut query_buf).await?;
 
-                                    if let Ok(Some(response)) = handle_query(&query_buf, &c, stream.peer_addr()?.ip()).await {
-                                        let resp_len = u16::try_from(response.len()).unwrap_or(u16::MAX).to_be_bytes();
+                                    let mut resp_buf = Vec::with_capacity(512);
+                                    if let Ok(true) = handle_query(&query_buf, &c, stream.peer_addr()?.ip(), &mut resp_buf).await {
+                                        let resp_len = u16::try_from(resp_buf.len()).unwrap_or(u16::MAX).to_be_bytes();
                                         stream.write_all(&resp_len).await?;
-                                        stream.write_all(&response).await?;
+                                        stream.write_all(&resp_buf).await?;
                                     }
                                     Ok::<(), std::io::Error>(())
                                 }).await;
@@ -398,47 +400,35 @@ impl AsyncService for DnsService {
 /// The extra-hot path: Initial query triage and routing.
 ///
 /// This function uses the zero-allocation wire parser to decide how to handle
-/// the query before performing a full parse.
-///
-/// ```mermaid
-/// flowchart TD
-///     Start[Inbound Query] --> WireHeader[WireHeader::parse]
-///     WireHeader -->|Valid Query| WireQuestion[WireQuestion::parse]
-///     WireQuestion -->|Simple Name| Local{Local Resolution?}
-///     Local -->|Found| Return[Local Response]
-///     Local -->|Not Found| Upstream[forward_to_upstream]
-///     WireQuestion -->|Complex Name/Pointers| Fallback[handle_query_fallback]
-///     Fallback --> Local2{Local Resolution?}
-///     Local2 -->|Found| Return
-///     Local2 -->|Not Found| Upstream
-/// ```
+/// the query before performing a full parse into the provided buffer.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub async fn handle_query(
     data: &[u8],
     ctx: &DnsContext,
     src_addr: IpAddr,
-) -> Result<Option<Vec<u8>>, DnsError> {
+    resp: &mut Vec<u8>,
+) -> Result<bool, DnsError> {
     ctx.stats.inc_requests();
 
     let _ = src_addr;
 
     // PHASE 1: Zero-Alloc Triage
     let Some(header) = WireHeader::parse(data) else {
-        return Ok(None);
+        return Ok(false);
     };
     if !header.is_query() {
-        return Ok(None);
+        return Ok(false);
     }
 
     let Some(question) = WireQuestion::parse(data) else {
-        return handle_query_fallback(data, ctx, src_addr).await;
+        return handle_query_fallback(data, ctx, src_addr, resp).await;
     };
 
     // PHASE 2: Local Resolution Attempt
-    if let Some(resp) = resolve_local_wire(data, &header, &question, ctx)? {
+    if resolve_local_wire(data, &header, &question, ctx, resp)? {
         ctx.stats.inc_auth();
         ctx.stats.inc_cache_hit();
-        return Ok(Some(resp));
+        return Ok(true);
     }
 
     ctx.stats.inc_cache_miss();
@@ -456,13 +446,15 @@ pub async fn handle_query(
 
             let edns = WireOptScanner::scan(data, &header, &question);
             let ra = !ctx.cfg.upstreams.is_empty();
-            return Ok(Some(WireResponseWriter::write_error_response(
+            WireResponseWriter::write_error_response(
                 data,
                 &question,
                 3, // NXDOMAIN
                 edns.as_ref(),
                 ra,
-            )));
+                resp,
+            );
+            return Ok(true);
         }
     }
 
@@ -470,30 +462,36 @@ pub async fn handle_query(
     if !ctx.upstreams.is_empty() {
         ctx.stats.inc_recursive();
         for mgr in &ctx.upstreams {
-            if let Ok(resp) = forward_to_upstream(data, &mgr.target, mgr).await {
-                return Ok(Some(resp));
+            if let Ok(upstream_resp) = forward_to_upstream(data, &mgr.target, mgr).await {
+                resp.clear();
+                resp.extend_from_slice(&upstream_resp);
+                return Ok(true);
             }
         }
     }
 
     let edns = WireOptScanner::scan(data, &header, &question);
     let ra = !ctx.upstreams.is_empty();
-    Ok(Some(WireResponseWriter::write_error_response(
+    WireResponseWriter::write_error_response(
         data,
         &question,
-        3, // NXDOMAIN (or ServFail if upstreams failed? RFC says NXDOMAIN is fine if we are authoritative for nothing)
+        3, // NXDOMAIN
         edns.as_ref(),
         ra,
-    )))
+        resp,
+    );
+    Ok(true)
 }
 
 /// Helper function for local resolution using wire-parsed data.
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn resolve_local_wire(
     data: &[u8],
     header: &WireHeader,
     question: &WireQuestion<'_>,
     ctx: &DnsContext,
-) -> Result<Option<Vec<u8>>, DnsError> {
+    resp: &mut Vec<u8>,
+) -> Result<bool, DnsError> {
     let raw_qtype = question.qtype();
     let qtype = QType::from(raw_qtype);
 
@@ -504,45 +502,62 @@ fn resolve_local_wire(
                 extract_local_hostname_wire(&mut labels, &ctx.cfg.multi_search_labels)
             {
                 let safe_hostname = fast_lowercase(hostname_slice);
-                let qname = Name::from_bytes(question.qname_raw())?;
                 let edns = WireOptScanner::scan(data, header, question);
-                let rb = ResponseBuilder::from_wire(
-                    header.id(),
-                    qname,
-                    RecordType::from(raw_qtype),
-                    edns,
-                    ctx,
-                );
 
-                let resp = LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ip(
-                    &rb,
-                    &safe_hostname,
-                    RecordType::from(raw_qtype),
-                )?;
-                return Ok(Some(resp));
+                let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
+                if let Some(ips) = resolver.resolve_ip(&safe_hostname, RecordType::from(raw_qtype))
+                {
+                    let ra = !ctx.upstreams.is_empty();
+                    WireResponseWriter::write_ip_response(
+                        data,
+                        question,
+                        &ips,
+                        ctx.cfg.ttl,
+                        edns.as_ref(),
+                        ra,
+                        resp,
+                    );
+                    return Ok(true);
+                } else if ctx.ctx.get_by_hostname(&safe_hostname).is_some() {
+                    // Host exists but no records for type (NODATA)
+                    let ra = !ctx.upstreams.is_empty();
+                    WireResponseWriter::write_error_response(
+                        data,
+                        question,
+                        0, // NoError (but with 0 answers)
+                        edns.as_ref(),
+                        ra,
+                        resp,
+                    );
+                    return Ok(true);
+                }
             }
         }
         QType::PTR => {
-            if let Some(_target_ip) = parse_arpa_wire(question.labels()) {
-                let qname = Name::from_bytes(question.qname_raw())?;
+            if let Some(target_ip) = parse_arpa_wire(question.labels()) {
                 let edns = WireOptScanner::scan(data, header, question);
-                let rb = ResponseBuilder::from_wire(
-                    header.id(),
-                    qname.clone(),
-                    RecordType::from(raw_qtype),
-                    edns,
-                    ctx,
-                );
 
-                let resp = LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ptr(&rb, &qname)?;
-                if let Some(r) = resp {
-                    return Ok(Some(r));
+                let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
+                if let Some(device) = ctx.ctx.get_by_ip(&target_ip) {
+                    let (host, domain) = resolver.get_ptr_parts(&device);
+                    let ra = !ctx.upstreams.is_empty();
+                    WireResponseWriter::write_ptr_response(
+                        data,
+                        question,
+                        &host,
+                        &domain,
+                        ctx.cfg.ttl,
+                        edns.as_ref(),
+                        ra,
+                        resp,
+                    );
+                    return Ok(true);
                 }
             }
         }
         _ => {}
     }
-    Ok(None)
+    Ok(false)
 }
 
 /// Fallback logic for queries that are too complex for the zero-alloc wire parser.
@@ -551,11 +566,12 @@ async fn handle_query_fallback(
     data: &[u8],
     ctx: &DnsContext,
     src_addr: IpAddr,
-) -> Result<Option<Vec<u8>>, DnsError> {
+    resp: &mut Vec<u8>,
+) -> Result<bool, DnsError> {
     let _ = src_addr;
 
     let Ok(query) = Message::from_bytes(data) else {
-        return Ok(None);
+        return Ok(false);
     };
     let rb = ResponseBuilder::new(&query, ctx);
     let question = query.queries.first().ok_or(DnsError::WireParseError)?;
@@ -567,16 +583,26 @@ async fn handle_query_fallback(
             let safe_hostname = fast_lowercase(hostname_slice);
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();
-            let resp =
-                LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ip(&rb, &safe_hostname, qtype)?;
-            return Ok(Some(resp));
+
+            let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
+            if let Some(ips) = resolver.resolve_ip(&safe_hostname, qtype) {
+                resp.clear();
+                resp.extend_from_slice(&rb.success_ips(ips)?);
+                return Ok(true);
+            } else if ctx.ctx.get_by_hostname(&safe_hostname).is_some() {
+                resp.clear();
+                resp.extend_from_slice(&rb.empty_noerror()?);
+                return Ok(true);
+            }
         }
     } else if qtype == RecordType::PTR {
-        let resp = LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ptr(&rb, qname)?;
-        if let Some(response) = resp {
+        let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
+        if let Some((host, domain)) = resolver.resolve_ptr(qname)? {
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();
-            return Ok(Some(response));
+            resp.clear();
+            resp.extend_from_slice(&rb.success_ptr(&host, &domain)?);
+            return Ok(true);
         }
     }
 
@@ -597,18 +623,24 @@ async fn handle_query_fallback(
             ctx.stats.inc_blocked();
             ctx.ctx.inc_dns_blocked();
             adblocker.inc_ip_stats(src_addr);
-            return Ok(Some(rb.nxdomain()?));
+            resp.clear();
+            resp.extend_from_slice(&rb.nxdomain()?);
+            return Ok(true);
         }
     }
 
     if !ctx.upstreams.is_empty() {
         ctx.stats.inc_recursive();
         for mgr in &ctx.upstreams {
-            if let Ok(resp) = forward_to_upstream(data, &mgr.target, mgr).await {
-                return Ok(Some(resp));
+            if let Ok(upstream_resp) = forward_to_upstream(data, &mgr.target, mgr).await {
+                resp.clear();
+                resp.extend_from_slice(&upstream_resp);
+                return Ok(true);
             }
         }
     }
 
-    Ok(Some(rb.nxdomain()?))
+    resp.clear();
+    resp.extend_from_slice(&rb.nxdomain()?);
+    Ok(true)
 }

@@ -24,7 +24,6 @@
 use lanforge_macros::EnumRepr;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1736,19 +1735,26 @@ impl Device {
     ///
     /// Suffixes are resolved using the provided `gua_prefix` and `ula_prefix`.
     #[must_use]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn all_addresses_sorted(
         &self,
         gua_prefix: Option<Ipv6Addr>,
         ula_prefix: Option<Ipv6Addr>,
-    ) -> Vec<IpAddr> {
-        let mut addrs = Vec::new();
+    ) -> SmallVec<[IpAddr; 32]> {
+        let mut addrs: SmallVec<[IpAddr; 32]> = SmallVec::new();
+
+        let mut push_unique = |ip: IpAddr| {
+            if !addrs.contains(&ip) {
+                addrs.push(ip);
+            }
+        };
 
         // IPv4
         if let Some(ip) = self.v4.ip() {
-            addrs.push(IpAddr::V4(ip));
+            push_unique(IpAddr::V4(ip));
         }
         for (ip, _) in &self.seen_v4 {
-            addrs.push(IpAddr::V4(*ip));
+            push_unique(IpAddr::V4(*ip));
         }
 
         // IPv6
@@ -1757,18 +1763,14 @@ impl Device {
                 // DNS Contract: Static suffixes produce addresses on ALL active prefixes.
                 for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
                     if let Some(ip) = state.ip_with_prefix(Some(prefix)) {
-                        addrs.push(IpAddr::V6(ip));
+                        push_unique(IpAddr::V6(ip));
                     }
                 }
             } else if let Some(ip) = state.ip() {
                 // DNS Contract: Dynamic leases (DHCPv6) and SLAAC addresses are always included.
-                addrs.push(IpAddr::V6(ip));
+                push_unique(IpAddr::V6(ip));
             }
         }
-
-        // De-duplicate while preserving prioritization order
-        let mut unique = HashSet::new();
-        addrs.retain(|ip| unique.insert(*ip));
 
         // Sort by classification score
         addrs.sort_by_key(|ip| classify_ip(ip).score());

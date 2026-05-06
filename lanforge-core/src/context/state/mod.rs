@@ -218,15 +218,20 @@ impl State {
     }
 
     #[must_use]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_by_hostname(&self, hostname: &str) -> Option<Arc<Device>> {
-        let mac = self
-            .indices
-            .name_index
-            .get(&hostname.to_ascii_lowercase())?;
+        let mac = if hostname.as_bytes().iter().any(|b| b.is_ascii_uppercase()) {
+            self.indices
+                .name_index
+                .get(&hostname.to_ascii_lowercase())?
+        } else {
+            self.indices.name_index.get(hostname)?
+        };
         self.devices.get(mac).cloned()
     }
 
     #[must_use]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_by_ip(&self, ip: &IpAddr) -> Option<Arc<Device>> {
         let mac = self.indices.ip_index.get(ip)?;
         self.devices.get(mac).cloned()
@@ -415,12 +420,12 @@ impl State {
         events
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn find_mac_by_hostname_jit(
         &mut self,
         hostname: &str,
         last_seen_threshold: Option<Duration>,
     ) -> Option<MacAddr> {
-        let hostname_lower = hostname.to_ascii_lowercase();
         let now = SystemTime::now();
 
         let found = self.devices.iter().find(|(_, dev)| {
@@ -431,8 +436,8 @@ impl State {
                 return false;
             }
 
-            dev.hostname.name.to_ascii_lowercase() == hostname_lower
-                || dev.dns_fallback == hostname_lower
+            dev.hostname.name.eq_ignore_ascii_case(hostname)
+                || dev.dns_fallback.eq_ignore_ascii_case(hostname)
         });
 
         if let Some((mac, dev)) = found {

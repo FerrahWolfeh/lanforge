@@ -3,6 +3,8 @@
 //! Replaces full Hickory Message parsing for local/upstream routing decisions.
 //! Optimized for performance by avoiding UTF-8 validation and heap allocations.
 
+use std::net::IpAddr;
+
 pub mod qtypes;
 
 /// Simple view into the DNS message header.
@@ -220,46 +222,196 @@ impl WireOptScanner {
 pub struct WireResponseWriter;
 
 impl WireResponseWriter {
-    /// Constructs a minimal error response (REFUSED, FORMERR, etc) without a full parse.
-    #[must_use]
+    /// Writes a minimal error response (REFUSED, FORMERR, etc) into the provided buffer.
     pub fn write_error_response(
         query_data: &[u8],
         question: &WireQuestion,
         rcode: u8,
         edns: Option<&WireOptScanner>,
         ra: bool,
-    ) -> Vec<u8> {
-        // max: 12 (header) + question.data + 11 (OPT record)
+        resp: &mut Vec<u8>,
+    ) {
+        resp.clear();
         let capacity = 12 + question.data.len() + 11;
-        let mut resp = Vec::with_capacity(capacity); // hint correto evita realloc
+        if resp.capacity() < capacity {
+            resp.reserve(capacity);
+        }
 
-        // 1. Header (copy ID, alter flags)
         let mut h = [0u8; 12];
         h.copy_from_slice(&query_data[0..12]);
         h[2] |= 0x80; // QR = 1 (Response)
+        h[2] |= 0x04; // AA = 1 (Authoritative Answer)
         if ra {
             h[3] |= 0x80; // RA = 1 (Recursion Available)
         }
         h[3] &= 0xF0; // Clear RCODE
         h[3] |= rcode & 0x0F;
-        h[6..12].fill(0); // AN/NS/AR count reset to zero by default
+        h[6..12].fill(0); // AN/NS/AR count reset
         if edns.is_some() {
-            h[11] = 1; // ARCOUNT = 1 (for OPT)
+            h[11] = 1; // ARCOUNT = 1
         }
         resp.extend_from_slice(&h);
-        // 2. Question section (slice after the 12-byte header)
         resp.extend_from_slice(&question.data[12..]);
 
-        // 3. EDNS OPT record if present
         if let Some(opt) = edns {
-            resp.push(0); // Root Name
-            resp.extend_from_slice(&41u16.to_be_bytes()); // Type 41 (OPT)
-            resp.extend_from_slice(&opt.max_payload.to_be_bytes()); // Class (Max Payload)
-            resp.extend_from_slice(&[0, 0, 0, 0]); // TTL (V=0, Ext RCODE=0, Flags=0)
-            resp.extend_from_slice(&[0, 0]); // RDLEN = 0
+            Self::write_opt(resp, opt);
+        }
+    }
+
+    /// Writes a successful A or AAAA response with one or more IP addresses into the buffer.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub fn write_ip_response(
+        query_data: &[u8],
+        question: &WireQuestion,
+        ips: &[IpAddr],
+        ttl: u32,
+        edns: Option<&WireOptScanner>,
+        ra: bool,
+        resp: &mut Vec<u8>,
+    ) {
+        resp.clear();
+        let is_v6 = matches!(ips.first(), Some(IpAddr::V6(_)));
+        let rd_len = if is_v6 { 16 } else { 4 };
+        let capacity = 12 + question.data.len() + (ips.len() * (12 + rd_len)) + 11;
+        if resp.capacity() < capacity {
+            resp.reserve(capacity);
         }
 
-        resp
+        // 1. Header
+        let mut h = [0u8; 12];
+        h.copy_from_slice(&query_data[0..12]);
+        h[2] |= 0x80; // QR = 1
+        h[2] |= 0x04; // AA = 1
+        if ra {
+            h[3] |= 0x80;
+        }
+        h[3] &= 0xF0; // RCODE = 0 (NoError)
+
+        let ancount = ips.len() as u16;
+        let an_bytes = ancount.to_be_bytes();
+        h[6] = an_bytes[0];
+        h[7] = an_bytes[1];
+        h[8] = 0;
+        h[9] = 0; // NSCOUNT = 0
+        h[10] = 0;
+        h[11] = if edns.is_some() { 1 } else { 0 }; // ARCOUNT
+
+        resp.extend_from_slice(&h);
+
+        // 2. Question
+        resp.extend_from_slice(&question.data[12..]);
+
+        // 3. Answers
+        let qtype = if is_v6 { 28u16 } else { 1u16 }; // AAAA=28, A=1
+        for ip in ips {
+            // Name Pointer (0xC00C points to the QNAME starting at index 12)
+            resp.extend_from_slice(&[0xC0, 0x0C]);
+            resp.extend_from_slice(&qtype.to_be_bytes());
+            resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
+            resp.extend_from_slice(&ttl.to_be_bytes());
+            resp.extend_from_slice(&(rd_len as u16).to_be_bytes());
+            match ip {
+                IpAddr::V4(addr) => resp.extend_from_slice(&addr.octets()),
+                IpAddr::V6(addr) => resp.extend_from_slice(&addr.octets()),
+            }
+        }
+
+        // 4. EDNS
+        if let Some(opt) = edns {
+            Self::write_opt(resp, opt);
+        }
+    }
+
+    /// Writes a PTR response into the buffer.
+    pub fn write_ptr_response(
+        query_data: &[u8],
+        question: &WireQuestion,
+        host: &str,
+        domain: &str,
+        ttl: u32,
+        edns: Option<&WireOptScanner>,
+        ra: bool,
+        resp: &mut Vec<u8>,
+    ) {
+        resp.clear();
+        let capacity = 12 + question.data.len() + 12 + host.len() + domain.len() + 4;
+        if resp.capacity() < capacity {
+            resp.reserve(capacity);
+        }
+
+        // 1. Header
+        let mut h = [0u8; 12];
+        h.copy_from_slice(&query_data[0..12]);
+        h[2] |= 0x80; // QR = 1
+        h[2] |= 0x04; // AA = 1
+        if ra {
+            h[3] |= 0x80;
+        }
+        h[3] &= 0xF0;
+        h[6] = 0;
+        h[7] = 1; // ANCOUNT = 1
+        h[8] = 0;
+        h[9] = 0;
+        h[10] = 0;
+        h[11] = if edns.is_some() { 1 } else { 0 };
+        resp.extend_from_slice(&h);
+
+        // 2. Question
+        resp.extend_from_slice(&question.data[12..]);
+
+        // 3. Answer (PTR)
+        resp.extend_from_slice(&[0xC0, 0x0C]);
+        resp.extend_from_slice(&12u16.to_be_bytes()); // Type PTR (12)
+        resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
+        resp.extend_from_slice(&ttl.to_be_bytes());
+
+        // RDLEN and RDATA
+        // Pre-calculate RDATA length to avoid extra Vec allocation
+        let mut rdlen = 0u16;
+        for label in host.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            rdlen += 1 + label.len() as u16;
+        }
+        for label in domain.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            rdlen += 1 + label.len() as u16;
+        }
+        rdlen += 1; // Null terminator
+
+        resp.extend_from_slice(&rdlen.to_be_bytes());
+
+        for label in host.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            resp.push(label.len() as u8);
+            resp.extend_from_slice(label.as_bytes());
+        }
+        for label in domain.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            resp.push(label.len() as u8);
+            resp.extend_from_slice(label.as_bytes());
+        }
+        resp.push(0); // Null terminator
+
+        // 4. EDNS
+        if let Some(opt) = edns {
+            Self::write_opt(resp, opt);
+        }
+    }
+
+    fn write_opt(resp: &mut Vec<u8>, opt: &WireOptScanner) {
+        resp.push(0); // Root Name
+        resp.extend_from_slice(&41u16.to_be_bytes()); // Type 41 (OPT)
+        resp.extend_from_slice(&opt.max_payload.to_be_bytes()); // Class (Max Payload)
+        resp.extend_from_slice(&[0, 0, 0, 0]); // TTL
+        resp.extend_from_slice(&[0, 0]); // RDLEN = 0
     }
 }
 
@@ -275,8 +427,10 @@ mod tests {
             b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04host\x03lan\x00\x00\x01\x00\x01";
         let question = WireQuestion::parse(query_data).expect("Should parse question");
         let rcode = 5; // REFUSED
-        let resp =
-            WireResponseWriter::write_error_response(query_data, &question, rcode, None, false);
+        let mut resp = Vec::new();
+        WireResponseWriter::write_error_response(
+            query_data, &question, rcode, None, false, &mut resp,
+        );
 
         // Header (12) + QNAME ("4host3lan0" = 10) + QTYPE (2) + QCLASS (2) = 26 bytes
         assert_eq!(
@@ -285,7 +439,10 @@ mod tests {
             "Response size should be exactly 26 bytes (no 24-byte header duplication)"
         );
         assert_eq!(&resp[0..2], b"\x12\x34", "ID should match");
-        assert_eq!(resp[2], 0x81, "Flags byte 1 should have QR=1 and RD=1");
+        assert_eq!(
+            resp[2], 0x85,
+            "Flags byte 1 should have QR=1, AA=1 and RD=1"
+        );
         assert_eq!(resp[3] & 0x0F, 0x05, "RCODE should be 5 (REFUSED)");
 
         // The question part MUST start immediately after the 12-byte header

@@ -4,14 +4,13 @@
 //! shared `LanforgeContext`. No network I/O is performed — all data comes
 //! from the in-memory device state.
 
+use smallvec::SmallVec;
+use std::borrow::Cow;
 use std::net::IpAddr;
-use std::str::FromStr;
 
 use crate::config::DnsConfig;
 use crate::error::DnsError;
-use crate::response::ResponseBuilder;
 use crate::utils::{extract_local_hostname, parse_arpa};
-use hickory_proto::rr::rdata::PTR;
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::device::Device;
@@ -35,49 +34,28 @@ impl<'a> LocalResolver<'a> {
 
     /// Resolves an A or AAAA query for the given hostname.
     ///
-    /// Looks up the device by hostname and returns all matching IP records
-    /// (A for IPv4, AAAA for IPv6). Returns a full DNS response with
-    /// `NoError` (records or NODATA) or `NXDomain` if the host is unknown.
-    pub fn resolve_ip(
-        &self,
-        rb: &ResponseBuilder<'_>,
-        hostname: &str,
-        qtype: RecordType,
-    ) -> Result<Vec<u8>, DnsError> {
+    /// Looks up the device by hostname and returns all matching IP addresses.
+    /// Returns `None` if the host is unknown.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub fn resolve_ip(&self, hostname: &str, qtype: RecordType) -> Option<SmallVec<[IpAddr; 32]>> {
         if let Some(device) = self.ctx.get_by_hostname(hostname) {
-            if let Some(records) = self.resolve_local_with_device(rb.qname(), &device, qtype) {
-                return rb.success(records);
-            }
-            // Host exists but has no records for the requested type (NODATA)
-            return rb.empty_noerror();
+            return self.collect_device_ips_filtered(&device, qtype);
         }
 
-        // Phase 2: JIT Shadow Lookup (Trace Back)
+        // JIT Shadow Lookup (Trace Back)
         let threshold =
             std::time::Duration::from_secs(u64::from(self.cfg.last_seen_threshold_days) * 86400);
         if let Some(mac) = self.ctx.find_mac_by_hostname_jit(hostname, Some(threshold))
             && let Some(device) = self.ctx.get_device(&mac)
-            && let Some(records) = self.resolve_local_with_device(rb.qname(), &device, qtype)
         {
-            return rb.success(records);
+            return self.collect_device_ips_filtered(&device, qtype);
         }
-        // Host promoted but has no records for the requested type
-        rb.nxdomain()
+
+        None
     }
 
     /// Resolves a reverse DNS (PTR) query for an IP address.
-    ///
-    /// Parses the ARPA-formatted query name (e.g., `4.3.2.1.in-addr.arpa.`
-    /// or `b.a.9.8...ip6.arpa.`), looks up the owning device, and returns
-    /// a PTR record pointing to the device's hostname.
-    ///
-    /// Returns `Ok(None)` if the IP is not in the ARPA format or not found
-    /// in the context.
-    pub fn resolve_ptr(
-        &self,
-        rb: &ResponseBuilder<'_>,
-        qname: &Name,
-    ) -> Result<Option<Vec<u8>>, DnsError> {
+    pub fn resolve_ptr(&self, qname: &Name) -> Result<Option<(String, String)>, DnsError> {
         let Some(target_ip) = parse_arpa(qname) else {
             return Ok(None);
         };
@@ -86,13 +64,21 @@ impl<'a> LocalResolver<'a> {
             return Ok(None);
         };
 
+        let (host, domain) = self.get_ptr_parts(&device);
+        Ok(Some((host.into_owned(), domain.into_owned())))
+    }
+
+    /// Internal helper to get PTR parts from a device without allocating if possible.
+    pub fn get_ptr_parts<'d>(&self, device: &'d Device) -> (Cow<'d, str>, Cow<'a, str>) {
         let host = if device.hostname.name.is_empty() {
-            format!("host-{}", device.mac.to_string().replace(':', ""))
+            Cow::Borrowed(device.dns_fallback.as_str())
         } else {
-            device
-                .hostname
-                .name
-                .replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "-")
+            let name = &device.hostname.name;
+            if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                Cow::Borrowed(name.as_str())
+            } else {
+                Cow::Owned(name.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "-"))
+            }
         };
 
         let domain = self
@@ -100,12 +86,29 @@ impl<'a> LocalResolver<'a> {
             .search_domains
             .first()
             .map_or("lan", |d| d.as_str());
-        let fqdn = format!("{host}.{domain}.");
-        let ptr_name = Name::from_str(&fqdn).unwrap_or_else(|_| Name::root());
 
-        let record = Record::from_rdata(qname.clone(), self.cfg.ttl, RData::PTR(PTR(ptr_name)));
+        (host, Cow::Borrowed(domain))
+    }
 
-        Ok(Some(rb.success(vec![record])?))
+    /// Internal helper to collect IPs filtered by query type.
+    #[must_use]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub fn collect_device_ips_filtered(
+        &self,
+        device: &Device,
+        qtype: RecordType,
+    ) -> Option<SmallVec<[IpAddr; 32]>> {
+        if !matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
+            return None;
+        }
+
+        let mut ips = self.collect_device_ips(device);
+        ips.retain(|ip| match ip {
+            IpAddr::V4(_) => matches!(qtype, RecordType::A | RecordType::ANY),
+            IpAddr::V6(_) => matches!(qtype, RecordType::AAAA | RecordType::ANY),
+        });
+
+        if ips.is_empty() { None } else { Some(ips) }
     }
 
     /// Collects all IP addresses for a device and converts them to DNS records.
@@ -173,7 +176,8 @@ impl<'a> LocalResolver<'a> {
     /// and deduplicated. Falls back to configured prefixes if the system
     /// hasn't learned interface prefixes yet (useful for tests).
     #[must_use]
-    pub fn collect_device_ips(&self, device: &Device) -> Vec<IpAddr> {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub fn collect_device_ips(&self, device: &Device) -> SmallVec<[IpAddr; 32]> {
         let (sys_gua, sys_ula) = self
             .ctx
             .target_ifindex()
