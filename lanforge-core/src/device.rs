@@ -461,14 +461,25 @@ impl IPv4State {
 /// - `IPv6State::Dynamic(...)` — `DHCPv6` lease
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IPv6State {
-    /// A manually configured static address or suffix.
-    /// Suffixes are resolved against the current global prefix.
+    /// Manually configured static address or suffix.
     Static(Ipv6AddrOrSuffix, SystemTime),
-    /// An address assigned via a dynamic `DHCPv6` lease (`IA_NA`).
+    /// Dynamic address assigned via `DHCPv6`.
     Dynamic(V6Lease),
-    /// An address observed being used via SLAAC (Stateless Address Autoconfiguration).
-    /// These are learned from NDP/neighbor discovery events.
+    /// Address discovered via SLAAC (Stateless Address Auto-Configuration).
     Slaac(Ipv6Addr, SystemTime),
+    /// Link-local address (fe80::/10).
+    LinkLocal(Ipv6Addr, SystemTime),
+    /// Address discovered via Neighbor Discovery (NDP) that is neither SLAAC nor DHCP.
+    Discovery(Ipv6Addr, SystemTime),
+}
+
+/// Source of an IPv6 observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V6ObservationOrigin {
+    /// Discovered via the dedicated SLAAC tracker (usually probes).
+    SlaacTracker,
+    /// Discovered via the generic Neighbor Monitor (NDP events).
+    NdpMonitor,
 }
 
 impl IPv6State {
@@ -479,7 +490,10 @@ impl IPv6State {
     pub fn ip_with_prefix(&self, prefix: Option<Ipv6Addr>) -> Option<Ipv6Addr> {
         match self {
             Self::Dynamic(lease) => Some(lease.ip),
-            Self::Static(Ipv6AddrOrSuffix::Full(ip), _) | Self::Slaac(ip, _) => Some(*ip),
+            Self::Static(Ipv6AddrOrSuffix::Full(ip), _)
+            | Self::Slaac(ip, _)
+            | Self::LinkLocal(ip, _)
+            | Self::Discovery(ip, _) => Some(*ip),
             Self::Static(suf, _) => prefix.map(|p| Ipv6Addr::from(suf.as_u128(Some(p)))),
         }
     }
@@ -488,7 +502,10 @@ impl IPv6State {
     pub const fn ip(&self) -> Option<Ipv6Addr> {
         match self {
             Self::Dynamic(lease) => Some(lease.ip),
-            Self::Static(Ipv6AddrOrSuffix::Full(ip), _) | Self::Slaac(ip, _) => Some(*ip),
+            Self::Static(Ipv6AddrOrSuffix::Full(ip), _)
+            | Self::Slaac(ip, _)
+            | Self::LinkLocal(ip, _)
+            | Self::Discovery(ip, _) => Some(*ip),
             Self::Static(_suf, _) => None, // Suffix needs prefix
         }
     }
@@ -1084,10 +1101,11 @@ impl Device {
         None
     }
 
-    pub fn apply_slaac_observation(
+    pub fn apply_v6_observation(
         &mut self,
         addr: Ipv6Addr,
         is_active: bool,
+        origin: V6ObservationOrigin,
     ) -> Option<DeviceChange> {
         let mut changed = false;
         let now = SystemTime::now();
@@ -1097,39 +1115,64 @@ impl Device {
             SystemTime::UNIX_EPOCH
         };
 
-        // Check if we already have this address in any form (Static, Dynamic, or SLAAC)
+        let classification = classify_ipv6(&addr);
+        let target_state = match classification {
+            IpClassification::LinkLocal => IPv6State::LinkLocal(addr, timestamp),
+            _ => match origin {
+                V6ObservationOrigin::SlaacTracker => IPv6State::Slaac(addr, timestamp),
+                V6ObservationOrigin::NdpMonitor => IPv6State::Discovery(addr, timestamp),
+            },
+        };
+
+        // Check if we already have this address in any form (Static, Dynamic, etc.)
         let existing_index = self.v6.iter().position(|s| match s {
             IPv6State::Static(s, _) => s.matches(addr),
             _ => s.ip() == Some(addr),
         });
 
         if let Some(idx) = existing_index {
-            match &mut self.v6[idx] {
-                IPv6State::Slaac(_, ts) | IPv6State::Static(_, ts) => {
-                    let elapsed = now.duration_since(*ts).unwrap_or(Duration::MAX);
-                    let was_active = elapsed < Self::ONLINE_THRESHOLD;
+            let state = &mut self.v6[idx];
 
-                    if is_active != was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
-                        *ts = timestamp;
-                        changed = true;
+            // Promote Discovery to Slaac if seen by SlaacTracker
+            if matches!(state, IPv6State::Discovery(..))
+                && matches!(target_state, IPv6State::Slaac(..))
+            {
+                *state = target_state;
+                changed = true;
+            } else {
+                match state {
+                    IPv6State::Static(_, ts)
+                    | IPv6State::Slaac(_, ts)
+                    | IPv6State::Discovery(_, ts)
+                    | IPv6State::LinkLocal(_, ts) => {
+                        let elapsed = now.duration_since(*ts).unwrap_or(Duration::MAX);
+                        let was_active = elapsed < Self::ONLINE_THRESHOLD;
+
+                        if is_active != was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
+                            *ts = timestamp;
+                            changed = true;
+                        }
                     }
-                }
-                IPv6State::Dynamic(lease) => {
-                    let elapsed = now.duration_since(lease.last_seen).unwrap_or(Duration::MAX);
-                    let was_active = elapsed < Self::ONLINE_THRESHOLD;
+                    IPv6State::Dynamic(lease) => {
+                        let elapsed = now.duration_since(lease.last_seen).unwrap_or(Duration::MAX);
+                        let was_active = elapsed < Self::ONLINE_THRESHOLD;
 
-                    if is_active != was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
-                        lease.last_seen = timestamp;
-                        changed = true;
+                        if is_active != was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
+                            lease.last_seen = timestamp;
+                            changed = true;
+                        }
                     }
                 }
             }
         } else {
-            // New SLAAC address
-            self.v6.push(IPv6State::Slaac(addr, timestamp));
-
+            // New address
+            self.v6.push(target_state.clone());
             self.last_seen = self.calculate_last_seen();
-            return Some(DeviceChange::SlaacObserved { addr });
+
+            return match target_state {
+                IPv6State::Slaac(..) => Some(DeviceChange::SlaacObserved { addr }),
+                _ => Some(DeviceChange::NdpActivity { ip: addr }),
+            };
         }
 
         if changed {
@@ -1202,7 +1245,9 @@ impl Device {
         }
         if self.v6.iter().any(|s| match s {
             IPv6State::Dynamic(l) => l.expires < now,
-            IPv6State::Slaac(_, ts) => now.duration_since(*ts).unwrap_or_default() > threshold,
+            IPv6State::Slaac(_, ts) | IPv6State::LinkLocal(_, ts) | IPv6State::Discovery(_, ts) => {
+                now.duration_since(*ts).unwrap_or_default() > threshold
+            }
             IPv6State::Static(..) => false,
         }) {
             return true;
@@ -1242,7 +1287,10 @@ impl Device {
                 IPv6State::Dynamic(l) => {
                     latest = latest.max(l.last_seen);
                 }
-                IPv6State::Slaac(_, ts) | IPv6State::Static(_, ts) => {
+                IPv6State::Slaac(_, ts)
+                | IPv6State::Static(_, ts)
+                | IPv6State::LinkLocal(_, ts)
+                | IPv6State::Discovery(_, ts) => {
                     latest = latest.max(*ts);
                 }
             }
@@ -1345,8 +1393,7 @@ impl Device {
             }
             IpAddr::V6(ip6) => {
                 let initial_v6 = self.v6.len();
-                self.v6
-                    .retain(|s| !matches!(s, IPv6State::Slaac(a, _) if a == ip6));
+                self.v6.retain(|s| s.ip() != Some(*ip6));
                 self.v6.len() != initial_v6
             }
         }
@@ -1367,12 +1414,19 @@ impl Device {
                 let mut v6_changed = false;
                 self.v6.retain_mut(|s| {
                     if s.ip() == Some(v6) {
-                        if matches!(s, IPv6State::Slaac(_, _)) {
+                        if matches!(
+                            s,
+                            IPv6State::Slaac(..)
+                                | IPv6State::Discovery(..)
+                                | IPv6State::LinkLocal(..)
+                        ) {
                             v6_changed = true;
                             false
                         } else {
                             match s {
-                                IPv6State::Static(_, ts) => {
+                                IPv6State::Static(_, ts)
+                                | IPv6State::LinkLocal(_, ts)
+                                | IPv6State::Discovery(_, ts) => {
                                     *ts = SystemTime::UNIX_EPOCH;
                                     v6_changed = true;
                                 }
@@ -1563,7 +1617,7 @@ impl Device {
                 v6_expired_iaids.push(lease.iaid);
                 false
             }
-            IPv6State::Slaac(_, ts) => {
+            IPv6State::Slaac(_, ts) | IPv6State::LinkLocal(_, ts) | IPv6State::Discovery(_, ts) => {
                 now.duration_since(*ts).unwrap_or(Duration::MAX) <= ip_expiry_threshold
             }
             _ => true,
@@ -1937,7 +1991,7 @@ mod tests {
         // Observe a SLAAC IP matching the suffix
         let gual_ip = "2804:bdc:50ae:f700::1".parse::<Ipv6Addr>().unwrap();
 
-        let change = dev.apply_slaac_observation(gual_ip, true);
+        let change = dev.apply_v6_observation(gual_ip, true, V6ObservationOrigin::SlaacTracker);
 
         // Should be NdpActivity (non-persistent), NOT SlaacObserved (persistent)
         assert!(matches!(change, Some(DeviceChange::NdpActivity { .. })));

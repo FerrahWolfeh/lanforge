@@ -66,6 +66,8 @@ pub fn format_v6_state(state: &IPv6State) -> String {
         IPv6State::Static(s, _) => format!("Static({})", s),
         IPv6State::Dynamic(lease) => format!("DHCP({})", lease.ip),
         IPv6State::Slaac(ip, _) => format!("SLAAC({})", ip),
+        IPv6State::LinkLocal(ip, _) => format!("LinkLocal({})", ip),
+        IPv6State::Discovery(ip, _) => format!("Discovered({})", ip),
     }
 }
 

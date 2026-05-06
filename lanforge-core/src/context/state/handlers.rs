@@ -8,6 +8,7 @@ use crate::context::state::{
 };
 use crate::device::{
     Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, TopologyInfo, classify_ipv6,
+    V6ObservationOrigin,
 };
 use crate::identifiers::{Duid, MacAddr};
 
@@ -71,7 +72,7 @@ impl State {
         addr: Ipv6Addr,
         is_active: bool,
     ) -> EventVec {
-        self.mutate_device(mac, |dev| dev.apply_slaac_observation(addr, is_active))
+        self.mutate_device(mac, |dev| dev.apply_v6_observation(addr, is_active, V6ObservationOrigin::SlaacTracker))
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -119,7 +120,7 @@ impl State {
                 None
             };
 
-            if let Some(c) = dev.apply_slaac_observation(ip, is_active) {
+            if let Some(c) = dev.apply_v6_observation(ip, is_active, V6ObservationOrigin::NdpMonitor) {
                 // If it's Link-Local and we are already worthy, don't trigger a dirty update.
                 // This keeps NdpSeen events quiet for background traffic.
                 if classify_ipv6(&ip) == IpClassification::LinkLocal && dev.is_worthy() {
@@ -467,7 +468,7 @@ impl State {
                 for (_, ip, active) in &entries {
                     let change = match ip {
                         IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
-                        IpAddr::V6(v6) => dev.apply_slaac_observation(*v6, *active),
+                        IpAddr::V6(v6) => dev.apply_v6_observation(*v6, *active, V6ObservationOrigin::NdpMonitor),
                     };
                     if let Some(c) = change
                         && first_change.is_none()
@@ -504,7 +505,7 @@ impl State {
                 for (ip, active) in updates {
                     let change = match ip {
                         IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
-                        IpAddr::V6(v6) => dev.apply_slaac_observation(*v6, *active),
+                        IpAddr::V6(v6) => dev.apply_v6_observation(*v6, *active, V6ObservationOrigin::NdpMonitor),
                     };
                     if let Some(c) = change
                         && first_change.is_none()

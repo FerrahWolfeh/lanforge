@@ -41,18 +41,28 @@ pub(crate) fn format_iso8601(time: SystemTime) -> String {
     dt.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-fn get_v6_kind(addr: &Ipv6Addr) -> &'static str {
-    if addr.is_loopback() || addr.is_unspecified() {
-        return "Internal";
+fn get_v6_kind(state: &IPv6State, prefix: Option<Ipv6Addr>) -> String {
+    let ip = state.ip_with_prefix(prefix);
+    let bits_kind = if let Some(addr) = ip {
+        let segments = addr.segments();
+        if (segments[0] & 0xfe00) == 0xfc00 {
+            "ULA"
+        } else if (segments[0] & 0xffc0) == 0xfe80 {
+            "LinkLocal"
+        } else {
+            "GUA"
+        }
+    } else {
+        "Unknown"
+    };
+
+    match state {
+        IPv6State::Static(..) => format!("{bits_kind} (Static)"),
+        IPv6State::Dynamic(..) => format!("{bits_kind} (DHCP)"),
+        IPv6State::Slaac(..) => format!("{bits_kind} (SLAAC)"),
+        IPv6State::LinkLocal(..) => "LinkLocal".to_string(),
+        IPv6State::Discovery(..) => format!("{bits_kind} (Discovered)"),
     }
-    let segments = addr.segments();
-    if (segments[0] & 0xfe00) == 0xfc00 {
-        return "ULA";
-    }
-    if (segments[0] & 0xffc0) == 0xfe80 {
-        return "LinkLocal";
-    }
-    "GUA"
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +185,12 @@ impl ClientContext {
             slaac_addrs += dev
                 .v6
                 .iter()
-                .filter(|s| matches!(s, IPv6State::Slaac(..)))
+                .filter(|s| {
+                    matches!(
+                        s,
+                        IPv6State::Slaac(..) | IPv6State::Discovery(..) | IPv6State::LinkLocal(..)
+                    )
+                })
                 .count();
         }
 
@@ -339,7 +354,9 @@ impl ClientContext {
                             .map(|s| match s {
                                 IPv6State::Dynamic(l) => format_iso8601(l.expires),
                                 IPv6State::Static(_, _) => "Static".to_string(),
-                                IPv6State::Slaac(_, _) => "—".to_string(),
+                                IPv6State::Slaac(_, _)
+                                | IPv6State::LinkLocal(_, _)
+                                | IPv6State::Discovery(_, _) => "—".to_string(),
                             })
                             .unwrap_or_else(|| "—".to_string()),
                         reserved: state.is_some_and(|s| matches!(s, IPv6State::Static(_, _)))
@@ -352,7 +369,7 @@ impl ClientContext {
                         if let Some(ip) = state.ip_with_prefix(None) {
                             list.push(Ipv6Entry {
                                 addr: ip.to_string(),
-                                kind: get_v6_kind(&ip).to_string(),
+                                kind: get_v6_kind(state, None),
                             });
                         } else if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_), _) = state {
                             if let Some(ip) = ula_prefix.and_then(|p| state.ip_with_prefix(Some(p)))
@@ -532,7 +549,7 @@ impl ClientContext {
                         .filter_map(|s: &IPv6State| {
                             s.ip_with_prefix(None).map(|ip: Ipv6Addr| Ipv6Entry {
                                 addr: ip.to_string(),
-                                kind: get_v6_kind(&ip).to_string(),
+                                kind: get_v6_kind(s, None),
                             })
                         })
                         .collect()
