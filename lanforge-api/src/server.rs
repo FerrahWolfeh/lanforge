@@ -204,6 +204,7 @@ pub struct ClientContext {
 // handle_client — command dispatch
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 async fn write_response<W>(
     writer: &mut W,
     response: &Response,
@@ -255,6 +256,7 @@ where
 ///
 /// Reads JSON lines or Bincode from the stream, dispatches them to the appropriate
 /// handler in `ClientContext`, and writes back the response.
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub async fn handle_client<S>(stream: S, ctx: ClientContext) -> Result<(), ApiError>
 where
     S: AsyncRead + AsyncWrite + Unpin,

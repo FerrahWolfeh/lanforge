@@ -128,6 +128,7 @@ impl LanforgeContext {
 
     /// Returns all devices.
     #[must_use]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn all_devices(&self) -> Vec<Arc<Device>> {
         self.read().devices().collect()
     }

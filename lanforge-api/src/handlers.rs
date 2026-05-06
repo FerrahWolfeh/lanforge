@@ -62,6 +62,7 @@ fn get_v6_kind(addr: &Ipv6Addr) -> &'static str {
 impl ClientContext {
     /// Generates a full `StatusResponse` by gathering data from the configuration
     /// and the active device table.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) async fn handle_status(&self) -> Response {
         let devices = self.ctx.all_devices();
 
@@ -246,6 +247,7 @@ impl ClientContext {
     ///
     /// The filter is matched against hostnames, MAC addresses, and IP addresses.
     /// Generates a `DevicesResponse`, optionally filtering by search string, vendor, or method.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) async fn handle_devices(
         &self,
         filter: Option<String>,
@@ -455,6 +457,7 @@ impl ClientContext {
     }
 
     /// Gathers detailed information and history for a device.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) async fn handle_whois(&self, target: String) -> Response {
         let device = if let Some(m) = MacAddr::parse(&target) {
             self.ctx.get_device(&m)
@@ -685,6 +688,7 @@ impl ClientContext {
     }
 
     /// Aggregates all active dynamic leases (v4, v6, and prefixes).
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) async fn handle_leases(&self, _count_only: bool) -> Response {
         let devices = self.ctx.all_devices();
         let mut api_leases = Vec::new();

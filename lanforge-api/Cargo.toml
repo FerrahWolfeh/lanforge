@@ -21,6 +21,8 @@ bincode = "1.3.3"
 async-trait = "0.1.86"
 zstd = { version = "0.13", optional = true }
 
+hotpath = { workspace = true, optional = true }
+
 
 # No optional dependencies here, they moved to lanforge-http and lanforge-dns
 
@@ -28,6 +30,8 @@ zstd = { version = "0.13", optional = true }
 adblock = ["lanforge-core/adblock", "lanforge-dns/adblock"]
 default = []
 zstd = ["dep:zstd"]
+hotpath = ["dep:hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
