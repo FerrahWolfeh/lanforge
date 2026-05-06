@@ -28,9 +28,3 @@ adblock = []
 hotpath = ["dep:hotpath"]
 hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 default = []
-
-
-[lints.clippy]
-nursery = "warn"
-all = "warn"
-pedantic = "warn"

@@ -11,6 +11,14 @@ impl LanforgeContext {
         self.inner.running.store(false, Ordering::SeqCst);
     }
 
+    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`) to `true`/`false`/`false`.
+    /// Used during soft-reboot.
+    pub fn reset_lifecycle(&self) {
+        self.inner.running.store(true, Ordering::SeqCst);
+        self.inner.db_ready.store(false, Ordering::SeqCst);
+        self.inner.if_ready.store(false, Ordering::SeqCst);
+    }
+
     /// Sets the database readiness state.
     pub fn set_db_ready(&self, ready: bool) {
         self.inner.db_ready.store(ready, Ordering::SeqCst);

@@ -7,7 +7,7 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::bootstrap::BootstrapResult;
-use crate::event_loop::run_event_loop;
+use crate::event_loop::{LoopResult, run_event_loop};
 use crate::registry::ServiceRegistry;
 use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
@@ -47,14 +47,50 @@ impl Daemon {
 
     /// Runs the daemon's main execution cycle.
     pub async fn run(mut self) -> Result<()> {
-        let bus = self.ctx.bus();
-        let bus_rx = bus.subscribe();
+        loop {
+            let bus = self.ctx.bus();
+            let bus_rx = bus.subscribe();
 
-        self.validate_features();
-        self.spawn_services();
-        let expected = self.registry.registered_ids();
+            self.validate_features();
+            self.spawn_services();
+            let expected = self.registry.registered_ids();
 
-        run_event_loop(self.bootstrap.clone(), self.ctx.clone(), bus_rx, expected).await?;
+            match run_event_loop(self.bootstrap.clone(), self.ctx.clone(), bus_rx, expected).await?
+            {
+                LoopResult::Reload => {
+                    info!("Daemon: Configuration reload requested. Starting soft-reboot...");
+
+                    // 1. Signal shutdown to current services
+                    self.ctx.terminate();
+                    let _ = self
+                        .ctx
+                        .bus()
+                        .publish(LanforgeEvent::System(SystemEvent::Shutdown));
+
+                    // 2. Wait for all services to exit
+                    let registry = std::mem::replace(&mut self.registry, ServiceRegistry::new());
+                    tokio::task::spawn_blocking(move || registry.wait_all()).await?;
+
+                    // 3. Reset context state (not the full registry, just the 'running' flag and readiness)
+                    self.ctx.reset_lifecycle();
+
+                    // 4. Reload configuration from disk
+                    let new_cfg = Arc::new(crate::bootstrap::Bootstrapper::load_config());
+                    self.bootstrap.cfg = new_cfg.clone();
+
+                    // 5. Re-synchronize static devices from new config into existing state
+                    let mut state = self.ctx.write();
+                    crate::bootstrap::Bootstrapper::reload_static_devices_into_state(
+                        &mut state, &new_cfg,
+                    );
+                    drop(state);
+
+                    info!("Daemon: Soft-reboot complete. Restarting services...");
+                    continue;
+                }
+                LoopResult::Shutdown => break,
+            }
+        }
 
         self.shutdown().await
     }

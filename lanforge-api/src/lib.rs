@@ -1,3 +1,4 @@
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 //! # Lanforge API
 //!
 //! This crate provides the management and control interface for the `lanforge` daemon.

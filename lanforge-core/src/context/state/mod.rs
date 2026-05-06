@@ -78,6 +78,16 @@ pub enum LeaseTarget {
     V6Prefix { iaid: u32 },
 }
 
+impl std::fmt::Display for LeaseTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::V4 => write!(f, "V4"),
+            Self::V6 { iaid } => write!(f, "V6 (IAID: {iaid})"),
+            Self::V6Prefix { iaid } => write!(f, "V6-PD (IAID: {iaid})"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DeviceUpdate & Dispatch
 // ---------------------------------------------------------------------------
@@ -183,7 +193,7 @@ pub struct State {
     pub static_entries: HashMap<MacAddr, StaticEntry>,
     pub indices: Indices,
     pub discovery: DiscoveryCache,
-    pub network: NetworkState,
+    pub interfaces: NetworkState,
 
     #[serde(skip)]
     pub indexing_enabled: bool,
@@ -220,7 +230,7 @@ impl State {
     #[must_use]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_by_hostname(&self, hostname: &str) -> Option<Arc<Device>> {
-        let mac = if hostname.as_bytes().iter().any(|b| b.is_ascii_uppercase()) {
+        let mac = if hostname.as_bytes().iter().any(u8::is_ascii_uppercase) {
             self.indices
                 .name_index
                 .get(&hostname.to_ascii_lowercase())?
@@ -279,7 +289,7 @@ impl State {
 
     #[must_use]
     pub fn get_interface_gua_at(&self, ifindex: u32) -> Option<(Ipv6Addr, u32, u32)> {
-        let state = self.network.interface_ips.get(&ifindex)?;
+        let state = self.interfaces.interface_ips.get(&ifindex)?;
         state
             .gua
             .map(|ip| (ip, state.gua_preferred, state.gua_valid))
@@ -287,7 +297,7 @@ impl State {
 
     #[must_use]
     pub fn get_interface_ips(&self, ifindex: u32) -> InterfaceState {
-        self.network
+        self.interfaces
             .interface_ips
             .get(&ifindex)
             .cloned()
@@ -307,6 +317,7 @@ impl State {
         self.static_entries.insert(mac, entry);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_static_device(
         &mut self,
         mac: MacAddr,

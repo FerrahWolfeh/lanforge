@@ -31,7 +31,11 @@ quinn = { version = "0.11.9", features = [
     "rustls",
     "runtime-tokio",
 ], optional = true }
-smallvec = { version = "1.15.1", features = ["union", "const_generics", "serde"] }
+smallvec = { version = "1.15.1", features = [
+    "union",
+    "const_generics",
+    "serde",
+] }
 
 [features]
 adblock = ["dep:ureq", "dep:dashmap", "lanforge-core/adblock"]
@@ -43,17 +47,14 @@ dot = [
 ]
 doq = ["dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
-hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc", "lanforge-core/hotpath-alloc"]
+hotpath-alloc = [
+    "hotpath",
+    "hotpath/hotpath-alloc",
+    "lanforge-core/hotpath-alloc",
+]
 default = []
 
 
 [dev-dependencies]
 tokio = { version = "1.50.0", features = ["io-util", "net", "rt", "time"] }
 hickory-client = "0.25.2"
-
-[lints.clippy]
-nursery = "warn"
-all = "warn"
-pedantic = "warn"
-missing_panics_doc = "allow"
-missing_errors_doc = "allow"

@@ -41,7 +41,7 @@ fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     let domain_base = cfg
         .search_domains
         .first()
-        .map_or_else(|| "lan".to_string(), |d| d.clone());
+        .map_or_else(|| "lan".to_string(), Clone::clone);
 
     let soa_zone = Name::from_str(&format!("{domain_base}.")).unwrap_or_else(|_| Name::root());
     let soa_master_ns =
@@ -82,7 +82,7 @@ pub fn resolve_local(
     _device: &Device,
     qtype: RecordType,
     cfg: &DnsConfig,
-    ctx: LanforgeContext,
+    ctx: &LanforgeContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
     let resolver = LocalResolver::new(cfg, &ctx);
@@ -113,7 +113,7 @@ fn resolve_local_matches_question_name_exactly() {
     query.add_query(Query::query(name.clone(), RecordType::A));
 
     let device = ctx.get_device(&mac).unwrap();
-    let result = resolve_local(&query, &device, RecordType::A, &cfg, ctx).unwrap();
+    let result = resolve_local(&query, &device, RecordType::A, &cfg, &ctx).unwrap();
     let resp_bytes = result.unwrap();
     let resp_msg = Message::from_bytes(&resp_bytes).unwrap();
 
@@ -160,7 +160,7 @@ fn test_resolve_local_v6_suffix_merging() {
     query.add_query(Query::query(name, RecordType::AAAA));
 
     let device_arc = ctx.get_device(&mac).expect("Should resolve locally");
-    let res_bytes = resolve_local(&query, &device_arc, RecordType::AAAA, &cfg, ctx)
+    let res_bytes = resolve_local(&query, &device_arc, RecordType::AAAA, &cfg, &ctx)
         .unwrap()
         .expect("Should resolve locally");
 
@@ -216,7 +216,7 @@ fn test_resolve_local_priority_ordering() {
     query.add_query(Query::query(name, RecordType::ANY));
 
     let device_arc = ctx.get_device(&mac).unwrap();
-    let res_bytes = resolve_local(&query, &device_arc, RecordType::ANY, &cfg, ctx)
+    let res_bytes = resolve_local(&query, &device_arc, RecordType::ANY, &cfg, &ctx)
         .unwrap()
         .expect("Should resolve locally");
 
@@ -420,7 +420,7 @@ fn test_dns_response_contract() {
     query.add_query(Query::query(name, RecordType::AAAA));
 
     let device_arc = ctx.get_device(&mac).unwrap();
-    let res_bytes = resolve_local(&query, &device_arc, RecordType::AAAA, &cfg, ctx)
+    let res_bytes = resolve_local(&query, &device_arc, RecordType::AAAA, &cfg, &ctx)
         .unwrap()
         .expect("Should resolve locally");
 

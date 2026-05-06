@@ -100,7 +100,7 @@ impl DeviceChange {
     }
 
     /// Returns true if this change represents a modification to lease state
-    /// (DHCPv4, DHCPv6, SLAAC, or V6Prefix) that requires full child table sync.
+    /// (`DHCPv4`, `DHCPv6`, SLAAC, or `V6Prefix`) that requires full child table sync.
     #[must_use]
     pub const fn is_lease_change(&self) -> bool {
         matches!(

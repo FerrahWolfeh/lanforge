@@ -35,15 +35,12 @@ hotpath = { workspace = true, optional = true }
 
 [features]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
-hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc", "lanforge-core/hotpath-alloc"]
+hotpath-alloc = [
+    "hotpath",
+    "hotpath/hotpath-alloc",
+    "lanforge-core/hotpath-alloc",
+]
 default = []
 
 [dev-dependencies]
 tokio = { version = "1.51.0", features = ["full"] }
-
-[lints.clippy]
-nursery = "warn"
-all = "warn"
-pedantic = "warn"
-missing_panics_doc = "allow"
-missing_errors_doc = "allow"

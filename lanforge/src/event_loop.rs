@@ -18,12 +18,20 @@ use tracing::{debug, error, info, warn};
 
 use crate::bootstrap::BootstrapResult;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum LoopResult {
+    /// The system should perform a soft-reboot (reload config and restart services).
+    Reload,
+    /// The system should shut down gracefully.
+    Shutdown,
+}
+
 pub async fn run_event_loop(
     bootstrap: BootstrapResult,
     ctx: LanforgeContext,
     mut bus_rx: Receiver<TimedEvent>,
     expected_services: HashSet<String>,
-) -> Result<()> {
+) -> Result<LoopResult> {
     let cfg = bootstrap.cfg;
     let target_ifindex = bootstrap.target_ifindex;
 
@@ -62,7 +70,7 @@ pub async fn run_event_loop(
     let mut status_timer = interval(Duration::from_secs(10));
     status_timer.tick().await; // skip first tick
 
-    loop {
+    let result = loop {
         tokio::select! {
             _ = stale_timer.tick() => {
                 ctx.expire_stale(stale_interval);
@@ -73,11 +81,11 @@ pub async fn run_event_loop(
             }
             _ = sigterm.recv() => {
                 info!("SIGTERM received — starting graceful shutdown...");
-                break;
+                break LoopResult::Shutdown;
             }
             _ = sigint.recv() => {
                 info!("SIGINT received — starting graceful shutdown...");
-                break;
+                break LoopResult::Shutdown;
             }
             _ = status_timer.tick() => {
                 if !loop_ctx.system_ready_sent {
@@ -95,8 +103,8 @@ pub async fn run_event_loop(
             event = bus_rx.recv() => {
                 match event {
                     Ok(timed_event) => {
-                        if !handle_bus_event(timed_event.event, &mut loop_ctx) {
-                            break;
+                        if let Some(res) = handle_bus_event(timed_event.event, &mut loop_ctx) {
+                            break res;
                         }
                     }
                     Err(RecvError::Lagged(n)) => {
@@ -104,14 +112,14 @@ pub async fn run_event_loop(
                     }
                     Err(RecvError::Closed) => {
                         error!("EventBus: channel closed unexpectedly");
-                        break;
+                        break LoopResult::Shutdown;
                     }
                 }
             }
         }
-    }
+    };
 
-    Ok(())
+    Ok(result)
 }
 
 struct LoopContext<'a> {
@@ -124,7 +132,7 @@ struct LoopContext<'a> {
     system_ready_sent: bool,
 }
 
-fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
+fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> Option<LoopResult> {
     match event {
         LanforgeEvent::System(SystemEvent::ServiceReady { name })
             if l_ctx.expected_services.contains(&name)
@@ -161,11 +169,8 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
                 .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
         }
         LanforgeEvent::System(SystemEvent::ReloadConfig) => {
-            info!("ReloadConfig: Forcing background synchronization...");
-            let _ = l_ctx
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
+            info!("ReloadConfig: Initiating soft-reboot...");
+            return Some(LoopResult::Reload);
         }
         LanforgeEvent::Network(NetworkEvent::WolTriggered { mac, ip_hint }) => {
             handle_wol_event(l_ctx, mac, ip_hint);
@@ -188,11 +193,11 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> bool {
         }
         LanforgeEvent::System(SystemEvent::Shutdown) => {
             debug!("EventLoop: shutdown received via bus");
-            return false;
+            return Some(LoopResult::Shutdown);
         }
         _ => {}
     }
-    true
+    None
 }
 
 fn handle_wol_event(l_ctx: &LoopContext, mac: MacAddr, ip_hint: Option<Ipv4Addr>) {
@@ -201,7 +206,7 @@ fn handle_wol_event(l_ctx: &LoopContext, mac: MacAddr, ip_hint: Option<Ipv4Addr>
 
     {
         let ctx_read = l_ctx.ctx.read();
-        if let Some(if_ips) = ctx_read.network.interface_ips.get(&l_ctx.target_ifindex)
+        if let Some(if_ips) = ctx_read.interfaces.interface_ips.get(&l_ctx.target_ifindex)
             && let Some((ip, prefix)) = if_ips.v4
         {
             let ip_u32 = u32::from_be_bytes(ip.octets());

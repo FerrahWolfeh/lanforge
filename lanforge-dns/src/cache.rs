@@ -12,13 +12,16 @@
 //! - **TTL extraction:** The minimum TTL from all answer/NS/additional records is used
 //! - **ID rewriting:** On cache hit, the query ID is patched in-place (bytes 0-1)
 
-use hickory_proto::rr::RData;
-use hickory_proto::{op::Message, serialize::binary::BinEncodable};
+use hickory_proto::rr::{Name, RData};
+use hickory_proto::{
+    op::Message,
+    serialize::binary::{BinDecodable, BinEncodable},
+};
 use moka::Expiry;
 use moka::sync::Cache;
 use std::time::{Duration, Instant};
 
-use crate::wire::WireQuestion;
+use crate::wire::{WireQuestion, qtypes::QType};
 
 /// Cache key for DNS responses.
 ///
@@ -194,5 +197,35 @@ impl DnsCache {
         };
 
         self.cache.insert(key, cached_response);
+    }
+
+    /// Invalidates all entries in the cache.
+    pub fn invalidate_all(&self) {
+        self.cache.invalidate_all();
+    }
+
+    /// Returns a dump of all cache entries.
+    pub fn dump(&self) -> Vec<(String, String, String, u64)> {
+        self.cache
+            .iter()
+            .map(|(key, value)| {
+                let name = Name::from_bytes(&key.qname)
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|_| "invalid".to_string());
+                let kind = QType::from(key.qtype).to_string();
+
+                // Try to parse RData from response bytes for display
+                let data = if let Ok(msg) = Message::from_bytes(&value.data) {
+                    msg.answers
+                        .first()
+                        .map(|r| r.data.to_string())
+                        .unwrap_or_else(|| "no-data".to_string())
+                } else {
+                    "wire-error".to_string()
+                };
+
+                (name, kind, data, value.ttl.as_secs())
+            })
+            .collect()
     }
 }

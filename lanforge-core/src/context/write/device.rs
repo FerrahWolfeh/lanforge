@@ -42,6 +42,7 @@ impl LanforgeContext {
 
     /// Adds a static device to the registry (test-only helper).
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub fn add_static_device(
         &self,
         mac: MacAddr,

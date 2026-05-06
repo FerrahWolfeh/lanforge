@@ -1,6 +1,7 @@
 pub mod config;
 pub mod db;
 pub mod devices;
+pub mod dhcp;
 pub mod dns;
 pub mod host;
 pub mod lease;
@@ -14,6 +15,7 @@ pub mod wol;
 pub use config::ConfigHandler;
 pub use db::DbHandler;
 pub use devices::DevicesHandler;
+pub use dhcp::DhcpHandler;
 pub use dns::DnsCommand;
 pub use host::HostHandler;
 pub use lease::LeaseHandler;

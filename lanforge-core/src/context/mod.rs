@@ -61,7 +61,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -179,6 +179,8 @@ struct LanforgeContextInner {
     last_db_flush: RwLock<Option<SystemTime>>,
     /// Internal counters for event rates.
     event_counters: EventCounters,
+    /// Timestamp of the last network scan.
+    last_scan: RwLock<Instant>,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -219,6 +221,7 @@ impl LanforgeContext {
                 dns_context: RwLock::new(None),
                 last_db_flush: RwLock::new(None),
                 event_counters: EventCounters::default(),
+                last_scan: RwLock::new(Instant::now()),
             }),
         }
     }
@@ -261,6 +264,17 @@ impl LanforgeContext {
     #[must_use]
     pub fn last_db_flush(&self) -> Option<SystemTime> {
         *self.inner.last_db_flush.read()
+    }
+
+    /// Records a new network scan timestamp.
+    pub fn record_scan(&self) {
+        *self.inner.last_scan.write() = Instant::now();
+    }
+
+    /// Returns the number of seconds since the last network scan.
+    #[must_use]
+    pub fn last_scan_secs_ago(&self) -> u64 {
+        self.inner.last_scan.read().elapsed().as_secs()
     }
 
     /// Returns the internal event counters.

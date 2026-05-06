@@ -38,3 +38,17 @@ impl From<u16> for QType {
         }
     }
 }
+
+impl std::fmt::Display for QType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::A => write!(f, "A"),
+            Self::NS => write!(f, "NS"),
+            Self::PTR => write!(f, "PTR"),
+            Self::MX => write!(f, "MX"),
+            Self::AAAA => write!(f, "AAAA"),
+            Self::Any => write!(f, "ANY"),
+            Self::Other(n) => write!(f, "TYPE{n}"),
+        }
+    }
+}

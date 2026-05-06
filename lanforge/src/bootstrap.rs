@@ -96,7 +96,7 @@ impl Bootstrapper {
         ))
     }
 
-    fn load_config() -> Config {
+    pub(crate) fn load_config() -> Config {
         #[cfg(feature = "debug-commands")]
         let mut cfg = Config::load();
 

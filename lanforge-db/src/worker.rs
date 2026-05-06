@@ -115,9 +115,7 @@ impl DbWorker {
             let mut result = Ok(());
             // 1. Perform purges
             if !purges.is_empty() {
-                if let Err(e) = db.delete_devices(&purges).await {
-                    result = Err(e);
-                }
+                result = db.delete_devices(&purges).await;
             }
 
             // 2. Perform lease updates (heavy)

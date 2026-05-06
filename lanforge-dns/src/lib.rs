@@ -55,6 +55,9 @@
 //! | [`config`] | `DnsConfig` — listen address, upstream, search domain, prefixes |
 //! | [`error`] | `DnsError` — I/O, protocol, wire parse, timeout errors |
 
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
+
 pub mod cache;
 pub mod config;
 #[cfg(feature = "dot")]

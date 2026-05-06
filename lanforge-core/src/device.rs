@@ -467,7 +467,7 @@ pub enum IPv6State {
     Dynamic(V6Lease),
     /// Address discovered via SLAAC (Stateless Address Auto-Configuration).
     Slaac(Ipv6Addr, SystemTime),
-    /// Link-local address (fe80::/10).
+    /// Link-local address (`fe80::/10`).
     LinkLocal(Ipv6Addr, SystemTime),
     /// Address discovered via Neighbor Discovery (NDP) that is neither SLAAC nor DHCP.
     Discovery(Ipv6Addr, SystemTime),

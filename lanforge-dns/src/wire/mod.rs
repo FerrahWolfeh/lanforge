@@ -227,7 +227,7 @@ impl WireResponseWriter {
         query_data: &[u8],
         question: &WireQuestion,
         rcode: u8,
-        edns: Option<&WireOptScanner>,
+        edns: Option<WireOptScanner>,
         ra: bool,
         resp: &mut Vec<u8>,
     ) {
@@ -265,7 +265,7 @@ impl WireResponseWriter {
         question: &WireQuestion,
         ips: &[IpAddr],
         ttl: u32,
-        edns: Option<&WireOptScanner>,
+        edns: Option<WireOptScanner>,
         ra: bool,
         resp: &mut Vec<u8>,
     ) {
@@ -329,7 +329,7 @@ impl WireResponseWriter {
         host: &str,
         domain: &str,
         ttl: u32,
-        edns: Option<&WireOptScanner>,
+        edns: Option<WireOptScanner>,
         ra: bool,
         resp: &mut Vec<u8>,
     ) {
@@ -406,7 +406,7 @@ impl WireResponseWriter {
         }
     }
 
-    fn write_opt(resp: &mut Vec<u8>, opt: &WireOptScanner) {
+    fn write_opt(resp: &mut Vec<u8>, opt: WireOptScanner) {
         resp.push(0); // Root Name
         resp.extend_from_slice(&41u16.to_be_bytes()); // Type 41 (OPT)
         resp.extend_from_slice(&opt.max_payload.to_be_bytes()); // Class (Max Payload)

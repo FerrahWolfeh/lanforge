@@ -18,6 +18,23 @@ pub struct InterfaceState {
     pub gua_valid: u32,
 }
 
+/// Simplified DHCP pool metrics for state tracking.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct DhcpPoolStats {
+    pub subnet: String,
+    pub total: u32,
+    pub used: u32,
+    pub available: u32,
+    pub utilization_percent: f32,
+}
+
+impl DhcpPoolStats {
+    pub fn total_addresses(&self) -> u32 { self.total }
+    pub fn used_addresses(&self) -> u32 { self.used }
+    pub fn available_addresses(&self) -> u32 { self.available }
+    pub fn utilization_percent(&self) -> f32 { self.utilization_percent }
+}
+
 /// Managed network interface states.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetworkState {
@@ -27,11 +44,21 @@ pub struct NetworkState {
         deserialize_with = "deserialize_int_map"
     )]
     pub interface_ips: HashMap<u32, InterfaceState>,
+    /// Active DHCPv4 pool metrics.
+    pub v4_pool: Option<DhcpPoolStats>,
+    /// Active DHCPv6 pool metrics indexed by IAID.
+    #[serde(
+        serialize_with = "serialize_int_map",
+        deserialize_with = "deserialize_int_map"
+    )]
+    pub v6_pools: HashMap<u32, DhcpPoolStats>,
 }
 
 impl NetworkState {
     pub fn clear(&mut self) {
         self.interface_ips.clear();
+        self.v4_pool = None;
+        self.v6_pools.clear();
     }
 }
 

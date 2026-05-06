@@ -70,34 +70,37 @@ impl LogHandler {
                     mac.to_string().dimmed()
                 );
             }
-            LanforgeEvent::Dns(DnsEvent::AdblockToggle {
-                enabled,
-                duration_secs,
-            }) => {
-                let status = if *enabled {
-                    "ENABLED".green().bold()
-                } else {
-                    "DISABLED".red().bold()
-                };
-                let suffix = duration_secs
-                    .map(|s| format!(" for {s}s"))
-                    .unwrap_or_default();
-                println!("[{}] {} DNS Adblocker{}", now, status, suffix);
-            }
-            LanforgeEvent::Dns(DnsEvent::AdblockReload) => {
-                println!("[{}] {} Reloading blocklists...", now, "DNS".cyan().bold());
-            }
-            LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, domain }) => {
-                if self.verbose {
-                    println!(
-                        "[{}] {} {} -> {}",
-                        now,
-                        "BLOCK".red().bold(),
-                        src_addr.to_string().bright_cyan(),
-                        domain.bright_red()
-                    );
+            LanforgeEvent::Dns(e) => match e {
+                DnsEvent::AdblockToggle {
+                    enabled,
+                    duration_secs,
+                } => {
+                    let status = if *enabled {
+                        "ENABLED".green().bold()
+                    } else {
+                        "DISABLED".red().bold()
+                    };
+                    let suffix = duration_secs
+                        .map(|s| format!(" for {s}s"))
+                        .unwrap_or_default();
+                    println!("[{}] {} DNS Adblocker{}", now, status, suffix);
                 }
-            }
+                DnsEvent::AdblockReload => {
+                    println!("[{}] {} Reloading blocklists...", now, "DNS".cyan().bold());
+                }
+                DnsEvent::QueryBlocked { src_addr, domain } => {
+                    if self.verbose {
+                        println!(
+                            "[{}] {} {} -> {}",
+                            now,
+                            "BLOCK".red().bold(),
+                            src_addr.to_string().bright_cyan(),
+                            domain.bright_red()
+                        );
+                    }
+                }
+                _ => {}
+            },
             LanforgeEvent::Device(DeviceEvent::Updated {
                 mac,
                 hostname,

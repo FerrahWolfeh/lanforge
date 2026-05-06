@@ -1,3 +1,4 @@
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 //! # Lanforge Core
 //!
 //! `lanforge-core` is the central logic engine for the Lanforge daemon. It manages

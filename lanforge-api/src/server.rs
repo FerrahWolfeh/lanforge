@@ -73,7 +73,6 @@ impl AsyncService for ControlService {
         let mut current_gua: Option<String> = None;
 
         let startup_time = Instant::now();
-        let mut last_scan = Instant::now();
 
         // TCP Listener opcional para debug
         let tcp_listener = if let Some(port) = cfg.tcp_port {
@@ -106,7 +105,6 @@ impl AsyncService for ControlService {
                                     current_gua = gua.map(|ip| ip.to_string());
                                 }
                                 LanforgeEvent::System(SystemEvent::ReloadConfig) => {
-                                    last_scan = Instant::now();
                                 }
                                 LanforgeEvent::System(SystemEvent::Shutdown) => {
                                     debug!("Control: shutdown received");
@@ -129,7 +127,7 @@ impl AsyncService for ControlService {
                             let ctx = ClientContext {
                                 current_gua: current_gua.clone(),
                                 uptime_secs: startup_time.elapsed().as_secs(),
-                                last_scan_secs_ago: last_scan.elapsed().as_secs(),
+                                last_scan_secs_ago: self.ctx.last_scan_secs_ago(),
                                 cfg: cfg.clone(),
                                 ctx: self.ctx.clone(),
                             };
@@ -157,7 +155,7 @@ impl AsyncService for ControlService {
                         let ctx = ClientContext {
                             current_gua: current_gua.clone(),
                             uptime_secs: startup_time.elapsed().as_secs(),
-                            last_scan_secs_ago: last_scan.elapsed().as_secs(),
+                            last_scan_secs_ago: self.ctx.last_scan_secs_ago(),
                             cfg: cfg.clone(),
                             ctx: self.ctx.clone(),
                         };

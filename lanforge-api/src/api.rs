@@ -182,6 +182,9 @@ pub enum CommandAction {
         /// Optional specific lease target (V4, V6, or V6Prefix with IAID).
         target: Option<LeaseTarget>,
     },
+    /// Fetch DHCP pool utilization.
+    #[dispatch(handler = "handle_dhcp_pools")]
+    DhcpPools,
     /// Perform a VACUUM operation on the underlying SQLite database.
     #[dispatch(handler = "handle_db_vacuum")]
     DbVacuum,
@@ -220,6 +223,12 @@ pub enum CommandAction {
         /// Optional record type (A, AAAA, TXT, etc.).
         record_type: Option<String>,
     },
+    /// Flush the DNS cache.
+    #[dispatch(handler = "handle_dns_cache_flush")]
+    DnsCacheFlush,
+    /// Dump the DNS cache contents.
+    #[dispatch(handler = "handle_dns_cache_dump")]
+    DnsCacheDump,
     /// Enable or disable the DNS adblocker.
     #[dispatch(handler = "handle_dns_adblock_set", args(enabled, duration_secs))]
     DnsAdblockSet {
@@ -287,6 +296,10 @@ pub enum Response {
     DnsStats(DnsStatsResponse),
     /// Response for a DNS diagnostic query.
     DnsQuery(DnsQueryResponse),
+    /// Response for DHCP pool utilization.
+    DhcpPools(DhcpPoolsResponse),
+    /// Response for DNS cache dump.
+    DnsCache(DnsCacheResponse),
     /// Response for a full context dump.
     ContextDump(Box<State>),
     /// List of active DHCP leases.
@@ -677,23 +690,36 @@ pub struct DnsQueryResponse {
     pub authoritative: bool,
 }
 
-/// A single DNS record in a query response.
+pub use lanforge_core::bus::dns::DnsRecordEntry;
+
+/// Detailed DHCP pool utilization.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct DnsRecordEntry {
-    /// Record name.
-    pub name: String,
-    /// Record type string (A, AAAA, etc.).
-    pub kind: String,
-    /// Record data (IP, Target, etc.).
-    pub data: String,
-    /// Time-to-Live.
-    pub ttl: u32,
+pub struct DhcpPoolsResponse {
+    pub v4_pools: Vec<DhcpPoolEntry>,
+    pub v6_pools: Vec<DhcpPoolEntry>,
 }
 
-impl std::fmt::Display for DnsRecordEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:<5} {:<20} -> {}", self.kind, self.name, self.data)
-    }
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DhcpPoolEntry {
+    pub subnet: String,
+    pub total: u32,
+    pub used: u32,
+    pub available: u32,
+    pub utilization_percent: f32,
+}
+
+/// DNS cache dump entry.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsCacheResponse {
+    pub entries: Vec<DnsCacheEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsCacheEntry {
+    pub name: String,
+    pub kind: String,
+    pub data: String,
+    pub expires_in_secs: u64,
 }
 
 #[cfg(test)]

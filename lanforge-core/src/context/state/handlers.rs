@@ -7,8 +7,8 @@ use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
 use crate::device::{
-    Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, TopologyInfo, classify_ipv6,
-    V6ObservationOrigin,
+    Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, TopologyInfo,
+    V6ObservationOrigin, classify_ipv6,
 };
 use crate::identifiers::{Duid, MacAddr};
 
@@ -72,7 +72,9 @@ impl State {
         addr: Ipv6Addr,
         is_active: bool,
     ) -> EventVec {
-        self.mutate_device(mac, |dev| dev.apply_v6_observation(addr, is_active, V6ObservationOrigin::SlaacTracker))
+        self.mutate_device(mac, |dev| {
+            dev.apply_v6_observation(addr, is_active, V6ObservationOrigin::SlaacTracker)
+        })
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -364,7 +366,7 @@ impl State {
         ifindex: u32,
         state: InterfaceState,
     ) -> EventVec {
-        self.network.interface_ips.insert(ifindex, state);
+        self.interfaces.interface_ips.insert(ifindex, state);
         vec![LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
             ifindex,
         })]
@@ -447,7 +449,7 @@ impl State {
         self.static_entries.clear();
         self.indices.clear();
         self.discovery.clear();
-        self.network.clear();
+        self.interfaces.clear();
         EventVec::new()
     }
 
@@ -468,7 +470,9 @@ impl State {
                 for (_, ip, active) in &entries {
                     let change = match ip {
                         IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
-                        IpAddr::V6(v6) => dev.apply_v6_observation(*v6, *active, V6ObservationOrigin::NdpMonitor),
+                        IpAddr::V6(v6) => {
+                            dev.apply_v6_observation(*v6, *active, V6ObservationOrigin::NdpMonitor)
+                        }
                     };
                     if let Some(c) = change
                         && first_change.is_none()
@@ -505,7 +509,9 @@ impl State {
                 for (ip, active) in updates {
                     let change = match ip {
                         IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
-                        IpAddr::V6(v6) => dev.apply_v6_observation(*v6, *active, V6ObservationOrigin::NdpMonitor),
+                        IpAddr::V6(v6) => {
+                            dev.apply_v6_observation(*v6, *active, V6ObservationOrigin::NdpMonitor)
+                        }
                     };
                     if let Some(c) = change
                         && first_change.is_none()

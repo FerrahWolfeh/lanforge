@@ -226,12 +226,12 @@ pub fn build_tree(
     }
 
     // Interface IPs
-    if !state.network.interface_ips.is_empty() {
+    if !state.interfaces.interface_ips.is_empty() {
         let mut if_items = Vec::new();
-        let mut if_keys: Vec<_> = state.network.interface_ips.keys().collect();
+        let mut if_keys: Vec<_> = state.interfaces.interface_ips.keys().collect();
         if_keys.sort();
         for idx in if_keys {
-            let if_state = &state.network.interface_ips[idx];
+            let if_state = &state.interfaces.interface_ips[idx];
             if_items.push(TreeItem::new_leaf(
                 format!("if.{}", idx),
                 Text::from(Line::from(vec![
@@ -249,7 +249,7 @@ pub fn build_tree(
                 "state.interfaces".to_string(),
                 Text::from(format!(
                     "interface_ips ({})",
-                    state.network.interface_ips.len()
+                    state.interfaces.interface_ips.len()
                 )),
                 if_items,
             )

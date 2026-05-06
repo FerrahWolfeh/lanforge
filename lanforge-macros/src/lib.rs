@@ -411,10 +411,14 @@ pub fn cli_handler_derive(input: TokenStream) -> TokenStream {
                                     let fields = fields_content.parse_terminated(Ident::parse, syn::Token![,])?;
                                     let field_mappings = fields.iter().map(|f| quote! { #f: #f.clone() });
                                     action_fields = quote! { { #(#field_mappings),* } };
+
+                                    // Se houver campos, esperamos outra vírgula antes do booleano
+                                    if content.peek(syn::Token![,]) {
+                                        content.parse::<syn::Token![,]>()?;
+                                    }
                                 }
                             }
-                            
-                            content.parse::<syn::Token![,]>()?;
+
                             let streaming: syn::LitBool = content.parse()?;
                             
                             handler_expr = Some(quote! {

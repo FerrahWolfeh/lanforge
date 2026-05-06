@@ -13,7 +13,7 @@ pub enum Cli {
     Lanforge(LanforgeArgs),
 
     /// Quick Wake-on-LAN (alias for 'lanforge wol')
-    #[command(name = "wake")]
+    #[command(name = "wake", hide = true)]
     Wake {
         /// Target device MAC or Hostname
         target: Option<String>,
@@ -27,7 +27,7 @@ pub enum Cli {
     },
 
     /// Show service status (alias for 'lanforge status')
-    #[command(name = "lf-status")]
+    #[command(name = "lf-status", hide = true)]
     LfStatus {
         #[arg(
             short,
@@ -39,7 +39,7 @@ pub enum Cli {
     },
 
     /// List devices (alias for 'lanforge devices')
-    #[command(name = "lf-devices")]
+    #[command(name = "lf-devices", hide = true)]
     LfDevices {
         #[arg(short, long)]
         verbose: bool,
@@ -65,7 +65,7 @@ pub enum Cli {
     },
 
     /// Force network scan (alias for 'lanforge scan')
-    #[command(name = "lf-scan")]
+    #[command(name = "lf-scan", hide = true)]
     LfScan {
         #[arg(
             short,
@@ -77,7 +77,7 @@ pub enum Cli {
     },
 
     /// View network topology hierarchically
-    #[command(name = "lf-topology")]
+    #[command(name = "lf-topology", hide = true)]
     LfTopology {
         #[arg(
             short,
@@ -219,6 +219,12 @@ pub enum Command {
         #[command(subcommand)]
         action: DnsCommand,
     },
+    /// DHCP server management
+    #[handler(DhcpHandler { .. })]
+    Dhcp {
+        #[command(subcommand)]
+        action: DhcpCommand,
+    },
     /// Script-friendly data querying (outputs raw JSON)
     #[handler(QueryHandler { .. })]
     Query {
@@ -283,6 +289,25 @@ pub enum DnsCommand {
         #[command(subcommand)]
         action: AdblockAction,
     },
+    /// Manage resolver cache
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum CacheAction {
+    /// Flush all entries from the DNS cache
+    Flush,
+    /// Dump the current DNS cache contents
+    Dump,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DhcpCommand {
+    /// View detailed pool utilization
+    Pool,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -300,8 +325,22 @@ pub enum AdblockAction {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum LeaseCommand {
-    Renew { mac: String },
-    Release { mac: String },
+    /// Forces a renew of a specific lease.
+    Renew {
+        /// Target device MAC
+        mac: String,
+        /// Trigger IPv6 renew instead of IPv4
+        #[arg(short = '6', long)]
+        v6: bool,
+    },
+    /// Forces a release of a specific lease.
+    Release {
+        /// Target device MAC
+        mac: String,
+        /// Trigger IPv6 release instead of IPv4
+        #[arg(short = '6', long)]
+        v6: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

@@ -6,7 +6,7 @@
 use std::fs::metadata;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::Ordering;
-use std::time::SystemTime;
+use std::time::{self, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 #[allow(unused_imports)]
@@ -22,10 +22,11 @@ use lanforge_db::log_engine::LogDb;
 use std::str::FromStr;
 
 use crate::api::{
-    Capabilities, DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats,
-    DnsQueryResponse, DnsStatsResponse, Encoding, HostConfigEntry, HostsResponse, Ipv6Entry,
-    LeaseEntry, LeaseInfo, LeaseKind, LeasesResponse, NetworkStatus, ResourcesStatus, Response,
-    ServicesStatus, SimpleSuccess, StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse,
+    Capabilities, DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DhcpPoolEntry,
+    DhcpPoolsResponse, DnsCacheEntry, DnsCacheResponse, DnsQueryResponse, DnsStatsResponse,
+    Encoding, HostConfigEntry, HostsResponse, Ipv6Entry, LeaseEntry, LeaseInfo, LeaseKind,
+    LeasesResponse, NetworkStatus, ResourcesStatus, Response, ServicesStatus, SimpleSuccess,
+    StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse,
 };
 
 // Moved to lanforge-http
@@ -126,7 +127,7 @@ impl ClientContext {
         status.network.lan_iface.clone_from(&self.cfg.lan_iface);
         if let Some(ifindex) = self.ctx.target_ifindex() {
             let state = self.ctx.read();
-            if let Some(if_ips) = state.network.interface_ips.get(&ifindex) {
+            if let Some(if_ips) = state.interfaces.interface_ips.get(&ifindex) {
                 if let Some((ip, prefix)) = if_ips.v4 {
                     status.network.lan_ipv4 = Some(ip.to_string());
                     status.network.lan_ipv4_cidr = Some(format!("{}/{}", ip, prefix));
@@ -659,15 +660,55 @@ impl ClientContext {
     /// DNS diagnostic query.
     pub(crate) async fn handle_dns_query(
         &self,
-        _name: String,
-        _record_type: Option<String>,
+        name: String,
+        record_type: Option<String>,
     ) -> Response {
-        // This would probably send a msg to DnsService or use a shared client
-        Response::DnsQuery(DnsQueryResponse {
-            records: Vec::new(),
-            latency_ms: 0,
-            authoritative: false,
+        let query_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u32;
+        let record_type = record_type.unwrap_or_else(|| "A".to_string());
+
+        let mut rx = self.ctx.bus().subscribe();
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::DiagnosticQuery {
+                query_id,
+                name,
+                record_type,
+            }));
+
+        match tokio::time::timeout(time::Duration::from_secs(5), async move {
+            while let Ok(timed_event) = rx.recv().await {
+                if let LanforgeEvent::Dns(DnsEvent::DiagnosticResponse {
+                    query_id: resp_id,
+                    records,
+                    latency_ms,
+                    authoritative,
+                }) = timed_event.event
+                {
+                    if resp_id == query_id {
+                        return Some(DnsQueryResponse {
+                            records,
+                            latency_ms,
+                            authoritative,
+                        });
+                    }
+                }
+            }
+            None
         })
+        .await
+        {
+            Ok(Some(resp)) => Response::DnsQuery(resp),
+            Ok(None) => Response::Error {
+                error: "DNS response channel closed".into(),
+            },
+            Err(_) => Response::Error {
+                error: "DNS query timed out waiting for event bus".into(),
+            },
+        }
     }
 
     /// Fully dumps the main in-memory state.
@@ -682,12 +723,12 @@ impl ClientContext {
             state.static_entries.clear();
             state.discovery.ndp_cache.clear();
             state.discovery.orphaned_v6.clear();
-            state.network.interface_ips.clear();
+            state.interfaces.interface_ips.clear();
         } else if only_orphans {
             state.devices.clear();
             state.static_entries.clear();
             state.discovery.ndp_cache.clear();
-            state.network.interface_ips.clear();
+            state.interfaces.interface_ips.clear();
         }
 
         Response::ContextDump(Box::new(state))
@@ -775,7 +816,7 @@ impl ClientContext {
         mac_str: String,
         target: Option<LeaseTarget>,
     ) -> Response {
-        let _mac = match MacAddr::from_str(&mac_str) {
+        let mac = match MacAddr::from_str(&mac_str) {
             Ok(m) => m,
             Err(e) => {
                 return Response::Error {
@@ -784,14 +825,18 @@ impl ClientContext {
             }
         };
 
-        match target.unwrap_or(LeaseTarget::V4) {
-            LeaseTarget::V4 => Response::Error {
-                error: "Lease renew via API not fully implemented".into(),
-            },
-            _ => Response::Error {
-                error: "V6 renew not implemented".into(),
-            },
-        }
+        let target = target.unwrap_or(LeaseTarget::V4);
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Device(DeviceEvent::LeaseRenew {
+                mac,
+                target: target.clone(),
+            }));
+
+        Response::Success(SimpleSuccess {
+            message: format!("Lease renew requested for {} ({})", mac, target),
+        })
     }
 
     /// Releases a lease manually.
@@ -800,7 +845,7 @@ impl ClientContext {
         mac_str: String,
         target: Option<LeaseTarget>,
     ) -> Response {
-        let _mac = match MacAddr::from_str(&mac_str) {
+        let mac = match MacAddr::from_str(&mac_str) {
             Ok(m) => m,
             Err(e) => {
                 return Response::Error {
@@ -809,14 +854,18 @@ impl ClientContext {
             }
         };
 
-        match target.unwrap_or(LeaseTarget::V4) {
-            LeaseTarget::V4 => Response::Error {
-                error: "Lease release via API not fully implemented".into(),
-            },
-            _ => Response::Error {
-                error: "V6 release not implemented".into(),
-            },
-        }
+        let target = target.unwrap_or(LeaseTarget::V4);
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Device(DeviceEvent::LeaseRelease {
+                mac,
+                target: target.clone(),
+            }));
+
+        Response::Success(SimpleSuccess {
+            message: format!("Lease release requested for {} ({})", mac, target),
+        })
     }
 
     /// Fetches the current topology of the network.
@@ -840,8 +889,21 @@ impl ClientContext {
         Response::Topology(TopologyResponse { entries })
     }
 
-    /// Triggers active network scans.
     pub(crate) async fn handle_scan(&self) -> Response {
+        let last_scan = self.ctx.last_scan_secs_ago();
+        let cooldown = 60;
+
+        if last_scan < cooldown {
+            return Response::Error {
+                error: format!(
+                    "Scan on cooldown. Please wait {} more seconds.",
+                    cooldown - last_scan
+                ),
+            };
+        }
+
+        self.ctx.record_scan();
+
         let _ = self
             .ctx
             .bus()
@@ -850,8 +912,9 @@ impl ClientContext {
             .ctx
             .bus()
             .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
+
         Response::Success(SimpleSuccess {
-            message: "Active network scans triggered".to_string(),
+            message: "Active network scans triggered (ARP Storm + NDP/SLAAC Discovery)".to_string(),
         })
     }
 
@@ -1093,5 +1156,93 @@ impl ClientContext {
         Response::Success(SimpleSuccess {
             message: "Log cleanup triggered".to_string(),
         })
+    }
+    pub(crate) async fn handle_dhcp_pools(&self) -> Response {
+        let state = self.ctx.read();
+        let mut v4_pools = Vec::new();
+        let mut v6_pools = Vec::new();
+
+        if let Some(ref pool) = state.interfaces.v4_pool {
+            v4_pools.push(DhcpPoolEntry {
+                subnet: pool.subnet.to_string(),
+                total: pool.total_addresses(),
+                used: pool.used_addresses(),
+                available: pool.available_addresses(),
+                utilization_percent: pool.utilization_percent(),
+            });
+        }
+
+        for (iaid, pool) in &state.interfaces.v6_pools {
+            v6_pools.push(DhcpPoolEntry {
+                subnet: format!("IAID: {iaid} ({})", pool.subnet),
+                total: pool.total_addresses(),
+                used: pool.used_addresses(),
+                available: pool.available_addresses(),
+                utilization_percent: pool.utilization_percent(),
+            });
+        }
+
+        Response::DhcpPools(DhcpPoolsResponse { v4_pools, v6_pools })
+    }
+
+    pub(crate) async fn handle_dns_cache_flush(&self) -> Response {
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::CacheFlush));
+        Response::Success(SimpleSuccess {
+            message: "DNS cache flush signal sent".to_string(),
+        })
+    }
+
+    pub(crate) async fn handle_dns_cache_dump(&self) -> Response {
+        let query_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u32;
+
+        let mut rx = self.ctx.bus().subscribe();
+
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::CacheDumpQuery { query_id }));
+
+        match tokio::time::timeout(time::Duration::from_secs(2), async move {
+            while let Ok(timed_event) = rx.recv().await {
+                if let LanforgeEvent::Dns(DnsEvent::CacheDumpResponse {
+                    query_id: resp_id,
+                    entries,
+                }) = timed_event.event
+                {
+                    if resp_id == query_id {
+                        let cache_entries = entries
+                            .into_iter()
+                            .map(|(name, kind, data, expires_in_secs)| DnsCacheEntry {
+                                name,
+                                kind,
+                                data,
+                                expires_in_secs,
+                            })
+                            .collect();
+
+                        return Some(DnsCacheResponse {
+                            entries: cache_entries,
+                        });
+                    }
+                }
+            }
+            None
+        })
+        .await
+        {
+            Ok(Some(resp)) => Response::DnsCache(resp),
+            Ok(None) => Response::Error {
+                error: "DNS response channel closed".into(),
+            },
+            Err(_) => Response::Error {
+                error: "DNS cache dump timed out".into(),
+            },
+        }
     }
 }

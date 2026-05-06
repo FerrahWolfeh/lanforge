@@ -38,6 +38,10 @@ impl CliCommand for DnsCommand {
                     Ok(ControlCommand::new(CommandAction::DnsAdblockReload))
                 }
             },
+            args::DnsCommand::Cache { action } => match action {
+                args::CacheAction::Flush => Ok(ControlCommand::new(CommandAction::DnsCacheFlush)),
+                args::CacheAction::Dump => Ok(ControlCommand::new(CommandAction::DnsCacheDump)),
+            },
         }
     }
 
@@ -79,6 +83,27 @@ impl CliCommand for DnsCommand {
             }
             Response::Error { error } => {
                 println!("Error: {}", error);
+            }
+            Response::DnsCache(cache) => {
+                element! {
+                    View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                        View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                            Text(content: " DNS CACHE DUMP ", color: Color::White, weight: Weight::Bold)
+                        }
+                        View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
+                            #(cache.entries.iter().map(|e| element! {
+                                View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
+                                    Text(content: format!("{:<5}", e.kind), color: Color::Cyan)
+                                    Text(content: format!(" {:<30}", e.name))
+                                    Text(content: " -> ", color: Color::DarkGrey)
+                                    Text(content: e.data.clone())
+                                    View(flex_grow: 1.0)
+                                    Text(content: format!("{}s", e.expires_in_secs), color: Color::Yellow)
+                                }
+                            }))
+                        }
+                    }
+                }.print();
             }
             Response::Success(msg) => {
                 println!("{}", msg.message);
