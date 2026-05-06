@@ -4,7 +4,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::{InterfaceState, State};
-use lanforge_core::device::Ipv6AddrOrSuffix;
+use lanforge_core::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::identifiers::MacAddr;
 use lanforge_db::engine::LeaseDb;
 use lanforge_network::ifmon::AddressMonitor;
@@ -160,6 +160,7 @@ impl Bootstrapper {
                     v4_ip,
                     v6_suffix,
                     e.boot_file.clone(),
+                    Origin::Toml,
                 );
             }
         }

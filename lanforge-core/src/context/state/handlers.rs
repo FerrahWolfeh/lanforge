@@ -86,10 +86,35 @@ impl State {
             .insert(ip, (mac, SystemTime::now()));
 
         let orphaned = self.discovery.orphaned_v6.remove(&ip);
+        let orphaned_info = orphaned.clone();
 
-        self.mutate_device(mac, |dev| {
-            let mut change = if let Some((duid, iaid, expires)) = orphaned {
-                dev.apply_v6_lease(&duid, iaid, ip, expires)
+        let mut events = self.mutate_device(mac, |dev| {
+            let mut change = if let Some((duid, iaid, expires)) = &orphaned {
+                let old_duid = dev.duid.clone();
+                let c = dev.apply_v6_lease(duid, *iaid, ip, *expires);
+
+                if let Some(old) = old_duid
+                    && old != *duid
+                {
+                    if dev.origin == crate::device::Origin::Toml {
+                        tracing::warn!(
+                            "⚠️ DUID change detected for static host {} ({}). TOML says {:?}, but client sent {:?}. Please update your lanforge.toml.",
+                            dev.display_hostname(),
+                            mac,
+                            old,
+                            duid
+                        );
+                    } else {
+                        tracing::info!(
+                            "🔄 DUID migrated for host {} ({}): {:?} -> {:?}",
+                            dev.display_hostname(),
+                            mac,
+                            old,
+                            duid
+                        );
+                    }
+                }
+                c
             } else {
                 None
             };
@@ -106,7 +131,35 @@ impl State {
                 }
             }
             change
-        })
+        });
+
+        // Safety check: if we just linked an orphaned dynamic lease to a static device,
+        // and the assigned IP is NOT the static one, trigger a RECONFIGURE.
+        if let Some((duid, iaid, _)) = orphaned_info
+            && let Some(dev) = self.devices.get(&mac)
+            && dev.is_static()
+            && dev.duid.as_ref() == Some(&duid)
+        {
+            let has_static_match = dev.v6.iter().any(|s| match s {
+                IPv6State::Static(s, _) => s.matches(ip),
+                _ => false,
+            });
+
+            if !has_static_match {
+                tracing::info!(
+                    "📡 Triggering DHCPv6 Reconfigure for {} ({}) to move from temporary {} to static assignment.",
+                    dev.display_hostname(),
+                    mac,
+                    ip
+                );
+                events.push(LanforgeEvent::Device(DeviceEvent::LeaseRenew {
+                    mac,
+                    target: LeaseTarget::V6 { iaid },
+                }));
+            }
+        }
+
+        events
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]

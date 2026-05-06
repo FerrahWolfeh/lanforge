@@ -8,7 +8,7 @@ use crate::context::LanforgeContext;
 use crate::identifiers::MacAddr;
 #[cfg(test)]
 use crate::{
-    device::{Device, Ipv6AddrOrSuffix},
+    device::{Device, Ipv6AddrOrSuffix, Origin},
     identifiers::Duid,
 };
 
@@ -50,18 +50,18 @@ impl LanforgeContext {
         v4_static: Option<Ipv4Addr>,
         v6_suffix: Option<Ipv6AddrOrSuffix>,
         boot_file: Option<String>,
+        origin: Origin,
     ) {
-        use crate::context::state::{DeviceUpdate, FieldUpdate};
-        use crate::device::Origin;
+        use crate::context::state::{self, DeviceUpdate, FieldUpdate};
 
         let _ = self.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            update: crate::context::state::CliHostUpdate {
+            update: state::CliHostUpdate {
                 hostname: FieldUpdate::from(Some(hostname)),
                 duid: FieldUpdate::from(duid),
                 v4_static: FieldUpdate::from(v4_static),
                 v6_suffix: FieldUpdate::from(v6_suffix),
-                origin: Origin::Cli,
+                origin,
                 boot_file: FieldUpdate::from(boot_file),
             },
         });

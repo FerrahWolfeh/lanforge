@@ -315,6 +315,7 @@ impl State {
         v4_static: Option<Ipv4Addr>,
         v6_suffix: Option<Ipv6AddrOrSuffix>,
         boot_file: Option<String>,
+        origin: Origin,
     ) {
         self.apply_update(DeviceUpdate::CliHostUpdated {
             mac,
@@ -324,7 +325,7 @@ impl State {
                 v4_static: v4_static.into(),
                 v6_suffix: v6_suffix.into(),
                 boot_file: boot_file.into(),
-                origin: Origin::Cli,
+                origin,
             },
         });
     }
