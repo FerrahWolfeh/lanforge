@@ -19,6 +19,7 @@ hotpath = { workspace = true, optional = true }
 ureq = { version = "3.3.0", optional = true }
 dashmap = { version = "6.1.0", optional = true }
 parking_lot = "0.12.5"
+socket2 = { version = "0.5.8", features = ["all"] }
 rustls = { version = "0.23.22", optional = true, default-features = false, features = [
     "ring",
     "std",

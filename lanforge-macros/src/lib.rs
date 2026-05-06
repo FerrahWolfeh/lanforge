@@ -27,6 +27,7 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut base_backoff = quote! { 1 };
     let mut max_backoff = quote! { 60 };
     let mut stack = quote! { 512 };
+    let mut multi_threaded = quote! { false };
     let mut describe = None;
 
     for meta in args_list {
@@ -46,6 +47,8 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                 max_backoff = quote! { #val };
             } else if nv.path.is_ident("stack") {
                 stack = quote! { #val };
+            } else if nv.path.is_ident("multi_threaded") {
+                multi_threaded = quote! { #val };
             } else if nv.path.is_ident("describe") {
                 describe = Some(quote! { #val });
             }
@@ -85,6 +88,7 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                     base_backoff: std::time::Duration::from_secs(#base_backoff as u64),
                     max_backoff: std::time::Duration::from_secs(#max_backoff as u64),
                     stack_kb: #stack as usize,
+                    multi_threaded: #multi_threaded,
                 }
             }
 

@@ -95,6 +95,7 @@ impl UpstreamManager {
     /// 2. If protocol is UDP, use UDP with TCP fallback
     /// 3. If protocol is TLS, use DNS-over-TLS
     /// 4. Restore the original query ID before returning and caching
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn forward(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
         let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
         let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
@@ -149,6 +150,7 @@ impl UpstreamManager {
         }
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn forward_udp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
         // Maps to a unique internal ID to avoid collisions between multiple LAN clients
         let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
@@ -187,32 +189,30 @@ impl UpstreamManager {
         udp_result
     }
 
-    /// DNS-over-TLS (`DoT`) forwarding.
+    #[cfg(not(feature = "dot"))]
+    #[allow(clippy::unused_async)]
+    async fn forward_dot(&self, _data: &[u8], _target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
+        Err(DnsError::Tls("DoT feature not enabled".to_string()))
+    }
+
+    #[cfg(feature = "dot")]
     async fn forward_dot(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
-        #[cfg(not(feature = "dot"))]
-        {
-            let _ = (data, target);
-            return Err(DnsError::Tls("DoT feature not enabled".to_string()));
-        }
+        use rustls_pki_types::ServerName;
+        use tokio_rustls::TlsConnector;
 
-        #[cfg(feature = "dot")]
-        {
-            use rustls_pki_types::ServerName;
-            use tokio_rustls::TlsConnector;
+        let hostname = target.hostname.as_deref().unwrap_or("dns.google");
+        let server_name = ServerName::try_from(hostname)
+            .map_err(|e| DnsError::Tls(format!("Invalid upstream hostname: {e}")))?
+            .to_owned();
 
-            let hostname = target.hostname.as_deref().unwrap_or("dns.google");
-            let server_name = ServerName::try_from(hostname)
-                .map_err(|e| DnsError::Tls(format!("Invalid upstream hostname: {e}")))?
-                .to_owned();
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-            let mut root_cert_store = rustls::RootCertStore::empty();
-            root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
 
-            let config = rustls::ClientConfig::builder()
-                .with_root_certificates(root_cert_store)
-                .with_no_client_auth();
-
-            let connector = TlsConnector::from(Arc::new(config));
+        let connector = TlsConnector::from(Arc::new(config));
             let tcp_stream = timeout(Duration::from_secs(5), TcpStream::connect(target.addr))
                 .await
                 .map_err(|_| DnsError::UpstreamTimeout)??;
@@ -236,7 +236,6 @@ impl UpstreamManager {
             .await
             .map_err(|_| DnsError::UpstreamTimeout)?
             .map_err(DnsError::Io)
-        }
     }
 
     /// DNS-over-QUIC (`DoQ`) forwarding.

@@ -13,6 +13,7 @@ use lanforge_core::{
     bus::{SystemEvent, TimedEvent},
     context::LanforgeContext,
 };
+use socket2::{Domain, Protocol, Socket, Type};
 use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -68,6 +69,7 @@ use lanforge_core::service::{AsyncService, ServiceControl};
     retries = 0,
     base_backoff = 2,
     max_backoff = 30,
+    multi_threaded = true,
     describe = format!(
         "DNS on {} ({} upstreams, domains: {:?})",
         self.cfg.listen, self.cfg.upstreams.len(), self.cfg.search_domains
@@ -93,16 +95,36 @@ impl DnsService {
         self.stats.snapshot()
     }
 
-    async fn bind_sockets(&self) -> Result<(Arc<UdpSocket>, TcpListener), CoreError> {
-        let udp_sock = Arc::new(
-            UdpSocket::bind(self.cfg.listen)
-                .await
-                .map_err(|e| CoreError::Generic(format!("UDP Bind Error: {e}")))?,
-        );
-        let tcp_listener = TcpListener::bind(self.cfg.listen)
+    fn bind_udp_reuseport(&self) -> Result<UdpSocket, CoreError> {
+        let addr = self.cfg.listen;
+        let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))
+            .map_err(|e| CoreError::Generic(format!("Socket Creation Error: {e}")))?;
+
+        socket
+            .set_reuse_address(true)
+            .map_err(|e| CoreError::Generic(format!("SO_REUSEADDR Error: {e}")))?;
+
+        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+        socket
+            .set_reuse_port(true)
+            .map_err(|e| CoreError::Generic(format!("SO_REUSEPORT Error: {e}")))?;
+
+        socket
+            .bind(&addr.into())
+            .map_err(|e| CoreError::Generic(format!("Socket Bind Error: {e}")))?;
+
+        socket
+            .set_nonblocking(true)
+            .map_err(|e| CoreError::Generic(format!("Socket Nonblocking Error: {e}")))?;
+
+        UdpSocket::from_std(socket.into())
+            .map_err(|e| CoreError::Generic(format!("UdpSocket Conversion Error: {e}")))
+    }
+
+    async fn bind_tcp(&self) -> Result<TcpListener, CoreError> {
+        TcpListener::bind(self.cfg.listen)
             .await
-            .map_err(|e| CoreError::Generic(format!("TCP Bind Error: {e}")))?;
-        Ok((udp_sock, tcp_listener))
+            .map_err(|e| CoreError::Generic(format!("TCP Bind Error: {e}")))
     }
 
     /// Initializes a `DnsContext` for manual query handling.
@@ -307,28 +329,39 @@ impl AsyncService for DnsService {
         self.ctx.wait_for_db().await?;
 
         // 2. Initialize networking and context
-        let (udp_sock, tcp_listener) = self.bind_sockets().await?;
+        let tcp_listener = self.bind_tcp().await?;
         let dns_ctx = self.init_dns_context().await?;
 
         // Expose context for other services (DoT/DoH)
         self.ctx.set_dns_context(Arc::clone(&dns_ctx));
 
-        // 3. Signal readiness
-        ctrl.signal_ready();
+        // 3. Determine scaling factor
+        let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
 
-        // 4. Spawn protocol handlers
-        let rx = bus.subscribe();
-        let udp_task = self.spawn_udp_handler(Arc::clone(&dns_ctx), udp_sock);
-        let tcp_task = self.spawn_tcp_handler(Arc::clone(&dns_ctx), tcp_listener);
+        info!(
+            "Starting DNS service with {} UDP handlers (SO_REUSEPORT enabled)",
+            parallelism
+        );
+
+        // 4. Spawn UDP handlers
+        let mut udp_handlers = Vec::with_capacity(parallelism);
+        for i in 0..parallelism {
+            let sock = Arc::new(self.bind_udp_reuseport()?);
+            let handle = self.spawn_udp_handler(Arc::clone(&dns_ctx), sock);
+            udp_handlers.push(handle);
+            tracing::trace!("Spawned DNS UDP worker #{}", i);
+        }
+
+        // 5. Spawn other protocol managers
+        let tcp_handle = self.spawn_tcp_handler(Arc::clone(&dns_ctx), tcp_listener);
         #[cfg(feature = "adblock")]
-        let adblock_task = self.spawn_adblock_manager(&dns_ctx);
+        let adblock_handle = self.spawn_adblock_manager(&dns_ctx);
 
         #[cfg(feature = "dot")]
         let dot_task = if self.cfg.dot_enabled
             && let Some(listen_addr) = self.cfg.dot_listen
         {
             use crate::dot::DotService;
-
             info!("DoT: Starting listener on {}", listen_addr);
             let mut dot_svc = DotService::new(Arc::new(self.cfg.clone()), self.ctx.clone());
             let dot_ctrl = ctrl.clone();
@@ -338,28 +371,26 @@ impl AsyncService for DnsService {
                 }
             }))
         } else {
-            if self.cfg.dot_listen.is_some() && !self.cfg.dot_enabled {
-                use tracing::warn;
-
-                warn!(
-                    "DoT: Listener address configured but dot_enabled = false. Service inactive."
-                );
-            }
             None
         };
 
-        // 5. Enter main process loop
-        self.wait_for_shutdown(rx).await;
+        ctrl.signal_ready();
 
-        // Cleanup
-        udp_task.abort();
-        tcp_task.abort();
+        // 6. Enter main process loop
+        self.wait_for_shutdown(bus.subscribe()).await;
+
+        // 7. Cleanup
+        for h in udp_handlers {
+            h.abort();
+        }
+        tcp_handle.abort();
         #[cfg(feature = "adblock")]
-        adblock_task.abort();
+        adblock_handle.abort();
         #[cfg(feature = "dot")]
         if let Some(t) = dot_task {
             t.abort();
         }
+
         Ok(())
     }
 }
@@ -503,8 +534,7 @@ fn resolve_local_wire(
                     ctx,
                 );
 
-                let resp =
-                    LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ptr(&rb, &qname)?;
+                let resp = LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ptr(&rb, &qname)?;
                 if let Some(r) = resp {
                     return Ok(Some(r));
                 }
@@ -537,11 +567,8 @@ async fn handle_query_fallback(
             let safe_hostname = fast_lowercase(hostname_slice);
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();
-            let resp = LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ip(
-                &rb,
-                &safe_hostname,
-                qtype,
-            )?;
+            let resp =
+                LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ip(&rb, &safe_hostname, qtype)?;
             return Ok(Some(resp));
         }
     } else if qtype == RecordType::PTR {

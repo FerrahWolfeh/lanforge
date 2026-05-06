@@ -192,6 +192,7 @@ mod tests {
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
                 stack_kb: 0,
+                multi_threaded: false,
             }
         }
     }
@@ -230,6 +231,7 @@ mod tests {
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
                 stack_kb: 1,
+                multi_threaded: false,
             }
         }
     }
@@ -311,6 +313,7 @@ mod tests {
                 base_backoff: Duration::from_millis(5),
                 max_backoff: Duration::from_millis(20),
                 stack_kb: 0,
+                multi_threaded: false,
             }
         }
         fn describe(&self) -> String {
@@ -360,6 +363,7 @@ mod tests {
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
                 stack_kb: 0,
+                multi_threaded: false,
             }
         }
     }
@@ -414,6 +418,7 @@ mod tests {
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
                 stack_kb: 0,
+                multi_threaded: false,
             }
         }
     }

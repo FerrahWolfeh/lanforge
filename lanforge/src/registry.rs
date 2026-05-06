@@ -47,10 +47,17 @@ impl ServiceRegistry {
             builder = builder.stack_size(meta.stack_kb * 1024);
         }
 
+        let name_thread = name.clone();
         let handle = builder
             .spawn(move || {
-                let rt = Builder::new_current_thread()
+                let mut rt_builder = if meta.multi_threaded {
+                    Builder::new_multi_thread()
+                } else {
+                    Builder::new_current_thread()
+                };
+                let rt = rt_builder
                     .enable_all()
+                    .thread_name(format!("{name_thread} worker"))
                     .build()
                     .expect("Failed to build per-service runtime");
                 rt.block_on(supervise_async(&ctx_spawn, factory));

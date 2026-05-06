@@ -40,37 +40,51 @@ impl DnsStats {
     /// Increments the total request counter.
     pub fn inc_requests(&self) {
         self.requests_total.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "hotpath")]
+        hotpath::gauge!("dns_requests_total").inc(1.0);
     }
 
     /// Increments the cache hit counter.
     pub fn inc_cache_hit(&self) {
         self.cache_hits.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "hotpath")]
+        hotpath::gauge!("dns_cache_hits").inc(1.0);
     }
 
     /// Increments the cache miss counter.
     pub fn inc_cache_miss(&self) {
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "hotpath")]
+        hotpath::gauge!("dns_cache_misses").inc(1.0);
     }
 
     /// Increments the upstream error counter.
     pub fn inc_upstream_error(&self) {
         self.upstream_errors.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "hotpath")]
+        hotpath::gauge!("dns_upstream_errors").inc(1.0);
     }
 
     /// Increments the authoritative query counter.
     pub fn inc_auth(&self) {
         self.auth_queries.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "hotpath")]
+        hotpath::gauge!("dns_auth_queries").inc(1.0);
     }
 
     /// Increments the recursive forwarding counter.
     pub fn inc_recursive(&self) {
         self.recursions.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "hotpath")]
+        hotpath::gauge!("dns_recursive_queries").inc(1.0);
     }
 
     /// Increments the blocked query counter.
     #[cfg(feature = "adblock")]
     pub fn inc_blocked(&self) {
         self.blocked_queries.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "hotpath")]
+        hotpath::gauge!("dns_blocked_queries").inc(1.0);
     }
 
     /// Captures a point-in-time snapshot of all counters.

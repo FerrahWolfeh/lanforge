@@ -36,6 +36,7 @@
 //!             base_backoff: Duration::from_secs(1),
 //!             max_backoff: Duration::from_secs(30),
 //!             stack_kb: 0,
+//!             multi_threaded: false,
 //!         }
 //!     }
 //! }
@@ -71,7 +72,7 @@ use std::time::Duration;
 /// | `max_retries`   | Max restarts before giving up (0 = unlimited)    | 3                   |
 /// | `base_backoff`  | Initial backoff on failure (doubles per retry)   | 1 second            |
 /// | `max_backoff`   | Maximum backoff cap                              | 30 seconds          |
-/// | `max_backoff`   | Maximum backoff cap                              | 30 seconds          |
+/// | `multi_threaded`| If true, uses a multi-thread tokio runtime       | `true` for DNS      |
 ///
 /// # Backoff Strategy
 ///
@@ -97,6 +98,7 @@ use std::time::Duration;
 ///     base_backoff: Duration::from_secs(2),
 ///     max_backoff: Duration::from_secs(60),
 ///     stack_kb: 0,
+///     multi_threaded: false,
 /// };
 /// ```
 pub struct ServiceMeta {
@@ -123,6 +125,11 @@ pub struct ServiceMeta {
     /// **DEPRECATED**: Stack size for the service's dedicated OS thread, in KiB.
     /// This is no longer used since all services are now async.
     pub stack_kb: usize,
+
+    /// If true, the service's dedicated thread uses a multi-threaded Tokio runtime
+    /// instead of the default single-threaded one. This allows `tokio::spawn` calls
+    /// within the service to run across multiple worker threads.
+    pub multi_threaded: bool,
 }
 
 /// Core trait defining a service within the Lanforge system.
@@ -199,6 +206,7 @@ pub trait LanforgeService: Send + Sync {
 ///             base_backoff: Duration::from_secs(1),
 ///             max_backoff: Duration::from_secs(10),
 ///             stack_kb: 0,
+///             multi_threaded: false,
 ///         }
 ///     }
 /// }
