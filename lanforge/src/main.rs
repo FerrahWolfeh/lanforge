@@ -42,7 +42,11 @@ async fn async_main() -> Result<()> {
 
     // 1.1 Setup Profiling
     #[cfg(feature = "hotpath")]
-    let _hotpath = hotpath::HotpathGuardBuilder::new("lanforged").build();
+    let _hotpath = {
+        let guard = hotpath::HotpathGuardBuilder::new("lanforged").build();
+        hotpath::tokio_runtime!();
+        guard
+    };
 
     // 2. Run Bootstrap
     let (bootstrap, ctx) = Bootstrapper::run().await?;

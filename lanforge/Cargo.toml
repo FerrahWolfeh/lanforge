@@ -19,6 +19,7 @@ hotpath = [
     "dep:hotpath",
     "hotpath/hotpath",
     "hotpath/threads",
+    "hotpath/tokio",
     "lanforge-core/hotpath",
     "lanforge-dns/hotpath",
     "lanforge-network/hotpath",

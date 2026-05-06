@@ -531,7 +531,7 @@ pub fn update_dispatch_derive(input: TokenStream) -> TokenStream {
 
     quote! {
         impl State {
-            pub fn apply_update(&mut self, update: #name) -> Vec<crate::bus::LanforgeEvent> {
+            pub fn apply_update(&mut self, update: #name) -> crate::bus::EventVec {
                 match update {
                     #(#variants)*
                 }

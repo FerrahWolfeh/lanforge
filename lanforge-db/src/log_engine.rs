@@ -102,12 +102,17 @@ impl LogDb {
 
     /// Records a new event in the log history.
     pub async fn record_log(&self, timed_event: &TimedEvent) -> Result<(), LeaseDbError> {
-        self.record_logs_batch(std::slice::from_ref(timed_event))
+        let mut buf = String::new();
+        self.record_logs_batch(std::slice::from_ref(timed_event), &mut buf)
             .await
     }
 
-    /// Records multiple events in a single transaction.
-    pub async fn record_logs_batch(&self, events: &[TimedEvent]) -> Result<(), LeaseDbError> {
+    /// Records multiple events in a single transaction using a reusable buffer.
+    pub async fn record_logs_batch(
+        &self,
+        events: &[TimedEvent],
+        json_buf: &mut String,
+    ) -> Result<(), LeaseDbError> {
         if events.is_empty() {
             return Ok(());
         }
@@ -116,9 +121,13 @@ impl LogDb {
 
         let mut last_timestamp = 0;
         for timed_event in events {
-            let json = serde_json::to_string(&timed_event.event).map_err(|e| {
-                LeaseDbError::Migration("event serialization".into(), e.to_string())
-            })?;
+            json_buf.clear();
+            // Safety: serde_json always produces valid UTF-8
+            unsafe {
+                serde_json::to_writer(json_buf.as_mut_vec(), &timed_event.event).map_err(|e| {
+                    LeaseDbError::Migration("event serialization".into(), e.to_string())
+                })?;
+            }
 
             let now_secs = timed_event
                 .timestamp
@@ -129,7 +138,7 @@ impl LogDb {
 
             sqlx::query("INSERT INTO system_logs (timestamp, event_json) VALUES (?, ?)")
                 .bind(now_secs)
-                .bind(json)
+                .bind(json_buf.as_str())
                 .execute(&mut *tx)
                 .await?;
         }

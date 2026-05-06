@@ -17,7 +17,7 @@ impl State {
         mac: MacAddr,
         ip: Ipv4Addr,
         expires: SystemTime,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.mutate_device(mac, |dev| dev.apply_v4_lease(ip, expires))
     }
 
@@ -28,14 +28,14 @@ impl State {
         iaid: u32,
         ip: Ipv6Addr,
         expires: SystemTime,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         let m = if let Some(m) = mac {
             m
         } else if let Some(m) = self.indices.duid_index.get(&duid) {
             *m
         } else {
             self.discovery.orphaned_v6.insert(ip, (duid, iaid, expires));
-            return Vec::new();
+            return crate::bus::EventVec::new();
         };
 
         self.mutate_device(m, |dev| dev.apply_v6_lease(&duid, iaid, ip, expires))
@@ -50,13 +50,13 @@ impl State {
         prefix: Ipv6Addr,
         len: u8,
         expires: SystemTime,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         let m = if let Some(m) = mac {
             m
         } else if let Some(m) = self.indices.duid_index.get(&duid) {
             *m
         } else {
-            return Vec::new(); // IA_PD usually requires a prior IA_NA to link DUID to MAC
+            return crate::bus::EventVec::new(); // IA_PD usually requires a prior IA_NA to link DUID to MAC
         };
 
         self.mutate_device(m, |dev| {
@@ -69,7 +69,7 @@ impl State {
         mac: MacAddr,
         addr: Ipv6Addr,
         is_active: bool,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.mutate_device(mac, |dev| dev.apply_slaac_observation(addr, is_active))
     }
 
@@ -78,7 +78,7 @@ impl State {
         mac: MacAddr,
         ip: Ipv6Addr,
         is_active: bool,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.discovery
             .ndp_cache
             .insert(ip, (mac, SystemTime::now()));
@@ -112,7 +112,7 @@ impl State {
         mac: MacAddr,
         ip: Ipv4Addr,
         is_active: bool,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.mutate_device(mac, |dev| dev.apply_arp_observation(ip, is_active))
     }
 
@@ -120,7 +120,7 @@ impl State {
         &mut self,
         mac: MacAddr,
         hostname: String,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.mutate_device(mac, |dev| {
             dev.apply_hostname_hint(hostname, HostnameOrigin::Dhcp)
         })
@@ -130,7 +130,7 @@ impl State {
         &mut self,
         mac: MacAddr,
         hostname: String,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.mutate_device(mac, |dev| {
             dev.apply_hostname_hint(hostname, HostnameOrigin::Mdns)
         })
@@ -141,13 +141,13 @@ impl State {
         mac: Option<MacAddr>,
         duid: Duid,
         iaid: u32,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         let mac = if let Some(m) = mac {
             m
         } else if let Some(m) = self.indices.duid_index.get(&duid) {
             *m
         } else {
-            return Vec::new();
+            return crate::bus::EventVec::new();
         };
 
         // Find all orphans for this DUID
@@ -181,7 +181,7 @@ impl State {
         &mut self,
         mac: MacAddr,
         update: CliHostUpdate,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         let events = self.mutate_device(mac, |dev| {
             if let FieldUpdate::Set(h) = update.hostname {
                 dev.hostname = Hostname {
@@ -231,23 +231,23 @@ impl State {
         events
     }
 
-    pub(crate) fn handle_host_removed(&mut self, mac: MacAddr) -> Vec<LanforgeEvent> {
+    pub(crate) fn handle_host_removed(&mut self, mac: MacAddr) -> crate::bus::EventVec {
         if let Some(dev) = self.devices.remove(&mac) {
             self.indices.unindex_device(&dev);
             if let Some(duid) = &dev.duid {
                 self.indices.duid_index.remove(duid);
             }
             self.static_entries.remove(&mac);
-            return vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })];
+            return vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })].into();
         }
-        Vec::new()
+        crate::bus::EventVec::new()
     }
 
     pub(crate) fn handle_lease_released(
         &mut self,
         mac: MacAddr,
         target: LeaseTarget,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.mutate_device(mac, |dev| {
             let changed = match target {
                 LeaseTarget::V4 => {
@@ -279,7 +279,7 @@ impl State {
         })
     }
 
-    pub(crate) fn handle_ip_deleted(&mut self, ip: IpAddr) -> Vec<LanforgeEvent> {
+    pub(crate) fn handle_ip_deleted(&mut self, ip: IpAddr) -> crate::bus::EventVec {
         let mac = self.indices.ip_index.get(&ip).copied();
         if let Some(mac) = mac {
             let events = self.mutate_device(mac, |dev| {
@@ -297,13 +297,13 @@ impl State {
 
             events
         } else {
-            Vec::new()
+            crate::bus::EventVec::new()
         }
     }
 
-    pub(crate) fn handle_ip_offline(&mut self, ip: IpAddr) -> Vec<LanforgeEvent> {
+    pub(crate) fn handle_ip_offline(&mut self, ip: IpAddr) -> crate::bus::EventVec {
         let mac = self.indices.ip_index.get(&ip).copied();
-        mac.map_or_else(Vec::new, |mac| {
+        mac.map_or_else(crate::bus::EventVec::new, |mac| {
             self.mutate_device(mac, |dev| {
                 if dev.mark_ip_offline(ip) {
                     Some(DeviceChange::IpOffline { ip })
@@ -318,14 +318,14 @@ impl State {
         &mut self,
         ifindex: u32,
         state: InterfaceState,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.network.interface_ips.insert(ifindex, state);
         vec![LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
             ifindex,
-        })]
+        })].into()
     }
 
-    pub(crate) fn handle_prune_zombies(&mut self) -> Vec<LanforgeEvent> {
+    pub(crate) fn handle_prune_zombies(&mut self) -> crate::bus::EventVec {
         let max_age = Duration::from_hours(1);
         let mut removed = Vec::new();
         self.devices.retain(|mac, dev| {
@@ -344,22 +344,22 @@ impl State {
                 .map(|mac| LanforgeEvent::Device(DeviceEvent::Purged { mac }))
                 .collect();
         }
-        Vec::new()
+        crate::bus::EventVec::new()
     }
 
-    pub(crate) fn handle_rebuild_dns_indices(&mut self) -> Vec<LanforgeEvent> {
+    pub(crate) fn handle_rebuild_dns_indices(&mut self) -> crate::bus::EventVec {
         self.indices.clear();
         for (mac, dev) in &self.devices {
             self.indices.index_device(*mac, dev);
         }
-        Vec::new()
+        crate::bus::EventVec::new()
     }
 
     pub(crate) fn handle_class_hint(
         &mut self,
         mac: MacAddr,
         class: DeviceClass,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.mutate_device(mac, |dev| {
             if dev.class == class {
                 None
@@ -376,7 +376,7 @@ impl State {
         parent_mac: Option<MacAddr>,
         port: Option<String>,
         ifindex: u32,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         self.mutate_device(mac, |dev| {
             let new_topo = TopologyInfo {
                 parent_mac,
@@ -400,24 +400,24 @@ impl State {
         })
     }
 
-    pub(crate) fn handle_reset(&mut self) -> Vec<LanforgeEvent> {
+    pub(crate) fn handle_reset(&mut self) -> crate::bus::EventVec {
         self.devices.clear();
         self.static_entries.clear();
         self.indices.clear();
         self.discovery.clear();
         self.network.clear();
-        Vec::new()
+        crate::bus::EventVec::new()
     }
 
     pub(crate) fn handle_neighbor_batch(
         &mut self,
         entries: Vec<(MacAddr, IpAddr, bool)>,
-    ) -> Vec<LanforgeEvent> {
-        let mut grouped: HashMap<MacAddr, Vec<(IpAddr, bool)>> = HashMap::new();
+    ) -> crate::bus::EventVec {
+        let mut grouped: HashMap<MacAddr, crate::bus::SmallVec<[(IpAddr, bool); 4]>> = HashMap::with_capacity(4);
         for (mac, ip, active) in entries {
             grouped.entry(mac).or_default().push((ip, active));
         }
-        let mut events = Vec::new();
+        let mut events = crate::bus::EventVec::new();
         for (mac, updates) in &grouped {
             let mac = *mac;
             let mut dev_events = self.mutate_device(mac, |dev| {
@@ -456,9 +456,9 @@ impl State {
         events
     }
 
-    pub fn expire_stale(&mut self, ip_expiry_threshold: Duration) -> Vec<LanforgeEvent> {
+    pub fn expire_stale(&mut self, ip_expiry_threshold: Duration) -> crate::bus::EventVec {
         let now = SystemTime::now();
-        let mut events = Vec::new();
+        let mut events = crate::bus::EventVec::new();
 
         let macs: Vec<MacAddr> = self.devices.keys().copied().collect();
         for mac in macs {

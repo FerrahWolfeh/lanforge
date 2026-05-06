@@ -85,7 +85,7 @@ pub fn resolve_local(
     ctx: LanforgeContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
-    let resolver = LocalResolver::new(cfg, ctx);
+    let resolver = LocalResolver::new(cfg, &ctx);
     let rb = ResponseBuilder::new(query, &dns_ctx);
     if let Some(records) = resolver.resolve_local(rb.qname(), qtype) {
         Ok(Some(rb.success(records)?))
@@ -325,7 +325,7 @@ fn test_local_resolver_direct_api() {
         RecordType::A,
     ));
     let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
-    let resolver = crate::resolver::LocalResolver::new(&cfg, ctx);
+    let resolver = crate::resolver::LocalResolver::new(&cfg, &ctx);
     let resp_bytes = resolver
         .resolve_ip(
             &ResponseBuilder::new(&query, &dns_ctx),
@@ -363,7 +363,7 @@ fn test_dhcp_registration_creates_dns_record() {
 
     let resp_bytes = {
         let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
-        LocalResolver::new(&cfg, ctx.clone())
+        LocalResolver::new(&cfg, &ctx)
             .resolve_ip(
                 &ResponseBuilder::new(&query, &dns_ctx),
                 "my-device",

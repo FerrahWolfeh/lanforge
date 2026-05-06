@@ -21,6 +21,10 @@ pub use self::dns::DnsEvent;
 pub use self::network::NetworkEvent;
 pub use self::storage::StorageEvent;
 pub use self::system::SystemEvent;
+pub use smallvec::SmallVec;
+
+/// Reusable event collection that avoids heap allocation for the common case (1-2 events).
+pub type EventVec = SmallVec<[LanforgeEvent; 2]>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimedEvent {

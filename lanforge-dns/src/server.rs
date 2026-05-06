@@ -483,7 +483,7 @@ fn resolve_local_wire(
                     ctx,
                 );
 
-                let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ip(
+                let resp = LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ip(
                     &rb,
                     &safe_hostname,
                     RecordType::from(raw_qtype),
@@ -504,7 +504,7 @@ fn resolve_local_wire(
                 );
 
                 let resp =
-                    LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ptr(&rb, &qname)?;
+                    LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ptr(&rb, &qname)?;
                 if let Some(r) = resp {
                     return Ok(Some(r));
                 }
@@ -537,7 +537,7 @@ async fn handle_query_fallback(
             let safe_hostname = fast_lowercase(hostname_slice);
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();
-            let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ip(
+            let resp = LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ip(
                 &rb,
                 &safe_hostname,
                 qtype,
@@ -545,7 +545,7 @@ async fn handle_query_fallback(
             return Ok(Some(resp));
         }
     } else if qtype == RecordType::PTR {
-        let resp = LocalResolver::new(&ctx.cfg, ctx.ctx.clone()).resolve_ptr(&rb, qname)?;
+        let resp = LocalResolver::new(&ctx.cfg, &ctx.ctx).resolve_ptr(&rb, qname)?;
         if let Some(response) = resp {
             ctx.stats.inc_auth();
             ctx.stats.inc_cache_hit();

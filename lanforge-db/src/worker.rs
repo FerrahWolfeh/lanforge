@@ -48,6 +48,7 @@ pub struct DbWorker {
     dirty: bool,
     dirty_macs: HashSet<MacAddr>,
     log_buffer: Vec<TimedEvent>,
+    json_buf: String,
 }
 
 impl DbWorker {
@@ -59,6 +60,7 @@ impl DbWorker {
             dirty: false,
             dirty_macs: HashSet::new(),
             log_buffer: Vec::with_capacity(128),
+            json_buf: String::with_capacity(4096),
         }
     }
 
@@ -67,7 +69,7 @@ impl DbWorker {
     async fn flush_batch(&mut self, db: &LeaseDb, log_db: &LogDb) {
         // 1. Flush Logs
         if !self.log_buffer.is_empty() {
-            if let Err(e) = log_db.record_logs_batch(&self.log_buffer).await {
+            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.json_buf).await {
                 error!("Failed to flush log batch: {e}");
             } else {
                 self.log_buffer.clear();
@@ -117,14 +119,11 @@ impl DbWorker {
                         .publish(LanforgeEvent::Storage(StorageEvent::DbWrite {
                             devices: count,
                         }));
-                    debug!(
-                        "Main DB flushed ({} devices)",
-                        if self.dirty {
-                            "all".to_string()
-                        } else {
-                            count.to_string()
-                        }
-                    );
+                    if self.dirty {
+                        debug!("Main DB flushed (all devices)");
+                    } else {
+                        debug!("Main DB flushed ({count} devices)");
+                    }
                 }
                 self.dirty = false;
                 self.dirty_macs.clear();
@@ -173,7 +172,7 @@ impl AsyncService for DbWorker {
                     if timed_event.is_loggable() {
                         self.log_buffer.push(timed_event.clone());
                         if self.log_buffer.len() >= 100 {
-                            if let Err(e) = log_db.record_logs_batch(&self.log_buffer).await {
+                            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.json_buf).await {
                                 error!("Immediate log flush error: {e}");
                             } else {
                                 self.log_buffer.clear();

@@ -21,7 +21,7 @@ impl LanforgeContext {
         };
 
         if !events.is_empty() {
-            let bus = self.bus();
+            let bus = self.bus_ref();
             for event in events {
                 let _ = bus.publish(event);
             }

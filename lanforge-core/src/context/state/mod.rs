@@ -354,7 +354,7 @@ impl State {
         &mut self,
         mac: MacAddr,
         f: impl FnOnce(&mut Device) -> Option<DeviceChange>,
-    ) -> Vec<LanforgeEvent> {
+    ) -> crate::bus::EventVec {
         let was_in_table = self.devices.contains_key(&mac);
         let mut dev_arc = self
             .devices
@@ -363,7 +363,7 @@ impl State {
 
         let was_worthy = was_in_table && dev_arc.is_worthy();
         let was_online = dev_arc.is_online();
-        let mut events = Vec::new();
+        let mut events = crate::bus::EventVec::new();
 
         {
             let dev = Arc::make_mut(&mut dev_arc);

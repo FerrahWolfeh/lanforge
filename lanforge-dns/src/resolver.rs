@@ -23,13 +23,13 @@ use lanforge_core::device::Device;
 /// device (IPv4, SLAAC, static V6 suffixes) into DNS records.
 pub struct LocalResolver<'a> {
     cfg: &'a DnsConfig,
-    ctx: LanforgeContext,
+    ctx: &'a LanforgeContext,
 }
 
 impl<'a> LocalResolver<'a> {
     /// Creates a new resolver bound to the given config and context.
     #[must_use]
-    pub const fn new(cfg: &'a DnsConfig, ctx: LanforgeContext) -> Self {
+    pub const fn new(cfg: &'a DnsConfig, ctx: &'a LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
 

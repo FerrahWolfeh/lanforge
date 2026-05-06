@@ -240,6 +240,14 @@ impl LanforgeContext {
         self.inner.bus.clone()
     }
 
+    /// Returns a reference to the shared event bus.
+    ///
+    /// Useful for publishing events without cloning the Arc.
+    #[must_use]
+    pub fn bus_ref(&self) -> &EventBus {
+        &self.inner.bus
+    }
+
     /// Records a new database flush timestamp.
     ///
     /// Call this after a successful database write to track staleness.
