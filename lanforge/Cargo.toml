@@ -82,7 +82,7 @@ tokio = { workspace = true, features = [
 futures = { workspace = true }
 
 # CLI e config
-clap = { workspace = true, features = ["derive", "env"] }
+clap = { workspace = true }
 serde = { workspace = true }
 toml = "1.1.2"
 
