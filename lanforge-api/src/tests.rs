@@ -54,7 +54,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     let _ = ctx_handle.apply(DeviceUpdate::V4LeaseGranted {
         mac: mac_dyn,
         ip: "192.168.1.10".parse().unwrap(),
-        expires: SystemTime::now() + Duration::from_secs(3600),
+        expires: SystemTime::now() + Duration::from_hours(1),
     });
 
     // 3. Add a TOML device
@@ -92,7 +92,7 @@ async fn test_host_list_returns_static_and_cli_only() {
         // Dynamic host should not be in d.hosts
         assert!(!d.hosts.iter().any(|dev| dev.mac == mac_dyn.to_string()));
     } else {
-        panic!("Expected Response::Hosts, got {:?}", resp);
+        panic!("Expected Response::Hosts, got {resp:?}");
     }
 
     // 5. handle_devices (called by Devices) should still return all 3
@@ -130,7 +130,7 @@ async fn test_api_status_reports_gua_and_ula() {
         assert_eq!(s.network.ula, Some(ula));
         assert_eq!(s.uptime_secs, 100);
     } else {
-        panic!("Expected Response::Status, got {:?}", resp);
+        panic!("Expected Response::Status, got {resp:?}");
     }
 }
 
@@ -201,7 +201,7 @@ async fn test_dump_command_simulation() {
             "Hostname mismatch in dumped state"
         );
     } else {
-        panic!("Expected Response::ContextDump, got {:?}", resp);
+        panic!("Expected Response::ContextDump, got {resp:?}");
     }
 
     // 6. Cleanup (closing connection should terminate handle_client)
@@ -236,7 +236,7 @@ async fn test_granular_querying() {
         duid: "00:01:00:01:2d:65:6d:73".parse().unwrap(),
         iaid: 1,
         ip: ip_v6,
-        expires: SystemTime::now() + Duration::from_secs(3600),
+        expires: SystemTime::now() + Duration::from_hours(1),
     });
 
     let ctx = ClientContext {

@@ -10,17 +10,11 @@ use hickory_proto::{
     serialize::binary::BinDecodable,
 };
 use lanforge_core::{
-    bus::{SystemEvent, TimedEvent, dns::DnsRecordEntry},
+    bus::{SystemEvent, TimedEvent},
     context::LanforgeContext,
 };
 use socket2::{Domain, Protocol, Socket, Type};
-use std::{
-    net::IpAddr,
-    str::FromStr,
-    string::ToString,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UdpSocket},
@@ -183,7 +177,7 @@ impl DnsService {
                 tokio::select! {
                     res = sock.recv_from(&mut buf) => {
                         let Ok((len, src)) = res else { continue; };
-                        if let Ok(true) = handle_query(&buf[..len], &dns_ctx, src.ip(), &mut resp_buf).await {
+                        if matches!(handle_query(&buf[..len], &dns_ctx, src.ip(), &mut resp_buf).await, Ok(true)) {
                             let _ = sock.send_to(&resp_buf, src).await;
                         }
                     }
@@ -289,7 +283,7 @@ impl DnsService {
                                     stream.read_exact(&mut query_buf).await?;
 
                                     let mut resp_buf = Vec::with_capacity(512);
-                                    if let Ok(true) = handle_query(&query_buf, &c, stream.peer_addr()?.ip(), &mut resp_buf).await {
+                                    if matches!(handle_query(&query_buf, &c, stream.peer_addr()?.ip(), &mut resp_buf).await, Ok(true)) {
                                         let resp_len = u16::try_from(resp_buf.len()).unwrap_or(u16::MAX).to_be_bytes();
                                         stream.write_all(&resp_len).await?;
                                         stream.write_all(&resp_buf).await?;
@@ -302,6 +296,29 @@ impl DnsService {
                     () = tokio::time::sleep(Duration::from_millis(100)) => {
                         if !ctx_tcp.is_running() { break; }
                     }
+                }
+            }
+        })
+    }
+
+    fn spawn_cache_handler(&self, dns_ctx: Arc<DnsContext>) -> JoinHandle<()> {
+        let bus = self.ctx.bus();
+        let mut rx = bus.subscribe();
+
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(TimedEvent {
+                        event: LanforgeEvent::Dns(DnsEvent::CacheFlush),
+                        ..
+                    }) => {
+                        for upstream in &dns_ctx.upstreams {
+                            upstream.cache.invalidate_all();
+                        }
+                        info!("DNS cache flushed for all upstreams");
+                    }
+                    Err(RecvError::Closed) => break,
+                    _ => {}
                 }
             }
         })
@@ -320,99 +337,6 @@ impl DnsService {
                 }
             }
         }
-    }
-
-    fn spawn_diagnostic_handler(&self, dns_ctx: Arc<DnsContext>) -> JoinHandle<()> {
-        let bus = self.ctx.bus();
-        let mut rx = bus.subscribe();
-
-        tokio::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(TimedEvent {
-                        event:
-                            LanforgeEvent::Dns(DnsEvent::DiagnosticQuery {
-                                query_id,
-                                name,
-                                record_type,
-                            }),
-                        ..
-                    }) => {
-                        let start = Instant::now();
-                        let rtype = RecordType::from_str(&record_type).unwrap_or(RecordType::A);
-
-                        let resolver = LocalResolver::new(&dns_ctx.cfg, &dns_ctx.ctx);
-                        let results = if rtype == RecordType::PTR {
-                            if let Ok(ptr_name) = Name::from_str(&name) {
-                                resolver
-                                    .resolve_ptr(&ptr_name)
-                                    .ok()
-                                    .flatten()
-                                    .map(|(h, d)| {
-                                        vec![DnsRecordEntry {
-                                            name: name.clone(),
-                                            kind: "PTR".to_string(),
-                                            data: format!("{h}.{d}"),
-                                            ttl: dns_ctx.cfg.ttl,
-                                        }]
-                                    })
-                                    .unwrap_or_default()
-                            } else {
-                                Vec::new()
-                            }
-                        } else {
-                            resolver
-                                .resolve_ip(&name, rtype)
-                                .map(|ips| {
-                                    ips.iter()
-                                        .map(|ip| DnsRecordEntry {
-                                            name: name.clone(),
-                                            kind: rtype.to_string(),
-                                            data: ip.to_string(),
-                                            ttl: dns_ctx.cfg.ttl,
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default()
-                        };
-
-                        let latency_ms = start.elapsed().as_millis() as u64;
-                        let authoritative = !results.is_empty();
-
-                        let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::DiagnosticResponse {
-                            query_id,
-                            records: results,
-                            latency_ms,
-                            authoritative,
-                        }));
-                    }
-                    Ok(TimedEvent {
-                        event: LanforgeEvent::Dns(DnsEvent::CacheFlush),
-                        ..
-                    }) => {
-                        for upstream in &dns_ctx.upstreams {
-                            upstream.cache.invalidate_all();
-                        }
-                        info!("DNS cache flushed for all upstreams");
-                    }
-                    Ok(TimedEvent {
-                        event: LanforgeEvent::Dns(DnsEvent::CacheDumpQuery { query_id }),
-                        ..
-                    }) => {
-                        let mut entries = Vec::new();
-                        for upstream in &dns_ctx.upstreams {
-                            entries.extend(upstream.cache.dump());
-                        }
-                        let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::CacheDumpResponse {
-                            query_id,
-                            entries,
-                        }));
-                    }
-                    Err(RecvError::Closed) => break,
-                    _ => {}
-                }
-            }
-        })
     }
 }
 
@@ -475,7 +399,7 @@ impl AsyncService for DnsService {
             None
         };
 
-        let diag_handle = self.spawn_diagnostic_handler(Arc::clone(&dns_ctx));
+        let cache_handle = self.spawn_cache_handler(Arc::clone(&dns_ctx));
 
         ctrl.signal_ready();
 
@@ -487,7 +411,7 @@ impl AsyncService for DnsService {
             h.abort();
         }
         tcp_handle.abort();
-        diag_handle.abort();
+        cache_handle.abort();
         #[cfg(feature = "adblock")]
         adblock_handle.abort();
         #[cfg(feature = "dot")]
@@ -527,7 +451,7 @@ pub async fn handle_query(
     };
 
     // PHASE 2: Local Resolution Attempt
-    if resolve_local_wire(data, &header, &question, ctx, resp)? {
+    if resolve_local_wire(data, &header, &question, ctx, resp) {
         ctx.stats.inc_auth();
         ctx.stats.inc_cache_hit();
         return Ok(true);
@@ -589,7 +513,7 @@ fn resolve_local_wire(
     question: &WireQuestion<'_>,
     ctx: &DnsContext,
     resp: &mut Vec<u8>,
-) -> Result<bool, DnsError> {
+) -> bool {
     let raw_qtype = question.qtype();
     let qtype = QType::from(raw_qtype);
 
@@ -615,7 +539,7 @@ fn resolve_local_wire(
                         ra,
                         resp,
                     );
-                    return Ok(true);
+                    return true;
                 } else if ctx.ctx.get_by_hostname(&safe_hostname).is_some() {
                     // Host exists but no records for type (NODATA)
                     let ra = !ctx.upstreams.is_empty();
@@ -623,7 +547,7 @@ fn resolve_local_wire(
                         data, question, 0, // NoError (but with 0 answers)
                         edns, ra, resp,
                     );
-                    return Ok(true);
+                    return true;
                 }
             }
         }
@@ -645,13 +569,13 @@ fn resolve_local_wire(
                         ra,
                         resp,
                     );
-                    return Ok(true);
+                    return true;
                 }
             }
         }
         _ => {}
     }
-    Ok(false)
+    false
 }
 
 /// Fallback logic for queries that are too complex for the zero-alloc wire parser.

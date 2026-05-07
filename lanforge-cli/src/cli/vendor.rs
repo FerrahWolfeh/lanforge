@@ -13,5 +13,5 @@ pub fn resolve_vendor(mac: &str) -> Option<String> {
     db.lookup_by_mac(mac)
         .ok()
         .flatten()
-        .map(|entry| entry.company_name.to_string())
+        .map(|entry| entry.company_name.clone())
 }

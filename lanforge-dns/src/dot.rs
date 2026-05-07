@@ -119,7 +119,10 @@ async fn handle_dot_connection(
             .ok_or("Invalid DNS context")?;
 
         let mut resp_buf = Vec::with_capacity(512);
-        if let Ok(true) = handle_query(&query_buf, dns_ctx, peer.ip(), &mut resp_buf).await {
+        if matches!(
+            handle_query(&query_buf, dns_ctx, peer.ip(), &mut resp_buf).await,
+            Ok(true)
+        ) {
             let resp_len = u16::try_from(resp_buf.len())?.to_be_bytes();
             tls_stream.write_all(&resp_len).await?;
             tls_stream.write_all(&resp_buf).await?;

@@ -37,6 +37,7 @@ pub struct Daemon {
 
 impl Daemon {
     /// Creates a new Daemon instance from a bootstrap result and context.
+    #[must_use]
     pub fn new(bootstrap: BootstrapResult, ctx: LanforgeContext) -> Self {
         Self {
             bootstrap,
@@ -68,7 +69,7 @@ impl Daemon {
                         .publish(LanforgeEvent::System(SystemEvent::Shutdown));
 
                     // 2. Wait for all services to exit
-                    let registry = std::mem::replace(&mut self.registry, ServiceRegistry::new());
+                    let registry = std::mem::take(&mut self.registry);
                     tokio::task::spawn_blocking(move || registry.wait_all()).await?;
 
                     // 3. Reset context state (not the full registry, just the 'running' flag and readiness)
@@ -86,7 +87,6 @@ impl Daemon {
                     drop(state);
 
                     info!("Daemon: Soft-reboot complete. Restarting services...");
-                    continue;
                 }
                 LoopResult::Shutdown => break,
             }
@@ -96,31 +96,31 @@ impl Daemon {
     }
 
     fn validate_features(&self) {
-        let _cfg = &self.bootstrap.cfg;
+        let cfg = &self.bootstrap.cfg;
 
         #[cfg(not(feature = "dot"))]
-        if _cfg.dns_toml.dot_enabled {
+        if cfg.dns_toml.dot_enabled {
             tracing::error!(
                 "❌ Feature 'dot' (DNS-over-TLS) is enabled in configuration but not compiled in the binary!"
             );
         }
 
         #[cfg(not(feature = "doq"))]
-        if _cfg.dns_toml.doq_enabled {
+        if cfg.dns_toml.doq_enabled {
             tracing::error!(
                 "❌ Feature 'doq' (DNS-over-QUIC) is enabled in configuration but not compiled in the binary!"
             );
         }
 
         #[cfg(not(feature = "http"))]
-        if _cfg.http_toml.enabled {
+        if cfg.http_toml.enabled {
             tracing::error!(
                 "❌ Feature 'http' (REST API / Metrics) is enabled in configuration but not compiled in the binary!"
             );
         }
 
         #[cfg(not(feature = "adblock"))]
-        if _cfg.dns_enabled && _cfg.dns_toml.adblock_enabled {
+        if cfg.dns_enabled && cfg.dns_toml.adblock_enabled {
             tracing::error!(
                 "❌ Feature 'adblock' is enabled in configuration but not compiled in the binary!"
             );
@@ -135,8 +135,7 @@ impl Daemon {
         }
 
         #[cfg(not(feature = "postgres"))]
-        if _cfg.database.url.starts_with("postgres") || _cfg.database.url.starts_with("postgresql")
-        {
+        if cfg.database.url.starts_with("postgres") || cfg.database.url.starts_with("postgresql") {
             tracing::error!(
                 "❌ Database URL suggests PostgreSQL but feature 'postgres' is not compiled in!"
             );

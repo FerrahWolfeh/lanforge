@@ -1,4 +1,4 @@
-use crate::api::{Command, Compression, Encoding, Response};
+use crate::api::{Command, CommandAction, Compression, Encoding, Response};
 use lanforge_core::error::CoreError;
 
 use crate::config::ApiConfig;
@@ -35,7 +35,8 @@ pub struct ControlService {
 }
 
 impl ControlService {
-    pub fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
+    #[must_use]
+    pub const fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
 }
@@ -114,7 +115,6 @@ impl AsyncService for ControlService {
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(service = "ControlAPI", lost = n, "Event bus lagged");
-                            continue;
                         }
                         Err(_) => break,
                     }
@@ -219,7 +219,7 @@ where
             s.into_bytes()
         }
         Encoding::Bincode => bincode::serialize(response)
-            .map_err(|e| ApiError::Bincode(format!("Bincode serialize error: {}", e)))?,
+            .map_err(|e| ApiError::Bincode(format!("Bincode serialize error: {e}")))?,
     };
 
     let data = if compression == Compression::Zstd {
@@ -241,7 +241,8 @@ where
     // Framing: Bincode or Compressed responses are length-prefixed (u32 BE).
     // JSON remains line-based unless compressed.
     if encoding == Encoding::Bincode || compression != Compression::None {
-        let len = data.len() as u32;
+        let len = u32::try_from(data.len())
+            .map_err(|_| ApiError::EncodingError("Response too large".into()))?;
         writer.write_all(&len.to_be_bytes()).await?;
     }
 
@@ -320,8 +321,6 @@ where
         let resp_encoding = req.encoding.unwrap_or(req_encoding);
         let resp_compression = req.compression.unwrap_or(Compression::None);
 
-        use crate::api::CommandAction;
-
         let resp = req.action.dispatch(&ctx).await;
 
         if let CommandAction::Log { follow, n } = req.action {
@@ -369,7 +368,7 @@ where
                 }
             }
             break;
-        } else if let CommandAction::Watch = req.action {
+        } else if req.action == CommandAction::Watch {
             // Write initial response
             write_response(&mut writer, &resp, resp_encoding, resp_compression).await?;
 

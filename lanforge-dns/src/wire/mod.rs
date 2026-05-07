@@ -287,14 +287,14 @@ impl WireResponseWriter {
         }
         h[3] &= 0xF0; // RCODE = 0 (NoError)
 
-        let ancount = ips.len() as u16;
+        let ancount = u16::try_from(ips.len()).unwrap_or(u16::MAX);
         let an_bytes = ancount.to_be_bytes();
         h[6] = an_bytes[0];
         h[7] = an_bytes[1];
         h[8] = 0;
         h[9] = 0; // NSCOUNT = 0
         h[10] = 0;
-        h[11] = if edns.is_some() { 1 } else { 0 }; // ARCOUNT
+        h[11] = u8::from(edns.is_some()); // ARCOUNT
 
         resp.extend_from_slice(&h);
 
@@ -309,7 +309,7 @@ impl WireResponseWriter {
             resp.extend_from_slice(&qtype.to_be_bytes());
             resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
             resp.extend_from_slice(&ttl.to_be_bytes());
-            resp.extend_from_slice(&(rd_len as u16).to_be_bytes());
+            resp.extend_from_slice(&(u16::try_from(rd_len).unwrap_or(u16::MAX)).to_be_bytes());
             match ip {
                 IpAddr::V4(addr) => resp.extend_from_slice(&addr.octets()),
                 IpAddr::V6(addr) => resp.extend_from_slice(&addr.octets()),
@@ -353,7 +353,7 @@ impl WireResponseWriter {
         h[8] = 0;
         h[9] = 0;
         h[10] = 0;
-        h[11] = if edns.is_some() { 1 } else { 0 };
+        h[11] = u8::from(edns.is_some());
         resp.extend_from_slice(&h);
 
         // 2. Question
@@ -372,13 +372,13 @@ impl WireResponseWriter {
             if label.is_empty() {
                 continue;
             }
-            rdlen += 1 + label.len() as u16;
+            rdlen += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
         }
         for label in domain.split('.') {
             if label.is_empty() {
                 continue;
             }
-            rdlen += 1 + label.len() as u16;
+            rdlen += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
         }
         rdlen += 1; // Null terminator
 
@@ -388,14 +388,14 @@ impl WireResponseWriter {
             if label.is_empty() {
                 continue;
             }
-            resp.push(label.len() as u8);
+            resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
             resp.extend_from_slice(label.as_bytes());
         }
         for label in domain.split('.') {
             if label.is_empty() {
                 continue;
             }
-            resp.push(label.len() as u8);
+            resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
             resp.extend_from_slice(label.as_bytes());
         }
         resp.push(0); // Null terminator

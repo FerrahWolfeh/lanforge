@@ -258,19 +258,20 @@ struct ServiceLineProps<'a> {
 
 #[component]
 fn HttpServiceLine(props: &HttpServiceLineProps) -> impl Into<AnyElement<'_>> {
-    if let Some(info) = &props.info {
-        element! {
-            ServiceLine(
-                name: "HTTP API",
-                state: info.state.as_str(),
-                online_val: "online",
-                meta: "REST Interface"
-            )
-        }
-        .into_any()
-    } else {
-        element! { View() }.into_any()
-    }
+    props.info.as_ref().map_or_else(
+        || element! { View() }.into_any(),
+        |info| {
+            element! {
+                ServiceLine(
+                    name: "HTTP API",
+                    state: info.state.as_str(),
+                    online_val: "online",
+                    meta: "REST Interface"
+                )
+            }
+            .into_any()
+        },
+    )
 }
 
 #[derive(Props, Default, Clone)]

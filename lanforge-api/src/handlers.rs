@@ -2,14 +2,14 @@
 //!
 //! Implementation of `ClientContext` methods that build the detailed
 //! JSON responses for `Status`, `Devices`, and `HostList` commands.
+#![allow(clippy::unused_async)]
 
 use std::fs::metadata;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::Ordering;
-use std::time::{self, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-#[allow(unused_imports)]
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
@@ -32,6 +32,10 @@ use crate::api::{
 // Moved to lanforge-http
 
 use crate::server::ClientContext;
+use hickory_proto::rr::{Name, RecordType};
+use lanforge_core::bus::dns::DnsRecordEntry;
+use lanforge_dns::resolver::LocalResolver;
+use lanforge_dns::server::DnsContext;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,7 +48,7 @@ pub(crate) fn format_iso8601(time: SystemTime) -> String {
 
 fn get_v6_kind(state: &IPv6State, prefix: Option<Ipv6Addr>) -> String {
     let ip = state.ip_with_prefix(prefix);
-    let bits_kind = if let Some(addr) = ip {
+    let bits_kind = ip.map_or("Unknown", |addr| {
         let segments = addr.segments();
         if (segments[0] & 0xfe00) == 0xfc00 {
             "ULA"
@@ -53,9 +57,7 @@ fn get_v6_kind(state: &IPv6State, prefix: Option<Ipv6Addr>) -> String {
         } else {
             "GUA"
         }
-    } else {
-        "Unknown"
-    };
+    });
 
     match state {
         IPv6State::Static(..) => format!("{bits_kind} (Static)"),
@@ -130,7 +132,7 @@ impl ClientContext {
             if let Some(if_ips) = state.interfaces.interface_ips.get(&ifindex) {
                 if let Some((ip, prefix)) = if_ips.v4 {
                     status.network.lan_ipv4 = Some(ip.to_string());
-                    status.network.lan_ipv4_cidr = Some(format!("{}/{}", ip, prefix));
+                    status.network.lan_ipv4_cidr = Some(format!("{ip}/{prefix}"));
                 }
                 status.network.gua = if_ips.gua.map(|ip| ip.to_string());
                 status.network.ula = if_ips.ula.map(|ip| ip.to_string());
@@ -214,13 +216,11 @@ impl ClientContext {
             "inactive"
         }
         .to_string();
-        status.services.dhcp_v6.pool_free = self
-            .cfg
-            .dhcp_v6_pool_size
-            .map(|total| total.saturating_sub(v6_dynamic_count as u64) as usize)
-            .unwrap_or(9999);
-        status.services.dhcp_v6.ula = self.cfg.ula_prefix.clone();
-        status.services.dhcp_v6.gua = self.current_gua.clone();
+        status.services.dhcp_v6.pool_free = self.cfg.dhcp_v6_pool_size.map_or(9999, |total| {
+            total.saturating_sub(v6_dynamic_count as u64) as usize
+        });
+        status.services.dhcp_v6.ula.clone_from(&self.cfg.ula_prefix);
+        status.services.dhcp_v6.gua.clone_from(&self.current_gua);
         status.services.dhcp_v6.uptime_secs = self.uptime_secs;
 
         // Services -> DNS
@@ -351,15 +351,16 @@ impl ClientContext {
                     });
                     LeaseInfo {
                         ip: ip.to_string(),
-                        expires: state
-                            .map(|s| match s {
+                        expires: state.map_or_else(
+                            || "—".to_string(),
+                            |s| match s {
                                 IPv6State::Dynamic(l) => format_iso8601(l.expires),
                                 IPv6State::Static(_, _) => "Static".to_string(),
                                 IPv6State::Slaac(_, _)
                                 | IPv6State::LinkLocal(_, _)
                                 | IPv6State::Discovery(_, _) => "—".to_string(),
-                            })
-                            .unwrap_or_else(|| "—".to_string()),
+                            },
+                        ),
                         reserved: state.is_some_and(|s| matches!(s, IPv6State::Static(_, _)))
                             || dev.is_static(),
                     }
@@ -477,24 +478,30 @@ impl ClientContext {
     /// Gathers detailed information and history for a device.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) async fn handle_whois(&self, target: String) -> Response {
-        let device = if let Some(m) = MacAddr::parse(&target) {
-            self.ctx.get_device(&m)
-        } else if let Ok(ip) = target.parse::<IpAddr>() {
-            self.ctx
-                .get_mac_by_ip(ip)
-                .and_then(|m| self.ctx.get_device(&m))
-        } else {
-            self.ctx
-                .all_devices()
-                .into_iter()
-                .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
-        };
+        let device = MacAddr::parse(&target).map_or_else(
+            || {
+                target.parse::<IpAddr>().map_or_else(
+                    |_| {
+                        self.ctx
+                            .all_devices()
+                            .into_iter()
+                            .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
+                    },
+                    |ip| {
+                        self.ctx
+                            .get_mac_by_ip(ip)
+                            .and_then(|m| self.ctx.get_device(&m))
+                    },
+                )
+            },
+            |m| self.ctx.get_device(&m),
+        );
 
         if let Some(dev) = device {
             let mac = dev.mac;
 
             // Fetch history from DB
-            let _history: Vec<LeaseHistoryEntry> =
+            let history: Vec<LeaseHistoryEntry> =
                 if let Ok(db) = LeaseDb::open(&self.cfg.database).await {
                     db.get_lease_history(mac).await.unwrap_or_default()
                 } else {
@@ -557,10 +564,7 @@ impl ClientContext {
                 },
             };
 
-            Response::Whois(Box::new(WhoisResponse {
-                entry,
-                history: _history,
-            }))
+            Response::Whois(Box::new(WhoisResponse { entry, history }))
         } else {
             Response::Error {
                 error: format!("Device '{target}' not found"),
@@ -663,52 +667,64 @@ impl ClientContext {
         name: String,
         record_type: Option<String>,
     ) -> Response {
-        let query_id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u32;
-        let record_type = record_type.unwrap_or_else(|| "A".to_string());
+        let Some(dns_ctx_any) = self.ctx.get_dns_context() else {
+            return Response::Error {
+                error: "DNS engine not ready or disabled".into(),
+            };
+        };
 
-        let mut rx = self.ctx.bus().subscribe();
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Dns(DnsEvent::DiagnosticQuery {
-                query_id,
-                name,
-                record_type,
-            }));
+        let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
+            return Response::Error {
+                error: "Invalid DNS context".into(),
+            };
+        };
 
-        match tokio::time::timeout(time::Duration::from_secs(5), async move {
-            while let Ok(timed_event) = rx.recv().await {
-                if let LanforgeEvent::Dns(DnsEvent::DiagnosticResponse {
-                    query_id: resp_id,
-                    records,
-                    latency_ms,
-                    authoritative,
-                }) = timed_event.event
-                {
-                    if resp_id == query_id {
-                        return Some(DnsQueryResponse {
-                            records,
-                            latency_ms,
-                            authoritative,
-                        });
-                    }
-                }
-            }
-            None
+        let start = Instant::now();
+        let rtype = record_type
+            .and_then(|s| RecordType::from_str(&s).ok())
+            .unwrap_or(RecordType::A);
+
+        let resolver = LocalResolver::new(&dns_ctx.cfg, &dns_ctx.ctx);
+        let results = if rtype == RecordType::PTR {
+            Name::from_str(&name).map_or_else(
+                |_| Vec::new(),
+                |ptr_name| {
+                    resolver
+                        .resolve_ptr(&ptr_name)
+                        .ok()
+                        .flatten()
+                        .map(|(h, d)| {
+                            vec![DnsRecordEntry {
+                                name: name.clone(),
+                                kind: "PTR".to_string(),
+                                data: format!("{h}.{d}"),
+                                ttl: dns_ctx.cfg.ttl,
+                            }]
+                        })
+                        .unwrap_or_default()
+                },
+            )
+        } else {
+            resolver
+                .resolve_ip(&name, rtype)
+                .map(|ips| {
+                    ips.iter()
+                        .map(|ip| DnsRecordEntry {
+                            name: name.clone(),
+                            kind: rtype.to_string(),
+                            data: ip.to_string(),
+                            ttl: dns_ctx.cfg.ttl,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        Response::DnsQuery(DnsQueryResponse {
+            records: results,
+            latency_ms: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+            authoritative: true, // Local resolver is always authoritative for local names
         })
-        .await
-        {
-            Ok(Some(resp)) => Response::DnsQuery(resp),
-            Ok(None) => Response::Error {
-                error: "DNS response channel closed".into(),
-            },
-            Err(_) => Response::Error {
-                error: "DNS query timed out waiting for event bus".into(),
-            },
-        }
     }
 
     /// Fully dumps the main in-memory state.
@@ -767,8 +783,7 @@ impl ClientContext {
                     remaining_secs: lease
                         .expires
                         .duration_since(now)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0),
+                        .map_or(0, |d| d.as_secs().cast_signed()),
                 });
             }
 
@@ -784,8 +799,7 @@ impl ClientContext {
                         remaining_secs: lease
                             .expires
                             .duration_since(now)
-                            .map(|d| d.as_secs() as i64)
-                            .unwrap_or(0),
+                            .map_or(0, |d| d.as_secs().cast_signed()),
                     });
                 }
             }
@@ -801,8 +815,7 @@ impl ClientContext {
                     remaining_secs: prefix
                         .expires
                         .duration_since(now)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0),
+                        .map_or(0, |d| d.as_secs().cast_signed()),
                 });
             }
         }
@@ -810,7 +823,7 @@ impl ClientContext {
         Response::Leases(LeasesResponse { leases: api_leases })
     }
 
-    /// Renews a lease (ForceRenew).
+    /// Renews a lease (`ForceRenew`).
     pub(crate) async fn handle_lease_renew(
         &self,
         mac_str: String,
@@ -819,9 +832,7 @@ impl ClientContext {
         let mac = match MacAddr::from_str(&mac_str) {
             Ok(m) => m,
             Err(e) => {
-                return Response::Error {
-                    error: e.to_string(),
-                };
+                return Response::Error { error: e };
             }
         };
 
@@ -835,7 +846,7 @@ impl ClientContext {
             }));
 
         Response::Success(SimpleSuccess {
-            message: format!("Lease renew requested for {} ({})", mac, target),
+            message: format!("Lease renew requested for {mac} ({target})"),
         })
     }
 
@@ -848,9 +859,7 @@ impl ClientContext {
         let mac = match MacAddr::from_str(&mac_str) {
             Ok(m) => m,
             Err(e) => {
-                return Response::Error {
-                    error: e.to_string(),
-                };
+                return Response::Error { error: e };
             }
         };
 
@@ -864,7 +873,7 @@ impl ClientContext {
             }));
 
         Response::Success(SimpleSuccess {
-            message: format!("Lease release requested for {} ({})", mac, target),
+            message: format!("Lease release requested for {mac} ({target})"),
         })
     }
 
@@ -926,32 +935,33 @@ impl ClientContext {
         v4: Option<String>,
         v6_suffix: Option<String>,
     ) -> Response {
-        if let Some(m) = mac.as_deref().and_then(MacAddr::parse) {
-            let _ = self.ctx.apply(DeviceUpdate::CliHostUpdated {
-                mac: m,
-                update: CliHostUpdate {
-                    hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-                    duid: FieldUpdate::NoChange,
-                    v4_static: v4
-                        .as_deref()
-                        .and_then(|s| s.parse().ok())
-                        .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-                    v6_suffix: v6_suffix
-                        .as_deref()
-                        .and_then(Ipv6AddrOrSuffix::parse)
-                        .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-                    origin: Origin::Cli,
-                    boot_file: FieldUpdate::NoChange,
-                },
-            });
-            Response::Success(SimpleSuccess {
-                message: "Host added/updated".to_string(),
-            })
-        } else {
-            Response::Error {
+        mac.as_deref().and_then(MacAddr::parse).map_or_else(
+            || Response::Error {
                 error: "Invalid or missing MAC".to_string(),
-            }
-        }
+            },
+            |m| {
+                let _ = self.ctx.apply(DeviceUpdate::CliHostUpdated {
+                    mac: m,
+                    update: CliHostUpdate {
+                        hostname: hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                        duid: FieldUpdate::NoChange,
+                        v4_static: v4
+                            .as_deref()
+                            .and_then(|s| s.parse().ok())
+                            .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                        v6_suffix: v6_suffix
+                            .as_deref()
+                            .and_then(Ipv6AddrOrSuffix::parse)
+                            .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+                        origin: Origin::Cli,
+                        boot_file: FieldUpdate::NoChange,
+                    },
+                });
+                Response::Success(SimpleSuccess {
+                    message: "Host added/updated".to_string(),
+                })
+            },
+        )
     }
 
     /// Updates a specific field of a host entry.
@@ -961,89 +971,92 @@ impl ClientContext {
         field: String,
         value: String,
     ) -> Response {
-        if let Some(mac_addr) = MacAddr::parse(&mac) {
-            let mut hn = FieldUpdate::NoChange;
-            let mut v4s = FieldUpdate::NoChange;
-            let mut v6s = FieldUpdate::NoChange;
-            let mut bfs = FieldUpdate::NoChange;
-
-            let err_msg = match field.as_str() {
-                "hostname" => {
-                    hn = FieldUpdate::Set(value);
-                    None
-                }
-                "v4" | "ipv4" => {
-                    if value.is_empty() {
-                        v4s = FieldUpdate::Clear;
-                        None
-                    } else if let Ok(ip) = value.parse() {
-                        v4s = FieldUpdate::Set(ip);
-                        None
-                    } else {
-                        Some("Invalid IPv4")
-                    }
-                }
-                "v6_suffix" | "v6" => {
-                    if value.is_empty() {
-                        v6s = FieldUpdate::Clear;
-                        None
-                    } else if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
-                        v6s = FieldUpdate::Set(suf);
-                        None
-                    } else {
-                        Some("Invalid IPv6 interface ID (suffix) or address")
-                    }
-                }
-                "boot_file" | "boot" => {
-                    if value.is_empty() {
-                        bfs = FieldUpdate::Clear;
-                    } else {
-                        bfs = FieldUpdate::Set(value);
-                    }
-                    None
-                }
-                _ => Some("Unknown field"),
-            };
-
-            if let Some(e) = err_msg {
-                Response::Error {
-                    error: e.to_string(),
-                }
-            } else {
-                let _ = self.ctx.apply(DeviceUpdate::CliHostUpdated {
-                    mac: mac_addr,
-                    update: CliHostUpdate {
-                        hostname: hn,
-                        duid: FieldUpdate::NoChange,
-                        v4_static: v4s,
-                        v6_suffix: v6s,
-                        origin: Origin::Cli,
-                        boot_file: bfs,
-                    },
-                });
-                Response::Success(SimpleSuccess {
-                    message: format!("Host {mac} updated"),
-                })
-            }
-        } else {
-            Response::Error {
+        MacAddr::parse(&mac).map_or_else(
+            || Response::Error {
                 error: "Invalid MAC".to_string(),
-            }
-        }
+            },
+            |mac_addr| {
+                let mut hn = FieldUpdate::NoChange;
+                let mut v4s = FieldUpdate::NoChange;
+                let mut v6s = FieldUpdate::NoChange;
+                let mut bfs = FieldUpdate::NoChange;
+
+                let err_msg = match field.as_str() {
+                    "hostname" => {
+                        hn = FieldUpdate::Set(value);
+                        None
+                    }
+                    "v4" | "ipv4" => {
+                        if value.is_empty() {
+                            v4s = FieldUpdate::Clear;
+                            None
+                        } else if let Ok(ip) = value.parse() {
+                            v4s = FieldUpdate::Set(ip);
+                            None
+                        } else {
+                            Some("Invalid IPv4")
+                        }
+                    }
+                    "v6_suffix" | "v6" => {
+                        if value.is_empty() {
+                            v6s = FieldUpdate::Clear;
+                            None
+                        } else if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
+                            v6s = FieldUpdate::Set(suf);
+                            None
+                        } else {
+                            Some("Invalid IPv6 interface ID (suffix) or address")
+                        }
+                    }
+                    "boot_file" | "boot" => {
+                        if value.is_empty() {
+                            bfs = FieldUpdate::Clear;
+                        } else {
+                            bfs = FieldUpdate::Set(value);
+                        }
+                        None
+                    }
+                    _ => Some("Unknown field"),
+                };
+
+                err_msg.map_or_else(
+                    || {
+                        let _ = self.ctx.apply(DeviceUpdate::CliHostUpdated {
+                            mac: mac_addr,
+                            update: CliHostUpdate {
+                                hostname: hn,
+                                duid: FieldUpdate::NoChange,
+                                v4_static: v4s,
+                                v6_suffix: v6s,
+                                origin: Origin::Cli,
+                                boot_file: bfs,
+                            },
+                        });
+                        Response::Success(SimpleSuccess {
+                            message: format!("Host {mac} updated"),
+                        })
+                    },
+                    |e| Response::Error {
+                        error: e.to_string(),
+                    },
+                )
+            },
+        )
     }
 
     /// Removes a host entry.
     pub(crate) async fn handle_host_remove(&self, mac: String) -> Response {
-        if let Some(mac_addr) = MacAddr::parse(&mac) {
-            let _ = self.ctx.apply(DeviceUpdate::HostRemoved { mac: mac_addr });
-            Response::Success(SimpleSuccess {
-                message: format!("Host {mac} removed"),
-            })
-        } else {
-            Response::Error {
+        MacAddr::parse(&mac).map_or_else(
+            || Response::Error {
                 error: "Invalid MAC".to_string(),
-            }
-        }
+            },
+            |mac_addr| {
+                let _ = self.ctx.apply(DeviceUpdate::HostRemoved { mac: mac_addr });
+                Response::Success(SimpleSuccess {
+                    message: format!("Host {mac} removed"),
+                })
+            },
+        )
     }
 
     /// Prunes 'zombie' entries from the database.
@@ -1060,19 +1073,20 @@ impl ClientContext {
 
     /// Forcefully purges a device from memory and database.
     pub(crate) async fn handle_purge(&self, mac: String) -> Response {
-        if let Some(mac_addr) = MacAddr::parse(&mac) {
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Device(DeviceEvent::Purged { mac: mac_addr }));
-            Response::Success(SimpleSuccess {
-                message: format!("Device {mac} purged"),
-            })
-        } else {
-            Response::Error {
+        MacAddr::parse(&mac).map_or_else(
+            || Response::Error {
                 error: "Invalid MAC".to_string(),
-            }
-        }
+            },
+            |mac_addr| {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Device(DeviceEvent::Purged { mac: mac_addr }));
+                Response::Success(SimpleSuccess {
+                    message: format!("Device {mac} purged"),
+                })
+            },
+        )
     }
 
     /// Dummy handler for watch (streaming is handled in server.rs)
@@ -1086,13 +1100,13 @@ impl ClientContext {
     pub(crate) async fn handle_log(&self, _follow: bool, n: Option<usize>) -> Response {
         let n_lines = n.unwrap_or(100);
         let history_len = if let Ok(db) = LogDb::open(&self.cfg.log_db_url).await {
-            db.get_history(n_lines).await.map(|h| h.len()).unwrap_or(0)
+            db.get_history(n_lines).await.map_or(0, |h| h.len())
         } else {
             0
         };
 
         Response::Success(SimpleSuccess {
-            message: format!("Starting event stream ({} historical)...", history_len),
+            message: format!("Starting event stream ({history_len} historical)..."),
         })
     }
 
@@ -1164,7 +1178,7 @@ impl ClientContext {
 
         if let Some(ref pool) = state.interfaces.v4_pool {
             v4_pools.push(DhcpPoolEntry {
-                subnet: pool.subnet.to_string(),
+                subnet: pool.subnet.clone(),
                 total: pool.total_addresses(),
                 used: pool.used_addresses(),
                 available: pool.available_addresses(),
@@ -1196,53 +1210,31 @@ impl ClientContext {
     }
 
     pub(crate) async fn handle_dns_cache_dump(&self) -> Response {
-        let query_id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u32;
+        let Some(dns_ctx_any) = self.ctx.get_dns_context() else {
+            return Response::Error {
+                error: "DNS engine not ready or disabled".into(),
+            };
+        };
 
-        let mut rx = self.ctx.bus().subscribe();
+        let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
+            return Response::Error {
+                error: "Invalid DNS context".into(),
+            };
+        };
 
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Dns(DnsEvent::CacheDumpQuery { query_id }));
-
-        match tokio::time::timeout(time::Duration::from_secs(2), async move {
-            while let Ok(timed_event) = rx.recv().await {
-                if let LanforgeEvent::Dns(DnsEvent::CacheDumpResponse {
-                    query_id: resp_id,
-                    entries,
-                }) = timed_event.event
-                {
-                    if resp_id == query_id {
-                        let cache_entries = entries
-                            .into_iter()
-                            .map(|(name, kind, data, expires_in_secs)| DnsCacheEntry {
-                                name,
-                                kind,
-                                data,
-                                expires_in_secs,
-                            })
-                            .collect();
-
-                        return Some(DnsCacheResponse {
-                            entries: cache_entries,
-                        });
-                    }
-                }
+        let mut entries = Vec::new();
+        for upstream in &dns_ctx.upstreams {
+            let dump = upstream.cache.dump();
+            for (name, kind, data, expires_in_secs) in dump {
+                entries.push(DnsCacheEntry {
+                    name,
+                    kind,
+                    data,
+                    expires_in_secs,
+                });
             }
-            None
-        })
-        .await
-        {
-            Ok(Some(resp)) => Response::DnsCache(resp),
-            Ok(None) => Response::Error {
-                error: "DNS response channel closed".into(),
-            },
-            Err(_) => Response::Error {
-                error: "DNS cache dump timed out".into(),
-            },
         }
+
+        Response::DnsCache(DnsCacheResponse { entries })
     }
 }

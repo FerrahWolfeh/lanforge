@@ -37,7 +37,7 @@ pub struct UpstreamManager {
     /// Monotonically increasing ID generator to avoid collisions.
     pub(crate) next_id: AtomicU16,
     /// Cache of upstream responses with TTL-based expiry.
-    pub(crate) cache: Arc<DnsCache>,
+    pub cache: Arc<DnsCache>,
     /// The specific upstream target this manager handles.
     pub target: UpstreamTarget,
 }

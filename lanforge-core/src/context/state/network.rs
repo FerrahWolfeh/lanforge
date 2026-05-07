@@ -29,10 +29,22 @@ pub struct DhcpPoolStats {
 }
 
 impl DhcpPoolStats {
-    pub fn total_addresses(&self) -> u32 { self.total }
-    pub fn used_addresses(&self) -> u32 { self.used }
-    pub fn available_addresses(&self) -> u32 { self.available }
-    pub fn utilization_percent(&self) -> f32 { self.utilization_percent }
+    #[must_use]
+    pub const fn total_addresses(&self) -> u32 {
+        self.total
+    }
+    #[must_use]
+    pub const fn used_addresses(&self) -> u32 {
+        self.used
+    }
+    #[must_use]
+    pub const fn available_addresses(&self) -> u32 {
+        self.available
+    }
+    #[must_use]
+    pub const fn utilization_percent(&self) -> f32 {
+        self.utilization_percent
+    }
 }
 
 /// Managed network interface states.
@@ -44,9 +56,9 @@ pub struct NetworkState {
         deserialize_with = "deserialize_int_map"
     )]
     pub interface_ips: HashMap<u32, InterfaceState>,
-    /// Active DHCPv4 pool metrics.
+    /// Active `DHCPv4` pool metrics.
     pub v4_pool: Option<DhcpPoolStats>,
-    /// Active DHCPv6 pool metrics indexed by IAID.
+    /// Active `DHCPv6` pool metrics indexed by IAID.
     #[serde(
         serialize_with = "serialize_int_map",
         deserialize_with = "deserialize_int_map"

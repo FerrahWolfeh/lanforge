@@ -28,26 +28,6 @@ pub enum DnsEvent {
     AdblockReload,
     #[cfg(feature = "adblock")]
     QueryBlocked { src_addr: IpAddr, domain: String },
-    /// A diagnostic query requested via API.
-    DiagnosticQuery {
-        query_id: u32,
-        name: String,
-        record_type: String,
-    },
-    /// Response to a diagnostic query.
-    DiagnosticResponse {
-        query_id: u32,
-        records: Vec<DnsRecordEntry>,
-        latency_ms: u64,
-        authoritative: bool,
-    },
     /// Flush the DNS cache.
     CacheFlush,
-    /// Request a DNS cache dump.
-    CacheDumpQuery { query_id: u32 },
-    /// DNS cache dump response.
-    CacheDumpResponse {
-        query_id: u32,
-        entries: Vec<(String, String, String, u64)>, // (name, kind, data, expires_in)
-    },
 }

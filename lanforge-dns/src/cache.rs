@@ -205,21 +205,20 @@ impl DnsCache {
     }
 
     /// Returns a dump of all cache entries.
+    #[must_use]
     pub fn dump(&self) -> Vec<(String, String, String, u64)> {
         self.cache
             .iter()
             .map(|(key, value)| {
                 let name = Name::from_bytes(&key.qname)
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|_| "invalid".to_string());
+                    .map_or_else(|_| "invalid".to_string(), |n| n.to_string());
                 let kind = QType::from(key.qtype).to_string();
 
                 // Try to parse RData from response bytes for display
                 let data = if let Ok(msg) = Message::from_bytes(&value.data) {
                     msg.answers
                         .first()
-                        .map(|r| r.data.to_string())
-                        .unwrap_or_else(|| "no-data".to_string())
+                        .map_or_else(|| "no-data".to_string(), |r| r.data.to_string())
                 } else {
                     "wire-error".to_string()
                 };

@@ -42,7 +42,7 @@ pub async fn run_event_loop(
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
-    let stale_interval = Duration::from_secs(120);
+    let stale_interval = Duration::from_mins(2);
     let mut stale_timer = interval(stale_interval);
     stale_timer.tick().await;
 

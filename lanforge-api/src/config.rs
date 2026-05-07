@@ -5,6 +5,7 @@ use lanforge_macros::ServiceConfig;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the Unix Domain Socket (UDS) control service.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
 #[config(key = "api")]
 #[serde(default)]
@@ -141,6 +142,7 @@ impl Default for HttpConfig {
 #[cfg(test)]
 impl ApiConfig {
     /// Creates a dummy configuration for testing purposes.
+    #[must_use]
     pub fn dummy() -> Self {
         Self::default()
     }

@@ -1,7 +1,7 @@
 use super::CliCommand;
 use crate::args::DbCommand;
 use color_eyre::eyre::Result;
-use colored::*;
+use colored::Colorize;
 use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
 
 pub struct DbHandler {

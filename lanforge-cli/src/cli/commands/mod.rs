@@ -76,6 +76,7 @@ impl CliCommand for GenericHandler {
     }
 }
 
+#[must_use]
 pub fn format_uptime(secs: u64) -> String {
     let d = secs / 86400;
     let h = (secs % 86400) / 3600;
@@ -91,6 +92,7 @@ pub fn format_uptime(secs: u64) -> String {
     }
 }
 
+#[must_use]
 pub fn format_short_relative(iso: &str) -> String {
     if let Ok(dt) = DateTime::parse_from_rfc3339(iso) {
         if dt.year() <= 1970 {
@@ -112,7 +114,7 @@ pub fn format_short_relative(iso: &str) -> String {
         let m = secs / 60;
         let h = secs / 3600;
         let d = secs / 86400;
-        let w = secs / 604800;
+        let w = secs / 604_800;
 
         if w > 0 {
             return format!("{w}w");
@@ -128,6 +130,7 @@ pub fn format_short_relative(iso: &str) -> String {
     "—".to_string()
 }
 
+#[must_use]
 pub fn format_relative_iso8601(iso: &str) -> String {
     if let Ok(dt) = DateTime::parse_from_rfc3339(iso) {
         if dt.year() <= 1970 {

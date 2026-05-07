@@ -17,6 +17,7 @@ pub struct ServiceRegistry {
 
 impl ServiceRegistry {
     /// Creates a new, empty service registry.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             handles: Vec::new(),

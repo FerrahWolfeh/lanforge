@@ -62,6 +62,10 @@ pub enum ApiError {
     /// Generic error string.
     #[error("API error: {0}")]
     Generic(String),
+
+    /// Error during data encoding.
+    #[error("Encoding error: {0}")]
+    EncodingError(String),
 }
 
 /// A specialized Result type for API operations.

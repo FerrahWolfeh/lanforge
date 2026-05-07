@@ -111,7 +111,7 @@ pub struct LanforgeArgs {
     )]
     pub socket: String,
 
-    /// Remote URL of the Lanforge daemon (e.g. https://192.168.1.1:8080)
+    /// Remote URL of the Lanforge daemon (e.g. <https://192.168.1.1:8080>)
     #[cfg(feature = "remote")]
     #[arg(long, global = true, env = "LANFORGE_REMOTE_URL")]
     pub remote: Option<String>,
@@ -377,7 +377,7 @@ pub enum HostCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DbCommand {
-    /// Perform a SQLite VACUUM operation
+    /// Perform a `SQLite` VACUUM operation
     Vacuum,
     /// Clear the transient system log database
     LogClean,

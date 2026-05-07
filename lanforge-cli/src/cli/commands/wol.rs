@@ -9,19 +9,21 @@ pub struct WolCommand {
 
 impl CliCommand for WolCommand {
     fn prepare(&mut self) -> Result<ControlCommand> {
-        if let Some(target) = &self.target {
-            Ok(ControlCommand::new(CommandAction::Wol {
-                target: target.clone(),
-            }))
-        } else {
-            // Interactive mode: fetch devices first
-            Ok(ControlCommand::new(CommandAction::Devices {
-                filter: None,
-                vendor: None,
-                method: None,
-                format: None,
-            }))
-        }
+        self.target.as_ref().map_or_else(
+            || {
+                Ok(ControlCommand::new(CommandAction::Devices {
+                    filter: None,
+                    vendor: None,
+                    method: None,
+                    format: None,
+                }))
+            },
+            |target| {
+                Ok(ControlCommand::new(CommandAction::Wol {
+                    target: target.clone(),
+                }))
+            },
+        )
     }
 
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
@@ -46,7 +48,7 @@ impl CliCommand for WolCommand {
                 let index = options.iter().position(|s| s == &selection).unwrap();
                 let mac = &resp.devices[index].mac;
 
-                println!("Triggering Wake-on-LAN for {}...", mac);
+                println!("Triggering Wake-on-LAN for {mac}...");
 
                 return Ok(Some(ControlCommand::new(CommandAction::Wol {
                     target: mac.clone(),
@@ -56,10 +58,10 @@ impl CliCommand for WolCommand {
                 println!("✓ {}", s.message);
             }
             Response::Error { error } => {
-                println!("Error: {}", error);
+                println!("Error: {error}");
             }
             _ => {
-                println!("Unexpected response: {:?}", response);
+                println!("Unexpected response: {response:?}");
             }
         }
         Ok(None)

@@ -44,9 +44,8 @@ pub async fn run_client(command: Command, socket_path: &str, opts: ClientOptions
     loop {
         write_request(&mut writer, &control_cmd, encoding).await?;
 
-        let response = match read_response(&mut reader, encoding, compression).await? {
-            Some(r) => r,
-            None => break,
+        let Some(response) = read_response(&mut reader, encoding, compression).await? else {
+            break;
         };
 
         if let Some(next_cmd) = handler.on_response(&response)? {
@@ -58,9 +57,8 @@ pub async fn run_client(command: Command, socket_path: &str, opts: ClientOptions
 
         if handler.is_streaming() {
             loop {
-                let resp = match read_response(&mut reader, encoding, compression).await? {
-                    Some(r) => r,
-                    None => break,
+                let Some(resp) = read_response(&mut reader, encoding, compression).await? else {
+                    break;
                 };
                 let _ = handler.on_response(&resp)?;
             }
@@ -134,7 +132,9 @@ where
         Encoding::Bincode => {
             let mut buf =
                 bincode::serialize(cmd).map_err(|e| eyre!("Bincode serialize error: {e}"))?;
-            let mut final_buf = (buf.len() as u32).to_be_bytes().to_vec();
+            let mut final_buf = (u32::try_from(buf.len()).unwrap_or(u32::MAX))
+                .to_be_bytes()
+                .to_vec();
             final_buf.append(&mut buf);
             final_buf
         }

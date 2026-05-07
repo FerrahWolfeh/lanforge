@@ -2,7 +2,7 @@ use super::CliCommand;
 use chrono::DateTime;
 use chrono::Local;
 use color_eyre::eyre::Result;
-use colored::*;
+use colored::Colorize;
 use lanforge_api::api::Response;
 use lanforge_api::api::SimpleSuccess;
 use lanforge_api::api::{Command as ControlCommand, CommandAction};
@@ -83,21 +83,19 @@ impl LogHandler {
                     let suffix = duration_secs
                         .map(|s| format!(" for {s}s"))
                         .unwrap_or_default();
-                    println!("[{}] {} DNS Adblocker{}", now, status, suffix);
+                    println!("[{now}] {status} DNS Adblocker{suffix}");
                 }
                 DnsEvent::AdblockReload => {
                     println!("[{}] {} Reloading blocklists...", now, "DNS".cyan().bold());
                 }
-                DnsEvent::QueryBlocked { src_addr, domain } => {
-                    if self.verbose {
-                        println!(
-                            "[{}] {} {} -> {}",
-                            now,
-                            "BLOCK".red().bold(),
-                            src_addr.to_string().bright_cyan(),
-                            domain.bright_red()
-                        );
-                    }
+                DnsEvent::QueryBlocked { src_addr, domain } if self.verbose => {
+                    println!(
+                        "[{}] {} {} -> {}",
+                        now,
+                        "BLOCK".red().bold(),
+                        src_addr.to_string().bright_cyan(),
+                        domain.bright_red()
+                    );
                 }
                 _ => {}
             },
@@ -129,7 +127,7 @@ impl LogHandler {
                     }
                     DeviceChange::ArpActivity { .. } | DeviceChange::NdpActivity { .. } => {
                         if self.verbose {
-                            let change_str = self.format_change(change);
+                            let change_str = Self::format_change(change);
                             println!(
                                 "[{}] {} {} ({}) -> {}",
                                 now,
@@ -141,7 +139,7 @@ impl LogHandler {
                         }
                     }
                     _ => {
-                        let change_str = self.format_change(change);
+                        let change_str = Self::format_change(change);
                         println!(
                             "[{}] {} {} ({}) -> {}",
                             now,
@@ -233,7 +231,7 @@ impl LogHandler {
                     "[{}] {} {} for {}",
                     now,
                     "DHCP4".blue().bold(),
-                    format!("{:?}", msg_type).bright_magenta().bold(),
+                    format!("{msg_type:?}").bright_magenta().bold(),
                     mac.to_string().yellow()
                 );
             }
@@ -242,7 +240,7 @@ impl LogHandler {
                     "[{}] {} {} for {}",
                     now,
                     "DHCP6".magenta().bold(),
-                    format!("{:?}", msg_type).bright_magenta().bold(),
+                    format!("{msg_type:?}").bright_magenta().bold(),
                     mac.to_string().yellow()
                 );
             }
@@ -424,7 +422,8 @@ impl LogHandler {
         }
     }
 
-    fn format_change(&self, change: &DeviceChange) -> String {
+    #[must_use]
+    fn format_change(change: &DeviceChange) -> String {
         match change {
             DeviceChange::V4Assigned { ip } => {
                 format!("IPv4 assigned: {}", ip.to_string().bright_cyan())
@@ -439,7 +438,7 @@ impl LogHandler {
                         format!("IPv6 Prefix (IAID: {iaid})")
                     }
                 };
-                format!("{} expired", target_str).dimmed().to_string()
+                format!("{target_str} expired").dimmed().to_string()
             }
             DeviceChange::SlaacObserved { addr } => {
                 format!(
@@ -449,14 +448,14 @@ impl LogHandler {
                 )
             }
             DeviceChange::HostnameChanged { hostname } => format!("Hostname: {}", hostname.bold()),
-            DeviceChange::V4StaticChanged { ip } => match ip {
-                Some(v) => format!("Static IPv4 set: {}", v.to_string().bright_green()),
-                None => "Static IPv4 removed".dimmed().to_string(),
-            },
-            DeviceChange::V6SuffixChanged { suffix } => match suffix {
-                Some(s) => format!("Static IPv6 suffix set: {}", s.to_string().bold()),
-                None => "Static IPv6 suffix removed".dimmed().to_string(),
-            },
+            DeviceChange::V4StaticChanged { ip } => ip.as_ref().map_or_else(
+                || "Static IPv4 removed".dimmed().to_string(),
+                |v| format!("Static IPv4 set: {}", v.to_string().bright_green()),
+            ),
+            DeviceChange::V6SuffixChanged { suffix } => suffix.as_ref().map_or_else(
+                || "Static IPv6 suffix removed".dimmed().to_string(),
+                |s| format!("Static IPv6 suffix set: {}", s.to_string().bold()),
+            ),
             DeviceChange::DuidAssociated { duid } => {
                 format!("DUID associated: {}", duid.to_string().cyan())
             }
@@ -491,9 +490,7 @@ impl LogHandler {
                 )
             }
             DeviceChange::TopologyChanged { parent_mac, port } => {
-                let parent = parent_mac
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "Local".to_string());
+                let parent = parent_mac.map_or_else(|| "Local".to_string(), |m| m.to_string());
                 let port = port.as_deref().unwrap_or("?");
                 format!(
                     "topology updated: behind {} on port {}",

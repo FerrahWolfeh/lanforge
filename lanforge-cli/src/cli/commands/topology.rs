@@ -56,8 +56,7 @@ impl CliCommand for TopologyHandler {
                         .entries
                         .iter()
                         .find(|e| e.mac == root_mac)
-                        .map(|e| e.hostname.as_str())
-                        .unwrap_or("Unknown Switch");
+                        .map_or("Unknown Switch", |e| e.hostname.as_str());
 
                     println!("┏━ 🖧  {root_hostname} [{root_mac}]");
                     print_children(&root_mac, &parent_to_children, "┃  ", true);
@@ -77,7 +76,7 @@ impl CliCommand for TopologyHandler {
                 println!("Error fetching topology: {error}");
             }
             _ => {
-                println!("Unexpected response: {:?}", response);
+                println!("Unexpected response: {response:?}");
             }
         }
         Ok(None)
@@ -118,7 +117,7 @@ fn print_children(
             );
 
             // Recursively print children of this child
-            let next_indent = format!("{}{}", indent, sub_indent);
+            let next_indent = format!("{indent}{sub_indent}");
             print_children(&child.mac, map, &next_indent, false);
         }
     }

@@ -44,10 +44,10 @@ impl CliCommand for DhcpHandler {
                 }.print();
             }
             Response::Error { error } => {
-                println!("Error: {}", error);
+                println!("Error: {error}");
             }
             _ => {
-                println!("Unexpected response: {:?}", response);
+                println!("Unexpected response: {response:?}");
             }
         }
         Ok(None)

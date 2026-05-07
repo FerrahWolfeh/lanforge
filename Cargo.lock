@@ -2324,6 +2324,7 @@ dependencies = [
  "bincode",
  "chrono",
  "hex",
+ "hickory-proto 0.26.1",
  "hotpath",
  "lanforge-core",
  "lanforge-db",

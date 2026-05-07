@@ -140,36 +140,19 @@ pub fn load_toml(path: &str) -> TomlConfig {
         }
     };
 
-    let mut cfg = TomlConfig::default();
-
-    // Helper for section-by-section loading
-    fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
-        if let Some(sec_val) = v.get(key) {
-            match T::deserialize(sec_val.clone()) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(
-                        "[config]   - [FAIL] Section [{key}]: {e} (using defaults for this section)"
-                    );
-                    T::default()
-                }
-            }
-        } else {
-            T::default()
-        }
-    }
-
-    cfg.system = load_section(&value, "system");
-    cfg.database = load_section(&value, "database");
-    cfg.ra = load_section(&value, "ra");
-    cfg.dhcp = load_section(&value, "dhcp");
-    cfg.dns = load_section(&value, "dns");
-    cfg.monitor = load_section(&value, "monitor");
-    cfg.mdns = load_section(&value, "mdns");
-    cfg.api = load_section(&value, "api");
-    cfg.http = load_section(&value, "http");
-    cfg.tftp = load_section(&value, "tftp");
-    cfg.devices = load_section(&value, "devices");
+    let cfg = TomlConfig {
+        system: load_section(&value, "system"),
+        database: load_section(&value, "database"),
+        ra: load_section(&value, "ra"),
+        dhcp: load_section(&value, "dhcp"),
+        dns: load_section(&value, "dns"),
+        monitor: load_section(&value, "monitor"),
+        mdns: load_section(&value, "mdns"),
+        api: load_section(&value, "api"),
+        http: load_section(&value, "http"),
+        tftp: load_section(&value, "tftp"),
+        devices: load_section(&value, "devices"),
+    };
 
     info!("[config] Partial config recovery complete");
     cfg
@@ -208,6 +191,19 @@ pub fn load_devices_only(path: &str) -> Vec<StaticDeviceCfg> {
     }
 }
 
+// Helper for section-by-section loading
+fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
+    v.get(key).map_or_else(T::default, |sec_val| {
+        match T::deserialize(sec_val.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("[config]   - [FAIL] Section [{key}]: {e} (using defaults for this section)");
+                T::default()
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,18 +235,17 @@ source = "broken" # Invalid variant
         let value: toml::Value = toml::from_str(content).unwrap();
 
         // Helper for section-by-section loading (copy-pasted from load_toml for testing)
-        fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
-            if let Some(sec_val) = v.get(key) {
-                T::deserialize(sec_val.clone()).unwrap_or_default()
-            } else {
-                T::default()
-            }
-        }
 
         let system: SystemCfg = load_section(&value, "system");
         let ra: RaServiceConfig = load_section(&value, "ra");
 
         assert_eq!(system.iface, "eth42");
         assert!(!ra.enabled); // Should be default
+    }
+
+    fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
+        v.get(key).map_or_else(T::default, |sec_val| {
+            T::deserialize(sec_val.clone()).unwrap_or_default()
+        })
     }
 }

@@ -54,8 +54,7 @@ where
                 loop {
                     match bus_rx.recv().await {
                         Ok(e) if matches!(e.event, LanforgeEvent::System(SystemEvent::Shutdown)) => return true,
-                        Ok(_) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {},
                         Err(_) => return false,
                     }
                 }
@@ -124,8 +123,7 @@ where
                             loop {
                                 match bus_rx.recv().await {
                                     Ok(e) if matches!(e.event, LanforgeEvent::System(SystemEvent::Shutdown)) => return,
-                                    Ok(_) => continue,
-                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {},
                                     Err(_) => return,
                                 }
                             }

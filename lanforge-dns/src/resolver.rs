@@ -37,6 +37,7 @@ impl<'a> LocalResolver<'a> {
     /// Looks up the device by hostname and returns all matching IP addresses.
     /// Returns `None` if the host is unknown.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[must_use]
     pub fn resolve_ip(&self, hostname: &str, qtype: RecordType) -> Option<SmallVec<[IpAddr; 32]>> {
         if let Some(device) = self.ctx.get_by_hostname(hostname) {
             return self.collect_device_ips_filtered(&device, qtype);
@@ -69,6 +70,7 @@ impl<'a> LocalResolver<'a> {
     }
 
     /// Internal helper to get PTR parts from a device without allocating if possible.
+    #[must_use]
     pub fn get_ptr_parts<'d>(&self, device: &'d Device) -> (Cow<'d, str>, Cow<'a, str>) {
         let host = if device.hostname.name.is_empty() {
             Cow::Borrowed(device.dns_fallback.as_str())

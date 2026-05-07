@@ -82,7 +82,7 @@ impl CliCommand for DnsCommand {
                 }.print();
             }
             Response::Error { error } => {
-                println!("Error: {}", error);
+                println!("Error: {error}");
             }
             Response::DnsCache(cache) => {
                 element! {
@@ -109,7 +109,7 @@ impl CliCommand for DnsCommand {
                 println!("{}", msg.message);
             }
             _ => {
-                println!("Unexpected response: {:?}", response);
+                println!("Unexpected response: {response:?}");
             }
         }
         Ok(None)

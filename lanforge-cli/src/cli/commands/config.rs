@@ -24,9 +24,9 @@ impl CliCommand for ConfigHandler {
                 println!("✅ {}", s.message);
             }
             Response::Error { error } => {
-                println!("❌ Error: {}", error);
+                println!("❌ Error: {error}");
             }
-            _ => println!("Unexpected response: {:?}", response),
+            _ => println!("Unexpected response: {response:?}"),
         }
         Ok(None)
     }

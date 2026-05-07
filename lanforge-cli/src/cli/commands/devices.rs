@@ -210,7 +210,7 @@ fn HostRow(props: &HostRowProps) -> impl Into<AnyElement<'_>> {
 fn truncate(s: &str, max_width: usize) -> String {
     if s.chars().count() > max_width {
         let truncated: String = s.chars().take(max_width - 1).collect();
-        format!("{}…", truncated)
+        format!("{truncated}…")
     } else {
         s.to_string()
     }
@@ -271,7 +271,7 @@ fn render_verbose_device(dev: &DeviceEntry) {
     for seen in &dev.seen_v4 {
         let already_in_v4 = dev.v4.as_ref().is_some_and(|v| &v.ip == seen);
         if !already_in_v4 {
-            v4_lines.push(format!("V4 (Guessed) {:<24}", seen));
+            v4_lines.push(format!("V4 (Guessed) {seen:<24}"));
         }
     }
     if v4_lines.is_empty() {

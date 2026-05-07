@@ -78,7 +78,8 @@ pub struct Command {
 
 impl Command {
     /// Helper to create a command with default transport options.
-    pub fn new(action: CommandAction) -> Self {
+    #[must_use]
+    pub const fn new(action: CommandAction) -> Self {
         Self {
             encoding: None,
             compression: None,
@@ -152,7 +153,7 @@ pub enum CommandAction {
     HostSet {
         /// Target device MAC address.
         mac: String,
-        /// Field name (e.g., "hostname", "v4", "v6_suffix").
+        /// Field name (e.g., "hostname", "v4", "`v6_suffix`").
         field: String,
         /// New value for the field.
         value: String,
@@ -171,7 +172,7 @@ pub enum CommandAction {
     LeaseRenew {
         /// Target device MAC address.
         mac: String,
-        /// Optional specific lease target (V4, V6, or V6Prefix with IAID).
+        /// Optional specific lease target (V4, V6, or `V6Prefix` with IAID).
         target: Option<LeaseTarget>,
     },
     /// Manually release a DHCP lease.
@@ -179,13 +180,13 @@ pub enum CommandAction {
     LeaseRelease {
         /// Target device MAC address.
         mac: String,
-        /// Optional specific lease target (V4, V6, or V6Prefix with IAID).
+        /// Optional specific lease target (V4, V6, or `V6Prefix` with IAID).
         target: Option<LeaseTarget>,
     },
     /// Fetch DHCP pool utilization.
     #[dispatch(handler = "handle_dhcp_pools")]
     DhcpPools,
-    /// Perform a VACUUM operation on the underlying SQLite database.
+    /// Perform a VACUUM operation on the underlying `SQLite` database.
     #[dispatch(handler = "handle_db_vacuum")]
     DbVacuum,
     /// Clear all transient system logs.
@@ -366,11 +367,11 @@ pub struct LeaseEntry {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum LeaseKind {
-    /// Standard DHCPv4 lease.
+    /// Standard `DHCPv4` lease.
     V4,
-    /// DHCPv6 IA_NA address lease.
+    /// `DHCPv6` `IA_NA` address lease.
     V6,
-    /// DHCPv6 IA_PD prefix delegation lease.
+    /// `DHCPv6` `IA_PD` prefix delegation lease.
     V6Prefix,
 }
 
@@ -426,17 +427,17 @@ pub struct DeviceEntry {
     pub online: bool,
     /// Last seen timestamp in ISO 8601.
     pub last_seen: String,
-    /// Hex-encoded DUID for DHCPv6, if available.
+    /// Hex-encoded DUID for `DHCPv6`, if available.
     pub duid: Option<String>,
-    /// Human-readable primary IPv4 display.
+    /// Human-readable primary `IPv4` display.
     pub display_v4: String,
-    /// Human-readable primary IPv6 display.
+    /// Human-readable primary `IPv6` display.
     pub display_v6: String,
-    /// Active DHCPv4 lease information.
+    /// Active `DHCPv4` lease information.
     pub v4: Option<LeaseInfo>,
-    /// List of all IPv4 addresses seen for this device.
+    /// List of all `IPv4` addresses seen for this device.
     pub seen_v4: Vec<String>,
-    /// Active DHCPv6 lease information.
+    /// Active `DHCPv6` lease information.
     pub v6: Option<LeaseInfo>,
     /// List of IPv6 addresses (SLAAC, GUA, etc.) tracked for this device.
     pub ipv6_addrs: Vec<Ipv6Entry>,
@@ -450,7 +451,7 @@ pub struct DeviceEntry {
 pub struct Ipv6Entry {
     /// Full IPv6 address.
     pub addr: String,
-    /// Category of the address (e.g., "SLAAC", "ULA", "GUA", "LinkLocal").
+    /// Category of the address (e.g., "SLAAC", "ULA", "GUA", "Link-Local").
     pub kind: String,
 }
 
@@ -517,11 +518,11 @@ pub struct ServicesStatus {
     // --- Protocol Services ---
     /// Router Advertisement service (NDP).
     pub ra: ServiceRa,
-    /// DHCPv4 server.
+    /// `DHCPv4` server.
     pub dhcp_v4: ServiceDhcpV4,
-    /// DHCPv6 server.
+    /// `DHCPv6` server.
     pub dhcp_v6: ServiceDhcpV6,
-    /// Authoritative/Caching DNS server.
+    /// Authoritative/Caching `DNS` server.
     pub dns: ServiceDns,
 }
 
@@ -538,12 +539,12 @@ pub struct ServiceRa {
     pub ula: Option<String>,
 }
 
-/// Status of the DHCPv4 service.
+/// Status of the `DHCPv4` service.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServiceDhcpV4 {
     /// Current state (e.g., "online", "offline").
     pub state: String,
-    /// Seconds since the DHCPv4 service started.
+    /// Seconds since the `DHCPv4` service started.
     pub uptime_secs: u64,
     /// Number of active leases currently assigned.
     pub leases_active: usize,
@@ -551,12 +552,12 @@ pub struct ServiceDhcpV4 {
     pub pool_free: usize,
 }
 
-/// Status of the DHCPv6 service.
+/// Status of the `DHCPv6` service.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServiceDhcpV6 {
     /// Current state (e.g., "online", "offline").
     pub state: String,
-    /// Seconds since the DHCPv6 service started.
+    /// Seconds since the `DHCPv6` service started.
     pub uptime_secs: u64,
     /// Number of active leases currently assigned.
     pub leases_active: usize,
@@ -599,7 +600,7 @@ pub struct ServiceNdp {
     pub last_scan_secs_ago: u64,
 }
 
-/// Statistics and path information for the SQLite database.
+/// Statistics and path information for the `SQLite` database.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DbStatus {
     /// Filesystem path to the database file.

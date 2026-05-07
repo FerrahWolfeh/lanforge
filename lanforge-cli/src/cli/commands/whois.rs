@@ -125,7 +125,7 @@ fn HistoryRow(props: &HistoryRowProps) -> impl Into<AnyElement<'_>> {
     element! {
         View(flex_direction: FlexDirection::Row) {
             Text(content: format!("{:<20}", time), color: Color::DarkGrey)
-            Text(content: format!("{:<20}", h.ip.to_string()), color: Color::Green)
+            Text(content: format!("{:<20}", h.ip.clone()), color: Color::Green)
             Text(content: format!("{:<15}", h.lease_type), color: Color::Yellow)
             Text(content: format!("{:?}", h.action), color: Color::Cyan)
         }

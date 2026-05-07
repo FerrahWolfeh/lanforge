@@ -99,6 +99,7 @@ pub struct Config {
 
 impl Config {
     /// Load config: parse CLI args, read TOML, merge with CLI overrides.
+    #[must_use]
     pub fn load() -> Self {
         let cli = CliArgs::parse();
 
@@ -108,7 +109,7 @@ impl Config {
         // 2. Load modular configs from /etc/lanforge/conf.d/ or same dir as main config
         let config_dir = Path::new(&cli.config)
             .parent()
-            .unwrap_or(Path::new("/etc/lanforge"));
+            .unwrap_or_else(|| Path::new("/etc/lanforge"));
 
         // We look for files like "dhcp.toml", "dns.toml", etc.
         let service_files = [
@@ -176,14 +177,14 @@ impl Config {
             system: {
                 let mut s = toml_cfg.system;
                 if let Some(ref iface) = cli.iface_lan {
-                    s.iface = iface.clone();
+                    s.iface.clone_from(iface);
                 }
                 s
             },
             database: {
                 let mut db = toml_cfg.database;
                 if let Some(ref url) = cli.db_url {
-                    db.url = url.clone();
+                    db.url.clone_from(url);
                 }
                 db
             },
@@ -279,6 +280,7 @@ impl Config {
     }
 
     /// Returns the path to the dedicated API password hash file.
+    #[must_use]
     pub fn get_password_hash_path(&self) -> PathBuf {
         Path::new(&self.config_path)
             .parent()
@@ -287,6 +289,7 @@ impl Config {
     }
 
     /// Builds an `RaConfig` from the merged configuration.
+    #[must_use]
     pub fn to_ra_config(&self) -> RaConfig {
         let mut cfg = self.ra_toml.to_ra_config(self.system.iface.clone());
 
@@ -314,19 +317,20 @@ impl Config {
     }
 
     /// Builds a `Dhcpv4Config` from the merged configuration.
+    #[must_use]
     pub fn to_dhcpv4_config(&self) -> Dhcpv4Config {
         let mut cfg = self.dhcpv4_toml.clone();
 
         // Injected fields
         cfg.enabled = self.dhcpv4_enabled;
-        cfg.iface = self.system.iface.clone();
+        cfg.iface.clone_from(&self.system.iface);
         cfg.server_id = cfg.router; // Use router IP as server ID by default
 
         // Option 15 & 119
         if cfg.domain_name.is_none() {
             cfg.domain_name = self.search_domains.first().cloned();
         }
-        cfg.search_domains = self.search_domains.clone();
+        cfg.search_domains.clone_from(&self.search_domains);
 
         cfg
     }
@@ -337,7 +341,7 @@ impl Config {
 
         // Injected fields
         cfg.enabled = self.dhcpv6_enabled;
-        cfg.iface = self.system.iface.clone();
+        cfg.iface.clone_from(&self.system.iface);
 
         // Prefix detection
         if let Some(p) = self.ra_toml.prefixes.iter().find(|p| {
@@ -365,7 +369,7 @@ impl Config {
         }
 
         if cfg.search_domains.is_empty() {
-            cfg.search_domains = self.search_domains.clone();
+            cfg.search_domains.clone_from(&self.search_domains);
         }
 
         cfg
@@ -380,10 +384,10 @@ impl Config {
 
         // TLS Inheritance
         if cfg.tls_cert.is_none() {
-            cfg.tls_cert = self.system.tls_cert.clone();
+            cfg.tls_cert.clone_from(&self.system.tls_cert);
         }
         if cfg.tls_key.is_none() {
-            cfg.tls_key = self.system.tls_key.clone();
+            cfg.tls_key.clone_from(&self.system.tls_key);
         }
 
         // Search labels
@@ -420,8 +424,8 @@ impl Config {
         cfg.http_listen = Some(self.http_toml.listen);
 
         // Reporting fields
-        cfg.db_url = self.database.url.clone();
-        cfg.log_db_url = self.database.log_url.clone();
+        cfg.db_url.clone_from(&self.database.url);
+        cfg.log_db_url.clone_from(&self.database.log_url);
         cfg.db_path = if self.database.url.starts_with("sqlite://") {
             self.database
                 .url
@@ -431,11 +435,11 @@ impl Config {
         } else {
             self.database.url.clone()
         };
-        cfg.lan_iface = self.system.iface.clone();
-        cfg.ula_prefix = if !self.system.target_prefix.starts_with("fe80") {
-            Some(self.system.target_prefix.clone())
-        } else {
+        cfg.lan_iface.clone_from(&self.system.iface);
+        cfg.ula_prefix = if self.system.target_prefix.starts_with("fe80") {
             None
+        } else {
+            Some(self.system.target_prefix.clone())
         };
         cfg.ra_enabled = self.ra_enabled;
         cfg.dhcp_v4_enabled = self.dhcpv4_enabled;

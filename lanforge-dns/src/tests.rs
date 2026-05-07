@@ -85,7 +85,7 @@ pub fn resolve_local(
     ctx: &LanforgeContext,
 ) -> Result<Option<Vec<u8>>, DnsError> {
     let dns_ctx = mock_dns_context(ctx.clone(), cfg.clone());
-    let resolver = LocalResolver::new(cfg, &ctx);
+    let resolver = LocalResolver::new(cfg, ctx);
     let rb = ResponseBuilder::new(query, &dns_ctx);
     if let Some(records) = resolver.resolve_local(rb.qname(), qtype) {
         Ok(Some(rb.success(records)?))
