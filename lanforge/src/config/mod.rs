@@ -103,15 +103,19 @@ impl Config {
     pub fn load() -> Self {
         let cli = CliArgs::parse();
 
-        // 1. Load main config
         let mut toml_cfg = load_toml(&cli.config);
+        Self::load_modular_configs(&cli.config, &mut toml_cfg);
 
-        // 2. Load modular configs from /etc/lanforge/conf.d/ or same dir as main config
-        let config_dir = Path::new(&cli.config)
+        let search_domains = Self::resolve_search_domains(&toml_cfg);
+
+        Self::apply_cli_overrides(toml_cfg, &cli, search_domains)
+    }
+
+    fn load_modular_configs(config_path: &str, toml_cfg: &mut toml::TomlConfig) {
+        let config_dir = Path::new(config_path)
             .parent()
             .unwrap_or_else(|| Path::new("/etc/lanforge"));
 
-        // We look for files like "dhcp.toml", "dns.toml", etc.
         let service_files = [
             ("database.toml", "database"),
             ("ra.toml", "ra"),
@@ -124,11 +128,10 @@ impl Config {
             ("tftp.toml", "tftp"),
         ];
 
-        for (filename, _key) in service_files {
+        for (filename, _) in service_files {
             let path = config_dir.join(filename);
             if path.exists() {
                 let extra = load_toml(path.to_str().unwrap());
-                // Simple merge: if the service-specific file exists, it replaces that section
                 match filename {
                     "database.toml" => toml_cfg.database = extra.database,
                     "ra.toml" => toml_cfg.ra = extra.ra,
@@ -143,34 +146,36 @@ impl Config {
                 }
             }
         }
+    }
 
-        let search_domains = {
-            let mut domains = Vec::new();
-            // 1. Unified search_domains from [system]
-            for dom in &toml_cfg.system.search_domains {
-                if !domains.contains(dom) {
-                    domains.push(dom.clone());
-                }
+    fn resolve_search_domains(toml_cfg: &toml::TomlConfig) -> Vec<String> {
+        let mut domains = Vec::new();
+        for dom in &toml_cfg.system.search_domains {
+            if !domains.contains(dom) {
+                domains.push(dom.clone());
             }
-            // 2. search_domains from [dns]
-            for dom in &toml_cfg.dns.search_domains {
-                if !domains.contains(dom) {
-                    domains.push(dom.clone());
-                }
+        }
+        for dom in &toml_cfg.dns.search_domains {
+            if !domains.contains(dom) {
+                domains.push(dom.clone());
             }
-            // 3. Legacy domain_name from [dhcp.v4]
-            if let Some(ref d) = toml_cfg.dhcp.v4.domain_name
-                && !domains.contains(d)
-            {
-                domains.push(d.clone());
-            }
-            // 4. Default "lan" if completely empty
-            if domains.is_empty() {
-                domains.push("lan".to_string());
-            }
-            domains
-        };
+        }
+        if let Some(ref d) = toml_cfg.dhcp.v4.domain_name
+            && !domains.contains(d)
+        {
+            domains.push(d.clone());
+        }
+        if domains.is_empty() {
+            domains.push("lan".to_string());
+        }
+        domains
+    }
 
+    fn apply_cli_overrides(
+        toml_cfg: toml::TomlConfig,
+        cli: &CliArgs,
+        search_domains: Vec<String>,
+    ) -> Self {
         Self {
             #[cfg(feature = "debug-commands")]
             command: cli.command.unwrap_or(Command::Run { only: None }),
@@ -188,7 +193,6 @@ impl Config {
                 }
                 db
             },
-
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
             ra_toml: {
                 let mut r = toml_cfg.ra;
@@ -203,7 +207,6 @@ impl Config {
                 }
                 r
             },
-
             dhcpv4_enabled: cli.dhcpv4_enabled.unwrap_or(toml_cfg.dhcp.v4.enabled),
             dhcpv4_toml: {
                 let mut d = toml_cfg.dhcp.v4;
@@ -218,19 +221,17 @@ impl Config {
                 }
                 d
             },
-
             dhcpv6_enabled: cli.dhcpv6_enabled.unwrap_or(toml_cfg.dhcp.v6.enabled),
             dhcpv6_toml: toml_cfg.dhcp.v6,
-
             dns_enabled: cli.dns_enabled.unwrap_or(toml_cfg.dns.enabled),
             dns_toml: {
                 let mut d = toml_cfg.dns;
-                if let Some(listen) = cli.dns_listen
+                if let Some(listen) = &cli.dns_listen
                     && let Ok(addr) = listen.parse()
                 {
                     d.listen = addr;
                 }
-                if let Some(upstream) = cli.dns_upstream
+                if let Some(upstream) = &cli.dns_upstream
                     && let Ok(target) = upstream.parse()
                 {
                     d.upstreams = vec![PrioritizedUpstream {
@@ -241,16 +242,16 @@ impl Config {
                 if let Some(port) = cli.dns_port {
                     d.listen.set_port(port);
                 }
-                if let Some(dot_listen) = cli.dns_dot_listen
+                if let Some(dot_listen) = &cli.dns_dot_listen
                     && let Ok(addr) = dot_listen.parse()
                 {
                     d.dot_listen = Some(addr);
                 }
-                if let Some(cert) = cli.dns_tls_cert {
-                    d.tls_cert = Some(cert);
+                if let Some(cert) = &cli.dns_tls_cert {
+                    d.tls_cert = Some(cert.clone());
                 }
-                if let Some(key) = cli.dns_tls_key {
-                    d.tls_key = Some(key);
+                if let Some(key) = &cli.dns_tls_key {
+                    d.tls_key = Some(key.clone());
                 }
                 #[cfg(feature = "adblock")]
                 if let Some(adblock) = cli.dns_adblock_enabled {
@@ -265,17 +266,14 @@ impl Config {
                 d
             },
             search_domains,
-
             monitor_toml: toml_cfg.monitor,
             mdns_toml: toml_cfg.mdns,
             api_toml: toml_cfg.api,
             http_toml: toml_cfg.http,
             tftp_toml: toml_cfg.tftp,
-
             devices: toml_cfg.devices,
-            devices_file: cli.devices_file,
-
-            config_path: cli.config,
+            devices_file: cli.devices_file.clone(),
+            config_path: cli.config.clone(),
         }
     }
 
@@ -336,6 +334,7 @@ impl Config {
     }
 
     /// Builds a `Dhcpv6Config` from the merged configuration.
+    #[must_use]
     pub fn to_dhcpv6_config(&self) -> Dhcpv6Config {
         let mut cfg = self.dhcpv6_toml.clone();
 
@@ -376,6 +375,7 @@ impl Config {
     }
 
     /// Builds a `DnsConfig` from the merged configuration.
+    #[must_use]
     pub fn to_dns_config(&self) -> DnsConfig {
         let mut cfg = self.dns_toml.clone();
 
@@ -403,13 +403,14 @@ impl Config {
                 .ra_toml
                 .prefixes
                 .iter()
-                .find_map(|p| p.resolved_address());
+                .find_map(PrefixConfig::resolved_address);
         }
 
         cfg
     }
 
     /// Builds an `ApiConfig` for the control service.
+    #[must_use]
     pub fn to_api_config(&self) -> ApiConfig {
         // Resolve password hash from dedicated file, falling back to TOML
         let auth_password_hash = std::fs::read_to_string(self.get_password_hash_path())
@@ -462,7 +463,7 @@ impl Config {
                 (Some(Ipv6AddrOrSuffix::Full(s)), Some(Ipv6AddrOrSuffix::Full(e))) => {
                     let start = u128::from_be_bytes(s.octets());
                     let end = u128::from_be_bytes(e.octets());
-                    Some(end.saturating_sub(start).saturating_add(1) as u64)
+                    u64::try_from(end.saturating_sub(start).saturating_add(1)).ok()
                 }
                 _ => None,
             })

@@ -77,76 +77,99 @@ impl ClientContext {
     /// and the active device table.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) async fn handle_status(&self) -> Response {
-        let devices = self.ctx.all_devices();
-
         let mut status = StatusResponse {
             uptime_secs: self.uptime_secs,
             version: env!("CARGO_PKG_VERSION").to_string(),
             services: ServicesStatus::default(),
-            db: DbStatus::default(),
-            network: NetworkStatus::default(),
-            resources: ResourcesStatus::default(),
+            db: self.gather_db_status(),
+            network: self.gather_network_status().await,
+            resources: Self::gather_resource_status(),
             devices: DevicesStats::default(),
-            capabilities: Capabilities {
-                encodings: vec![Encoding::Json, Encoding::Bincode],
-                compression: {
-                    #[cfg(feature = "zstd")]
-                    {
-                        use crate::api::Compression;
-                        vec![Compression::None, Compression::Zstd]
-                    }
-                    #[cfg(not(feature = "zstd"))]
-                    {
-                        use crate::api::Compression;
-                        vec![Compression::None]
-                    }
-                },
-            },
+            capabilities: Self::gather_capabilities(),
         };
 
-        // DB stats
-        status.db.path.clone_from(&self.cfg.db_path);
+        let devices = self.ctx.all_devices();
+        self.populate_service_and_device_stats(&mut status, &devices);
+
+        Response::Status(Box::new(status))
+    }
+
+    fn gather_db_status(&self) -> DbStatus {
+        let mut db = DbStatus {
+            path: self.cfg.db_path.clone(),
+            ..Default::default()
+        };
         if let Ok(meta) = metadata(&self.cfg.db_path) {
-            status.db.size_bytes = meta.len();
+            db.size_bytes = meta.len();
         }
         if let Some(last_flush) = self.ctx.last_db_flush() {
-            status.db.last_flush_secs_ago = last_flush.elapsed().unwrap_or_default().as_secs();
+            db.last_flush_secs_ago = last_flush.elapsed().unwrap_or_default().as_secs();
         }
+        db
+    }
 
-        // Resources (RSS/VMS)
+    fn gather_resource_status() -> ResourcesStatus {
+        let mut res = ResourcesStatus::default();
         if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
             let mut parts = statm.split_whitespace();
             if let (Some(vms_pages), Some(rss_pages)) = (parts.next(), parts.next()) {
-                let page_size = 4096; // Traditional conservative page size
-                status.resources.memory_vms_bytes =
-                    vms_pages.parse::<u64>().unwrap_or(0) * page_size;
-                status.resources.memory_rss_bytes =
-                    rss_pages.parse::<u64>().unwrap_or(0) * page_size;
+                let page_size = 4096;
+                res.memory_vms_bytes = vms_pages.parse::<u64>().unwrap_or(0) * page_size;
+                res.memory_rss_bytes = rss_pages.parse::<u64>().unwrap_or(0) * page_size;
             }
         }
+        res
+    }
 
-        // Network
-        status.network.lan_iface.clone_from(&self.cfg.lan_iface);
+    async fn gather_network_status(&self) -> NetworkStatus {
+        let mut net = NetworkStatus {
+            lan_iface: self.cfg.lan_iface.clone(),
+            ..Default::default()
+        };
         if let Some(ifindex) = self.ctx.target_ifindex() {
             let state = self.ctx.read();
             if let Some(if_ips) = state.interfaces.interface_ips.get(&ifindex) {
                 if let Some((ip, prefix)) = if_ips.v4 {
-                    status.network.lan_ipv4 = Some(ip.to_string());
-                    status.network.lan_ipv4_cidr = Some(format!("{ip}/{prefix}"));
+                    net.lan_ipv4 = Some(ip.to_string());
+                    net.lan_ipv4_cidr = Some(format!("{ip}/{prefix}"));
                 }
-                status.network.gua = if_ips.gua.map(|ip| ip.to_string());
-                status.network.ula = if_ips.ula.map(|ip| ip.to_string());
-                status.network.lan_ipv6 = if_ips.link_local.map(|ip| ip.to_string());
+                net.gua = if_ips.gua.map(|ip| ip.to_string());
+                net.ula = if_ips.ula.map(|ip| ip.to_string());
+                net.lan_ipv6 = if_ips.link_local.map(|ip| ip.to_string());
             }
         }
-        // Fallback to config if state is missing prefix info
-        if status.network.gua.is_none() {
-            status.network.gua.clone_from(&self.current_gua);
+        if net.gua.is_none() {
+            net.gua.clone_from(&self.current_gua);
         }
-        if status.network.ula.is_none() {
-            status.network.ula.clone_from(&self.cfg.ula_prefix);
+        if net.ula.is_none() {
+            net.ula.clone_from(&self.cfg.ula_prefix);
         }
+        net
+    }
 
+    fn gather_capabilities() -> Capabilities {
+        Capabilities {
+            encodings: vec![Encoding::Json, Encoding::Bincode],
+            compression: {
+                #[cfg(feature = "zstd")]
+                {
+                    use crate::api::Compression;
+                    vec![Compression::None, Compression::Zstd]
+                }
+                #[cfg(not(feature = "zstd"))]
+                {
+                    use crate::api::Compression;
+                    vec![Compression::None]
+                }
+            },
+        }
+    }
+
+    fn populate_service_and_device_stats(
+        &self,
+        status: &mut StatusResponse,
+        devices: &[std::sync::Arc<lanforge_core::device::Device>],
+    ) {
         // Services -> RA
         status.services.ra.state = if self.cfg.ra_enabled {
             "online".to_string()
@@ -157,35 +180,23 @@ impl ClientContext {
         status.services.ra.gua.clone_from(&self.current_gua);
         status.services.ra.ula.clone_from(&status.network.ula);
 
-        // Devices + Leases
-        let dev_ct = devices.len();
-        let mut online_ct = 0;
-        let mut static_toml = 0;
-        let mut dynamic = 0;
-
-        let mut v4_dynamic_count = 0;
-        let mut v6_dynamic_count = 0;
-        let mut slaac_addrs = 0;
-
-        for dev in &devices {
-            let is_online = dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300;
-            if is_online {
-                online_ct += 1;
+        let mut counts = (0, 0, 0, 0, 0, 0, 0); // online, static, dynamic, v4_dyn, v6_dyn, slaac, managed_cli
+        for dev in devices {
+            if dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300 {
+                counts.0 += 1;
             }
-
             if dev.is_static() {
-                static_toml += 1;
+                counts.1 += 1;
             } else {
-                dynamic += 1;
+                counts.2 += 1;
                 if dev.v4.ip().is_some() {
-                    v4_dynamic_count += 1;
+                    counts.3 += 1;
                 }
                 if dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))) {
-                    v6_dynamic_count += 1;
+                    counts.4 += 1;
                 }
             }
-
-            slaac_addrs += dev
+            counts.5 += dev
                 .v6
                 .iter()
                 .filter(|s| {
@@ -195,21 +206,26 @@ impl ClientContext {
                     )
                 })
                 .count();
+            if dev.origin == Origin::Cli {
+                counts.6 += 1;
+            }
         }
 
-        status.services.dhcp_v4.leases_active = v4_dynamic_count as usize;
+        status.services.dhcp_v4.leases_active = counts.3;
         status.services.dhcp_v4.state = if self.cfg.dhcp_v4_enabled {
             "active"
         } else {
             "inactive"
         }
         .to_string();
-        status.services.dhcp_v4.pool_free =
+        status.services.dhcp_v4.pool_free = usize::try_from(
             self.cfg
                 .dhcp_v4_range_size
-                .saturating_sub(v4_dynamic_count as u32) as usize;
+                .saturating_sub(u32::try_from(counts.3).unwrap_or(u32::MAX)),
+        )
+        .unwrap_or_default();
 
-        status.services.dhcp_v6.leases_active = v6_dynamic_count as usize;
+        status.services.dhcp_v6.leases_active = counts.4;
         status.services.dhcp_v6.state = if self.cfg.dhcp_v6_enabled {
             "active"
         } else {
@@ -217,18 +233,18 @@ impl ClientContext {
         }
         .to_string();
         status.services.dhcp_v6.pool_free = self.cfg.dhcp_v6_pool_size.map_or(9999, |total| {
-            total.saturating_sub(v6_dynamic_count as u64) as usize
+            usize::try_from(total.saturating_sub(counts.4 as u64)).unwrap_or_default()
         });
         status.services.dhcp_v6.ula.clone_from(&self.cfg.ula_prefix);
         status.services.dhcp_v6.gua.clone_from(&self.current_gua);
         status.services.dhcp_v6.uptime_secs = self.uptime_secs;
 
-        // Services -> DNS
         status.services.dns.state = if self.cfg.dns_enabled {
-            "online".to_string()
+            "online"
         } else {
-            "offline".to_string()
-        };
+            "offline"
+        }
+        .to_string();
         status.services.dns.uptime_secs = self.uptime_secs;
         status
             .services
@@ -236,7 +252,6 @@ impl ClientContext {
             .upstream
             .clone_from(&self.cfg.dns_upstream);
 
-        // --- Core Services ---
         status.services.db_worker.state = "online".to_string();
         status.services.mdns_prober.state = "active".to_string();
         status.services.iface_monitor.state = "online".to_string();
@@ -247,16 +262,124 @@ impl ClientContext {
             });
         }
 
-        status.devices.total = dev_ct;
-        status.devices.online = online_ct;
-        status.devices.static_toml = static_toml;
-        status.devices.managed_cli = devices.iter().filter(|d| d.origin == Origin::Cli).count();
-        status.devices.dynamic = dynamic;
-        status.services.ndp_monitor.addrs_tracked = slaac_addrs;
+        status.devices.total = devices.len();
+        status.devices.online = counts.0;
+        status.devices.static_toml = counts.1;
+        status.devices.managed_cli = counts.6;
+        status.devices.dynamic = counts.2;
+        status.services.ndp_monitor.addrs_tracked = counts.5;
         status.services.ndp_monitor.state = "online".to_string();
         status.services.ndp_monitor.uptime_secs = self.uptime_secs;
+    }
 
-        Response::Status(Box::new(status))
+    fn device_matches_filter(
+        dev: &lanforge_core::device::Device,
+        filter: Option<&String>,
+        method: Option<&String>,
+    ) -> bool {
+        let matches_filter = filter.is_none_or(|f| {
+            let f_lower = f.to_lowercase();
+            dev.hostname.name.to_lowercase().contains(&f_lower)
+                || dev.mac.to_string().to_lowercase().contains(&f_lower)
+                || dev
+                    .v4
+                    .ip()
+                    .map(|ip| ip.to_string())
+                    .is_some_and(|s| s.contains(&f_lower))
+                || dev.v6.iter().any(|s| {
+                    s.ip()
+                        .map(|ip| ip.to_string())
+                        .is_some_and(|s| s.contains(&f_lower))
+                })
+        });
+
+        let matches_method = method.is_none_or(|m| {
+            let m_lower = m.to_lowercase();
+            dev.learning_method()
+                .to_string()
+                .to_lowercase()
+                .contains(&m_lower)
+        });
+
+        matches_filter && matches_method
+    }
+
+    fn map_device(
+        dev: &lanforge_core::device::Device,
+        gua_prefix: Option<Ipv6Addr>,
+        ula_prefix: Option<Ipv6Addr>,
+    ) -> DeviceEntry {
+        let is_online = dev.is_online();
+        DeviceEntry {
+            mac: dev.mac.to_string(),
+            hostname: dev.display_hostname().to_string(),
+            origin: dev.origin.as_str().to_string(),
+            online: is_online,
+            last_seen: format_iso8601(dev.last_seen),
+            learning_method: dev.learning_method().to_string(),
+            class: dev.class.as_str().to_string(),
+            duid: dev.duid.as_ref().map(|d: &Duid| d.to_string()),
+            display_v4: dev.display_v4(),
+            display_v6: dev.display_v6(gua_prefix, ula_prefix),
+            v4: match &dev.v4 {
+                IPv4State::Static(ip) => Some(LeaseInfo {
+                    ip: ip.to_string(),
+                    expires: "Static".to_string(),
+                    reserved: true,
+                }),
+                IPv4State::Dynamic(v) => Some(LeaseInfo {
+                    ip: v.ip.to_string(),
+                    expires: format_iso8601(v.expires),
+                    reserved: dev.is_static(),
+                }),
+                IPv4State::None => None,
+            },
+            seen_v4: dev.seen_v4.iter().map(|(ip, _)| ip.to_string()).collect(),
+            v6: dev.primary_v6(gua_prefix, ula_prefix).map(|ip| {
+                let state = dev.v6.iter().find(|s| {
+                    s.ip_with_prefix(gua_prefix) == Some(ip)
+                        || s.ip_with_prefix(ula_prefix) == Some(ip)
+                });
+                LeaseInfo {
+                    ip: ip.to_string(),
+                    expires: state.map_or_else(
+                        || "—".to_string(),
+                        |s| match s {
+                            IPv6State::Dynamic(l) => format_iso8601(l.expires),
+                            IPv6State::Static(_, _) => "Static".to_string(),
+                            _ => "—".to_string(),
+                        },
+                    ),
+                    reserved: state.is_some_and(|s| matches!(s, IPv6State::Static(_, _)))
+                        || dev.is_static(),
+                }
+            }),
+            ipv6_addrs: {
+                let mut list = Vec::new();
+                for state in &dev.v6 {
+                    if let Some(ip) = state.ip_with_prefix(None) {
+                        list.push(Ipv6Entry {
+                            addr: ip.to_string(),
+                            kind: get_v6_kind(state, None),
+                        });
+                    } else if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_), _) = state {
+                        if let Some(ip) = ula_prefix.and_then(|p| state.ip_with_prefix(Some(p))) {
+                            list.push(Ipv6Entry {
+                                addr: ip.to_string(),
+                                kind: "ULA (Static)".to_string(),
+                            });
+                        }
+                        if let Some(ip) = gua_prefix.and_then(|p| state.ip_with_prefix(Some(p))) {
+                            list.push(Ipv6Entry {
+                                addr: ip.to_string(),
+                                kind: "GUA (Static)".to_string(),
+                            });
+                        }
+                    }
+                }
+                list
+            },
+        }
     }
 
     /// Generates a `DevicesResponse`, optionally filtering by a search string.
@@ -271,36 +394,21 @@ impl ClientContext {
         method: Option<String>,
     ) -> Response {
         let devices = self.ctx.all_devices();
-
         let mut api_devices = Vec::new();
         let mut online = 0;
 
+        let gua_prefix = self
+            .current_gua
+            .as_ref()
+            .and_then(|s| s.parse::<Ipv6Addr>().ok());
+        let ula_prefix = self
+            .cfg
+            .ula_prefix
+            .as_ref()
+            .and_then(|s| s.parse::<Ipv6Addr>().ok());
+
         for dev in &devices {
-            let matches_filter = filter.as_ref().is_none_or(|f| {
-                let f_lower = f.to_lowercase();
-                dev.hostname.name.to_lowercase().contains(&f_lower)
-                    || dev.mac.to_string().to_lowercase().contains(&f_lower)
-                    || dev
-                        .v4
-                        .ip()
-                        .map(|ip| ip.to_string())
-                        .is_some_and(|s| s.contains(&f_lower))
-                    || dev.v6.iter().any(|s| {
-                        s.ip()
-                            .map(|ip| ip.to_string())
-                            .is_some_and(|s| s.contains(&f_lower))
-                    })
-            });
-
-            let matches_method = method.as_ref().is_none_or(|m| {
-                let m_lower = m.to_lowercase();
-                dev.learning_method()
-                    .to_string()
-                    .to_lowercase()
-                    .contains(&m_lower)
-            });
-
-            if !matches_filter || !matches_method {
+            if !Self::device_matches_filter(dev, filter.as_ref(), method.as_ref()) {
                 continue;
             }
 
@@ -309,90 +417,7 @@ impl ClientContext {
                 online += 1;
             }
 
-            let gua_prefix = self
-                .current_gua
-                .as_ref()
-                .and_then(|s| s.parse::<Ipv6Addr>().ok());
-            let ula_prefix = self
-                .cfg
-                .ula_prefix
-                .as_ref()
-                .and_then(|s| s.parse::<Ipv6Addr>().ok());
-
-            api_devices.push(DeviceEntry {
-                mac: dev.mac.to_string(),
-                hostname: dev.display_hostname().to_string(),
-                origin: dev.origin.as_str().to_string(),
-                online: is_online,
-                last_seen: format_iso8601(dev.last_seen),
-                learning_method: dev.learning_method().to_string(),
-                class: dev.class.as_str().to_string(),
-                duid: dev.duid.as_ref().map(|d: &Duid| d.to_string()),
-                display_v4: dev.display_v4(),
-                display_v6: dev.display_v6(gua_prefix, ula_prefix),
-                v4: match &dev.v4 {
-                    IPv4State::Static(ip) => Some(LeaseInfo {
-                        ip: ip.to_string(),
-                        expires: "Static".to_string(),
-                        reserved: true,
-                    }),
-                    IPv4State::Dynamic(v) => Some(LeaseInfo {
-                        ip: v.ip.to_string(),
-                        expires: format_iso8601(v.expires),
-                        reserved: dev.is_static(),
-                    }),
-                    IPv4State::None => None,
-                },
-                seen_v4: dev.seen_v4.iter().map(|(ip, _)| ip.to_string()).collect(),
-                v6: dev.primary_v6(gua_prefix, ula_prefix).map(|ip| {
-                    let state = dev.v6.iter().find(|s| {
-                        s.ip_with_prefix(gua_prefix) == Some(ip)
-                            || s.ip_with_prefix(ula_prefix) == Some(ip)
-                    });
-                    LeaseInfo {
-                        ip: ip.to_string(),
-                        expires: state.map_or_else(
-                            || "—".to_string(),
-                            |s| match s {
-                                IPv6State::Dynamic(l) => format_iso8601(l.expires),
-                                IPv6State::Static(_, _) => "Static".to_string(),
-                                IPv6State::Slaac(_, _)
-                                | IPv6State::LinkLocal(_, _)
-                                | IPv6State::Discovery(_, _) => "—".to_string(),
-                            },
-                        ),
-                        reserved: state.is_some_and(|s| matches!(s, IPv6State::Static(_, _)))
-                            || dev.is_static(),
-                    }
-                }),
-                ipv6_addrs: {
-                    let mut list = Vec::new();
-                    for state in &dev.v6 {
-                        if let Some(ip) = state.ip_with_prefix(None) {
-                            list.push(Ipv6Entry {
-                                addr: ip.to_string(),
-                                kind: get_v6_kind(state, None),
-                            });
-                        } else if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_), _) = state {
-                            if let Some(ip) = ula_prefix.and_then(|p| state.ip_with_prefix(Some(p)))
-                            {
-                                list.push(Ipv6Entry {
-                                    addr: ip.to_string(),
-                                    kind: "ULA (Static)".to_string(),
-                                });
-                            }
-                            if let Some(ip) = gua_prefix.and_then(|p| state.ip_with_prefix(Some(p)))
-                            {
-                                list.push(Ipv6Entry {
-                                    addr: ip.to_string(),
-                                    kind: "GUA (Static)".to_string(),
-                                });
-                            }
-                        }
-                    }
-                    list
-                },
-            });
+            api_devices.push(Self::map_device(dev, gua_prefix, ula_prefix));
         }
 
         Response::Devices(DevicesResponse {
@@ -1150,7 +1175,7 @@ impl ClientContext {
         })
     }
 
-    /// Perform a VACUUM operation on the underlying SQLite database.
+    /// Perform a VACUUM operation on the underlying `SQLite` database.
     pub(crate) async fn handle_db_vacuum(&self) -> Response {
         let _ = self
             .ctx
@@ -1195,6 +1220,7 @@ impl ClientContext {
                 utilization_percent: pool.utilization_percent(),
             });
         }
+        drop(state);
 
         Response::DhcpPools(DhcpPoolsResponse { v4_pools, v6_pools })
     }

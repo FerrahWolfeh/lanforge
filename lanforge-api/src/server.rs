@@ -39,44 +39,24 @@ impl ControlService {
     pub const fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
-}
 
-impl AsyncService for ControlService {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        let cfg = self.cfg.clone();
-
-        let path_ref = Path::new(&cfg.socket_path);
-
-        // Old socket cleanup
+    fn setup_unix_listener(path: &str) -> Result<UnixListener, CoreError> {
+        let path_ref = Path::new(path);
         if path_ref.exists() {
-            debug!("Cleaning up old socket: {}", path_ref.display());
             fs::remove_file(path_ref).map_err(CoreError::Io)?;
         }
-
-        // Ensure parent directory exists
         if let Some(parent) = path_ref.parent()
             && !parent.exists()
         {
-            debug!("Creating socket directory: {}", parent.display());
             fs::create_dir_all(parent).map_err(CoreError::Io)?;
         }
-
         let listener = UnixListener::bind(path_ref).map_err(CoreError::Io)?;
+        let _ = fs::set_permissions(path_ref, Permissions::from_mode(0o666));
+        Ok(listener)
+    }
 
-        // Set 0666 permissions for easy local access during development.
-        if let Err(e) = fs::set_permissions(path_ref, Permissions::from_mode(0o666)) {
-            debug!("Warning: could not set 0666 permissions on socket: {e}");
-        }
-
-        ctrl.signal_ready();
-
-        let mut bus_rx = self.ctx.bus().subscribe();
-        let mut current_gua: Option<String> = None;
-
-        let startup_time = Instant::now();
-
-        // TCP Listener opcional para debug
-        let tcp_listener = if let Some(port) = cfg.tcp_port {
+    async fn setup_tcp_listener(&self, port: Option<u16>) -> Option<TcpListener> {
+        if let Some(port) = port {
             let addr = format!("0.0.0.0:{port}");
             match TcpListener::bind(&addr).await {
                 Ok(l) => {
@@ -90,14 +70,45 @@ impl AsyncService for ControlService {
             }
         } else {
             None
+        }
+    }
+
+    fn spawn_client_handler<S>(&self, stream: S, current_gua: Option<String>, startup_time: Instant)
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let ctx = ClientContext {
+            current_gua,
+            uptime_secs: startup_time.elapsed().as_secs(),
+            last_scan_secs_ago: self.ctx.last_scan_secs_ago(),
+            cfg: self.cfg.clone(),
+            ctx: self.ctx.clone(),
         };
+        tokio::spawn(async move {
+            if let Err(e) = handle_client(stream, ctx).await {
+                debug!("Control: error serving client: {e:#}");
+            }
+        });
+    }
+}
+
+impl AsyncService for ControlService {
+    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+        let cfg = self.cfg.clone();
+        let listener = Self::setup_unix_listener(&cfg.socket_path)?;
+        ctrl.signal_ready();
+
+        let mut bus_rx = self.ctx.bus().subscribe();
+        let mut current_gua: Option<String> = None;
+        let startup_time = Instant::now();
+
+        let tcp_listener = self.setup_tcp_listener(cfg.tcp_port).await;
 
         loop {
             if !self.ctx.is_running() {
                 break;
             }
             tokio::select! {
-                // Monitora mudanças de prefixo GUA para reportar no 'status'
                 msg = bus_rx.recv() => {
                     match msg {
                         Ok(timed_event) => {
@@ -105,12 +116,8 @@ impl AsyncService for ControlService {
                                 LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, .. }) => {
                                     current_gua = gua.map(|ip| ip.to_string());
                                 }
-                                LanforgeEvent::System(SystemEvent::ReloadConfig) => {
-                                }
-                                LanforgeEvent::System(SystemEvent::Shutdown) => {
-                                    debug!("Control: shutdown received");
-                                    break;
-                                }
+                                LanforgeEvent::System(SystemEvent::Shutdown) => break,
+                                _ => {}
                             });
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -119,61 +126,20 @@ impl AsyncService for ControlService {
                         Err(_) => break,
                     }
                 }
-
-                // Aceita novas conexões UDS
                 connection = listener.accept() => {
-                    match connection {
-                        Ok((stream, _)) => {
-                            let ctx = ClientContext {
-                                current_gua: current_gua.clone(),
-                                uptime_secs: startup_time.elapsed().as_secs(),
-                                last_scan_secs_ago: self.ctx.last_scan_secs_ago(),
-                                cfg: cfg.clone(),
-                                ctx: self.ctx.clone(),
-                            };
-                            tokio::spawn(async move {
-                                if let Err(e) = handle_client(stream, ctx).await {
-                                    debug!("Control (UDS): error serving client: {e:#}");
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            error!("Control: UDS accept error: {e}");
-                        }
+                    if let Ok((stream, _)) = connection {
+                        self.spawn_client_handler(stream, current_gua.clone(), startup_time);
                     }
                 }
-
-                // Aceita novas conexões TCP
                 tcp_res = async {
-                    if let Some(ref l) = tcp_listener {
-                        l.accept().await.ok()
-                    } else {
-                        None
-                    }
-                }, if tcp_listener.is_some() => {
+                    if let Some(ref l) = tcp_listener { l.accept().await.ok() } else { std::future::pending().await }
+                } => {
                     if let Some((stream, _)) = tcp_res {
-                        let ctx = ClientContext {
-                            current_gua: current_gua.clone(),
-                            uptime_secs: startup_time.elapsed().as_secs(),
-                            last_scan_secs_ago: self.ctx.last_scan_secs_ago(),
-                            cfg: cfg.clone(),
-                            ctx: self.ctx.clone(),
-                        };
-                        tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, ctx).await {
-                                debug!("Control (TCP): error serving client: {e:#}");
-                            }
-                        });
+                        self.spawn_client_handler(stream, current_gua.clone(), startup_time);
                     }
                 }
             }
         }
-
-        // Cleanup
-        if path_ref.exists() {
-            let _ = fs::remove_file(path_ref);
-        }
-
         Ok(())
     }
 }
@@ -255,6 +221,14 @@ where
 ///
 /// Reads JSON lines or Bincode from the stream, dispatches them to the appropriate
 /// handler in `ClientContext`, and writes back the response.
+///
+/// # Errors
+///
+/// Returns `ApiError` if:
+/// - The underlying stream encounters an I/O error.
+/// - A command fails to deserialize (specifically for the Bincode protocol).
+/// - A response fails to serialize or compress.
+/// - The protocol framing is violated (e.g., invalid length prefix).
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub async fn handle_client<S>(stream: S, ctx: ClientContext) -> Result<(), ApiError>
 where
@@ -324,74 +298,11 @@ where
         let resp = req.action.dispatch(&ctx).await;
 
         if let CommandAction::Log { follow, n } = req.action {
-            let n_lines = n.unwrap_or(100);
-            let history = if let Ok(db) = LogDb::open(&ctx.cfg.database.log_url).await {
-                db.get_history(n_lines).await.unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-
-            // Write initial "Starting..." response
-            write_response(&mut writer, &resp, resp_encoding, resp_compression).await?;
-
-            for event in history {
-                write_response(
-                    &mut writer,
-                    &Response::Event(event),
-                    resp_encoding,
-                    resp_compression,
-                )
-                .await?;
-            }
-
-            if !follow {
-                continue;
-            }
-
-            let mut rx = ctx.ctx.bus().subscribe();
-            while let Ok(msg) = rx.recv().await {
-                if !ctx.ctx.is_running()
-                    || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown))
-                {
-                    break;
-                }
-                if write_response(
-                    &mut writer,
-                    &Response::Event(msg),
-                    resp_encoding,
-                    resp_compression,
-                )
-                .await
-                .is_err()
-                {
-                    break;
-                }
-            }
-            break;
+            handle_log_stream(&mut writer, &ctx, &resp, follow, n, req_encoding).await?;
+            continue;
         } else if req.action == CommandAction::Watch {
-            // Write initial response
-            write_response(&mut writer, &resp, resp_encoding, resp_compression).await?;
-
-            let mut rx = ctx.ctx.bus().subscribe();
-            while let Ok(msg) = rx.recv().await {
-                if !ctx.ctx.is_running()
-                    || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown))
-                {
-                    break;
-                }
-                if write_response(
-                    &mut writer,
-                    &Response::Event(msg),
-                    resp_encoding,
-                    resp_compression,
-                )
-                .await
-                .is_err()
-                {
-                    break;
-                }
-            }
-            break;
+            handle_watch_stream(&mut writer, &ctx, &resp, req_encoding).await?;
+            continue;
         }
 
         if let Err(e) = write_response(&mut writer, &resp, resp_encoding, resp_compression).await {
@@ -403,4 +314,73 @@ where
     Ok(())
 }
 
-// Additional helpers needed for server.rs since I used them in handle_client
+/// Handles the 'Log' command by streaming historical and/or live events.
+async fn handle_log_stream<W>(
+    writer: &mut W,
+    ctx: &ClientContext,
+    initial_resp: &Response,
+    follow: bool,
+    n: Option<usize>,
+    encoding: Encoding,
+) -> Result<(), ApiError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let n_lines = n.unwrap_or(100);
+    let history = if let Ok(db) = LogDb::open(&ctx.cfg.database.log_url).await {
+        db.get_history(n_lines).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    write_response(writer, initial_resp, encoding, Compression::None).await?;
+
+    for event in history {
+        write_response(writer, &Response::Event(event), encoding, Compression::None).await?;
+    }
+
+    if follow {
+        stream_events(writer, ctx, encoding).await?;
+    }
+    Ok(())
+}
+
+/// Handles the 'Watch' command by streaming live events.
+async fn handle_watch_stream<W>(
+    writer: &mut W,
+    ctx: &ClientContext,
+    initial_resp: &Response,
+    encoding: Encoding,
+) -> Result<(), ApiError>
+where
+    W: AsyncWrite + Unpin,
+{
+    write_response(writer, initial_resp, encoding, Compression::None).await?;
+    stream_events(writer, ctx, encoding).await
+}
+
+/// Helper that subscribes to the event bus and streams events to the writer.
+async fn stream_events<W>(
+    writer: &mut W,
+    ctx: &ClientContext,
+    encoding: Encoding,
+) -> Result<(), ApiError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut rx = ctx.ctx.bus().subscribe();
+    while let Ok(msg) = rx.recv().await {
+        if !ctx.ctx.is_running()
+            || matches!(msg.event, LanforgeEvent::System(SystemEvent::Shutdown))
+        {
+            break;
+        }
+        if write_response(writer, &Response::Event(msg), encoding, Compression::None)
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+    Ok(())
+}
