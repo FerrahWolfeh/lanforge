@@ -8,6 +8,7 @@ use lanforge_core::identifiers::MacAddr;
 use lanforge_network::wol::send_wol_magic_packet;
 
 use std::collections::HashSet;
+use std::hash::BuildHasher;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
@@ -26,12 +27,15 @@ pub enum LoopResult {
     Shutdown,
 }
 
-pub async fn run_event_loop(
+pub async fn run_event_loop<S>(
     bootstrap: BootstrapResult,
     ctx: LanforgeContext,
     mut bus_rx: Receiver<TimedEvent>,
-    expected_services: HashSet<String>,
-) -> Result<LoopResult> {
+    expected_services: HashSet<String, S>,
+) -> Result<LoopResult>
+where
+    S: BuildHasher + Clone + Send + 'static,
+{
     let cfg = bootstrap.cfg;
     let target_ifindex = bootstrap.target_ifindex;
 
@@ -62,8 +66,8 @@ pub async fn run_event_loop(
         cfg: &cfg,
         state: &mut state,
         target_ifindex,
+        ready_services: HashSet::with_hasher(expected_services.hasher().clone()),
         expected_services,
-        ready_services: HashSet::new(),
         system_ready_sent: false,
     };
 
@@ -122,17 +126,20 @@ pub async fn run_event_loop(
     Ok(result)
 }
 
-struct LoopContext<'a> {
+struct LoopContext<'a, S> {
     ctx: &'a LanforgeContext,
     cfg: &'a Arc<Config>,
     state: &'a mut LoopState,
     target_ifindex: u32,
-    expected_services: HashSet<String>,
-    ready_services: HashSet<String>,
+    expected_services: HashSet<String, S>,
+    ready_services: HashSet<String, S>,
     system_ready_sent: bool,
 }
 
-fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> Option<LoopResult> {
+fn handle_bus_event<S: BuildHasher>(
+    event: LanforgeEvent,
+    l_ctx: &mut LoopContext<'_, S>,
+) -> Option<LoopResult> {
     match event {
         LanforgeEvent::System(SystemEvent::ServiceReady { name })
             if l_ctx.expected_services.contains(&name)
@@ -200,7 +207,11 @@ fn handle_bus_event(event: LanforgeEvent, l_ctx: &mut LoopContext) -> Option<Loo
     None
 }
 
-fn handle_wol_event(l_ctx: &LoopContext, mac: MacAddr, ip_hint: Option<Ipv4Addr>) {
+fn handle_wol_event<S: BuildHasher>(
+    l_ctx: &LoopContext<'_, S>,
+    mac: MacAddr,
+    ip_hint: Option<Ipv4Addr>,
+) {
     info!("WOL: Triggering for {mac} (hint: {ip_hint:?})");
     let mut directed_broadcast = None;
 
@@ -226,7 +237,7 @@ fn handle_wol_event(l_ctx: &LoopContext, mac: MacAddr, ip_hint: Option<Ipv4Addr>
     }
 }
 
-fn handle_db_reset(l_ctx: &LoopContext) {
+fn handle_db_reset<S: BuildHasher>(l_ctx: &LoopContext<'_, S>) {
     info!("Database reset confirmed. Performing state refresh...");
     l_ctx.ctx.reset();
 
