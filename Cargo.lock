@@ -2396,6 +2396,7 @@ dependencies = [
 name = "lanforge-db"
 version = "0.5.0"
 dependencies = [
+ "chrono",
  "hotpath",
  "lanforge-core",
  "lanforge-macros",

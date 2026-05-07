@@ -25,6 +25,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+serde_json = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 # Third party
@@ -36,7 +38,7 @@ sqlx = { version = "0.8", features = [
     "uuid",
     "migrate",
 ] }
-serde_json = "1.0.149"
+
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -14,8 +14,10 @@ lanforge-macros = { path = "../lanforge-macros" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true, features = ["json"], optional = true }
+chrono = { workspace = true, features = ["serde"] }
 
 # Server dependencies
 axum = { version = "0.8.8", features = ["ws"], optional = true }
@@ -33,9 +35,7 @@ axum-server = { version = "0.8.0", optional = true, features = [
     "rustls",
     "tls-rustls",
 ] }
-serde_json = "1.0.149"
 url = { version = "2.5.4", optional = true }
-chrono = { version = "0.4.44", features = ["serde"] }
 async-trait = "0.1.86"
 base64 = { version = "0.22.1", optional = true }
 futures = { version = "0.3.31", optional = true }
