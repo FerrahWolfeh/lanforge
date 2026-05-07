@@ -64,45 +64,48 @@ pub fn format_uptime(secs: u64) -> String {
     }
 }
 
-/// Formats an IPv6State into a clean string.
+/// Formats an `IPv6State` into a clean string.
+#[must_use]
 pub fn format_v6_state(state: &IPv6State) -> String {
     match state {
-        IPv6State::Static(s, _) => format!("Static({})", s),
+        IPv6State::Static(s, _) => format!("Static({s})"),
         IPv6State::Dynamic(lease) => format!("DHCP({})", lease.ip),
-        IPv6State::Slaac(ip, _) => format!("SLAAC({})", ip),
-        IPv6State::LinkLocal(ip, _) => format!("LinkLocal({})", ip),
-        IPv6State::Discovery(ip, _) => format!("Discovered({})", ip),
+        IPv6State::Slaac(ip, _) => format!("SLAAC({ip})"),
+        IPv6State::LinkLocal(ip, _) => format!("LinkLocal({ip})"),
+        IPv6State::Discovery(ip, _) => format!("Discovered({ip})"),
     }
 }
 
-/// Formats a StaticEntry into a clean string.
+/// Formats a `StaticEntry` into a clean string.
+#[must_use]
 pub fn format_static_entry(entry: &StaticEntry) -> String {
     let mut parts = Vec::new();
     parts.push(format!("host: {}", entry.hostname));
     if let Some(v4) = entry.v4_static {
-        parts.push(format!("v4: {}", v4));
+        parts.push(format!("v4: {v4}"));
     }
     if let Some(v6) = &entry.v6_suffix {
-        parts.push(format!("v6: {}", v6));
+        parts.push(format!("v6: {v6}"));
     }
     parts.push(format!("origin: {:?}", entry.origin));
     format!("{{ {} }}", parts.join(", "))
 }
 
-/// Formats InterfaceState into a clean string.
+/// Formats `InterfaceState` into a clean string.
+#[must_use]
 pub fn format_interface_state(state: &InterfaceState) -> String {
     let mut parts = Vec::new();
     if let Some((ip, mask)) = state.v4 {
-        parts.push(format!("v4: {}/{}", ip, mask));
+        parts.push(format!("v4: {ip}/{mask}"));
     }
     if let Some(ll) = state.link_local {
-        parts.push(format!("ll: {}", ll));
+        parts.push(format!("ll: {ll}"));
     }
     if let Some(gua) = state.gua {
-        parts.push(format!("gua: {}", gua));
+        parts.push(format!("gua: {gua}"));
     }
     if let Some(ula) = state.ula {
-        parts.push(format!("ula: {}", ula));
+        parts.push(format!("ula: {ula}"));
     }
     format!("{{ {} }}", parts.join(", "))
 }

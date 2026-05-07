@@ -24,17 +24,18 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
         .split(chunks[0]);
 
     // 1. Network Status
-    let network_text = if let Some(s) = &state.status {
-        format!(
-            "Interface:  {}\nIPv4:       {}\nIPv6 ULA:   {}\nIPv6 GUA:   {}",
-            s.network.lan_iface,
-            s.network.lan_ipv4.as_deref().unwrap_or("—"),
-            s.network.ula.as_deref().unwrap_or("—"),
-            s.network.gua.as_deref().unwrap_or("—"),
-        )
-    } else {
-        "Loading connection details...".to_string()
-    };
+    let network_text = state.status.as_ref().map_or_else(
+        || "Loading connection details...".to_string(),
+        |s| {
+            format!(
+                "Interface:  {}\nIPv4:       {}\nIPv6 ULA:   {}\nIPv6 GUA:   {}",
+                s.network.lan_iface,
+                s.network.lan_ipv4.as_deref().unwrap_or("—"),
+                s.network.ula.as_deref().unwrap_or("—"),
+                s.network.gua.as_deref().unwrap_or("—"),
+            )
+        },
+    );
 
     let network_block = Paragraph::new(network_text).block(
         Block::default()
@@ -45,29 +46,30 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
     f.render_widget(network_block, top_chunks[0]);
 
     // 2. DHCP & Service Summary
-    let services_block = if let Some(s) = &state.status {
-        let render_service = |label: &str, status: &str| {
-            let (icon, color) = if status != "offline" {
-                ("● online", theme::ONLINE)
-            } else {
-                ("○ offline", theme::OFFLINE)
+    let services_block = state.status.as_ref().map_or_else(
+        || Paragraph::new("Checking services..."),
+        |s| {
+            let render_service = |label: &str, status: &str| {
+                let (icon, color) = if status == "offline" {
+                    ("○ offline", theme::OFFLINE)
+                } else {
+                    ("● online", theme::ONLINE)
+                };
+                Line::from(vec![
+                    Span::raw(format!("{label:<8} ")),
+                    Span::styled(icon, Style::default().fg(color)),
+                ])
             };
-            Line::from(vec![
-                Span::raw(format!("{:<8} ", label)),
-                Span::styled(icon, Style::default().fg(color)),
-            ])
-        };
 
-        let lines = vec![
-            render_service("DHCPv4:", &s.services.dhcp_v4.state),
-            render_service("DHCPv6:", &s.services.dhcp_v6.state),
-            render_service("DNS:", &s.services.dns.state),
-            render_service("RA:", "online"),
-        ];
-        Paragraph::new(lines)
-    } else {
-        Paragraph::new("Checking services...")
-    };
+            let lines = vec![
+                render_service("DHCPv4:", &s.services.dhcp_v4.state),
+                render_service("DHCPv6:", &s.services.dhcp_v6.state),
+                render_service("DNS:", &s.services.dns.state),
+                render_service("RA:", "online"),
+            ];
+            Paragraph::new(lines)
+        },
+    );
 
     let services_widget = services_block.block(
         Block::default()
@@ -78,37 +80,35 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
     f.render_widget(services_widget, top_chunks[1]);
 
     // 3. System Stats
-    let stats_block = if let Some(s) = &state.status {
-        let render_stat = |label: &str, val: String| {
-            Line::from(vec![
-                Span::styled(
-                    format!("{:<11}", label),
-                    Style::default().fg(theme::TEXT_DIM),
-                ),
-                Span::styled(val, Style::default().fg(theme::VALUE)),
-            ])
-        };
+    let stats_block = state.status.as_ref().map_or_else(
+        || Paragraph::new("Fetching stats..."),
+        |s| {
+            let render_stat = |label: &str, val: String| {
+                Line::from(vec![
+                    Span::styled(format!("{label:<11}"), Style::default().fg(theme::TEXT_DIM)),
+                    Span::styled(val, Style::default().fg(theme::VALUE)),
+                ])
+            };
 
-        let lines = vec![
-            render_stat("Uptime:", utils::format_uptime(s.uptime_secs)),
-            render_stat("Version:", s.version.clone()),
-            render_stat(
-                "DB Size:",
-                bytesize::ByteSize::b(s.db.size_bytes).to_string(),
-            ),
-            render_stat(
-                "Memory RSS:",
-                bytesize::ByteSize::b(s.resources.memory_rss_bytes).to_string(),
-            ),
-            render_stat(
-                "Memory VMS:",
-                bytesize::ByteSize::b(s.resources.memory_vms_bytes).to_string(),
-            ),
-        ];
-        Paragraph::new(lines)
-    } else {
-        Paragraph::new("Fetching stats...")
-    };
+            let lines = vec![
+                render_stat("Uptime:", utils::format_uptime(s.uptime_secs)),
+                render_stat("Version:", s.version.clone()),
+                render_stat(
+                    "DB Size:",
+                    bytesize::ByteSize::b(s.db.size_bytes).to_string(),
+                ),
+                render_stat(
+                    "Memory RSS:",
+                    bytesize::ByteSize::b(s.resources.memory_rss_bytes).to_string(),
+                ),
+                render_stat(
+                    "Memory VMS:",
+                    bytesize::ByteSize::b(s.resources.memory_vms_bytes).to_string(),
+                ),
+            ];
+            Paragraph::new(lines)
+        },
+    );
 
     let stats_widget = stats_block.block(
         Block::default()
@@ -125,31 +125,32 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
         .split(chunks[1]);
 
     // 4a. Device Breakdown by Category
-    let category_breakdown = if let Some(cs) = &state.state {
-        let mut counts = std::collections::HashMap::new();
-        for dev in cs.devices.values() {
-            *counts.entry(dev.class).or_insert(0) += 1;
-        }
+    let category_breakdown = state.state.as_ref().map_or_else(
+        || Paragraph::new("Calculating inventory..."),
+        |cs| {
+            let mut counts = std::collections::HashMap::new();
+            for dev in cs.devices.values() {
+                *counts.entry(dev.class).or_insert(0) += 1;
+            }
 
-        let mut lines = Vec::new();
-        let mut sorted_classes: Vec<_> = counts.keys().collect();
-        sorted_classes.sort_by_key(|c| format!("{:?}", c));
+            let mut lines = Vec::new();
+            let mut sorted_classes: Vec<_> = counts.keys().collect();
+            sorted_classes.sort_by_key(|c| format!("{c:?}"));
 
-        for class in sorted_classes {
-            let count = counts[class];
-            lines.push(Line::from(vec![
-                Span::raw(format!(
-                    "  {} {:<10} ",
-                    utils::get_class_icon(*class),
-                    format!("{:?}", class)
-                )),
-                Span::styled(count.to_string(), Style::default().fg(theme::VALUE)),
-            ]));
-        }
-        Paragraph::new(lines)
-    } else {
-        Paragraph::new("Calculating inventory...")
-    };
+            for class in sorted_classes {
+                let count = counts[class];
+                lines.push(Line::from(vec![
+                    Span::raw(format!(
+                        "  {} {:<10} ",
+                        utils::get_class_icon(*class),
+                        format!("{:?}", class)
+                    )),
+                    Span::styled(count.to_string(), Style::default().fg(theme::VALUE)),
+                ]));
+            }
+            Paragraph::new(lines)
+        },
+    );
 
     let inventory_block = category_breakdown.block(
         Block::default()
@@ -160,29 +161,27 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
     f.render_widget(inventory_block, bottom_chunks[0]);
 
     // 4b. DNS Stats
-    let dns_stats_block = if let Some(ds) = &state.dns_stats {
-        let render_stat = |label: &str, val: u64| {
-            Line::from(vec![
-                Span::styled(
-                    format!("{:<14}", label),
-                    Style::default().fg(theme::TEXT_DIM),
-                ),
-                Span::styled(val.to_string(), Style::default().fg(theme::VALUE)),
-            ])
-        };
+    let dns_stats_block = state.dns_stats.as_ref().map_or_else(
+        || Paragraph::new("Waiting for DNS stats..."),
+        |ds| {
+            let render_stat = |label: &str, val: u64| {
+                Line::from(vec![
+                    Span::styled(format!("{label:<14}"), Style::default().fg(theme::TEXT_DIM)),
+                    Span::styled(val.to_string(), Style::default().fg(theme::VALUE)),
+                ])
+            };
 
-        let lines = vec![
-            render_stat("Total Queries:", ds.total_requests),
-            render_stat("Cache Hits:", ds.cache_hits),
-            render_stat("Cache Misses:", ds.cache_misses),
-            render_stat("Blocked:", ds.blocked_queries),
-            render_stat("Auth Queries:", ds.auth_queries),
-            render_stat("Recursions:", ds.recursions),
-        ];
-        Paragraph::new(lines)
-    } else {
-        Paragraph::new("Waiting for DNS stats...")
-    };
+            let lines = vec![
+                render_stat("Total Queries:", ds.total_requests),
+                render_stat("Cache Hits:", ds.cache_hits),
+                render_stat("Cache Misses:", ds.cache_misses),
+                render_stat("Blocked:", ds.blocked_queries),
+                render_stat("Auth Queries:", ds.auth_queries),
+                render_stat("Recursions:", ds.recursions),
+            ];
+            Paragraph::new(lines)
+        },
+    );
 
     let dns_widget = dns_stats_block.block(
         Block::default()

@@ -13,11 +13,11 @@ use super::TuiFormat;
 impl TuiFormat for LanforgeEvent {
     fn format_tui<'a>(&'a self, spans: &mut Vec<Span<'a>>) {
         match self {
-            LanforgeEvent::Device(dev_event) => format_device_event(dev_event, spans),
-            LanforgeEvent::Dns(dns_event) => format_dns_event(dns_event, spans),
-            LanforgeEvent::Network(net_event) => format_network_event(net_event, spans),
-            LanforgeEvent::System(sys_event) => format_system_event(sys_event, spans),
-            LanforgeEvent::Storage(store_event) => format_storage_event(store_event, spans),
+            Self::Device(dev_event) => format_device_event(dev_event, spans),
+            Self::Dns(dns_event) => format_dns_event(dns_event, spans),
+            Self::Network(net_event) => format_network_event(net_event, spans),
+            Self::System(sys_event) => format_system_event(sys_event, spans),
+            Self::Storage(store_event) => format_storage_event(store_event, spans),
         }
     }
 }
@@ -112,7 +112,7 @@ fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
                 mac.to_string(),
                 Style::default().fg(theme::MAC),
             ));
-            spans.push(Span::raw(format!(" ({:?})", target)));
+            spans.push(Span::raw(format!(" ({target:?})")));
         }
         DeviceEvent::LeaseRenew { mac, target } => {
             spans.push(Span::styled(
@@ -126,7 +126,7 @@ fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
                 mac.to_string(),
                 Style::default().fg(theme::MAC),
             ));
-            spans.push(Span::raw(format!(" ({:?})", target)));
+            spans.push(Span::raw(format!(" ({target:?})")));
         }
         DeviceEvent::DhcpV4Transaction { mac, msg_type, .. } => {
             spans.push(Span::styled(
@@ -137,7 +137,7 @@ fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
             ));
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                format!("{:?}", msg_type),
+                format!("{msg_type:?}"),
                 Style::default()
                     .fg(theme::MOCHA_LAVENDER)
                     .add_modifier(Modifier::BOLD),
@@ -157,7 +157,7 @@ fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
             ));
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                format!("{:?}", msg_type),
+                format!("{msg_type:?}"),
                 Style::default()
                     .fg(theme::MOCHA_LAVENDER)
                     .add_modifier(Modifier::BOLD),
@@ -179,14 +179,14 @@ fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
                     .fg(theme::MOCHA_SAPPHIRE)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::raw(format!("Neighbor scan: {} total, ", total)));
+            spans.push(Span::raw(format!("Neighbor scan: {total} total, ")));
             spans.push(Span::styled(
                 new.to_string(),
                 Style::default()
                     .fg(theme::MOCHA_GREEN)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::raw(format!(" new in {}ms", duration_ms)));
+            spans.push(Span::raw(format!(" new in {duration_ms}ms")));
         }
     }
 }
@@ -210,7 +210,7 @@ fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>)
         DeviceChange::V6PrefixAssigned { prefix, len, .. } => {
             spans.push(Span::raw("IA_PD assigned: "));
             spans.push(Span::styled(
-                format!("{}/{}", prefix, len),
+                format!("{prefix}/{len}"),
                 Style::default().fg(theme::IP).add_modifier(Modifier::BOLD),
             ));
         }
@@ -254,9 +254,7 @@ fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>)
             ));
         }
         DeviceChange::TopologyChanged { parent_mac, port } => {
-            let parent = parent_mac
-                .map(|m| m.to_string())
-                .unwrap_or_else(|| "Local".to_string());
+            let parent = parent_mac.map_or_else(|| "Local".to_string(), |m| m.to_string());
             let port = port.as_deref().unwrap_or("?");
             spans.push(Span::raw("topology updated: behind "));
             spans.push(Span::styled(parent, Style::default().fg(theme::IP)));
@@ -273,11 +271,11 @@ fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>)
                 LeaseTarget::V6Prefix { iaid } => format!("IPv6 Prefix (IAID: {iaid})"),
             };
             spans.push(Span::styled(
-                format!("{} expired", target_str),
+                format!("{target_str} expired"),
                 Style::default().fg(theme::TEXT_DIM),
             ));
         }
-        _ => spans.push(Span::raw(format!("{:?}", change))),
+        _ => spans.push(Span::raw(format!("{change:?}"))),
     }
 }
 
@@ -305,7 +303,7 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
             ));
             spans.push(Span::raw(" Adblocker"));
             if let Some(s) = duration_secs {
-                spans.push(Span::raw(format!(" for {}s", s)));
+                spans.push(Span::raw(format!(" for {s}s")));
             }
         }
         DnsEvent::AdblockReload => {
@@ -374,7 +372,7 @@ fn format_network_event<'a>(event: &'a NetworkEvent, spans: &mut Vec<Span<'a>>) 
                     .add_modifier(Modifier::BOLD),
             ));
         }
-        _ => spans.push(Span::raw(format!("{:?}", event))),
+        _ => spans.push(Span::raw(format!("{event:?}"))),
     }
 }
 
@@ -396,7 +394,7 @@ fn format_system_event<'a>(event: &'a SystemEvent, spans: &mut Vec<Span<'a>>) {
             spans.push(Span::raw("Service ready: "));
             spans.push(Span::styled(name, Style::default().fg(theme::MOCHA_BLUE)));
         }
-        _ => spans.push(Span::raw(format!("{:?}", event))),
+        _ => spans.push(Span::raw(format!("{event:?}"))),
     }
 }
 
@@ -416,6 +414,6 @@ fn format_storage_event<'a>(event: &'a StorageEvent, spans: &mut Vec<Span<'a>>) 
             ));
             spans.push(Span::raw(" devices)"));
         }
-        _ => spans.push(Span::raw(format!("{:?}", event))),
+        _ => spans.push(Span::raw(format!("{event:?}"))),
     }
 }

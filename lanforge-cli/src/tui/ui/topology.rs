@@ -13,11 +13,11 @@ pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
         .constraints([Constraint::Min(10), Constraint::Length(3)])
         .split(area);
 
-    let devices = if let Some(st) = &app.state.state {
-        st.devices.values().collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    let devices = app
+        .state
+        .state
+        .as_ref()
+        .map_or_else(Vec::new, |st| st.devices.values().collect::<Vec<_>>());
 
     let mut parent_to_children: HashMap<String, Vec<&lanforge_core::device::Device>> =
         HashMap::new();
@@ -68,8 +68,7 @@ pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
         let root_hostname = devices
             .iter()
             .find(|d| d.mac.to_string() == root_mac)
-            .map(|d| d.hostname.name.as_str())
-            .unwrap_or("Unknown Switch");
+            .map_or("Unknown Switch", |d| d.hostname.name.as_str());
 
         let text = Text::from(vec![Line::from(vec![
             Span::styled("🖧  ", Style::default().fg(Color::Cyan)),
@@ -167,7 +166,7 @@ fn build_children(
     parent_mac: &str,
     map: &HashMap<String, Vec<&lanforge_core::device::Device>>,
 ) -> Option<Vec<TreeItem<'static, String>>> {
-    if let Some(children) = map.get(parent_mac) {
+    map.get(parent_mac).map(|children| {
         let mut items = Vec::new();
         let mut sorted = children.clone();
         sorted.sort_by(|a, b| {
@@ -210,8 +209,6 @@ fn build_children(
                 items.push(item);
             }
         }
-        Some(items)
-    } else {
-        None
-    }
+        items
+    })
 }

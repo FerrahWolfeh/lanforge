@@ -148,7 +148,7 @@ async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sende
     let fetch_tx = tx.clone();
     let fetch_client = client.clone();
     let fetch_task = async move {
-        let mut last_refresh = Instant::now() - Duration::from_secs(10);
+        let mut last_refresh = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
         loop {
             if last_refresh.elapsed() >= Duration::from_secs(5) {
                 // Status
@@ -220,7 +220,7 @@ async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {
     let fetch_socket = socket_path.clone();
     let fetch_tx = tx.clone();
     let fetch_task = async move {
-        let mut last_refresh = Instant::now() - Duration::from_secs(10);
+        let mut last_refresh = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
         loop {
             if last_refresh.elapsed() >= Duration::from_secs(5) {
                 if let Ok(mut stream) = UnixStream::connect(&fetch_socket).await {

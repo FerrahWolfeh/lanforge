@@ -12,7 +12,14 @@ pub struct TuiState {
     pub connection_error: Option<String>,
 }
 
+impl Default for TuiState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TuiState {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             status: None,

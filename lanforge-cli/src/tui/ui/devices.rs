@@ -51,17 +51,15 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
             let v4 = dev
                 .v4
                 .ip()
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "—".to_string());
+                .map_or_else(|| "—".to_string(), |ip| ip.to_string());
 
             // Show first non-link-local IPv6 if possible
             let v6 = dev
                 .v6
                 .iter()
-                .find(|s| s.ip().map(|ip| !ip.is_loopback()).unwrap_or(false))
-                .and_then(|s| s.ip())
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "—".to_string());
+                .find(|s| s.ip().is_some_and(|ip| !ip.is_loopback()))
+                .and_then(lanforge_core::device::IPv6State::ip)
+                .map_or_else(|| "—".to_string(), |ip| ip.to_string());
 
             let host_display = format!("{} {}", utils::get_class_icon(dev.class), host);
 
@@ -79,7 +77,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     }
 
     let title = if app.filter_text.is_empty() {
-        format!(" Devices ({}) ", matching_count)
+        format!(" Devices ({matching_count}) ")
     } else {
         format!(
             " Devices ({} matching '{}') ",
@@ -118,12 +116,11 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT));
 
-    let text = if let Some(state) = &app.state.state {
-        if let Some(selected_idx) = app.device_list_state.selected() {
+    let text = app.state.state.as_ref().map_or_else(|| "State not loaded.".to_string(), |state| app.device_list_state.selected().map_or_else(|| "No device selected.".to_string(), |selected_idx| {
             // This is a bit inefficient to find the device again, but okay for detail view
             let mut keys: Vec<_> = state.devices.keys().collect();
             keys.sort();
-            if let Some(mac) = keys.get(selected_idx) {
+            keys.get(selected_idx).map_or_else(|| "No device selected.".to_string(), |mac| {
                 let dev = &state.devices[*mac];
 
                 let v6_addrs = if dev.v6.is_empty() {
@@ -149,16 +146,12 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                 let vendor = crate::cli::vendor::resolve_vendor(&dev.mac.to_string())
                     .unwrap_or_else(|| "Unknown".to_string());
 
-                let topo = if let Some(t) = &dev.topology {
+                let topo = dev.topology.as_ref().map_or_else(|| "—".to_string(), |t| {
                     let parent = t
-                        .parent_mac
-                        .map(|m| m.to_string())
-                        .unwrap_or_else(|| "Local".to_string());
+                        .parent_mac.map_or_else(|| "Local".to_string(), |m| m.to_string());
                     let port = t.port.as_deref().unwrap_or("?");
                     format!("{} @ {} (ifindex {})", parent, port, t.local_ifindex)
-                } else {
-                    "—".to_string()
-                };
+                });
 
                 format!(
                     "MAC:       {}\nVendor:    {}\nHostname:  {} ({:?})\nOrigin:    {:?}\nClass:     {} {:?}\nLast Seen: {}\n\nIPv4:      {}\nIPv6:      {}\nPrefixes:  {}\nTopology:  {}",
@@ -171,22 +164,13 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                     dev.class,
                     utils::format_absolute_time(dev.last_seen),
                     dev.v4
-                        .ip()
-                        .map(|ip| ip.to_string())
-                        .unwrap_or_else(|| "—".to_string()),
+                        .ip().map_or_else(|| "—".to_string(), |ip| ip.to_string()),
                     v6_addrs,
                     prefixes,
                     topo
                 )
-            } else {
-                "No device selected.".to_string()
-            }
-        } else {
-            "No device selected.".to_string()
-        }
-    } else {
-        "State not loaded.".to_string()
-    };
+            })
+        }));
 
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, detail_area);

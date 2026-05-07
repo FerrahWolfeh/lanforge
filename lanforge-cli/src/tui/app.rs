@@ -14,26 +14,27 @@ pub enum TuiTab {
 }
 
 impl TuiTab {
-    pub fn from_index(index: usize) -> Self {
+    #[must_use]
+    pub const fn from_index(index: usize) -> Self {
         match index {
-            0 => TuiTab::Overview,
-            1 => TuiTab::Devices,
-            2 => TuiTab::Explorer,
-            3 => TuiTab::Events,
-            4 => TuiTab::Services,
-            5 => TuiTab::Topology,
-            _ => TuiTab::Overview,
+            1 => Self::Devices,
+            2 => Self::Explorer,
+            3 => Self::Events,
+            4 => Self::Services,
+            5 => Self::Topology,
+            _ => Self::Overview,
         }
     }
 
-    pub fn to_index(self) -> usize {
+    #[must_use]
+    pub const fn to_index(self) -> usize {
         match self {
-            TuiTab::Overview => 0,
-            TuiTab::Devices => 1,
-            TuiTab::Explorer => 2,
-            TuiTab::Events => 3,
-            TuiTab::Services => 4,
-            TuiTab::Topology => 5,
+            Self::Overview => 0,
+            Self::Devices => 1,
+            Self::Explorer => 2,
+            Self::Events => 3,
+            Self::Services => 4,
+            Self::Topology => 5,
         }
     }
 }
@@ -51,7 +52,14 @@ pub struct TuiApp {
     pub should_quit: bool,
 }
 
+impl Default for TuiApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TuiApp {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: TuiState::new(),
@@ -72,7 +80,7 @@ impl TuiApp {
             match key.code {
                 KeyCode::Enter | KeyCode::Esc => self.filter_active = false,
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.should_quit = true
+                    self.should_quit = true;
                 }
                 KeyCode::Backspace => {
                     self.filter_text.pop();
@@ -88,7 +96,7 @@ impl TuiApp {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true
+                self.should_quit = true;
             }
             KeyCode::Char('1') => self.active_tab = TuiTab::Overview,
             KeyCode::Char('2') => self.active_tab = TuiTab::Devices,
@@ -134,12 +142,12 @@ impl TuiApp {
         }
     }
 
-    fn next_tab(&mut self) {
+    const fn next_tab(&mut self) {
         let i = self.active_tab.to_index();
         self.active_tab = TuiTab::from_index((i + 1) % 6);
     }
 
-    fn prev_tab(&mut self) {
+    const fn prev_tab(&mut self) {
         let i = self.active_tab.to_index();
         self.active_tab = TuiTab::from_index((i + 5) % 6);
     }
@@ -147,16 +155,10 @@ impl TuiApp {
     fn move_up(&mut self) {
         match self.active_tab {
             TuiTab::Devices => {
-                let i = match self.device_list_state.selected() {
-                    Some(i) => {
-                        if i == 0 {
-                            0
-                        } else {
-                            i - 1
-                        }
-                    }
-                    None => 0,
-                };
+                let i = self
+                    .device_list_state
+                    .selected()
+                    .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
                 self.device_list_state.select(Some(i));
             }
             TuiTab::Explorer => {
@@ -172,10 +174,7 @@ impl TuiApp {
     fn move_down(&mut self) {
         match self.active_tab {
             TuiTab::Devices => {
-                let i = match self.device_list_state.selected() {
-                    Some(i) => i + 1,
-                    None => 0,
-                };
+                let i = self.device_list_state.selected().map_or(0, |i| i + 1);
                 self.device_list_state.select(Some(i));
             }
             TuiTab::Explorer => {

@@ -14,41 +14,40 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    let (left_text, right_text) = if let Some(s) = &state.status {
-        let uptime = format!("▲ {}", utils::format_uptime(s.uptime_secs));
-        let device_count = if let Some(st) = &state.state {
-            st.devices.len()
-        } else {
-            0
-        };
+    let (left_text, right_text) = state.status.as_ref().map_or_else(
+        || {
+            (
+                Line::from(vec![Span::styled(
+                    " 🔨 LANFORGE (Connecting...)",
+                    Style::default().fg(theme::TEXT_DIM),
+                )]),
+                Line::from(vec![Span::styled(
+                    " ● — ",
+                    Style::default().fg(theme::OFFLINE),
+                )]),
+            )
+        },
+        |s| {
+            let uptime = format!("▲ {}", utils::format_uptime(s.uptime_secs));
+            let device_count = state.state.as_ref().map_or(0, |st| st.devices.len());
 
-        (
-            Line::from(vec![
-                Span::styled(
-                    " 🔨 LANFORGE ",
-                    Style::default()
-                        .fg(theme::ACCENT)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(uptime, Style::default().fg(theme::TEXT_DIM)),
-            ]),
-            Line::from(vec![Span::styled(
-                format!("● {} devices ", device_count),
-                Style::default().fg(theme::ONLINE),
-            )]),
-        )
-    } else {
-        (
-            Line::from(vec![Span::styled(
-                " 🔨 LANFORGE (Connecting...)",
-                Style::default().fg(theme::TEXT_DIM),
-            )]),
-            Line::from(vec![Span::styled(
-                " ● — ",
-                Style::default().fg(theme::OFFLINE),
-            )]),
-        )
-    };
+            (
+                Line::from(vec![
+                    Span::styled(
+                        " 🔨 LANFORGE ",
+                        Style::default()
+                            .fg(theme::ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(uptime, Style::default().fg(theme::TEXT_DIM)),
+                ]),
+                Line::from(vec![Span::styled(
+                    format!("● {device_count} devices "),
+                    Style::default().fg(theme::ONLINE),
+                )]),
+            )
+        },
+    );
 
     let left_block = Paragraph::new(left_text).block(
         Block::default()

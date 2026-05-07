@@ -7,11 +7,12 @@ use tui_tree_widget::TreeItem;
 
 fn key_val(key: &str, val: String) -> Text<'static> {
     Text::from(Line::from(vec![
-        Span::styled(format!("{}: ", key), Style::default().fg(theme::KEY)),
+        Span::styled(format!("{key}: "), Style::default().fg(theme::KEY)),
         Span::styled(val, Style::default().fg(theme::VALUE)),
     ]))
 }
 
+#[must_use]
 pub fn build_tree(
     state: &State,
     status: &Option<StatusResponse>,
@@ -59,7 +60,7 @@ pub fn build_tree(
         let dev = &state.devices[mac];
         let mut dev_fields = vec![
             TreeItem::new_leaf(
-                format!("dev.{}.vendor", mac),
+                format!("dev.{mac}.vendor"),
                 key_val(
                     "vendor",
                     crate::cli::vendor::resolve_vendor(&mac.to_string())
@@ -67,22 +68,22 @@ pub fn build_tree(
                 ),
             ),
             TreeItem::new_leaf(
-                format!("dev.{}.hostname", mac),
+                format!("dev.{mac}.hostname"),
                 key_val(
                     "hostname",
                     format!("{} ({:?})", dev.hostname.name, dev.hostname.origin),
                 ),
             ),
             TreeItem::new_leaf(
-                format!("dev.{}.origin", mac),
+                format!("dev.{mac}.origin"),
                 key_val("origin", format!("{:?}", dev.origin)),
             ),
             TreeItem::new_leaf(
-                format!("dev.{}.class", mac),
+                format!("dev.{mac}.class"),
                 key_val("class", format!("{:?}", dev.class)),
             ),
             TreeItem::new_leaf(
-                format!("dev.{}.seen", mac),
+                format!("dev.{mac}.seen"),
                 key_val("last_seen", utils::format_relative_time(dev.last_seen)),
             ),
         ];
@@ -91,18 +92,17 @@ pub fn build_tree(
         if let Some(t) = &dev.topology {
             let parent = t
                 .parent_mac
-                .map(|m| m.to_string())
-                .unwrap_or_else(|| "Local".to_string());
+                .map_or_else(|| "Local".to_string(), |m| m.to_string());
             let port = t.port.as_deref().unwrap_or("?");
             dev_fields.push(TreeItem::new_leaf(
-                format!("dev.{}.topology", mac),
-                key_val("topology", format!("{} @ {}", parent, port)),
+                format!("dev.{mac}.topology"),
+                key_val("topology", format!("{parent} @ {port}")),
             ));
         }
 
         // IPv4
         dev_fields.push(TreeItem::new_leaf(
-            format!("dev.{}.v4", mac),
+            format!("dev.{mac}.v4"),
             key_val("v4", format!("{:?}", dev.v4)),
         ));
 
@@ -114,14 +114,14 @@ pub fn build_tree(
                 .enumerate()
                 .map(|(i, s)| {
                     TreeItem::new_leaf(
-                        format!("dev.{}.v6.{}", mac, i),
+                        format!("dev.{mac}.v6.{i}"),
                         Text::from(format!("[{}] {}", i, utils::format_v6_state(s))),
                     )
                 })
                 .collect();
             dev_fields.push(
                 TreeItem::new(
-                    format!("dev.{}.v6", mac),
+                    format!("dev.{mac}.v6"),
                     Text::from("v6 addresses"),
                     v6_items,
                 )
@@ -131,7 +131,7 @@ pub fn build_tree(
 
         device_nodes.push(
             TreeItem::new(
-                format!("dev.{}", mac),
+                format!("dev.{mac}"),
                 Text::from(Line::from(vec![
                     Span::raw(format!("{} ", utils::get_class_icon(dev.class))),
                     Span::styled(mac.to_string(), Style::default().fg(theme::MAC)),
@@ -167,17 +167,15 @@ pub fn build_tree(
         ndp_keys.sort();
         for ip in ndp_keys {
             let (mac, _) = &state.discovery.ndp_cache[ip];
-            let host_info = if let Some(dev) = state.devices.get(mac) {
-                if !dev.hostname.name.is_empty() {
-                    format!(" ({})", dev.hostname.name)
-                } else {
+            let host_info = state.devices.get(mac).map_or_else(String::new, |dev| {
+                if dev.hostname.name.is_empty() {
                     String::new()
+                } else {
+                    format!(" ({})", dev.hostname.name)
                 }
-            } else {
-                String::new()
-            };
+            });
             ndp_items.push(TreeItem::new_leaf(
-                format!("ndp.{}", ip),
+                format!("ndp.{ip}"),
                 Text::from(Line::from(vec![
                     Span::styled(ip.to_string(), Style::default().fg(theme::IP)),
                     Span::raw(" → "),
@@ -204,7 +202,7 @@ pub fn build_tree(
         for mac in static_keys {
             let entry = &state.static_entries[mac];
             static_items.push(TreeItem::new_leaf(
-                format!("static.{}", mac),
+                format!("static.{mac}"),
                 Text::from(Line::from(vec![
                     Span::styled(mac.to_string(), Style::default().fg(theme::MAC)),
                     Span::raw(" → "),
@@ -233,9 +231,9 @@ pub fn build_tree(
         for idx in if_keys {
             let if_state = &state.interfaces.interface_ips[idx];
             if_items.push(TreeItem::new_leaf(
-                format!("if.{}", idx),
+                format!("if.{idx}"),
                 Text::from(Line::from(vec![
-                    Span::styled(format!("ifindex {}", idx), Style::default().fg(theme::KEY)),
+                    Span::styled(format!("ifindex {idx}"), Style::default().fg(theme::KEY)),
                     Span::raw(": "),
                     Span::styled(
                         utils::format_interface_state(if_state),

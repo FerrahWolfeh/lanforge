@@ -9,11 +9,11 @@ use super::CliFormat;
 impl CliFormat for LanforgeEvent {
     fn format_cli(&self, now: &str, verbose: bool) {
         match self {
-            LanforgeEvent::Device(e) => format_device_event(now, e, verbose),
-            LanforgeEvent::Dns(e) => format_dns_event(now, e, verbose),
-            LanforgeEvent::Network(e) => format_network_event(now, e),
-            LanforgeEvent::Storage(e) => format_storage_event(now, e),
-            LanforgeEvent::System(e) => format_system_event(now, e, verbose),
+            Self::Device(e) => format_device_event(now, e, verbose),
+            Self::Dns(e) => format_dns_event(now, e, verbose),
+            Self::Network(e) => format_network_event(now, e),
+            Self::Storage(e) => format_storage_event(now, e),
+            Self::System(e) => format_system_event(now, e, verbose),
         }
     }
 }
