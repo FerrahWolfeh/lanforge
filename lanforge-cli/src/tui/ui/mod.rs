@@ -1,4 +1,4 @@
-use crate::tui::app::{TuiApp, TuiTab};
+use crate::tui::app::{TuiApp, TuiMode, TuiTab};
 use crate::tui::theme;
 use ratatui::{
     Frame,
@@ -64,7 +64,7 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
     }
 
     // 4. Footer
-    let help_text = if app.filter_active {
+    let help_text = if app.mode == TuiMode::Filtering {
         "TYPE TO FILTER...  Enter/Esc: Confirm"
     } else {
         "q:Quit  1-6:Tabs  ↑↓:Navigate  Enter:Details  /:Search  r:Refresh"

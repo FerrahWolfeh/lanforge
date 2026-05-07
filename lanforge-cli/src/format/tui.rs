@@ -3,6 +3,7 @@ use lanforge_core::bus::{
     DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
 use lanforge_core::context::state::LeaseTarget;
+use lanforge_core::identifiers::MacAddr;
 use ratatui::{
     style::{Modifier, Style},
     text::Span,
@@ -25,169 +26,183 @@ impl TuiFormat for LanforgeEvent {
 fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
     match event {
         DeviceEvent::Discovered { mac, hostname } => {
-            spans.push(Span::styled(
-                "NEW  ",
-                Style::default()
-                    .fg(theme::MOCHA_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw("Device discovered: "));
-            spans.push(Span::styled(
-                hostname.as_deref().unwrap_or("unknown"),
-                Style::default()
-                    .fg(theme::HOSTNAME)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" ("));
-            spans.push(Span::styled(
-                mac.to_string(),
-                Style::default().fg(theme::MAC),
-            ));
-            spans.push(Span::raw(")"));
+            format_device_discovered(*mac, hostname.as_deref(), spans);
         }
         DeviceEvent::Updated {
             mac,
             hostname,
             change,
         } => {
-            let (tag, color) = match change.as_ref() {
-                DeviceChange::ArpActivity { .. } | DeviceChange::NdpActivity { .. } => {
-                    ("TRC  ", theme::MOCHA_SAPPHIRE)
-                }
-                _ => ("UPD  ", theme::ACCENT),
-            };
-            spans.push(Span::styled(
-                tag,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(
-                hostname.as_deref().unwrap_or("unknown"),
-                Style::default()
-                    .fg(theme::HOSTNAME)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" ("));
-            spans.push(Span::styled(
-                mac.to_string(),
-                Style::default().fg(theme::MAC),
-            ));
-            spans.push(Span::raw(") -> "));
-            format_device_change(change, spans);
+            format_device_updated(*mac, hostname.as_deref(), change, spans);
         }
-        DeviceEvent::Expired { mac } => {
-            spans.push(Span::styled(
-                "EXP  ",
-                Style::default()
-                    .fg(theme::MOCHA_RED)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw("Device expired: "));
-            spans.push(Span::styled(
-                mac.to_string(),
-                Style::default().fg(theme::MOCHA_RED),
-            ));
+        DeviceEvent::Expired { mac } | DeviceEvent::Purged { mac } => {
+            format_device_lifecycle(event, *mac, spans);
         }
-        DeviceEvent::Purged { mac } => {
-            spans.push(Span::styled(
-                "DEL  ",
-                Style::default()
-                    .fg(theme::MOCHA_RED)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw("Device purged: "));
-            spans.push(Span::styled(
-                mac.to_string(),
-                Style::default().fg(theme::MOCHA_RED),
-            ));
+        DeviceEvent::LeaseRelease { mac, target } | DeviceEvent::LeaseRenew { mac, target } => {
+            format_device_command(event, *mac, target, spans);
         }
-        DeviceEvent::LeaseRelease { mac, target } => {
-            spans.push(Span::styled(
-                "CMD  ",
-                Style::default()
-                    .fg(theme::MOCHA_TEAL)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw("Forced Release: "));
-            spans.push(Span::styled(
-                mac.to_string(),
-                Style::default().fg(theme::MAC),
-            ));
-            spans.push(Span::raw(format!(" ({target:?})")));
+        DeviceEvent::DhcpV4Transaction { mac, .. } | DeviceEvent::DhcpV6Transaction { mac, .. } => {
+            format_dhcp_transaction(event, *mac, spans);
         }
-        DeviceEvent::LeaseRenew { mac, target } => {
-            spans.push(Span::styled(
-                "CMD  ",
-                Style::default()
-                    .fg(theme::MOCHA_TEAL)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw("Force Renew: "));
-            spans.push(Span::styled(
-                mac.to_string(),
-                Style::default().fg(theme::MAC),
-            ));
-            spans.push(Span::raw(format!(" ({target:?})")));
+        DeviceEvent::NeighborBatchSummary { .. } => {
+            format_scan_summary(event, spans);
         }
-        DeviceEvent::DhcpV4Transaction { mac, msg_type, .. } => {
-            spans.push(Span::styled(
-                "DHCP4",
-                Style::default()
-                    .fg(theme::MOCHA_BLUE)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                format!("{msg_type:?}"),
-                Style::default()
-                    .fg(theme::MOCHA_LAVENDER)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" for "));
-            spans.push(Span::styled(
-                mac.to_string(),
-                Style::default().fg(theme::MAC),
-            ));
+    }
+}
+
+fn format_device_discovered<'a>(
+    mac: MacAddr,
+    hostname: Option<&'a str>,
+    spans: &mut Vec<Span<'a>>,
+) {
+    spans.push(Span::styled(
+        "NEW  ",
+        Style::default()
+            .fg(theme::MOCHA_GREEN)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw("Device discovered: "));
+    spans.push(Span::styled(
+        hostname.unwrap_or("unknown"),
+        Style::default()
+            .fg(theme::HOSTNAME)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" ("));
+    spans.push(Span::styled(
+        mac.to_string(),
+        Style::default().fg(theme::MAC),
+    ));
+    spans.push(Span::raw(")"));
+}
+
+fn format_device_updated<'a>(
+    mac: MacAddr,
+    hostname: Option<&'a str>,
+    change: &'a DeviceChange,
+    spans: &mut Vec<Span<'a>>,
+) {
+    let (tag, color) = match change {
+        DeviceChange::ArpActivity { .. } | DeviceChange::NdpActivity { .. } => {
+            ("TRC  ", theme::MOCHA_SAPPHIRE)
         }
-        DeviceEvent::DhcpV6Transaction { mac, msg_type, .. } => {
-            spans.push(Span::styled(
-                "DHCP6",
-                Style::default()
-                    .fg(theme::MOCHA_MAUVE)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                format!("{msg_type:?}"),
-                Style::default()
-                    .fg(theme::MOCHA_LAVENDER)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" for "));
-            spans.push(Span::styled(
-                mac.to_string(),
-                Style::default().fg(theme::MAC),
-            ));
+        _ => ("UPD  ", theme::ACCENT),
+    };
+    spans.push(Span::styled(
+        tag,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        hostname.unwrap_or("unknown"),
+        Style::default()
+            .fg(theme::HOSTNAME)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" ("));
+    spans.push(Span::styled(
+        mac.to_string(),
+        Style::default().fg(theme::MAC),
+    ));
+    spans.push(Span::raw(") -> "));
+    format_device_change(change, spans);
+}
+
+fn format_device_lifecycle(event: &DeviceEvent, mac: MacAddr, spans: &mut Vec<Span<'_>>) {
+    let (tag, label) = match event {
+        DeviceEvent::Expired { .. } => ("EXP  ", "Device expired: "),
+        DeviceEvent::Purged { .. } => ("DEL  ", "Device purged: "),
+        _ => return,
+    };
+
+    spans.push(Span::styled(
+        tag,
+        Style::default()
+            .fg(theme::MOCHA_RED)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(label));
+    spans.push(Span::styled(
+        mac.to_string(),
+        Style::default().fg(theme::MOCHA_RED),
+    ));
+}
+
+fn format_device_command(
+    event: &DeviceEvent,
+    mac: MacAddr,
+    target: &LeaseTarget,
+    spans: &mut Vec<Span<'_>>,
+) {
+    let label = match event {
+        DeviceEvent::LeaseRelease { .. } => "Forced Release: ",
+        DeviceEvent::LeaseRenew { .. } => "Force Renew: ",
+        _ => return,
+    };
+
+    spans.push(Span::styled(
+        "CMD  ",
+        Style::default()
+            .fg(theme::MOCHA_TEAL)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(label));
+    spans.push(Span::styled(
+        mac.to_string(),
+        Style::default().fg(theme::MAC),
+    ));
+    spans.push(Span::raw(format!(" ({target:?})")));
+}
+
+fn format_dhcp_transaction(event: &DeviceEvent, mac: MacAddr, spans: &mut Vec<Span<'_>>) {
+    let (tag, color, msg_type) = match event {
+        DeviceEvent::DhcpV4Transaction { msg_type, .. } => {
+            ("DHCP4", theme::MOCHA_BLUE, format!("{msg_type:?}"))
         }
-        DeviceEvent::NeighborBatchSummary {
-            total,
-            new,
-            duration_ms,
-        } => {
-            spans.push(Span::styled(
-                "SCAN ",
-                Style::default()
-                    .fg(theme::MOCHA_SAPPHIRE)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(format!("Neighbor scan: {total} total, ")));
-            spans.push(Span::styled(
-                new.to_string(),
-                Style::default()
-                    .fg(theme::MOCHA_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(format!(" new in {duration_ms}ms")));
+        DeviceEvent::DhcpV6Transaction { msg_type, .. } => {
+            ("DHCP6", theme::MOCHA_MAUVE, format!("{msg_type:?}"))
         }
+        _ => return,
+    };
+
+    spans.push(Span::styled(
+        tag,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        msg_type,
+        Style::default()
+            .fg(theme::MOCHA_LAVENDER)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" for "));
+    spans.push(Span::styled(
+        mac.to_string(),
+        Style::default().fg(theme::MAC),
+    ));
+}
+
+fn format_scan_summary(event: &DeviceEvent, spans: &mut Vec<Span<'_>>) {
+    if let DeviceEvent::NeighborBatchSummary {
+        total,
+        new,
+        duration_ms,
+    } = event
+    {
+        spans.push(Span::styled(
+            "SCAN ",
+            Style::default()
+                .fg(theme::MOCHA_SAPPHIRE)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(format!("Neighbor scan: {total} total, ")));
+        spans.push(Span::styled(
+            new.to_string(),
+            Style::default()
+                .fg(theme::MOCHA_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(format!(" new in {duration_ms}ms")));
     }
 }
 
@@ -330,7 +345,7 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
             spans.push(Span::raw(" -> "));
             spans.push(Span::styled(domain, Style::default().fg(theme::MOCHA_RED)));
         }
-        _ => {}
+        DnsEvent::CacheFlush => {}
     }
 }
 

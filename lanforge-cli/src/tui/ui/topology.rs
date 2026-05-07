@@ -1,11 +1,13 @@
-use crate::tui::app::TuiApp;
+use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::theme;
+use lanforge_core::device::Device;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tui_tree_widget::{Tree, TreeItem};
 
 pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
@@ -13,19 +15,32 @@ pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
         .constraints([Constraint::Min(10), Constraint::Length(3)])
         .split(area);
 
-    let devices = app
+    let devices: Vec<_> = app
         .state
         .state
         .as_ref()
-        .map_or_else(Vec::new, |st| st.devices.values().collect::<Vec<_>>());
+        .map_or_else(Vec::new, |st| st.devices.values().collect());
 
-    let mut parent_to_children: HashMap<String, Vec<&lanforge_core::device::Device>> =
-        HashMap::new();
-    let mut orphans: Vec<&lanforge_core::device::Device> = Vec::new();
+    let (parent_to_children, orphans, roots) = get_topology_data(app, &devices);
+    let tree_items = build_tree_items(roots, &parent_to_children, orphans, &devices);
 
+    render_tree(f, app, chunks[0], &tree_items);
+    render_help_footer(f, app, chunks[1]);
+}
+
+fn get_topology_data<'a>(
+    app: &TuiApp,
+    devices: &'a [&Arc<Device>],
+) -> (
+    HashMap<String, Vec<&'a Device>>,
+    Vec<&'a Device>,
+    Vec<String>,
+) {
+    let mut parent_to_children: HashMap<String, Vec<&Device>> = HashMap::new();
+    let mut orphans: Vec<&Device> = Vec::new();
     let filter = app.filter_text.to_lowercase();
 
-    for dev in &devices {
+    for dev in devices {
         // Apply filter
         if !filter.is_empty() {
             let matches = dev.hostname.name.to_lowercase().contains(&filter)
@@ -62,6 +77,15 @@ pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
 
     roots.sort();
 
+    (parent_to_children, orphans, roots)
+}
+
+fn build_tree_items(
+    roots: Vec<String>,
+    parent_to_children: &HashMap<String, Vec<&Device>>,
+    orphans: Vec<&Device>,
+    devices: &[&Arc<Device>],
+) -> Vec<TreeItem<'static, String>> {
     let mut tree_items = Vec::new();
 
     for root_mac in roots {
@@ -78,7 +102,7 @@ pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
             ),
         ])]);
 
-        if let Some(children) = build_children(&root_mac, &parent_to_children)
+        if let Some(children) = build_children(&root_mac, parent_to_children)
             && let Ok(item) = TreeItem::new(root_mac, text, children)
         {
             tree_items.push(item);
@@ -105,7 +129,16 @@ pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
         }
     }
 
-    let tree_widget = Tree::new(&tree_items)
+    tree_items
+}
+
+fn render_tree(
+    f: &mut Frame,
+    app: &mut TuiApp,
+    area: Rect,
+    tree_items: &[TreeItem<'static, String>],
+) {
+    let tree_widget = Tree::new(tree_items)
         .unwrap()
         .block(
             Block::default()
@@ -120,10 +153,11 @@ pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         );
 
-    f.render_stateful_widget(tree_widget, chunks[0], &mut app.tree_state_topology);
+    f.render_stateful_widget(tree_widget, area, &mut app.tree_state_topology);
+}
 
-    // Help Footer
-    let help_text = if app.filter_active {
+fn render_help_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let help_text = if app.mode == TuiMode::Filtering {
         Line::from(vec![
             Span::styled("Filter: ", Style::default().fg(theme::KEY)),
             Span::styled(&app.filter_text, Style::default().fg(theme::VALUE)),
@@ -159,12 +193,12 @@ pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
         )
         .alignment(ratatui::layout::Alignment::Center);
 
-    f.render_widget(footer, chunks[1]);
+    f.render_widget(footer, area);
 }
 
 fn build_children(
     parent_mac: &str,
-    map: &HashMap<String, Vec<&lanforge_core::device::Device>>,
+    map: &HashMap<String, Vec<&Device>>,
 ) -> Option<Vec<TreeItem<'static, String>>> {
     map.get(parent_mac).map(|children| {
         let mut items = Vec::new();

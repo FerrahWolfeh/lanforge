@@ -1,4 +1,4 @@
-use crate::tui::app::TuiApp;
+use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
 use ratatui::{
     Frame,
@@ -102,7 +102,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
 
     f.render_stateful_widget(t, area, &mut app.device_list_state);
 
-    if app.showing_detail {
+    if app.mode == TuiMode::Detail {
         render_detail(f, area, app);
     }
 }

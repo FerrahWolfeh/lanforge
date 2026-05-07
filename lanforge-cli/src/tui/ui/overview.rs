@@ -23,7 +23,20 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
         ])
         .split(chunks[0]);
 
-    // 1. Network Status
+    render_network_status(f, top_chunks[0], state);
+    render_core_services(f, top_chunks[1], state);
+    render_runtime_stats(f, top_chunks[2], state);
+
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
+
+    render_device_inventory(f, bottom_chunks[0], state);
+    render_dns_stats(f, bottom_chunks[1], state);
+}
+
+fn render_network_status(f: &mut Frame, area: Rect, state: &TuiState) {
     let network_text = state.status.as_ref().map_or_else(
         || "Loading connection details...".to_string(),
         |s| {
@@ -43,9 +56,10 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(network_block, top_chunks[0]);
+    f.render_widget(network_block, area);
+}
 
-    // 2. DHCP & Service Summary
+fn render_core_services(f: &mut Frame, area: Rect, state: &TuiState) {
     let services_block = state.status.as_ref().map_or_else(
         || Paragraph::new("Checking services..."),
         |s| {
@@ -77,9 +91,10 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(services_widget, top_chunks[1]);
+    f.render_widget(services_widget, area);
+}
 
-    // 3. System Stats
+fn render_runtime_stats(f: &mut Frame, area: Rect, state: &TuiState) {
     let stats_block = state.status.as_ref().map_or_else(
         || Paragraph::new("Fetching stats..."),
         |s| {
@@ -116,15 +131,10 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(stats_widget, top_chunks[2]);
+    f.render_widget(stats_widget, area);
+}
 
-    // 4. Bottom Area: Inventory & DNS
-    let bottom_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
-
-    // 4a. Device Breakdown by Category
+fn render_device_inventory(f: &mut Frame, area: Rect, state: &TuiState) {
     let category_breakdown = state.state.as_ref().map_or_else(
         || Paragraph::new("Calculating inventory..."),
         |cs| {
@@ -158,9 +168,10 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(inventory_block, bottom_chunks[0]);
+    f.render_widget(inventory_block, area);
+}
 
-    // 4b. DNS Stats
+fn render_dns_stats(f: &mut Frame, area: Rect, state: &TuiState) {
     let dns_stats_block = state.dns_stats.as_ref().map_or_else(
         || Paragraph::new("Waiting for DNS stats..."),
         |ds| {
@@ -189,5 +200,5 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(dns_widget, bottom_chunks[1]);
+    f.render_widget(dns_widget, area);
 }

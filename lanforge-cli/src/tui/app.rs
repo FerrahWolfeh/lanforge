@@ -13,6 +13,13 @@ pub enum TuiTab {
     Topology,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiMode {
+    Normal,
+    Filtering,
+    Detail,
+}
+
 impl TuiTab {
     #[must_use]
     pub const fn from_index(index: usize) -> Self {
@@ -42,13 +49,12 @@ impl TuiTab {
 pub struct TuiApp {
     pub state: TuiState,
     pub active_tab: TuiTab,
+    pub mode: TuiMode,
     pub device_list_state: TableState,
     pub tree_state: TreeState<String>,
     pub tree_state_topology: TreeState<String>,
-    pub showing_detail: bool,
     pub auto_scroll: bool,
     pub filter_text: String,
-    pub filter_active: bool,
     pub should_quit: bool,
 }
 
@@ -64,21 +70,20 @@ impl TuiApp {
         Self {
             state: TuiState::new(),
             active_tab: TuiTab::Overview,
+            mode: TuiMode::Normal,
             device_list_state: TableState::default(),
             tree_state: TreeState::default(),
             tree_state_topology: TreeState::default(),
-            showing_detail: false,
             auto_scroll: true,
             filter_text: String::new(),
-            filter_active: false,
             should_quit: false,
         }
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) {
-        if self.filter_active {
+        if self.mode == TuiMode::Filtering {
             match key.code {
-                KeyCode::Enter | KeyCode::Esc => self.filter_active = false,
+                KeyCode::Enter | KeyCode::Esc => self.mode = TuiMode::Normal,
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.should_quit = true;
                 }
@@ -111,7 +116,7 @@ impl TuiApp {
                     self.active_tab,
                     TuiTab::Devices | TuiTab::Explorer | TuiTab::Topology
                 ) {
-                    self.filter_active = true;
+                    self.mode = TuiMode::Filtering;
                 }
             }
             KeyCode::Char(' ') => {
@@ -122,7 +127,7 @@ impl TuiApp {
             KeyCode::Up => self.move_up(),
             KeyCode::Down => self.move_down(),
             KeyCode::Enter => match self.active_tab {
-                TuiTab::Devices => self.showing_detail = true,
+                TuiTab::Devices => self.mode = TuiMode::Detail,
                 TuiTab::Explorer => {
                     self.tree_state.toggle_selected();
                 }
@@ -132,8 +137,8 @@ impl TuiApp {
                 _ => {}
             },
             KeyCode::Esc => {
-                if self.showing_detail {
-                    self.showing_detail = false;
+                if self.mode == TuiMode::Detail {
+                    self.mode = TuiMode::Normal;
                 } else if !self.filter_text.is_empty() {
                     self.filter_text.clear();
                 }
