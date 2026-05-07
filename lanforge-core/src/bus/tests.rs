@@ -2,9 +2,10 @@
 
 use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent};
 use crate::context::LanforgeContext;
-use crate::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, State};
-use crate::device::Origin;
-use crate::identifiers::MacAddr;
+use crate::context::state::State;
+use lanforge_types::device::Origin;
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate, TimedEvent};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -73,7 +74,7 @@ async fn known_device_does_not_publish_discovered() {
     }
 
     assert!(
-        !events.iter().any(|e: &crate::bus::TimedEvent| matches!(
+        !events.iter().any(|e: &TimedEvent| matches!(
             e.event,
             LanforgeEvent::Device(DeviceEvent::Discovered { .. })
         )),

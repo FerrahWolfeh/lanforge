@@ -1,5 +1,5 @@
-use crate::device::Device;
-use crate::identifiers::{Duid, MacAddr};
+use lanforge_types::device::Device;
+use lanforge_types::identifiers::{Duid, MacAddr};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;

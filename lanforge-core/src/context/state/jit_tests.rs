@@ -1,8 +1,8 @@
 use crate::bus::EventBus;
 use crate::context::LanforgeContext;
 use crate::context::state::DeviceUpdate;
-use crate::device::{Device, Origin};
-use crate::identifiers::MacAddr;
+use lanforge_types::device::{Device, Origin};
+use lanforge_types::identifiers::MacAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 

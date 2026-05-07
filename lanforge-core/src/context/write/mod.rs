@@ -4,15 +4,11 @@ pub(crate) mod device;
 pub(crate) mod network;
 pub(crate) mod storage;
 
-use crate::{
-    context::{
-        LanforgeContext,
-        state::{DeviceUpdate, State},
-    },
-    device::Device,
-};
+use lanforge_types::{Device, DeviceUpdate, events::EventVec};
 use parking_lot::RwLockWriteGuard;
 use std::{net::IpAddr, sync::atomic::Ordering};
+
+use crate::context::{LanforgeContext, state::State};
 
 impl LanforgeContext {
     /// Provides direct write access to the underlying device state.
@@ -28,13 +24,13 @@ impl LanforgeContext {
     /// Applies a state mutation and returns any events that were published to the bus.
     #[must_use]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn apply_with_events(&self, update: DeviceUpdate) -> crate::bus::EventVec {
+    pub fn apply_with_events(&self, update: DeviceUpdate) -> EventVec {
         // 1. Update Metrics
         self.update_metrics(&update);
 
         // 2. Fast-path for redundant activity updates (Debounce)
         let Some(update) = self.debounce_update(update) else {
-            return crate::bus::EventVec::new();
+            return EventVec::new();
         };
 
         // 3. Apply to State
@@ -44,7 +40,7 @@ impl LanforgeContext {
         };
 
         if events.is_empty() {
-            return crate::bus::EventVec::new();
+            return EventVec::new();
         }
 
         // 4. Publish Events

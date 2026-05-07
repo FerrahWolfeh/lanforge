@@ -28,7 +28,7 @@
 //! ```rust
 //! use lanforge_core::context::LanforgeContext;
 //! use lanforge_core::bus::EventBus;
-//! use lanforge_core::identifiers::MacAddr;
+//! use lanforge_types::MacAddr;
 //! use std::sync::Arc;
 //!
 //! let bus = Arc::new(EventBus::new());
@@ -45,13 +45,12 @@ use std::{
     sync::Arc,
 };
 
+use lanforge_types::{Device, Duid, InterfaceState, MacAddr};
 use parking_lot::RwLockReadGuard;
 
 use crate::{
-    context::state::{InterfaceState, State},
+    context::state::State,
     context::{LanforgeContext, state::StaticRegistry},
-    device::Device,
-    identifiers::{Duid, MacAddr},
 };
 
 impl LanforgeContext {

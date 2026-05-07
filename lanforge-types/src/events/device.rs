@@ -1,6 +1,6 @@
-use crate::device::DeviceClass;
+use crate::device::{DeviceClass, Ipv6AddrOrSuffix};
 use crate::identifiers::{Duid, MacAddr};
-use crate::{context::state::LeaseTarget, device::Ipv6AddrOrSuffix};
+use crate::updates::LeaseTarget;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -71,9 +71,6 @@ pub enum DeviceChange {
 impl DeviceChange {
     /// Returns true if this change represents a significant state modification
     /// that should be persisted to the main database immediately.
-    ///
-    /// Minor changes like activity timestamps or transient status updates
-    /// return false to avoid excessive main DB writes.
     #[must_use]
     pub const fn is_persistent(&self) -> bool {
         match self {
@@ -99,8 +96,7 @@ impl DeviceChange {
         }
     }
 
-    /// Returns true if this change represents a modification to lease state
-    /// (`DHCPv4`, `DHCPv6`, SLAAC, or `V6Prefix`) that requires full child table sync.
+    /// Returns true if this change represents a modification to lease state.
     #[must_use]
     pub const fn is_lease_change(&self) -> bool {
         matches!(

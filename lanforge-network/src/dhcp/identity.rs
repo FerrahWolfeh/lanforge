@@ -7,7 +7,7 @@
 
 use std::{fmt, sync::Arc};
 
-use lanforge_core::{device::Device, identifiers::MacAddr};
+use lanforge_types::{device::Device, identifiers::MacAddr};
 
 /// Resolved identity of a DHCP client device.
 ///

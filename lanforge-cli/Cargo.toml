@@ -45,6 +45,7 @@ lanforge-http = { path = "../lanforge-http", features = [
 lanforge-core = { path = "../lanforge-core" }
 lanforge-db = { path = "../lanforge-db" }
 lanforge-macros = { path = "../lanforge-macros" }
+lanforge-types = { path = "../lanforge-types" }
 mac_oui = { version = "0.4.11", features = ["with-db"] }
 bincode = "1.3.3"
 zstd = { version = "0.13", optional = true }

@@ -4,13 +4,11 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use crate::context::LanforgeContext;
-use crate::identifiers::MacAddr;
+use lanforge_types::MacAddr;
 #[cfg(test)]
-use crate::{
-    device::{Device, Ipv6AddrOrSuffix, Origin},
-    identifiers::Duid,
-};
+use lanforge_types::{Device, Duid, Ipv6AddrOrSuffix, Origin};
+
+use crate::context::LanforgeContext;
 
 impl LanforgeContext {
     /// Triggers the background garbage collection process.
@@ -53,11 +51,11 @@ impl LanforgeContext {
         boot_file: Option<String>,
         origin: Origin,
     ) {
-        use crate::context::state::{self, DeviceUpdate, FieldUpdate};
+        use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 
         let _ = self.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            update: state::CliHostUpdate {
+            update: CliHostUpdate {
                 hostname: FieldUpdate::from(Some(hostname)),
                 duid: FieldUpdate::from(duid),
                 v4_static: FieldUpdate::from(v4_static),

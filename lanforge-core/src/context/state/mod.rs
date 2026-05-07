@@ -10,9 +10,11 @@ pub mod network;
 pub mod tests;
 
 use crate::bus::{DeviceChange, DeviceEvent, LanforgeEvent};
-use crate::device::{Device, DeviceClass, Ipv6AddrOrSuffix, Origin};
-use crate::identifiers::{Duid, MacAddr};
-use lanforge_macros::UpdateDispatch;
+use lanforge_types::device::{Device, DeviceClass, Ipv6AddrOrSuffix, Origin};
+use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::updates::{
+    CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget, StaticEntry,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -21,166 +23,76 @@ use std::time::{Duration, SystemTime};
 
 pub use self::cache::DiscoveryCache;
 pub use self::indices::Indices;
-pub use self::network::{InterfaceState, NetworkState};
+pub use self::network::NetworkState;
 
 // ---------------------------------------------------------------------------
-// Types moved from state.rs
+// DeviceUpdate Dispatch
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum FieldUpdate<T> {
-    #[serde(rename = "no_change")]
-    #[default]
-    NoChange,
-    #[serde(rename = "clear")]
-    Clear,
-    #[serde(rename = "set")]
-    Set(T),
-}
-
-impl<T> From<Option<T>> for FieldUpdate<T> {
-    fn from(opt: Option<T>) -> Self {
-        opt.map_or_else(|| Self::Clear, |val| Self::Set(val))
-    }
-}
-
-impl<T> From<T> for FieldUpdate<T> {
-    fn from(val: T) -> Self {
-        Self::Set(val)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct StaticEntry {
-    pub mac: MacAddr,
-    pub hostname: String,
-    pub duid: Option<Duid>,
-    pub v4_static: Option<Ipv4Addr>,
-    pub v6_suffix: Option<Ipv6AddrOrSuffix>,
-    pub boot_file: Option<String>,
-    pub origin: Origin,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CliHostUpdate {
-    pub hostname: FieldUpdate<String>,
-    pub duid: FieldUpdate<Duid>,
-    pub v4_static: FieldUpdate<Ipv4Addr>,
-    pub v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
-    pub boot_file: FieldUpdate<String>,
-    pub origin: Origin,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub enum LeaseTarget {
-    V4,
-    V6 { iaid: u32 },
-    V6Prefix { iaid: u32 },
-}
-
-impl std::fmt::Display for LeaseTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::V4 => write!(f, "V4"),
-            Self::V6 { iaid } => write!(f, "V6 (IAID: {iaid})"),
-            Self::V6Prefix { iaid } => write!(f, "V6-PD (IAID: {iaid})"),
+impl State {
+    pub fn apply_update(&mut self, update: DeviceUpdate) -> crate::bus::EventVec {
+        match update {
+            DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
+                self.handle_v4_lease_granted(mac, ip, expires)
+            }
+            DeviceUpdate::V6LeaseGranted {
+                mac,
+                duid,
+                iaid,
+                ip,
+                expires,
+            } => self.handle_v6_lease_granted(mac, duid, iaid, ip, expires),
+            DeviceUpdate::V6PrefixAssigned {
+                mac,
+                duid,
+                iaid,
+                prefix,
+                len,
+                expires,
+            } => self.handle_v6_prefix_assigned(mac, duid, iaid, prefix, len, expires),
+            DeviceUpdate::SlaacObserved {
+                mac,
+                addr,
+                is_active,
+            } => self.handle_slaac_observed(mac, addr, is_active),
+            DeviceUpdate::NdpSeen { mac, ip, is_active } => {
+                self.handle_ndp_seen(mac, ip, is_active)
+            }
+            DeviceUpdate::ArpSeen { mac, ip, is_active } => {
+                self.handle_arp_seen(mac, ip, is_active)
+            }
+            DeviceUpdate::DhcpHostnameHint { mac, hostname } => {
+                self.handle_hostname_hint_dhcp(mac, hostname)
+            }
+            DeviceUpdate::MdnsHostnameHint { mac, hostname } => {
+                self.handle_hostname_hint_mdns(mac, hostname)
+            }
+            DeviceUpdate::DuidAssociated { mac, duid, iaid } => {
+                self.handle_duid_associated(mac, duid, iaid)
+            }
+            DeviceUpdate::CliHostUpdated { mac, update } => {
+                self.handle_cli_host_updated(mac, update)
+            }
+            DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
+            DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, target),
+            DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
+            DeviceUpdate::IpOffline { ip } => self.handle_ip_offline(ip),
+            DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
+                self.handle_interface_ips_changed(ifindex, state)
+            }
+            DeviceUpdate::PruneZombies => self.handle_prune_zombies(),
+            DeviceUpdate::RebuildDnsIndices => self.handle_rebuild_dns_indices(),
+            DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
+            DeviceUpdate::TopologyUpdated {
+                mac,
+                parent_mac,
+                port,
+                ifindex,
+            } => self.handle_topology_updated(mac, parent_mac, port, ifindex),
+            DeviceUpdate::Reset => self.handle_reset(),
+            DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries),
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// DeviceUpdate & Dispatch
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, UpdateDispatch)]
-pub enum DeviceUpdate {
-    V4LeaseGranted {
-        mac: MacAddr,
-        ip: Ipv4Addr,
-        expires: SystemTime,
-    },
-    V6LeaseGranted {
-        mac: Option<MacAddr>,
-        duid: Duid,
-        iaid: u32,
-        ip: Ipv6Addr,
-        expires: SystemTime,
-    },
-    V6PrefixAssigned {
-        mac: Option<MacAddr>,
-        duid: Duid,
-        iaid: u32,
-        prefix: Ipv6Addr,
-        len: u8,
-        expires: SystemTime,
-    },
-    SlaacObserved {
-        mac: MacAddr,
-        addr: Ipv6Addr,
-        is_active: bool,
-    },
-    NdpSeen {
-        mac: MacAddr,
-        ip: Ipv6Addr,
-        is_active: bool,
-    },
-    ArpSeen {
-        mac: MacAddr,
-        ip: Ipv4Addr,
-        is_active: bool,
-    },
-    #[handler("handle_hostname_hint_dhcp")]
-    DhcpHostnameHint {
-        mac: MacAddr,
-        hostname: String,
-    },
-    #[handler("handle_hostname_hint_mdns")]
-    MdnsHostnameHint {
-        mac: MacAddr,
-        hostname: String,
-    },
-    DuidAssociated {
-        mac: Option<MacAddr>,
-        duid: Duid,
-        iaid: u32,
-    },
-    CliHostUpdated {
-        mac: MacAddr,
-        update: CliHostUpdate,
-    },
-    HostRemoved {
-        mac: MacAddr,
-    },
-    LeaseReleased {
-        mac: MacAddr,
-        target: LeaseTarget,
-    },
-    IpDeleted {
-        ip: IpAddr,
-    },
-    IpOffline {
-        ip: IpAddr,
-    },
-    InterfaceIpsChanged {
-        ifindex: u32,
-        state: InterfaceState,
-    },
-    PruneZombies,
-    RebuildDnsIndices,
-    ClassHint {
-        mac: MacAddr,
-        class: DeviceClass,
-    },
-    TopologyUpdated {
-        mac: MacAddr,
-        parent_mac: Option<MacAddr>,
-        port: Option<String>,
-        ifindex: u32,
-    },
-    Reset,
-    NeighborBatch {
-        entries: Vec<(MacAddr, IpAddr, bool)>,
-    },
 }
 
 // ---------------------------------------------------------------------------

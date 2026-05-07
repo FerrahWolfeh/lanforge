@@ -20,14 +20,14 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use lanforge_api::api::{Command, Response};
 use lanforge_api::server::ClientContext;
-use lanforge_core::identifiers::MacAddr;
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
-    context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate},
-    device::{Device, Ipv6AddrOrSuffix, Origin},
     error::CoreError,
 };
 use lanforge_dns::tls_utils;
+use lanforge_types::{
+    CliHostUpdate, Device, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::{net::Ipv4Addr, time::Instant};

@@ -5,11 +5,13 @@ use lanforge_api::server::{ClientContext, handle_client};
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::device::Origin;
-use lanforge_core::identifiers::MacAddr;
 use lanforge_core::service::ServiceControl;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::worker::DbWorker;
+use lanforge_types::device::Origin;
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::updates::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -52,7 +54,6 @@ async fn test_full_db_reset_chain() {
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
 
     // 2. Add some initial state (dynamic and static)
-    use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate};
     let _ = ctx.apply(DeviceUpdate::ArpSeen {
         mac: mac_dyn,
         ip: "192.168.1.10".parse::<Ipv4Addr>().unwrap(),

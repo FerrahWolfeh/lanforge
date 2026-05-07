@@ -33,9 +33,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
-use lanforge_core::device::IPv4State;
-
-use lanforge_core::identifiers::MacAddr;
+use lanforge_types::device::IPv4State;
+use lanforge_types::identifiers::MacAddr;
 
 use lanforge_core::context::LanforgeContext;
 
@@ -241,10 +240,7 @@ impl IpPool {
 
 #[cfg(test)]
 mod tests {
-    use lanforge_core::{
-        context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate},
-        device::Origin,
-    };
+    use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate, Origin};
 
     use super::*;
     use crate::dhcp::v4::config::Dhcpv4PoolConfig;

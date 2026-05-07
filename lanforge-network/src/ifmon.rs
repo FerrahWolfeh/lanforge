@@ -22,9 +22,9 @@
 use futures::stream::TryStreamExt;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::context::state::{DeviceUpdate, InterfaceState};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_types::{DeviceUpdate, InterfaceState};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;

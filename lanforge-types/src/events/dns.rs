@@ -1,7 +1,6 @@
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "adblock")]
 use std::net::IpAddr;
-
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DnsRecordEntry {

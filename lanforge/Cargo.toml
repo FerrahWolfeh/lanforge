@@ -49,32 +49,23 @@ dot = ["lanforge-dns/dot"]
 doq = ["lanforge-dns/doq"]
 
 # Core Features
-adblock = [
-    "lanforge-dns/adblock",
-    "lanforge-db/adblock",
-]
+adblock = ["lanforge-dns/adblock", "lanforge-db/adblock"]
 zstd = ["lanforge-api/zstd"]
 
 # Meta-features
-full = [
-    "http",
-    "https",
-    "doh",
-    "dot",
-    "doq",
-    "adblock",
-    "postgres",
-    "sqlite",
-]
+full = ["http", "https", "doh", "dot", "doq", "adblock", "postgres", "sqlite"]
 
 
 [dependencies]
+lanforge-types = { path = "../lanforge-types" }
 lanforge-core = { path = "../lanforge-core" }
 lanforge-db = { path = "../lanforge-db" }
 lanforge-dns = { path = "../lanforge-dns" }
 lanforge-network = { path = "../lanforge-network" }
 lanforge-api = { path = "../lanforge-api" }
 lanforge-http = { path = "../lanforge-http", optional = true }
+lanforge-tftp = { path = "../lanforge-tftp" }
+
 
 # Async & runtime
 tokio = { version = "1", features = [
@@ -107,7 +98,6 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
     "fmt",
     "ansi",
 ] }
-lanforge-tftp = { version = "0.1.0", path = "../lanforge-tftp" }
 hotpath = { workspace = true, optional = true }
 tikv-jemallocator = { workspace = true, optional = true }
 

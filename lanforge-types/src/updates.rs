@@ -1,0 +1,165 @@
+use crate::device::{DeviceClass, Ipv6AddrOrSuffix, Origin};
+use crate::identifiers::{Duid, MacAddr};
+use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::time::SystemTime;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FieldUpdate<T> {
+    #[serde(rename = "no_change")]
+    #[default]
+    NoChange,
+    #[serde(rename = "clear")]
+    Clear,
+    #[serde(rename = "set")]
+    Set(T),
+}
+
+impl<T> From<Option<T>> for FieldUpdate<T> {
+    fn from(opt: Option<T>) -> Self {
+        opt.map_or_else(|| Self::Clear, |val| Self::Set(val))
+    }
+}
+
+impl<T> From<T> for FieldUpdate<T> {
+    fn from(val: T) -> Self {
+        Self::Set(val)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct StaticEntry {
+    pub mac: MacAddr,
+    pub hostname: String,
+    pub duid: Option<Duid>,
+    pub v4_static: Option<Ipv4Addr>,
+    pub v6_suffix: Option<Ipv6AddrOrSuffix>,
+    pub boot_file: Option<String>,
+    pub origin: Origin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CliHostUpdate {
+    pub hostname: FieldUpdate<String>,
+    pub duid: FieldUpdate<Duid>,
+    pub v4_static: FieldUpdate<Ipv4Addr>,
+    pub v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
+    pub boot_file: FieldUpdate<String>,
+    pub origin: Origin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct InterfaceState {
+    pub v4: Option<(Ipv4Addr, u8)>,
+    pub link_local: Option<Ipv6Addr>,
+    pub gua: Option<Ipv6Addr>,
+    pub ula: Option<Ipv6Addr>,
+    pub gua_preferred: u32,
+    pub gua_valid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub enum LeaseTarget {
+    V4,
+    V6 { iaid: u32 },
+    V6Prefix { iaid: u32 },
+}
+
+impl std::fmt::Display for LeaseTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::V4 => write!(f, "V4"),
+            Self::V6 { iaid } => write!(f, "V6 (IAID: {iaid})"),
+            Self::V6Prefix { iaid } => write!(f, "V6-PD (IAID: {iaid})"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DeviceUpdate {
+    V4LeaseGranted {
+        mac: MacAddr,
+        ip: Ipv4Addr,
+        expires: SystemTime,
+    },
+    V6LeaseGranted {
+        mac: Option<MacAddr>,
+        duid: Duid,
+        iaid: u32,
+        ip: Ipv6Addr,
+        expires: SystemTime,
+    },
+    V6PrefixAssigned {
+        mac: Option<MacAddr>,
+        duid: Duid,
+        iaid: u32,
+        prefix: Ipv6Addr,
+        len: u8,
+        expires: SystemTime,
+    },
+    SlaacObserved {
+        mac: MacAddr,
+        addr: Ipv6Addr,
+        is_active: bool,
+    },
+    NdpSeen {
+        mac: MacAddr,
+        ip: Ipv6Addr,
+        is_active: bool,
+    },
+    ArpSeen {
+        mac: MacAddr,
+        ip: Ipv4Addr,
+        is_active: bool,
+    },
+    DhcpHostnameHint {
+        mac: MacAddr,
+        hostname: String,
+    },
+    MdnsHostnameHint {
+        mac: MacAddr,
+        hostname: String,
+    },
+    DuidAssociated {
+        mac: Option<MacAddr>,
+        duid: Duid,
+        iaid: u32,
+    },
+    CliHostUpdated {
+        mac: MacAddr,
+        update: CliHostUpdate,
+    },
+    HostRemoved {
+        mac: MacAddr,
+    },
+    LeaseReleased {
+        mac: MacAddr,
+        target: LeaseTarget,
+    },
+    IpDeleted {
+        ip: IpAddr,
+    },
+    IpOffline {
+        ip: IpAddr,
+    },
+    InterfaceIpsChanged {
+        ifindex: u32,
+        state: InterfaceState,
+    },
+    PruneZombies,
+    RebuildDnsIndices,
+    ClassHint {
+        mac: MacAddr,
+        class: DeviceClass,
+    },
+    TopologyUpdated {
+        mac: MacAddr,
+        parent_mac: Option<MacAddr>,
+        port: Option<String>,
+        ifindex: u32,
+    },
+    Reset,
+    NeighborBatch {
+        entries: Vec<(MacAddr, IpAddr, bool)>,
+    },
+}

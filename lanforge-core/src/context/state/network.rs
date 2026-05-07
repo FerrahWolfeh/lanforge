@@ -1,22 +1,11 @@
+use lanforge_types::updates::InterfaceState;
 use serde::{Deserialize, Serialize, de::Error};
 use std::{
     collections::HashMap,
     fmt::Display,
     hash::{BuildHasher, Hash},
-    net::{Ipv4Addr, Ipv6Addr},
     str::FromStr,
 };
-
-/// Network interface IP configuration state.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct InterfaceState {
-    pub v4: Option<(Ipv4Addr, u8)>,
-    pub link_local: Option<Ipv6Addr>,
-    pub gua: Option<Ipv6Addr>,
-    pub ula: Option<Ipv6Addr>,
-    pub gua_preferred: u32,
-    pub gua_valid: u32,
-}
 
 /// Simplified DHCP pool metrics for state tracking.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

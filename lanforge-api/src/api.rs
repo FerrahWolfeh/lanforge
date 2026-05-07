@@ -1,5 +1,5 @@
-use lanforge_core::context::state::LeaseTarget;
 use lanforge_core::{bus::TimedEvent, context::state::State};
+use lanforge_types::{LeaseTarget, events::dns::DnsRecordEntry};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -690,8 +690,6 @@ pub struct DnsQueryResponse {
     /// Whether the result was authoritative.
     pub authoritative: bool,
 }
-
-pub use lanforge_core::bus::dns::DnsRecordEntry;
 
 /// Detailed DHCP pool utilization.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

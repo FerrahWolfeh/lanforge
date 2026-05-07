@@ -8,6 +8,7 @@ lanforge-core = { path = "../lanforge-core" }
 lanforge-db = { path = "../lanforge-db" }
 lanforge-dns = { path = "../lanforge-dns" }
 lanforge-macros = { path = "../lanforge-macros" }
+lanforge-types = { path = "../lanforge-types" }
 
 hex = { version = "0.4.3", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
@@ -19,7 +20,9 @@ thiserror = "2.0.18"
 tokio-util = { version = "0.7.18" }
 bincode = "1.3.3"
 async-trait = "0.1.86"
-hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
+hickory-proto = { version = "0.26.1", default-features = false, features = [
+    "std",
+] }
 zstd = { version = "0.13", optional = true }
 
 hotpath = { workspace = true, optional = true }

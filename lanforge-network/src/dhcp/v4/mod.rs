@@ -37,8 +37,8 @@ use lanforge_core::bus::{
     DeviceChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent,
 };
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::context::state::{DeviceUpdate, LeaseTarget};
-use lanforge_core::identifiers::MacAddr;
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::{DeviceUpdate, LeaseTarget};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, SystemTime};

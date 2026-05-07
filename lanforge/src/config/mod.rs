@@ -30,7 +30,6 @@ pub use args::CliArgs;
 #[cfg(feature = "debug-commands")]
 pub use args::Command;
 use lanforge_api::config::{ApiConfig, HttpConfig};
-use lanforge_core::device::Ipv6AddrOrSuffix;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_dns::{DnsConfig, PrioritizedUpstream};
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
@@ -39,6 +38,7 @@ use lanforge_network::mdns::MdnsConfig;
 use lanforge_network::ndp::config::MonitorConfig;
 use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
 use lanforge_tftp::config::TftpConfig;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
 
 use clap::Parser;
@@ -178,7 +178,7 @@ impl Config {
     ) -> Self {
         Self {
             #[cfg(feature = "debug-commands")]
-            command: cli.command.unwrap_or(Command::Run { only: None }),
+            command: cli.command.clone().unwrap_or(Command::Run { only: None }),
             system: {
                 let mut s = toml_cfg.system;
                 if let Some(ref iface) = cli.iface_lan {

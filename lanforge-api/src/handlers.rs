@@ -13,12 +13,14 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
-use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
-use lanforge_core::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
-use lanforge_core::identifiers::{Duid, MacAddr};
 use lanforge_core::utils::auth::hash_password;
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
 use lanforge_db::log_engine::LogDb;
+use lanforge_types::events::dns::DnsRecordEntry;
+use lanforge_types::{
+    CliHostUpdate, Device, DeviceUpdate, Duid, FieldUpdate, IPv4State, IPv6State, Ipv6AddrOrSuffix,
+    LeaseTarget, MacAddr, Origin,
+};
 use std::str::FromStr;
 
 use crate::api::{
@@ -31,9 +33,10 @@ use crate::api::{
 
 // Moved to lanforge-http
 
+use crate::api::Compression;
 use crate::server::ClientContext;
+
 use hickory_proto::rr::{Name, RecordType};
-use lanforge_core::bus::dns::DnsRecordEntry;
 use lanforge_dns::resolver::LocalResolver;
 use lanforge_dns::server::DnsContext;
 
@@ -153,12 +156,10 @@ impl ClientContext {
             compression: {
                 #[cfg(feature = "zstd")]
                 {
-                    use crate::api::Compression;
                     vec![Compression::None, Compression::Zstd]
                 }
                 #[cfg(not(feature = "zstd"))]
                 {
-                    use crate::api::Compression;
                     vec![Compression::None]
                 }
             },
@@ -168,7 +169,7 @@ impl ClientContext {
     fn populate_service_and_device_stats(
         &self,
         status: &mut StatusResponse,
-        devices: &[std::sync::Arc<lanforge_core::device::Device>],
+        devices: &[std::sync::Arc<Device>],
     ) {
         // Services -> RA
         status.services.ra.state = if self.cfg.ra_enabled {
@@ -273,7 +274,7 @@ impl ClientContext {
     }
 
     fn device_matches_filter(
-        dev: &lanforge_core::device::Device,
+        dev: &Device,
         filter: Option<&String>,
         method: Option<&String>,
     ) -> bool {
@@ -305,7 +306,7 @@ impl ClientContext {
     }
 
     fn map_device(
-        dev: &lanforge_core::device::Device,
+        dev: &Device,
         gua_prefix: Option<Ipv6Addr>,
         ula_prefix: Option<Ipv6Addr>,
     ) -> DeviceEntry {

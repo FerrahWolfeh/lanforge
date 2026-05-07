@@ -1,7 +1,8 @@
 use super::types::DeviceRow;
 use super::utils::system_time_to_unix;
 use crate::LeaseDbError;
-use lanforge_core::device::{Device, IPv4State, IPv6State, V6PrefixLease};
+use lanforge_types::device::{IPv4State, IPv6State, V6PrefixLease};
+use lanforge_types::{Device, MacAddr};
 use sqlx::{Sqlite, Transaction};
 use std::net::Ipv4Addr;
 
@@ -357,7 +358,7 @@ pub async fn find_mac_by_hostname(
     pool: &sqlx::SqlitePool,
     hostname: &str,
     since_unix: i64,
-) -> Result<Option<lanforge_core::identifiers::MacAddr>, crate::LeaseDbError> {
+) -> Result<Option<MacAddr>, crate::LeaseDbError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT mac FROM devices WHERE (hostname = ? OR hostname = ?) AND last_seen >= ? LIMIT 1",
     )
@@ -367,5 +368,5 @@ pub async fn find_mac_by_hostname(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.and_then(|(mac,)| lanforge_core::identifiers::MacAddr::parse(&mac)))
+    Ok(row.and_then(|(mac,)| MacAddr::parse(&mac)))
 }

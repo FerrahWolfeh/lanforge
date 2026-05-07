@@ -10,7 +10,7 @@
 //! # Example
 //!
 //! ```rust
-//! use lanforge_core::identifiers::{Duid, MacAddr};
+//! use lanforge_types::identifiers::{Duid, MacAddr};
 //!
 //! let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
 //! let duid = Duid::generate_ll_from_mac(mac.0);
@@ -42,7 +42,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust
-/// use lanforge_core::identifiers::{Duid, MacAddr};
+/// use lanforge_types::identifiers::{Duid, MacAddr};
 ///
 /// // DUID-LL for MAC 00:01:02:03:04:05
 /// let duid = Duid::new(vec![0, 3, 0, 1, 0, 1, 2, 3, 4, 5]);
@@ -54,8 +54,6 @@ pub struct Duid {
     /// The raw bytes of the DUID.
     pub bytes: Arc<[u8]>,
 }
-
-// Removed serialize_duid helper as it's now handled by the Identifier macro.
 
 impl Duid {
     /// Creates a new DUID from a vector of bytes.
@@ -82,7 +80,7 @@ impl Duid {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_core::identifiers::Duid;
+    /// use lanforge_types::identifiers::Duid;
     ///
     /// // DUID-LL (type = 3)
     /// let duid = Duid::new(vec![0, 3, 0, 1, 0, 1, 2, 3, 4, 5]);
@@ -117,7 +115,7 @@ impl Duid {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_core::identifiers::{Duid, MacAddr};
+    /// use lanforge_types::identifiers::{Duid, MacAddr};
     ///
     /// // DUID-LL for MAC 00:01:02:03:04:05
     /// let duid = Duid::new(vec![0, 3, 0, 1, 0, 1, 2, 3, 4, 5]);
@@ -163,7 +161,7 @@ impl Duid {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_core::identifiers::{Duid, MacAddr};
+    /// use lanforge_types::identifiers::{Duid, MacAddr};
     ///
     /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     /// let duid = Duid::generate_ll_from_mac(mac.0);
@@ -177,8 +175,6 @@ impl Duid {
         Self::new(bytes)
     }
 }
-
-// Display, Debug, and Serde implementations for Duid are now handled by the Identifier macro.
 
 impl std::str::FromStr for Duid {
     type Err = String;
@@ -199,8 +195,6 @@ impl std::str::FromStr for Duid {
     }
 }
 
-// deserialize_duid helper removed as it's now handled by the Identifier macro.
-
 // ---------------------------------------------------------------------------
 // MacAddr
 // ---------------------------------------------------------------------------
@@ -217,7 +211,7 @@ impl std::str::FromStr for Duid {
 /// # Example
 ///
 /// ```rust
-/// use lanforge_core::identifiers::MacAddr;
+/// use lanforge_types::identifiers::MacAddr;
 ///
 /// let mac = MacAddr::parse("00:de:ad:be:ef:00").unwrap();
 /// assert_eq!(mac.0, [0x00, 0xde, 0xad, 0xbe, 0xef, 0x00]);
@@ -225,8 +219,6 @@ impl std::str::FromStr for Duid {
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Identifier, PartialOrd, Ord)]
 pub struct MacAddr(pub [u8; 6]);
-
-// Display, Debug, and Serde implementations for MacAddr are now handled by the Identifier macro.
 
 impl MacAddr {
     /// All-zeros MAC address (00:00:00:00:00:00).
@@ -239,7 +231,7 @@ impl MacAddr {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_core::identifiers::MacAddr;
+    /// use lanforge_types::identifiers::MacAddr;
     ///
     /// let mac = MacAddr::parse("00:de:ad:be:ef:00").unwrap();
     /// assert_eq!(mac.0, [0x00, 0xde, 0xad, 0xbe, 0xef, 0x00]);
@@ -314,8 +306,6 @@ impl AsRef<[u8; 6]> for MacAddr {
         &self.0
     }
 }
-
-// Removed manual Display and Debug implementations for MacAddr.
 
 #[cfg(test)]
 mod tests {

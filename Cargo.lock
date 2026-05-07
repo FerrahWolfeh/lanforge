@@ -2303,6 +2303,7 @@ dependencies = [
  "lanforge-http",
  "lanforge-network",
  "lanforge-tftp",
+ "lanforge-types",
  "netlink-sys",
  "pnet",
  "rtnetlink",
@@ -2330,6 +2331,7 @@ dependencies = [
  "lanforge-db",
  "lanforge-dns",
  "lanforge-macros",
+ "lanforge-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2360,6 +2362,7 @@ dependencies = [
  "lanforge-db",
  "lanforge-http",
  "lanforge-macros",
+ "lanforge-types",
  "mac_oui",
  "ratatui",
  "reqwest",
@@ -2380,6 +2383,7 @@ dependencies = [
  "argon2",
  "hotpath",
  "lanforge-macros",
+ "lanforge-types",
  "parking_lot",
  "rand 0.8.6",
  "serde",
@@ -2396,6 +2400,7 @@ dependencies = [
  "hotpath",
  "lanforge-core",
  "lanforge-macros",
+ "lanforge-types",
  "serde",
  "serde_json",
  "sqlx",
@@ -2415,6 +2420,7 @@ dependencies = [
  "hotpath",
  "lanforge-core",
  "lanforge-macros",
+ "lanforge-types",
  "moka",
  "parking_lot",
  "quinn",
@@ -2448,6 +2454,7 @@ dependencies = [
  "lanforge-core",
  "lanforge-dns",
  "lanforge-macros",
+ "lanforge-types",
  "rand 0.10.1",
  "reqwest",
  "rustls",
@@ -2481,6 +2488,7 @@ dependencies = [
  "hotpath",
  "lanforge-core",
  "lanforge-macros",
+ "lanforge-types",
  "libc",
  "netlink-packet-core",
  "netlink-sys",
@@ -2509,6 +2517,15 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "lanforge-types"
+version = "0.1.0"
+dependencies = [
+ "lanforge-macros",
+ "serde",
+ "smallvec",
 ]
 
 [[package]]

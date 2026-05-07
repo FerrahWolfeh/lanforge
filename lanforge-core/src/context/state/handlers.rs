@@ -6,11 +6,12 @@ use crate::bus::{DeviceChange, DeviceEvent, EventVec, LanforgeEvent, NetworkEven
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
-use crate::device::{
+use lanforge_types::Origin;
+use lanforge_types::device::{
     Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, TopologyInfo,
     V6ObservationOrigin, classify_ipv6,
 };
-use crate::identifiers::{Duid, MacAddr};
+use lanforge_types::identifiers::{Duid, MacAddr};
 
 impl State {
     pub(crate) fn handle_v4_lease_granted(
@@ -99,7 +100,7 @@ impl State {
                 if let Some(old) = old_duid
                     && old != *duid
                 {
-                    if dev.origin == crate::device::Origin::Toml {
+                    if dev.origin == Origin::Toml {
                         tracing::warn!(
                             "⚠️ DUID change detected for static host {} ({}). TOML says {:?}, but client sent {:?}. Please update your lanforge.toml.",
                             dev.display_hostname(),
@@ -495,18 +496,17 @@ impl State {
         }
 
         // SLOW-PATH: Multiple MACs in the same batch
-        let mut grouped: HashMap<MacAddr, crate::bus::SmallVec<[(IpAddr, bool); 4]>> =
-            HashMap::with_capacity(4);
+        // Re-implementing slow path more clearly
+        let mut grouped_updates: HashMap<MacAddr, Vec<(IpAddr, bool)>> = HashMap::new();
         for (mac, ip, active) in entries {
-            grouped.entry(mac).or_default().push((ip, active));
+            grouped_updates.entry(mac).or_default().push((ip, active));
         }
 
         let mut events = EventVec::new();
-        for (mac, updates) in &grouped {
-            let mac = *mac;
+        for (mac, updates) in grouped_updates {
             let mut dev_events = self.mutate_device(mac, |dev| {
                 let mut first_change = None;
-                for (ip, active) in updates {
+                for (ip, active) in &updates {
                     let change = match ip {
                         IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
                         IpAddr::V6(v6) => {
@@ -523,7 +523,7 @@ impl State {
             });
             events.append(&mut dev_events);
 
-            for (ip, _) in updates {
+            for (ip, _) in &updates {
                 if let IpAddr::V6(v6) = ip {
                     self.discovery
                         .ndp_cache

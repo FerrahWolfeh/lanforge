@@ -4,7 +4,7 @@
 //! and IPv6 prefix/suffix combining — all designed to minimize allocations.
 
 use hickory_proto::rr::Name;
-use lanforge_core::device::Ipv6AddrOrSuffix;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 use std::array::from_fn;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

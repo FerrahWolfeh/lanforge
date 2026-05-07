@@ -35,8 +35,8 @@
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::device::Device;
-use lanforge_core::identifiers::MacAddr;
+use lanforge_types::device::Device;
+use lanforge_types::identifiers::MacAddr;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -517,8 +517,7 @@ mod tests {
     use dhcproto::v4::{Architecture, DhcpOption, Message, MessageType, Opcode};
     use dhcproto::{Decodable, Decoder, Encodable, Encoder};
     use lanforge_core::context::LanforgeContext;
-    use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate};
-    use lanforge_core::device::Origin;
+    use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate, Origin};
     use std::collections::HashMap;
     use std::net::Ipv4Addr;
     use std::time::{Duration, SystemTime};

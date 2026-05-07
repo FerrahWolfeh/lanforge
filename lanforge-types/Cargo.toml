@@ -1,0 +1,16 @@
+[package]
+name = "lanforge-types"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+adblock = []
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+smallvec = { version = "1.15.1", features = [
+    "union",
+    "const_generics",
+    "serde",
+] }
+lanforge-macros = { path = "../lanforge-macros" }

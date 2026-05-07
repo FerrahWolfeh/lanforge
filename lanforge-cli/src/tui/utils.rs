@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
-use lanforge_core::context::state::{InterfaceState, StaticEntry};
-use lanforge_core::device::{DeviceClass, IPv6State};
+use lanforge_types::{DeviceClass, IPv6State, InterfaceState, updates::StaticEntry};
 use std::time::SystemTime;
 
 /// Returns an emoji icon for a device class.

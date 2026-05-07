@@ -4,8 +4,8 @@ use crate::config::Config;
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::identifiers::MacAddr;
 use lanforge_network::wol::send_wol_magic_packet;
+use lanforge_types::identifiers::MacAddr;
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;

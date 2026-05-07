@@ -1,4 +1,4 @@
-use crate::identifiers::{Duid, MacAddr};
+use lanforge_types::identifiers::{Duid, MacAddr};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

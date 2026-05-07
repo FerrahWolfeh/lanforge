@@ -42,11 +42,10 @@ use crate::ndp::utils::{
 };
 use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::context::state::DeviceUpdate;
 use lanforge_core::error::CoreError;
-use lanforge_core::identifiers::MacAddr;
-use lanforge_core::ndp::NeighborEvent;
 use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_types::ndp::NeighborEvent;
+use lanforge_types::{DeviceUpdate, MacAddr};
 use netlink_packet_core::NetlinkMessage;
 use netlink_sys::SocketAddr;
 use rtnetlink::Handle;

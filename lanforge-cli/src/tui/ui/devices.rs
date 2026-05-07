@@ -1,5 +1,6 @@
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
+use lanforge_types::IPv6State;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -58,7 +59,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
                 .v6
                 .iter()
                 .find(|s| s.ip().is_some_and(|ip| !ip.is_loopback()))
-                .and_then(lanforge_core::device::IPv6State::ip)
+                .and_then(IPv6State::ip)
                 .map_or_else(|| "—".to_string(), |ip| ip.to_string());
 
             let host_display = format!("{} {}", utils::get_class_icon(dev.class), host);

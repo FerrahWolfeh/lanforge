@@ -2,9 +2,10 @@
 
 use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent};
 use crate::context::LanforgeContext;
-use crate::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
-use crate::device::{Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
-use crate::identifiers::{Duid, MacAddr};
+use lanforge_types::device::Device;
+use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
+use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::updates::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -50,7 +51,15 @@ fn apply_update_hostname_hint_respects_static() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
     // Simula device estático via API correta
-    ctx.add_static_device(mac, "static-host".to_string(), None, None, None, None, Origin::Cli);
+    ctx.add_static_device(
+        mac,
+        "static-host".to_string(),
+        None,
+        None,
+        None,
+        None,
+        Origin::Cli,
+    );
 
     let changed = ctx.apply(DeviceUpdate::DhcpHostnameHint {
         mac,
@@ -747,11 +756,27 @@ fn test_static_registry_validation() {
     let suf1 = Ipv6AddrOrSuffix::parse("::100").unwrap();
 
     // 1. Setup normal registrations
-    ctx.add_static_device(mac1, "host1".to_string(), None, Some(ip1), Some(suf1), None, Origin::Cli);
+    ctx.add_static_device(
+        mac1,
+        "host1".to_string(),
+        None,
+        Some(ip1),
+        Some(suf1),
+        None,
+        Origin::Cli,
+    );
 
     // 2. Add conflicting registrations for mac2
     // mac2 tries to claim the same IPv4 and IPv6 suffix as mac1
-    ctx.add_static_device(mac2, "host2".to_string(), None, Some(ip1), Some(suf1), None, Origin::Cli);
+    ctx.add_static_device(
+        mac2,
+        "host2".to_string(),
+        None,
+        Some(ip1),
+        Some(suf1),
+        None,
+        Origin::Cli,
+    );
 
     // 3. Get registry - should perform collision detection
     let registry = ctx.get_static_registry();

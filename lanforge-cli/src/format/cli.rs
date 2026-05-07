@@ -2,7 +2,7 @@ use colored::Colorize;
 use lanforge_core::bus::{
     DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
-use lanforge_core::context::state::LeaseTarget;
+use lanforge_types::{LeaseTarget, MacAddr};
 
 use super::CliFormat;
 
@@ -104,7 +104,7 @@ fn format_device_event(now: &str, event: &DeviceEvent, verbose: bool) {
 
 fn print_device_update(
     now: &str,
-    mac: lanforge_core::identifiers::MacAddr,
+    mac: MacAddr,
     hostname: Option<&str>,
     change: &DeviceChange,
     verbose: bool,

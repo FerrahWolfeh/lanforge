@@ -1,7 +1,7 @@
 use lanforge_api::config::ApiConfig;
 use lanforge_core::context::{EventCounters, LanforgeContext};
-use lanforge_core::device::{Device, Origin};
 use lanforge_dns::stats::DnsStats;
+use lanforge_types::device::{Device, Origin};
 use std::fmt::Write;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 lanforge-core = { path = "../lanforge-core" }
 lanforge-macros = { path = "../lanforge-macros" }
+lanforge-types = { path = "../lanforge-types" }
 dhcproto = "0.14.0"
 netlink-packet-core = "0.8.1"
 pnet = "0.35.0"

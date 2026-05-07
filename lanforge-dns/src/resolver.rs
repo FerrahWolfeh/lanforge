@@ -4,6 +4,7 @@
 //! shared `LanforgeContext`. No network I/O is performed — all data comes
 //! from the in-memory device state.
 
+use lanforge_types::Device;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::IpAddr;
@@ -13,7 +14,6 @@ use crate::error::DnsError;
 use crate::utils::{extract_local_hostname, parse_arpa};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::device::Device;
 
 /// Resolves local DNS queries (A/AAAA/PTR) using the `LanforgeContext`.
 ///

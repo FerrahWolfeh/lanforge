@@ -10,7 +10,7 @@
 //! The magic packet format: 6 bytes of `0xFF` followed by 16 repetitions
 //! of the target MAC address (total 102 bytes).
 
-use lanforge_core::identifiers::MacAddr;
+use lanforge_types::MacAddr;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -27,7 +27,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 /// # Example
 ///
 /// ```ignore
-/// use lanforge_core::identifiers::MacAddr;
+/// use lanforge_types::MacAddr;
 /// use lanforge_network::wol::send_wol_magic_packet;
 ///
 /// let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);

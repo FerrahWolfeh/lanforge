@@ -1,9 +1,12 @@
 //! Storage and lifecycle state management.
 
-use crate::context::{LanforgeContext, state::DeviceUpdate};
 use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+
+use lanforge_types::DeviceUpdate;
+
+use crate::context::LanforgeContext;
 
 impl LanforgeContext {
     /// Sets the system lifecycle to shutdown mode for this instance.

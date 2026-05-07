@@ -198,6 +198,8 @@ impl DnsService {
         let initial_enabled = self.cfg.adblock_enabled;
 
         tokio::spawn(async move {
+            use std::time::Instant;
+
             let Some(adblocker) = adblocker else {
                 return;
             };
@@ -473,12 +475,8 @@ pub async fn handle_query(
             let edns = WireOptScanner::scan(data, &header, &question);
             let ra = !ctx.cfg.upstreams.is_empty();
             WireResponseWriter::write_error_response(
-                data,
-                &question,
-                3, // NXDOMAIN
-                edns.as_ref(),
-                ra,
-                resp,
+                data, &question, 3, // NXDOMAIN
+                edns, ra, resp,
             );
             return Ok(true);
         }

@@ -6,7 +6,7 @@ use iocraft::prelude::*;
 use lanforge_api::api::Response;
 use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
-use lanforge_core::device::Origin;
+use lanforge_types::device::Origin;
 
 pub struct DevicesHandler {
     pub verbose: bool,

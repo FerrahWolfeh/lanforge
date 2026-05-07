@@ -3,9 +3,10 @@ use hickory_proto::rr::rdata::opt::EdnsOption;
 use hickory_proto::rr::{Name, RData, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use lanforge_core::bus::EventBus;
-use lanforge_core::context::state::{CliHostUpdate, DeviceUpdate, FieldUpdate, State};
-use lanforge_core::device::{Device, Ipv6AddrOrSuffix, Origin};
-use lanforge_core::identifiers::{Duid, MacAddr};
+use lanforge_core::context::state::State;
+use lanforge_types::{
+    CliHostUpdate, Device, DeviceUpdate, Duid, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin,
+};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -266,12 +267,19 @@ async fn test_adblock_integration() {
     adblocker.replace_blocklist(list);
     adblocker.set_enabled(true);
 
+    let soa_zone = Name::from_str("lan.").unwrap();
+    let soa_master_ns = Name::from_str("ns.lan.").unwrap();
+    let soa_mailbox = Name::from_str("hostmaster.lan.").unwrap();
+
     let ctx = DnsContext {
         cfg,
         upstreams: Vec::new(),
         stats: Arc::new(DnsStats::default()),
         ctx: ctx_instance,
         adblocker: Some(adblocker),
+        soa_zone,
+        soa_master_ns,
+        soa_mailbox,
     };
 
     let mut query = Message::query();

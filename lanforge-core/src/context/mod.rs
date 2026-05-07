@@ -56,7 +56,8 @@
 use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
 use crate::context::state::State;
 use crate::error::CoreError;
-use crate::identifiers::MacAddr;
+use lanforge_types::Device;
+use lanforge_types::identifiers::MacAddr;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -145,7 +146,7 @@ impl ServiceHandle {
 /// Contains only the data necessary for the database worker to flush
 /// state to disk, avoiding the need to clone the entire `State` struct.
 pub struct PersistenceSnapshot {
-    pub devices: HashMap<MacAddr, Arc<crate::device::Device>>,
+    pub devices: HashMap<MacAddr, Arc<Device>>,
     pub timestamp: SystemTime,
 }
 
