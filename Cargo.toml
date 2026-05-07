@@ -21,6 +21,7 @@ tokio = { version = "1.52.2" }
 serde = { version = "1.0.228" }
 tracing = { version = "0.1.44" }
 thiserror = { version = "2.0.18" }
+reqwest = { version = "0.13.3" }
 
 
 [profile.release]

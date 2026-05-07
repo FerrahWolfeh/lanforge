@@ -15,6 +15,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
+reqwest = { workspace = true, features = ["json"], optional = true }
 
 # Server dependencies
 axum = { version = "0.8.8", features = ["ws"], optional = true }
@@ -41,7 +42,6 @@ futures = { version = "0.3.31", optional = true }
 rand = "0.10.1"
 
 # Client dependencies
-reqwest = { version = "0.13.3", features = ["json"], optional = true }
 rustls = { version = "0.23.40", default-features = false, features = [
     "std",
     "ring",
@@ -66,4 +66,4 @@ doh = ["server", "dep:base64"]
 tower = { version = "0.5.2", features = ["util"] }
 http-body-util = "0.1.2"
 tokio = { workspace = true, features = ["full", "test-util"] }
-reqwest = { version = "0.13.3", features = ["json"] }
+reqwest = { workspace = true, features = ["json"] }

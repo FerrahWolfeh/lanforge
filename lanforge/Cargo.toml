@@ -57,6 +57,7 @@ full = ["http", "https", "doh", "dot", "doq", "adblock", "postgres", "sqlite"]
 
 
 [dependencies]
+# Lanforge
 lanforge-types = { path = "../lanforge-types" }
 lanforge-core = { path = "../lanforge-core" }
 lanforge-db = { path = "../lanforge-db" }
@@ -68,7 +69,7 @@ lanforge-tftp = { path = "../lanforge-tftp" }
 
 
 # Async & runtime
-tokio = { version = "1", features = [
+tokio = { workspace = true, features = [
     "macros",
     "rt",
     "rt-multi-thread",
@@ -82,7 +83,7 @@ futures = { version = "0.3.32", default-features = false, features = ["std"] }
 
 # CLI e config
 clap = { version = "4.6.1", features = ["derive", "env"] }
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 toml = "1.1.2"
 
 # Networking / netlink
@@ -92,7 +93,7 @@ pnet = "0.35.0"
 
 # Observabilidade
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
-tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing = { workspace = true, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = [
     "env-filter",
     "fmt",
@@ -103,6 +104,6 @@ tikv-jemallocator = { workspace = true, optional = true }
 
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full", "io-util"] }
+tokio = { workspace = true, features = ["full", "io-util"] }
 tempfile = "3.10.1"
 serde_json = "1.0"
