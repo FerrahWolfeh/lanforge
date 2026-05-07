@@ -79,11 +79,11 @@ tokio = { workspace = true, features = [
     "sync",
     "io-util",
 ] }
-futures = { version = "0.3.32", default-features = false, features = ["std"] }
+futures = { workspace = true }
 
 # CLI e config
 clap = { workspace = true, features = ["derive", "env"] }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 toml = "1.1.2"
 
 # Networking / netlink

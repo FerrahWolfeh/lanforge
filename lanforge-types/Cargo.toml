@@ -10,10 +10,5 @@ adblock = []
 # Lanforge
 lanforge-macros = { path = "../lanforge-macros" }
 
-# Third party
-serde = { workspace = true, features = ["derive", "rc"] }
-smallvec = { version = "1.15.1", features = [
-    "union",
-    "const_generics",
-    "serde",
-] }
+serde = { workspace = true, features = ["rc"] }
+smallvec = { workspace = true }

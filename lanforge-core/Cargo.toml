@@ -12,18 +12,14 @@ lanforge-types = { path = "../lanforge-types" }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "sync"] }
-serde = { workspace = true, features = ["derive", "rc"] }
+serde = { workspace = true, features = ["rc"] }
 hotpath = { workspace = true, optional = true }
+smallvec = { workspace = true }
 
 # Third party
 argon2 = { version = "0.5.3" }
 rand = { version = "0.8.6" }
 parking_lot = { version = "0.12.5" }
-smallvec = { version = "1.15.1", features = [
-    "union",
-    "const_generics",
-    "serde",
-] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "sync", "rt-multi-thread"] }

@@ -12,8 +12,9 @@ lanforge-macros = { path = "../lanforge-macros" }
 tokio = { workspace = true, features = ["io-util", "net", "time", "rt"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 hotpath = { workspace = true, optional = true }
+smallvec = { workspace = true }
 
 # Third party
 moka = { version = "0.12.15", features = ["sync"] }
@@ -35,11 +36,6 @@ quinn = { version = "0.11.9", features = [
     "rustls",
     "runtime-tokio",
 ], optional = true }
-smallvec = { version = "1.15.1", features = [
-    "union",
-    "const_generics",
-    "serde",
-] }
 
 [features]
 adblock = ["dep:ureq", "dep:dashmap", "lanforge-core/adblock"]

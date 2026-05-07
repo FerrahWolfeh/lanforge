@@ -17,7 +17,7 @@ tokio = { workspace = true, features = [
     "macros",
     "sync",
 ] }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 tracing = { workspace = true }
 
 # Third party

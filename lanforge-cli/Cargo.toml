@@ -37,9 +37,9 @@ lanforge-http = { path = "../lanforge-http", features = [
 ], optional = true }
 
 # Workspace
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true, features = ["serde"] }
+chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
