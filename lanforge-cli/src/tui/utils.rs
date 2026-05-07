@@ -4,7 +4,8 @@ use lanforge_core::device::{DeviceClass, IPv6State};
 use std::time::SystemTime;
 
 /// Returns an emoji icon for a device class.
-pub fn get_class_icon(class: DeviceClass) -> &'static str {
+#[must_use]
+pub const fn get_class_icon(class: DeviceClass) -> &'static str {
     match class {
         DeviceClass::None => "❓",
         DeviceClass::Computer => "💻",
@@ -16,15 +17,17 @@ pub fn get_class_icon(class: DeviceClass) -> &'static str {
     }
 }
 
-/// Formats SystemTime into a human-readable relative duration string (e.g., "2m ago")
+/// Formats `SystemTime` into a human-readable relative duration string (e.g., "2m ago")
 /// or "now" if very recent.
+#[must_use]
 pub fn format_relative_time(st: SystemTime) -> String {
     if st == SystemTime::UNIX_EPOCH {
         return "never".to_string();
     }
     let now = SystemTime::now();
-    match now.duration_since(st) {
-        Ok(d) => {
+    now.duration_since(st).map_or_else(
+        |_| "future".to_string(),
+        |d| {
             if d.as_secs() < 5 {
                 "now".to_string()
             } else if d.as_secs() < 60 {
@@ -36,21 +39,22 @@ pub fn format_relative_time(st: SystemTime) -> String {
             } else {
                 format!("{}d ago", d.as_secs() / 86400)
             }
-        }
-        Err(_) => "future".to_string(),
-    }
+        },
+    )
 }
 
-/// Formats SystemTime into an absolute timestamp (HH:MM:SS).
+/// Formats `SystemTime` into an absolute timestamp (HH:MM:SS).
+#[must_use]
 pub fn format_absolute_time(st: SystemTime) -> String {
     let dt: DateTime<Utc> = st.into();
     dt.format("%H:%M:%S").to_string()
 }
 
 /// Formats uptime seconds into a concise string (e.g. "1h 23m").
+#[must_use]
 pub fn format_uptime(secs: u64) -> String {
     if secs < 60 {
-        format!("{}s", secs)
+        format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else if secs < 86400 {

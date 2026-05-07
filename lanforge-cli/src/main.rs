@@ -1,5 +1,6 @@
 mod args;
 mod cli;
+mod format;
 #[cfg(feature = "tui")]
 mod tui;
 
