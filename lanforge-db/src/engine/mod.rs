@@ -1,6 +1,6 @@
 use lanforge_core::context::PersistenceSnapshot;
-use lanforge_types::DeviceUpdate;
-use lanforge_types::updates::StaticEntry;
+use lanforge_core::types::DeviceUpdate;
+use lanforge_core::types::updates::StaticEntry;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
@@ -8,10 +8,10 @@ use std::time::SystemTime;
 use tracing::{debug, info};
 
 use lanforge_core::context::state::State;
-use lanforge_types::device::{
+use lanforge_core::types::device::{
     Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, TopologyInfo,
 };
-use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_core::types::identifiers::{Duid, MacAddr};
 
 pub mod types;
 pub mod utils;

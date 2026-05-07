@@ -55,3 +55,5 @@ pub mod error;
 pub mod macros;
 pub mod service;
 pub mod utils;
+
+pub use lanforge_types as types;

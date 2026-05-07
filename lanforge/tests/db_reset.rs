@@ -8,9 +8,9 @@ use lanforge_core::context::state::State;
 use lanforge_core::service::ServiceControl;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::worker::DbWorker;
-use lanforge_types::device::Origin;
-use lanforge_types::identifiers::MacAddr;
-use lanforge_types::updates::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+use lanforge_core::types::device::Origin;
+use lanforge_core::types::identifiers::MacAddr;
+use lanforge_core::types::updates::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;

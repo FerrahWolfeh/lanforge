@@ -8,7 +8,6 @@ lanforge-core = { path = "../lanforge-core" }
 lanforge-api = { path = "../lanforge-api" }
 lanforge-dns = { path = "../lanforge-dns" }
 lanforge-macros = { path = "../lanforge-macros" }
-lanforge-types = { path = "../lanforge-types" }
 
 # Server dependencies
 axum = { version = "0.8.8", features = ["ws"], optional = true }

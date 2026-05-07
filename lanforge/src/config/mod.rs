@@ -38,7 +38,7 @@ use lanforge_network::mdns::MdnsConfig;
 use lanforge_network::ndp::config::MonitorConfig;
 use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
 use lanforge_tftp::config::TftpConfig;
-use lanforge_types::device::Ipv6AddrOrSuffix;
+use lanforge_core::types::device::Ipv6AddrOrSuffix;
 pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
 
 use clap::Parser;

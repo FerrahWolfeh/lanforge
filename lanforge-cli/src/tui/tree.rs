@@ -1,8 +1,8 @@
 use crate::tui::{theme, utils};
 use lanforge_api::api::StatusResponse;
 use lanforge_core::context::state::State;
-use lanforge_types::device::Device;
-use lanforge_types::identifiers::MacAddr;
+use lanforge_core::types::device::Device;
+use lanforge_core::types::identifiers::MacAddr;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use tui_tree_widget::TreeItem;

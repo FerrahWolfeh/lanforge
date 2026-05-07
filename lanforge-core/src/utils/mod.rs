@@ -19,7 +19,7 @@
 //!
 //! ```rust
 //! use std::net::Ipv6Addr;
-//! use lanforge_types::MacAddr;
+//! use lanforge_core::types::MacAddr;
 //! use lanforge_core::utils::{mac_from_eui64_link_local, is_slaac_iid, ip_matches_prefix};
 //!
 //! let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();

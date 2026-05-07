@@ -21,8 +21,8 @@
 //!
 //! Marked as `critical: false` — failure does not halt the daemon.
 
+use lanforge_core::types::DeviceClass;
 use lanforge_macros::ServiceConfig;
-use lanforge_types::DeviceClass;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the mDNS prober.
@@ -47,7 +47,7 @@ impl Default for MdnsConfig {
 
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::DeviceUpdate;
+use lanforge_core::types::DeviceUpdate;
 use pnet::datalink::interfaces;
 use std::fmt::Write;
 use std::io::ErrorKind;

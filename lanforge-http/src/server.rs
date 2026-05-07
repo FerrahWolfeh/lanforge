@@ -25,7 +25,7 @@ use lanforge_core::{
     error::CoreError,
 };
 use lanforge_dns::tls_utils;
-use lanforge_types::{
+use lanforge_core::types::{
     CliHostUpdate, Device, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin,
 };
 use serde::{Deserialize, Serialize};

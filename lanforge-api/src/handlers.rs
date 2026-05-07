@@ -16,8 +16,8 @@ use lanforge_core::bus::{
 use lanforge_core::utils::auth::hash_password;
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
 use lanforge_db::log_engine::LogDb;
-use lanforge_types::events::dns::DnsRecordEntry;
-use lanforge_types::{
+use lanforge_core::types::events::dns::DnsRecordEntry;
+use lanforge_core::types::{
     CliHostUpdate, Device, DeviceUpdate, Duid, FieldUpdate, IPv4State, IPv6State, Ipv6AddrOrSuffix,
     LeaseTarget, MacAddr, Origin,
 };

@@ -2,7 +2,7 @@ use super::CliCommand;
 use crate::args::LeaseCommand;
 use color_eyre::eyre::Result;
 use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
-use lanforge_types::LeaseTarget;
+use lanforge_core::types::LeaseTarget;
 
 pub struct LeaseHandler {
     pub action: LeaseCommand,

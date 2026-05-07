@@ -10,7 +10,6 @@ hickory-proto = { version = "0.26.1", default-features = false, features = [
 moka = { version = "0.12.15", features = ["sync"] }
 lanforge-core = { path = "../lanforge-core" }
 lanforge-macros = { path = "../lanforge-macros" }
-lanforge-types = { path = "../lanforge-types" }
 tokio = { version = "1.52.1", features = ["io-util", "net", "time", "rt"] }
 tracing = "0.1.44"
 thiserror = "2.0.18"

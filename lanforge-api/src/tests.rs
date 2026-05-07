@@ -3,7 +3,7 @@
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate, MacAddr, Origin};
+use lanforge_core::types::{CliHostUpdate, DeviceUpdate, FieldUpdate, MacAddr, Origin};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 

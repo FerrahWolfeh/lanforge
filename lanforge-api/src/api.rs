@@ -1,5 +1,5 @@
 use lanforge_core::{bus::TimedEvent, context::state::State};
-use lanforge_types::{LeaseTarget, events::dns::DnsRecordEntry};
+use lanforge_core::types::{LeaseTarget, events::dns::DnsRecordEntry};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

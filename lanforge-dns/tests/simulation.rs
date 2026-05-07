@@ -6,7 +6,7 @@ use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_dns::DnsService;
 use lanforge_dns::config::{DnsConfig, PrioritizedUpstream};
-use lanforge_types::{DeviceUpdate, MacAddr};
+use lanforge_core::types::{DeviceUpdate, MacAddr};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::sync::Arc;

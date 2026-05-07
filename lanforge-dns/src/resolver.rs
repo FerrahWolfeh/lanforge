@@ -4,7 +4,7 @@
 //! shared `LanforgeContext`. No network I/O is performed — all data comes
 //! from the in-memory device state.
 
-use lanforge_types::Device;
+use lanforge_core::types::Device;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::IpAddr;

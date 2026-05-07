@@ -4,10 +4,10 @@ version = "0.5.0"
 edition = "2024"
 
 [features]
-default = ["sqlite", "adblock"]
+default = ["sqlite"]
 sqlite = ["sqlx/sqlite"]
 postgres = ["sqlx/postgres"]
-adblock = ["lanforge-core/adblock", "lanforge-types/adblock"]
+adblock = ["lanforge-core/adblock"]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
 hotpath-alloc = [
     "hotpath",
@@ -29,7 +29,6 @@ sqlx = { version = "0.8", features = [
 
 lanforge-core = { path = "../lanforge-core" }
 lanforge-macros = { path = "../lanforge-macros" }
-lanforge-types = { path = "../lanforge-types" }
 tracing = "0.1.44"
 thiserror = "2.0.18"
 serde = { version = "1.0.228", features = ["derive"] }

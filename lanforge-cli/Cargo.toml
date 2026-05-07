@@ -27,6 +27,12 @@ remote = [
 tui = ["dep:ratatui", "dep:crossterm", "dep:tui-tree-widget"]
 
 [dependencies]
+# Lanforge
+lanforge-core = { path = "../lanforge-core", features = ["adblock"] }
+lanforge-db = { path = "../lanforge-db", features = ["adblock"] }
+lanforge-macros = { path = "../lanforge-macros" }
+
+# Third party
 bytesize = "2.3.1"
 chrono = { version = "0.4.44", features = ["serde"] }
 clap = { version = "4.6.0", features = ["cargo", "derive", "env"] }
@@ -42,10 +48,6 @@ lanforge-api = { path = "../lanforge-api" }
 lanforge-http = { path = "../lanforge-http", features = [
     "remote",
 ], optional = true }
-lanforge-core = { path = "../lanforge-core" }
-lanforge-db = { path = "../lanforge-db" }
-lanforge-macros = { path = "../lanforge-macros" }
-lanforge-types = { path = "../lanforge-types" }
 mac_oui = { version = "0.4.11", features = ["with-db"] }
 bincode = "1.3.3"
 zstd = { version = "0.13", optional = true }

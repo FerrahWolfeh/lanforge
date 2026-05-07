@@ -4,7 +4,7 @@ use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{Command as ControlCommand, CommandAction, Response, WhoisResponse};
 use lanforge_db::engine::LeaseHistoryEntry;
-use lanforge_types::device::Origin;
+use lanforge_core::types::device::Origin;
 
 pub struct WhoisHandler {
     pub target: String,

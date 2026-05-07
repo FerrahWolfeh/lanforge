@@ -4,7 +4,7 @@ use hickory_proto::rr::{Name, RData, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
-use lanforge_types::{
+use lanforge_core::types::{
     CliHostUpdate, Device, DeviceUpdate, Duid, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin,
 };
 use std::collections::HashSet;

@@ -13,7 +13,7 @@ use std::str::FromStr;
 /// # Example
 ///
 /// ```rust
-/// use lanforge_types::identifiers::MacAddr;
+/// use lanforge_core::types::identifiers::MacAddr;
 ///
 /// let mac = MacAddr::parse("00:de:ad:be:ef:00").unwrap();
 /// assert_eq!(mac.0, [0x00, 0xde, 0xad, 0xbe, 0xef, 0x00]);
@@ -33,7 +33,7 @@ impl MacAddr {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_types::identifiers::MacAddr;
+    /// use lanforge_core::types::identifiers::MacAddr;
     ///
     /// let mac = MacAddr::parse("00:de:ad:be:ef:00").unwrap();
     /// assert_eq!(mac.0, [0x00, 0xde, 0xad, 0xbe, 0xef, 0x00]);

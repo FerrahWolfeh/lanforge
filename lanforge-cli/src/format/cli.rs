@@ -2,7 +2,7 @@ use colored::Colorize;
 use lanforge_core::bus::{
     DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
-use lanforge_types::{LeaseTarget, MacAddr};
+use lanforge_core::types::{LeaseTarget, MacAddr};
 
 use super::CliFormat;
 
