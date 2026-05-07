@@ -221,6 +221,18 @@ impl WireOptScanner {
 /// Helper for writing minimal DNS responses directly to the wire.
 pub struct WireResponseWriter;
 
+/// Arguments for writing a PTR response.
+#[derive(Clone, Copy)]
+pub struct PtrResponseArgs<'a> {
+    pub query_data: &'a [u8],
+    pub question: &'a WireQuestion<'a>,
+    pub host: &'a str,
+    pub domain: &'a str,
+    pub ttl: u32,
+    pub edns: Option<WireOptScanner>,
+    pub ra: bool,
+}
+
 impl WireResponseWriter {
     /// Writes a minimal error response (REFUSED, FORMERR, etc) into the provided buffer.
     pub fn write_error_response(
@@ -323,28 +335,19 @@ impl WireResponseWriter {
     }
 
     /// Writes a PTR response into the buffer.
-    pub fn write_ptr_response(
-        query_data: &[u8],
-        question: &WireQuestion,
-        host: &str,
-        domain: &str,
-        ttl: u32,
-        edns: Option<WireOptScanner>,
-        ra: bool,
-        resp: &mut Vec<u8>,
-    ) {
+    pub fn write_ptr_response(args: PtrResponseArgs, resp: &mut Vec<u8>) {
         resp.clear();
-        let capacity = 12 + question.data.len() + 12 + host.len() + domain.len() + 4;
+        let capacity = 12 + args.question.data.len() + 12 + args.host.len() + args.domain.len() + 4;
         if resp.capacity() < capacity {
             resp.reserve(capacity);
         }
 
         // 1. Header
         let mut h = [0u8; 12];
-        h.copy_from_slice(&query_data[0..12]);
+        h.copy_from_slice(&args.query_data[0..12]);
         h[2] |= 0x80; // QR = 1
         h[2] |= 0x04; // AA = 1
-        if ra {
+        if args.ra {
             h[3] |= 0x80;
         }
         h[3] &= 0xF0;
@@ -353,28 +356,28 @@ impl WireResponseWriter {
         h[8] = 0;
         h[9] = 0;
         h[10] = 0;
-        h[11] = u8::from(edns.is_some());
+        h[11] = u8::from(args.edns.is_some());
         resp.extend_from_slice(&h);
 
         // 2. Question
-        resp.extend_from_slice(&question.data[12..]);
+        resp.extend_from_slice(&args.question.data[12..]);
 
         // 3. Answer (PTR)
         resp.extend_from_slice(&[0xC0, 0x0C]);
         resp.extend_from_slice(&12u16.to_be_bytes()); // Type PTR (12)
         resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
-        resp.extend_from_slice(&ttl.to_be_bytes());
+        resp.extend_from_slice(&args.ttl.to_be_bytes());
 
         // RDLEN and RDATA
         // Pre-calculate RDATA length to avoid extra Vec allocation
         let mut rdlen = 0u16;
-        for label in host.split('.') {
+        for label in args.host.split('.') {
             if label.is_empty() {
                 continue;
             }
             rdlen += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
         }
-        for label in domain.split('.') {
+        for label in args.domain.split('.') {
             if label.is_empty() {
                 continue;
             }
@@ -384,14 +387,14 @@ impl WireResponseWriter {
 
         resp.extend_from_slice(&rdlen.to_be_bytes());
 
-        for label in host.split('.') {
+        for label in args.host.split('.') {
             if label.is_empty() {
                 continue;
             }
             resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
             resp.extend_from_slice(label.as_bytes());
         }
-        for label in domain.split('.') {
+        for label in args.domain.split('.') {
             if label.is_empty() {
                 continue;
             }
@@ -401,7 +404,7 @@ impl WireResponseWriter {
         resp.push(0); // Null terminator
 
         // 4. EDNS
-        if let Some(opt) = edns {
+        if let Some(opt) = args.edns {
             Self::write_opt(resp, opt);
         }
     }

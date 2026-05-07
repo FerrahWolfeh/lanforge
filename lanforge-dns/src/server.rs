@@ -2,7 +2,7 @@ use crate::{
     error::DnsError,
     response::ResponseBuilder,
     stats::DnsStatsSnapshot,
-    wire::{WireHeader, WireOptScanner, WireQuestion, qtypes::QType},
+    wire::{PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, qtypes::QType},
 };
 use hickory_proto::{
     op::Message,
@@ -560,13 +560,15 @@ fn resolve_local_wire(
                     let (host, domain) = resolver.get_ptr_parts(&device);
                     let ra = !ctx.upstreams.is_empty();
                     WireResponseWriter::write_ptr_response(
-                        data,
-                        question,
-                        &host,
-                        &domain,
-                        ctx.cfg.ttl,
-                        edns,
-                        ra,
+                        PtrResponseArgs {
+                            query_data: data,
+                            question,
+                            host: &host,
+                            domain: &domain,
+                            ttl: ctx.cfg.ttl,
+                            edns,
+                            ra,
+                        },
                         resp,
                     );
                     return true;

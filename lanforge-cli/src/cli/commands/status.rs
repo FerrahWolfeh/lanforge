@@ -36,9 +36,20 @@ impl CliCommand for StatusHandler {
 }
 
 pub fn render_status(st: &StatusResponse) {
-    // -----------------------------------------------------------------------
-    // HEADER
-    // -----------------------------------------------------------------------
+    render_header(st);
+    render_infrastructure(st);
+    render_services(st);
+    render_insights(st);
+
+    element! {
+        View(padding_left: 2, margin_bottom: 1) {
+            Text(content: "★ TOML static  · CLI managed", color: Color::DarkGrey)
+        }
+    }
+    .print();
+}
+
+fn render_header(st: &StatusResponse) {
     element! {
         View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -52,17 +63,16 @@ pub fn render_status(st: &StatusResponse) {
         }
     }
     .print();
+}
 
-    // -----------------------------------------------------------------------
-    // INFRASTRUCTURE (Network & Resources)
-    // -----------------------------------------------------------------------
+fn render_infrastructure(st: &StatusResponse) {
     let gua = st.network.gua.as_deref().unwrap_or("stabilizing...");
     let ula = st.network.ula.as_deref().unwrap_or("unavailable");
     let ipv4 = st
         .network
         .lan_ipv4_cidr
         .as_deref()
-        .unwrap_or(st.network.lan_ipv4.as_deref().unwrap_or("—"));
+        .unwrap_or_else(|| st.network.lan_ipv4.as_deref().unwrap_or("—"));
     let rss = ByteSize::b(st.resources.memory_rss_bytes);
 
     element! {
@@ -94,31 +104,24 @@ pub fn render_status(st: &StatusResponse) {
             }
         }
     }.print();
+}
 
-    // -----------------------------------------------------------------------
-    // SERVICES
-    // -----------------------------------------------------------------------
-
-    let ra_state = st.services.ra.state.as_str();
-    let dhcp_v4_state = st.services.dhcp_v4.state.as_str();
-    let dhcp_v4_meta = &*format!(
+fn render_services(st: &StatusResponse) {
+    let ndp_meta = format!(
+        "{} tracked · scan {}s ago",
+        st.services.ndp_monitor.addrs_tracked, st.services.ndp_monitor.last_scan_secs_ago
+    );
+    let dhcp_v4_meta = format!(
         "{} leases · {} free",
         st.services.dhcp_v4.leases_active, st.services.dhcp_v4.pool_free
     );
-    let dhcp_v6_state = st.services.dhcp_v6.state.as_str();
-    let dhcp_v6_meta = &*format!(
+    let dhcp_v6_meta = format!(
         "{} leases · prefix delegation",
         st.services.dhcp_v6.leases_active
     );
-    let dns_state = st.services.dns.state.as_str();
-    let dns_meta = &*format!(
+    let dns_meta = format!(
         "upstream {}",
         st.services.dns.upstream.as_deref().unwrap_or("—")
-    );
-    let ndp_state = st.services.ndp_monitor.state.as_str();
-    let ndp_meta = &*format!(
-        "{} tracked · scan {}s ago",
-        st.services.ndp_monitor.addrs_tracked, st.services.ndp_monitor.last_scan_secs_ago
     );
 
     element! {
@@ -127,75 +130,47 @@ pub fn render_status(st: &StatusResponse) {
                 Text(content: " SERVICES ", color: Color::Yellow, weight: Weight::Bold)
             }
             View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                // --- CORE ---
-                ServiceLine(
-                    name: "DB Worker",
-                    state: st.services.db_worker.state.as_str(),
-                    online_val: "online",
-                    meta: "Persistence & I/O"
-                )
-                ServiceLine(
-                    name: "mDNS",
-                    state: st.services.mdns_prober.state.as_str(),
-                    online_val: "active",
-                    meta: "Device Discovery Prober"
-                )
-                ServiceLine(
-                    name: "Iface Mon",
-                    state: st.services.iface_monitor.state.as_str(),
-                    online_val: "online",
-                    meta: "Interface Address Watcher"
-                )
+                ServiceLine(name: "DB Worker", state: st.services.db_worker.state.as_str(), online_val: "online", meta: "Persistence & I/O")
+                ServiceLine(name: "mDNS", state: st.services.mdns_prober.state.as_str(), online_val: "active", meta: "Device Discovery Prober")
+                ServiceLine(name: "Iface Mon", state: st.services.iface_monitor.state.as_str(), online_val: "online", meta: "Interface Address Watcher")
                 ServiceLine(
                     name: "NDP Mon",
-                    state: ndp_state,
+                    state: st.services.ndp_monitor.state.as_str(),
                     online_val: "online",
-                    meta: ndp_meta
+                    meta: ndp_meta.as_str()
                 )
-                ServiceLine(
-                    name: "Control",
-                    state: st.services.control_api.state.as_str(),
-                    online_val: "online",
-                    meta: "UDS Management API"
-                )
+                ServiceLine(name: "Control", state: st.services.control_api.state.as_str(), online_val: "online", meta: "UDS Management API")
                 HttpServiceLine(info: st.services.http_api.clone())
 
                 View(margin_top: 1, margin_bottom: 1) {
                     Text(content: "  ────────── Protocols ──────────", color: Color::DarkGrey)
                 }
 
-                // --- PROTOCOLS ---
-                ServiceLine(
-                    name: "RA",
-                    state: ra_state,
-                    online_val: "online",
-                    meta: "Neighbor Discovery & Prefixes"
-                )
+                ServiceLine(name: "RA", state: st.services.ra.state.as_str(), online_val: "online", meta: "Neighbor Discovery & Prefixes")
                 ServiceLine(
                     name: "DHCPv4",
-                    state: dhcp_v4_state,
+                    state: st.services.dhcp_v4.state.as_str(),
                     online_val: "active",
-                    meta: dhcp_v4_meta
+                    meta: dhcp_v4_meta.as_str()
                 )
                 ServiceLine(
                     name: "DHCPv6",
-                    state: dhcp_v6_state,
+                    state: st.services.dhcp_v6.state.as_str(),
                     online_val: "active",
-                    meta: dhcp_v6_meta
+                    meta: dhcp_v6_meta.as_str()
                 )
                 ServiceLine(
                     name: "DNS",
-                    state: dns_state,
+                    state: st.services.dns.state.as_str(),
                     online_val: "online",
-                    meta: dns_meta
+                    meta: dns_meta.as_str()
                 )
             }
         }
     }.print();
+}
 
-    // -----------------------------------------------------------------------
-    // INSIGHTS (Devices & Persistence)
-    // -----------------------------------------------------------------------
+fn render_insights(st: &StatusResponse) {
     let db_size = ByteSize::b(st.db.size_bytes);
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_bottom: 1) {
@@ -224,13 +199,6 @@ pub fn render_status(st: &StatusResponse) {
             }
         }
     }.print();
-
-    element! {
-        View(padding_left: 2, margin_bottom: 1) {
-            Text(content: "★ TOML static  · CLI managed", color: Color::DarkGrey)
-        }
-    }
-    .print();
 }
 
 #[component]

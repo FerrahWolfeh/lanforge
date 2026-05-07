@@ -31,7 +31,7 @@ use color_eyre::eyre::Result;
 use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
 
-pub trait CliCommand {
+pub trait CliCommand: Send {
     /// Builds the request to be sent to the daemon.
     fn prepare(&mut self) -> Result<ControlCommand>;
 

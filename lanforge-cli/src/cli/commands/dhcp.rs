@@ -93,7 +93,12 @@ struct PoolSectionProps {
 #[component]
 fn ProgressBar(props: &ProgressBarProps) -> impl Into<AnyElement<'_>> {
     let width: usize = 40;
-    let filled = ((props.percent / 100.0) * width as f32) as usize;
+    let filled = {
+        #[allow(clippy::cast_precision_loss)]
+        let f = (props.percent / 100.0).clamp(0.0, 1.0) * width as f32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        { f as usize }
+    };
     let empty = width.saturating_sub(filled);
     
     let filled_str = "█".repeat(filled);
