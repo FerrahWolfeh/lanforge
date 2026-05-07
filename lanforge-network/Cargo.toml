@@ -4,32 +4,37 @@ version = "0.11.0"
 edition = "2024"
 
 [dependencies]
+# Lanforge
 lanforge-core = { path = "../lanforge-core" }
 lanforge-macros = { path = "../lanforge-macros" }
-dhcproto = "0.14.0"
-netlink-packet-core = "0.8.1"
-pnet = "0.35.0"
-rtnetlink = "0.20.0"
-netlink-sys = "0.8.8"
-thiserror = "2.0.18"
-tokio = { version = "1.51.0", features = [
+
+# Workspace
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
     "time",
     "net",
     "io-util",
     "macros",
     "sync",
 ] }
-tracing = "0.1.44"
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
+
+# Third party
+dhcproto = "0.14.0"
+netlink-packet-core = "0.8.1"
+pnet = "0.35.0"
+rtnetlink = "0.20.0"
+netlink-sys = "0.8.8"
 socket2 = "0.6.3"
 futures = "0.3.32"
 rand = "0.10.1"
 libc = "0.2.183"
-hickory-proto = { version = "0.26.0", features = [
+hex = "0.4.3"
+hickory-proto = { version = "0.26.1", features = [
     "mdns",
 ], default-features = false }
 roaring = "0.11.3"
-serde = { version = "1.0.228", features = ["derive"] }
-hex = "0.4.3"
 hotpath = { workspace = true, optional = true }
 
 
@@ -43,4 +48,4 @@ hotpath-alloc = [
 default = []
 
 [dev-dependencies]
-tokio = { version = "1.51.0", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }

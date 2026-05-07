@@ -4,17 +4,21 @@ version = "0.11.0"
 edition = "2024"
 
 [dependencies]
-parking_lot = "0.12.5"
-serde = { version = "1.0.228", features = ["derive", "rc"] }
-thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["macros", "sync"] }
-tracing = "0.1.44"
-argon2 = "0.5.3"
-rand = "0.8.6"
-hotpath = { workspace = true, optional = true }
+# Lanforge
 lanforge-macros = { path = "../lanforge-macros" }
 lanforge-types = { path = "../lanforge-types" }
 
+# Workspace
+tracing = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "sync"] }
+serde = { workspace = true, features = ["derive", "rc"] }
+hotpath = { workspace = true, optional = true }
+
+# Third party
+argon2 = { version = "0.5.3" }
+rand = { version = "0.8.6" }
+parking_lot = { version = "0.12.5" }
 smallvec = { version = "1.15.1", features = [
     "union",
     "const_generics",
@@ -22,7 +26,7 @@ smallvec = { version = "1.15.1", features = [
 ] }
 
 [dev-dependencies]
-tokio = { version = "1.50.0", features = ["macros", "sync", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "sync", "rt-multi-thread"] }
 
 [features]
 adblock = ["lanforge-types/adblock"]

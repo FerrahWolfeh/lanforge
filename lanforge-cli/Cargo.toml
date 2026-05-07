@@ -32,6 +32,12 @@ lanforge-core = { path = "../lanforge-core", features = ["adblock"] }
 lanforge-db = { path = "../lanforge-db", features = ["adblock"] }
 lanforge-macros = { path = "../lanforge-macros" }
 
+# Workspace
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["full"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
 # Third party
 bytesize = "2.3.1"
 chrono = { version = "0.4.44", features = ["serde"] }
@@ -40,10 +46,7 @@ color-eyre = "0.6.5"
 colored = "3.1.1"
 inquire = "0.9.4"
 iocraft = "0.8.0"
-serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-tokio = { version = "1.50.0", features = ["full"] }
-tracing = "0.1.44"
 lanforge-api = { path = "../lanforge-api" }
 lanforge-http = { path = "../lanforge-http", features = [
     "remote",
