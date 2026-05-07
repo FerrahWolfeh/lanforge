@@ -1,8 +1,10 @@
-use crate::device::{DeviceClass, Ipv6AddrOrSuffix, Origin};
-use crate::identifiers::{Duid, MacAddr};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
+
+use crate::device::{DeviceClass, Origin};
+use crate::identifiers::{Duid, MacAddr};
+use crate::network::Ipv6AddrOrSuffix;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FieldUpdate<T> {

@@ -1,90 +1,20 @@
-//! Network device data structures.
-
 use lanforge_macros::EnumRepr;
-use serde::ser::SerializeSeq;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
+use std::net::Ipv4Addr;
+use std::time::{Duration, SystemTime};
 
+use crate::device::state::{
+    IPv4State, IPv6State, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease,
+};
+use crate::device::topology::TopologyInfo;
 use crate::events::DeviceChange;
 use crate::identifiers::{Duid, MacAddr};
-use crate::updates::LeaseTarget;
-use smallvec::SmallVec;
-
-// ---------------------------------------------------------------------------
-// Helpers for Serde
-// ---------------------------------------------------------------------------
-
-pub fn serialize_time_opt<S>(time: &Option<SystemTime>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    match time {
-        Some(t) => {
-            let elapsed = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
-            serializer.serialize_u64(elapsed.as_secs())
-        }
-        None => serializer.serialize_none(),
-    }
-}
-
-pub fn serialize_time<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let elapsed = time
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    serializer.serialize_u64(elapsed.as_secs())
-}
-
-pub fn serialize_seen_v4<S>(
-    seen: &[(Ipv4Addr, SystemTime)],
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut seq = serializer.serialize_seq(Some(seen.len()))?;
-    for (ip, time) in seen {
-        let elapsed = time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        seq.serialize_element(&(*ip, elapsed.as_secs()))?;
-    }
-    seq.end()
-}
-
-pub fn deserialize_time<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let secs = u64::deserialize(deserializer)?;
-    Ok(UNIX_EPOCH + Duration::from_secs(secs))
-}
-
-pub fn deserialize_time_opt<'de, D>(deserializer: D) -> Result<Option<SystemTime>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let opt_secs = Option::<u64>::deserialize(deserializer)?;
-    Ok(opt_secs.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)))
-}
-
-pub fn deserialize_seen_v4<'de, D>(
-    deserializer: D,
-) -> Result<SmallVec<[(Ipv4Addr, SystemTime); 4]>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::Deserialize;
-    let raw = Vec::<(Ipv4Addr, u64)>::deserialize(deserializer)?;
-    Ok(raw
-        .into_iter()
-        .map(|(ip, secs)| (ip, SystemTime::UNIX_EPOCH + Duration::from_secs(secs)))
-        .collect())
-}
+use crate::network::{Hostname, HostnameOrigin, IpClassification, classify_ipv6};
+use crate::utils::serde::{
+    deserialize_seen_v4, deserialize_time, deserialize_time_opt, serialize_seen_v4, serialize_time,
+    serialize_time_opt,
+};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
@@ -156,373 +86,6 @@ pub enum DeviceClass {
     Network = 6,
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
-)]
-pub enum HostnameOrigin {
-    #[default]
-    None = 0,
-    Mdns = 1,
-    Dhcp = 2,
-    Static = 3,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct Hostname {
-    pub name: String,
-    pub origin: HostnameOrigin,
-}
-
-impl Hostname {
-    #[must_use]
-    pub fn display(&self) -> &str {
-        if self.name.is_empty() {
-            "?"
-        } else {
-            &self.name
-        }
-    }
-}
-
-impl From<String> for Hostname {
-    fn from(name: String) -> Self {
-        Self {
-            name,
-            origin: HostnameOrigin::Static,
-        }
-    }
-}
-
-impl From<&str> for Hostname {
-    fn from(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            origin: HostnameOrigin::Static,
-        }
-    }
-}
-
-impl From<Hostname> for String {
-    fn from(val: Hostname) -> Self {
-        val.name
-    }
-}
-
-impl fmt::Display for Hostname {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct V4Lease {
-    pub ip: Ipv4Addr,
-    #[serde(
-        serialize_with = "serialize_time",
-        deserialize_with = "deserialize_time"
-    )]
-    pub expires: SystemTime,
-    #[serde(
-        default = "SystemTime::now",
-        serialize_with = "serialize_time",
-        deserialize_with = "deserialize_time"
-    )]
-    pub last_seen: SystemTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct V6Lease {
-    pub ip: Ipv6Addr,
-    pub iaid: u32,
-    #[serde(
-        serialize_with = "serialize_time",
-        deserialize_with = "deserialize_time"
-    )]
-    pub expires: SystemTime,
-    pub last_seen: SystemTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct V6PrefixLease {
-    pub prefix: Ipv6Addr,
-    pub len: u8,
-    pub iaid: u32,
-    #[serde(
-        serialize_with = "serialize_time",
-        deserialize_with = "deserialize_time"
-    )]
-    pub expires: SystemTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum IPv4State {
-    Static(Ipv4Addr),
-    Dynamic(V4Lease),
-    None,
-}
-
-impl IPv4State {
-    #[must_use]
-    pub const fn ip(&self) -> Option<Ipv4Addr> {
-        match self {
-            Self::Static(ip) => Some(*ip),
-            Self::Dynamic(lease) => Some(lease.ip),
-            Self::None => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn is_dynamic(&self) -> bool {
-        matches!(self, Self::Dynamic(_))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum IPv6State {
-    Static(Ipv6AddrOrSuffix, SystemTime),
-    Dynamic(V6Lease),
-    Slaac(Ipv6Addr, SystemTime),
-    LinkLocal(Ipv6Addr, SystemTime),
-    Discovery(Ipv6Addr, SystemTime),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum V6ObservationOrigin {
-    SlaacTracker,
-    NdpMonitor,
-}
-
-impl IPv6State {
-    #[must_use]
-    pub fn ip_with_prefix(&self, prefix: Option<Ipv6Addr>) -> Option<Ipv6Addr> {
-        match self {
-            Self::Dynamic(lease) => Some(lease.ip),
-            Self::Static(Ipv6AddrOrSuffix::Full(ip), _)
-            | Self::Slaac(ip, _)
-            | Self::LinkLocal(ip, _)
-            | Self::Discovery(ip, _) => Some(*ip),
-            Self::Static(suf, _) => prefix.map(|p| Ipv6Addr::from(suf.as_u128(Some(p)))),
-        }
-    }
-
-    #[must_use]
-    pub const fn ip(&self) -> Option<Ipv6Addr> {
-        match self {
-            Self::Dynamic(lease) => Some(lease.ip),
-            Self::Static(Ipv6AddrOrSuffix::Full(ip), _)
-            | Self::Slaac(ip, _)
-            | Self::LinkLocal(ip, _)
-            | Self::Discovery(ip, _) => Some(*ip),
-            Self::Static(_suf, _) => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn is_dynamic(&self) -> bool {
-        matches!(self, Self::Dynamic(_))
-    }
-
-    #[must_use]
-    pub fn is_link_local(&self) -> bool {
-        self.ip()
-            .is_some_and(|ip| ip.segments()[0] & 0xffc0 == 0xfe80)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[serde(try_from = "String", into = "String")]
-pub enum Ipv6AddrOrSuffix {
-    Full(Ipv6Addr),
-    Suffix([u8; 8]),
-}
-
-impl Ipv6AddrOrSuffix {
-    #[must_use]
-    pub fn matches(&self, addr: Ipv6Addr) -> bool {
-        match self {
-            Self::Full(ip) => *ip == addr,
-            Self::Suffix(suffix) => {
-                let segs = addr.segments();
-                let mut addr_suffix = [0u8; 8];
-                addr_suffix[0..2].copy_from_slice(&segs[4].to_be_bytes());
-                addr_suffix[2..4].copy_from_slice(&segs[5].to_be_bytes());
-                addr_suffix[4..6].copy_from_slice(&segs[6].to_be_bytes());
-                addr_suffix[6..8].copy_from_slice(&segs[7].to_be_bytes());
-                &addr_suffix == suffix
-            }
-        }
-    }
-
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        if s.is_empty() {
-            return None;
-        }
-        if let Ok(ip) = s.parse::<Ipv6Addr>() {
-            let segs = ip.segments();
-            if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 {
-                let mut bytes = [0u8; 8];
-                bytes[0..2].copy_from_slice(&segs[4].to_be_bytes());
-                bytes[2..4].copy_from_slice(&segs[5].to_be_bytes());
-                bytes[4..6].copy_from_slice(&segs[6].to_be_bytes());
-                bytes[6..8].copy_from_slice(&segs[7].to_be_bytes());
-                return Some(Self::Suffix(bytes));
-            }
-            return Some(Self::Full(ip));
-        }
-
-        if s.split(':').count() > 4 {
-            return None;
-        }
-
-        let full_s = format!("::{s}");
-        full_s.parse::<Ipv6Addr>().map_or(None, |ip| {
-            let segs = ip.segments();
-            let mut bytes = [0u8; 8];
-            bytes[0..2].copy_from_slice(&segs[4].to_be_bytes());
-            bytes[2..4].copy_from_slice(&segs[5].to_be_bytes());
-            bytes[4..6].copy_from_slice(&segs[6].to_be_bytes());
-            bytes[6..8].copy_from_slice(&segs[7].to_be_bytes());
-            Some(Self::Suffix(bytes))
-        })
-    }
-
-    #[must_use]
-    pub fn as_u128(&self, prefix: Option<Ipv6Addr>) -> u128 {
-        match self {
-            Self::Full(ip) => u128::from_be_bytes(ip.octets()),
-            Self::Suffix(s) => {
-                let mut bytes = [0u8; 16];
-                if let Some(p) = prefix {
-                    bytes.copy_from_slice(&p.octets());
-                }
-                bytes[8..16].copy_from_slice(s);
-                u128::from_be_bytes(bytes)
-            }
-        }
-    }
-}
-
-impl fmt::Display for Ipv6AddrOrSuffix {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Full(ip) => ip.fmt(f),
-            Self::Suffix(s) => {
-                let ip = Ipv6Addr::new(
-                    0,
-                    0,
-                    0,
-                    0,
-                    u16::from_be_bytes([s[0], s[1]]),
-                    u16::from_be_bytes([s[2], s[3]]),
-                    u16::from_be_bytes([s[4], s[5]]),
-                    u16::from_be_bytes([s[6], s[7]]),
-                );
-                ip.fmt(f)
-            }
-        }
-    }
-}
-
-impl TryFrom<String> for Ipv6AddrOrSuffix {
-    type Error = String;
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        Self::parse(&s).ok_or_else(|| format!("Invalid IPv6 address or suffix: {s}"))
-    }
-}
-
-impl From<Ipv6AddrOrSuffix> for String {
-    fn from(val: Ipv6AddrOrSuffix) -> Self {
-        val.to_string()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum IpClassification {
-    Ula = 0,
-    Ipv4 = 1,
-    Gua = 2,
-    LinkLocal = 3,
-    Loopback = 4,
-    Other = 10,
-}
-
-impl IpClassification {
-    #[must_use]
-    pub const fn score(&self) -> u8 {
-        *self as u8
-    }
-}
-
-#[must_use]
-pub const fn classify_ip(addr: &IpAddr) -> IpClassification {
-    match addr {
-        IpAddr::V4(v4) => {
-            if v4.is_loopback() {
-                IpClassification::Loopback
-            } else {
-                IpClassification::Ipv4
-            }
-        }
-        IpAddr::V6(v6) => classify_ipv6(v6),
-    }
-}
-
-#[must_use]
-pub const fn classify_ipv6(v6: &Ipv6Addr) -> IpClassification {
-    if v6.is_loopback() {
-        IpClassification::Loopback
-    } else if is_ula(v6) {
-        IpClassification::Ula
-    } else if (v6.segments()[0] & 0xe000) == 0x2000 {
-        IpClassification::Gua
-    } else if (v6.segments()[0] & 0xffc0) == 0xfe80 {
-        IpClassification::LinkLocal
-    } else {
-        IpClassification::Other
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Ipv6Prefix {
-    pub segments: [u16; 4],
-    pub group: IpClassification,
-}
-
-impl Ipv6Prefix {
-    #[must_use]
-    pub const fn from_addr(addr: Ipv6Addr) -> Self {
-        let segs = addr.segments();
-        Self {
-            segments: [segs[0], segs[1], segs[2], segs[3]],
-            group: classify_ipv6(&addr),
-        }
-    }
-
-    #[must_use]
-    pub const fn new(addr: Ipv6Addr, group: IpClassification) -> Self {
-        let segs = addr.segments();
-        Self {
-            segments: [segs[0], segs[1], segs[2], segs[3]],
-            group,
-        }
-    }
-
-    #[must_use]
-    pub const fn to_addr(&self) -> Ipv6Addr {
-        Ipv6Addr::new(
-            self.segments[0],
-            self.segments[1],
-            self.segments[2],
-            self.segments[3],
-            0,
-            0,
-            0,
-            0,
-        )
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub mac: MacAddr,
@@ -551,18 +114,6 @@ pub struct Device {
     pub class: DeviceClass,
     pub topology: Option<TopologyInfo>,
     pub boot_file: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TopologyInfo {
-    pub parent_mac: Option<MacAddr>,
-    pub port: Option<String>,
-    pub local_ifindex: u32,
-    #[serde(
-        serialize_with = "serialize_time",
-        deserialize_with = "deserialize_time"
-    )]
-    pub last_updated: SystemTime,
 }
 
 impl Device {
@@ -634,7 +185,7 @@ impl Device {
         &mut self,
         duid: &Duid,
         iaid: u32,
-        ip: Ipv6Addr,
+        ip: std::net::Ipv6Addr,
         expires: SystemTime,
     ) -> Option<DeviceChange> {
         let mut changed = if self.duid.as_ref() == Some(duid) {
@@ -683,7 +234,7 @@ impl Device {
         &mut self,
         duid: &Duid,
         iaid: u32,
-        prefix: Ipv6Addr,
+        prefix: std::net::Ipv6Addr,
         len: u8,
         expires: SystemTime,
     ) -> Option<DeviceChange> {
@@ -727,7 +278,7 @@ impl Device {
 
     pub fn apply_v6_observation(
         &mut self,
-        addr: Ipv6Addr,
+        addr: std::net::Ipv6Addr,
         is_active: bool,
         origin: V6ObservationOrigin,
     ) -> Option<DeviceChange> {
@@ -798,10 +349,9 @@ impl Device {
 
         if changed {
             self.last_seen = self.calculate_last_seen();
-            Some(DeviceChange::NdpActivity { ip: addr })
-        } else {
-            None
+            return Some(DeviceChange::NdpActivity { ip: addr });
         }
+        None
     }
 
     pub fn apply_arp_observation(&mut self, ip: Ipv4Addr, is_active: bool) -> Option<DeviceChange> {
@@ -925,6 +475,7 @@ impl Device {
         now: SystemTime,
         ip_expiry_threshold: Duration,
     ) -> Vec<DeviceChange> {
+        use crate::update::LeaseTarget;
         let mut events = Vec::new();
 
         // V4
@@ -991,6 +542,30 @@ impl Device {
 
         self.last_seen.elapsed().unwrap_or(Duration::ZERO) > max_age
     }
+
+    pub fn record_v4_activity(&mut self, ip: Ipv4Addr) -> bool {
+        let now = SystemTime::now();
+        let mut changed = false;
+
+        if let Some(pos) = self.seen_v4.iter().position(|(a, _)| *a == ip) {
+            let (_, ts) = &mut self.seen_v4[pos];
+            if now.duration_since(*ts).unwrap_or(Duration::MAX) > Self::ACTIVITY_DEBOUNCE {
+                *ts = now;
+                changed = true;
+            }
+        } else {
+            if self.seen_v4.len() >= 4 {
+                self.seen_v4.remove(0);
+            }
+            self.seen_v4.push((ip, now));
+            changed = true;
+        }
+
+        if changed {
+            self.last_seen = self.calculate_last_seen();
+        }
+        changed
+    }
 }
 
 impl Device {
@@ -1014,11 +589,12 @@ impl Device {
     #[must_use]
     pub fn primary_v6(
         &self,
-        gua_prefix: Option<Ipv6Addr>,
-        ula_prefix: Option<Ipv6Addr>,
-    ) -> Option<Ipv6Addr> {
-        let mut best: Option<(u8, Ipv6Addr)> = None;
-        let mut update_best = |prio: u8, addr: Ipv6Addr| {
+        gua_prefix: Option<std::net::Ipv6Addr>,
+        ula_prefix: Option<std::net::Ipv6Addr>,
+    ) -> Option<std::net::Ipv6Addr> {
+        use crate::network::is_ula;
+        let mut best: Option<(u8, std::net::Ipv6Addr)> = None;
+        let mut update_best = |prio: u8, addr: std::net::Ipv6Addr| {
             if best.as_ref().is_none_or(|(b_prio, _)| prio < *b_prio) {
                 best = Some((prio, addr));
             }
@@ -1050,42 +626,43 @@ impl Device {
     #[must_use]
     pub fn all_addresses_sorted(
         &self,
-        gua_prefix: Option<Ipv6Addr>,
-        ula_prefix: Option<Ipv6Addr>,
-    ) -> SmallVec<[IpAddr; 32]> {
-        let mut addrs: SmallVec<[IpAddr; 32]> = SmallVec::new();
-        let mut push_unique = |ip: IpAddr| {
+        gua_prefix: Option<std::net::Ipv6Addr>,
+        ula_prefix: Option<std::net::Ipv6Addr>,
+    ) -> SmallVec<[std::net::IpAddr; 32]> {
+        use crate::network::{Ipv6AddrOrSuffix, classify_ip};
+        let mut addrs: SmallVec<[std::net::IpAddr; 32]> = SmallVec::new();
+        let mut push_unique = |ip: std::net::IpAddr| {
             if !addrs.contains(&ip) {
                 addrs.push(ip);
             }
         };
 
         if let Some(ip) = self.v4.ip() {
-            push_unique(IpAddr::V4(ip));
+            push_unique(std::net::IpAddr::V4(ip));
         }
         for (ip, _) in &self.seen_v4 {
-            push_unique(IpAddr::V4(*ip));
+            push_unique(std::net::IpAddr::V4(*ip));
         }
 
         for state in &self.v6 {
             if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_), _) = state {
                 for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
                     if let Some(ip) = state.ip_with_prefix(Some(prefix)) {
-                        push_unique(IpAddr::V6(ip));
+                        push_unique(std::net::IpAddr::V6(ip));
                     }
                 }
             } else if let Some(ip) = state.ip() {
-                push_unique(IpAddr::V6(ip));
+                push_unique(std::net::IpAddr::V6(ip));
             }
         }
         addrs.sort_by_key(|ip| classify_ip(ip).score());
         addrs
     }
 
-    pub fn delete_ip(&mut self, ip: IpAddr) -> bool {
+    pub fn delete_ip(&mut self, ip: std::net::IpAddr) -> bool {
         let mut changed = false;
         match ip {
-            IpAddr::V4(ip4) => {
+            std::net::IpAddr::V4(ip4) => {
                 if let IPv4State::Static(s) = &self.v4
                     && *s == ip4
                 {
@@ -1103,7 +680,7 @@ impl Device {
                     changed = true;
                 }
             }
-            IpAddr::V6(ip6) => {
+            std::net::IpAddr::V6(ip6) => {
                 let initial_v6_len = self.v6.len();
                 self.v6.retain(|s| s.ip() != Some(ip6));
 
@@ -1121,10 +698,10 @@ impl Device {
         changed
     }
 
-    pub fn mark_ip_offline(&mut self, ip: IpAddr) -> bool {
+    pub fn mark_ip_offline(&mut self, ip: std::net::IpAddr) -> bool {
         let mut changed = false;
         match ip {
-            IpAddr::V4(ip4) => {
+            std::net::IpAddr::V4(ip4) => {
                 if let IPv4State::Dynamic(lease) = &mut self.v4
                     && lease.ip == ip4
                 {
@@ -1136,7 +713,7 @@ impl Device {
                     changed = true;
                 }
             }
-            IpAddr::V6(ip6) => {
+            std::net::IpAddr::V6(ip6) => {
                 let initial_len = self.v6.len();
                 self.v6.retain(|s| match s {
                     IPv6State::Slaac(addr, _)
@@ -1150,7 +727,9 @@ impl Device {
                 } else {
                     for state in &mut self.v6 {
                         match state {
-                            IPv6State::Static(Ipv6AddrOrSuffix::Full(addr), ts) if *addr == ip6 => {
+                            IPv6State::Static(crate::network::Ipv6AddrOrSuffix::Full(addr), ts)
+                                if *addr == ip6 =>
+                            {
                                 *ts = SystemTime::UNIX_EPOCH;
                                 changed = true;
                                 break;
@@ -1173,7 +752,11 @@ impl Device {
     }
 
     #[must_use]
-    pub fn display_v6(&self, gua_prefix: Option<Ipv6Addr>, ula_prefix: Option<Ipv6Addr>) -> String {
+    pub fn display_v6(
+        &self,
+        gua_prefix: Option<std::net::Ipv6Addr>,
+        ula_prefix: Option<std::net::Ipv6Addr>,
+    ) -> String {
         self.primary_v6(gua_prefix, ula_prefix)
             .map_or_else(|| "—".to_string(), |ip| ip.to_string())
     }
@@ -1217,8 +800,8 @@ pub enum LearningMethod {
     Unknown,
 }
 
-impl fmt::Display for LearningMethod {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for LearningMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Static => write!(f, "Static"),
             Self::Managed => write!(f, "Managed"),
@@ -1229,8 +812,4 @@ impl fmt::Display for LearningMethod {
             Self::Unknown => write!(f, "Unknown"),
         }
     }
-}
-
-const fn is_ula(addr: &Ipv6Addr) -> bool {
-    (addr.segments()[0] & 0xfe00) == 0xfc00
 }

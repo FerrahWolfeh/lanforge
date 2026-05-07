@@ -1,8 +1,4 @@
 //! IPv6 and EUI-64 utility functions.
-//!
-//! This module provides helper functions for working with IPv6 addresses,
-//! particularly in the context of SLAAC (Stateless Address Autoconfiguration)
-//! and EUI-64 identifier generation.
 
 use crate::identifiers::MacAddr;
 use std::net::Ipv6Addr;

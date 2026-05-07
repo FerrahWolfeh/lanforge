@@ -1,6 +1,7 @@
-use crate::device::{DeviceClass, Ipv6AddrOrSuffix};
+use crate::device::DeviceClass;
 use crate::identifiers::{Duid, MacAddr};
-use crate::updates::LeaseTarget;
+use crate::network::Ipv6AddrOrSuffix;
+use crate::update::LeaseTarget;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
