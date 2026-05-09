@@ -53,9 +53,18 @@ pub enum DnsError {
     #[error("Zero-alloc wire parser failure")]
     WireParseError,
 
+    /// The request was refused (e.g. no upstreams configured).
+    #[error("DNS request refused")]
+    Refused,
+
     /// TLS configuration or handshake error.
     #[error("TLS error: {0}")]
     Tls(String),
+
+    /// A generic or internal error.
+    #[error("Generic error: {0}")]
+    Generic(String),
+
     /// TLS PEM parsing error.
     #[cfg(feature = "dot")]
     #[error("TLS PEM parsing error: {0}")]

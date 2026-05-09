@@ -65,10 +65,12 @@ pub mod dot;
 pub mod error;
 #[cfg(feature = "adblock")]
 pub mod filter;
+pub mod health;
 pub mod resolver;
 pub mod response;
 pub mod server;
 pub mod stats;
+pub mod strategy;
 #[cfg(feature = "dot")]
 pub mod tls_utils;
 pub mod upstream;

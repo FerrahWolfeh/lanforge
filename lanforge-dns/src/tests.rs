@@ -19,6 +19,7 @@ use crate::resolver::LocalResolver;
 use crate::response::ResponseBuilder;
 use crate::server::{DnsContext, handle_query};
 use crate::stats::DnsStats;
+use crate::strategy::UpstreamMode;
 use crate::utils::extract_local_hostname;
 use lanforge_core::context::LanforgeContext;
 
@@ -50,9 +51,15 @@ fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     let soa_mailbox =
         Name::from_str(&format!("hostmaster.{domain_base}.")).unwrap_or_else(|_| Name::root());
 
+    let upstream_strategy = Arc::new(crate::strategy::UpstreamStrategy::new(
+        cfg.upstream_mode,
+        Vec::new(),
+    ));
+
     DnsContext {
         cfg,
         upstreams: Vec::new(),
+        upstream_strategy,
         stats: Arc::new(DnsStats::default()),
         ctx,
         #[cfg(feature = "adblock")]
@@ -249,6 +256,7 @@ async fn test_nxdomain_leak_prevention_and_soa() {
 #[cfg(feature = "adblock")]
 async fn test_adblock_integration() {
     use crate::filter::AdBlocker;
+    use crate::strategy::UpstreamStrategy;
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();
     cfg.adblock_enabled = true;
@@ -277,6 +285,7 @@ async fn test_adblock_integration() {
         stats: Arc::new(DnsStats::default()),
         ctx: ctx_instance,
         adblocker: Some(adblocker),
+        upstream_strategy: Arc::new(UpstreamStrategy::new(UpstreamMode::Sequential, vec![])),
         soa_zone,
         soa_master_ns,
         soa_mailbox,
@@ -459,4 +468,45 @@ fn test_dns_response_contract() {
     assert!(ips.contains(&dynamic_ula), "Missing DHCPv6 Dynamic");
 
     assert_eq!(ips.len(), 5);
+}
+
+#[test]
+fn test_upstream_health_ewma() {
+    use crate::health::UpstreamHealth;
+    let health = UpstreamHealth::new();
+
+    // First success sets EWMA to exact value
+    health.record_success(1000);
+    assert_eq!(
+        health
+            .rtt_ewma_us
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1000
+    );
+
+    // Second success: alpha=0.3 -> 0.3*500 + 0.7*1000 = 150 + 700 = 850
+    health.record_success(500);
+    assert_eq!(
+        health
+            .rtt_ewma_us
+            .load(std::sync::atomic::Ordering::Relaxed),
+        850
+    );
+}
+
+#[test]
+fn test_upstream_degradation() {
+    use crate::health::{UpstreamHealth, UpstreamStatus};
+    let health = UpstreamHealth::new();
+
+    for _ in 0..4 {
+        health.record_failure();
+    }
+    assert_eq!(health.status(), UpstreamStatus::Healthy);
+
+    health.record_failure(); // 5th failure
+    assert_eq!(health.status(), UpstreamStatus::Degraded);
+
+    health.record_success(100);
+    assert_eq!(health.status(), UpstreamStatus::Healthy);
 }

@@ -276,6 +276,8 @@ pub enum QueryTarget {
 pub enum DnsCommand {
     /// Show resolver performance statistics
     Stats,
+    /// Show upstream resolver health and status
+    Upstreams,
     /// Perform a diagnostic query
     Query {
         /// Name to resolve

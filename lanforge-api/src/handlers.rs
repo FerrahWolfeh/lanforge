@@ -13,14 +13,13 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
+use lanforge_core::types::{
+    CliHostUpdate, Device, DeviceUpdate, DnsRecordEntry, Duid, FieldUpdate, IPv4State, IPv6State,
+    Ipv6AddrOrSuffix, LeaseTarget, MacAddr, Origin,
+};
 use lanforge_core::utils::auth::hash_password;
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
 use lanforge_db::log_engine::LogDb;
-use lanforge_core::types::events::dns::DnsRecordEntry;
-use lanforge_core::types::{
-    CliHostUpdate, Device, DeviceUpdate, Duid, FieldUpdate, IPv4State, IPv6State, Ipv6AddrOrSuffix,
-    LeaseTarget, MacAddr, Origin,
-};
 use std::str::FromStr;
 
 use crate::api::{
@@ -627,6 +626,23 @@ impl ClientContext {
             auth_queries: 0,
             recursions: 0,
             blocked_queries: 0,
+        })
+    }
+
+    pub(crate) async fn handle_dns_upstreams(&self) -> Response {
+        use crate::api::DnsUpstreamsResponse;
+        use lanforge_dns::server::DnsContext;
+
+        if let Some(dns_ctx_any) = self.ctx.get_dns_context()
+            && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
+        {
+            return Response::DnsUpstreams(DnsUpstreamsResponse {
+                upstreams: dns_ctx.upstream_strategy.snapshots(),
+            });
+        }
+
+        Response::DnsUpstreams(DnsUpstreamsResponse {
+            upstreams: Vec::new(),
         })
     }
 

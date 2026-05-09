@@ -20,8 +20,8 @@ pub use crate::events::{
 };
 pub use crate::identifiers::{Duid, MacAddr};
 pub use crate::network::{
-    Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, NeighborEvent,
-    classify_ip, classify_ipv6,
+    DnsRecordEntry, Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix,
+    NeighborEvent, UpstreamHealthSnapshot, classify_ip, classify_ipv6,
 };
 pub use crate::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget};
 pub use crate::utils::network::{

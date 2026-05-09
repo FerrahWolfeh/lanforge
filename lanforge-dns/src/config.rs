@@ -4,6 +4,7 @@
 //! DNS service, including listen address, upstream resolver, search domains,
 //! and IPv6 prefix settings.
 
+use crate::strategy::UpstreamMode;
 use lanforge_macros::ServiceConfig;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv6Addr, SocketAddr};
@@ -116,6 +117,8 @@ pub struct DnsConfig {
     /// Upstream resolver targets with priorities.
     /// If empty, non-local queries return `REFUSED`.
     pub upstreams: Vec<PrioritizedUpstream>,
+    /// Strategy for choosing an upstream resolver.
+    pub upstream_mode: UpstreamMode,
     /// Local search domain suffixes (e.g., `["lan", "home.arpa"]`). Queries for
     /// these domains are resolved locally; others are forwarded upstream.
     pub search_domains: Vec<String>,
@@ -164,6 +167,7 @@ impl Default for DnsConfig {
             enabled: true,
             listen: "0.0.0.0:53".parse().unwrap(),
             upstreams: Vec::new(),
+            upstream_mode: UpstreamMode::Sequential,
             search_domains: vec!["lan".to_string()],
             ula_prefix: None,
             gua_prefix: None,

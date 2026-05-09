@@ -1,7 +1,10 @@
 use crate::{args, cli::commands::CliCommand};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::{Command as ControlCommand, CommandAction, DnsQueryResponse, Response};
+use lanforge_api::api::{
+    Command as ControlCommand, CommandAction, DnsCacheResponse, DnsQueryResponse, DnsStatsResponse,
+    DnsUpstreamsResponse, Response,
+};
 
 pub struct DnsCommand {
     pub action: args::DnsCommand,
@@ -11,6 +14,7 @@ impl CliCommand for DnsCommand {
     fn prepare(&mut self) -> Result<ControlCommand> {
         match &self.action {
             args::DnsCommand::Stats => Ok(ControlCommand::new(CommandAction::DnsStats)),
+            args::DnsCommand::Upstreams => Ok(ControlCommand::new(CommandAction::DnsUpstreams)),
             args::DnsCommand::Query { name, record_type } => {
                 Ok(ControlCommand::new(CommandAction::DnsQuery {
                     name: name.clone(),
@@ -47,63 +51,12 @@ impl CliCommand for DnsCommand {
 
     fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
         match response {
-            Response::DnsStats(stats) => {
-                element! {
-                    View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                        View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                            Text(content: " DNS RESOLVER STATS ", color: Color::White, weight: Weight::Bold)
-                        }
-                        View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                            StatLine(label: "Total Requests", value: stats.total_requests)
-                            StatLine(label: "Cache Hits", value: stats.cache_hits, color: Color::Green)
-                            StatLine(label: "Cache Misses", value: stats.cache_misses, color: Color::Yellow)
-                            StatLine(label: "Upstream Errors", value: stats.upstream_errors, color: Color::Red)
-                            StatLine(label: "Auth Queries", value: stats.auth_queries)
-                            StatLine(label: "Recursions", value: stats.recursions)
-                            StatLine(label: "Blocked Queries", value: stats.blocked_queries, color: Color::Cyan)
-                        }
-                    }
-                }.print();
-            }
-            Response::DnsQuery(query) => {
-                element! {
-                    View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
-                        View(flex_direction: FlexDirection::Row) {
-                            Text(content: " QUERY RESULT ", color: Color::White, weight: Weight::Bold)
-                            Text(content: format!("  latency: {}ms", query.latency_ms), color: Color::DarkGrey)
-                            #(query.authoritative.then(|| element! {
-                                Text(content: "  (Authoritative)", color: Color::Cyan)
-                            }))
-                        }
-                        View(margin_top: 1) {
-                            QueryResults(query: query.clone())
-                        }
-                    }
-                }.print();
-            }
+            Response::DnsStats(stats) => Self::render_stats(stats),
+            Response::DnsUpstreams(resp) => Self::render_upstreams(resp),
+            Response::DnsQuery(query) => Self::render_query(query),
+            Response::DnsCache(cache) => Self::render_cache(cache),
             Response::Error { error } => {
                 println!("Error: {error}");
-            }
-            Response::DnsCache(cache) => {
-                element! {
-                    View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                        View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                            Text(content: " DNS CACHE DUMP ", color: Color::White, weight: Weight::Bold)
-                        }
-                        View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
-                            #(cache.entries.iter().map(|e| element! {
-                                View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
-                                    Text(content: format!("{:<5}", e.kind), color: Color::Cyan)
-                                    Text(content: format!(" {:<30}", e.name))
-                                    Text(content: " -> ", color: Color::DarkGrey)
-                                    Text(content: e.data.clone())
-                                    View(flex_grow: 1.0)
-                                    Text(content: format!("{}s", e.expires_in_secs), color: Color::Yellow)
-                                }
-                            }))
-                        }
-                    }
-                }.print();
             }
             Response::Success(msg) => {
                 println!("{}", msg.message);
@@ -113,6 +66,103 @@ impl CliCommand for DnsCommand {
             }
         }
         Ok(None)
+    }
+}
+
+impl DnsCommand {
+    fn render_stats(stats: &DnsStatsResponse) {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " DNS RESOLVER STATS ", color: Color::White, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                    StatLine(label: "Total Requests", value: stats.total_requests)
+                    StatLine(label: "Cache Hits", value: stats.cache_hits, color: Color::Green)
+                    StatLine(label: "Cache Misses", value: stats.cache_misses, color: Color::Yellow)
+                    StatLine(label: "Upstream Errors", value: stats.upstream_errors, color: Color::Red)
+                    StatLine(label: "Auth Queries", value: stats.auth_queries)
+                    StatLine(label: "Recursions", value: stats.recursions)
+                    StatLine(label: "Blocked Queries", value: stats.blocked_queries, color: Color::Cyan)
+                }
+            }
+        }.print();
+    }
+
+    fn render_upstreams(resp: &DnsUpstreamsResponse) {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " DNS UPSTREAM HEALTH ", color: Color::White, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
+                    View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2, margin_bottom: 1) {
+                        Text(content: format!("{:<25}", "UPSTREAM"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<10}", "PROTO"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<10}", "RTT"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<15}", "SUCCESS RATE"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<10}", "STATUS"), color: Color::DarkGrey, weight: Weight::Bold)
+                    }
+                    #(resp.upstreams.iter().map(|u| {
+                        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                        let success_rate = if u.total_queries > 0 {
+                            (u.total_successes as f32 / u.total_queries as f32) * 100.0
+                        } else {
+                            0.0
+                        };
+                        let status_color = if u.status == "Healthy" { Color::Green } else { Color::Red };
+                        element! {
+                            View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
+                                Text(content: format!("{:<25}", u.target))
+                                Text(content: format!("{:<10}", u.protocol), color: Color::Cyan)
+                                Text(content: format!("{:<10}", format!("{}ms", u.rtt_ewma_us / 1000)), color: Color::Yellow)
+                                Text(content: format!("{:<15}", format!("{:.1}%", success_rate)))
+                                Text(content: format!("{:<10}", u.status), color: status_color)
+                            }
+                        }
+                    }))
+                }
+            }
+        }.print();
+    }
+
+    fn render_query(query: &DnsQueryResponse) {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: " QUERY RESULT ", color: Color::White, weight: Weight::Bold)
+                    Text(content: format!("  latency: {}ms", query.latency_ms), color: Color::DarkGrey)
+                    #(query.authoritative.then(|| element! {
+                        Text(content: "  (Authoritative)", color: Color::Cyan)
+                    }))
+                }
+                View(margin_top: 1) {
+                    QueryResults(query: query.clone())
+                }
+            }
+        }.print();
+    }
+
+    fn render_cache(cache: &DnsCacheResponse) {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " DNS CACHE DUMP ", color: Color::White, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
+                    #(cache.entries.iter().map(|e| element! {
+                        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
+                            Text(content: format!("{:<5}", e.kind), color: Color::Cyan)
+                            Text(content: format!(" {:<30}", e.name))
+                            Text(content: " -> ", color: Color::DarkGrey)
+                            Text(content: e.data.clone())
+                            View(flex_grow: 1.0)
+                            Text(content: format!("{}s", e.expires_in_secs), color: Color::Yellow)
+                        }
+                    }))
+                }
+            }
+        }.print();
     }
 }
 

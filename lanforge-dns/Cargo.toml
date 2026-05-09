@@ -52,7 +52,7 @@ hotpath-alloc = [
     "hotpath/hotpath-alloc",
     "lanforge-core/hotpath-alloc",
 ]
-default = []
+default = ["adblock", "dot", "doq"]
 
 
 [dev-dependencies]

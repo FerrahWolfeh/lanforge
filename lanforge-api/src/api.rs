@@ -1,5 +1,5 @@
+use lanforge_core::types::{DnsRecordEntry, LeaseTarget, UpstreamHealthSnapshot};
 use lanforge_core::{bus::TimedEvent, context::state::State};
-use lanforge_core::types::{LeaseTarget, events::dns::DnsRecordEntry};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -216,6 +216,9 @@ pub enum CommandAction {
     /// Retrieve DNS resolver statistics.
     #[dispatch(handler = "handle_dns_stats")]
     DnsStats,
+    /// Retrieve DNS upstream status and health.
+    #[dispatch(handler = "handle_dns_upstreams")]
+    DnsUpstreams,
     /// Perform a diagnostic DNS query.
     #[dispatch(handler = "handle_dns_query", args(name, record_type))]
     DnsQuery {
@@ -295,6 +298,8 @@ pub enum Response {
     Whois(Box<WhoisResponse>),
     /// Response for DNS statistics.
     DnsStats(DnsStatsResponse),
+    /// Response for DNS upstreams status.
+    DnsUpstreams(DnsUpstreamsResponse),
     /// Response for a DNS diagnostic query.
     DnsQuery(DnsQueryResponse),
     /// Response for DHCP pool utilization.
@@ -678,6 +683,12 @@ pub struct DnsStatsResponse {
     pub recursions: u64,
     /// Number of queries blocked by the adblocker.
     pub blocked_queries: u64,
+}
+
+/// A response containing status for all configured DNS upstreams.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsUpstreamsResponse {
+    pub upstreams: Vec<UpstreamHealthSnapshot>,
 }
 
 /// Results of a DNS diagnostic query.

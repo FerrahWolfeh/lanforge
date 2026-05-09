@@ -7,6 +7,7 @@
 use crate::cache::DnsCache;
 use crate::config::{UpstreamProtocol, UpstreamTarget};
 use crate::error::DnsError;
+use crate::health::UpstreamHealth;
 use crate::wire::{WireHeader, WireQuestion};
 use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::BinDecodable;
@@ -15,7 +16,7 @@ use std::io::Error;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::oneshot::{self, Sender};
@@ -40,6 +41,8 @@ pub struct UpstreamManager {
     pub cache: Arc<DnsCache>,
     /// The specific upstream target this manager handles.
     pub target: UpstreamTarget,
+    /// Performance and health tracking for this upstream.
+    pub health: Arc<UpstreamHealth>,
 }
 
 impl UpstreamManager {
@@ -84,6 +87,7 @@ impl UpstreamManager {
             next_id: AtomicU16::new(1),
             cache,
             target: target.clone(),
+            health: Arc::new(UpstreamHealth::new()),
         }))
     }
 
@@ -96,7 +100,7 @@ impl UpstreamManager {
     /// 3. If protocol is TLS, use DNS-over-TLS
     /// 4. Restore the original query ID before returning and caching
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub async fn forward(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
+    pub async fn forward(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
         let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
         let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
 
@@ -106,20 +110,32 @@ impl UpstreamManager {
         }
 
         let orig_id = header.id();
+        let start = Instant::now();
 
-        let resp_bytes = match target.protocol {
-            UpstreamProtocol::Udp => self.forward_udp(data, target.addr).await?,
-            UpstreamProtocol::Tls => self.forward_dot(data, target).await?,
+        let resp_result = match self.target.protocol {
+            UpstreamProtocol::Udp => self.forward_udp(data, self.target.addr).await,
+            UpstreamProtocol::Tls => self.forward_dot(data, &self.target).await,
             UpstreamProtocol::Quic => {
                 #[cfg(feature = "doq")]
                 {
-                    self.forward_doq(data, target).await?
+                    self.forward_doq(data, &self.target).await
                 }
                 #[cfg(not(feature = "doq"))]
                 {
-                    let _ = (data, target);
-                    return Err(DnsError::Tls("DoQ feature not enabled".to_string()));
+                    Err(DnsError::Tls("DoQ feature not enabled".to_string()))
                 }
+            }
+        };
+
+        let resp_bytes = match resp_result {
+            Ok(resp) => {
+                let rtt = start.elapsed().as_micros().try_into().unwrap_or(u32::MAX);
+                self.health.record_success(rtt);
+                resp
+            }
+            Err(e) => {
+                self.health.record_failure();
+                return Err(e);
             }
         };
 
@@ -191,7 +207,11 @@ impl UpstreamManager {
 
     #[cfg(not(feature = "dot"))]
     #[allow(clippy::unused_async)]
-    async fn forward_dot(&self, _data: &[u8], _target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
+    async fn forward_dot(
+        &self,
+        _data: &[u8],
+        _target: &UpstreamTarget,
+    ) -> Result<Vec<u8>, DnsError> {
         Err(DnsError::Tls("DoT feature not enabled".to_string()))
     }
 
@@ -213,29 +233,29 @@ impl UpstreamManager {
             .with_no_client_auth();
 
         let connector = TlsConnector::from(Arc::new(config));
-            let tcp_stream = timeout(Duration::from_secs(5), TcpStream::connect(target.addr))
-                .await
-                .map_err(|_| DnsError::UpstreamTimeout)??;
-
-            let mut tls_stream = connector.connect(server_name, tcp_stream).await?;
-
-            timeout(Duration::from_secs(5), async {
-                let len = u16::try_from(data.len()).unwrap_or(u16::MAX).to_be_bytes();
-                tls_stream.write_all(&len).await?;
-                tls_stream.write_all(data).await?;
-
-                let mut len_buf = [0u8; 2];
-                tls_stream.read_exact(&mut len_buf).await?;
-                let resp_len = u16::from_be_bytes(len_buf) as usize;
-
-                let mut resp_buf = vec![0u8; resp_len];
-                tls_stream.read_exact(&mut resp_buf).await?;
-
-                Ok::<Vec<u8>, Error>(resp_buf)
-            })
+        let tcp_stream = timeout(Duration::from_secs(5), TcpStream::connect(target.addr))
             .await
-            .map_err(|_| DnsError::UpstreamTimeout)?
-            .map_err(DnsError::Io)
+            .map_err(|_| DnsError::UpstreamTimeout)??;
+
+        let mut tls_stream = connector.connect(server_name, tcp_stream).await?;
+
+        timeout(Duration::from_secs(5), async {
+            let len = u16::try_from(data.len()).unwrap_or(u16::MAX).to_be_bytes();
+            tls_stream.write_all(&len).await?;
+            tls_stream.write_all(data).await?;
+
+            let mut len_buf = [0u8; 2];
+            tls_stream.read_exact(&mut len_buf).await?;
+            let resp_len = u16::from_be_bytes(len_buf) as usize;
+
+            let mut resp_buf = vec![0u8; resp_len];
+            tls_stream.read_exact(&mut resp_buf).await?;
+
+            Ok::<Vec<u8>, Error>(resp_buf)
+        })
+        .await
+        .map_err(|_| DnsError::UpstreamTimeout)?
+        .map_err(DnsError::Io)
     }
 
     /// DNS-over-QUIC (`DoQ`) forwarding.
@@ -286,14 +306,14 @@ impl UpstreamManager {
 
         send.write_all(data)
             .await
-            .map_err(|e| DnsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| DnsError::Io(std::io::Error::other(e)))?;
         send.finish()
-            .map_err(|e| DnsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| DnsError::Io(std::io::Error::other(e)))?;
 
         let resp = recv
             .read_to_end(4096)
             .await
-            .map_err(|e| DnsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| DnsError::Io(std::io::Error::other(e)))?;
         Ok(resp)
     }
 
@@ -331,8 +351,8 @@ impl UpstreamManager {
 /// Convenience function to forward a query to the upstream resolver.
 pub async fn forward_to_upstream(
     data: &[u8],
-    target: &UpstreamTarget,
+    _target: &UpstreamTarget,
     manager: &UpstreamManager,
 ) -> Result<Vec<u8>, DnsError> {
-    manager.forward(data, target).await
+    manager.forward(data).await
 }

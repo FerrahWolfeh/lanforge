@@ -26,10 +26,7 @@ use tracing::info;
 use crate::{
     config::DnsConfig, resolver::LocalResolver, stats::DnsStats, utils::extract_local_hostname_wire,
 };
-use crate::{
-    upstream::{UpstreamManager, forward_to_upstream},
-    utils::parse_arpa_wire,
-};
+use crate::{strategy::UpstreamStrategy, upstream::UpstreamManager, utils::parse_arpa_wire};
 use crate::{
     utils::{extract_local_hostname, fast_lowercase},
     wire::WireResponseWriter,
@@ -48,6 +45,8 @@ pub struct DnsContext {
     pub cfg: DnsConfig,
     /// List of upstream managers, one per target, sorted by priority.
     pub upstreams: Vec<Arc<UpstreamManager>>,
+    /// Strategy for recursive resolution.
+    pub upstream_strategy: Arc<UpstreamStrategy>,
     pub stats: Arc<DnsStats>,
     pub ctx: LanforgeContext,
     #[cfg(feature = "adblock")]
@@ -155,9 +154,15 @@ impl DnsService {
         let soa_mailbox =
             Name::from_str(&format!("hostmaster.{domain_base}.")).unwrap_or_else(|_| Name::root());
 
+        let upstream_strategy = Arc::new(UpstreamStrategy::new(
+            self.cfg.upstream_mode,
+            upstreams.clone(),
+        ));
+
         Ok(Arc::new(DnsContext {
             cfg: self.cfg.clone(),
             upstreams,
+            upstream_strategy,
             stats: Arc::clone(&self.stats),
             ctx: self.ctx.clone(),
             #[cfg(feature = "adblock")]
@@ -483,13 +488,16 @@ pub async fn handle_query(
     }
 
     // PHASE 3: Recursive Forwarding
-    if !ctx.upstreams.is_empty() {
-        ctx.stats.inc_recursive();
-        for mgr in &ctx.upstreams {
-            if let Ok(upstream_resp) = forward_to_upstream(data, &mgr.target, mgr).await {
-                resp.clear();
-                resp.extend_from_slice(&upstream_resp);
-                return Ok(true);
+    match ctx.upstream_strategy.resolve(data).await {
+        Ok(upstream_resp) => {
+            ctx.stats.inc_recursive();
+            resp.clear();
+            resp.extend_from_slice(&upstream_resp);
+            return Ok(true);
+        }
+        Err(e) => {
+            if !matches!(e, DnsError::Refused) {
+                ctx.stats.inc_upstream_error();
             }
         }
     }
@@ -647,13 +655,16 @@ async fn handle_query_fallback(
         }
     }
 
-    if !ctx.upstreams.is_empty() {
-        ctx.stats.inc_recursive();
-        for mgr in &ctx.upstreams {
-            if let Ok(upstream_resp) = forward_to_upstream(data, &mgr.target, mgr).await {
-                resp.clear();
-                resp.extend_from_slice(&upstream_resp);
-                return Ok(true);
+    match ctx.upstream_strategy.resolve(data).await {
+        Ok(upstream_resp) => {
+            ctx.stats.inc_recursive();
+            resp.clear();
+            resp.extend_from_slice(&upstream_resp);
+            return Ok(true);
+        }
+        Err(e) => {
+            if !matches!(e, DnsError::Refused) {
+                ctx.stats.inc_upstream_error();
             }
         }
     }

@@ -123,13 +123,11 @@ async fn handle_doq_connection(
                         return;
                     }
 
-                    let dns_ctx_any = match ctx_inner.get_dns_context() {
-                        Some(c) => c,
-                        None => return,
+                    let Some(dns_ctx_any) = ctx_inner.get_dns_context() else {
+                        return;
                     };
-                    let dns_ctx = match dns_ctx_any.downcast_ref::<DnsContext>() {
-                        Some(c) => c,
-                        None => return,
+                    let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
+                        return;
                     };
 
                     let mut resp_buf = Vec::with_capacity(512);
