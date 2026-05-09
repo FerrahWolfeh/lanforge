@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust
-/// use lanforge_core::types::identifiers::{Duid, MacAddr};
+/// use lanforge_types::identifiers::{Duid, MacAddr};
 ///
 /// // DUID-LL for MAC 00:01:02:03:04:05
 /// let duid = Duid::new(vec![0, 3, 0, 1, 0, 1, 2, 3, 4, 5]);
@@ -58,7 +58,7 @@ impl Duid {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_core::types::identifiers::Duid;
+    /// use lanforge_types::identifiers::Duid;
     ///
     /// // DUID-LL (type = 3)
     /// let duid = Duid::new(vec![0, 3, 0, 1, 0, 1, 2, 3, 4, 5]);
@@ -93,7 +93,7 @@ impl Duid {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_core::types::identifiers::{Duid, MacAddr};
+    /// use lanforge_types::identifiers::{Duid, MacAddr};
     ///
     /// // DUID-LL for MAC 00:01:02:03:04:05
     /// let duid = Duid::new(vec![0, 3, 0, 1, 0, 1, 2, 3, 4, 5]);
@@ -139,7 +139,7 @@ impl Duid {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_core::types::identifiers::{Duid, MacAddr};
+    /// use lanforge_types::identifiers::{Duid, MacAddr};
     ///
     /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     /// let duid = Duid::generate_ll_from_mac(mac.0);
