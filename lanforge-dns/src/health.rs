@@ -38,6 +38,8 @@ pub struct UpstreamHealth {
     pub consecutive_failures: AtomicU8,
     /// Unix timestamp of last successful response.
     pub last_success_ts: AtomicU64,
+    /// Unix timestamp of last failed response.
+    pub last_failure_ts: AtomicU64,
 }
 
 impl UpstreamHealth {
@@ -52,6 +54,7 @@ impl UpstreamHealth {
             total_failures: AtomicU64::new(0),
             consecutive_failures: AtomicU8::new(0),
             last_success_ts: AtomicU64::new(0),
+            last_failure_ts: AtomicU64::new(0),
         }
     }
 
@@ -91,15 +94,28 @@ impl UpstreamHealth {
         self.total_queries.fetch_add(1, Ordering::Relaxed);
         self.total_failures.fetch_add(1, Ordering::Relaxed);
         self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_failure_ts.store(now, Ordering::Relaxed);
     }
 
     /// Returns the current status based on consecutive failures.
     pub fn status(&self) -> UpstreamStatus {
         if self.consecutive_failures.load(Ordering::Relaxed) >= 5 {
-            UpstreamStatus::Degraded
-        } else {
-            UpstreamStatus::Healthy
+            let last_fail = self.last_failure_ts.load(Ordering::Relaxed);
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            if now.saturating_sub(last_fail) < 30 {
+                return UpstreamStatus::Degraded;
+            }
         }
+        UpstreamStatus::Healthy
     }
 
     /// Returns a serializable snapshot of the health metrics.

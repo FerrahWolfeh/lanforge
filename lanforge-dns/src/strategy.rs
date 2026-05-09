@@ -82,9 +82,20 @@ impl UpstreamStrategy {
 
     async fn resolve_parallel(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
         use tokio::task::JoinSet;
-
         let mut set = JoinSet::new();
-        for mgr in &self.upstreams {
+
+        let mut available: Vec<_> = self
+            .upstreams
+            .iter()
+            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
+            .collect();
+
+        // Fallback: If all are degraded, try all of them anyway
+        if available.is_empty() {
+            available = self.upstreams.iter().collect();
+        }
+
+        for mgr in available {
             let mgr = Arc::clone(mgr);
             let data = data.to_vec();
             set.spawn(async move { mgr.forward(&data).await });

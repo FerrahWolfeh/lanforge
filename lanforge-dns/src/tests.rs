@@ -11,15 +11,18 @@ use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::error::DnsError;
+use crate::health::{UpstreamHealth, UpstreamStatus};
 use crate::resolver::LocalResolver;
 use crate::response::ResponseBuilder;
 use crate::server::{DnsContext, handle_query};
 use crate::stats::DnsStats;
 use crate::strategy::UpstreamMode;
+use crate::upstream::UpstreamManager;
 use crate::utils::extract_local_hostname;
 use lanforge_core::context::LanforgeContext;
 
@@ -472,41 +475,145 @@ fn test_dns_response_contract() {
 
 #[test]
 fn test_upstream_health_ewma() {
-    use crate::health::UpstreamHealth;
     let health = UpstreamHealth::new();
 
     // First success sets EWMA to exact value
     health.record_success(1000);
-    assert_eq!(
-        health
-            .rtt_ewma_us
-            .load(std::sync::atomic::Ordering::Relaxed),
-        1000
-    );
+    assert_eq!(health.rtt_ewma_us.load(Ordering::Relaxed), 1000);
 
     // Second success: alpha=0.3 -> 0.3*500 + 0.7*1000 = 150 + 700 = 850
     health.record_success(500);
-    assert_eq!(
-        health
-            .rtt_ewma_us
-            .load(std::sync::atomic::Ordering::Relaxed),
-        850
-    );
+    assert_eq!(health.rtt_ewma_us.load(Ordering::Relaxed), 850);
 }
 
 #[test]
-fn test_upstream_degradation() {
-    use crate::health::{UpstreamHealth, UpstreamStatus};
+fn test_upstream_health_consecutive_failures() {
     let health = UpstreamHealth::new();
 
-    for _ in 0..4 {
+    health.record_failure();
+    assert_eq!(health.consecutive_failures.load(Ordering::Relaxed), 1);
+    assert_eq!(health.total_failures.load(Ordering::Relaxed), 1);
+
+    health.record_success(50);
+    assert_eq!(health.consecutive_failures.load(Ordering::Relaxed), 0);
+    assert_eq!(health.total_successes.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn test_upstream_health_status_timing() {
+    let health = UpstreamHealth::new();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    for _ in 0..5 {
         health.record_failure();
     }
-    assert_eq!(health.status(), UpstreamStatus::Healthy);
 
-    health.record_failure(); // 5th failure
+    // At T=0, should be degraded
+    health.last_failure_ts.store(now, Ordering::Relaxed);
     assert_eq!(health.status(), UpstreamStatus::Degraded);
 
-    health.record_success(100);
+    // At T=29, still degraded
+    health.last_failure_ts.store(now - 29, Ordering::Relaxed);
+    assert_eq!(health.status(), UpstreamStatus::Degraded);
+
+    // At T=30, should recover
+    health.last_failure_ts.store(now - 30, Ordering::Relaxed);
     assert_eq!(health.status(), UpstreamStatus::Healthy);
+}
+
+#[test]
+fn test_upstream_health_snapshot_labels() {
+    let health = UpstreamHealth::new();
+    health.record_success(1234);
+
+    let snap = health.snapshot("8.8.8.8:53".into(), "udp".into());
+    assert_eq!(snap.target, "8.8.8.8:53");
+    assert_eq!(snap.protocol, "udp");
+    assert_eq!(snap.rtt_ewma_us, 1234);
+    assert_eq!(snap.status, "Healthy");
+}
+
+#[tokio::test]
+async fn test_strategy_sequential_ordering() {
+    use crate::config::UpstreamTarget;
+    use crate::strategy::{UpstreamMode, UpstreamStrategy};
+
+    let t1: UpstreamTarget = "127.0.0.1:5301".parse().unwrap();
+    let t2: UpstreamTarget = "127.0.0.1:5302".parse().unwrap();
+
+    let m1 = UpstreamManager::new(&t1).await.unwrap();
+    let m2 = UpstreamManager::new(&t2).await.unwrap();
+
+    let strategy = UpstreamStrategy::new(UpstreamMode::Sequential, vec![m1.clone(), m2.clone()]);
+
+    // Mock failure for m1
+    for _ in 0..5 {
+        m1.health.record_failure();
+    }
+    assert_eq!(m1.health.status(), UpstreamStatus::Degraded);
+
+    // Strategy should skip m1 and try m2 (which will fail because nothing is listening)
+    let mut msg = Message::query();
+    msg.add_query(Query::query(
+        Name::from_str("example.com.").unwrap(),
+        RecordType::A,
+    ));
+    let query = msg.to_bytes().unwrap();
+    let res = strategy.resolve(&query).await;
+    assert!(res.is_err());
+
+    // Total queries on m1 should still be 5
+    assert_eq!(m1.health.total_queries.load(Ordering::Relaxed), 5);
+    // m2 should have been tried once
+    assert_eq!(m2.health.total_queries.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn test_strategy_fastest_selection() {
+    use crate::config::UpstreamTarget;
+    use crate::strategy::{UpstreamMode, UpstreamStrategy};
+
+    let t1: UpstreamTarget = "1.1.1.1:53".parse().unwrap();
+    let t2: UpstreamTarget = "8.8.8.8:53".parse().unwrap();
+
+    let m1 = UpstreamManager::new(&t1).await.unwrap();
+    let m2 = UpstreamManager::new(&t2).await.unwrap();
+
+    // m2 is faster
+    m1.health.record_success(2000);
+    m2.health.record_success(500);
+
+    let strategy = UpstreamStrategy::new(UpstreamMode::Fastest, vec![m1.clone(), m2]);
+
+    let snapshots = strategy.snapshots();
+    assert_eq!(snapshots[0].target, "1.1.1.1:53");
+    assert_eq!(snapshots[1].target, "8.8.8.8:53");
+}
+
+#[tokio::test]
+async fn test_strategy_parallel_all_degraded() {
+    use crate::config::UpstreamTarget;
+    use crate::strategy::{UpstreamMode, UpstreamStrategy};
+
+    let t1: UpstreamTarget = "127.0.0.1:5303".parse().unwrap();
+    let m1 = UpstreamManager::new(&t1).await.unwrap();
+
+    for _ in 0..5 {
+        m1.health.record_failure();
+    }
+
+    let strategy = UpstreamStrategy::new(UpstreamMode::Parallel, vec![m1.clone()]);
+
+    // Even if degraded, if it's the only one, parallel should still try it (fallback)
+    let mut msg = Message::query();
+    msg.add_query(Query::query(
+        Name::from_str("example.com.").unwrap(),
+        RecordType::A,
+    ));
+    let query = msg.to_bytes().unwrap();
+    let _ = strategy.resolve(&query).await;
+    assert_eq!(m1.health.total_queries.load(Ordering::Relaxed), 6);
 }
