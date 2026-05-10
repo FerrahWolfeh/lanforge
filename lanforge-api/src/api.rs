@@ -253,6 +253,21 @@ pub enum CommandAction {
         /// Filter by client IP address.
         client: Option<String>,
     },
+    /// Retrieve current adblock status and metrics.
+    #[dispatch(handler = "handle_dns_adblock_status", readonly)]
+    DnsAdblockStatus,
+    /// Add a domain to the blocklist.
+    #[dispatch(handler = "handle_dns_block", args(domain))]
+    DnsBlock {
+        /// Domain to block.
+        domain: String,
+    },
+    /// Add a domain to the allowlist.
+    #[dispatch(handler = "handle_dns_allow", args(domain))]
+    DnsAllow {
+        /// Domain to allow.
+        domain: String,
+    },
     /// Dump the full system context (for debugging).
     #[dispatch(handler = "handle_context_dump", args(only_devices, only_orphans))]
     ContextDump {
@@ -312,6 +327,8 @@ pub enum Response {
     DnsQuery(DnsQueryResponse),
     /// Response for DNS query logs.
     DnsQueryLog(DnsQueryLogResponse),
+    /// Response for DNS adblock status.
+    DnsAdblockStatus(DnsAdblockStatusResponse),
     /// Response for DHCP pool utilization.
     DhcpPools(DhcpPoolsResponse),
     /// Response for DNS cache dump.
@@ -746,6 +763,16 @@ pub struct DnsCacheEntry {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsQueryLogResponse {
     pub entries: Vec<lanforge_core::types::network::QueryLogEntry>,
+}
+
+/// Detailed status of the DNS adblocker.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsAdblockStatusResponse {
+    pub enabled: bool,
+    pub disabled_until: Option<u64>,
+    pub remaining_secs: Option<u64>,
+    pub blocklist_size: usize,
+    pub allowlist_size: usize,
 }
 
 #[cfg(test)]

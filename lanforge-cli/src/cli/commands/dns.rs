@@ -5,6 +5,7 @@ use iocraft::prelude::*;
 use lanforge_api::api::{
     Command as ControlCommand, CommandAction, DnsCacheResponse, DnsQueryLogResponse,
     DnsQueryResponse, DnsStatsResponse, DnsUpstreamsResponse, Response,
+    DnsAdblockStatusResponse,
 };
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_core::types::network::{QueryLogEntry, QueryResult};
@@ -25,6 +26,9 @@ impl CliCommand for DnsCommand {
                 }))
             }
             args::DnsCommand::Adblock { action } => match action {
+                args::AdblockAction::Status => {
+                    Ok(ControlCommand::new(CommandAction::DnsAdblockStatus))
+                }
                 args::AdblockAction::Enable => {
                     Ok(ControlCommand::new(CommandAction::DnsAdblockSet {
                         enabled: true,
@@ -43,6 +47,16 @@ impl CliCommand for DnsCommand {
                 }
                 args::AdblockAction::Reload => {
                     Ok(ControlCommand::new(CommandAction::DnsAdblockReload))
+                }
+                args::AdblockAction::Block { domain } => {
+                    Ok(ControlCommand::new(CommandAction::DnsBlock {
+                        domain: domain.clone(),
+                    }))
+                }
+                args::AdblockAction::Allow { domain } => {
+                    Ok(ControlCommand::new(CommandAction::DnsAllow {
+                        domain: domain.clone(),
+                    }))
                 }
             },
             args::DnsCommand::Cache { action } => match action {
@@ -65,6 +79,7 @@ impl CliCommand for DnsCommand {
             Response::DnsQuery(query) => Self::render_query(query),
             Response::DnsCache(cache) => Self::render_cache(cache),
             Response::DnsQueryLog(log) => Self::render_logs(log),
+            Response::DnsAdblockStatus(status) => Self::render_adblock_status(status),
             Response::Event(timed_event) => {
                 if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) = &timed_event.event {
                     Self::print_log_line(entry);
@@ -100,13 +115,13 @@ impl DnsCommand {
                     Text(content: " DNS RESOLVER STATS ", color: Color::White, weight: Weight::Bold)
                 }
                 View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                    StatLine(label: "Total Requests", value: stats.total_requests)
-                    StatLine(label: "Cache Hits", value: stats.cache_hits, color: Color::Green)
-                    StatLine(label: "Cache Misses", value: stats.cache_misses, color: Color::Yellow)
-                    StatLine(label: "Upstream Errors", value: stats.upstream_errors, color: Color::Red)
-                    StatLine(label: "Auth Queries", value: stats.auth_queries)
-                    StatLine(label: "Recursions", value: stats.recursions)
-                    StatLine(label: "Blocked Queries", value: stats.blocked_queries, color: Color::Cyan)
+                    StatLine(label: "Total Requests", value: stats.total_requests.to_string())
+                    StatLine(label: "Cache Hits", value: stats.cache_hits.to_string(), color: Color::Green)
+                    StatLine(label: "Cache Misses", value: stats.cache_misses.to_string(), color: Color::Yellow)
+                    StatLine(label: "Upstream Errors", value: stats.upstream_errors.to_string(), color: Color::Red)
+                    StatLine(label: "Auth Queries", value: stats.auth_queries.to_string())
+                    StatLine(label: "Recursions", value: stats.recursions.to_string())
+                    StatLine(label: "Blocked Queries", value: stats.blocked_queries.to_string(), color: Color::Cyan)
                 }
             }
         }.print();
@@ -228,6 +243,28 @@ impl DnsCommand {
         }.print();
     }
 
+    fn render_adblock_status(status: &DnsAdblockStatusResponse) {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " DNS ADBLOCK STATUS ", color: Color::White, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                    StatLine(
+                        label: "Status",
+                        value: if status.enabled { "Enabled".to_string() } else { "Disabled".to_string() },
+                        color: if status.enabled { Color::Green } else { Color::Red }
+                    )
+                    #(status.remaining_secs.map(|s| element! {
+                         StatLine(label: "Remaining", value: format!("{}s", s), color: Color::Yellow)
+                    }))
+                    StatLine(label: "Blocklist Size", value: status.blocklist_size.to_string())
+                    StatLine(label: "Allowlist Size", value: status.allowlist_size.to_string())
+                }
+            }
+        }.print();
+    }
+
     fn print_log_line(e: &QueryLogEntry) {
         use chrono::{DateTime, Local, Utc};
         let dt = DateTime::<Utc>::from_timestamp(e.timestamp.cast_signed(), 0).unwrap_or_default();
@@ -259,7 +296,7 @@ fn StatLine(props: &StatLineProps) -> impl Into<AnyElement<'_>> {
     element! {
         View(flex_direction: FlexDirection::Row) {
             Text(content: format!("{:<20}", props.label), color: Color::DarkGrey)
-            Text(content: props.value.to_string(), color: color)
+            Text(content: props.value.clone(), color: color)
         }
     }
 }
@@ -267,7 +304,7 @@ fn StatLine(props: &StatLineProps) -> impl Into<AnyElement<'_>> {
 #[derive(Props, Default)]
 struct StatLineProps {
     pub label: String,
-    pub value: u64,
+    pub value: String,
     pub color: Option<Color>,
 }
 #[component]

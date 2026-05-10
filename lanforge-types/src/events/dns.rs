@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "adblock")]
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum DnsEvent {
@@ -10,6 +9,10 @@ pub enum DnsEvent {
     },
     #[cfg(feature = "adblock")]
     AdblockReload,
+    #[cfg(feature = "adblock")]
+    AdblockBlock(String),
+    #[cfg(feature = "adblock")]
+    AdblockAllow(String),
     #[cfg(feature = "adblock")]
     QueryBlocked {
         src_addr: std::net::IpAddr,

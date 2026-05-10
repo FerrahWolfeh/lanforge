@@ -409,6 +409,71 @@ impl WireResponseWriter {
         }
     }
 
+    /// Writes a CNAME response into the buffer.
+    pub fn write_cname_response(
+        query_data: &[u8],
+        question: &WireQuestion,
+        target: &str,
+        ttl: u32,
+        edns: Option<WireOptScanner>,
+        ra: bool,
+        resp: &mut Vec<u8>,
+    ) {
+        resp.clear();
+        let capacity = 12 + question.data.len() + 12 + target.len() + 2;
+        if resp.capacity() < capacity {
+            resp.reserve(capacity);
+        }
+
+        // 1. Header
+        let mut h = [0u8; 12];
+        h.copy_from_slice(&query_data[0..12]);
+        h[2] |= 0x80; // QR = 1
+        h[2] |= 0x04; // AA = 1
+        if ra {
+            h[3] |= 0x80;
+        }
+        h[3] &= 0xF0;
+        h[6] = 0;
+        h[7] = 1; // ANCOUNT = 1
+        h[11] = u8::from(edns.is_some());
+        resp.extend_from_slice(&h);
+
+        // 2. Question
+        resp.extend_from_slice(&question.data[12..]);
+
+        // 3. Answer (CNAME)
+        resp.extend_from_slice(&[0xC0, 0x0C]);
+        resp.extend_from_slice(&5u16.to_be_bytes()); // Type CNAME (5)
+        resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
+        resp.extend_from_slice(&ttl.to_be_bytes());
+
+        // RDLEN and RDATA
+        let mut rdlen = 0u16;
+        for label in target.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            rdlen += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
+        }
+        rdlen += 1; // Null terminator
+        resp.extend_from_slice(&rdlen.to_be_bytes());
+
+        for label in target.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
+            resp.extend_from_slice(label.as_bytes());
+        }
+        resp.push(0);
+
+        // 4. EDNS
+        if let Some(opt) = edns {
+            Self::write_opt(resp, opt);
+        }
+    }
+
     fn write_opt(resp: &mut Vec<u8>, opt: WireOptScanner) {
         resp.push(0); // Root Name
         resp.extend_from_slice(&41u16.to_be_bytes()); // Type 41 (OPT)

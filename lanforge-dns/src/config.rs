@@ -7,7 +7,7 @@
 use crate::strategy::UpstreamMode;
 use lanforge_macros::ServiceConfig;
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 /// Supported protocols for upstream DNS forwarding.
@@ -135,6 +135,78 @@ impl Default for QueryLogConfig {
     }
 }
 
+/// How to respond to queries blocked by the adblocker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BlockingMode {
+    /// Return NXDOMAIN (default).
+    #[default]
+    NxDomain,
+    /// Return 0.0.0.0 (A) and :: (AAAA).
+    NullIp,
+    /// Return a custom user-specified IP address.
+    CustomIp,
+    /// Return REFUSED.
+    Refused,
+}
+
+impl FromStr for BlockingMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "nxdomain" => Ok(Self::NxDomain),
+            "null_ip" | "null" | "zero" => Ok(Self::NullIp),
+            "custom_ip" | "custom" => Ok(Self::CustomIp),
+            "refused" => Ok(Self::Refused),
+            _ => Err(format!("Invalid blocking mode: {s}")),
+        }
+    }
+}
+
+/// A manual DNS rewrite rule.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RewriteRule {
+    /// The domain name to match (e.g., "nas.example.com").
+    pub domain: String,
+    /// The answer to return. Can be an IP, another domain, or a device reference.
+    pub answer: String,
+}
+
+impl RewriteRule {
+    /// Attempts to parse the answer into a `RewriteAnswer`.
+    #[must_use]
+    pub fn parse_answer(&self) -> RewriteAnswer {
+        self.answer.parse::<Ipv4Addr>().map_or_else(
+            |_| {
+                self.answer.parse::<Ipv6Addr>().map_or_else(
+                    |_| {
+                        self.answer.strip_prefix("dev:").map_or_else(
+                            || RewriteAnswer::Cname(self.answer.clone()),
+                            |hostname| RewriteAnswer::Device(hostname.to_lowercase()),
+                        )
+                    },
+                    RewriteAnswer::Aaaa,
+                )
+            },
+            RewriteAnswer::A,
+        )
+    }
+}
+
+/// Resolved representation of a rewrite answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewriteAnswer {
+    /// Static IPv4 record.
+    A(Ipv4Addr),
+    /// Static IPv6 record.
+    Aaaa(Ipv6Addr),
+    /// Alias to another domain.
+    Cname(String),
+    /// Dynamic resolution from a lanforge device.
+    Device(String),
+}
+
 /// Configuration for the DNS service.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
@@ -170,6 +242,16 @@ pub struct DnsConfig {
     pub adblock_enabled: bool,
     /// List of URLs to fetch blocklists from.
     pub adblock_urls: Vec<String>,
+    /// How to respond to blocked queries.
+    pub blocking_mode: BlockingMode,
+    /// Custom IPv4 address for `BlockingMode::CustomIp`.
+    pub blocking_ip_v4: Option<Ipv4Addr>,
+    /// Custom IPv6 address for `BlockingMode::CustomIp`.
+    pub blocking_ip_v6: Option<Ipv6Addr>,
+    /// Manual DNS rewrite rules.
+    pub rewrites: Vec<RewriteRule>,
+    /// Domains that are never blocked.
+    pub allowlist: Vec<String>,
 
     /// How many days a device can be offline before its DNS entry is hidden.
     pub last_seen_threshold_days: u32,
@@ -209,6 +291,11 @@ impl Default for DnsConfig {
             multi_search_labels: vec![vec![b"lan".to_vec()]],
             adblock_enabled: false,
             adblock_urls: Vec::new(),
+            blocking_mode: BlockingMode::default(),
+            blocking_ip_v4: None,
+            blocking_ip_v6: None,
+            rewrites: Vec::new(),
+            allowlist: Vec::new(),
             last_seen_threshold_days: 7,
             dot_listen: None,
             dot_enabled: false,

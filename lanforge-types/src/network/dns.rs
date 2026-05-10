@@ -30,6 +30,8 @@ pub enum QueryResult {
     Error,
     /// Answered from the upstream cache.
     Cached,
+    /// Answered via a DNS rewrite rule.
+    Rewritten,
 }
 
 /// A single DNS query log entry.

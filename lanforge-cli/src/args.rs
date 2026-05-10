@@ -326,6 +326,8 @@ pub enum DhcpCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum AdblockAction {
+    /// Show current adblocker status and metrics
+    Status,
     /// Enable the adblocker
     Enable,
     /// Disable the adblocker
@@ -335,6 +337,16 @@ pub enum AdblockAction {
     },
     /// Reload blocklists from URLs
     Reload,
+    /// Add a domain to the blocklist
+    Block {
+        /// Domain to block
+        domain: String,
+    },
+    /// Add a domain to the allowlist
+    Allow {
+        /// Domain to allow
+        domain: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

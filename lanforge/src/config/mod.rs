@@ -30,15 +30,15 @@ pub use args::CliArgs;
 #[cfg(feature = "debug-commands")]
 pub use args::Command;
 use lanforge_api::config::{ApiConfig, HttpConfig};
+use lanforge_core::types::device::Ipv6AddrOrSuffix;
 use lanforge_db::config::DatabaseConfig;
-use lanforge_dns::{DnsConfig, PrioritizedUpstream};
+use lanforge_dns::{BlockingMode, DnsConfig, PrioritizedUpstream};
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
 use lanforge_network::dhcp::v6::config::Dhcpv6Config;
 use lanforge_network::mdns::MdnsConfig;
 use lanforge_network::ndp::config::MonitorConfig;
 use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
 use lanforge_tftp::config::TftpConfig;
-use lanforge_core::types::device::Ipv6AddrOrSuffix;
 pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
 
 use clap::Parser;
@@ -194,77 +194,13 @@ impl Config {
                 db
             },
             ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
-            ra_toml: {
-                let mut r = toml_cfg.ra;
-                if let Some(managed) = cli.ra_managed {
-                    r.managed = Some(managed);
-                }
-                if let Some(other) = cli.ra_other_config {
-                    r.other_config = Some(other);
-                }
-                if let Some(max_interval) = cli.ra_max_interval {
-                    r.max_interval = max_interval;
-                }
-                r
-            },
+            ra_toml: Self::merge_ra_overrides(toml_cfg.ra, cli),
             dhcpv4_enabled: cli.dhcpv4_enabled.unwrap_or(toml_cfg.dhcp.v4.enabled),
-            dhcpv4_toml: {
-                let mut d = toml_cfg.dhcp.v4;
-                if let Some(start) = cli.dhcpv4_range_start {
-                    d.range_start = Some(start);
-                }
-                if let Some(end) = cli.dhcpv4_range_end {
-                    d.range_end = Some(end);
-                }
-                if let Some(lt) = cli.dhcpv4_lease_time {
-                    d.lease_time = lt;
-                }
-                d
-            },
+            dhcpv4_toml: Self::merge_dhcpv4_overrides(toml_cfg.dhcp.v4, cli),
             dhcpv6_enabled: cli.dhcpv6_enabled.unwrap_or(toml_cfg.dhcp.v6.enabled),
             dhcpv6_toml: toml_cfg.dhcp.v6,
             dns_enabled: cli.dns_enabled.unwrap_or(toml_cfg.dns.enabled),
-            dns_toml: {
-                let mut d = toml_cfg.dns;
-                if let Some(listen) = &cli.dns_listen
-                    && let Ok(addr) = listen.parse()
-                {
-                    d.listen = addr;
-                }
-                if let Some(upstream) = &cli.dns_upstream
-                    && let Ok(target) = upstream.parse()
-                {
-                    d.upstreams = vec![PrioritizedUpstream {
-                        target,
-                        priority: 1,
-                    }];
-                }
-                if let Some(port) = cli.dns_port {
-                    d.listen.set_port(port);
-                }
-                if let Some(dot_listen) = &cli.dns_dot_listen
-                    && let Ok(addr) = dot_listen.parse()
-                {
-                    d.dot_listen = Some(addr);
-                }
-                if let Some(cert) = &cli.dns_tls_cert {
-                    d.tls_cert = Some(cert.clone());
-                }
-                if let Some(key) = &cli.dns_tls_key {
-                    d.tls_key = Some(key.clone());
-                }
-                #[cfg(feature = "adblock")]
-                if let Some(adblock) = cli.dns_adblock_enabled {
-                    d.adblock_enabled = adblock;
-                }
-                if let Some(ttl) = cli.dns_ttl {
-                    d.ttl = ttl;
-                }
-                if let Some(threshold) = cli.dns_last_seen {
-                    d.last_seen_threshold_days = threshold;
-                }
-                d
-            },
+            dns_toml: Self::merge_dns_overrides(toml_cfg.dns, cli),
             search_domains,
             monitor_toml: toml_cfg.monitor,
             mdns_toml: toml_cfg.mdns,
@@ -504,6 +440,78 @@ impl Config {
         };
 
         cfg
+    }
+
+    const fn merge_ra_overrides(mut r: RaServiceConfig, cli: &CliArgs) -> RaServiceConfig {
+        if let Some(managed) = cli.ra_managed {
+            r.managed = Some(managed);
+        }
+        if let Some(other) = cli.ra_other_config {
+            r.other_config = Some(other);
+        }
+        if let Some(max_interval) = cli.ra_max_interval {
+            r.max_interval = max_interval;
+        }
+        r
+    }
+
+    const fn merge_dhcpv4_overrides(mut d: Dhcpv4Config, cli: &CliArgs) -> Dhcpv4Config {
+        if let Some(start) = cli.dhcpv4_range_start {
+            d.range_start = Some(start);
+        }
+        if let Some(end) = cli.dhcpv4_range_end {
+            d.range_end = Some(end);
+        }
+        if let Some(lt) = cli.dhcpv4_lease_time {
+            d.lease_time = lt;
+        }
+        d
+    }
+
+    fn merge_dns_overrides(mut d: DnsConfig, cli: &CliArgs) -> DnsConfig {
+        if let Some(listen) = &cli.dns_listen
+            && let Ok(addr) = listen.parse()
+        {
+            d.listen = addr;
+        }
+        if let Some(upstream) = &cli.dns_upstream
+            && let Ok(target) = upstream.parse()
+        {
+            d.upstreams = vec![PrioritizedUpstream {
+                target,
+                priority: 1,
+            }];
+        }
+        if let Some(port) = cli.dns_port {
+            d.listen.set_port(port);
+        }
+        if let Some(dot_listen) = &cli.dns_dot_listen
+            && let Ok(addr) = dot_listen.parse()
+        {
+            d.dot_listen = Some(addr);
+        }
+        if let Some(cert) = &cli.dns_tls_cert {
+            d.tls_cert = Some(cert.clone());
+        }
+        if let Some(key) = &cli.dns_tls_key {
+            d.tls_key = Some(key.clone());
+        }
+        #[cfg(feature = "adblock")]
+        if let Some(adblock) = cli.dns_adblock_enabled {
+            d.adblock_enabled = adblock;
+        }
+        if let Some(mode_str) = &cli.dns_blocking_mode
+            && let Ok(mode) = mode_str.parse::<BlockingMode>()
+        {
+            d.blocking_mode = mode;
+        }
+        if let Some(ttl) = cli.dns_ttl {
+            d.ttl = ttl;
+        }
+        if let Some(threshold) = cli.dns_last_seen {
+            d.last_seen_threshold_days = threshold;
+        }
+        d
     }
 }
 

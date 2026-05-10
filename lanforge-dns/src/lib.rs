@@ -85,7 +85,7 @@ pub mod doq;
 mod tests;
 
 // Re-exports for convenience and compatibility
-pub use config::{DnsConfig, PrioritizedUpstream};
+pub use config::{BlockingMode, DnsConfig, PrioritizedUpstream, RewriteAnswer};
 #[cfg(feature = "doq")]
 pub use doq::DoqService;
 #[cfg(feature = "dot")]

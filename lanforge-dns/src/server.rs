@@ -14,7 +14,13 @@ use lanforge_core::{
     context::LanforgeContext,
 };
 use socket2::{Domain, Protocol, Socket, Type};
-use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    net::{IpAddr, Ipv6Addr},
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UdpSocket},
@@ -23,6 +29,7 @@ use tokio::{
 };
 use tracing::info;
 
+use crate::config::{BlockingMode, RewriteAnswer};
 use crate::query_log::QueryRing;
 use crate::{
     config::DnsConfig, resolver::LocalResolver, stats::DnsStats, utils::extract_local_hostname_wire,
@@ -35,6 +42,7 @@ use crate::{
 #[allow(unused_imports)]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_core::types::network::{QueryLogEntry, QueryResult};
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "adblock")]
@@ -249,10 +257,10 @@ impl DnsService {
         let adblocker = dns_ctx.adblocker.clone();
         let urls = self.cfg.adblock_urls.clone();
         let initial_enabled = self.cfg.adblock_enabled;
+        let rewrites = dns_ctx.cfg.rewrites.clone();
+        let allowlist = dns_ctx.cfg.allowlist.clone();
 
         tokio::spawn(async move {
-            use std::time::Instant;
-
             let Some(adblocker) = adblocker else {
                 return;
             };
@@ -272,13 +280,22 @@ impl DnsService {
                 .await;
             }
 
-            // 2. Event Loop
-            let mut reenable_at: Option<Instant> = None;
+            // 2. Initial Rewrites & Allowlist from config
+            {
+                adblocker.rewrites.write().clone_from(&rewrites);
+                let mut allow = HashSet::new();
+                for domain in &allowlist {
+                    allow.insert(domain.to_lowercase());
+                }
+                adblocker.replace_allowlist(allow);
+            }
+
+            // 3. Event Loop
             loop {
-                let sleep_duration = reenable_at.map_or_else(
-                    || Duration::from_hours(1),
-                    |at| at.saturating_duration_since(Instant::now()),
-                );
+                let sleep_duration = adblocker
+                    .timer
+                    .remaining_secs()
+                    .map_or(Duration::from_hours(1), Duration::from_secs);
 
                 tokio::select! {
                     res = rx.recv() => {
@@ -286,13 +303,15 @@ impl DnsService {
                             Ok(TimedEvent { event: LanforgeEvent::Dns(DnsEvent::AdblockToggle { enabled, duration_secs }), .. }) => {
                                 adblocker.set_enabled(enabled);
                                 if enabled {
-                                    reenable_at = None;
                                     info!("Adblock: enabled");
                                 } else if let Some(secs) = duration_secs {
-                                    reenable_at = Some(std::time::Instant::now() + Duration::from_secs(secs));
+                                    let until = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs() + secs;
+                                    adblocker.timer.disabled_until.store(until, Ordering::Relaxed);
                                     info!("Adblock: disabled for {} seconds", secs);
                                 } else {
-                                    reenable_at = None;
                                     info!("Adblock: disabled permanently");
                                 }
                             }
@@ -305,16 +324,20 @@ impl DnsService {
                                     }
                                 }).await;
                             }
+                            Ok(TimedEvent { event: LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)), .. }) => {
+                                adblocker.add_block(&domain);
+                            }
+                            Ok(TimedEvent { event: LanforgeEvent::Dns(DnsEvent::AdblockAllow(domain)), .. }) => {
+                                adblocker.add_allow(&domain);
+                            }
                             _ => {}
                         }
                     }
-                    () = tokio::time::sleep(sleep_duration), if reenable_at.is_some() => {
-                        if let Some(at) = reenable_at
-                            && at <= std::time::Instant::now() {
-                                adblocker.set_enabled(true);
-                                reenable_at = None;
-                                info!("Adblock: timer expired, re-enabled automatically");
-                            }
+                    () = tokio::time::sleep(sleep_duration), if adblocker.timer.remaining_secs().is_some() => {
+                        if let Some(rem) = adblocker.timer.remaining_secs() && rem == 0 {
+                            adblocker.set_enabled(true);
+                            info!("Adblock: timer expired, re-enabled automatically");
+                        }
                     }
                 }
             }
@@ -489,7 +512,7 @@ pub async fn handle_query(
     src_addr: IpAddr,
     resp: &mut Vec<u8>,
 ) -> Result<bool, DnsError> {
-    let start_instant = std::time::Instant::now();
+    let start_instant = Instant::now();
     ctx.stats.inc_requests();
 
     let _ = src_addr;
@@ -505,19 +528,21 @@ pub async fn handle_query(
     let Some(question) = WireQuestion::parse(data) else {
         return handle_query_fallback(data, ctx, src_addr, resp).await;
     };
+    let domain = labels_to_domain(question.labels());
 
     // PHASE 2: Local Resolution Attempt
     if resolve_local_wire(data, &header, &question, ctx, resp) {
         ctx.stats.inc_auth();
         ctx.stats.inc_cache_hit();
-        ctx.record_log(
-            src_addr,
-            labels_to_domain(question.labels()),
-            question.qtype(),
-            QueryResult::Local,
-            0,
-            false,
-        );
+        ctx.record_log(src_addr, domain, question.qtype(), QueryResult::Local, 0, false);
+        return Ok(true);
+    }
+
+    // PHASE 2.2: DNS Rewrites
+    #[cfg(feature = "adblock")]
+    if try_resolve_rewrite(data, &header, &question, ctx, &domain, resp) {
+        ctx.stats.inc_auth();
+        ctx.record_log(src_addr, domain, question.qtype(), QueryResult::Rewritten, 0, false);
         return Ok(true);
     }
 
@@ -527,29 +552,14 @@ pub async fn handle_query(
     #[cfg(feature = "adblock")]
     if let Some(adblocker) = &ctx.adblocker
         && adblocker.is_enabled()
+        && adblocker.should_block(&domain)
     {
-        let domain = labels_to_domain(question.labels());
-        if adblocker.should_block(&domain) {
-            ctx.stats.inc_blocked();
-            ctx.ctx.inc_dns_blocked();
-            adblocker.inc_ip_stats(src_addr);
-
-            let edns = WireOptScanner::scan(data, &header, &question);
-            let ra = !ctx.cfg.upstreams.is_empty();
-            WireResponseWriter::write_error_response(
-                data, &question, 3, // NXDOMAIN
-                edns, ra, resp,
-            );
-            ctx.record_log(
-                src_addr,
-                domain,
-                question.qtype(),
-                QueryResult::Blocked,
-                0,
-                false,
-            );
-            return Ok(true);
-        }
+        ctx.stats.inc_blocked();
+        ctx.ctx.inc_dns_blocked();
+        adblocker.inc_ip_stats(src_addr);
+        apply_adblock_blocking(data, &header, &question, ctx, resp);
+        ctx.record_log(src_addr, domain, question.qtype(), QueryResult::Blocked, 0, false);
+        return Ok(true);
     }
 
     // PHASE 3: Recursive Forwarding
@@ -558,41 +568,20 @@ pub async fn handle_query(
             ctx.stats.inc_recursive();
             resp.clear();
             resp.extend_from_slice(&upstream_resp);
-            ctx.record_log(
-                src_addr,
-                labels_to_domain(question.labels()),
-                question.qtype(),
-                if from_cache {
-                    QueryResult::Cached
-                } else {
-                    QueryResult::Forwarded
-                },
-                u32::try_from(start_instant.elapsed().as_micros()).unwrap_or(u32::MAX),
-                from_cache,
-            );
+            let result = if from_cache { QueryResult::Cached } else { QueryResult::Forwarded };
+            let elapsed = u32::try_from(start_instant.elapsed().as_micros()).unwrap_or(u32::MAX);
+            ctx.record_log(src_addr, domain, question.qtype(), result, elapsed, from_cache);
             return Ok(true);
         }
-        Err(e) => {
-            if !matches!(e, DnsError::Refused) {
-                ctx.stats.inc_upstream_error();
-            }
-        }
+        Err(e) if !matches!(e, DnsError::Refused) => ctx.stats.inc_upstream_error(),
+        Err(_) => {}
     }
 
     let edns = WireOptScanner::scan(data, &header, &question);
     let ra = !ctx.upstreams.is_empty();
-    WireResponseWriter::write_error_response(
-        data, &question, 3, // NXDOMAIN
-        edns, ra, resp,
-    );
-    ctx.record_log(
-        src_addr,
-        labels_to_domain(question.labels()),
-        question.qtype(),
-        QueryResult::NxDomain,
-        u32::try_from(start_instant.elapsed().as_micros()).unwrap_or(u32::MAX),
-        false,
-    );
+    WireResponseWriter::write_error_response(data, &question, 3, edns, ra, resp);
+    let elapsed = u32::try_from(start_instant.elapsed().as_micros()).unwrap_or(u32::MAX);
+    ctx.record_log(src_addr, domain, question.qtype(), QueryResult::NxDomain, elapsed, false);
     Ok(true)
 }
 
@@ -671,6 +660,77 @@ fn resolve_local_wire(
     false
 }
 
+/// Resolves a DNS rewrite rule using wire-format helpers.
+fn resolve_rewrite_wire(
+    data: &[u8],
+    header: &WireHeader,
+    question: &WireQuestion<'_>,
+    ctx: &DnsContext,
+    answer: RewriteAnswer,
+    resp: &mut Vec<u8>,
+) -> bool {
+    let edns = WireOptScanner::scan(data, header, question);
+    let ra = !ctx.upstreams.is_empty();
+    let qtype = question.qtype();
+
+    match answer {
+        RewriteAnswer::A(ip) if qtype == 1 || qtype == 255 => {
+            WireResponseWriter::write_ip_response(
+                data,
+                question,
+                &[IpAddr::V4(ip)],
+                ctx.cfg.ttl,
+                edns,
+                ra,
+                resp,
+            );
+            true
+        }
+        RewriteAnswer::Aaaa(ip) if qtype == 28 || qtype == 255 => {
+            WireResponseWriter::write_ip_response(
+                data,
+                question,
+                &[IpAddr::V6(ip)],
+                ctx.cfg.ttl,
+                edns,
+                ra,
+                resp,
+            );
+            true
+        }
+        RewriteAnswer::Cname(target) => {
+            WireResponseWriter::write_cname_response(
+                data,
+                question,
+                &target,
+                ctx.cfg.ttl,
+                edns,
+                ra,
+                resp,
+            );
+            true
+        }
+        RewriteAnswer::Device(hostname) => {
+            let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
+            resolver
+                .resolve_ip(&hostname, RecordType::from(qtype))
+                .is_some_and(|ips| {
+                    WireResponseWriter::write_ip_response(
+                        data,
+                        question,
+                        &ips,
+                        ctx.cfg.ttl,
+                        edns,
+                        ra,
+                        resp,
+                    );
+                    true
+                })
+        }
+        _ => false,
+    }
+}
+
 /// Fallback logic for queries that are too complex for the zero-alloc wire parser.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 async fn handle_query_fallback(
@@ -679,7 +739,7 @@ async fn handle_query_fallback(
     src_addr: IpAddr,
     resp: &mut Vec<u8>,
 ) -> Result<bool, DnsError> {
-    let start_instant = std::time::Instant::now();
+    let start_instant = Instant::now();
     let _ = src_addr;
 
     let Ok(query) = Message::from_bytes(data) else {
@@ -692,6 +752,12 @@ async fn handle_query_fallback(
 
     // PHASE 2: Local Resolution Attempt (Fallback path)
     if resolve_local_fallback(ctx, &rb, qname, qtype, src_addr, resp)? {
+        return Ok(true);
+    }
+
+    // PHASE 2.2: DNS Rewrites (Fallback path)
+    #[cfg(feature = "adblock")]
+    if resolve_rewrite_fallback(ctx, &rb, qname, qtype, src_addr, resp)? {
         return Ok(true);
     }
 
@@ -807,6 +873,93 @@ fn resolve_local_fallback(
     Ok(false)
 }
 
+/// Helper for DNS rewrites in the fallback path.
+#[cfg(feature = "adblock")]
+fn resolve_rewrite_fallback(
+    ctx: &DnsContext,
+    rb: &ResponseBuilder,
+    qname: &Name,
+    qtype: RecordType,
+    src_addr: IpAddr,
+    resp: &mut Vec<u8>,
+) -> Result<bool, DnsError> {
+    if let Some(adblocker) = &ctx.adblocker {
+        let mut domain = qname.to_string();
+        if domain.ends_with('.') {
+            domain.pop();
+        }
+        domain.make_ascii_lowercase();
+
+        if let Some(answer) = adblocker.resolve_rewrite(&domain) {
+            match answer {
+                RewriteAnswer::A(ip) if qtype == RecordType::A || qtype == RecordType::ANY => {
+                    ctx.stats.inc_auth();
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_ips([IpAddr::V4(ip)])?);
+                    ctx.record_log(
+                        src_addr,
+                        domain,
+                        qtype.into(),
+                        QueryResult::Rewritten,
+                        0,
+                        false,
+                    );
+                    return Ok(true);
+                }
+                RewriteAnswer::Aaaa(ip)
+                    if qtype == RecordType::AAAA || qtype == RecordType::ANY =>
+                {
+                    ctx.stats.inc_auth();
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_ips([IpAddr::V6(ip)])?);
+                    ctx.record_log(
+                        src_addr,
+                        domain,
+                        qtype.into(),
+                        QueryResult::Rewritten,
+                        0,
+                        false,
+                    );
+                    return Ok(true);
+                }
+                RewriteAnswer::Cname(target) => {
+                    ctx.stats.inc_auth();
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_cname(&target)?);
+                    ctx.record_log(
+                        src_addr,
+                        domain,
+                        qtype.into(),
+                        QueryResult::Rewritten,
+                        0,
+                        false,
+                    );
+                    return Ok(true);
+                }
+                RewriteAnswer::Device(hostname) => {
+                    let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
+                    if let Some(ips) = resolver.resolve_ip(&hostname, qtype) {
+                        ctx.stats.inc_auth();
+                        resp.clear();
+                        resp.extend_from_slice(&rb.success_ips(ips)?);
+                        ctx.record_log(
+                            src_addr,
+                            domain,
+                            qtype.into(),
+                            QueryResult::Rewritten,
+                            0,
+                            false,
+                        );
+                        return Ok(true);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Helper for adblock filtering in the fallback path.
 #[cfg(feature = "adblock")]
 fn check_adblock_fallback(
@@ -831,7 +984,38 @@ fn check_adblock_fallback(
             ctx.ctx.inc_dns_blocked();
             adblocker.inc_ip_stats(src_addr);
             resp.clear();
-            resp.extend_from_slice(&rb.nxdomain()?);
+
+            match ctx.cfg.blocking_mode {
+                BlockingMode::NxDomain => {
+                    resp.extend_from_slice(&rb.nxdomain()?);
+                }
+                BlockingMode::NullIp => {
+                    let ips = if qtype == RecordType::AAAA {
+                        vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
+                    } else {
+                        vec![IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)]
+                    };
+                    resp.extend_from_slice(&rb.success_ips(ips)?);
+                }
+                BlockingMode::CustomIp => {
+                    let ips = if qtype == RecordType::AAAA {
+                        vec![IpAddr::V6(
+                            ctx.cfg.blocking_ip_v6.unwrap_or(Ipv6Addr::UNSPECIFIED),
+                        )]
+                    } else {
+                        vec![IpAddr::V4(
+                            ctx.cfg
+                                .blocking_ip_v4
+                                .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
+                        )]
+                    };
+                    resp.extend_from_slice(&rb.success_ips(ips)?);
+                }
+                BlockingMode::Refused => {
+                    resp.extend_from_slice(&rb.refused()?);
+                }
+            }
+
             ctx.record_log(
                 src_addr,
                 domain,
@@ -844,4 +1028,65 @@ fn check_adblock_fallback(
         }
     }
     Ok(false)
+}
+
+#[cfg(feature = "adblock")]
+fn apply_adblock_blocking(
+    data: &[u8],
+    header: &WireHeader,
+    question: &WireQuestion,
+    ctx: &DnsContext,
+    resp: &mut Vec<u8>,
+) {
+    let edns = WireOptScanner::scan(data, header, question);
+    let ra = !ctx.cfg.upstreams.is_empty();
+
+    match ctx.cfg.blocking_mode {
+        BlockingMode::NxDomain => {
+            WireResponseWriter::write_error_response(data, question, 3, edns, ra, resp);
+        }
+        BlockingMode::NullIp => {
+            let ips = if question.qtype() == 28 {
+                vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
+            } else {
+                vec![IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)]
+            };
+            WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
+        }
+        BlockingMode::CustomIp => {
+            let ips = if question.qtype() == 28 {
+                vec![IpAddr::V6(
+                    ctx.cfg.blocking_ip_v6.unwrap_or(Ipv6Addr::UNSPECIFIED),
+                )]
+            } else {
+                vec![IpAddr::V4(
+                    ctx.cfg
+                        .blocking_ip_v4
+                        .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
+                )]
+            };
+            WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
+        }
+        BlockingMode::Refused => {
+            WireResponseWriter::write_error_response(data, question, 5, edns, ra, resp);
+        }
+    }
+}
+
+#[cfg(feature = "adblock")]
+fn try_resolve_rewrite(
+    data: &[u8],
+    header: &WireHeader,
+    question: &WireQuestion,
+    ctx: &DnsContext,
+    domain: &str,
+    resp: &mut Vec<u8>,
+) -> bool {
+    if let Some(adblocker) = &ctx.adblocker
+        && let Some(answer) = adblocker.resolve_rewrite(domain)
+        && resolve_rewrite_wire(data, header, question, ctx, answer, resp)
+    {
+        return true;
+    }
+    false
 }

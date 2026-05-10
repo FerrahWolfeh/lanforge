@@ -13,9 +13,9 @@
 //!
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
-#[cfg(feature = "adblock")]
-use lanforge_core::types::DnsEvent;
-use lanforge_core::types::{DeviceEvent, LanforgeEvent, MacAddr, StorageEvent, SystemEvent, TimedEvent};
+use lanforge_core::types::{
+    DeviceEvent, DnsEvent, LanforgeEvent, MacAddr, StorageEvent, SystemEvent, TimedEvent,
+};
 use std::time::Duration;
 use tokio::time::{Interval, interval};
 use tracing::{debug, error, info, warn};

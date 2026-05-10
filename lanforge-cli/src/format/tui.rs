@@ -345,6 +345,32 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
             spans.push(Span::raw(" -> "));
             spans.push(Span::styled(domain, Style::default().fg(theme::MOCHA_RED)));
         }
+        DnsEvent::AdblockBlock(domain) => {
+            spans.push(Span::styled(
+                "BLOCK",
+                Style::default()
+                    .fg(theme::MOCHA_RED)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" Manual block: "));
+            spans.push(Span::styled(
+                domain,
+                Style::default().fg(theme::MOCHA_RED).add_modifier(Modifier::BOLD),
+            ));
+        }
+        DnsEvent::AdblockAllow(domain) => {
+            spans.push(Span::styled(
+                "ALLOW",
+                Style::default()
+                    .fg(theme::MOCHA_GREEN)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" Manual allow: "));
+            spans.push(Span::styled(
+                domain,
+                Style::default().fg(theme::MOCHA_GREEN).add_modifier(Modifier::BOLD),
+            ));
+        }
         DnsEvent::QueryResolved(_) | DnsEvent::CacheFlush => {}
     }
 }

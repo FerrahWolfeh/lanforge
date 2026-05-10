@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::error::DnsError;
+use crate::filter::AdBlocker;
 use crate::health::{UpstreamHealth, UpstreamStatus};
 use crate::resolver::LocalResolver;
 use crate::response::ResponseBuilder;
@@ -25,6 +26,7 @@ use crate::strategy::UpstreamMode;
 use crate::upstream::UpstreamManager;
 use crate::utils::extract_local_hostname;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::types::network::{QueryLogEntry, QueryResult};
 
 fn init_test_context() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
@@ -618,4 +620,182 @@ async fn test_strategy_parallel_all_degraded() {
     let query = msg.to_bytes().unwrap();
     let _ = strategy.resolve(&query).await;
     assert_eq!(m1.health.total_queries.load(Ordering::Relaxed), 6);
+}
+
+#[tokio::test]
+async fn test_query_ring() {
+    use crate::query_log::QueryRing;
+    let ring = QueryRing::new(5);
+
+    for i in 0u64..10 {
+        ring.push(QueryLogEntry {
+            timestamp: i,
+            src_ip: "127.0.0.1".parse().unwrap(),
+            domain: format!("host{i}.lan"),
+            qtype: 1,
+            result: QueryResult::Local,
+            upstream_us: 0,
+            cached: false,
+        });
+    }
+
+    let entries = ring.get_recent(10);
+    assert_eq!(entries.len(), 5);
+    // Should contain the last 5 entries (5 to 9)
+    assert_eq!(entries[0].domain, "host9.lan");
+    assert_eq!(entries[4].domain, "host5.lan");
+}
+
+#[tokio::test]
+#[cfg(feature = "adblock")]
+async fn test_dns_rewrites_fallback() {
+    let ctx_instance = init_test_context();
+    let mut cfg = mock_config();
+    cfg.adblock_enabled = true;
+    cfg.rewrites = vec![
+        crate::config::RewriteRule {
+            domain: "vault.lan".to_string(),
+            answer: "10.0.0.1".to_string(),
+        },
+        crate::config::RewriteRule {
+            domain: "alias.lan".to_string(),
+            answer: "target.lan".to_string(),
+        },
+    ];
+
+    let adblocker = Arc::new(AdBlocker::new());
+    adblocker.rewrites.write().clone_from(&cfg.rewrites);
+    adblocker.set_enabled(true);
+
+    let ctx = DnsContext {
+        cfg: cfg.clone(),
+        upstreams: Vec::new(),
+        stats: Arc::new(DnsStats::default()),
+        ctx: ctx_instance,
+        adblocker: Some(adblocker),
+        upstream_strategy: Arc::new(crate::strategy::UpstreamStrategy::new(
+            UpstreamMode::Sequential,
+            vec![],
+        )),
+        soa_zone: Name::from_str("lan.").unwrap(),
+        soa_master_ns: Name::from_str("ns.lan.").unwrap(),
+        soa_mailbox: Name::from_str("hostmaster.lan.").unwrap(),
+        query_log: None,
+    };
+
+    // Use a query that triggers fallback (e.g., with a pointer or just calling handle_query_fallback)
+    let mut query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("vault.lan.").unwrap(),
+        RecordType::A,
+    ));
+    let data = query.to_bytes().unwrap();
+    let mut resp_buf = Vec::new();
+
+    // Test direct IP rewrite
+    let res = crate::server::handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+        .await
+        .unwrap();
+    assert!(res);
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.response_code, ResponseCode::NoError);
+    assert_eq!(resp.answers.len(), 1);
+    if let RData::A(ip) = &resp.answers[0].data {
+        assert_eq!(Into::<Ipv4Addr>::into(*ip), Ipv4Addr::new(10, 0, 0, 1));
+    } else {
+        panic!("Wrong record type");
+    }
+
+    // Test CNAME rewrite
+    query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("alias.lan.").unwrap(),
+        RecordType::A,
+    ));
+    let data = query.to_bytes().unwrap();
+    resp_buf.clear();
+    let res = crate::server::handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+        .await
+        .unwrap();
+    assert!(res);
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.answers.len(), 1);
+    if let RData::CNAME(name) = &resp.answers[0].data {
+        assert_eq!(name.to_string(), "target.lan.");
+    } else {
+        panic!("Wrong record type");
+    }
+}
+
+#[tokio::test]
+#[cfg(feature = "adblock")]
+async fn test_dns_blocking_modes_fallback() {
+    let ctx_instance = init_test_context();
+    let mut cfg = mock_config();
+    cfg.adblock_enabled = true;
+    cfg.blocking_mode = crate::config::BlockingMode::NullIp;
+
+    let adblocker = Arc::new(AdBlocker::new());
+    let mut list = HashSet::new();
+    list.insert("evil.com".to_string());
+    adblocker.replace_blocklist(list);
+    adblocker.set_enabled(true);
+
+    let ctx = DnsContext {
+        cfg: cfg.clone(),
+        upstreams: vec![
+            UpstreamManager::new(&"8.8.8.8:53".parse().unwrap())
+                .await
+                .unwrap(),
+        ],
+        stats: Arc::new(DnsStats::default()),
+        ctx: ctx_instance,
+        adblocker: Some(adblocker),
+        upstream_strategy: Arc::new(crate::strategy::UpstreamStrategy::new(
+            UpstreamMode::Sequential,
+            vec![],
+        )),
+        soa_zone: Name::from_str("lan.").unwrap(),
+        soa_master_ns: Name::from_str("ns.lan.").unwrap(),
+        soa_mailbox: Name::from_str("hostmaster.lan.").unwrap(),
+        query_log: None,
+    };
+
+    let mut query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("evil.com.").unwrap(),
+        RecordType::A,
+    ));
+    let data = query.to_bytes().unwrap();
+    let mut resp_buf = Vec::new();
+
+    // Test NullIp mode
+    let _ = crate::server::handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+        .await
+        .unwrap();
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.response_code, ResponseCode::NoError);
+    assert_eq!(resp.answers.len(), 1);
+    if let RData::A(ip) = &resp.answers[0].data {
+        assert_eq!(Into::<Ipv4Addr>::into(*ip), Ipv4Addr::UNSPECIFIED);
+    }
+
+    // Test Refused mode
+    let mut cfg_refused = ctx.cfg.clone();
+    cfg_refused.blocking_mode = crate::config::BlockingMode::Refused;
+    let ctx_refused = DnsContext {
+        cfg: cfg_refused,
+        ..ctx
+    };
+    resp_buf.clear();
+    let _ = crate::server::handle_query(
+        &data,
+        &ctx_refused,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf,
+    )
+    .await
+    .unwrap();
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.response_code, ResponseCode::Refused);
 }
