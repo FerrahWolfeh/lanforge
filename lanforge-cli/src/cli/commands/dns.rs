@@ -1,10 +1,13 @@
 use crate::{args, cli::commands::CliCommand};
 use color_eyre::eyre::Result;
+use colored::Colorize;
 use iocraft::prelude::*;
 use lanforge_api::api::{
-    Command as ControlCommand, CommandAction, DnsCacheResponse, DnsQueryResponse, DnsStatsResponse,
-    DnsUpstreamsResponse, Response,
+    Command as ControlCommand, CommandAction, DnsCacheResponse, DnsQueryLogResponse,
+    DnsQueryResponse, DnsStatsResponse, DnsUpstreamsResponse, Response,
 };
+use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+use lanforge_core::types::network::{QueryLogEntry, QueryResult};
 
 pub struct DnsCommand {
     pub action: args::DnsCommand,
@@ -46,6 +49,12 @@ impl CliCommand for DnsCommand {
                 args::CacheAction::Flush => Ok(ControlCommand::new(CommandAction::DnsCacheFlush)),
                 args::CacheAction::Dump => Ok(ControlCommand::new(CommandAction::DnsCacheDump)),
             },
+            args::DnsCommand::Log { limit, client, .. } => {
+                Ok(ControlCommand::new(CommandAction::DnsQueryLog {
+                    limit: Some(*limit),
+                    client: client.clone(),
+                }))
+            }
         }
     }
 
@@ -55,6 +64,12 @@ impl CliCommand for DnsCommand {
             Response::DnsUpstreams(resp) => Self::render_upstreams(resp),
             Response::DnsQuery(query) => Self::render_query(query),
             Response::DnsCache(cache) => Self::render_cache(cache),
+            Response::DnsQueryLog(log) => Self::render_logs(log),
+            Response::Event(timed_event) => {
+                if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) = &timed_event.event {
+                    Self::print_log_line(entry);
+                }
+            }
             Response::Error { error } => {
                 println!("Error: {error}");
             }
@@ -66,6 +81,14 @@ impl CliCommand for DnsCommand {
             }
         }
         Ok(None)
+    }
+
+    fn is_streaming(&self) -> bool {
+        if let args::DnsCommand::Log { follow, .. } = &self.action {
+            *follow
+        } else {
+            false
+        }
     }
 }
 
@@ -163,6 +186,70 @@ impl DnsCommand {
                 }
             }
         }.print();
+    }
+
+    fn render_logs(log: &DnsQueryLogResponse) {
+        use chrono::{DateTime, Local, Utc};
+        element! {
+            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " DNS QUERY LOG ", color: Color::White, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
+                    View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2, margin_bottom: 1) {
+                        Text(content: format!("{:<10}", "TIME"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<16}", "CLIENT"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<30}", "DOMAIN"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<8}", "RESULT"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<8}", "LATENCY"), color: Color::DarkGrey, weight: Weight::Bold)
+                    }
+                    #(log.entries.iter().rev().map(|e| {
+                        let dt = DateTime::<Utc>::from_timestamp(e.timestamp.cast_signed(), 0).unwrap_or_default();
+                        let local_dt: DateTime<Local> = DateTime::from(dt);
+                        let time_str = local_dt.format("%H:%M:%S").to_string();
+                        let result_color = match e.result {
+                            QueryResult::Blocked => Color::Red,
+                            QueryResult::Local => Color::Green,
+                            QueryResult::Cached => Color::Cyan,
+                            _ => Color::White,
+                        };
+                        element! {
+                            View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
+                                Text(content: format!("{:<10}", time_str), color: Color::DarkGrey)
+                                Text(content: format!("{:<16}", e.src_ip))
+                                Text(content: format!("{:<30}", e.domain))
+                                Text(content: format!("{:<8?}", e.result), color: result_color)
+                                Text(content: format!("{:<8}", format!("{}ms", e.upstream_us / 1000)), color: Color::Yellow)
+                            }
+                        }
+                    }))
+                }
+            }
+        }.print();
+    }
+
+    fn print_log_line(e: &QueryLogEntry) {
+        use chrono::{DateTime, Local, Utc};
+        let dt = DateTime::<Utc>::from_timestamp(e.timestamp.cast_signed(), 0).unwrap_or_default();
+        let local_dt: DateTime<Local> = DateTime::from(dt);
+        let time_str = local_dt.format("%H:%M:%S").to_string();
+
+        let result_str = format!("{:?}", e.result);
+        let result_colored = match e.result {
+            QueryResult::Blocked => result_str.red(),
+            QueryResult::Local => result_str.green(),
+            QueryResult::Cached => result_str.cyan(),
+            _ => result_str.white(),
+        };
+
+        println!(
+            "{}  {:<16}  {:<30}  {:<8}  {}ms",
+            time_str.dimmed(),
+            e.src_ip,
+            e.domain,
+            result_colored,
+            (e.upstream_us / 1000).to_string().yellow()
+        );
     }
 }
 

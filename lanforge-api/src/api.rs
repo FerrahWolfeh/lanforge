@@ -245,6 +245,14 @@ pub enum CommandAction {
     /// Force a reload of the adblock blocklists.
     #[dispatch(handler = "handle_dns_adblock_reload")]
     DnsAdblockReload,
+    /// Retrieve recent DNS query logs.
+    #[dispatch(handler = "handle_dns_query_log", args(limit, client), readonly)]
+    DnsQueryLog {
+        /// Maximum number of entries to retrieve.
+        limit: Option<usize>,
+        /// Filter by client IP address.
+        client: Option<String>,
+    },
     /// Dump the full system context (for debugging).
     #[dispatch(handler = "handle_context_dump", args(only_devices, only_orphans))]
     ContextDump {
@@ -302,6 +310,8 @@ pub enum Response {
     DnsUpstreams(DnsUpstreamsResponse),
     /// Response for a DNS diagnostic query.
     DnsQuery(DnsQueryResponse),
+    /// Response for DNS query logs.
+    DnsQueryLog(DnsQueryLogResponse),
     /// Response for DHCP pool utilization.
     DhcpPools(DhcpPoolsResponse),
     /// Response for DNS cache dump.
@@ -730,6 +740,12 @@ pub struct DnsCacheEntry {
     pub kind: String,
     pub data: String,
     pub expires_in_secs: u64,
+}
+
+/// A response containing recent DNS query logs.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsQueryLogResponse {
+    pub entries: Vec<lanforge_core::types::network::QueryLogEntry>,
 }
 
 #[cfg(test)]

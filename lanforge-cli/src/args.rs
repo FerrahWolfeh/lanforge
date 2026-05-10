@@ -278,6 +278,18 @@ pub enum DnsCommand {
     Stats,
     /// Show upstream resolver health and status
     Upstreams,
+    /// View recent query logs
+    Log {
+        /// Number of entries to show
+        #[arg(short = 'n', long, default_value = "50")]
+        limit: usize,
+        /// Filter by client IP address
+        #[arg(short, long)]
+        client: Option<String>,
+        /// Watch for new queries in real-time
+        #[arg(short, long)]
+        follow: bool,
+    },
     /// Perform a diagnostic query
     Query {
         /// Name to resolve

@@ -175,6 +175,15 @@ fn format_dns_event(now: &str, event: &DnsEvent, verbose: bool) {
                 domain.bright_red()
             );
         }
+        DnsEvent::QueryResolved(entry) if verbose => {
+            println!(
+                "[{now}] {} {} -> {} ({:?})",
+                "DNS".cyan().bold(),
+                entry.src_ip.to_string().bright_cyan(),
+                entry.domain.bright_yellow(),
+                entry.result
+            );
+        }
         _ => {}
     }
 }

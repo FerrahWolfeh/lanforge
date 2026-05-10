@@ -27,7 +27,7 @@ use crate::api::{
     DhcpPoolsResponse, DnsCacheEntry, DnsCacheResponse, DnsQueryResponse, DnsStatsResponse,
     Encoding, HostConfigEntry, HostsResponse, Ipv6Entry, LeaseEntry, LeaseInfo, LeaseKind,
     LeasesResponse, NetworkStatus, ResourcesStatus, Response, ServicesStatus, SimpleSuccess,
-    StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse,
+    StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse, DnsQueryLogResponse,
 };
 
 // Moved to lanforge-http
@@ -686,13 +686,46 @@ impl ClientContext {
     /// Triggers a reload of DNS blocklists.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
+        let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
         Response::Success(SimpleSuccess {
-            message: "DNS Adblock reload requested".to_string(),
+            message: "Adblock reload triggered".to_string(),
         })
+    }
+
+    pub(crate) async fn handle_dns_query_log(
+        &self,
+        limit: Option<usize>,
+        client: Option<String>,
+    ) -> Response {
+        let limit = limit.unwrap_or(100);
+        let client_filter = client.and_then(|c| c.parse::<IpAddr>().ok());
+
+        let Some(dns_ctx_any) = self.ctx.get_dns_context() else {
+            return Response::Error {
+                error: "DNS service not initialized".into(),
+            };
+        };
+
+        let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
+            return Response::Error {
+                error: "Invalid DNS context".into(),
+            };
+        };
+
+        dns_ctx.query_log.as_ref().map_or_else(
+            || {
+                Response::Error {
+                    error: "Query logging is disabled".into(),
+                }
+            },
+            |log| {
+                let mut entries = log.get_recent(limit);
+                if let Some(client_ip) = client_filter {
+                    entries.retain(|e| e.src_ip == client_ip);
+                }
+                Response::DnsQueryLog(DnsQueryLogResponse { entries })
+            },
+        )
     }
 
     #[cfg(not(feature = "adblock"))]

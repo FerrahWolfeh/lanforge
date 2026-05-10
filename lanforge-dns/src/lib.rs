@@ -66,6 +66,7 @@ pub mod error;
 #[cfg(feature = "adblock")]
 pub mod filter;
 pub mod health;
+pub mod query_log;
 pub mod resolver;
 pub mod response;
 pub mod server;

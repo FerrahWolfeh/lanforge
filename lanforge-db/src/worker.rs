@@ -292,6 +292,11 @@ impl AsyncService for DbWorker {
                                 error!("DNS log record error: {e}");
                             }
                         }
+                        LanforgeEvent::Dns(DnsEvent::QueryResolved(ref entry)) => {
+                            if let Err(e) = log_db.record_dns_query(entry).await {
+                                error!("DNS query log record error: {e}");
+                            }
+                        }
                     });
 
                     if break_loop {

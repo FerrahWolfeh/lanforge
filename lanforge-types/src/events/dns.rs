@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "adblock")]
-use std::net::IpAddr;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum DnsEvent {
@@ -12,7 +11,12 @@ pub enum DnsEvent {
     #[cfg(feature = "adblock")]
     AdblockReload,
     #[cfg(feature = "adblock")]
-    QueryBlocked { src_addr: IpAddr, domain: String },
+    QueryBlocked {
+        src_addr: std::net::IpAddr,
+        domain: String,
+    },
+    /// A DNS query was resolved.
+    QueryResolved(crate::network::QueryLogEntry),
     /// Flush the DNS cache.
     #[default]
     CacheFlush,

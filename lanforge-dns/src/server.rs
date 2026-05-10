@@ -23,6 +23,7 @@ use tokio::{
 };
 use tracing::info;
 
+use crate::query_log::QueryRing;
 use crate::{
     config::DnsConfig, resolver::LocalResolver, stats::DnsStats, utils::extract_local_hostname_wire,
 };
@@ -33,6 +34,8 @@ use crate::{
 };
 #[allow(unused_imports)]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+use lanforge_core::types::network::{QueryLogEntry, QueryResult};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "adblock")]
 use crate::filter::{AdBlocker, labels_to_domain};
@@ -51,6 +54,7 @@ pub struct DnsContext {
     pub ctx: LanforgeContext,
     #[cfg(feature = "adblock")]
     pub adblocker: Option<Arc<AdBlocker>>,
+    pub query_log: Option<Arc<QueryRing>>,
 
     // Pre-computed SOA names for NXDOMAIN/NODATA responses
     pub soa_zone: Name,
@@ -159,6 +163,12 @@ impl DnsService {
             upstreams.clone(),
         ));
 
+        let query_log = if self.cfg.query_log.enabled {
+            Some(Arc::new(QueryRing::new(self.cfg.query_log.ring_size)))
+        } else {
+            None
+        };
+
         Ok(Arc::new(DnsContext {
             cfg: self.cfg.clone(),
             upstreams,
@@ -170,9 +180,47 @@ impl DnsService {
             soa_zone,
             soa_master_ns,
             soa_mailbox,
+            query_log,
         }))
     }
+}
 
+impl DnsContext {
+    pub fn record_log(
+        &self,
+        src_ip: std::net::IpAddr,
+        domain: String,
+        qtype: u16,
+        result: QueryResult,
+        upstream_us: u32,
+        cached: bool,
+    ) {
+        if let Some(log) = &self.query_log {
+            let entry = QueryLogEntry {
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                src_ip,
+                domain,
+                qtype,
+                result,
+                upstream_us,
+                cached,
+            };
+            log.push(entry.clone());
+
+            if self.cfg.query_log.persist {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)));
+            }
+        }
+    }
+}
+
+impl DnsService {
     fn spawn_udp_handler(&self, dns_ctx: Arc<DnsContext>, sock: Arc<UdpSocket>) -> JoinHandle<()> {
         let ctx_udp = self.ctx.clone();
         tokio::spawn(async move {
@@ -441,6 +489,7 @@ pub async fn handle_query(
     src_addr: IpAddr,
     resp: &mut Vec<u8>,
 ) -> Result<bool, DnsError> {
+    let start_instant = std::time::Instant::now();
     ctx.stats.inc_requests();
 
     let _ = src_addr;
@@ -461,6 +510,14 @@ pub async fn handle_query(
     if resolve_local_wire(data, &header, &question, ctx, resp) {
         ctx.stats.inc_auth();
         ctx.stats.inc_cache_hit();
+        ctx.record_log(
+            src_addr,
+            labels_to_domain(question.labels()),
+            question.qtype(),
+            QueryResult::Local,
+            0,
+            false,
+        );
         return Ok(true);
     }
 
@@ -483,16 +540,36 @@ pub async fn handle_query(
                 data, &question, 3, // NXDOMAIN
                 edns, ra, resp,
             );
+            ctx.record_log(
+                src_addr,
+                domain,
+                question.qtype(),
+                QueryResult::Blocked,
+                0,
+                false,
+            );
             return Ok(true);
         }
     }
 
     // PHASE 3: Recursive Forwarding
     match ctx.upstream_strategy.resolve(data).await {
-        Ok(upstream_resp) => {
+        Ok((upstream_resp, from_cache)) => {
             ctx.stats.inc_recursive();
             resp.clear();
             resp.extend_from_slice(&upstream_resp);
+            ctx.record_log(
+                src_addr,
+                labels_to_domain(question.labels()),
+                question.qtype(),
+                if from_cache {
+                    QueryResult::Cached
+                } else {
+                    QueryResult::Forwarded
+                },
+                u32::try_from(start_instant.elapsed().as_micros()).unwrap_or(u32::MAX),
+                from_cache,
+            );
             return Ok(true);
         }
         Err(e) => {
@@ -507,6 +584,14 @@ pub async fn handle_query(
     WireResponseWriter::write_error_response(
         data, &question, 3, // NXDOMAIN
         edns, ra, resp,
+    );
+    ctx.record_log(
+        src_addr,
+        labels_to_domain(question.labels()),
+        question.qtype(),
+        QueryResult::NxDomain,
+        u32::try_from(start_instant.elapsed().as_micros()).unwrap_or(u32::MAX),
+        false,
     );
     Ok(true)
 }
@@ -594,6 +679,7 @@ async fn handle_query_fallback(
     src_addr: IpAddr,
     resp: &mut Vec<u8>,
 ) -> Result<bool, DnsError> {
+    let start_instant = std::time::Instant::now();
     let _ = src_addr;
 
     let Ok(query) = Message::from_bytes(data) else {
@@ -604,20 +690,99 @@ async fn handle_query_fallback(
     let qname = question.name();
     let qtype = question.query_type();
 
+    // PHASE 2: Local Resolution Attempt (Fallback path)
+    if resolve_local_fallback(ctx, &rb, qname, qtype, src_addr, resp)? {
+        return Ok(true);
+    }
+
+    ctx.stats.inc_cache_miss();
+
+    // PHASE 2.5: Adblock Filtering (Fallback path)
+    #[cfg(feature = "adblock")]
+    if check_adblock_fallback(ctx, &rb, qname, qtype, src_addr, resp)? {
+        return Ok(true);
+    }
+
+    // PHASE 3: Recursive Forwarding
+    match ctx.upstream_strategy.resolve(data).await {
+        Ok((upstream_resp, from_cache)) => {
+            ctx.stats.inc_recursive();
+            resp.clear();
+            resp.extend_from_slice(&upstream_resp);
+            ctx.record_log(
+                src_addr,
+                qname.to_string(),
+                qtype.into(),
+                if from_cache {
+                    QueryResult::Cached
+                } else {
+                    QueryResult::Forwarded
+                },
+                u32::try_from(start_instant.elapsed().as_micros()).unwrap_or(u32::MAX),
+                from_cache,
+            );
+            return Ok(true);
+        }
+        Err(e) => {
+            if !matches!(e, DnsError::Refused) {
+                ctx.stats.inc_upstream_error();
+            }
+        }
+    }
+
+    resp.clear();
+    resp.extend_from_slice(&rb.nxdomain()?);
+    ctx.record_log(
+        src_addr,
+        qname.to_string(),
+        qtype.into(),
+        QueryResult::NxDomain,
+        u32::try_from(start_instant.elapsed().as_micros()).unwrap_or(u32::MAX),
+        false,
+    );
+    Ok(true)
+}
+
+/// Helper for local resolution in the fallback path.
+fn resolve_local_fallback(
+    ctx: &DnsContext,
+    rb: &ResponseBuilder,
+    qname: &Name,
+    qtype: RecordType,
+    src_addr: IpAddr,
+    resp: &mut Vec<u8>,
+) -> Result<bool, DnsError> {
     if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
         if let Some(hostname_slice) = extract_local_hostname(qname, &ctx.cfg.multi_search_labels) {
             let safe_hostname = fast_lowercase(hostname_slice);
-            ctx.stats.inc_auth();
-            ctx.stats.inc_cache_hit();
-
             let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
             if let Some(ips) = resolver.resolve_ip(&safe_hostname, qtype) {
+                ctx.stats.inc_auth();
+                ctx.stats.inc_cache_hit();
                 resp.clear();
                 resp.extend_from_slice(&rb.success_ips(ips)?);
+                ctx.record_log(
+                    src_addr,
+                    qname.to_string(),
+                    qtype.into(),
+                    QueryResult::Local,
+                    0,
+                    false,
+                );
                 return Ok(true);
             } else if ctx.ctx.get_by_hostname(&safe_hostname).is_some() {
+                ctx.stats.inc_auth();
+                ctx.stats.inc_cache_hit();
                 resp.clear();
                 resp.extend_from_slice(&rb.empty_noerror()?);
+                ctx.record_log(
+                    src_addr,
+                    qname.to_string(),
+                    qtype.into(),
+                    QueryResult::Local,
+                    0,
+                    false,
+                );
                 return Ok(true);
             }
         }
@@ -628,14 +793,30 @@ async fn handle_query_fallback(
             ctx.stats.inc_cache_hit();
             resp.clear();
             resp.extend_from_slice(&rb.success_ptr(&host, &domain)?);
+            ctx.record_log(
+                src_addr,
+                qname.to_string(),
+                qtype.into(),
+                QueryResult::Local,
+                0,
+                false,
+            );
             return Ok(true);
         }
     }
+    Ok(false)
+}
 
-    ctx.stats.inc_cache_miss();
-
-    // Adblock check for fallback path
-    #[cfg(feature = "adblock")]
+/// Helper for adblock filtering in the fallback path.
+#[cfg(feature = "adblock")]
+fn check_adblock_fallback(
+    ctx: &DnsContext,
+    rb: &ResponseBuilder,
+    qname: &Name,
+    qtype: RecordType,
+    src_addr: IpAddr,
+    resp: &mut Vec<u8>,
+) -> Result<bool, DnsError> {
     if let Some(adblocker) = &ctx.adblocker
         && adblocker.is_enabled()
     {
@@ -651,25 +832,16 @@ async fn handle_query_fallback(
             adblocker.inc_ip_stats(src_addr);
             resp.clear();
             resp.extend_from_slice(&rb.nxdomain()?);
+            ctx.record_log(
+                src_addr,
+                domain,
+                qtype.into(),
+                QueryResult::Blocked,
+                0,
+                false,
+            );
             return Ok(true);
         }
     }
-
-    match ctx.upstream_strategy.resolve(data).await {
-        Ok(upstream_resp) => {
-            ctx.stats.inc_recursive();
-            resp.clear();
-            resp.extend_from_slice(&upstream_resp);
-            return Ok(true);
-        }
-        Err(e) => {
-            if !matches!(e, DnsError::Refused) {
-                ctx.stats.inc_upstream_error();
-            }
-        }
-    }
-
-    resp.clear();
-    resp.extend_from_slice(&rb.nxdomain()?);
-    Ok(true)
+    Ok(false)
 }

@@ -100,13 +100,13 @@ impl UpstreamManager {
     /// 3. If protocol is TLS, use DNS-over-TLS
     /// 4. Restore the original query ID before returning and caching
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub async fn forward(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
+    pub async fn forward(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
         let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
         let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
 
         // 1. Try the cache first
         if let Some(cached_resp) = self.cache.get_wire(data, &question) {
-            return Ok(cached_resp);
+            return Ok((cached_resp, true));
         }
 
         let orig_id = header.id();
@@ -154,7 +154,7 @@ impl UpstreamManager {
                 qclass: question.qclass(),
             };
             self.cache.insert(key, &resp, final_bytes.clone());
-            Ok(final_bytes)
+            Ok((final_bytes, false))
         } else {
             let mut raw = resp_bytes;
             if raw.len() >= 2 {
@@ -162,7 +162,7 @@ impl UpstreamManager {
                 raw[0] = id_bytes[0];
                 raw[1] = id_bytes[1];
             }
-            Ok(raw)
+            Ok((raw, false))
         }
     }
 
@@ -353,6 +353,6 @@ pub async fn forward_to_upstream(
     data: &[u8],
     _target: &UpstreamTarget,
     manager: &UpstreamManager,
-) -> Result<Vec<u8>, DnsError> {
+) -> Result<(Vec<u8>, bool), DnsError> {
     manager.forward(data).await
 }

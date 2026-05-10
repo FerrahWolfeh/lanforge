@@ -345,7 +345,7 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
             spans.push(Span::raw(" -> "));
             spans.push(Span::styled(domain, Style::default().fg(theme::MOCHA_RED)));
         }
-        DnsEvent::CacheFlush => {}
+        DnsEvent::QueryResolved(_) | DnsEvent::CacheFlush => {}
     }
 }
 

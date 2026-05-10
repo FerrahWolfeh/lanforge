@@ -104,6 +104,37 @@ impl TryFrom<String> for UpstreamTarget {
     }
 }
 
+/// Configuration for DNS query logging.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct QueryLogConfig {
+    /// Whether query logging is enabled.
+    pub enabled: bool,
+    /// Size of the in-memory ring buffer.
+    pub ring_size: usize,
+    /// Whether to persist logs to the database.
+    pub persist: bool,
+    /// How often to flush logs to disk (if supported/needed).
+    pub flush_interval_secs: u32,
+    /// Retention in hours for persisted logs.
+    pub retention_hours: u32,
+    /// Maximum entries in the database.
+    pub max_entries: u32,
+}
+
+impl Default for QueryLogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            ring_size: 1000,
+            persist: false,
+            flush_interval_secs: 30,
+            retention_hours: 168, // 7 days
+            max_entries: 500_000,
+        }
+    }
+}
+
 /// Configuration for the DNS service.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
@@ -159,6 +190,9 @@ pub struct DnsConfig {
     pub doq_listen: Option<SocketAddr>,
     /// Whether `DoQ` is explicitly enabled.
     pub doq_enabled: bool,
+
+    /// Query logging configuration.
+    pub query_log: QueryLogConfig,
 }
 
 impl Default for DnsConfig {
@@ -182,6 +216,7 @@ impl Default for DnsConfig {
             tls_key: None,
             doq_listen: None,
             doq_enabled: false,
+            query_log: QueryLogConfig::default(),
         }
     }
 }

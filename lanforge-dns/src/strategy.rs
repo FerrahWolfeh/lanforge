@@ -52,7 +52,7 @@ impl UpstreamStrategy {
     }
 
     /// Forwards a query to one or more upstreams based on the strategy.
-    pub async fn resolve(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
+    pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
         if self.upstreams.is_empty() {
             return Err(DnsError::Refused);
         }
@@ -65,7 +65,7 @@ impl UpstreamStrategy {
         }
     }
 
-    async fn resolve_sequential(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
+    async fn resolve_sequential(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
         let mut last_err = DnsError::UpstreamTimeout;
         for mgr in &self.upstreams {
             if mgr.health.status() == UpstreamStatus::Degraded {
@@ -80,7 +80,7 @@ impl UpstreamStrategy {
         Err(last_err)
     }
 
-    async fn resolve_parallel(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
+    async fn resolve_parallel(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
         use tokio::task::JoinSet;
         let mut set = JoinSet::new();
 
@@ -117,7 +117,7 @@ impl UpstreamStrategy {
         Err(last_err)
     }
 
-    async fn resolve_fastest(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
+    async fn resolve_fastest(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
         let mut sorted = self.upstreams.clone();
         sorted.sort_by_key(|m| m.health.rtt_ewma_us.load(Ordering::Relaxed));
 
@@ -134,7 +134,7 @@ impl UpstreamStrategy {
         Err(last_err)
     }
 
-    async fn resolve_round_robin(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
+    async fn resolve_round_robin(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
         let len = self.upstreams.len();
         let start = self.rr_index.fetch_add(1, Ordering::Relaxed) % len;
 

@@ -70,6 +70,7 @@ fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
         soa_zone,
         soa_master_ns,
         soa_mailbox,
+        query_log: None,
     }
 }
 
@@ -292,6 +293,7 @@ async fn test_adblock_integration() {
         soa_zone,
         soa_master_ns,
         soa_mailbox,
+        query_log: None,
     };
 
     let mut query = Message::query();
