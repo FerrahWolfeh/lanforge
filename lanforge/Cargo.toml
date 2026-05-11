@@ -1,6 +1,7 @@
 [package]
 name = "lanforge"
 version = "0.13.0"
+license.workspace = true
 edition = "2024"
 
 [lib]

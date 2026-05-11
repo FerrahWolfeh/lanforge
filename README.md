@@ -1,174 +1,145 @@
-# lanforge
+# lanforge 🚀
 
-> Unified IPv4/IPv6 network control daemon for Linux edge gateways.
+> **Unified Network Orchestration for Linux Edge Gateways.**
 
-**lanforge** is a single-process daemon that replaces the fragile stack of radvd + dnsmasq + custom trackers typically found on small Linux routers and Raspberry Pi gateways. It manages RA, DHCPv4, DHCPv6, and SLAAC hostname tracking as coordinated tasks with a shared device table, rather than separate processes that communicate through files and signals.
+**lanforge** is a modern, single-process network daemon built in Rust. It replaces the fragmented stack of `radvd`, `dnsmasq`, and various custom tracking scripts typically used on Raspberry Pi routers and Linux gateways. 
 
-This is a personal project built for a Raspberry Pi 4B running a self-hosted home network stack. It is opinionated, but the core is generic enough to be useful on any Linux gateway.
-
----
-
-## Why
-
-The conventional setup looks like this:
-
-```
-radvd          → sends Router Advertisements
-dnsmasq        → DHCPv4 + DHCPv6 + local DNS upstream
-ipv6_namer     → watches NDP table, tries to associate SLAAC addresses to hostnames
-                  by reading dnsmasq's lease file
-pihole-FTL     → DNS resolver, pulls hostnames from dnsmasq as upstream
-```
-
-This works, until the router reboots with clients already on the network. The devices have active addresses, but dnsmasq's lease file is empty and ipv6_namer has no state — so nothing gets a hostname until each device happens to renew its DHCP lease. On a network where devices renew every 24 hours, that means flying blind for most of the day.
-
-The root cause is that the hostname lives in dnsmasq, the SLAAC address lives in ipv6_namer, and they only communicate through a file that evaporates on reboot.
-
-lanforge keeps a single `DeviceTable` in memory, backed by SQLite, that associates a MAC address with a hostname and all of its addresses — v4 lease, v6 lease, and SLAAC addresses — as one record. On startup, the table is restored from SQLite before the first NDP query runs. Hostnames are available immediately, with no dependency on lease renewal timing.
+By maintaining a **unified, reactive identity table** for every device on your network, Lanforge ensures that hostnames, IPv4/IPv6 leases, and SLAAC addresses are always consistent, persistent, and instantly available—even across reboots.
 
 ---
 
-## Status
+## ✨ Key Features
 
-Early development. The RA service is functional. DHCPv4/v6 and the unified device table are in progress.
+- **🌐 Comprehensive Address Management**
+  - **DHCPv4 Server**: High-performance implementation using Layer 2 Raw Sockets for maximum compatibility.
+  - **DHCPv6 Server**: Supports Stateful Address Assignment (IA_NA) and Prefix Delegation (IA_PD).
+  - **Router Advertisements (RA)**: Dynamic RA with RDNSS and DNSSL support; automatically adapts to WAN prefix changes.
+  - **SLAAC Tracking**: Advanced correlation of IPv6 SLAAC addresses to physical devices.
 
-| Component       | Status      |
-|-----------------|-------------|
-| RA service      | ✅ done      |
-| SLAAC tracker   | ✅ done (ipv6_namer, being migrated) |
-| DeviceTable     | 🔨 in progress |
-| DHCPv4 server   | 🔨 in progress |
-| DHCPv6 server   | planned     |
-| Control socket  | planned     |
-| PPPoE client    | future      |
+- **🔍 Intelligent Device Discovery**
+  - **Passive Monitoring**: Real-time tracking via Netlink (ARP/NDP) and mDNS sniffing.
+  - **Active Probing**: Direct mDNS queries and LLDP topology extraction to build a rich map of your network.
+  - **Vendor Resolution**: Integrated MAC OUI lookup for easy device identification.
 
----
+- **🛡️ Modern DNS Stack**
+  - **Unified Resolver**: Combines authoritative local resolution with recursive upstream forwarding.
+  - **Secure Protocols**: Support for **DNS-over-TLS (DoT)**, **DNS-over-QUIC (DoQ)**, and **DNS-over-HTTPS (DoH)**.
+  - **Micro-Adblocker**: Ultra-fast, zero-allocation domain filtering with support for custom blocklists and allowlists.
 
-## Architecture
+- **🛠️ Management & Observability**
+  - **Interactive TUI**: A real-time dashboard built with `ratatui` for visual network monitoring.
+  - **Powerful CLI**: Manage leases, trigger scans, perform "Whois" on devices, and control the adblocker.
+  - **Rich APIs**: JSON-RPC over Unix Domain Sockets (UDS) and a feature-gated REST/HTTP API.
 
-Each network service runs as a supervised tokio task inside a single process. A broadcast `EventBus` carries events between tasks — a `LeaseGranted` from the DHCP server triggers a hosts file write; a `PrefixChanged` from the netlink watcher triggers an updated RA. One netlink connection serves everything.
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                      lanforge                            │
-│                                                          │
-│   RA service ── DHCPv4 ── DHCPv6 ── SLAAC tracker       │
-│         │           │         │          │               │
-│         └───────────┴─────────┴──────────┘               │
-│                          │                               │
-│                      EventBus                            │
-│                          │                               │
-│              DeviceTable (Arc<RwLock>)                   │
-│              Supervisor (backoff restart)                │
-└──────────────────────────────────────────────────────────┘
-                           │ SIGHUP + addn-hosts
-                           ▼
-                       pihole-FTL
-```
-
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design.
+- **💾 Resilient Persistence**
+  - **Atomic State**: Backed by SQLite or PostgreSQL.
+  - **SD-Card Friendly**: Intelligent write-debounce logic minimizes disk I/O, preserving edge hardware longevity.
 
 ---
 
-## Configuration
+## 🏗️ Architecture
 
-```toml
-[general]
-iface_lan      = "end0"
-iface_wan      = "ppp0"
-hosts_file     = "/mnt/ram/lanforge/hosts"
-devices_db     = "/var/lib/lanforge/devices.db"
-dns_reload_cmd = "pkill -HUP pihole-FTL"
+Lanforge follows a reactive, event-driven architecture centered around a shared `LanforgeContext`.
 
-[ra]
-enabled         = true
-managed         = true
-other_config    = true
-max_interval    = 100
-router_lifetime = 1800
-mtu             = 1492
+```mermaid
+graph TD
+    subgraph "Sensors & Protocols"
+        Netlink[Netlink Monitor]
+        DHCP[DHCP v4/v6]
+        mDNS[mDNS Prober]
+        LLDP[LLDP Monitor]
+    end
 
-[[ra.prefix]]
-source  = "ula"
-address = "fd97:f00d:cafe:3731::"
+    subgraph "Core Engine"
+        Ctx[LanforgeContext]
+        Bus[EventBus]
+        Table[Managed Identity Table]
+    end
 
-[[ra.prefix]]
-source = "auto_gua"
+    subgraph "Actuators & Interfaces"
+        DNS[DNS Resolver]
+        RA[RA Service]
+        API[UDS/HTTP API]
+        TUI[Ratatui Dashboard]
+    end
 
-[[ra.rdnss]]
-servers  = ["fd97:f00d:cafe:3731::1"]
-lifetime = 600
-
-[dhcp.v4]
-enabled     = true
-range_start = "192.168.0.100"
-range_end   = "192.168.0.254"
-lease_time  = 86400
-router      = "192.168.0.1"
-dns         = ["192.168.0.1"]
-
-[dhcp.v6]
-enabled    = true
-lease_time = 86400
-
-# One [[devices]] block per physical device.
-# Both stacks, one place. v4_ip and v6_suffix are optional.
-[[devices]]
-mac       = "e0:d5:5e:e2:d4:89"
-hostname  = "Archie"
-v4_ip     = "192.168.0.2"
-v6_suffix = "::1057:cafe"
-
-[[devices]]
-mac      = "aa:bb:cc:dd:ee:ff"
-hostname = "Fuyu-PC"
-v4_ip    = "192.168.0.3"
+    Netlink -- Event --> Bus
+    DHCP -- Update --> Ctx
+    Bus -- Notify --> DNS
+    Ctx -- State --> Table
+    Table -- Resolve --> DNS
+    Table -- Display --> TUI
 ```
+
+See [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) for a deep dive into the design decisions and internal mechanics.
 
 ---
 
-## CLI
+## 🚀 Quick Start
 
-```
-lanforge run         # start all enabled services
-lanforge ra          # RA service only (debug/isolation)
-lanforge dhcp        # DHCP servers only
-lanforge devices     # list known devices (v4, v6, SLAAC, last seen)
-lanforge devices -v  # include DUID and lease expiry details
-lanforge status      # service health
-lanforge reload      # send SIGUSR1 to running daemon
-```
-
-`devices` and `status` communicate with the running daemon via `/run/lanforge/control.sock` and can be run without root.
-
----
-
-## Building
-
+### 1. Build
+Requires Rust 1.75+ and `cap-net-raw` capabilities.
 ```bash
 cargo build --release
 ```
 
-Requires `CAP_NET_RAW`, `CAP_NET_ADMIN`, and `CAP_NET_BIND_SERVICE` to run. The included systemd unit sets these via `AmbientCapabilities`.
-
+### 2. Install
+The included systemd unit handles the necessary capabilities for raw socket access.
 ```bash
-# Install
-install -Dm755 target/release/lanforge /usr/local/sbin/lanforge
-install -Dm644 contrib/lanforge.service /etc/systemd/system/lanforge.service
-install -Dm644 contrib/lanforge.toml    /etc/lanforge/lanforge.toml
+# Install binary and config
+sudo install -Dm755 target/release/lanforge /usr/local/sbin/lanforge
+sudo install -Dm644 contrib/lanforge.toml /etc/lanforge/lanforge.toml
 
-systemctl enable --now lanforge
+# Enable and start
+sudo systemctl enable --now lanforge
+```
+
+### 3. Configure
+A minimal `lanforge.toml` example:
+```toml
+[system]
+iface = "eth0"
+domain = "home.lan"
+
+[dhcp.v4]
+enabled = true
+range = "192.168.1.100 - 192.168.1.250"
+
+[dns]
+enabled = true
+upstreams = ["8.8.8.8", "1.1.1.1"]
+adblock_enabled = true
 ```
 
 ---
 
-## Related
+## ⌨️ CLI & TUI
 
-- [`longseer`](https://github.com/...) — the SLAAC hostname tracker this project grew out of
-- [`farcaster`](https://github.com/...) — command passing over SSH
+Lanforge comes with a powerful CLI (`lanforge-cli`) to interact with the running daemon.
+
+```bash
+# View the interactive dashboard
+lanforge tui
+
+# List all discovered devices with vendor info
+lanforge devices --show-vendor
+
+# Monitor the internal event bus in real-time
+lanforge log --follow
+
+# Check DNS stats and manage the adblocker
+lanforge dns stats
+lanforge dns adblock enable
+```
 
 ---
 
-## License
+## 🗺️ Project Status
 
-MIT
+Lanforge is currently in active development. Major core features (DHCP, RA, DNS, TUI) are stable and used in production home-lab environments.
+
+---
+
+## 📄 License
+
+Mozilla Public License 2.0 © FerrahWolfeh

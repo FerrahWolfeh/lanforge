@@ -1,6 +1,7 @@
 [package]
 name = "lanforge-api"
 version = "0.10.1"
+license.workspace = true
 edition = "2024"
 
 [dependencies]
