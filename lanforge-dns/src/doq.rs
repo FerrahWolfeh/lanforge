@@ -8,7 +8,8 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 
 use crate::config::DnsConfig;
-use crate::server::{DnsContext, handle_query};
+use crate::handler::process_query;
+use crate::server::DnsContext;
 use crate::tls_utils::load_tls_config;
 
 #[lanforge_macros::lanforge_service(
@@ -123,17 +124,15 @@ async fn handle_doq_connection(
                         return;
                     }
 
-                    let dns_ctx_any = match ctx_inner.get_dns_context() {
-                        Some(c) => c,
-                        None => return,
+                    let Some(dns_ctx_any) = ctx_inner.get_dns_context() else {
+                        return;
                     };
-                    let dns_ctx = match dns_ctx_any.downcast_ref::<DnsContext>() {
-                        Some(c) => c,
-                        None => return,
+                    let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
+                        return;
                     };
 
                     let mut resp_buf = Vec::with_capacity(512);
-                    match handle_query(&query_buf, dns_ctx, peer.ip(), &mut resp_buf).await {
+                    match process_query(&query_buf, dns_ctx, peer.ip(), &mut resp_buf).await {
                         Ok(true) => {
                             if let Err(e) = send.write_all(&resp_buf).await {
                                 debug!("DoQ stream write error: {}", e);
@@ -142,7 +141,7 @@ async fn handle_doq_connection(
                         }
                         Ok(false) => {}
                         Err(e) => {
-                            debug!("DoQ handle_query error: {}", e);
+                            debug!("DoQ process_query error: {}", e);
                         }
                     }
                 });

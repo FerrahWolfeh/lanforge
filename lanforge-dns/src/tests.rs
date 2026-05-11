@@ -11,16 +11,22 @@ use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::error::DnsError;
+use crate::filter::AdBlocker;
+use crate::health::{UpstreamHealth, UpstreamStatus};
 use crate::resolver::LocalResolver;
 use crate::response::ResponseBuilder;
-use crate::server::{DnsContext, handle_query};
+use crate::server::DnsContext;
 use crate::stats::DnsStats;
+use crate::strategy::UpstreamMode;
+use crate::upstream::UpstreamManager;
 use crate::utils::extract_local_hostname;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::types::network::{QueryLogEntry, QueryResult};
 
 fn init_test_context() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
@@ -50,9 +56,15 @@ fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     let soa_mailbox =
         Name::from_str(&format!("hostmaster.{domain_base}.")).unwrap_or_else(|_| Name::root());
 
+    let upstream_strategy = Arc::new(crate::strategy::UpstreamStrategy::new(
+        cfg.upstream_mode,
+        Vec::new(),
+    ));
+
     DnsContext {
         cfg,
         upstreams: Vec::new(),
+        upstream_strategy,
         stats: Arc::new(DnsStats::default()),
         ctx,
         #[cfg(feature = "adblock")]
@@ -60,6 +72,7 @@ fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
         soa_zone,
         soa_master_ns,
         soa_mailbox,
+        query_log: None,
     }
 }
 
@@ -237,9 +250,10 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     let data = query.to_bytes().unwrap();
     let ctx = mock_dns_context(ctx_instance, cfg);
     let mut resp_buf = Vec::new();
-    let has_resp = handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
-        .await
-        .unwrap();
+    let has_resp =
+        crate::handler::process_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+            .await
+            .unwrap();
     assert!(has_resp);
     let resp = Message::from_bytes(&resp_buf).unwrap();
     assert_eq!(resp.response_code, ResponseCode::NXDomain);
@@ -249,6 +263,7 @@ async fn test_nxdomain_leak_prevention_and_soa() {
 #[cfg(feature = "adblock")]
 async fn test_adblock_integration() {
     use crate::filter::AdBlocker;
+    use crate::strategy::UpstreamStrategy;
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();
     cfg.adblock_enabled = true;
@@ -277,9 +292,11 @@ async fn test_adblock_integration() {
         stats: Arc::new(DnsStats::default()),
         ctx: ctx_instance,
         adblocker: Some(adblocker),
+        upstream_strategy: Arc::new(UpstreamStrategy::new(UpstreamMode::Sequential, vec![])),
         soa_zone,
         soa_master_ns,
         soa_mailbox,
+        query_log: None,
     };
 
     let mut query = Message::query();
@@ -290,9 +307,10 @@ async fn test_adblock_integration() {
     let data = query.to_bytes().unwrap();
 
     let mut resp_buf = Vec::new();
-    let has_resp = handle_query(&data, &ctx, "192.168.1.1".parse().unwrap(), &mut resp_buf)
-        .await
-        .unwrap();
+    let has_resp =
+        crate::handler::process_query(&data, &ctx, "192.168.1.1".parse().unwrap(), &mut resp_buf)
+            .await
+            .unwrap();
     assert!(has_resp);
 
     let resp = Message::from_bytes(&resp_buf).unwrap();
@@ -459,4 +477,329 @@ fn test_dns_response_contract() {
     assert!(ips.contains(&dynamic_ula), "Missing DHCPv6 Dynamic");
 
     assert_eq!(ips.len(), 5);
+}
+
+#[test]
+fn test_upstream_health_ewma() {
+    let health = UpstreamHealth::new();
+
+    // First success sets EWMA to exact value
+    health.record_success(1000);
+    assert_eq!(health.rtt_ewma_us.load(Ordering::Relaxed), 1000);
+
+    // Second success: alpha=0.3 -> 0.3*500 + 0.7*1000 = 150 + 700 = 850
+    health.record_success(500);
+    assert_eq!(health.rtt_ewma_us.load(Ordering::Relaxed), 850);
+}
+
+#[test]
+fn test_upstream_health_consecutive_failures() {
+    let health = UpstreamHealth::new();
+
+    health.record_failure();
+    assert_eq!(health.consecutive_failures.load(Ordering::Relaxed), 1);
+    assert_eq!(health.total_failures.load(Ordering::Relaxed), 1);
+
+    health.record_success(50);
+    assert_eq!(health.consecutive_failures.load(Ordering::Relaxed), 0);
+    assert_eq!(health.total_successes.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn test_upstream_health_status_timing() {
+    let health = UpstreamHealth::new();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    for _ in 0..5 {
+        health.record_failure();
+    }
+
+    // At T=0, should be degraded
+    health.last_failure_ts.store(now, Ordering::Relaxed);
+    assert_eq!(health.status(), UpstreamStatus::Degraded);
+
+    // At T=29, still degraded
+    health.last_failure_ts.store(now - 29, Ordering::Relaxed);
+    assert_eq!(health.status(), UpstreamStatus::Degraded);
+
+    // At T=30, should recover
+    health.last_failure_ts.store(now - 30, Ordering::Relaxed);
+    assert_eq!(health.status(), UpstreamStatus::Healthy);
+}
+
+#[test]
+fn test_upstream_health_snapshot_labels() {
+    let health = UpstreamHealth::new();
+    health.record_success(1234);
+
+    let snap = health.snapshot("8.8.8.8:53".into(), "udp".into());
+    assert_eq!(snap.target, "8.8.8.8:53");
+    assert_eq!(snap.protocol, "udp");
+    assert_eq!(snap.rtt_ewma_us, 1234);
+    assert_eq!(snap.status, "Healthy");
+}
+
+#[tokio::test]
+async fn test_strategy_sequential_ordering() {
+    use crate::config::UpstreamTarget;
+    use crate::strategy::{UpstreamMode, UpstreamStrategy};
+
+    let t1: UpstreamTarget = "127.0.0.1:5301".parse().unwrap();
+    let t2: UpstreamTarget = "127.0.0.1:5302".parse().unwrap();
+
+    let m1 = UpstreamManager::new(&t1).await.unwrap();
+    let m2 = UpstreamManager::new(&t2).await.unwrap();
+
+    let strategy = UpstreamStrategy::new(UpstreamMode::Sequential, vec![m1.clone(), m2.clone()]);
+
+    // Mock failure for m1
+    for _ in 0..5 {
+        m1.health.record_failure();
+    }
+    assert_eq!(m1.health.status(), UpstreamStatus::Degraded);
+
+    // Strategy should skip m1 and try m2 (which will fail because nothing is listening)
+    let mut msg = Message::query();
+    msg.add_query(Query::query(
+        Name::from_str("example.com.").unwrap(),
+        RecordType::A,
+    ));
+    let query = msg.to_bytes().unwrap();
+    let res = strategy.resolve(&query).await;
+    assert!(res.is_err());
+
+    // Total queries on m1 should still be 5
+    assert_eq!(m1.health.total_queries.load(Ordering::Relaxed), 5);
+    // m2 should have been tried once
+    assert_eq!(m2.health.total_queries.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn test_strategy_fastest_selection() {
+    use crate::config::UpstreamTarget;
+    use crate::strategy::{UpstreamMode, UpstreamStrategy};
+
+    let t1: UpstreamTarget = "1.1.1.1:53".parse().unwrap();
+    let t2: UpstreamTarget = "8.8.8.8:53".parse().unwrap();
+
+    let m1 = UpstreamManager::new(&t1).await.unwrap();
+    let m2 = UpstreamManager::new(&t2).await.unwrap();
+
+    // m2 is faster
+    m1.health.record_success(2000);
+    m2.health.record_success(500);
+
+    let strategy = UpstreamStrategy::new(UpstreamMode::Fastest, vec![m1.clone(), m2]);
+
+    let snapshots = strategy.snapshots();
+    assert_eq!(snapshots[0].target, "1.1.1.1:53");
+    assert_eq!(snapshots[1].target, "8.8.8.8:53");
+}
+
+#[tokio::test]
+async fn test_strategy_parallel_all_degraded() {
+    use crate::config::UpstreamTarget;
+    use crate::strategy::{UpstreamMode, UpstreamStrategy};
+
+    let t1: UpstreamTarget = "127.0.0.1:5303".parse().unwrap();
+    let m1 = UpstreamManager::new(&t1).await.unwrap();
+
+    for _ in 0..5 {
+        m1.health.record_failure();
+    }
+
+    let strategy = UpstreamStrategy::new(UpstreamMode::Parallel, vec![m1.clone()]);
+
+    // Even if degraded, if it's the only one, parallel should still try it (fallback)
+    let mut msg = Message::query();
+    msg.add_query(Query::query(
+        Name::from_str("example.com.").unwrap(),
+        RecordType::A,
+    ));
+    let query = msg.to_bytes().unwrap();
+    let _ = strategy.resolve(&query).await;
+    assert_eq!(m1.health.total_queries.load(Ordering::Relaxed), 6);
+}
+
+#[tokio::test]
+async fn test_query_ring() {
+    use crate::query_log::QueryRing;
+    let ring = QueryRing::new(5);
+
+    for i in 0u64..10 {
+        ring.push(QueryLogEntry {
+            timestamp: i,
+            src_ip: "127.0.0.1".parse().unwrap(),
+            domain: format!("host{i}.lan"),
+            qtype: 1,
+            result: QueryResult::Local,
+            upstream_us: 0,
+            cached: false,
+        });
+    }
+
+    let entries = ring.get_recent(10);
+    assert_eq!(entries.len(), 5);
+    // Should contain the last 5 entries (5 to 9)
+    assert_eq!(entries[0].domain, "host9.lan");
+    assert_eq!(entries[4].domain, "host5.lan");
+}
+
+#[tokio::test]
+#[cfg(feature = "adblock")]
+async fn test_dns_rewrites_fallback() {
+    let ctx_instance = init_test_context();
+    let mut cfg = mock_config();
+    cfg.adblock_enabled = true;
+    cfg.rewrites = vec![
+        crate::config::RewriteRule {
+            domain: "vault.lan".to_string(),
+            answer: "10.0.0.1".to_string(),
+        },
+        crate::config::RewriteRule {
+            domain: "alias.lan".to_string(),
+            answer: "target.lan".to_string(),
+        },
+    ];
+
+    let adblocker = Arc::new(AdBlocker::new());
+    adblocker.rewrites.write().clone_from(&cfg.rewrites);
+    adblocker.set_enabled(true);
+
+    let ctx = DnsContext {
+        cfg: cfg.clone(),
+        upstreams: Vec::new(),
+        stats: Arc::new(DnsStats::default()),
+        ctx: ctx_instance,
+        adblocker: Some(adblocker),
+        upstream_strategy: Arc::new(crate::strategy::UpstreamStrategy::new(
+            UpstreamMode::Sequential,
+            vec![],
+        )),
+        soa_zone: Name::from_str("lan.").unwrap(),
+        soa_master_ns: Name::from_str("ns.lan.").unwrap(),
+        soa_mailbox: Name::from_str("hostmaster.lan.").unwrap(),
+        query_log: None,
+    };
+
+    // Use a query that triggers fallback (e.g., with a pointer or just calling handle_query_fallback)
+    let mut query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("vault.lan.").unwrap(),
+        RecordType::A,
+    ));
+    let data = query.to_bytes().unwrap();
+    let mut resp_buf = Vec::new();
+
+    // Test direct IP rewrite
+    let res =
+        crate::handler::process_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+            .await
+            .unwrap();
+    assert!(res);
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.response_code, ResponseCode::NoError);
+    assert_eq!(resp.answers.len(), 1);
+    if let RData::A(ip) = &resp.answers[0].data {
+        assert_eq!(Into::<Ipv4Addr>::into(*ip), Ipv4Addr::new(10, 0, 0, 1));
+    } else {
+        panic!("Wrong record type");
+    }
+
+    // Test CNAME rewrite
+    query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("alias.lan.").unwrap(),
+        RecordType::A,
+    ));
+    let data = query.to_bytes().unwrap();
+    resp_buf.clear();
+    let res =
+        crate::handler::process_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+            .await
+            .unwrap();
+    assert!(res);
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.answers.len(), 1);
+    if let RData::CNAME(name) = &resp.answers[0].data {
+        assert_eq!(name.to_string(), "target.lan.");
+    } else {
+        panic!("Wrong record type");
+    }
+}
+
+#[tokio::test]
+#[cfg(feature = "adblock")]
+async fn test_dns_blocking_modes_fallback() {
+    let ctx_instance = init_test_context();
+    let mut cfg = mock_config();
+    cfg.adblock_enabled = true;
+    cfg.blocking_mode = crate::config::BlockingMode::NullIp;
+
+    let adblocker = Arc::new(AdBlocker::new());
+    let mut list = HashSet::new();
+    list.insert("evil.com".to_string());
+    adblocker.replace_blocklist(list);
+    adblocker.set_enabled(true);
+
+    let ctx = DnsContext {
+        cfg: cfg.clone(),
+        upstreams: vec![
+            UpstreamManager::new(&"8.8.8.8:53".parse().unwrap())
+                .await
+                .unwrap(),
+        ],
+        stats: Arc::new(DnsStats::default()),
+        ctx: ctx_instance,
+        adblocker: Some(adblocker),
+        upstream_strategy: Arc::new(crate::strategy::UpstreamStrategy::new(
+            UpstreamMode::Sequential,
+            vec![],
+        )),
+        soa_zone: Name::from_str("lan.").unwrap(),
+        soa_master_ns: Name::from_str("ns.lan.").unwrap(),
+        soa_mailbox: Name::from_str("hostmaster.lan.").unwrap(),
+        query_log: None,
+    };
+
+    let mut query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("evil.com.").unwrap(),
+        RecordType::A,
+    ));
+    let data = query.to_bytes().unwrap();
+    let mut resp_buf = Vec::new();
+
+    // Test NullIp mode
+    let _ = crate::handler::process_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+        .await
+        .unwrap();
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.response_code, ResponseCode::NoError);
+    assert_eq!(resp.answers.len(), 1);
+    if let RData::A(ip) = &resp.answers[0].data {
+        assert_eq!(Into::<Ipv4Addr>::into(*ip), Ipv4Addr::UNSPECIFIED);
+    }
+
+    // Test Refused mode
+    let mut cfg_refused = ctx.cfg.clone();
+    cfg_refused.blocking_mode = crate::config::BlockingMode::Refused;
+    let ctx_refused = DnsContext {
+        cfg: cfg_refused,
+        ..ctx
+    };
+    resp_buf.clear();
+    let _ = crate::handler::process_query(
+        &data,
+        &ctx_refused,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf,
+    )
+    .await
+    .unwrap();
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.response_code, ResponseCode::Refused);
 }

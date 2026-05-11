@@ -1,7 +1,8 @@
 use lanforge_api::config::ApiConfig;
 use lanforge_core::context::{EventCounters, LanforgeContext};
-use lanforge_dns::stats::DnsStats;
 use lanforge_core::types::device::{Device, Origin};
+use lanforge_dns::server::DnsContext;
+use lanforge_dns::stats::DnsStats;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -126,6 +127,42 @@ fn append_dns_metrics(out: &mut String, ctx: &LanforgeContext) {
             "lanforge_dns_upstream_errors_total {}",
             snap.upstream_errors
         );
+    }
+
+    if let Some(dns_ctx_any) = ctx.get_dns_context()
+        && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
+    {
+        out.push_str("# HELP lanforge_dns_upstream_rtt_us Round-trip time to upstream resolver in microseconds\n");
+        out.push_str("# TYPE lanforge_dns_upstream_rtt_us gauge\n");
+        out.push_str(
+            "# HELP lanforge_dns_upstream_queries_total Total successful queries to upstream\n",
+        );
+        out.push_str("# TYPE lanforge_dns_upstream_queries_total counter\n");
+        out.push_str(
+            "# HELP lanforge_dns_upstream_failures_total Total failed queries to upstream\n",
+        );
+        out.push_str("# TYPE lanforge_dns_upstream_failures_total counter\n");
+
+        for mgr in &dns_ctx.upstreams {
+            let target = &mgr.target.addr.to_string();
+            let proto = format!("{:?}", mgr.target.protocol).to_lowercase();
+            let rtt = mgr.health.rtt_ewma_us.load(Ordering::Relaxed);
+            let queries = mgr.health.total_successes.load(Ordering::Relaxed);
+            let failures = mgr.health.total_failures.load(Ordering::Relaxed);
+
+            let _ = writeln!(
+                out,
+                "lanforge_dns_upstream_rtt_us{{target=\"{target}\",proto=\"{proto}\"}} {rtt}"
+            );
+            let _ = writeln!(
+                out,
+                "lanforge_dns_upstream_queries_total{{target=\"{target}\",proto=\"{proto}\"}} {queries}"
+            );
+            let _ = writeln!(
+                out,
+                "lanforge_dns_upstream_failures_total{{target=\"{target}\",proto=\"{proto}\"}} {failures}"
+            );
+        }
     }
 }
 

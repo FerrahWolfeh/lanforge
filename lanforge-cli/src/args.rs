@@ -276,6 +276,20 @@ pub enum QueryTarget {
 pub enum DnsCommand {
     /// Show resolver performance statistics
     Stats,
+    /// Show upstream resolver health and status
+    Upstreams,
+    /// View recent query logs
+    Log {
+        /// Number of entries to show
+        #[arg(short = 'n', long, default_value = "50")]
+        limit: usize,
+        /// Filter by client IP address
+        #[arg(short, long)]
+        client: Option<String>,
+        /// Watch for new queries in real-time
+        #[arg(short, long)]
+        follow: bool,
+    },
     /// Perform a diagnostic query
     Query {
         /// Name to resolve
@@ -312,6 +326,8 @@ pub enum DhcpCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum AdblockAction {
+    /// Show current adblocker status and metrics
+    Status,
     /// Enable the adblocker
     Enable,
     /// Disable the adblocker
@@ -321,6 +337,16 @@ pub enum AdblockAction {
     },
     /// Reload blocklists from URLs
     Reload,
+    /// Add a domain to the blocklist
+    Block {
+        /// Domain to block
+        domain: String,
+    },
+    /// Add a domain to the allowlist
+    Allow {
+        /// Domain to allow
+        domain: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

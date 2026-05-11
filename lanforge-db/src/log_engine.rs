@@ -74,24 +74,42 @@ impl LogDb {
             .execute(&pool)
             .await?;
 
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS system_logs (
+        let mut init_query = "
+            CREATE TABLE IF NOT EXISTS system_logs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp  INTEGER NOT NULL,
                 event_json TEXT NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
-             CREATE TABLE IF NOT EXISTS dns_blocked_logs (
+            );
+            CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
+            CREATE TABLE IF NOT EXISTS dns_queries (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   INTEGER NOT NULL,
+                src_ip      TEXT NOT NULL,
+                domain      TEXT NOT NULL,
+                qtype       INTEGER NOT NULL,
+                result      TEXT NOT NULL,
+                upstream_us INTEGER NOT NULL,
+                cached      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dns_queries_timestamp ON dns_queries(timestamp);
+        "
+        .to_string();
+
+        #[cfg(feature = "adblock")]
+        init_query.push_str(
+            "
+            CREATE TABLE IF NOT EXISTS dns_blocked_logs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp  INTEGER NOT NULL,
                 src_ip     TEXT NOT NULL,
                 src_mac    TEXT,
                 domain     TEXT NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS idx_dns_logs_timestamp ON dns_blocked_logs(timestamp);",
-        )
-        .execute(&pool)
-        .await?;
+            );
+            CREATE INDEX IF NOT EXISTS idx_dns_logs_timestamp ON dns_blocked_logs(timestamp);
+            ",
+        );
+
+        sqlx::query(&init_query).execute(&pool).await?;
 
         info!("In-memory log database initialized");
         Ok(Self {
@@ -152,6 +170,7 @@ impl LogDb {
     }
 
     /// Records a blocked DNS query.
+    #[cfg(feature = "adblock")]
     pub async fn record_dns_block(
         &self,
         timed_event: &TimedEvent,
@@ -179,6 +198,29 @@ impl LogDb {
         Ok(())
     }
 
+    /// Records a resolved DNS query.
+    pub async fn record_dns_query(
+        &self,
+        entry: &lanforge_core::types::network::QueryLogEntry,
+    ) -> Result<(), LeaseDbError> {
+        sqlx::query(
+            "INSERT INTO dns_queries (timestamp, src_ip, domain, qtype, result, upstream_us, cached) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(entry.timestamp as i64)
+        .bind(entry.src_ip.to_string())
+        .bind(&entry.domain)
+        .bind(i32::from(entry.qtype))
+        .bind(format!("{:?}", entry.result).to_lowercase())
+        .bind(i64::from(entry.upstream_us))
+        .bind(i32::from(entry.cached))
+        .execute(&self.pool)
+        .await?;
+
+        self.maybe_prune(entry.timestamp as i64).await?;
+        Ok(())
+    }
+
     async fn maybe_prune(&self, now_secs: i64) -> Result<(), LeaseDbError> {
         let mut last_prune = self.last_prune.lock().await;
         if last_prune.elapsed() >= Duration::from_secs(60) {
@@ -197,13 +239,28 @@ impl LogDb {
             .await?;
 
             // Prune DNS logs
-            sqlx::query("DELETE FROM dns_blocked_logs WHERE timestamp < ?")
+            #[cfg(feature = "adblock")]
+            {
+                sqlx::query("DELETE FROM dns_blocked_logs WHERE timestamp < ?")
+                    .bind(cutoff)
+                    .execute(&self.pool)
+                    .await?;
+
+                sqlx::query(
+                    "DELETE FROM dns_blocked_logs WHERE id <= (SELECT MAX(id) FROM dns_blocked_logs) - 50000",
+                )
+                .execute(&self.pool)
+                .await?;
+            }
+
+            // Prune full DNS query logs
+            sqlx::query("DELETE FROM dns_queries WHERE timestamp < ?")
                 .bind(cutoff)
                 .execute(&self.pool)
                 .await?;
 
             sqlx::query(
-                "DELETE FROM dns_blocked_logs WHERE id <= (SELECT MAX(id) FROM dns_blocked_logs) - 50000",
+                "DELETE FROM dns_queries WHERE id <= (SELECT MAX(id) FROM dns_queries) - 100000",
             )
             .execute(&self.pool)
             .await?;
@@ -215,6 +272,7 @@ impl LogDb {
     }
 
     /// Retrieves the most recent blocked DNS queries.
+    #[cfg(feature = "adblock")]
     pub async fn get_dns_block_history(
         &self,
         limit: usize,

@@ -146,6 +146,9 @@ pub struct CliArgs {
     /// Enable or disable the DNS adblocker.
     #[arg(long, env = "LANFORGE_DNS_ADBLOCK")]
     pub dns_adblock_enabled: Option<bool>,
+    /// How to respond to blocked queries (`nxdomain`, `null_ip`, `custom_ip`, `refused`).
+    #[arg(long, env = "LANFORGE_DNS_ADBLOCK_MODE")]
+    pub dns_blocking_mode: Option<String>,
 
     /// Default TTL for locally generated DNS records.
     #[arg(long, env = "LANFORGE_DNS_TTL")]

@@ -1,20 +1,11 @@
-use crate::{
-    error::DnsError,
-    response::ResponseBuilder,
-    stats::DnsStatsSnapshot,
-    wire::{PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, qtypes::QType},
-};
-use hickory_proto::{
-    op::Message,
-    rr::{Name, RecordType},
-    serialize::binary::BinDecodable,
-};
+use crate::stats::DnsStatsSnapshot;
+use hickory_proto::rr::Name;
 use lanforge_core::{
     bus::{SystemEvent, TimedEvent},
     context::LanforgeContext,
 };
 use socket2::{Domain, Protocol, Socket, Type};
-use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UdpSocket},
@@ -23,22 +14,17 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::{
-    config::DnsConfig, resolver::LocalResolver, stats::DnsStats, utils::extract_local_hostname_wire,
-};
-use crate::{
-    upstream::{UpstreamManager, forward_to_upstream},
-    utils::parse_arpa_wire,
-};
-use crate::{
-    utils::{extract_local_hostname, fast_lowercase},
-    wire::WireResponseWriter,
-};
+use crate::query_log::QueryRing;
+use crate::{config::DnsConfig, stats::DnsStats};
+use crate::{strategy::UpstreamStrategy, upstream::UpstreamManager};
 #[allow(unused_imports)]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+use lanforge_core::types::network::{QueryLogEntry, QueryResult};
+use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "adblock")]
-use crate::filter::{AdBlocker, labels_to_domain};
+use crate::filter::AdBlocker;
 
 /// Shared, immutable service state for the DNS hot path.
 ///
@@ -48,10 +34,13 @@ pub struct DnsContext {
     pub cfg: DnsConfig,
     /// List of upstream managers, one per target, sorted by priority.
     pub upstreams: Vec<Arc<UpstreamManager>>,
+    /// Strategy for recursive resolution.
+    pub upstream_strategy: Arc<UpstreamStrategy>,
     pub stats: Arc<DnsStats>,
     pub ctx: LanforgeContext,
     #[cfg(feature = "adblock")]
     pub adblocker: Option<Arc<AdBlocker>>,
+    pub query_log: Option<Arc<QueryRing>>,
 
     // Pre-computed SOA names for NXDOMAIN/NODATA responses
     pub soa_zone: Name,
@@ -155,9 +144,21 @@ impl DnsService {
         let soa_mailbox =
             Name::from_str(&format!("hostmaster.{domain_base}.")).unwrap_or_else(|_| Name::root());
 
+        let upstream_strategy = Arc::new(UpstreamStrategy::new(
+            self.cfg.upstream_mode,
+            upstreams.clone(),
+        ));
+
+        let query_log = if self.cfg.query_log.enabled {
+            Some(Arc::new(QueryRing::new(self.cfg.query_log.ring_size)))
+        } else {
+            None
+        };
+
         Ok(Arc::new(DnsContext {
             cfg: self.cfg.clone(),
             upstreams,
+            upstream_strategy,
             stats: Arc::clone(&self.stats),
             ctx: self.ctx.clone(),
             #[cfg(feature = "adblock")]
@@ -165,9 +166,47 @@ impl DnsService {
             soa_zone,
             soa_master_ns,
             soa_mailbox,
+            query_log,
         }))
     }
+}
 
+impl DnsContext {
+    pub fn record_log(
+        &self,
+        src_ip: std::net::IpAddr,
+        domain: String,
+        qtype: u16,
+        result: QueryResult,
+        upstream_us: u32,
+        cached: bool,
+    ) {
+        if let Some(log) = &self.query_log {
+            let entry = QueryLogEntry {
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                src_ip,
+                domain,
+                qtype,
+                result,
+                upstream_us,
+                cached,
+            };
+            log.push(entry.clone());
+
+            if self.cfg.query_log.persist {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)));
+            }
+        }
+    }
+}
+
+impl DnsService {
     fn spawn_udp_handler(&self, dns_ctx: Arc<DnsContext>, sock: Arc<UdpSocket>) -> JoinHandle<()> {
         let ctx_udp = self.ctx.clone();
         tokio::spawn(async move {
@@ -177,7 +216,7 @@ impl DnsService {
                 tokio::select! {
                     res = sock.recv_from(&mut buf) => {
                         let Ok((len, src)) = res else { continue; };
-                        if matches!(handle_query(&buf[..len], &dns_ctx, src.ip(), &mut resp_buf).await, Ok(true)) {
+                        if matches!(crate::handler::process_query(&buf[..len], &dns_ctx, src.ip(), &mut resp_buf).await, Ok(true)) {
                             let _ = sock.send_to(&resp_buf, src).await;
                         }
                     }
@@ -196,10 +235,10 @@ impl DnsService {
         let adblocker = dns_ctx.adblocker.clone();
         let urls = self.cfg.adblock_urls.clone();
         let initial_enabled = self.cfg.adblock_enabled;
+        let rewrites = dns_ctx.cfg.rewrites.clone();
+        let allowlist = dns_ctx.cfg.allowlist.clone();
 
         tokio::spawn(async move {
-            use std::time::Instant;
-
             let Some(adblocker) = adblocker else {
                 return;
             };
@@ -219,13 +258,22 @@ impl DnsService {
                 .await;
             }
 
-            // 2. Event Loop
-            let mut reenable_at: Option<Instant> = None;
+            // 2. Initial Rewrites & Allowlist from config
+            {
+                adblocker.rewrites.write().clone_from(&rewrites);
+                let mut allow = HashSet::new();
+                for domain in &allowlist {
+                    allow.insert(domain.to_lowercase());
+                }
+                adblocker.replace_allowlist(allow);
+            }
+
+            // 3. Event Loop
             loop {
-                let sleep_duration = reenable_at.map_or_else(
-                    || Duration::from_hours(1),
-                    |at| at.saturating_duration_since(Instant::now()),
-                );
+                let sleep_duration = adblocker
+                    .timer
+                    .remaining_secs()
+                    .map_or(Duration::from_hours(1), Duration::from_secs);
 
                 tokio::select! {
                     res = rx.recv() => {
@@ -233,13 +281,15 @@ impl DnsService {
                             Ok(TimedEvent { event: LanforgeEvent::Dns(DnsEvent::AdblockToggle { enabled, duration_secs }), .. }) => {
                                 adblocker.set_enabled(enabled);
                                 if enabled {
-                                    reenable_at = None;
                                     info!("Adblock: enabled");
                                 } else if let Some(secs) = duration_secs {
-                                    reenable_at = Some(std::time::Instant::now() + Duration::from_secs(secs));
+                                    let until = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs() + secs;
+                                    adblocker.timer.disabled_until.store(until, Ordering::Relaxed);
                                     info!("Adblock: disabled for {} seconds", secs);
                                 } else {
-                                    reenable_at = None;
                                     info!("Adblock: disabled permanently");
                                 }
                             }
@@ -252,16 +302,20 @@ impl DnsService {
                                     }
                                 }).await;
                             }
+                            Ok(TimedEvent { event: LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)), .. }) => {
+                                adblocker.add_block(&domain);
+                            }
+                            Ok(TimedEvent { event: LanforgeEvent::Dns(DnsEvent::AdblockAllow(domain)), .. }) => {
+                                adblocker.add_allow(&domain);
+                            }
                             _ => {}
                         }
                     }
-                    () = tokio::time::sleep(sleep_duration), if reenable_at.is_some() => {
-                        if let Some(at) = reenable_at
-                            && at <= std::time::Instant::now() {
-                                adblocker.set_enabled(true);
-                                reenable_at = None;
-                                info!("Adblock: timer expired, re-enabled automatically");
-                            }
+                    () = tokio::time::sleep(sleep_duration), if adblocker.timer.remaining_secs().is_some() => {
+                        if let Some(rem) = adblocker.timer.remaining_secs() && rem == 0 {
+                            adblocker.set_enabled(true);
+                            info!("Adblock: timer expired, re-enabled automatically");
+                        }
                     }
                 }
             }
@@ -285,7 +339,7 @@ impl DnsService {
                                     stream.read_exact(&mut query_buf).await?;
 
                                     let mut resp_buf = Vec::with_capacity(512);
-                                    if matches!(handle_query(&query_buf, &c, stream.peer_addr()?.ip(), &mut resp_buf).await, Ok(true)) {
+                                    if matches!(crate::handler::process_query(&query_buf, &c, stream.peer_addr()?.ip(), &mut resp_buf).await, Ok(true)) {
                                         let resp_len = u16::try_from(resp_buf.len()).unwrap_or(u16::MAX).to_be_bytes();
                                         stream.write_all(&resp_len).await?;
                                         stream.write_all(&resp_buf).await?;
@@ -423,242 +477,4 @@ impl AsyncService for DnsService {
 
         Ok(())
     }
-}
-
-/// The extra-hot path: Initial query triage and routing.
-///
-/// This function uses the zero-allocation wire parser to decide how to handle
-/// the query before performing a full parse into the provided buffer.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub async fn handle_query(
-    data: &[u8],
-    ctx: &DnsContext,
-    src_addr: IpAddr,
-    resp: &mut Vec<u8>,
-) -> Result<bool, DnsError> {
-    ctx.stats.inc_requests();
-
-    let _ = src_addr;
-
-    // PHASE 1: Zero-Alloc Triage
-    let Some(header) = WireHeader::parse(data) else {
-        return Ok(false);
-    };
-    if !header.is_query() {
-        return Ok(false);
-    }
-
-    let Some(question) = WireQuestion::parse(data) else {
-        return handle_query_fallback(data, ctx, src_addr, resp).await;
-    };
-
-    // PHASE 2: Local Resolution Attempt
-    if resolve_local_wire(data, &header, &question, ctx, resp) {
-        ctx.stats.inc_auth();
-        ctx.stats.inc_cache_hit();
-        return Ok(true);
-    }
-
-    ctx.stats.inc_cache_miss();
-
-    // PHASE 2.5: Adblock Filtering
-    #[cfg(feature = "adblock")]
-    if let Some(adblocker) = &ctx.adblocker
-        && adblocker.is_enabled()
-    {
-        let domain = labels_to_domain(question.labels());
-        if adblocker.should_block(&domain) {
-            ctx.stats.inc_blocked();
-            ctx.ctx.inc_dns_blocked();
-            adblocker.inc_ip_stats(src_addr);
-
-            let edns = WireOptScanner::scan(data, &header, &question);
-            let ra = !ctx.cfg.upstreams.is_empty();
-            WireResponseWriter::write_error_response(
-                data, &question, 3, // NXDOMAIN
-                edns, ra, resp,
-            );
-            return Ok(true);
-        }
-    }
-
-    // PHASE 3: Recursive Forwarding
-    if !ctx.upstreams.is_empty() {
-        ctx.stats.inc_recursive();
-        for mgr in &ctx.upstreams {
-            if let Ok(upstream_resp) = forward_to_upstream(data, &mgr.target, mgr).await {
-                resp.clear();
-                resp.extend_from_slice(&upstream_resp);
-                return Ok(true);
-            }
-        }
-    }
-
-    let edns = WireOptScanner::scan(data, &header, &question);
-    let ra = !ctx.upstreams.is_empty();
-    WireResponseWriter::write_error_response(
-        data, &question, 3, // NXDOMAIN
-        edns, ra, resp,
-    );
-    Ok(true)
-}
-
-/// Helper function for local resolution using wire-parsed data.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn resolve_local_wire(
-    data: &[u8],
-    header: &WireHeader,
-    question: &WireQuestion<'_>,
-    ctx: &DnsContext,
-    resp: &mut Vec<u8>,
-) -> bool {
-    let raw_qtype = question.qtype();
-    let qtype = QType::from(raw_qtype);
-
-    match qtype {
-        QType::A | QType::AAAA | QType::Any => {
-            let mut labels = question.labels();
-            if let Some(hostname_slice) =
-                extract_local_hostname_wire(&mut labels, &ctx.cfg.multi_search_labels)
-            {
-                let safe_hostname = fast_lowercase(hostname_slice);
-                let edns = WireOptScanner::scan(data, header, question);
-
-                let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
-                if let Some(ips) = resolver.resolve_ip(&safe_hostname, RecordType::from(raw_qtype))
-                {
-                    let ra = !ctx.upstreams.is_empty();
-                    WireResponseWriter::write_ip_response(
-                        data,
-                        question,
-                        &ips,
-                        ctx.cfg.ttl,
-                        edns,
-                        ra,
-                        resp,
-                    );
-                    return true;
-                } else if ctx.ctx.get_by_hostname(&safe_hostname).is_some() {
-                    // Host exists but no records for type (NODATA)
-                    let ra = !ctx.upstreams.is_empty();
-                    WireResponseWriter::write_error_response(
-                        data, question, 0, // NoError (but with 0 answers)
-                        edns, ra, resp,
-                    );
-                    return true;
-                }
-            }
-        }
-        QType::PTR => {
-            if let Some(target_ip) = parse_arpa_wire(question.labels()) {
-                let edns = WireOptScanner::scan(data, header, question);
-
-                let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
-                if let Some(device) = ctx.ctx.get_by_ip(&target_ip) {
-                    let (host, domain) = resolver.get_ptr_parts(&device);
-                    let ra = !ctx.upstreams.is_empty();
-                    WireResponseWriter::write_ptr_response(
-                        PtrResponseArgs {
-                            query_data: data,
-                            question,
-                            host: &host,
-                            domain: &domain,
-                            ttl: ctx.cfg.ttl,
-                            edns,
-                            ra,
-                        },
-                        resp,
-                    );
-                    return true;
-                }
-            }
-        }
-        _ => {}
-    }
-    false
-}
-
-/// Fallback logic for queries that are too complex for the zero-alloc wire parser.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-async fn handle_query_fallback(
-    data: &[u8],
-    ctx: &DnsContext,
-    src_addr: IpAddr,
-    resp: &mut Vec<u8>,
-) -> Result<bool, DnsError> {
-    let _ = src_addr;
-
-    let Ok(query) = Message::from_bytes(data) else {
-        return Ok(false);
-    };
-    let rb = ResponseBuilder::new(&query, ctx);
-    let question = query.queries.first().ok_or(DnsError::WireParseError)?;
-    let qname = question.name();
-    let qtype = question.query_type();
-
-    if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
-        if let Some(hostname_slice) = extract_local_hostname(qname, &ctx.cfg.multi_search_labels) {
-            let safe_hostname = fast_lowercase(hostname_slice);
-            ctx.stats.inc_auth();
-            ctx.stats.inc_cache_hit();
-
-            let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
-            if let Some(ips) = resolver.resolve_ip(&safe_hostname, qtype) {
-                resp.clear();
-                resp.extend_from_slice(&rb.success_ips(ips)?);
-                return Ok(true);
-            } else if ctx.ctx.get_by_hostname(&safe_hostname).is_some() {
-                resp.clear();
-                resp.extend_from_slice(&rb.empty_noerror()?);
-                return Ok(true);
-            }
-        }
-    } else if qtype == RecordType::PTR {
-        let resolver = LocalResolver::new(&ctx.cfg, &ctx.ctx);
-        if let Some((host, domain)) = resolver.resolve_ptr(qname)? {
-            ctx.stats.inc_auth();
-            ctx.stats.inc_cache_hit();
-            resp.clear();
-            resp.extend_from_slice(&rb.success_ptr(&host, &domain)?);
-            return Ok(true);
-        }
-    }
-
-    ctx.stats.inc_cache_miss();
-
-    // Adblock check for fallback path
-    #[cfg(feature = "adblock")]
-    if let Some(adblocker) = &ctx.adblocker
-        && adblocker.is_enabled()
-    {
-        let mut domain = qname.to_string();
-        if domain.ends_with('.') {
-            domain.pop();
-        }
-        domain.make_ascii_lowercase();
-
-        if adblocker.should_block(&domain) {
-            ctx.stats.inc_blocked();
-            ctx.ctx.inc_dns_blocked();
-            adblocker.inc_ip_stats(src_addr);
-            resp.clear();
-            resp.extend_from_slice(&rb.nxdomain()?);
-            return Ok(true);
-        }
-    }
-
-    if !ctx.upstreams.is_empty() {
-        ctx.stats.inc_recursive();
-        for mgr in &ctx.upstreams {
-            if let Ok(upstream_resp) = forward_to_upstream(data, &mgr.target, mgr).await {
-                resp.clear();
-                resp.extend_from_slice(&upstream_resp);
-                return Ok(true);
-            }
-        }
-    }
-
-    resp.clear();
-    resp.extend_from_slice(&rb.nxdomain()?);
-    Ok(true)
 }

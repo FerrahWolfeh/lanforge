@@ -13,14 +13,13 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
+use lanforge_core::types::{
+    CliHostUpdate, Device, DeviceUpdate, DnsRecordEntry, Duid, FieldUpdate, IPv4State, IPv6State,
+    Ipv6AddrOrSuffix, LeaseTarget, MacAddr, Origin,
+};
 use lanforge_core::utils::auth::hash_password;
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
 use lanforge_db::log_engine::LogDb;
-use lanforge_core::types::events::dns::DnsRecordEntry;
-use lanforge_core::types::{
-    CliHostUpdate, Device, DeviceUpdate, Duid, FieldUpdate, IPv4State, IPv6State, Ipv6AddrOrSuffix,
-    LeaseTarget, MacAddr, Origin,
-};
 use std::str::FromStr;
 
 use crate::api::{
@@ -28,7 +27,7 @@ use crate::api::{
     DhcpPoolsResponse, DnsCacheEntry, DnsCacheResponse, DnsQueryResponse, DnsStatsResponse,
     Encoding, HostConfigEntry, HostsResponse, Ipv6Entry, LeaseEntry, LeaseInfo, LeaseKind,
     LeasesResponse, NetworkStatus, ResourcesStatus, Response, ServicesStatus, SimpleSuccess,
-    StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse,
+    StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse, DnsQueryLogResponse,
 };
 
 // Moved to lanforge-http
@@ -630,6 +629,23 @@ impl ClientContext {
         })
     }
 
+    pub(crate) async fn handle_dns_upstreams(&self) -> Response {
+        use crate::api::DnsUpstreamsResponse;
+        use lanforge_dns::server::DnsContext;
+
+        if let Some(dns_ctx_any) = self.ctx.get_dns_context()
+            && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
+        {
+            return Response::DnsUpstreams(DnsUpstreamsResponse {
+                upstreams: dns_ctx.upstream_strategy.snapshots(),
+            });
+        }
+
+        Response::DnsUpstreams(DnsUpstreamsResponse {
+            upstreams: Vec::new(),
+        })
+    }
+
     /// Toggles the DNS adblocker.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_set(
@@ -670,17 +686,136 @@ impl ClientContext {
     /// Triggers a reload of DNS blocklists.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
+        let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
+        Response::Success(SimpleSuccess {
+            message: "Adblock reload triggered".to_string(),
+        })
+    }
+
+    /// Detailed status of the DNS adblocker.
+    #[cfg(feature = "adblock")]
+    pub(crate) async fn handle_dns_adblock_status(&self) -> Response {
+        use crate::api::DnsAdblockStatusResponse;
+        use lanforge_dns::server::DnsContext;
+
+        let Some(dns_ctx_any) = self.ctx.get_dns_context() else {
+            return Response::Error {
+                error: "DNS service not initialized".into(),
+            };
+        };
+        let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
+            return Response::Error {
+                error: "Invalid DNS context".into(),
+            };
+        };
+        let Some(adblocker) = &dns_ctx.adblocker else {
+            return Response::Error {
+                error: "Adblocker is not enabled in this build".into(),
+            };
+        };
+
+        Response::DnsAdblockStatus(DnsAdblockStatusResponse {
+            enabled: adblocker.is_enabled(),
+            disabled_until: {
+                let until = adblocker.timer.disabled_until.load(Ordering::Relaxed);
+                if until == 0 {
+                    None
+                } else {
+                    Some(until)
+                }
+            },
+            remaining_secs: adblocker.timer.remaining_secs(),
+            blocklist_size: adblocker.blocklist_size(),
+            allowlist_size: adblocker.allowlist_size(),
+        })
+    }
+
+    /// Dynamically add a domain to the blocklist.
+    #[cfg(feature = "adblock")]
+    pub(crate) async fn handle_dns_block(&self, domain: String) -> Response {
         let _ = self
             .ctx
             .bus()
-            .publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
+            .publish(LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain.clone())));
         Response::Success(SimpleSuccess {
-            message: "DNS Adblock reload requested".to_string(),
+            message: format!("Domain '{domain}' added to blocklist"),
         })
+    }
+
+    /// Dynamically add a domain to the allowlist.
+    #[cfg(feature = "adblock")]
+    pub(crate) async fn handle_dns_allow(&self, domain: String) -> Response {
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::AdblockAllow(domain.clone())));
+        Response::Success(SimpleSuccess {
+            message: format!("Domain '{domain}' added to allowlist"),
+        })
+    }
+
+    pub(crate) async fn handle_dns_query_log(
+        &self,
+        limit: Option<usize>,
+        client: Option<String>,
+    ) -> Response {
+        let limit = limit.unwrap_or(100);
+        let client_filter = client.and_then(|c| c.parse::<IpAddr>().ok());
+
+        let Some(dns_ctx_any) = self.ctx.get_dns_context() else {
+            return Response::Error {
+                error: "DNS service not initialized".into(),
+            };
+        };
+
+        let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
+            return Response::Error {
+                error: "Invalid DNS context".into(),
+            };
+        };
+
+        dns_ctx.query_log.as_ref().map_or_else(
+            || {
+                Response::Error {
+                    error: "Query logging is disabled".into(),
+                }
+            },
+            |log| {
+                let mut entries = log.get_recent(limit);
+                if let Some(client_ip) = client_filter {
+                    entries.retain(|e| e.src_ip == client_ip);
+                }
+                Response::DnsQueryLog(DnsQueryLogResponse { entries })
+            },
+        )
     }
 
     #[cfg(not(feature = "adblock"))]
     pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_adblock_status(&self) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_block(&self, _domain: String) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_allow(&self, _domain: String) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),

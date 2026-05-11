@@ -29,6 +29,32 @@ adblock_urls = [
     "https://adaway.org/hosts.txt",
 ]
 
+# Blocking mode: "nxdomain" (default), "null_ip" (0.0.0.0), "custom_ip", "refused"
+blocking_mode = "nxdomain"
+
+# These two only work on blocking_mode = "custom_ip"
+blocking_ip_v4 = "192.168.1.5"
+blocking_ip_v6 = "::1"
+
+# Domains to always allow regardless of blocklists (supports exact match and parent-domain walk)
+allowlist = ["google.com", "my-safe-site.lan"]
+
+# --- DNS Rewrites ---
+# Manually redirect domains to specific IPs or other domains.
+# Format: A table with 'domain' and 'answer' fields.
+# Answer can be an IPv4, IPv6, CNAME, or "dev:<hostname>" to map to a device's current IP.
+[[dns.rewrites]]
+domain = "router.lan"
+answer = "192.168.1.1"
+
+[[dns.rewrites]]
+domain = "vault.lan"
+answer = "dev:truenas"
+
+[[dns.rewrites]]
+domain = "google.com"
+answer = "forcesafesearch.google.com"
+
 # How many days a device can be offline before its DNS entry is hidden.
 last_seen_threshold_days = 7
 

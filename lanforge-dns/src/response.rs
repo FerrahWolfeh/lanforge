@@ -188,6 +188,20 @@ impl<'a> ResponseBuilder<'a> {
         Ok(resp.to_bytes()?)
     }
 
+    /// Builds a successful response with a CNAME record.
+    pub fn success_cname(&self, target: &str) -> Result<Vec<u8>, DnsError> {
+        use std::str::FromStr;
+        let mut resp = self.base();
+        let qname = self.qname();
+        let target_name = Name::from_str(target).unwrap_or_else(|_| Name::root());
+        resp.add_answer(Record::from_rdata(
+            qname.clone(),
+            self.ctx.cfg.ttl,
+            RData::CNAME(hickory_proto::rr::rdata::CNAME(target_name)),
+        ));
+        Ok(resp.to_bytes()?)
+    }
+
     /// Builds a successful response with the given answer records.
     pub fn success(&self, answers: Vec<Record>) -> Result<Vec<u8>, DnsError> {
         let mut resp = self.base();

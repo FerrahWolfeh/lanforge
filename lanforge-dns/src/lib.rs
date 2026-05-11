@@ -60,15 +60,21 @@
 
 pub mod cache;
 pub mod config;
+#[cfg(feature = "doh-upstream")]
+pub mod doh;
 #[cfg(feature = "dot")]
 pub mod dot;
 pub mod error;
 #[cfg(feature = "adblock")]
 pub mod filter;
+pub mod handler;
+pub mod health;
+pub mod query_log;
 pub mod resolver;
 pub mod response;
 pub mod server;
 pub mod stats;
+pub mod strategy;
 #[cfg(feature = "dot")]
 pub mod tls_utils;
 pub mod upstream;
@@ -79,10 +85,12 @@ pub mod wire;
 pub mod doq;
 
 #[cfg(test)]
+mod io_tests;
+#[cfg(test)]
 mod tests;
 
 // Re-exports for convenience and compatibility
-pub use config::{DnsConfig, PrioritizedUpstream};
+pub use config::{BlockingMode, DnsConfig, PrioritizedUpstream, RewriteAnswer};
 #[cfg(feature = "doq")]
 pub use doq::DoqService;
 #[cfg(feature = "dot")]
