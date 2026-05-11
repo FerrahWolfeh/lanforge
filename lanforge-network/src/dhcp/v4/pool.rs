@@ -269,7 +269,7 @@ mod tests {
         let ip = p.allocate(&ctx, mac(1), None).unwrap();
         assert!(
             p.is_in_range(ip),
-            "O IP alocado randomicamente deve respeitar o range"
+            "The randomly allocated IP must respect the range"
         );
     }
 
@@ -278,7 +278,7 @@ mod tests {
         let (mut p, ctx) = pool();
 
         let ip1 = p.allocate(&ctx, mac(1), None).unwrap();
-        // Simular o LanforgeContext alocando
+        // Simulate allocation in LanforgeContext
         let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
             mac: mac(1),
             ip: ip1,
@@ -286,7 +286,7 @@ mod tests {
         });
 
         let ip2 = p.allocate(&ctx, mac(1), None).unwrap();
-        assert_eq!(ip1, ip2, "Mesmo MAC deve receber o mesmo IP (Sticky)");
+        assert_eq!(ip1, ip2, "Same MAC must receive the same IP (Sticky)");
     }
 
     #[test]
@@ -294,20 +294,17 @@ mod tests {
         let (mut p, ctx) = pool();
         let requested = Ipv4Addr::new(192, 168, 0, 103);
         let ip = p.allocate(&ctx, mac(1), Some(requested)).unwrap();
-        assert_eq!(
-            ip, requested,
-            "Deve respeitar o Requested IP se estiver livre"
-        );
+        assert_eq!(ip, requested, "Must respect Requested IP if it is free");
     }
 
     #[test]
     fn skips_reserved_and_declined_ips() {
-        let (mut p, ctx) = pool(); // Range de 6 IPs (.100 a .105)
+        let (mut p, ctx) = pool(); // Range of 6 IPs (.100 to .105)
 
         let reserved_ip = Ipv4Addr::new(192, 168, 0, 100);
         let declined_ip = Ipv4Addr::new(192, 168, 0, 101);
 
-        // Simulamos IP reservado no contexto global
+        // Simulate reserved IP in global context
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(99),
             update: CliHostUpdate {
@@ -322,20 +319,20 @@ mod tests {
 
         p.mark_declined(declined_ip);
 
-        // Pedimos IPs
+        // Request IPs
         let expiry = SystemTime::now() + Duration::from_hours(1);
         for i in 0..4 {
             if let Some(ip) = p.allocate(&ctx, mac(i), None) {
-                // Registrar cada um para que NÂO seja pego de novo
+                // Register each one so it's not picked again
                 let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
                     mac: mac(i),
                     ip,
                     expires: expiry,
                 });
-                assert_ne!(ip, reserved_ip, "Não deve alocar IP reservado");
+                assert_ne!(ip, reserved_ip, "Must not allocate reserved IP");
                 assert_ne!(
                     ip, declined_ip,
-                    "Não deve alocar IP de quarentena (DECLINE)"
+                    "Must not allocate quarantined IP (DECLINE)"
                 );
             }
         }
@@ -343,9 +340,9 @@ mod tests {
 
     #[test]
     fn clears_quarantine_if_pool_exhausted() {
-        let (mut p, ctx) = pool(); // Range de 6 IPs (.100 a .105)
+        let (mut p, ctx) = pool(); // Range of 6 IPs (.100 to .105)
 
-        // Colocamos os 6 IPs em quarentena simulando uma rede problemática
+        // Put all 6 IPs in quarantine simulating a problematic network
         for i in 100..=105 {
             p.mark_declined(Ipv4Addr::new(192, 168, 0, i));
         }
@@ -354,7 +351,7 @@ mod tests {
         assert!(p.is_in_range(rescued_ip));
         assert!(
             p.declined.is_empty(),
-            "A quarentena deve ter sido esvaziada por emergência"
+            "Quarantine must have been emptied as an emergency"
         );
     }
 
@@ -367,20 +364,20 @@ mod tests {
         }]);
         let ip = Ipv4Addr::new(192, 168, 1, 100);
 
-        // 1. Marca como declined
+        // 1. Mark as declined
         p.mark_declined(ip);
         assert!(p.available.is_empty());
         assert_eq!(p.declined.len(), 1);
 
-        // 2. Tenta limpar agora (não deve recuperar pois o timeout é 2h)
+        // 2. Try to clean now (should not recover as timeout is 2h)
         p.cleanup_quarantine(Instant::now());
         assert!(p.available.is_empty());
 
-        // 3. Simula 3 horas no futuro
+        // 3. Simulate 3 hours in the future
         let three_hours_later = Instant::now() + Duration::from_hours(3);
         p.cleanup_quarantine(three_hours_later);
 
-        // 4. Deve ter recuperado o IP
+        // 4. Should have recovered the IP
         assert_eq!(p.available.len(), 1);
         assert_eq!(Ipv4Addr::from(p.available.select(0).unwrap()), ip);
         assert!(p.declined.is_empty());

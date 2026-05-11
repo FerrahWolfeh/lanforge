@@ -150,7 +150,7 @@ pub enum Command {
         #[arg(long)]
         show_vendor: bool,
     },
-    /// Live view reativo via socket (sem polling)
+    /// Reactive live view via socket (no polling)
     #[handler(generic(Watch, true))]
     Watch,
     /// Interactive TUI dashboard
@@ -159,7 +159,7 @@ pub enum Command {
     /// Service health and general status
     #[handler(StatusHandler)]
     Status,
-    /// `EventBus` interno em tempo real
+    /// Internal real-time `EventBus`
     #[handler(LogHandler { .. })]
     Log {
         #[arg(long)]
@@ -171,25 +171,25 @@ pub enum Command {
         #[arg(short = 'n', long, default_value = "50")]
         lines: usize,
     },
-    /// Gerenciamento de leases (renew/release)
+    /// Lease management (renew/release)
     #[handler(LeaseHandler { .. })]
     Lease {
         #[command(subcommand)]
         action: LeaseCommand,
     },
-    /// Dispara ciclo NDP imediato com feedback
+    /// Triggers immediate NDP cycle with feedback
     #[handler(generic(Scan, false))]
     Scan,
-    /// Gerenciamento de devices customizados
+    /// Custom device management
     #[handler(HostHandler { .. })]
     Host {
         #[command(subcommand)]
         action: HostCommand,
     },
-    /// Send reload signal to running daemon (recarrega config estática do TOML)
+    /// Send reload signal to running daemon (reloads static config from TOML)
     #[handler(generic(Reload, false))]
     Reload,
-    /// Gerenciamento de persistência
+    /// Persistence management
     #[handler(DbHandler { .. })]
     Db {
         #[command(subcommand)]
@@ -234,7 +234,7 @@ pub enum Command {
     /// View network topology hierarchically
     #[handler(TopologyHandler)]
     Topology,
-    /// Gerenciamento de configurações do daemon
+    /// Daemon configuration management
     #[handler(ConfigHandler { .. })]
     Config {
         #[command(subcommand)]

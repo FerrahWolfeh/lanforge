@@ -1,187 +1,186 @@
-# lanforge CLI — Especificação
+# lanforge CLI — Specification
 
-Interface de linha de comando e socket de controle para o daemon `lanforge`.
+Command line interface and control socket for the `lanforge` daemon.
 
 ---
 
-## Visão geral
+## Overview
 
-A CLI comunica com o daemon via socket Unix JSON em `/run/lanforge/control.sock`.
-Os comandos de consulta e gerenciamento funcionam sem permissões especiais.
-Comandos que modificam estado requerem que o socket esteja acessível (grupo `lanforge` ou root).
+The CLI communicates with the daemon via a JSON Unix socket at `/run/lanforge/control.sock`.
+Query and monitoring commands work without special permissions.
+Commands that modify state require the socket to be accessible (group `lanforge` or root).
 
 ```
-lanforge <comando> [subcomando] [flags]
+lanforge <command> [subcommand] [flags]
 ```
 
 ---
 
-## Comandos planejados
+## Planned Commands
 
-### Consulta e monitoramento
+### Query and Monitoring
 
-| Comando | Descrição |
+| Command | Description |
 |---|---|
-| `lanforge devices` | Lista todos os devices conhecidos |
-| `lanforge devices --verbose` | Lista com detalhes completos (DUID, expiração, SLAAC) |
-| `lanforge devices --filter <hostname\|mac\|ip>` | Filtra a listagem |
-| `lanforge devices --format json` | Output JSON para scripting |
-| `lanforge watch` | Live view reativo via socket (sem polling) |
-| `lanforge status` | Saúde dos serviços, pool, rede, persistência |
-| `lanforge log [--follow]` | EventBus interno em tempo real |
+| `lanforge devices` | List all known devices |
+| `lanforge devices --verbose` | List with full details (DUID, expiration, SLAAC) |
+| `lanforge devices --filter <hostname\|mac\|ip>` | Filter the listing |
+| `lanforge devices --format json` | JSON output for scripting |
+| `lanforge watch` | Reactive live view via socket (no polling) |
+| `lanforge status` | Health of services, pool, network, persistence |
+| `lanforge log [--follow]` | Real-time internal EventBus |
 
-### Gerenciamento de leases
+### Lease Management
 
-| Comando | Descrição |
+| Command | Description |
 |---|---|
-| `lanforge lease renew <mac>` | Envia DHCP FORCERENEW (RFC 3203) para o device |
-| `lanforge lease release <mac>` | Libera o lease e remove da tabela dinâmica |
-| `lanforge scan` | Dispara ciclo NDP imediato com feedback |
-| `lanforge export [--format json\|csv]` | Snapshot completo da tabela |
+| `lanforge lease renew <mac>` | Sends DHCP FORCERENEW (RFC 3203) to the device |
+| `lanforge lease release <mac>` | Releases the lease and removes from the dynamic table |
+| `lanforge scan` | Triggers immediate NDP cycle with feedback |
+| `lanforge export [--format json\|csv]` | Full table snapshot |
 
-### Gerenciamento de devices customizados
+### Custom Device Management
 
-| Comando | Descrição |
+| Command | Description |
 |---|---|
-| `lanforge host add` | Prompt interativo para adicionar device |
-| `lanforge host add <mac>` | Adiciona device com MAC pré-preenchido |
-| `lanforge host set <mac> <campo> <valor>` | Atualiza campo específico de um device |
-| `lanforge host list` | Lista devices gerenciados via CLI (não do TOML) |
-| `lanforge host remove <mac>` | Remove device da tabela de runtime |
+| `lanforge host add` | Interactive prompt to add device |
+| `lanforge host add <mac>` | Adds device with pre-filled MAC |
+| `lanforge host set <mac> <field> <value>` | Updates specific field of a device |
+| `lanforge host list` | Lists devices managed via CLI (not from TOML) |
+| `lanforge host remove <mac>` | Removes device from the runtime table |
 
-### Manutenção
+### Maintenance
 
-| Comando | Descrição |
+| Command | Description |
 |---|---|
-| `lanforge reload` | Envia SIGUSR1 (recarrega config estática do TOML) |
-| `lanforge db vacuum` | Compacta SQLite e remove expirados |
-| `lanforge shutdown` | Encerramento gracioso com flush imediato |
+| `lanforge reload` | Sends SIGUSR1 (reloads static config from TOML) |
+| `lanforge db vacuum` | Compacts SQLite and removes expired entries |
+| `lanforge shutdown` | Graceful shutdown with immediate flush |
 
-### Subsistemas individuais (para debug/teste)
+### Individual Subsystems (for debug/test)
 
-| Comando | Descrição |
+| Command | Description |
 |---|---|
-| `lanforge run --only ra` | Sobe apenas o serviço de RA |
-| `lanforge run --only dhcpv4` | Sobe apenas o DHCPv4 |
-| `lanforge run --only dhcpv6` | Sobe apenas o DHCPv6 |
-| `lanforge run --only dns` | Sobe apenas o DNS |
-| `lanforge run --only slaac` | Sobe apenas o tracker SLAAC |
+| `lanforge run --only ra` | Starts only the RA service |
+| `lanforge run --only dhcpv4` | Starts only DHCPv4 |
+| `lanforge run --only dhcpv6` | Starts only DHCPv6 |
+| `lanforge run --only dns` | Starts only DNS |
+| `lanforge run --only slaac` | Starts only the SLAAC tracker |
 
 ---
 
-## Gerenciamento de devices customizados
+## Custom Device Management
 
-### Filosofia
+### Philosophy
 
-Devices adicionados via CLI vivem numa camada intermediária entre os estáticos
-do TOML (imutáveis em runtime) e os dinâmicos aprendidos pelos protocolos.
-São persistidos no SQLite com uma flag `managed = true` e sobrevivem a reboots.
+Devices added via CLI live in an intermediate layer between static entries
+from TOML (immutable at runtime) and dynamic entries learned by protocols.
+They are persisted in SQLite with a `managed = true` flag and survive reboots.
 
-Três níveis de configuração possíveis, do mais simples ao mais completo:
+Three possible configuration levels, from simplest to most complete:
 
-1. **Só hostname** — associa um nome legível ao MAC. O device ainda recebe IP
-   dinâmico do pool, mas resolve no DNS com o hostname configurado.
+1. **Hostname only** — associates a readable name with the MAC. The device still receives a dynamic IP from the pool but resolves in DNS with the configured hostname.
 
-2. **Hostname + V4 fixo** — equivale a um `dhcp-host=` do dnsmasq.
-   O pool reserva o IP e o DHCPv4 sempre entrega para aquele MAC.
+2. **Hostname + Static V4** — equivalent to `dhcp-host=` in dnsmasq.
+   The pool reserves the IP and DHCPv4 always delivers it to that MAC.
 
-3. **Hostname + V4 + sufixo ULA** — configuração completa, equivalente a um
-   `[[devices]]` no TOML, mas adicionada em runtime sem editar arquivo.
+3. **Hostname + V4 + ULA suffix** — complete configuration, equivalent to a
+   `[[devices]]` in TOML, but added at runtime without editing a file.
 
-### Prompt interativo: `lanforge host add`
+### Interactive Prompt: `lanforge host add`
 
 ```
 $ lanforge host add
 
-  Adicionar device
+  Add device
 
   MAC address: aa:bb:cc:dd:ee:ff
-  Hostname:    meu-device
+  Hostname:    my-device
 
-  Nível de configuração:
-  [1] Só hostname (IP dinâmico do pool)
-  [2] Hostname + IPv4 fixo
-  [3] Hostname + IPv4 fixo + sufixo ULA
+  Configuration level:
+  [1] Hostname only (dynamic IP from pool)
+  [2] Hostname + Static IPv4
+  [3] Hostname + Static IPv4 + ULA suffix
 
-  Escolha [1]: 2
+  Choice [1]: 2
 
-  IPv4 fixo: 192.168.0.50
+  Static IPv4: 192.168.0.50
 
-  Confirmar?
+  Confirm?
     MAC       aa:bb:cc:dd:ee:ff
-    hostname  meu-device
-    V4 fixo   192.168.0.50
+    hostname  my-device
+    Static V4 192.168.0.50
 
-  [s/N]: s
+  [y/N]: y
 
-  ✓ Device adicionado. Hostname resolve imediatamente em .lan
+  ✓ Device added. Hostname resolves immediately in .lan
 ```
 
-### Com MAC pré-preenchido: `lanforge host add <mac>`
+### With Pre-filled MAC: `lanforge host add <mac>`
 
 ```
 $ lanforge host add aa:bb:cc:dd:ee:ff
 
-  Adicionar device  ·  aa:bb:cc:dd:ee:ff
+  Add device  ·  aa:bb:cc:dd:ee:ff
 
-  ℹ  Device já visto na rede (last seen há 4 minutos, IP 192.168.0.142)
+  ℹ  Device already seen on network (last seen 4 minutes ago, IP 192.168.0.142)
 
   Hostname:    solarium
 
-  Nível de configuração:
-  [1] Só hostname (IP dinâmico do pool)
-  [2] Hostname + IPv4 fixo
-  [3] Hostname + IPv4 fixo + sufixo ULA
+  Configuration level:
+  [1] Hostname only (dynamic IP from pool)
+  [2] Hostname + Static IPv4
+  [3] Hostname + Static IPv4 + ULA suffix
 
-  Escolha [1]: 1
+  Choice [1]: 1
 
-  ✓ Hostname "solarium" associado a aa:bb:cc:dd:ee:ff
-    Resolve imediatamente como solarium.lan → 192.168.0.142
+  ✓ Hostname "solarium" associated with aa:bb:cc:dd:ee:ff
+    Resolves immediately as solarium.lan → 192.168.0.142
 ```
 
-### Atualização pontual: `lanforge host set`
+### Point Update: `lanforge host set`
 
 ```
-$ lanforge host set aa:bb:cc:dd:ee:ff hostname novo-nome
-  ✓ hostname atualizado: meu-device → novo-nome
+$ lanforge host set aa:bb:cc:dd:ee:ff hostname new-name
+  ✓ hostname updated: my-device → new-name
 
 $ lanforge host set aa:bb:cc:dd:ee:ff v4 192.168.0.55
-  ✓ IPv4 fixo definido: 192.168.0.55
-  ℹ  O device receberá o novo IP no próximo ciclo DHCP
+  ✓ Static IPv4 defined: 192.168.0.55
+  ℹ  The device will receive the new IP in the next DHCP cycle
 
 $ lanforge host set aa:bb:cc:dd:ee:ff v6-suffix ::1234
-  ✓ sufixo ULA definido: fd97:f00d:cafe:3731::1234
+  ✓ ULA suffix defined: fd97:f00d:cafe:3731::1234
 ```
 
-### Listagem: `lanforge host list`
+### Listing: `lanforge host list`
 
 ```
 $ lanforge host list
 
-  DEVICES GERENCIADOS VIA CLI  ·  3 entries
+  DEVICES MANAGED VIA CLI  ·  3 entries
 
-  MAC                HOSTNAME       V4 FIXO          SUFIXO ULA       ADICIONADO
+  MAC                HOSTNAME       STATIC V4        ULA SUFFIX       ADDED
   ─────────────────────────────────────────────────────────────────────────────
-  aa:bb:cc:dd:ee:ff  solarium       —                —                ontem 14:22
-  11:22:33:44:55:66  impressora     192.168.0.50     —                há 3 dias
-  de:ad:be:ef:00:01  nas-storage    192.168.0.20     ::dead:beef      há 1 semana
+  aa:bb:cc:dd:ee:ff  solarium       —                —                yesterday 14:22
+  11:22:33:44:55:66  printer        192.168.0.50     —                3 days ago
+  de:ad:be:ef:00:01  nas-storage    192.168.0.20     ::dead:beef      1 week ago
 
-  Use "lanforge host remove <mac>" para remover.
+  Use "lanforge host remove <mac>" to remove.
 ```
 
-### Remoção: `lanforge host remove`
+### Removal: `lanforge host remove`
 
 ```
 $ lanforge host remove aa:bb:cc:dd:ee:ff
 
-  Remover device aa:bb:cc:dd:ee:ff (solarium)?
+  Remove device aa:bb:cc:dd:ee:ff (solarium)?
 
-  ℹ  O device ainda está ativo na rede (IP 192.168.0.142)
-     Após remoção, continuará com IP dinâmico mas sem hostname.
+  ℹ  The device is still active on the network (IP 192.168.0.142)
+     After removal, it will continue with a dynamic IP but without a hostname.
 
-  [s/N]: s
+  [y/N]: y
 
-  ✓ Device removido da tabela gerenciada.
+  ✓ Device removed from managed table.
 ```
 
 ---
@@ -198,26 +197,26 @@ $ lanforge devices
   ──────────────────────────────────────────────────────────────────────────────
   Archie      ★    e0:d5:5e:e2:d4:89  192.168.0.2      fd97::1057:cafe        ↑
                                                         2804:abcd::e2d5:5eff   ↑
-              lease V4 até amanhã 08:14  ·  V6 até amanhã 08:14
+              V4 lease until tomorrow 08:14  ·  V6 until tomorrow 08:14
 
   Fuyu-PC     ★    aa:bb:cc:dd:ee:ff  192.168.0.3      fd97::bbcc:ddff        ↑
-              lease V4 até amanhã 14:22  ·  sem DHCPv6
+              V4 lease until tomorrow 14:22  ·  no DHCPv6
 
   solarium    ·    3c:0a:7a:d8:11:78  192.168.0.104    fd97::3e0a:7aff        ↑
                                                         2804:abcd::3e0a:7aff   ↑
-              lease V4 expira em 6h  ·  V6 expira em 6h
+              V4 lease expires in 6h  ·  V6 expires in 6h
 
   PrinterHQ   ★    11:22:33:44:55:66  192.168.0.10     —
-              sem lease ativo  ·  last seen há 2 dias
+              no active lease  ·  last seen 2 days ago
 
-  impressora  ·    11:22:33:44:55:66  192.168.0.50     —
-              lease V4 expira em 18h  ·  IP fixo via CLI
+  printer     ·    11:22:33:44:55:66  192.168.0.50     —
+              V4 lease expires in 18h  ·  static IP via CLI
 
   host-aabb…  –    bb:aa:dd:cc:ee:ff  192.168.0.187    —
-              lease V4 expira em 18h  ·  sem DHCPv6
+              V4 lease expires in 18h  ·  no DHCPv6
 
   ──────────────────────────────────────────────────────────────────────────────
-  ★ TOML estático   · gerenciado via CLI   – dinâmico   ↑ SLAAC ativo
+  ★ Static TOML   · Managed via CLI   – Dynamic   ↑ SLAAC active
 ```
 
 ---
@@ -232,11 +231,11 @@ $ lanforge devices --verbose
   ┌─ Archie ★ ─────────────────────────────────────────────────────────────────┐
   │  MAC        e0:d5:5e:e2:d4:89                                             │
   │  DUID       00:03:00:01:e0:d5:5e:e2:d4:89  (DUID-LL)                     │
-  │  last seen  há 3 segundos                                                  │
-  │  origem     TOML estático                                                  │
+  │  last seen  3 seconds ago                                                  │
+  │  origin     Static TOML                                                   │
   │                                                                            │
-  │  V4         192.168.0.2              expira 2026-03-22 08:14  (reservado) │
-  │  V6         fd97::1057:cafe          expira 2026-03-22 08:14  (reservado) │
+  │  V4         192.168.0.2              expires 2026-03-22 08:14  (reserved) │
+  │  V6         fd97::1057:cafe          expires 2026-03-22 08:14  (reserved) │
   │  SLAAC      fd97::e2d5:5eff:fee2:d489                                     │
   │             2804:abcd:1234:5678::e2d5:5eff:fee2:d489                      │
   └────────────────────────────────────────────────────────────────────────────┘
@@ -244,11 +243,11 @@ $ lanforge devices --verbose
   ┌─ solarium · ───────────────────────────────────────────────────────────────┐
   │  MAC        3c:0a:7a:d8:11:78                                             │
   │  DUID       00:01:00:01:2a:4b:6c:8d:3c:0a:7a:d8:11:78  (DUID-LLT)       │
-  │  last seen  há 3 segundos                                                  │
-  │  origem     hostname via CLI (adicionado ontem 14:22)                     │
+  │  last seen  3 seconds ago                                                  │
+  │  origin     hostname via CLI (added yesterday 14:22)                      │
   │                                                                            │
-  │  V4         192.168.0.104            expira em 6h (dinâmico)              │
-  │  V6         fd97::3e0a:7aff:fed8:1178 expira em 6h (dinâmico)             │
+  │  V4         192.168.0.104            expires in 6h (dynamic)              │
+  │  V6         fd97::3e0a:7aff:fed8:1178 expires in 6h (dynamic)             │
   │  SLAAC      fd97::3e0a:7aff:fed8:1178                                     │
   │             2804:abcd::3e0a:7aff:fed8:1178                                │
   └────────────────────────────────────────────────────────────────────────────┘
@@ -263,55 +262,55 @@ $ lanforge status
 
   LANFORGE  ·  uptime 4d 12h 33m  ·  v0.5.0
 
-  SERVIÇOS
+  SERVICES
   ─────────────────────────────────────────────────────────────────────────────
   ● RA          online    uptime 4d 12h
-                          GUA  2804:abcd:1234:5678::/64  (dinâmico)
+                          GUA  2804:abcd:1234:5678::/64  (dynamic)
                           ULA  fd97:f00d:cafe:3731::/64
-                          intervalo ~100s  ·  MTU 1492  ·  M=1 O=1
+                          interval ~100s  ·  MTU 1492  ·  M=1 O=1
 
   ● DHCPv4      online    uptime 4d 12h
                           pool 192.168.0.100–254
-                          12 leases ativos  ·  143 livres
-                          próxima expiração em 6h  (solarium)
+                          12 active leases  ·  143 free
+                          next expiration in 6h  (solarium)
 
   ● DHCPv6      online    uptime 4d 12h
                           pool fd97::100–200
-                          9 leases ativos  ·  247 livres
-                          próxima expiração em 6h  (solarium)
+                          9 active leases  ·  247 free
+                          next expiration in 6h  (solarium)
 
   ● DNS         online    uptime 4d 12h
-                          escutando 0.0.0.0:5300
+                          listening 0.0.0.0:5300
                           upstream 127.0.0.1:5335 (Unbound)
-                          domínio .lan  ·  TTL 60s
+                          domain .lan  ·  TTL 60s
 
   ● SLAAC       online    uptime 4d 12h
-                          24 endereços rastreados
-                          último scan há 3s  ·  GUA 2804:abcd::/64
+                          24 addresses tracked
+                          last scan 3s ago  ·  GUA 2804:abcd::/64
 
   DEVICES
   ─────────────────────────────────────────────────────────────────────────────
-  12 conhecidos  ·  10 online  ·  2 estáticos sem atividade
-  7 do TOML  ·  3 gerenciados via CLI  ·  2 dinâmicos puros
+  12 known  ·  10 online  ·  2 static without activity
+  7 from TOML  ·  3 managed via CLI  ·  2 pure dynamic
 
-  PERSISTÊNCIA
+  PERSISTENCE
   ─────────────────────────────────────────────────────────────────────────────
   SQLite   /var/lib/lanforge/leases.db  ·  148 KB
-           último flush há 12s  ·  debounce 3s
-           WAL mode  ·  sem erros
+           last flush 12s ago  ·  debounce 3s
+           WAL mode  ·  no errors
 
-  REDE
+  NETWORK
   ─────────────────────────────────────────────────────────────────────────────
   LAN      end0  ·  192.168.0.1/16  ·  fd97::1/64
-  WAN      ppp0  ·  CGNAT (sem IPv4 público)
-           GUA   2804:abcd:1234:5678::/64  (delegado pelo ISP)
+  WAN      ppp0  ·  CGNAT (no public IPv4)
+           GUA   2804:abcd:1234:5678::/64  (ISP delegated)
 ```
 
 ---
 
-## Protocolo do socket (`/run/lanforge/control.sock`)
+## Socket Protocol (`/run/lanforge/control.sock`)
 
-Socket Unix de domínio, mensagens JSON delimitadas por newline (`\n`).
+Unix domain socket, newline-delimited JSON messages (`\n`).
 
 ### Requests
 
@@ -324,10 +323,10 @@ Socket Unix de domínio, mensagens JSON delimitadas por newline (`\n`).
 { "cmd": "shutdown" }
 
 { "cmd": "host_add", "mac": "aa:bb:cc:dd:ee:ff", "hostname": "solarium" }
-{ "cmd": "host_add", "mac": "aa:bb:cc:dd:ee:ff", "hostname": "impressora", "v4": "192.168.0.50" }
+{ "cmd": "host_add", "mac": "aa:bb:cc:dd:ee:ff", "hostname": "printer", "v4": "192.168.0.50" }
 { "cmd": "host_add", "mac": "aa:bb:cc:dd:ee:ff", "hostname": "nas", "v4": "192.168.0.20", "v6_suffix": "::dead:beef" }
 
-{ "cmd": "host_set", "mac": "aa:bb:cc:dd:ee:ff", "field": "hostname", "value": "novo-nome" }
+{ "cmd": "host_set", "mac": "aa:bb:cc:dd:ee:ff", "field": "hostname", "value": "new-name" }
 { "cmd": "host_set", "mac": "aa:bb:cc:dd:ee:ff", "field": "v4", "value": "192.168.0.55" }
 { "cmd": "host_set", "mac": "aa:bb:cc:dd:ee:ff", "field": "v6_suffix", "value": "::1234" }
 
@@ -402,43 +401,43 @@ Socket Unix de domínio, mensagens JSON delimitadas por newline (`\n`).
 
 ---
 
-## Schema SQLite — campo adicional para devices CLI
+## SQLite Schema — Additional field for CLI devices
 
 ```sql
--- Devices gerenciados via CLI têm managed = true e origin = 'cli'
--- Devices do TOML têm is_static = true e origin = 'toml'
--- Devices dinâmicos têm ambos false e origin = 'dynamic'
+-- Devices managed via CLI have managed = true and origin = 'cli'
+-- Devices from TOML have is_static = true and origin = 'toml'
+-- Dynamic devices have both false and origin = 'dynamic'
 
 ALTER TABLE devices ADD COLUMN origin TEXT NOT NULL DEFAULT 'dynamic';
-ALTER TABLE devices ADD COLUMN managed_at INTEGER;  -- unix timestamp da adição via CLI
+ALTER TABLE devices ADD COLUMN managed_at INTEGER;  -- unix timestamp of addition via CLI
 ```
 
-A distinção `origin` permite que `lanforge host list` filtre apenas os entries
-adicionados via CLI, e que o bootstrap saiba não sobrescrever entries do TOML
-com o que veio do DB (o TOML sempre tem precedência).
+The `origin` distinction allows `lanforge host list` to filter only entries
+added via CLI, and for bootstrap to know not to overwrite TOML entries
+with what came from the DB (TOML always has precedence).
 
 ---
 
-## Notas de implementação
+## Implementation Notes
 
-**Precedência de configuração em runtime:**
+**Runtime Configuration Precedence:**
 
 ```
-TOML estático  >  CLI gerenciado  >  dinâmico de protocolo
+Static TOML  >  Managed CLI  >  Protocol Dynamic
 ```
 
-Um device adicionado via CLI com hostname `"solarium"` não sobrescreve um
-`[[devices]]` do TOML que tenha o mesmo MAC — o TOML vence sempre.
+A device added via CLI with hostname `"solarium"` does not overwrite a
+`[[devices]]` from TOML that has the same MAC — TOML always wins.
 
-**Persistência dos entries CLI:**
+**CLI Entries Persistence:**
 
-Entries adicionados via CLI são gravados no SQLite imediatamente (sem debounce),
-pois são ações explícitas do usuário. O `db_worker` normal cobre o restante.
+Entries added via CLI are written to SQLite immediately (without debounce),
+as they are explicit user actions. The normal `db_worker` covers the rest.
 
-**`host add` com MAC já na tabela:**
+**`host add` with MAC already in table:**
 
-Se o MAC já existe como device dinâmico, o comando eleva o entry para `managed`
-sem perder o lease ativo. O hostname passa a resolver no DNS imediatamente.
+If the MAC already exists as a dynamic device, the command elevates the entry to `managed`
+without losing the active lease. The hostname starts resolving in DNS immediately.
 
-Se o MAC já existe como entry do TOML, o comando recusa com erro explicativo
-e sugere editar o arquivo de configuração.
+If the MAC already exists as a TOML entry, the command refuses with an explanatory error
+and suggests editing the configuration file.

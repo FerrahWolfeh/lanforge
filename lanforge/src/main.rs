@@ -1,4 +1,4 @@
-//! `lanforge` — Gerenciador central de identidades de rede (IPv6/IPv4).
+//! `lanforge` — Central network identity manager (IPv6/IPv4).
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
     clippy::missing_docs_in_private_items,
@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     let res = rt.block_on(async_main());
 
     if let Err(e) = res {
-        eprintln!("❌ Erro fatal: {e:#}");
+        eprintln!("❌ Fatal error: {e:#}");
         std::process::exit(1);
     }
     std::process::exit(0);

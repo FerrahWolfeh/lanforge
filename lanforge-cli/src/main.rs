@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             } else {
-                println!("Nenhum comando especificado. Use --help para ver as opções.");
+                println!("No command specified. Use --help to see available options.");
             }
         }
         Cli::Wake { target, socket } => {
