@@ -43,6 +43,9 @@ pub struct UpstreamManager {
     pub target: UpstreamTarget,
     /// Performance and health tracking for this upstream.
     pub health: Arc<UpstreamHealth>,
+    /// Shared DoH client if this upstream uses HTTPS.
+    #[cfg(feature = "doh-upstream")]
+    pub doh_client: Option<crate::doh::DohClient>,
 }
 
 impl UpstreamManager {
@@ -88,6 +91,12 @@ impl UpstreamManager {
             cache,
             target: target.clone(),
             health: Arc::new(UpstreamHealth::new()),
+            #[cfg(feature = "doh-upstream")]
+            doh_client: if target.protocol == UpstreamProtocol::Https {
+                Some(crate::doh::DohClient::new())
+            } else {
+                None
+            },
         }))
     }
 
@@ -123,6 +132,20 @@ impl UpstreamManager {
                 #[cfg(not(feature = "doq"))]
                 {
                     Err(DnsError::Tls("DoQ feature not enabled".to_string()))
+                }
+            }
+            UpstreamProtocol::Https => {
+                #[cfg(feature = "doh-upstream")]
+                {
+                    if let Some(client) = &self.doh_client {
+                        client.resolve(&self.target, data).await
+                    } else {
+                        Err(DnsError::Generic("DoH client not initialized".to_string()))
+                    }
+                }
+                #[cfg(not(feature = "doh-upstream"))]
+                {
+                    Err(DnsError::Generic("DoH feature not enabled".to_string()))
                 }
             }
         };

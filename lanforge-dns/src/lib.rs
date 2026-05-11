@@ -62,6 +62,8 @@ pub mod cache;
 pub mod config;
 #[cfg(feature = "dot")]
 pub mod dot;
+#[cfg(feature = "doh-upstream")]
+pub mod doh;
 pub mod error;
 #[cfg(feature = "adblock")]
 pub mod filter;
@@ -83,6 +85,8 @@ pub mod doq;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod io_tests;
 
 // Re-exports for convenience and compatibility
 pub use config::{BlockingMode, DnsConfig, PrioritizedUpstream, RewriteAnswer};

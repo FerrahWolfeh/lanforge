@@ -36,6 +36,15 @@ quinn = { version = "0.11.9", features = [
     "rustls",
     "runtime-tokio",
 ], optional = true }
+hyper = { version = "1.8.1", features = ["full"], optional = true }
+hyper-util = { version = "0.1.13", features = ["full"], optional = true }
+hyper-rustls = { version = "0.27.9", features = [
+    "rustls-platform-verifier",
+    "http2",
+    "ring",
+], optional = true }
+http-body-util = { version = "0.1.3", optional = true }
+base64 = { version = "0.22.1", optional = true }
 
 [features]
 adblock = ["dep:ureq", "dep:dashmap", "lanforge-core/adblock"]
@@ -46,6 +55,16 @@ dot = [
     "dep:webpki-roots",
 ]
 doq = ["dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+doh-upstream = [
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:hyper-rustls",
+    "dep:http-body-util",
+    "dep:base64",
+    "dep:rustls",
+    "dep:rustls-pki-types",
+    "dep:webpki-roots",
+]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
 hotpath-alloc = [
     "hotpath",
