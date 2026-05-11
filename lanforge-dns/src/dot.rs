@@ -11,7 +11,8 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 
 use crate::config::DnsConfig;
-use crate::server::{DnsContext, handle_query};
+use crate::handler::process_query;
+use crate::server::DnsContext;
 use crate::tls_utils::load_tls_config;
 
 #[lanforge_macros::lanforge_service(
@@ -120,7 +121,7 @@ async fn handle_dot_connection(
 
         let mut resp_buf = Vec::with_capacity(512);
         if matches!(
-            handle_query(&query_buf, dns_ctx, peer.ip(), &mut resp_buf).await,
+            process_query(&query_buf, dns_ctx, peer.ip(), &mut resp_buf).await,
             Ok(true)
         ) {
             let resp_len = u16::try_from(resp_buf.len())?.to_be_bytes();

@@ -11,7 +11,12 @@ use std::net::IpAddr;
 
 use crate::config::DnsConfig;
 use crate::error::DnsError;
-use crate::utils::{extract_local_hostname, parse_arpa};
+use crate::utils::{
+    extract_local_hostname, extract_local_hostname_wire, parse_arpa, parse_arpa_wire,
+};
+use crate::wire::{
+    PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, WireResponseWriter, qtypes::QType,
+};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use lanforge_core::context::LanforgeContext;
 
@@ -190,5 +195,113 @@ impl<'a> LocalResolver<'a> {
         let ula = sys_ula.or(self.cfg.ula_prefix);
 
         device.all_addresses_sorted(gua, ula)
+    }
+
+    /// Helper function for local resolution using wire-parsed data.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub fn resolve_local_wire(
+        &self,
+        data: &[u8],
+        header: &WireHeader,
+        question: &WireQuestion<'_>,
+        has_upstreams: bool,
+        resp: &mut Vec<u8>,
+    ) -> bool {
+        let raw_qtype = question.qtype();
+        let qtype = QType::from(raw_qtype);
+
+        match qtype {
+            QType::A | QType::AAAA | QType::Any => {
+                let mut labels = question.labels();
+                if let Some(hostname_slice) =
+                    extract_local_hostname_wire(&mut labels, &self.cfg.multi_search_labels)
+                {
+                    let safe_hostname = crate::utils::fast_lowercase(hostname_slice);
+                    let edns = WireOptScanner::scan(data, header, question);
+
+                    if let Some(ips) = self.resolve_ip(&safe_hostname, RecordType::from(raw_qtype))
+                    {
+                        WireResponseWriter::write_ip_response(
+                            data,
+                            question,
+                            &ips,
+                            self.cfg.ttl,
+                            edns,
+                            has_upstreams,
+                            resp,
+                        );
+                        return true;
+                    } else if self.ctx.get_by_hostname(&safe_hostname).is_some() {
+                        // Host exists but no records for type (NODATA)
+                        WireResponseWriter::write_error_response(
+                            data,
+                            question,
+                            0, // NoError (but with 0 answers)
+                            edns,
+                            has_upstreams,
+                            resp,
+                        );
+                        return true;
+                    }
+                }
+            }
+            QType::PTR => {
+                if let Some(target_ip) = parse_arpa_wire(question.labels()) {
+                    let edns = WireOptScanner::scan(data, header, question);
+
+                    if let Some(device) = self.ctx.get_by_ip(&target_ip) {
+                        let (host, domain) = self.get_ptr_parts(&device);
+                        WireResponseWriter::write_ptr_response(
+                            PtrResponseArgs {
+                                query_data: data,
+                                question,
+                                host: &host,
+                                domain: &domain,
+                                ttl: self.cfg.ttl,
+                                edns,
+                                ra: has_upstreams,
+                            },
+                            resp,
+                        );
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Helper for local resolution in the fallback path.
+    pub fn resolve_local_fallback(
+        &self,
+        rb: &crate::response::ResponseBuilder,
+        qname: &Name,
+        qtype: RecordType,
+        resp: &mut Vec<u8>,
+    ) -> Result<bool, DnsError> {
+        if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
+            if let Some(hostname_slice) =
+                extract_local_hostname(qname, &self.cfg.multi_search_labels)
+            {
+                let safe_hostname = crate::utils::fast_lowercase(hostname_slice);
+                if let Some(ips) = self.resolve_ip(&safe_hostname, qtype) {
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_ips(ips)?);
+                    return Ok(true);
+                } else if self.ctx.get_by_hostname(&safe_hostname).is_some() {
+                    resp.clear();
+                    resp.extend_from_slice(&rb.empty_noerror()?);
+                    return Ok(true);
+                }
+            }
+        } else if qtype == RecordType::PTR
+            && let Some((host, domain)) = self.resolve_ptr(qname)?
+        {
+            resp.clear();
+            resp.extend_from_slice(&rb.success_ptr(&host, &domain)?);
+            return Ok(true);
+        }
+        Ok(false)
     }
 }

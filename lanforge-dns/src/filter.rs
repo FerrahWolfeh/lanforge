@@ -1,10 +1,12 @@
 use crate::error::DnsError;
-use crate::wire::WireLabelIter;
+use crate::server::DnsContext;
+use crate::wire::{WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter};
 use dashmap::DashMap;
+use hickory_proto::rr::RecordType;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tracing::{error, info};
@@ -229,6 +231,293 @@ impl AdBlocker {
         }
 
         Ok(new_list)
+    }
+
+    /// Attempts to resolve a rewrite rule and writes it to the response via wire formatting.
+    pub fn try_resolve_rewrite_wire(
+        &self,
+        data: &[u8],
+        header: &WireHeader,
+        question: &WireQuestion,
+        ctx: &DnsContext,
+        domain: &str,
+        resp: &mut Vec<u8>,
+    ) -> bool {
+        if let Some(answer) = self.resolve_rewrite(domain) {
+            return Self::resolve_rewrite_wire(data, header, question, ctx, answer, resp);
+        }
+        false
+    }
+
+    fn resolve_rewrite_wire(
+        data: &[u8],
+        header: &WireHeader,
+        question: &WireQuestion<'_>,
+        ctx: &DnsContext,
+        answer: crate::config::RewriteAnswer,
+        resp: &mut Vec<u8>,
+    ) -> bool {
+        let edns = WireOptScanner::scan(data, header, question);
+        let ra = !ctx.upstreams.is_empty();
+        let qtype = question.qtype();
+
+        match answer {
+            crate::config::RewriteAnswer::A(ip) if qtype == 1 || qtype == 255 => {
+                WireResponseWriter::write_ip_response(
+                    data,
+                    question,
+                    &[IpAddr::V4(ip)],
+                    ctx.cfg.ttl,
+                    edns,
+                    ra,
+                    resp,
+                );
+                true
+            }
+            crate::config::RewriteAnswer::Aaaa(ip) if qtype == 28 || qtype == 255 => {
+                WireResponseWriter::write_ip_response(
+                    data,
+                    question,
+                    &[IpAddr::V6(ip)],
+                    ctx.cfg.ttl,
+                    edns,
+                    ra,
+                    resp,
+                );
+                true
+            }
+            crate::config::RewriteAnswer::Cname(target) => {
+                WireResponseWriter::write_cname_response(
+                    data,
+                    question,
+                    &target,
+                    ctx.cfg.ttl,
+                    edns,
+                    ra,
+                    resp,
+                );
+                true
+            }
+            crate::config::RewriteAnswer::Device(hostname) => {
+                let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &ctx.ctx);
+                resolver
+                    .resolve_ip(&hostname, RecordType::from(qtype))
+                    .is_some_and(|ips| {
+                        WireResponseWriter::write_ip_response(
+                            data,
+                            question,
+                            &ips,
+                            ctx.cfg.ttl,
+                            edns,
+                            ra,
+                            resp,
+                        );
+                        true
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Resolves rewrites in the fallback path.
+    pub fn try_resolve_rewrite_fallback(
+        &self,
+        ctx: &DnsContext,
+        rb: &crate::response::ResponseBuilder,
+        qname: &hickory_proto::rr::Name,
+        qtype: RecordType,
+        src_addr: IpAddr,
+        resp: &mut Vec<u8>,
+    ) -> Result<bool, DnsError> {
+        let mut domain = qname.to_string();
+        if domain.ends_with('.') {
+            domain.pop();
+        }
+        domain.make_ascii_lowercase();
+
+        if let Some(answer) = self.resolve_rewrite(&domain) {
+            match answer {
+                crate::config::RewriteAnswer::A(ip)
+                    if qtype == RecordType::A || qtype == RecordType::ANY =>
+                {
+                    ctx.stats.inc_auth();
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_ips([IpAddr::V4(ip)])?);
+                    ctx.record_log(
+                        src_addr,
+                        domain,
+                        qtype.into(),
+                        lanforge_core::types::network::QueryResult::Rewritten,
+                        0,
+                        false,
+                    );
+                    return Ok(true);
+                }
+                crate::config::RewriteAnswer::Aaaa(ip)
+                    if qtype == RecordType::AAAA || qtype == RecordType::ANY =>
+                {
+                    ctx.stats.inc_auth();
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_ips([IpAddr::V6(ip)])?);
+                    ctx.record_log(
+                        src_addr,
+                        domain,
+                        qtype.into(),
+                        lanforge_core::types::network::QueryResult::Rewritten,
+                        0,
+                        false,
+                    );
+                    return Ok(true);
+                }
+                crate::config::RewriteAnswer::Cname(target) => {
+                    ctx.stats.inc_auth();
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_cname(&target)?);
+                    ctx.record_log(
+                        src_addr,
+                        domain,
+                        qtype.into(),
+                        lanforge_core::types::network::QueryResult::Rewritten,
+                        0,
+                        false,
+                    );
+                    return Ok(true);
+                }
+                crate::config::RewriteAnswer::Device(hostname) => {
+                    let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &ctx.ctx);
+                    if let Some(ips) = resolver.resolve_ip(&hostname, qtype) {
+                        ctx.stats.inc_auth();
+                        resp.clear();
+                        resp.extend_from_slice(&rb.success_ips(ips)?);
+                        ctx.record_log(
+                            src_addr,
+                            domain,
+                            qtype.into(),
+                            lanforge_core::types::network::QueryResult::Rewritten,
+                            0,
+                            false,
+                        );
+                        return Ok(true);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(false)
+    }
+
+    /// Generates a blocking response using the zero-alloc wire builder.
+    pub fn apply_adblock_wire(
+        &self,
+        data: &[u8],
+        header: &WireHeader,
+        question: &WireQuestion,
+        ctx: &DnsContext,
+        resp: &mut Vec<u8>,
+    ) {
+        let edns = WireOptScanner::scan(data, header, question);
+        let ra = !ctx.cfg.upstreams.is_empty();
+
+        match ctx.cfg.blocking_mode {
+            crate::config::BlockingMode::NxDomain => {
+                WireResponseWriter::write_error_response(data, question, 3, edns, ra, resp);
+            }
+            crate::config::BlockingMode::NullIp => {
+                let ips = if question.qtype() == 28 {
+                    vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
+                } else {
+                    vec![IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)]
+                };
+                WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
+            }
+            crate::config::BlockingMode::CustomIp => {
+                let ips = if question.qtype() == 28 {
+                    vec![IpAddr::V6(
+                        ctx.cfg.blocking_ip_v6.unwrap_or(Ipv6Addr::UNSPECIFIED),
+                    )]
+                } else {
+                    vec![IpAddr::V4(
+                        ctx.cfg
+                            .blocking_ip_v4
+                            .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
+                    )]
+                };
+                WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
+            }
+            crate::config::BlockingMode::Refused => {
+                WireResponseWriter::write_error_response(data, question, 5, edns, ra, resp);
+            }
+        }
+    }
+
+    /// Fallback path blocking.
+    pub fn apply_adblock_fallback(
+        &self,
+        ctx: &DnsContext,
+        rb: &crate::response::ResponseBuilder,
+        qname: &hickory_proto::rr::Name,
+        qtype: RecordType,
+        src_addr: IpAddr,
+        resp: &mut Vec<u8>,
+    ) -> Result<bool, DnsError> {
+        if !self.is_enabled() {
+            return Ok(false);
+        }
+
+        let mut domain = qname.to_string();
+        if domain.ends_with('.') {
+            domain.pop();
+        }
+        domain.make_ascii_lowercase();
+
+        if self.should_block(&domain) {
+            ctx.stats.inc_blocked();
+            ctx.ctx.inc_dns_blocked();
+            self.inc_ip_stats(src_addr);
+            resp.clear();
+
+            match ctx.cfg.blocking_mode {
+                crate::config::BlockingMode::NxDomain => {
+                    resp.extend_from_slice(&rb.nxdomain()?);
+                }
+                crate::config::BlockingMode::NullIp => {
+                    let ips = if qtype == RecordType::AAAA {
+                        vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
+                    } else {
+                        vec![IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)]
+                    };
+                    resp.extend_from_slice(&rb.success_ips(ips)?);
+                }
+                crate::config::BlockingMode::CustomIp => {
+                    let ips = if qtype == RecordType::AAAA {
+                        vec![IpAddr::V6(
+                            ctx.cfg.blocking_ip_v6.unwrap_or(Ipv6Addr::UNSPECIFIED),
+                        )]
+                    } else {
+                        vec![IpAddr::V4(
+                            ctx.cfg
+                                .blocking_ip_v4
+                                .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
+                        )]
+                    };
+                    resp.extend_from_slice(&rb.success_ips(ips)?);
+                }
+                crate::config::BlockingMode::Refused => {
+                    resp.extend_from_slice(&rb.refused()?);
+                }
+            }
+
+            ctx.record_log(
+                src_addr,
+                domain,
+                qtype.into(),
+                lanforge_core::types::network::QueryResult::Blocked,
+                0,
+                false,
+            );
+            return Ok(true);
+        }
+        Ok(false)
     }
 }
 

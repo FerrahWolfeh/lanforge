@@ -20,7 +20,7 @@ use crate::filter::AdBlocker;
 use crate::health::{UpstreamHealth, UpstreamStatus};
 use crate::resolver::LocalResolver;
 use crate::response::ResponseBuilder;
-use crate::server::{DnsContext, handle_query};
+use crate::server::DnsContext;
 use crate::stats::DnsStats;
 use crate::strategy::UpstreamMode;
 use crate::upstream::UpstreamManager;
@@ -250,9 +250,10 @@ async fn test_nxdomain_leak_prevention_and_soa() {
     let data = query.to_bytes().unwrap();
     let ctx = mock_dns_context(ctx_instance, cfg);
     let mut resp_buf = Vec::new();
-    let has_resp = handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
-        .await
-        .unwrap();
+    let has_resp =
+        crate::handler::process_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+            .await
+            .unwrap();
     assert!(has_resp);
     let resp = Message::from_bytes(&resp_buf).unwrap();
     assert_eq!(resp.response_code, ResponseCode::NXDomain);
@@ -306,9 +307,10 @@ async fn test_adblock_integration() {
     let data = query.to_bytes().unwrap();
 
     let mut resp_buf = Vec::new();
-    let has_resp = handle_query(&data, &ctx, "192.168.1.1".parse().unwrap(), &mut resp_buf)
-        .await
-        .unwrap();
+    let has_resp =
+        crate::handler::process_query(&data, &ctx, "192.168.1.1".parse().unwrap(), &mut resp_buf)
+            .await
+            .unwrap();
     assert!(has_resp);
 
     let resp = Message::from_bytes(&resp_buf).unwrap();
@@ -693,9 +695,10 @@ async fn test_dns_rewrites_fallback() {
     let mut resp_buf = Vec::new();
 
     // Test direct IP rewrite
-    let res = crate::server::handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
-        .await
-        .unwrap();
+    let res =
+        crate::handler::process_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+            .await
+            .unwrap();
     assert!(res);
     let resp = Message::from_bytes(&resp_buf).unwrap();
     assert_eq!(resp.response_code, ResponseCode::NoError);
@@ -714,9 +717,10 @@ async fn test_dns_rewrites_fallback() {
     ));
     let data = query.to_bytes().unwrap();
     resp_buf.clear();
-    let res = crate::server::handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
-        .await
-        .unwrap();
+    let res =
+        crate::handler::process_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+            .await
+            .unwrap();
     assert!(res);
     let resp = Message::from_bytes(&resp_buf).unwrap();
     assert_eq!(resp.answers.len(), 1);
@@ -770,7 +774,7 @@ async fn test_dns_blocking_modes_fallback() {
     let mut resp_buf = Vec::new();
 
     // Test NullIp mode
-    let _ = crate::server::handle_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+    let _ = crate::handler::process_query(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
         .await
         .unwrap();
     let resp = Message::from_bytes(&resp_buf).unwrap();
@@ -788,7 +792,7 @@ async fn test_dns_blocking_modes_fallback() {
         ..ctx
     };
     resp_buf.clear();
-    let _ = crate::server::handle_query(
+    let _ = crate::handler::process_query(
         &data,
         &ctx_refused,
         "127.0.0.1".parse().unwrap(),
