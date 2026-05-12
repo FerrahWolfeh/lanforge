@@ -32,6 +32,11 @@ fn main() -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
+    // 0. Initialize Crypto Provider (Rustls 0.23+ requirement)
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok(); // Ignore if already installed
+
     // 1. Setup Logging
     tracing_subscriber::fmt()
         .without_time()

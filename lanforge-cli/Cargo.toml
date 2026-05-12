@@ -46,6 +46,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
 clap = { workspace = true }
+rustls = { workspace = true }
 
 
 # Third party

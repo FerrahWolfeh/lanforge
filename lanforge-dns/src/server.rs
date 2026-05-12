@@ -14,6 +14,7 @@ use tokio::{
 };
 use tracing::info;
 
+pub use crate::handler::process_query as handle_query;
 use crate::query_log::QueryRing;
 use crate::{config::DnsConfig, stats::DnsStats};
 use crate::{strategy::UpstreamStrategy, upstream::UpstreamManager};
