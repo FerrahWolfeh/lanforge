@@ -175,12 +175,26 @@ impl AdBlocker {
         self.allowlist.read().len()
     }
 
-    /// Attempts to resolve a domain via rewrite rules.
     pub fn resolve_rewrite(&self, qname: &str) -> Option<crate::config::RewriteAnswer> {
-        self.rewrites
-            .read()
+        let rewrites = self.rewrites.read();
+
+        // 1. Try exact match first (qname is already lowercased by caller)
+        if let Some(rule) = rewrites.iter().find(|r| r.domain == qname) {
+            return Some(rule.parse_answer());
+        }
+
+        // 2. Try explicit wildcard matches (*.domain.com)
+        rewrites
             .iter()
-            .find(|rule| rule.domain.to_lowercase() == qname)
+            .find(|rule| {
+                if rule.domain.starts_with("*.") {
+                    let base = &rule.domain[2..];
+                    // Matches "base.com" and any subdomain "sub.base.com"
+                    qname == base || qname.ends_with(&format!(".{base}"))
+                } else {
+                    false
+                }
+            })
             .map(super::config::RewriteRule::parse_answer)
     }
 

@@ -733,6 +733,124 @@ async fn test_dns_rewrites_fallback() {
 
 #[tokio::test]
 #[cfg(feature = "adblock")]
+async fn test_dns_rewrites_explicit_wildcard() {
+    let ctx_instance = init_test_context();
+    let mut cfg = mock_config();
+    cfg.adblock_enabled = true;
+    cfg.rewrites = vec![
+        crate::config::RewriteRule {
+            domain: "google.com".to_string(),
+            answer: "1.1.1.1".to_string(),
+        },
+        crate::config::RewriteRule {
+            domain: "*.internal".to_string(),
+            answer: "10.0.0.1".to_string(),
+        },
+    ];
+
+    let adblocker = Arc::new(AdBlocker::new());
+    // Normalize and load
+    let mut normalized = cfg.rewrites.clone();
+    for r in &mut normalized {
+        r.domain = r.domain.to_lowercase();
+    }
+    adblocker.rewrites.write().clone_from(&normalized);
+    adblocker.set_enabled(true);
+
+    let ctx = DnsContext {
+        cfg: cfg.clone(),
+        upstreams: Vec::new(),
+        stats: Arc::new(DnsStats::default()),
+        ctx: ctx_instance,
+        adblocker: Some(adblocker),
+        upstream_strategy: Arc::new(crate::strategy::UpstreamStrategy::new(
+            UpstreamMode::Sequential,
+            vec![],
+        )),
+        soa_zone: Name::from_str("lan.").unwrap(),
+        soa_master_ns: Name::from_str("ns.lan.").unwrap(),
+        soa_mailbox: Name::from_str("hostmaster.lan.").unwrap(),
+        query_log: None,
+    };
+
+    let mut resp_buf = Vec::new();
+
+    // 1. Exact match for non-wildcard
+    let mut query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("google.com.").unwrap(),
+        RecordType::A,
+    ));
+    let _ = crate::handler::process_query(
+        &query.to_bytes().unwrap(),
+        &ctx,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf,
+    )
+    .await
+    .unwrap();
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.answers.len(), 1);
+
+    // 2. NO match for subdomain of non-wildcard (google.com does NOT match www.google.com)
+    query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("www.google.com.").unwrap(),
+        RecordType::A,
+    ));
+    resp_buf.clear();
+    let res = crate::handler::process_query(
+        &query.to_bytes().unwrap(),
+        &ctx,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf,
+    )
+    .await
+    .unwrap();
+    assert!(res);
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    // Should fall through to NXDOMAIN since upstreams are empty and it's not local/rewrite
+    assert_eq!(resp.response_code, ResponseCode::NXDomain);
+
+    // 3. Match base domain of wildcard rule (*.internal matches internal)
+    query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("internal.").unwrap(),
+        RecordType::A,
+    ));
+    resp_buf.clear();
+    let _ = crate::handler::process_query(
+        &query.to_bytes().unwrap(),
+        &ctx,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf,
+    )
+    .await
+    .unwrap();
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.answers.len(), 1);
+
+    // 4. Match subdomain of wildcard rule (*.internal matches api.internal)
+    query = Message::query();
+    query.add_query(Query::query(
+        Name::from_str("api.internal.").unwrap(),
+        RecordType::A,
+    ));
+    resp_buf.clear();
+    let _ = crate::handler::process_query(
+        &query.to_bytes().unwrap(),
+        &ctx,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf,
+    )
+    .await
+    .unwrap();
+    let resp = Message::from_bytes(&resp_buf).unwrap();
+    assert_eq!(resp.answers.len(), 1);
+}
+
+#[tokio::test]
+#[cfg(feature = "adblock")]
 async fn test_dns_blocking_modes_fallback() {
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();

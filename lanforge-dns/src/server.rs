@@ -261,7 +261,11 @@ impl DnsService {
 
             // 2. Initial Rewrites & Allowlist from config
             {
-                adblocker.rewrites.write().clone_from(&rewrites);
+                let mut normalized_rewrites = rewrites.clone();
+                for rule in &mut normalized_rewrites {
+                    rule.domain = rule.domain.to_lowercase();
+                }
+                *adblocker.rewrites.write() = normalized_rewrites;
                 let mut allow = HashSet::new();
                 for domain in &allowlist {
                     allow.insert(domain.to_lowercase());
