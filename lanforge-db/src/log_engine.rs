@@ -12,9 +12,11 @@
 //!
 //! Pruning runs at most once every 60 seconds to avoid overhead.
 
+use lanforge_core::types::QueryResult;
+use lanforge_core::types::network::{DnsRecordType, QueryLogEntry};
 use serde_json;
 use std::fs::{OpenOptions, create_dir_all};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -85,11 +87,13 @@ impl LogDb {
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp   INTEGER NOT NULL,
                 src_ip      TEXT NOT NULL,
+                src_mac     TEXT,
                 domain      TEXT NOT NULL,
                 qtype       INTEGER NOT NULL,
                 result      TEXT NOT NULL,
                 upstream_us INTEGER NOT NULL,
-                cached      INTEGER NOT NULL
+                cached      INTEGER NOT NULL,
+                answer      TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_dns_queries_timestamp ON dns_queries(timestamp);
         "
@@ -199,21 +203,20 @@ impl LogDb {
     }
 
     /// Records a resolved DNS query.
-    pub async fn record_dns_query(
-        &self,
-        entry: &lanforge_core::types::network::QueryLogEntry,
-    ) -> Result<(), LeaseDbError> {
+    pub async fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), LeaseDbError> {
         sqlx::query(
-            "INSERT INTO dns_queries (timestamp, src_ip, domain, qtype, result, upstream_us, cached) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO dns_queries (timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(entry.timestamp as i64)
         .bind(entry.src_ip.to_string())
-        .bind(&entry.domain)
-        .bind(i32::from(entry.qtype))
+        .bind(entry.src_mac.as_ref().map(|m| m.to_string()))
+        .bind(entry.domain.as_ref())
+        .bind(u16::from(entry.qtype) as i32)
         .bind(format!("{:?}", entry.result).to_lowercase())
         .bind(i64::from(entry.upstream_us))
         .bind(i32::from(entry.cached))
+        .bind(entry.answer.as_ref())
         .execute(&self.pool)
         .await?;
 
@@ -269,6 +272,56 @@ impl LogDb {
             debug!("Log database pruned");
         }
         Ok(())
+    }
+
+    /// Retrieves the most recent DNS queries.
+    pub async fn get_dns_query_history(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<QueryLogEntry>, LeaseDbError> {
+        let limit = limit as i64;
+        let rows = sqlx::query(
+            "SELECT timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer 
+             FROM dns_queries ORDER BY id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            let timestamp: i64 = row.get("timestamp");
+            let src_ip: String = row.get("src_ip");
+            let src_mac: Option<String> = row.get("src_mac");
+            let domain: String = row.get("domain");
+            let qtype: i32 = row.get("qtype");
+            let result: String = row.get("result");
+            let upstream_us: i64 = row.get("upstream_us");
+            let cached: i32 = row.get("cached");
+            let answer: Option<String> = row.get("answer");
+
+            entries.push(QueryLogEntry {
+                timestamp: timestamp as u64,
+                src_ip: src_ip.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+                src_mac: src_mac.and_then(|m| m.parse().ok()),
+                domain: std::sync::Arc::from(domain),
+                qtype: DnsRecordType::from(qtype as u16),
+                result: match result.as_str() {
+                    "local" => QueryResult::Local,
+                    "forwarded" => QueryResult::Forwarded,
+                    "blocked" => QueryResult::Blocked,
+                    "nxdomain" => QueryResult::NxDomain,
+                    "error" => QueryResult::Error,
+                    "cached" => QueryResult::Cached,
+                    "rewritten" => QueryResult::Rewritten,
+                    _ => QueryResult::Local,
+                },
+                upstream_us: upstream_us as u32,
+                cached: cached != 0,
+                answer,
+            });
+        }
+        Ok(entries)
     }
 
     /// Retrieves the most recent blocked DNS queries.

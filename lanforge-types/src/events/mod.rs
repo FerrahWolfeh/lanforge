@@ -69,6 +69,7 @@ impl TimedEvent {
             LanforgeEvent::Dns(e) => match e {
                 #[cfg(feature = "adblock")]
                 DnsEvent::AdblockToggle { .. } | DnsEvent::AdblockReload => true,
+                DnsEvent::QueryResolved(_) => true,
                 _ => false,
             },
         }

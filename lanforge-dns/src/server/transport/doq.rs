@@ -8,9 +8,9 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 
 use crate::config::DnsConfig;
-use crate::handler::process_query;
 use crate::server::DnsContext;
-use crate::tls_utils::load_tls_config;
+use crate::server::transport::tls::load_tls_config;
+use crate::wire::{WireHeader, WireQuestion};
 
 #[lanforge_macros::lanforge_service(
     id = "doq",
@@ -32,9 +32,7 @@ impl DoqService {
 
 impl AsyncService for DoqService {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        let Some(addr) = self.cfg.doq_listen else {
-            return Ok(());
-        };
+        let Some(addr) = self.cfg.doq_listen else { return Ok(()); };
 
         let cert = self.cfg.tls_cert.as_deref().ok_or_else(|| {
             CoreError::Generic("DoQ requires tls_cert to be configured".to_string())
@@ -46,7 +44,6 @@ impl AsyncService for DoqService {
         let mut tls_config = load_tls_config(cert, key)
             .map_err(|e| CoreError::Generic(format!("Failed to load TLS config: {e}")))?;
 
-        // Set ALPN for DoQ (RFC 9250)
         tls_config.alpn_protocols = vec![b"doq".to_vec()];
 
         let mut transport_config = TransportConfig::default();
@@ -78,21 +75,16 @@ impl AsyncService for DoqService {
                                         debug!("DoQ connection closed: {}", e);
                                     }
                                 }
-                                Err(e) => {
-                                    debug!("DoQ handshake failed: {}", e);
-                                }
+                                Err(e) => { debug!("DoQ handshake failed: {}", e); }
                             }
                         });
                     }
                 }
                 _ = rx.recv() => {
-                    if !self.ctx.is_running() {
-                        break;
-                    }
+                    if !self.ctx.is_running() { break; }
                 }
             }
         }
-
         Ok(())
     }
 }
@@ -102,53 +94,40 @@ async fn handle_doq_connection(
     ctx: LanforgeContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let peer = connection.remote_address();
+    let dns_ctx_any = ctx.get_dns_context().ok_or("DNS engine not ready")?;
+    let _ = dns_ctx_any.downcast_ref::<DnsContext>().ok_or("Invalid DNS context")?;
 
     loop {
-        // RFC 9250: Each DNS message SHOULD be sent on a separate QUIC stream.
-        // We support both bidirectional and unidirectional streams, but
-        // bidirectional is the standard way to get a response back.
         match connection.accept_bi().await {
             Ok((mut send, mut recv)) => {
-                let ctx_inner = ctx.clone();
+                // Actually dns_ctx is Arc-wrapped inside LanforgeContext anyway if we downcast properly.
+                // Wait, get_dns_context() returns Arc<dyn Any + Send + Sync>.
+                // So we can clone the Arc.
+                let dns_ctx_arc = dns_ctx_any.clone().downcast::<DnsContext>().map_err(|_| "Downcast failed")?;
+
                 tokio::spawn(async move {
-                    // DNS queries are small, 4KB is plenty
                     let query_buf = match recv.read_to_end(4096).await {
                         Ok(buf) => buf,
-                        Err(e) => {
-                            debug!("DoQ stream read error: {}", e);
-                            return;
-                        }
+                        Err(e) => { debug!("DoQ stream read error: {}", e); return; }
                     };
+                    if query_buf.is_empty() { return; }
 
-                    if query_buf.is_empty() {
-                        return;
-                    }
-
-                    let Some(dns_ctx_any) = ctx_inner.get_dns_context() else {
-                        return;
-                    };
-                    let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
-                        return;
-                    };
+                    let header = match WireHeader::parse(&query_buf) { Some(h) => h, None => return };
+                    let question = match WireQuestion::parse(&query_buf) { Some(q) => q, None => return };
 
                     let mut resp_buf = Vec::with_capacity(512);
-                    match process_query(&query_buf, dns_ctx, peer.ip(), &mut resp_buf).await {
-                        Ok(true) => {
-                            if let Err(e) = send.write_all(&resp_buf).await {
-                                debug!("DoQ stream write error: {}", e);
+                    match dns_ctx_arc.pipeline.run(&dns_ctx_arc, &query_buf, &header, &question, peer.ip(), &mut resp_buf).await {
+                        Ok(()) => {
+                            if !resp_buf.is_empty() {
+                                if let Err(e) = send.write_all(&resp_buf).await { debug!("DoQ stream write error: {}", e); }
+                                let _ = send.finish();
                             }
-                            let _ = send.finish();
                         }
-                        Ok(false) => {}
-                        Err(e) => {
-                            debug!("DoQ process_query error: {}", e);
-                        }
+                        Err(e) => { debug!("DoQ pipeline error: {}", e); }
                     }
                 });
             }
-            Err(e) => {
-                return Err(e.into());
-            }
+            Err(e) => { return Err(e.into()); }
         }
     }
 }

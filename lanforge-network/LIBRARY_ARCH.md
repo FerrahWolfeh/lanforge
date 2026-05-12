@@ -18,7 +18,7 @@ This crate is the networking engine of Lanforge. It manages every aspect of LAN 
 | `rtnetlink` | Netlink RTNL for interface queries, neighbor events |
 | `roaring` | Efficient IPv4 address pool tracking (`RoaringBitmap`) |
 | `socket2` | Low-level socket configuration (`SO_BINDTODEVICE`, raw ICMPv6) |
-| `hickory-proto` | mDNS message types (via `Message`, `Query`, `RData`) |
+| `lanforge-dns` | Native DNS wire parser and message types |
 | `lanforge-core` | `LanforgeContext`, `EventBus`, `DeviceUpdate`, service traits |
 | `tokio` | Async runtime, `AsyncFd`, `select!`, `spawn_blocking` |
 | `tracing` | Diagnostic logging |

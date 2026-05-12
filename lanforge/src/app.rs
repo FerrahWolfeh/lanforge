@@ -11,11 +11,11 @@ use crate::event_loop::{LoopResult, run_event_loop};
 use crate::registry::ServiceRegistry;
 use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
+use lanforge_dns::DnsService;
 #[cfg(feature = "doq")]
 use lanforge_dns::DoqService;
 #[cfg(feature = "dot")]
 use lanforge_dns::DotService;
-use lanforge_dns::server::DnsService;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
 use lanforge_network::dhcp::v4::Dhcpv4Service;
@@ -188,6 +188,7 @@ impl Daemon {
 
             #[cfg(feature = "doq")]
             async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.doq_enabled => DoqService::new(Arc::new(cfg.to_dns_config()), ctx),
+
             async [ctx, cfg] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
 
             #[cfg(feature = "http")]

@@ -182,15 +182,15 @@ fn render_dns_stats(f: &mut Frame, area: Rect, state: &TuiState) {
                 ])
             };
 
-            let lines = vec![
-                render_stat("Total Queries:", ds.total_requests),
-                render_stat("Cache Hits:", ds.cache_hits),
-                render_stat("Cache Misses:", ds.cache_misses),
-                render_stat("Blocked:", ds.blocked_queries),
-                render_stat("Auth Queries:", ds.auth_queries),
-                render_stat("Recursions:", ds.recursions),
-            ];
-            Paragraph::new(lines)
+            Paragraph::new(vec![
+                render_stat("Requests", ds.total_requests),
+                render_stat("Cache Hits", ds.cache_hits),
+                render_stat("Cache Misses", ds.cache_misses),
+                render_stat("Upstream Errs", ds.upstream_errors),
+                render_stat("Blocked", ds.blocked_queries),
+                render_stat("Resolved", ds.resolved_total),
+                render_stat("Failed", ds.failed_total),
+            ])
         },
     );
 

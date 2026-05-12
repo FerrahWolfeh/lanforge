@@ -20,14 +20,15 @@ use lanforge_core::types::{
 use lanforge_core::utils::auth::hash_password;
 use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
 use lanforge_db::log_engine::LogDb;
+use lanforge_dns::telemetry::DnsStats;
 use std::str::FromStr;
 
 use crate::api::{
     Capabilities, DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DhcpPoolEntry,
-    DhcpPoolsResponse, DnsCacheEntry, DnsCacheResponse, DnsQueryResponse, DnsStatsResponse,
-    Encoding, HostConfigEntry, HostsResponse, Ipv6Entry, LeaseEntry, LeaseInfo, LeaseKind,
-    LeasesResponse, NetworkStatus, ResourcesStatus, Response, ServicesStatus, SimpleSuccess,
-    StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse, DnsQueryLogResponse,
+    DhcpPoolsResponse, DnsCacheEntry, DnsCacheResponse, DnsQueryLogEntry, DnsQueryLogResponse,
+    DnsQueryResponse, DnsStatsResponse, Encoding, HostConfigEntry, HostsResponse, Ipv6Entry,
+    LeaseEntry, LeaseInfo, LeaseKind, LeasesResponse, NetworkStatus, ResourcesStatus, Response,
+    ServicesStatus, SimpleSuccess, StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse,
 };
 
 // Moved to lanforge-http
@@ -35,8 +36,7 @@ use crate::api::{
 use crate::api::Compression;
 use crate::server::ClientContext;
 
-use hickory_proto::rr::{Name, RecordType};
-use lanforge_dns::resolver::LocalResolver;
+use lanforge_core::types::DnsRecordType;
 use lanforge_dns::server::DnsContext;
 
 // ---------------------------------------------------------------------------
@@ -599,8 +599,6 @@ impl ClientContext {
 
     /// Snapshot of DNS resolver statistics.
     pub(crate) async fn handle_dns_stats(&self) -> Response {
-        use lanforge_dns::stats::DnsStats;
-
         if let Some(stats_any) = self.ctx.get_dns_stats()
             && let Some(stats) = stats_any.downcast_ref::<DnsStats>()
         {
@@ -615,6 +613,8 @@ impl ClientContext {
                 blocked_queries: stats.blocked_queries.load(Ordering::Relaxed),
                 #[cfg(not(feature = "adblock"))]
                 blocked_queries: 0,
+                resolved_total: stats.resolved_total.load(Ordering::Relaxed),
+                failed_total: stats.failed_total.load(Ordering::Relaxed),
             });
         }
 
@@ -626,6 +626,8 @@ impl ClientContext {
             auth_queries: 0,
             recursions: 0,
             blocked_queries: 0,
+            resolved_total: 0,
+            failed_total: 0,
         })
     }
 
@@ -637,7 +639,7 @@ impl ClientContext {
             && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
         {
             return Response::DnsUpstreams(DnsUpstreamsResponse {
-                upstreams: dns_ctx.upstream_strategy.snapshots(),
+                upstreams: dns_ctx.recursive.snapshots(),
             });
         }
 
@@ -686,7 +688,10 @@ impl ClientContext {
     /// Triggers a reload of DNS blocklists.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
-        let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::AdblockReload));
         Response::Success(SimpleSuccess {
             message: "Adblock reload triggered".to_string(),
         })
@@ -708,7 +713,7 @@ impl ClientContext {
                 error: "Invalid DNS context".into(),
             };
         };
-        let Some(adblocker) = &dns_ctx.adblocker else {
+        let Some(adblocker) = &dns_ctx.filter else {
             return Response::Error {
                 error: "Adblocker is not enabled in this build".into(),
             };
@@ -718,11 +723,7 @@ impl ClientContext {
             enabled: adblocker.is_enabled(),
             disabled_until: {
                 let until = adblocker.timer.disabled_until.load(Ordering::Relaxed);
-                if until == 0 {
-                    None
-                } else {
-                    Some(until)
-                }
+                if until == 0 { None } else { Some(until) }
             },
             remaining_secs: adblocker.timer.remaining_secs(),
             blocklist_size: adblocker.blocklist_size(),
@@ -774,20 +775,57 @@ impl ClientContext {
             };
         };
 
-        dns_ctx.query_log.as_ref().map_or_else(
-            || {
-                Response::Error {
-                    error: "Query logging is disabled".into(),
+        let mut entries = if let Ok(db) = LogDb::open(&self.cfg.log_db_url).await {
+            db.get_dns_query_history(limit).await.unwrap_or_else(|_| {
+                dns_ctx
+                    .query_log
+                    .as_ref()
+                    .map_or_else(Vec::new, |log| log.get_recent(limit))
+            })
+        } else {
+            dns_ctx
+                .query_log
+                .as_ref()
+                .map_or_else(Vec::new, |log| log.get_recent(limit))
+        };
+
+        if let Some(client_ip) = client_filter {
+            entries.retain(|e| e.src_ip == client_ip);
+        }
+
+        let state = self.ctx.read();
+        let detailed_entries = entries
+            .into_iter()
+            .map(|e| {
+                let hostname = state
+                    .get_mac_by_ip(e.src_ip)
+                    .and_then(|mac| state.devices.get(&mac))
+                    .and_then(|dev| {
+                        if dev.hostname.name.is_empty() {
+                            None
+                        } else {
+                            Some(dev.hostname.name.clone())
+                        }
+                    });
+
+                DnsQueryLogEntry {
+                    timestamp: e.timestamp,
+                    src_ip: e.src_ip.to_string(),
+                    src_mac: e.src_mac.map(|m| m.to_string()),
+                    src_hostname: hostname,
+                    domain: e.domain.to_string(),
+                    qtype: format!("{:?}", e.qtype),
+                    result: format!("{:?}", e.result),
+                    upstream_us: e.upstream_us,
+                    cached: e.cached,
+                    answer: e.answer,
                 }
-            },
-            |log| {
-                let mut entries = log.get_recent(limit);
-                if let Some(client_ip) = client_filter {
-                    entries.retain(|e| e.src_ip == client_ip);
-                }
-                Response::DnsQueryLog(DnsQueryLogResponse { entries })
-            },
-        )
+            })
+            .collect();
+
+        Response::DnsQueryLog(DnsQueryLogResponse {
+            entries: detailed_entries,
+        })
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -842,31 +880,27 @@ impl ClientContext {
 
         let start = Instant::now();
         let rtype = record_type
-            .and_then(|s| RecordType::from_str(&s).ok())
-            .unwrap_or(RecordType::A);
+            .and_then(|s| s.parse::<DnsRecordType>().ok())
+            .unwrap_or(DnsRecordType::A);
 
-        let resolver = LocalResolver::new(&dns_ctx.cfg, &dns_ctx.ctx);
-        let results = if rtype == RecordType::PTR {
-            Name::from_str(&name).map_or_else(
-                |_| Vec::new(),
-                |ptr_name| {
-                    resolver
-                        .resolve_ptr(&ptr_name)
-                        .ok()
-                        .flatten()
-                        .map(|(h, d)| {
-                            vec![DnsRecordEntry {
-                                name: name.clone(),
-                                kind: "PTR".to_string(),
-                                data: format!("{h}.{d}"),
-                                ttl: dns_ctx.cfg.ttl,
-                            }]
-                        })
-                        .unwrap_or_default()
-                },
-            )
+        let results = if rtype == DnsRecordType::PTR {
+            dns_ctx
+                .local
+                .resolve_ptr(&name)
+                .ok()
+                .flatten()
+                .map(|(h, d)| {
+                    vec![DnsRecordEntry {
+                        name: name.clone(),
+                        kind: "PTR".to_string(),
+                        data: format!("{h}.{d}"),
+                        ttl: dns_ctx.cfg.ttl,
+                    }]
+                })
+                .unwrap_or_default()
         } else {
-            resolver
+            dns_ctx
+                .local
                 .resolve_ip(&name, rtype)
                 .map(|ips| {
                     ips.iter()
@@ -1385,7 +1419,7 @@ impl ClientContext {
         };
 
         let mut entries = Vec::new();
-        for upstream in &dns_ctx.upstreams {
+        for upstream in &dns_ctx.recursive.upstreams {
             let dump = upstream.cache.dump();
             for (name, kind, data, expires_in_secs) in dump {
                 entries.push(DnsCacheEntry {

@@ -9,14 +9,11 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
 use crate::error::DnsError;
 
-/// Shared TLS acceptor for HTTP and DNS-over-TLS.
 pub struct TlsAcceptor {
     pub config: Arc<ServerConfig>,
 }
 
-/// Loads a TLS configuration from either filesystem paths or raw PEM strings.
 pub fn load_tls_config(cert_input: &str, key_input: &str) -> Result<ServerConfig, DnsError> {
-    // Initialize the default crypto provider (Ring)
     let _ = ring::default_provider().install_default();
 
     let certs = load_certs(cert_input)?;

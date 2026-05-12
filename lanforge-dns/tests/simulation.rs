@@ -1,14 +1,15 @@
-use hickory_proto::op::{Message, Query, ResponseCode};
-use hickory_proto::rr::{Name, RData, RecordType};
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::types::{
+    DeviceUpdate, DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
+    MacAddr,
+};
 use lanforge_dns::DnsService;
 use lanforge_dns::config::{DnsConfig, PrioritizedUpstream};
-use lanforge_core::types::{DeviceUpdate, MacAddr};
+use lanforge_dns::wire::{WireDecoder, WireEncoder};
 use std::net::Ipv4Addr;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -20,7 +21,7 @@ fn init_test_context() -> LanforgeContext {
 }
 
 #[tokio::test]
-async fn test_dns_simulation_udp() {
+async fn dns_simulation_udp() {
     let ctx = init_test_context();
 
     // 1. Setup Config
@@ -30,8 +31,6 @@ async fn test_dns_simulation_udp() {
         search_domains: vec!["lan".to_string()],
         ..Default::default()
     };
-
-    // Default multi_search_labels is [[b"lan"]]
 
     // 2. Register a device for local resolution
     let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
@@ -71,13 +70,17 @@ async fn test_dns_simulation_udp() {
     let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
     client_sock.connect("127.0.0.1:1053").await.unwrap();
 
-    let mut query = Message::query();
-    query.metadata.id = 1234;
-    query.add_query(Query::query(
-        Name::from_str("my-device.lan.").unwrap(),
-        RecordType::A,
-    ));
-    let query_bytes = query.to_vec().unwrap();
+    let mut query = DnsMessage::new();
+    query.header.id = 1234;
+    query.header.qdcount = 1;
+    query.questions.push(DnsQuestion {
+        name: Arc::from("my-device.lan"),
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+
+    let mut encoder = WireEncoder::new();
+    let query_bytes = encoder.encode_message(&query);
 
     client_sock.send(&query_bytes).await.unwrap();
 
@@ -87,19 +90,20 @@ async fn test_dns_simulation_udp() {
         .expect("Timeout waiting for DNS response")
         .expect("Recv failed");
 
-    let response = Message::from_vec(&buf[..n]).unwrap();
+    let mut decoder = WireDecoder::new(&buf[..n]);
+    let response = decoder.decode_message().unwrap();
 
     // 5. Verify Response
-    assert_eq!(response.metadata.id, 1234);
-    assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+    assert_eq!(response.header.id, 1234);
+    assert_eq!(response.header.rcode, DnsResponseCode::NoError);
 
     assert!(!response.answers.is_empty(), "No answers in response");
 
     let answer = &response.answers[0];
-    if let RData::A(rdata) = &answer.data {
-        assert_eq!(u32::from(rdata.0), u32::from(ip));
+    if let DnsRData::A(rdata_ip) = &answer.rdata {
+        assert_eq!(*rdata_ip, ip);
     } else {
-        panic!("Wrong RData type: {:?}", answer.data);
+        panic!("Wrong RData type: {:?}", answer.rdata);
     }
 
     // Cleanup: Shutdown context
@@ -107,7 +111,7 @@ async fn test_dns_simulation_udp() {
 }
 
 #[tokio::test]
-async fn test_dns_simulation_upstream() {
+async fn dns_simulation_upstream() {
     let ctx = init_test_context();
 
     // 1. Setup Config with multiple upstreams
@@ -159,13 +163,17 @@ async fn test_dns_simulation_upstream() {
     let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
     client_sock.connect("127.0.0.1:1054").await.unwrap();
 
-    let mut query = Message::query();
-    query.metadata.id = 5678;
-    query.add_query(Query::query(
-        Name::from_str("google.com.").unwrap(),
-        RecordType::A,
-    ));
-    let query_bytes = query.to_vec().unwrap();
+    let mut query = DnsMessage::new();
+    query.header.id = 5678;
+    query.header.qdcount = 1;
+    query.questions.push(DnsQuestion {
+        name: Arc::from("google.com"),
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+
+    let mut encoder = WireEncoder::new();
+    let query_bytes = encoder.encode_message(&query);
 
     client_sock.send(&query_bytes).await.unwrap();
 
@@ -175,11 +183,12 @@ async fn test_dns_simulation_upstream() {
         .expect("Timeout waiting for upstream DNS response")
         .expect("Recv failed");
 
-    let response = Message::from_vec(&buf[..n]).unwrap();
+    let mut decoder = WireDecoder::new(&buf[..n]);
+    let response = decoder.decode_message().unwrap();
 
     // 4. Verify Response
-    assert_eq!(response.metadata.id, 5678);
-    assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+    assert_eq!(response.header.id, 5678);
+    assert_eq!(response.header.rcode, DnsResponseCode::NoError);
     assert!(!response.answers.is_empty(), "No answers for google.com");
 
     ctx.terminate();

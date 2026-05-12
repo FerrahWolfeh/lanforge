@@ -32,9 +32,7 @@ futures = "0.3.32"
 rand = "0.10.1"
 libc = "0.2.183"
 hex = "0.4.3"
-hickory-proto = { version = "0.26.1", features = [
-    "mdns",
-], default-features = false }
+lanforge-dns = { path = "../lanforge-dns" }
 roaring = "0.11.3"
 hotpath = { workspace = true, optional = true }
 

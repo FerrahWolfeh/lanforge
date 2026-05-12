@@ -1,96 +1,66 @@
 //! DNS service statistics using atomic counters.
-//!
-//! Provides lock-free counters for tracking requests, cache hits/misses,
-//! upstream errors, authoritative queries, and recursive forwarding.
-//! Designed for zero-lock performance in the DNS hot path.
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Atomic counters for DNS service metrics.
-///
-/// All counters use `Relaxed` ordering since exact precision is not required
-/// for statistics — only eventual consistency matters.
 #[derive(Debug)]
 pub struct DnsStats {
-    /// Total number of DNS queries received.
     pub requests_total: AtomicU64,
-    /// Number of queries answered from the upstream cache.
     pub cache_hits: AtomicU64,
-    /// Number of queries that required upstream forwarding.
     pub cache_misses: AtomicU64,
-    /// Number of errors returned from the upstream resolver.
     pub upstream_errors: AtomicU64,
-    /// Number of queries answered authoritatively from local state.
     pub auth_queries: AtomicU64,
-    /// Number of queries forwarded recursively to upstream.
     pub recursions: AtomicU64,
-    /// Number of queries blocked by the adblocker.
+    pub resolved_total: AtomicU64,
+    pub failed_total: AtomicU64,
     #[cfg(feature = "adblock")]
     pub blocked_queries: AtomicU64,
 }
 
 impl DnsStats {
-    /// Creates a new stats instance with all counters at zero.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Increments the total request counter.
     pub fn inc_requests(&self) {
         self.requests_total.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "hotpath")]
-        hotpath::gauge!("dns_requests_total").inc(1.0);
     }
 
-    /// Increments the cache hit counter.
     pub fn inc_cache_hit(&self) {
         self.cache_hits.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "hotpath")]
-        hotpath::gauge!("dns_cache_hits").inc(1.0);
     }
 
-    /// Increments the cache miss counter.
     pub fn inc_cache_miss(&self) {
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "hotpath")]
-        hotpath::gauge!("dns_cache_misses").inc(1.0);
     }
 
-    /// Increments the upstream error counter.
     pub fn inc_upstream_error(&self) {
         self.upstream_errors.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "hotpath")]
-        hotpath::gauge!("dns_upstream_errors").inc(1.0);
     }
 
-    /// Increments the authoritative query counter.
     pub fn inc_auth(&self) {
         self.auth_queries.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "hotpath")]
-        hotpath::gauge!("dns_auth_queries").inc(1.0);
     }
 
-    /// Increments the recursive forwarding counter.
     pub fn inc_recursive(&self) {
         self.recursions.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "hotpath")]
-        hotpath::gauge!("dns_recursive_queries").inc(1.0);
     }
 
-    /// Increments the blocked query counter.
+    pub fn inc_resolved(&self) {
+        self.resolved_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_failed(&self) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     #[cfg(feature = "adblock")]
     pub fn inc_blocked(&self) {
         self.blocked_queries.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "hotpath")]
-        hotpath::gauge!("dns_blocked_queries").inc(1.0);
     }
 
-    /// Captures a point-in-time snapshot of all counters.
-    ///
-    /// The returned `DnsStatsSnapshot` is safe to serialize and report
-    /// via the API or CLI.
     pub fn snapshot(&self) -> DnsStatsSnapshot {
         DnsStatsSnapshot {
             requests_total: self.requests_total.load(Ordering::Relaxed),
@@ -99,30 +69,24 @@ impl DnsStats {
             upstream_errors: self.upstream_errors.load(Ordering::Relaxed),
             auth_queries: self.auth_queries.load(Ordering::Relaxed),
             recursions: self.recursions.load(Ordering::Relaxed),
+            resolved_total: self.resolved_total.load(Ordering::Relaxed),
+            failed_total: self.failed_total.load(Ordering::Relaxed),
             #[cfg(feature = "adblock")]
             blocked_queries: self.blocked_queries.load(Ordering::Relaxed),
         }
     }
 }
 
-/// A non-atomic snapshot of DNS statistics for reporting.
-///
-/// Suitable for JSON serialization via the API/CLI.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DnsStatsSnapshot {
-    /// Total number of DNS queries received.
     pub requests_total: u64,
-    /// Number of queries answered from the upstream cache.
     pub cache_hits: u64,
-    /// Number of queries that required upstream forwarding.
     pub cache_misses: u64,
-    /// Number of errors from the upstream resolver.
     pub upstream_errors: u64,
-    /// Number of queries answered authoritatively from local state.
     pub auth_queries: u64,
-    /// Number of queries forwarded recursively.
     pub recursions: u64,
-    /// Number of queries blocked by the adblocker.
+    pub resolved_total: u64,
+    pub failed_total: u64,
     #[cfg(feature = "adblock")]
     pub blocked_queries: u64,
 }
@@ -136,6 +100,8 @@ impl Default for DnsStats {
             upstream_errors: AtomicU64::new(0),
             auth_queries: AtomicU64::new(0),
             recursions: AtomicU64::new(0),
+            resolved_total: AtomicU64::new(0),
+            failed_total: AtomicU64::new(0),
             #[cfg(feature = "adblock")]
             blocked_queries: AtomicU64::new(0),
         }

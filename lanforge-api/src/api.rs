@@ -710,6 +710,10 @@ pub struct DnsStatsResponse {
     pub recursions: u64,
     /// Number of queries blocked by the adblocker.
     pub blocked_queries: u64,
+    /// Number of queries successfully resolved.
+    pub resolved_total: u64,
+    /// Number of queries that failed to resolve.
+    pub failed_total: u64,
 }
 
 /// A response containing status for all configured DNS upstreams.
@@ -759,10 +763,25 @@ pub struct DnsCacheEntry {
     pub expires_in_secs: u64,
 }
 
+/// A single entry in the detailed DNS query log.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsQueryLogEntry {
+    pub timestamp: u64,
+    pub src_ip: String,
+    pub src_mac: Option<String>,
+    pub src_hostname: Option<String>,
+    pub domain: String,
+    pub qtype: String,
+    pub result: String,
+    pub upstream_us: u32,
+    pub cached: bool,
+    pub answer: Option<String>,
+}
+
 /// A response containing recent DNS query logs.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsQueryLogResponse {
-    pub entries: Vec<lanforge_core::types::network::QueryLogEntry>,
+    pub entries: Vec<DnsQueryLogEntry>,
 }
 
 /// Detailed status of the DNS adblocker.

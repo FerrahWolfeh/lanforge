@@ -4,7 +4,7 @@
 //! DNS service, including listen address, upstream resolver, search domains,
 //! and IPv6 prefix settings.
 
-use crate::strategy::UpstreamMode;
+use crate::resolver::recursive::UpstreamMode;
 use lanforge_macros::ServiceConfig;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -298,7 +298,9 @@ pub struct DnsConfig {
     /// Whether the micro-adblocker is enabled.
     pub adblock_enabled: bool,
     /// List of URLs to fetch blocklists from.
-    pub adblock_urls: Vec<String>,
+    pub adblock_sources: Vec<String>,
+    /// List of URLs to fetch allowlists from.
+    pub adblock_allowlist_urls: Vec<String>,
     /// How to respond to blocked queries.
     pub blocking_mode: BlockingMode,
     /// Custom IPv4 address for `BlockingMode::CustomIp`.
@@ -347,7 +349,8 @@ impl Default for DnsConfig {
             ttl: 60,
             multi_search_labels: vec![vec![b"lan".to_vec()]],
             adblock_enabled: false,
-            adblock_urls: Vec::new(),
+            adblock_sources: Vec::new(),
+            adblock_allowlist_urls: Vec::new(),
             blocking_mode: BlockingMode::default(),
             blocking_ip_v4: None,
             blocking_ip_v6: None,

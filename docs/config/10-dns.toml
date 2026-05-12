@@ -73,3 +73,11 @@ dot_listen = "0.0.0.0:853"
 doq_enabled = false
 doq_listen = "0.0.0.0:853"
 # Both DoT and DoQ share the same tls_cert and tls_key.
+
+# --- Query Logging ---
+# Tracks query outcomes and provides metrics for the CLI/UI.
+[dns.query_log]
+enabled = true
+ring_size = 1000
+persist = false      # If true, queries are saved to the long-term DB
+retention_hours = 168 # 7 days

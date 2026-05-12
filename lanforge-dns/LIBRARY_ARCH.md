@@ -10,11 +10,8 @@ High-performance authoritative LAN DNS server for the Lanforge daemon. Features 
 
 ### Dependencies
 
-| Crate | Usage |
-| :--- | :--- |
-| `hickory-proto` | DNS message types, binary serialization (no server runtime) |
-| `moka` (sync) | Synchronous response cache with TTL-based expiry |
 | `lanforge-core` | `LanforgeContext` for device lookup, `EventBus`, service traits |
+| `moka` (sync) | Synchronous response cache with TTL-based expiry |
 | `tokio` | UDP/TCP listeners, oneshot channels, timeouts |
 | `tracing` | Diagnostic logging |
 | `thiserror` | `DnsError` |
@@ -74,7 +71,7 @@ sequenceDiagram
     WH-->>UDP: Valid header
     UDP->>WQ: WireQuestion::parse(data)
     alt pointers found (complex)
-        WQ-->>UDP: None → handle_query_fallback (full Hickory parse)
+        WQ-->>UDP: None → DnsError::WireParseError
     end
 
     WQ-->>UDP: QNAME, QTYPE
@@ -143,9 +140,7 @@ The `wire/` module replaces full Hickory Message parsing for initial routing dec
 | `qdcount()` | Number of questions (bytes 4-5) | O(1) |
 | `arcount()` | Number of additional records (bytes 10-11) | O(1) |
 
-### `WireQuestion` — QNAME Without Pointer Following
-
-Parses the question section by iterating raw labels. If a name compression pointer (`0xC0` prefix) is encountered, it returns `None` — signaling fallback to the full Hickory parser.
+Parses the question section by iterating raw labels. If a name compression pointer (`0xC0` prefix) is encountered, it returns `None` — signaling an error or fallback to the full `WireDecoder`.
 
 ```
  QNAME: [len4]host[len3]lan[0x00]  →  WireLabelIter → [b"host", b"lan"]
@@ -288,15 +283,15 @@ When the upstream UDP response has the TC (truncated) flag set, the manager fall
 | **TTL range** | Clamped to 5-3600 seconds |
 | **Cache hit** | Clone bytes, patch query ID (bytes 0-1), return |
 
-**Why store raw bytes?** Avoids re-serializing the response on every cache hit. Cloning ~100 bytes is far faster than re-parsing + re-building a Hickory `Message`.
+**Why store raw bytes?** Avoids re-serializing the response on every cache hit. Cloning ~100 bytes is far faster than full message re-parsing.
 
 ---
 
 ## Response Construction
 
-### `ResponseBuilder` — Hickory-Based Message Builder
+### `ResponseBuilder` — Native Message Builder
 
-While the wire parser handles queries, responses are built using Hickory-DNS `Message` for correctness:
+Responses are built using `DnsMessage` and `WireEncoder` for correctness and efficiency:
 
 | Method | Purpose |
 | :--- | :--- |
@@ -433,7 +428,7 @@ The stats are attached to the `LanforgeContext` via `ctx.set_dns_stats()` during
 | Wire parse + local hit | 0 (query) + 1 (response Vec) | <10 μs |
 | Wire parse + cache hit | 1 (clone cached Vec) | <5 μs |
 | Wire parse + upstream miss | 1 (Vec) + network RTT | ~1-50 ms |
-| Full Hickory fallback + local | 3+ (Name parsing) | <50 μs |
+| Full fallback + local | 2+ (Name parsing) | <30 μs |
 | TCP fallback | 2 (Vec allocations) | ~10-100 ms |
 
 ---
@@ -445,7 +440,7 @@ The stats are attached to the `LanforgeContext` via `ctx.set_dns_stats()` during
 | Variant | Source | Recoverable? |
 | :--- | :--- | :---: |
 | `Io` | Socket read/write | Depends |
-| `Protocol` | Hickory-DNS encoding/decoding | ❌ |
+| `Protocol` | DNS encoding/decoding errors | ❌ |
 | `UdpDecode` / `TcpDecode` | Corrupt upstream response | ✅ (retry next query) |
 | `UdpEncode` / `TcpEncode` | Response serialization failure | ❌ |
 | `UpstreamTimeout` | 3s UDP or 5s TCP timeout | ✅ (retry next query) |

@@ -1,38 +1,28 @@
+use crate::config::RewriteAnswer;
 use crate::error::DnsError;
+use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter};
 use dashmap::DashMap;
-use hickory_proto::rr::RecordType;
+use lanforge_core::types::{DnsRecordType};
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tracing::{error, info};
+use tracing::{error, info, trace};
 
-/// In-memory DNS filtering engine.
-///
-/// Provides O(1) blocklist lookups and tracks per-IP blocking statistics.
-/// Supports transient disabling with automatic re-enabling after a duration.
 pub struct AdBlocker {
-    /// The actual set of blocked hostnames.
     blocklist: RwLock<Arc<HashSet<String>>>,
-    /// Domains that are never blocked.
     allowlist: RwLock<Arc<HashSet<String>>>,
-    /// Shared timer state for disabling/enabling.
     pub timer: Arc<AdblockTimerState>,
-    /// Manual DNS rewrite rules.
     pub rewrites: RwLock<Vec<crate::config::RewriteRule>>,
-    /// Per-IP blocking counters.
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
 }
 
-/// Shared atomic state for adblocker status and temporary disabling.
 pub struct AdblockTimerState {
-    /// Master switch for filtering.
     pub enabled: AtomicBool,
-    /// Unix timestamp when filtering should automatically re-enable (0 if no timer).
     pub disabled_until: AtomicU64,
 }
 
@@ -45,7 +35,6 @@ impl AdblockTimerState {
         }
     }
 
-    /// Returns the number of seconds remaining if a disable timer is active.
     #[must_use]
     pub fn remaining_secs(&self) -> Option<u64> {
         let until = self.disabled_until.load(Ordering::Relaxed);
@@ -61,7 +50,6 @@ impl AdblockTimerState {
 }
 
 impl AdBlocker {
-    /// Creates a new, initially empty and disabled adblocker.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -73,12 +61,10 @@ impl AdBlocker {
         }
     }
 
-    /// Returns true if filtering is currently active.
     pub fn is_enabled(&self) -> bool {
         self.timer.enabled.load(Ordering::Relaxed)
     }
 
-    /// Sets the enabled state.
     pub fn set_enabled(&self, enabled: bool) {
         self.timer.enabled.store(enabled, Ordering::Relaxed);
         if enabled {
@@ -86,23 +72,16 @@ impl AdBlocker {
         }
     }
 
-    /// Checks if a hostname (joined labels) should be blocked.
-    ///
-    /// Supports wildcards via parent-domain walk and allowlist overrides.
     pub fn should_block(&self, qname: &str) -> bool {
         if !self.is_enabled() {
             return false;
         }
-
-        // 1. Check allowlist (exact or parent)
         {
             let allow = self.allowlist.read();
             if Self::match_recursive(&allow, qname) {
                 return false;
             }
         }
-
-        // 2. Check blocklist (exact or parent)
         let block = self.blocklist.read();
         Self::match_recursive(&block, qname)
     }
@@ -111,7 +90,6 @@ impl AdBlocker {
         if set.contains(qname) {
             return true;
         }
-
         let mut current = qname;
         while let Some(pos) = current.find('.') {
             current = &current[pos + 1..];
@@ -125,7 +103,6 @@ impl AdBlocker {
         false
     }
 
-    /// Increments the block counter for a specific source IP.
     pub fn inc_ip_stats(&self, ip: IpAddr) {
         self.per_ip_stats
             .entry(ip)
@@ -133,21 +110,18 @@ impl AdBlocker {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Replaces the current blocklist with a new one.
     pub fn replace_blocklist(&self, new_list: HashSet<String>) {
         let count = new_list.len();
         *self.blocklist.write() = Arc::new(new_list);
         info!("AdBlocker: blocklist updated with {} entries", count);
     }
 
-    /// Replaces the current allowlist with a new one.
     pub fn replace_allowlist(&self, new_list: HashSet<String>) {
         let count = new_list.len();
         *self.allowlist.write() = Arc::new(new_list);
         info!("AdBlocker: allowlist updated with {} entries", count);
     }
 
-    /// Adds a single domain to the blocklist dynamically.
     pub fn add_block(&self, domain: &str) {
         let mut list = self.blocklist.write();
         let mut new_set = (**list).clone();
@@ -155,7 +129,6 @@ impl AdBlocker {
         *list = Arc::new(new_set);
     }
 
-    /// Adds a single domain to the allowlist dynamically.
     pub fn add_allow(&self, domain: &str) {
         let mut list = self.allowlist.write();
         let mut new_set = (**list).clone();
@@ -163,55 +136,52 @@ impl AdBlocker {
         *list = Arc::new(new_set);
     }
 
-    /// Returns the number of entries in the blocklist.
     #[must_use]
     pub fn blocklist_size(&self) -> usize {
         self.blocklist.read().len()
     }
 
-    /// Returns the number of entries in the allowlist.
     #[must_use]
     pub fn allowlist_size(&self) -> usize {
         self.allowlist.read().len()
     }
 
-    pub fn resolve_rewrite(&self, qname: &str) -> Option<crate::config::RewriteAnswer> {
+    pub fn resolve_rewrite(&self, qname: &str) -> Option<RewriteAnswer> {
         let rewrites = self.rewrites.read();
-
-        // 1. Try exact match first (qname is already lowercased by caller)
         if let Some(rule) = rewrites.iter().find(|r| r.domain == qname) {
             return Some(rule.parse_answer());
         }
-
-        // 2. Try explicit wildcard matches (*.domain.com)
         rewrites
             .iter()
             .find(|rule| {
                 if rule.domain.starts_with("*.") {
                     let base = &rule.domain[2..];
-                    // Matches "base.com" and any subdomain "sub.base.com"
                     qname == base || qname.ends_with(&format!(".{base}"))
                 } else {
                     false
                 }
             })
-            .map(super::config::RewriteRule::parse_answer)
+            .map(crate::config::RewriteRule::parse_answer)
     }
 
-    /// Downloads and parses blocklists from the provided URLs.
-    ///
-    /// This is a blocking operation intended to be run in a background task.
     pub fn load_from_urls(&self, urls: &[String]) -> Result<HashSet<String>, DnsError> {
         let mut new_list = HashSet::new();
         let agent = ureq::Agent::new_with_defaults();
+        let mut total_domains = 0;
+        let mut successful_urls = 0;
+
+        info!(
+            "🛡️ AdBlocker: Starting blocklist update from {} sources",
+            urls.len()
+        );
 
         for url in urls {
-            info!("AdBlocker: fetching blocklist from {}", url);
+            trace!("AdBlocker: fetching {}", url);
             match agent.get(url).call() {
                 Ok(resp) => {
                     if !resp.status().is_success() {
                         error!(
-                            "AdBlocker: failed to fetch {}: status {}",
+                            "❌ AdBlocker: source {} returned status {}",
                             url,
                             resp.status()
                         );
@@ -228,26 +198,31 @@ impl AdBlocker {
                         if trimmed.is_empty() || trimmed.starts_with('#') {
                             continue;
                         }
-
-                        // Handle formats like "0.0.0.0 domain.com" or symbol-prefixed domains
                         let domain = trimmed.split_whitespace().last().unwrap_or("");
                         if !domain.is_empty() {
                             new_list.insert(domain.to_ascii_lowercase());
                             line_count += 1;
                         }
                     }
-                    info!("AdBlocker: loaded {} domains from {}", line_count, url);
+                    info!("✅ AdBlocker: loaded {} domains from {}", line_count, url);
+                    total_domains += line_count;
+                    successful_urls += 1;
                 }
                 Err(e) => {
-                    error!("AdBlocker: failed to fetch {}: {}", url, e);
+                    error!("❌ AdBlocker: failed to fetch {}: {}", url, e);
                 }
             }
         }
-
+        info!(
+            "🎉 AdBlocker: Update complete. Total unique domains: {} (from {} total lines). Sources: {}/{}",
+            new_list.len(),
+            total_domains,
+            successful_urls,
+            urls.len()
+        );
         Ok(new_list)
     }
 
-    /// Attempts to resolve a rewrite rule and writes it to the response via wire formatting.
     pub fn try_resolve_rewrite_wire(
         &self,
         data: &[u8],
@@ -268,15 +243,15 @@ impl AdBlocker {
         header: &WireHeader,
         question: &WireQuestion<'_>,
         ctx: &DnsContext,
-        answer: crate::config::RewriteAnswer,
+        answer: RewriteAnswer,
         resp: &mut Vec<u8>,
     ) -> bool {
         let edns = WireOptScanner::scan(data, header, question);
-        let ra = !ctx.upstreams.is_empty();
-        let qtype = question.qtype();
+        let ra = !ctx.recursive.upstreams.is_empty();
+        let qtype = DnsRecordType::from(question.qtype());
 
         match answer {
-            crate::config::RewriteAnswer::A(ip) if qtype == 1 || qtype == 255 => {
+            RewriteAnswer::A(ip) if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY => {
                 WireResponseWriter::write_ip_response(
                     data,
                     question,
@@ -288,7 +263,9 @@ impl AdBlocker {
                 );
                 true
             }
-            crate::config::RewriteAnswer::Aaaa(ip) if qtype == 28 || qtype == 255 => {
+            RewriteAnswer::Aaaa(ip)
+                if qtype == DnsRecordType::AAAA || qtype == DnsRecordType::ANY =>
+            {
                 WireResponseWriter::write_ip_response(
                     data,
                     question,
@@ -300,7 +277,7 @@ impl AdBlocker {
                 );
                 true
             }
-            crate::config::RewriteAnswer::Cname(target) => {
+            RewriteAnswer::Cname(target) => {
                 WireResponseWriter::write_cname_response(
                     data,
                     question,
@@ -312,35 +289,31 @@ impl AdBlocker {
                 );
                 true
             }
-            crate::config::RewriteAnswer::Device(hostname) => {
-                let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &ctx.ctx);
-                resolver
-                    .resolve_ip(&hostname, RecordType::from(qtype))
-                    .is_some_and(|ips| {
-                        WireResponseWriter::write_ip_response(
-                            data,
-                            question,
-                            &ips,
-                            ctx.cfg.ttl,
-                            edns,
-                            ra,
-                            resp,
-                        );
-                        true
-                    })
+            RewriteAnswer::Device(hostname) => {
+                ctx.local.resolve_ip(&hostname, qtype).is_some_and(|ips| {
+                    WireResponseWriter::write_ip_response(
+                        data,
+                        question,
+                        &ips,
+                        ctx.cfg.ttl,
+                        edns,
+                        ra,
+                        resp,
+                    );
+                    true
+                })
             }
             _ => false,
         }
     }
 
-    /// Resolves rewrites in the fallback path.
     pub fn try_resolve_rewrite_fallback(
         &self,
         ctx: &DnsContext,
-        rb: &crate::response::ResponseBuilder,
-        qname: &hickory_proto::rr::Name,
-        qtype: RecordType,
-        src_addr: IpAddr,
+        rb: &ResponseBuilder,
+        qname: &str,
+        qtype: DnsRecordType,
+        _src_addr: IpAddr,
         resp: &mut Vec<u8>,
     ) -> Result<bool, DnsError> {
         let mut domain = qname.to_string();
@@ -351,66 +324,30 @@ impl AdBlocker {
 
         if let Some(answer) = self.resolve_rewrite(&domain) {
             match answer {
-                crate::config::RewriteAnswer::A(ip)
-                    if qtype == RecordType::A || qtype == RecordType::ANY =>
-                {
-                    ctx.stats.inc_auth();
+                RewriteAnswer::A(ip) if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY => {
                     resp.clear();
                     resp.extend_from_slice(&rb.success_ips([IpAddr::V4(ip)])?);
-                    ctx.record_log(
-                        src_addr,
-                        domain,
-                        qtype.into(),
-                        lanforge_core::types::network::QueryResult::Rewritten,
-                        0,
-                        false,
-                    );
                     return Ok(true);
                 }
-                crate::config::RewriteAnswer::Aaaa(ip)
-                    if qtype == RecordType::AAAA || qtype == RecordType::ANY =>
+                RewriteAnswer::Aaaa(ip)
+                    if qtype == DnsRecordType::AAAA || qtype == DnsRecordType::ANY =>
                 {
-                    ctx.stats.inc_auth();
                     resp.clear();
                     resp.extend_from_slice(&rb.success_ips([IpAddr::V6(ip)])?);
-                    ctx.record_log(
-                        src_addr,
-                        domain,
-                        qtype.into(),
-                        lanforge_core::types::network::QueryResult::Rewritten,
-                        0,
-                        false,
-                    );
                     return Ok(true);
                 }
-                crate::config::RewriteAnswer::Cname(target) => {
-                    ctx.stats.inc_auth();
+                RewriteAnswer::Cname(target) => {
                     resp.clear();
                     resp.extend_from_slice(&rb.success_cname(&target)?);
-                    ctx.record_log(
-                        src_addr,
-                        domain,
-                        qtype.into(),
-                        lanforge_core::types::network::QueryResult::Rewritten,
-                        0,
-                        false,
-                    );
                     return Ok(true);
                 }
-                crate::config::RewriteAnswer::Device(hostname) => {
-                    let resolver = crate::resolver::LocalResolver::new(&ctx.cfg, &ctx.ctx);
-                    if let Some(ips) = resolver.resolve_ip(&hostname, qtype) {
-                        ctx.stats.inc_auth();
+                RewriteAnswer::Device(hostname) => {
+                    if let Some(ips) = ctx
+                        .local
+                        .resolve_ip(&hostname, qtype)
+                    {
                         resp.clear();
                         resp.extend_from_slice(&rb.success_ips(ips)?);
-                        ctx.record_log(
-                            src_addr,
-                            domain,
-                            qtype.into(),
-                            lanforge_core::types::network::QueryResult::Rewritten,
-                            0,
-                            false,
-                        );
                         return Ok(true);
                     }
                 }
@@ -420,7 +357,6 @@ impl AdBlocker {
         Ok(false)
     }
 
-    /// Generates a blocking response using the zero-alloc wire builder.
     pub fn apply_adblock_wire(
         &self,
         data: &[u8],
@@ -437,23 +373,23 @@ impl AdBlocker {
                 WireResponseWriter::write_error_response(data, question, 3, edns, ra, resp);
             }
             crate::config::BlockingMode::NullIp => {
-                let ips = if question.qtype() == 28 {
+                let qtype = DnsRecordType::from(question.qtype());
+                let ips = if qtype == DnsRecordType::AAAA {
                     vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
                 } else {
-                    vec![IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)]
+                    vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)]
                 };
                 WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
             }
             crate::config::BlockingMode::CustomIp => {
-                let ips = if question.qtype() == 28 {
+                let qtype = DnsRecordType::from(question.qtype());
+                let ips = if qtype == DnsRecordType::AAAA {
                     vec![IpAddr::V6(
                         ctx.cfg.blocking_ip_v6.unwrap_or(Ipv6Addr::UNSPECIFIED),
                     )]
                 } else {
                     vec![IpAddr::V4(
-                        ctx.cfg
-                            .blocking_ip_v4
-                            .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
+                        ctx.cfg.blocking_ip_v4.unwrap_or(Ipv4Addr::UNSPECIFIED),
                     )]
                 };
                 WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
@@ -464,20 +400,18 @@ impl AdBlocker {
         }
     }
 
-    /// Fallback path blocking.
     pub fn apply_adblock_fallback(
         &self,
         ctx: &DnsContext,
-        rb: &crate::response::ResponseBuilder,
-        qname: &hickory_proto::rr::Name,
-        qtype: RecordType,
-        src_addr: IpAddr,
+        rb: &ResponseBuilder,
+        qname: &str,
+        qtype: DnsRecordType,
+        _src_addr: IpAddr,
         resp: &mut Vec<u8>,
     ) -> Result<bool, DnsError> {
         if !self.is_enabled() {
             return Ok(false);
         }
-
         let mut domain = qname.to_string();
         if domain.ends_with('.') {
             domain.pop();
@@ -485,17 +419,13 @@ impl AdBlocker {
         domain.make_ascii_lowercase();
 
         if self.should_block(&domain) {
-            ctx.stats.inc_blocked();
-            ctx.ctx.inc_dns_blocked();
-            self.inc_ip_stats(src_addr);
             resp.clear();
-
             match ctx.cfg.blocking_mode {
                 crate::config::BlockingMode::NxDomain => {
                     resp.extend_from_slice(&rb.nxdomain()?);
                 }
                 crate::config::BlockingMode::NullIp => {
-                    let ips = if qtype == RecordType::AAAA {
+                    let ips = if qtype == DnsRecordType::AAAA {
                         vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
                     } else {
                         vec![IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)]
@@ -503,7 +433,7 @@ impl AdBlocker {
                     resp.extend_from_slice(&rb.success_ips(ips)?);
                 }
                 crate::config::BlockingMode::CustomIp => {
-                    let ips = if qtype == RecordType::AAAA {
+                    let ips = if qtype == DnsRecordType::AAAA {
                         vec![IpAddr::V6(
                             ctx.cfg.blocking_ip_v6.unwrap_or(Ipv6Addr::UNSPECIFIED),
                         )]
@@ -520,15 +450,6 @@ impl AdBlocker {
                     resp.extend_from_slice(&rb.refused()?);
                 }
             }
-
-            ctx.record_log(
-                src_addr,
-                domain,
-                qtype.into(),
-                lanforge_core::types::network::QueryResult::Blocked,
-                0,
-                false,
-            );
             return Ok(true);
         }
         Ok(false)
@@ -541,9 +462,6 @@ impl Default for AdBlocker {
     }
 }
 
-/// Joins wire-format labels into a dot-separated domain string.
-///
-/// Performs a single allocation for the resulting string.
 #[must_use]
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn labels_to_domain(labels: WireLabelIter<'_>) -> String {
@@ -558,58 +476,4 @@ pub fn labels_to_domain(labels: WireLabelIter<'_>) -> String {
     }
     domain.make_ascii_lowercase();
     domain
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_adblock_basic() {
-        let adblock = AdBlocker::new();
-        let mut list = HashSet::new();
-        list.insert("doubleclick.net".to_string());
-        adblock.replace_blocklist(list);
-
-        // Initially disabled
-        assert!(!adblock.should_block("doubleclick.net"));
-
-        adblock.set_enabled(true);
-        assert!(adblock.should_block("doubleclick.net"));
-        assert!(!adblock.should_block("google.com"));
-    }
-
-    #[test]
-    fn test_adblock_wildcard() {
-        let adblock = AdBlocker::new();
-        adblock.set_enabled(true);
-        let mut list = HashSet::new();
-        list.insert("doubleclick.net".to_string());
-        adblock.replace_blocklist(list);
-
-        assert!(adblock.should_block("doubleclick.net"));
-        assert!(adblock.should_block("ads.doubleclick.net"));
-        assert!(adblock.should_block("very.deep.sub.ads.doubleclick.net"));
-        assert!(!adblock.should_block("notdoubleclick.net"));
-    }
-
-    #[test]
-    fn test_adblock_allowlist() {
-        let adblock = AdBlocker::new();
-        adblock.set_enabled(true);
-
-        let mut block = HashSet::new();
-        block.insert("doubleclick.net".to_string());
-        adblock.replace_blocklist(block);
-
-        let mut allow = HashSet::new();
-        allow.insert("safe.doubleclick.net".to_string());
-        adblock.replace_allowlist(allow);
-
-        assert!(adblock.should_block("doubleclick.net"));
-        assert!(adblock.should_block("ads.doubleclick.net"));
-        // Allowlist hit
-        assert!(!adblock.should_block("safe.doubleclick.net"));
-        assert!(!adblock.should_block("sub.safe.doubleclick.net"));
-    }
 }

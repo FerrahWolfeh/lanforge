@@ -1,54 +1,46 @@
 //! Local DNS resolver backed by the `LanforgeContext`.
-//!
-//! Resolves A, AAAA, ANY, and PTR queries by looking up devices in the
-//! shared `LanforgeContext`. No network I/O is performed — all data comes
-//! from the in-memory device state.
 
 use lanforge_core::types::Device;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use crate::config::DnsConfig;
 use crate::error::DnsError;
+use crate::resolver::builder::ResponseBuilder;
 use crate::utils::{
-    extract_local_hostname, extract_local_hostname_wire, parse_arpa, parse_arpa_wire,
+    extract_local_hostname, extract_local_hostname_wire, fast_lowercase, parse_arpa,
+    parse_arpa_wire,
 };
-use crate::wire::{
-    PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, WireResponseWriter, qtypes::QType,
-};
-use hickory_proto::rr::{Name, RData, Record, RecordType};
+use crate::wire::{PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::types::{DnsClass, DnsRecord, DnsRecordType, DnsRData};
 
 /// Resolves local DNS queries (A/AAAA/PTR) using the `LanforgeContext`.
-///
-/// This resolver performs authoritative resolution for hostnames in the
-/// configured search domain. It aggregates all known IP addresses for a
-/// device (IPv4, SLAAC, static V6 suffixes) into DNS records.
-pub struct LocalResolver<'a> {
-    cfg: &'a DnsConfig,
-    ctx: &'a LanforgeContext,
+pub struct LocalResolver {
+    pub cfg: Arc<DnsConfig>,
+    pub ctx: LanforgeContext,
 }
 
-impl<'a> LocalResolver<'a> {
-    /// Creates a new resolver bound to the given config and context.
+impl LocalResolver {
     #[must_use]
-    pub const fn new(cfg: &'a DnsConfig, ctx: &'a LanforgeContext) -> Self {
+    pub fn new(cfg: Arc<DnsConfig>, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
 
-    /// Resolves an A or AAAA query for the given hostname.
-    ///
-    /// Looks up the device by hostname and returns all matching IP addresses.
-    /// Returns `None` if the host is unknown.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     #[must_use]
-    pub fn resolve_ip(&self, hostname: &str, qtype: RecordType) -> Option<SmallVec<[IpAddr; 32]>> {
+    pub fn resolve_ip(
+        &self,
+        hostname: &str,
+        qtype: DnsRecordType,
+    ) -> Option<SmallVec<[IpAddr; 32]>> {
         if let Some(device) = self.ctx.get_by_hostname(hostname) {
             return self.collect_device_ips_filtered(&device, qtype);
         }
 
-        // JIT Shadow Lookup (Trace Back)
+        // JIT Shadow Lookup
         let threshold =
             std::time::Duration::from_secs(u64::from(self.cfg.last_seen_threshold_days) * 86400);
         if let Some(mac) = self.ctx.find_mac_by_hostname_jit(hostname, Some(threshold))
@@ -60,8 +52,7 @@ impl<'a> LocalResolver<'a> {
         None
     }
 
-    /// Resolves a reverse DNS (PTR) query for an IP address.
-    pub fn resolve_ptr(&self, qname: &Name) -> Result<Option<(String, String)>, DnsError> {
+    pub fn resolve_ptr(&self, qname: &str) -> Result<Option<(String, String)>, DnsError> {
         let Some(target_ip) = parse_arpa(qname) else {
             return Ok(None);
         };
@@ -74,9 +65,8 @@ impl<'a> LocalResolver<'a> {
         Ok(Some((host.into_owned(), domain.into_owned())))
     }
 
-    /// Internal helper to get PTR parts from a device without allocating if possible.
     #[must_use]
-    pub fn get_ptr_parts<'d>(&self, device: &'d Device) -> (Cow<'d, str>, Cow<'a, str>) {
+    pub fn get_ptr_parts<'d>(&self, device: &'d Device) -> (Cow<'d, str>, Cow<'_, str>) {
         let host = if device.hostname.name.is_empty() {
             Cow::Borrowed(device.dns_fallback.as_str())
         } else {
@@ -93,72 +83,73 @@ impl<'a> LocalResolver<'a> {
             .search_domains
             .first()
             .map_or("lan", |d| d.as_str());
-
         (host, Cow::Borrowed(domain))
     }
 
-    /// Internal helper to collect IPs filtered by query type.
     #[must_use]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn collect_device_ips_filtered(
         &self,
         device: &Device,
-        qtype: RecordType,
+        qtype: DnsRecordType,
     ) -> Option<SmallVec<[IpAddr; 32]>> {
-        if !matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
+        if !matches!(
+            qtype,
+            DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY
+        ) {
             return None;
         }
 
         let mut ips = self.collect_device_ips(device);
         ips.retain(|ip| match ip {
-            IpAddr::V4(_) => matches!(qtype, RecordType::A | RecordType::ANY),
-            IpAddr::V6(_) => matches!(qtype, RecordType::AAAA | RecordType::ANY),
+            IpAddr::V4(_) => matches!(qtype, DnsRecordType::A | DnsRecordType::ANY),
+            IpAddr::V6(_) => matches!(qtype, DnsRecordType::AAAA | DnsRecordType::ANY),
         });
 
         if ips.is_empty() { None } else { Some(ips) }
     }
 
-    /// Collects all IP addresses for a device and converts them to DNS records.
-    ///
-    /// Returns `None` if no addresses match the requested query type.
-    /// Resolves local records for a given name and type.
     #[must_use]
-    pub fn resolve_local(&self, qname: &Name, qtype: RecordType) -> Option<Vec<Record>> {
+    pub fn resolve_local(&self, qname: &str, qtype: DnsRecordType) -> Option<Vec<DnsRecord>> {
         let hostname = extract_local_hostname(qname, &self.cfg.multi_search_labels)?;
         let device = self.ctx.get_by_hostname(hostname)?;
         self.resolve_local_with_device(qname, &device, qtype)
     }
 
-    /// Internal helper to resolve records when the device is already known.
     #[must_use]
     pub fn resolve_local_with_device(
         &self,
-        qname: &Name,
+        qname: &str,
         device: &Device,
-        qtype: RecordType,
-    ) -> Option<Vec<Record>> {
-        if !matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
+        qtype: DnsRecordType,
+    ) -> Option<Vec<DnsRecord>> {
+        if !matches!(qtype, DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY) {
             return None;
         }
 
         let ips = self.collect_device_ips(device);
         let mut records = Vec::new();
+        let qname_arc: Arc<str> = Arc::from(qname);
 
         for ip in ips {
             match ip {
-                IpAddr::V4(v4) if matches!(qtype, RecordType::A | RecordType::ANY) => {
-                    records.push(Record::from_rdata(
-                        qname.clone(),
-                        self.cfg.ttl,
-                        RData::A(v4.into()),
-                    ));
+                IpAddr::V4(v4) if matches!(qtype, DnsRecordType::A | DnsRecordType::ANY) => {
+                    records.push(DnsRecord {
+                        name: qname_arc.clone(),
+                        rtype: DnsRecordType::A,
+                        rclass: DnsClass::IN,
+                        ttl: self.cfg.ttl,
+                        rdata: DnsRData::A(v4),
+                    });
                 }
-                IpAddr::V6(v6) if matches!(qtype, RecordType::AAAA | RecordType::ANY) => {
-                    records.push(Record::from_rdata(
-                        qname.clone(),
-                        self.cfg.ttl,
-                        RData::AAAA(v6.into()),
-                    ));
+                IpAddr::V6(v6) if matches!(qtype, DnsRecordType::AAAA | DnsRecordType::ANY) => {
+                    records.push(DnsRecord {
+                        name: qname_arc.clone(),
+                        rtype: DnsRecordType::AAAA,
+                        rclass: DnsClass::IN,
+                        ttl: self.cfg.ttl,
+                        rdata: DnsRData::AAAA(v6),
+                    });
                 }
                 _ => {}
             }
@@ -171,34 +162,17 @@ impl<'a> LocalResolver<'a> {
         }
     }
 
-    /// Collects and sorts all IP addresses for a device.
-    ///
-    /// Aggregates addresses from:
-    /// 1. Static IPv4/V6 reservations
-    /// 2. Dynamic DHCP leases
-    /// 3. SLAAC-observed addresses
-    /// 4. V6 suffixes combined with learned prefixes
-    ///
-    /// Results are sorted by priority (ULA first, then GUA, then IPv4)
-    /// and deduplicated. Falls back to configured prefixes if the system
-    /// hasn't learned interface prefixes yet (useful for tests).
     #[must_use]
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn collect_device_ips(&self, device: &Device) -> SmallVec<[IpAddr; 32]> {
         let (sys_gua, sys_ula) = self
             .ctx
             .target_ifindex()
             .map_or((None, None), |idx| self.ctx.get_interface_prefixes_opt(idx));
-
-        // Fallback to configured prefixes if system hasn't learned them yet
         let gua = sys_gua.or(self.cfg.gua_prefix);
         let ula = sys_ula.or(self.cfg.ula_prefix);
-
         device.all_addresses_sorted(gua, ula)
     }
 
-    /// Helper function for local resolution using wire-parsed data.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn resolve_local_wire(
         &self,
         data: &[u8],
@@ -207,20 +181,18 @@ impl<'a> LocalResolver<'a> {
         has_upstreams: bool,
         resp: &mut Vec<u8>,
     ) -> bool {
-        let raw_qtype = question.qtype();
-        let qtype = QType::from(raw_qtype);
+        let qtype = DnsRecordType::from(question.qtype());
 
         match qtype {
-            QType::A | QType::AAAA | QType::Any => {
+            DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY => {
                 let mut labels = question.labels();
                 if let Some(hostname_slice) =
                     extract_local_hostname_wire(&mut labels, &self.cfg.multi_search_labels)
                 {
-                    let safe_hostname = crate::utils::fast_lowercase(hostname_slice);
+                    let safe_hostname = fast_lowercase(hostname_slice);
                     let edns = WireOptScanner::scan(data, header, question);
 
-                    if let Some(ips) = self.resolve_ip(&safe_hostname, RecordType::from(raw_qtype))
-                    {
+                    if let Some(ips) = self.resolve_ip(&safe_hostname, qtype) {
                         WireResponseWriter::write_ip_response(
                             data,
                             question,
@@ -232,11 +204,20 @@ impl<'a> LocalResolver<'a> {
                         );
                         return true;
                     } else if self.ctx.get_by_hostname(&safe_hostname).is_some() {
-                        // Host exists but no records for type (NODATA)
                         WireResponseWriter::write_error_response(
                             data,
                             question,
-                            0, // NoError (but with 0 answers)
+                            0, // NOERROR (but no data)
+                            edns,
+                            has_upstreams,
+                            resp,
+                        );
+                        return true;
+                    } else {
+                        WireResponseWriter::write_error_response(
+                            data,
+                            question,
+                            3, // NXDOMAIN
                             edns,
                             has_upstreams,
                             resp,
@@ -245,7 +226,7 @@ impl<'a> LocalResolver<'a> {
                     }
                 }
             }
-            QType::PTR => {
+            DnsRecordType::PTR => {
                 if let Some(target_ip) = parse_arpa_wire(question.labels()) {
                     let edns = WireOptScanner::scan(data, header, question);
 
@@ -272,20 +253,21 @@ impl<'a> LocalResolver<'a> {
         false
     }
 
-    /// Helper for local resolution in the fallback path.
     pub fn resolve_local_fallback(
         &self,
-        rb: &crate::response::ResponseBuilder,
-        qname: &Name,
-        qtype: RecordType,
+        rb: &ResponseBuilder,
+        qname: &str,
+        qtype: DnsRecordType,
         resp: &mut Vec<u8>,
     ) -> Result<bool, DnsError> {
-        if matches!(qtype, RecordType::A | RecordType::AAAA | RecordType::ANY) {
+        if matches!(qtype, DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY) {
             if let Some(hostname_slice) =
                 extract_local_hostname(qname, &self.cfg.multi_search_labels)
             {
-                let safe_hostname = crate::utils::fast_lowercase(hostname_slice);
-                if let Some(ips) = self.resolve_ip(&safe_hostname, qtype) {
+                let safe_hostname = fast_lowercase(hostname_slice);
+                if let Some(ips) =
+                    self.resolve_ip(&safe_hostname, qtype)
+                {
                     resp.clear();
                     resp.extend_from_slice(&rb.success_ips(ips)?);
                     return Ok(true);
@@ -295,7 +277,7 @@ impl<'a> LocalResolver<'a> {
                     return Ok(true);
                 }
             }
-        } else if qtype == RecordType::PTR
+        } else if qtype == DnsRecordType::PTR
             && let Some((host, domain)) = self.resolve_ptr(qname)?
         {
             resp.clear();

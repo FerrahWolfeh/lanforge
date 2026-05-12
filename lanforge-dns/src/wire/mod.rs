@@ -3,9 +3,12 @@
 //! Replaces full Hickory Message parsing for local/upstream routing decisions.
 //! Optimized for performance by avoiding UTF-8 validation and heap allocations.
 
+use lanforge_core::types::{
+    DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
+    DnsResponseCode,
+};
 use std::net::IpAddr;
-
-pub mod qtypes;
+use std::sync::Arc;
 
 /// Simple view into the DNS message header.
 pub struct WireHeader<'a> {
@@ -56,6 +59,18 @@ impl<'a> WireHeader<'a> {
 
     #[inline]
     #[must_use]
+    pub fn ancount(&self) -> u16 {
+        u16::from_be_bytes([self.data[6], self.data[7]])
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn nscount(&self) -> u16 {
+        u16::from_be_bytes([self.data[8], self.data[9]])
+    }
+
+    #[inline]
+    #[must_use]
     pub fn arcount(&self) -> u16 {
         u16::from_be_bytes([self.data[10], self.data[11]])
     }
@@ -68,6 +83,53 @@ impl<'a> WireHeader<'a> {
             data[0] = bytes[0];
             data[1] = bytes[1];
         }
+    }
+
+    /// Converts the wire header into an owned DnsHeader.
+    #[must_use]
+    pub fn to_owned(&self) -> DnsHeader {
+        DnsHeader {
+            id: self.id(),
+            qr: !self.is_query(),
+            opcode: (self.data[2] & 0x78) >> 3,
+            aa: (self.data[2] & 0x04) != 0,
+            tc: self.tc(),
+            rd: self.rd(),
+            ra: (self.data[3] & 0x80) != 0,
+            z: (self.data[3] & 0x40) != 0,
+            ad: (self.data[3] & 0x20) != 0,
+            cd: (self.data[3] & 0x10) != 0,
+            rcode: DnsResponseCode::from(self.data[3] & 0x0F),
+            qdcount: self.qdcount(),
+            ancount: self.ancount(),
+            nscount: self.nscount(),
+            arcount: self.arcount(),
+        }
+    }
+}
+
+/// Helper to skip a DNS name in the wire format without decompressing.
+pub fn skip_name(data: &[u8], mut pos: usize) -> Option<usize> {
+    loop {
+        if pos >= data.len() {
+            return None;
+        }
+        let len = data[pos];
+        if len == 0 {
+            return Some(pos + 1);
+        }
+        if (len & 0xC0) == 0xC0 {
+            // Pointer (2 bytes)
+            if pos + 2 > data.len() {
+                return None;
+            }
+            return Some(pos + 2);
+        }
+        if (len & 0xC0) != 0 {
+            // Reserved label type
+            return None;
+        }
+        pos += 1 + (len as usize);
     }
 }
 
@@ -101,7 +163,7 @@ impl<'a> WireQuestion<'a> {
             }
             if (len & 0xC0) != 0 {
                 // Pointer or reserved label type in the question:
-                // Fallback to the slow path (hickory-dns).
+                // Unsupported in the zero-alloc fast path.
                 return None;
             }
             pos += 1 + len;
@@ -163,6 +225,19 @@ impl<'a> WireQuestion<'a> {
             pos: 0,
         }
     }
+
+    /// Converts the wire question into an owned DnsQuestion.
+    #[must_use]
+    pub fn to_owned(&self) -> DnsQuestion {
+        let mut decoder = WireDecoder::new(self.data);
+        decoder.pos = 12;
+        let name = decoder.decode_name().unwrap_or_else(|| Arc::from(""));
+        DnsQuestion {
+            name,
+            qtype: DnsRecordType::from(self.qtype),
+            qclass: DnsClass::from(self.qclass()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -189,6 +264,73 @@ impl<'a> Iterator for WireLabelIter<'a> {
         }
         self.pos = end;
         Some(&self.data[start..end])
+    }
+}
+
+/// Scans a DNS response to identify TTL field offsets for cache scrubbing.
+pub struct WireResponseScanner<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> WireResponseScanner<'a> {
+    #[must_use]
+    pub const fn new(data: &'a [u8]) -> Self {
+        Self { data }
+    }
+
+    /// Identifies all TTL field offsets in the response (Answers, Authorities, and Additionals).
+    /// Returns (offsets, min_ttl).
+    #[must_use]
+    pub fn scan_ttls(&self) -> (Vec<usize>, u32) {
+        let Some(header) = WireHeader::parse(self.data) else {
+            return (Vec::new(), 0);
+        };
+
+        let mut pos = 12; // Start after header
+
+        // Skip Questions
+        for _ in 0..header.qdcount() {
+            pos = skip_name(self.data, pos).unwrap_or(self.data.len());
+            pos += 4; // Type and Class
+        }
+
+        let mut offsets = Vec::new();
+        let mut min_ttl = u32::MAX;
+
+        let record_count =
+            header.ancount() as usize + header.nscount() as usize + header.arcount() as usize;
+
+        for _ in 0..record_count {
+            if pos >= self.data.len() {
+                break;
+            }
+            pos = skip_name(self.data, pos).unwrap_or(self.data.len());
+            if pos + 10 > self.data.len() {
+                break;
+            }
+
+            // TYPE(2), CLASS(2), TTL(4), RDLEN(2)
+            let ttl_offset = pos + 4;
+            let ttl = u32::from_be_bytes([
+                self.data[ttl_offset],
+                self.data[ttl_offset + 1],
+                self.data[ttl_offset + 2],
+                self.data[ttl_offset + 3],
+            ]);
+
+            if ttl < min_ttl {
+                min_ttl = ttl;
+            }
+            offsets.push(ttl_offset);
+
+            let rdlen = u16::from_be_bytes([self.data[pos + 8], self.data[pos + 9]]) as usize;
+            pos += 10 + rdlen;
+        }
+
+        if min_ttl == u32::MAX {
+            min_ttl = 60;
+        }
+        (offsets, min_ttl)
     }
 }
 
@@ -483,6 +625,383 @@ impl WireResponseWriter {
     }
 }
 
+/// Full-featured DNS wire decoder.
+pub struct WireDecoder<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> WireDecoder<'a> {
+    #[must_use]
+    pub const fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    pub fn set_pos(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+
+    /// Decodes a domain name from the wire format, handling pointers (decompression).
+    pub fn decode_name(&mut self) -> Option<Arc<str>> {
+        let mut name = String::new();
+        let mut pos = self.pos;
+        let mut jumped = false;
+        let mut first_label = true;
+        let mut loop_count = 0;
+
+        loop {
+            loop_count += 1;
+            if loop_count > 64 {
+                return None;
+            } // Loop protection (e.g. pointer cycles)
+
+            if pos >= self.data.len() {
+                return None;
+            }
+            let len = self.data[pos];
+
+            if len == 0 {
+                if !jumped {
+                    self.pos = pos + 1;
+                }
+                break;
+            }
+
+            if (len & 0xC0) == 0xC0 {
+                if pos + 1 >= self.data.len() {
+                    return None;
+                }
+                let offset = (((len & 0x3F) as usize) << 8) | (self.data[pos + 1] as usize);
+                if !jumped {
+                    self.pos = pos + 2;
+                }
+                pos = offset;
+                jumped = true;
+                continue;
+            }
+
+            if !first_label {
+                name.push('.');
+            }
+            let start = pos + 1;
+            let end = start + (len as usize);
+            if end > self.data.len() {
+                return None;
+            }
+            name.push_str(std::str::from_utf8(&self.data[start..end]).ok()?);
+            pos = end;
+            first_label = false;
+        }
+
+        Some(Arc::from(name))
+    }
+
+    /// Decodes the full DNS message.
+    pub fn decode_message(&mut self) -> Option<DnsMessage> {
+        let header = WireHeader::parse(self.data)?.to_owned();
+        self.pos = 12;
+
+        let mut msg = DnsMessage {
+            header: header.clone(),
+            ..Default::default()
+        };
+
+        for _ in 0..header.qdcount {
+            msg.questions.push(self.decode_question()?);
+        }
+        for _ in 0..header.ancount {
+            msg.answers.push(self.decode_record()?);
+        }
+        for _ in 0..header.nscount {
+            msg.authorities.push(self.decode_record()?);
+        }
+        for _ in 0..header.arcount {
+            msg.additionals.push(self.decode_record()?);
+        }
+
+        Some(msg)
+    }
+
+    fn decode_question(&mut self) -> Option<DnsQuestion> {
+        let name = self.decode_name()?;
+        if self.pos + 4 > self.data.len() {
+            return None;
+        }
+        let qtype = DnsRecordType::from(u16::from_be_bytes([
+            self.data[self.pos],
+            self.data[self.pos + 1],
+        ]));
+        let qclass = DnsClass::from(u16::from_be_bytes([
+            self.data[self.pos + 2],
+            self.data[self.pos + 3],
+        ]));
+        self.pos += 4;
+        Some(DnsQuestion {
+            name,
+            qtype,
+            qclass,
+        })
+    }
+
+    fn decode_record(&mut self) -> Option<DnsRecord> {
+        let name = self.decode_name()?;
+        if self.pos + 10 > self.data.len() {
+            return None;
+        }
+        let rtype = DnsRecordType::from(u16::from_be_bytes([
+            self.data[self.pos],
+            self.data[self.pos + 1],
+        ]));
+        let rclass = DnsClass::from(u16::from_be_bytes([
+            self.data[self.pos + 2],
+            self.data[self.pos + 3],
+        ]));
+        let ttl = u32::from_be_bytes([
+            self.data[self.pos + 4],
+            self.data[self.pos + 5],
+            self.data[self.pos + 6],
+            self.data[self.pos + 7],
+        ]);
+        let rdlen = u16::from_be_bytes([self.data[self.pos + 8], self.data[self.pos + 9]]) as usize;
+        self.pos += 10;
+        if self.pos + rdlen > self.data.len() {
+            return None;
+        }
+
+        let rdata_end = self.pos + rdlen;
+        let rdata = self.decode_rdata(rtype, rdlen)?;
+        self.pos = rdata_end;
+
+        Some(DnsRecord {
+            name,
+            rtype,
+            rclass,
+            ttl,
+            rdata,
+        })
+    }
+
+    fn decode_rdata(&mut self, rtype: DnsRecordType, rdlen: usize) -> Option<DnsRData> {
+        let start = self.pos;
+        match rtype {
+            DnsRecordType::A => {
+                if rdlen != 4 {
+                    return None;
+                }
+                Some(DnsRData::A(std::net::Ipv4Addr::new(
+                    self.data[start],
+                    self.data[start + 1],
+                    self.data[start + 2],
+                    self.data[start + 3],
+                )))
+            }
+            DnsRecordType::AAAA => {
+                if rdlen != 16 {
+                    return None;
+                }
+                let mut b = [0u8; 16];
+                b.copy_from_slice(&self.data[start..start + 16]);
+                Some(DnsRData::AAAA(std::net::Ipv6Addr::from(b)))
+            }
+            DnsRecordType::CNAME => Some(DnsRData::CNAME(self.decode_name()?)),
+            DnsRecordType::PTR => Some(DnsRData::PTR(self.decode_name()?)),
+            DnsRecordType::NS => Some(DnsRData::NS(self.decode_name()?)),
+            DnsRecordType::SOA => {
+                let mname = self.decode_name()?;
+                let rname = self.decode_name()?;
+                if self.pos + 20 > self.data.len() {
+                    return None;
+                }
+                let serial = u32::from_be_bytes([
+                    self.data[self.pos],
+                    self.data[self.pos + 1],
+                    self.data[self.pos + 2],
+                    self.data[self.pos + 3],
+                ]);
+                let refresh = i32::from_be_bytes([
+                    self.data[self.pos + 4],
+                    self.data[self.pos + 5],
+                    self.data[self.pos + 6],
+                    self.data[self.pos + 7],
+                ]);
+                let retry = i32::from_be_bytes([
+                    self.data[self.pos + 8],
+                    self.data[self.pos + 9],
+                    self.data[self.pos + 10],
+                    self.data[self.pos + 11],
+                ]);
+                let expire = i32::from_be_bytes([
+                    self.data[self.pos + 12],
+                    self.data[self.pos + 13],
+                    self.data[self.pos + 14],
+                    self.data[self.pos + 15],
+                ]);
+                let minimum = u32::from_be_bytes([
+                    self.data[self.pos + 16],
+                    self.data[self.pos + 17],
+                    self.data[self.pos + 18],
+                    self.data[self.pos + 19],
+                ]);
+                self.pos += 20;
+                Some(DnsRData::SOA {
+                    mname,
+                    rname,
+                    serial,
+                    refresh,
+                    retry,
+                    expire,
+                    minimum,
+                })
+            }
+            _ => Some(DnsRData::Unknown(self.data[start..start + rdlen].to_vec())),
+        }
+    }
+}
+
+/// Helper for encoding DNS messages into wire format.
+#[derive(Default)]
+pub struct WireEncoder {
+    buf: Vec<u8>,
+}
+
+impl WireEncoder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            buf: Vec::with_capacity(512),
+        }
+    }
+
+    pub fn encode_name(&mut self, name: &str) {
+        for label in name.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            self.buf.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
+            self.buf.extend_from_slice(label.as_bytes());
+        }
+        self.buf.push(0);
+    }
+
+    pub fn encode_header(&mut self, h: &DnsHeader) {
+        self.buf.extend_from_slice(&h.id.to_be_bytes());
+        let mut b2 = 0u8;
+        if h.qr {
+            b2 |= 0x80;
+        }
+        b2 |= (h.opcode & 0x0F) << 3;
+        if h.aa {
+            b2 |= 0x04;
+        }
+        if h.tc {
+            b2 |= 0x02;
+        }
+        if h.rd {
+            b2 |= 0x01;
+        }
+        self.buf.push(b2);
+
+        let mut b3 = 0u8;
+        if h.ra {
+            b3 |= 0x80;
+        }
+        if h.z {
+            b3 |= 0x40;
+        }
+        if h.ad {
+            b3 |= 0x20;
+        }
+        if h.cd {
+            b3 |= 0x10;
+        }
+        b3 |= u8::from(h.rcode) & 0x0F;
+        self.buf.push(b3);
+
+        self.buf.extend_from_slice(&h.qdcount.to_be_bytes());
+        self.buf.extend_from_slice(&h.ancount.to_be_bytes());
+        self.buf.extend_from_slice(&h.nscount.to_be_bytes());
+        self.buf.extend_from_slice(&h.arcount.to_be_bytes());
+    }
+
+    pub fn encode_message(&mut self, msg: &DnsMessage) -> Vec<u8> {
+        self.encode_header(&msg.header);
+        for q in &msg.questions {
+            self.encode_name(&q.name);
+            self.buf
+                .extend_from_slice(&u16::from(q.qtype).to_be_bytes());
+            self.buf
+                .extend_from_slice(&u16::from(q.qclass).to_be_bytes());
+        }
+        for r in &msg.answers {
+            self.encode_record(r);
+        }
+        for r in &msg.authorities {
+            self.encode_record(r);
+        }
+        for r in &msg.additionals {
+            self.encode_record(r);
+        }
+        std::mem::take(&mut self.buf)
+    }
+
+    fn encode_record(&mut self, r: &DnsRecord) {
+        self.encode_name(&r.name);
+        self.buf
+            .extend_from_slice(&u16::from(r.rtype).to_be_bytes());
+        self.buf
+            .extend_from_slice(&u16::from(r.rclass).to_be_bytes());
+        self.buf.extend_from_slice(&r.ttl.to_be_bytes());
+
+        let rdlen_pos = self.buf.len();
+        self.buf.extend_from_slice(&[0, 0]); // Placeholder
+
+        let rdata_start = self.buf.len();
+        self.encode_rdata(&r.rdata);
+        let rdlen = u16::try_from(self.buf.len() - rdata_start).unwrap_or(u16::MAX);
+        let rdlen_bytes = rdlen.to_be_bytes();
+        self.buf[rdlen_pos] = rdlen_bytes[0];
+        self.buf[rdlen_pos + 1] = rdlen_bytes[1];
+    }
+
+    fn encode_rdata(&mut self, rdata: &DnsRData) {
+        match rdata {
+            DnsRData::A(ip) => self.buf.extend_from_slice(&ip.octets()),
+            DnsRData::AAAA(ip) => self.buf.extend_from_slice(&ip.octets()),
+            DnsRData::CNAME(name) => self.encode_name(name),
+            DnsRData::PTR(name) => self.encode_name(name),
+            DnsRData::NS(name) => self.encode_name(name),
+            DnsRData::SOA {
+                mname,
+                rname,
+                serial,
+                refresh,
+                retry,
+                expire,
+                minimum,
+            } => {
+                self.encode_name(mname);
+                self.encode_name(rname);
+                self.buf.extend_from_slice(&serial.to_be_bytes());
+                self.buf.extend_from_slice(&refresh.to_be_bytes());
+                self.buf.extend_from_slice(&retry.to_be_bytes());
+                self.buf.extend_from_slice(&expire.to_be_bytes());
+                self.buf.extend_from_slice(&minimum.to_be_bytes());
+            }
+            DnsRData::OPT { options } => {
+                for (code, data) in options {
+                    self.buf.extend_from_slice(&code.to_be_bytes());
+                    self.buf.extend_from_slice(
+                        &(u16::try_from(data.len()).unwrap_or(u16::MAX)).to_be_bytes(),
+                    );
+                    self.buf.extend_from_slice(data);
+                }
+            }
+            DnsRData::Unknown(data) => self.buf.extend_from_slice(data),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,5 +1038,36 @@ mod tests {
             b"\x04host",
             "Question section should start at index 12"
         );
+    }
+
+    #[test]
+    fn test_name_decompression() {
+        // "host.lan" at offset 12
+        // pointer to offset 12 at offset 26
+        let data = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04host\x03lan\x00\x00\x01\x00\x01\xC0\x0C\x00\x01\x00\x01";
+        let mut decoder = WireDecoder::new(data);
+        decoder.pos = 12;
+        let name1 = decoder.decode_name().unwrap();
+        assert_eq!(&*name1, "host.lan");
+
+        decoder.pos = 26;
+        let name2 = decoder.decode_name().unwrap();
+        assert_eq!(&*name2, "host.lan");
+    }
+
+    #[test]
+    fn test_full_message_decode_encode() {
+        let query_data =
+            b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04host\x03lan\x00\x00\x01\x00\x01";
+        let mut decoder = WireDecoder::new(query_data);
+        let msg = decoder.decode_message().unwrap();
+
+        assert_eq!(msg.header.id, 0x1234);
+        assert_eq!(msg.questions.len(), 1);
+        assert_eq!(&*msg.questions[0].name, "host.lan");
+
+        let mut encoder = WireEncoder::new();
+        let encoded = encoder.encode_message(&msg);
+        assert_eq!(encoded, query_data);
     }
 }

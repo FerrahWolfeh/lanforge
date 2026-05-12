@@ -122,6 +122,8 @@ impl DnsCommand {
                     StatLine(label: "Auth Queries", value: stats.auth_queries.to_string())
                     StatLine(label: "Recursions", value: stats.recursions.to_string())
                     StatLine(label: "Blocked Queries", value: stats.blocked_queries.to_string(), color: Color::Cyan)
+                    StatLine(label: "Resolved Total", value: stats.resolved_total.to_string(), color: Color::Green)
+                    StatLine(label: "Failed Total", value: stats.failed_total.to_string(), color: Color::Red)
                 }
             }
         }.print();
@@ -213,27 +215,38 @@ impl DnsCommand {
                 View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
                     View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2, margin_bottom: 1) {
                         Text(content: format!("{:<10}", "TIME"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<16}", "CLIENT"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<18}", "CLIENT"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<6}", "TYPE"), color: Color::DarkGrey, weight: Weight::Bold)
                         Text(content: format!("{:<30}", "DOMAIN"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<8}", "RESULT"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<10}", "RESULT"), color: Color::DarkGrey, weight: Weight::Bold)
+                        Text(content: format!("{:<25}", "ANSWER"), color: Color::DarkGrey, weight: Weight::Bold)
                         Text(content: format!("{:<8}", "LATENCY"), color: Color::DarkGrey, weight: Weight::Bold)
                     }
                     #(log.entries.iter().rev().map(|e| {
                         let dt = DateTime::<Utc>::from_timestamp(e.timestamp.cast_signed(), 0).unwrap_or_default();
                         let local_dt: DateTime<Local> = DateTime::from(dt);
                         let time_str = local_dt.format("%H:%M:%S").to_string();
-                        let result_color = match e.result {
-                            QueryResult::Blocked => Color::Red,
-                            QueryResult::Local => Color::Green,
-                            QueryResult::Cached => Color::Cyan,
+                        
+                        let result_color = match e.result.as_str() {
+                            "blocked" | "Blocked" => Color::Red,
+                            "local" | "Local" | "rewritten" | "Rewritten" => Color::Green,
+                            "cached" | "Cached" => Color::Cyan,
+                            "nxdomain" | "NxDomain" => Color::Yellow,
                             _ => Color::White,
                         };
+
+                        let client_str = e.src_hostname.as_ref().map_or_else(|| format!("{:<18}", e.src_ip), |host| format!("{host:<18}"));
+
+                        let answer_str = e.answer.as_deref().unwrap_or("-");
+
                         element! {
                             View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
                                 Text(content: format!("{:<10}", time_str), color: Color::DarkGrey)
-                                Text(content: format!("{:<16}", e.src_ip))
+                                Text(content: client_str)
+                                Text(content: format!("{:<6}", e.qtype), color: Color::Cyan)
                                 Text(content: format!("{:<30}", e.domain))
-                                Text(content: format!("{:<8?}", e.result), color: result_color)
+                                Text(content: format!("{:<10}", e.result), color: result_color)
+                                Text(content: format!("{:<25}", answer_str), color: Color::DarkGrey)
                                 Text(content: format!("{:<8}", format!("{}ms", e.upstream_us / 1000)), color: Color::Yellow)
                             }
                         }

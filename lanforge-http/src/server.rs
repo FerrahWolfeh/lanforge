@@ -24,7 +24,7 @@ use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     error::CoreError,
 };
-use lanforge_dns::tls_utils;
+use lanforge_dns::server::transport::tls as tls_utils;
 use lanforge_core::types::{
     CliHostUpdate, Device, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin,
 };
@@ -437,7 +437,8 @@ async fn handle_dns_query(
     body: Bytes,
 ) -> impl IntoResponse {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use lanforge_dns::server::{DnsContext, handle_query};
+    use lanforge_dns::server::DnsContext;
+    use lanforge_dns::wire::{WireHeader, WireQuestion};
 
     let query_data = if method == Method::GET {
         let Some(dns_base64) = params.dns else {
@@ -473,14 +474,27 @@ async fn handle_dns_query(
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or_else(|| "127.0.0.1".parse().unwrap());
 
+    let header = match WireHeader::parse(&query_data) {
+        Some(h) => h,
+        None => return (StatusCode::BAD_REQUEST, "Invalid DNS header").into_response(),
+    };
+    let question = match WireQuestion::parse(&query_data) {
+        Some(q) => q,
+        None => return (StatusCode::BAD_REQUEST, "Invalid DNS question").into_response(),
+    };
+
     let mut resp_buf = Vec::with_capacity(512);
-    match handle_query(&query_data, dns_ctx, _src_ip, &mut resp_buf).await {
-        Ok(true) => (
-            [(axum::http::header::CONTENT_TYPE, "application/dns-message")],
-            resp_buf,
-        )
-            .into_response(),
-        Ok(false) => StatusCode::NO_CONTENT.into_response(),
+    match dns_ctx.pipeline.run(dns_ctx, &query_data, &header, &question, _src_ip, &mut resp_buf).await {
+        Ok(()) => {
+            if !resp_buf.is_empty() {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/dns-message")],
+                    resp_buf,
+                ).into_response()
+            } else {
+                StatusCode::NO_CONTENT.into_response()
+            }
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

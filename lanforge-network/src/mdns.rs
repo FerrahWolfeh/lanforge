@@ -52,12 +52,13 @@ use pnet::datalink::interfaces;
 use std::fmt::Write;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{debug, error, warn};
 
-use hickory_proto::op::{Message, MessageType, OpCode, Query, UpdateMessage};
-use hickory_proto::rr::{Name, RData, RecordType};
+use lanforge_core::types::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType};
+use lanforge_dns::wire::{WireDecoder, WireEncoder};
 
 use crate::error::NetworkError;
 
@@ -245,10 +246,10 @@ async fn run_mdns_worker(
 fn handle_command(cmd: &MdnsCommand, socket_v4: &UdpSocket, socket_v6: &UdpSocket) {
     match cmd {
         MdnsCommand::ProbeAll => {
-            let _ = broadcast_query(socket_v4, socket_v6);
+            broadcast_query(socket_v4, socket_v6);
         }
         MdnsCommand::ProbeIp(ip) => {
-            let _ = send_unicast_query(socket_v4, socket_v6, *ip);
+            send_unicast_query(socket_v4, socket_v6, *ip);
         }
     }
 }
@@ -324,56 +325,56 @@ fn setup_multicast_socket_v6() -> Result<UdpSocket, NetworkError> {
     Ok(socket.into())
 }
 
-fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket) -> Result<(), NetworkError> {
-    let mut msg = Message::new(0, MessageType::Query, OpCode::Query);
+fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket) {
+    let mut msg = DnsMessage::new();
+    msg.header.qdcount = 1;
+    msg.questions.push(DnsQuestion {
+        name: Arc::from("_services._dns-sd._udp.local"),
+        qtype: DnsRecordType::PTR,
+        qclass: DnsClass::IN,
+    });
 
-    // PTR query for _services._dns-sd._udp.local.
-    let name = Name::from_ascii("_services._dns-sd._udp.local.")
-        .map_err(|e| NetworkError::Mdns(e.to_string()))?;
-    msg.add_query(Query::query(name, RecordType::PTR));
+    let mut encoder = WireEncoder::new();
+    let bytes = encoder.encode_message(&msg);
 
-    let bytes = msg
-        .to_vec()
-        .map_err(|e| NetworkError::Mdns(e.to_string()))?;
     let _ = sock4.send_to(&bytes, SocketAddr::new(IpAddr::V4(MDNS_IPV4), MDNS_PORT));
     let _ = sock6.send_to(&bytes, SocketAddr::new(IpAddr::V6(MDNS_IPV6), MDNS_PORT));
 
     debug!("mDNS broadcast probe enviado");
-    Ok(())
 }
 
-fn send_unicast_query(
-    sock4: &UdpSocket,
-    sock6: &UdpSocket,
-    target: IpAddr,
-) -> Result<(), NetworkError> {
-    let mut msg = Message::new(0, MessageType::Query, OpCode::Query);
+fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) {
+    let mut msg = DnsMessage::new();
+    msg.header.qdcount = 1;
 
     // Most devices respond to a PTR query for their own IP.
     // Example: 1.1.168.192.in-addr.arpa.
     let name = match target {
         IpAddr::V4(v4) => {
             let octets = v4.octets();
-            Name::from_ascii(format!(
-                "{}.{}.{}.{}.in-addr.arpa.",
+            format!(
+                "{}.{}.{}.{}.in-addr.arpa",
                 octets[3], octets[2], octets[1], octets[0]
-            ))
-            .map_err(|e| NetworkError::Mdns(e.to_string()))?
+            )
         }
         IpAddr::V6(v6) => {
             let mut name_str = String::new();
             for seg in v6.octets().iter().rev() {
                 let _ = write!(name_str, "{:x}.{:x}.", seg & 0xf, seg >> 4);
             }
-            name_str.push_str("ip6.arpa.");
-            Name::from_ascii(name_str).map_err(|e| NetworkError::Mdns(e.to_string()))?
+            name_str.push_str("ip6.arpa");
+            name_str
         }
     };
 
-    msg.add_query(Query::query(name, RecordType::PTR));
-    let bytes = msg
-        .to_vec()
-        .map_err(|e| NetworkError::Mdns(e.to_string()))?;
+    msg.questions.push(DnsQuestion {
+        name: Arc::from(name),
+        qtype: DnsRecordType::PTR,
+        qclass: DnsClass::IN,
+    });
+
+    let mut encoder = WireEncoder::new();
+    let bytes = encoder.encode_message(&msg);
 
     // We send to the multicast address but some devices might respond unicast if we set the QU bit.
     // For now, simple multicast.
@@ -387,14 +388,14 @@ fn send_unicast_query(
     }
 
     debug!("mDNS targeted probe enviado para {}", target);
-    Ok(())
 }
 
 fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
-    let Ok(msg) = Message::from_vec(data) else {
+    let mut decoder = WireDecoder::new(data);
+    let Some(msg) = decoder.decode_message() else {
         return;
     };
-    if msg.message_type != MessageType::Response {
+    if !msg.header.qr {
         return;
     }
 
@@ -422,10 +423,10 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
 
     // We look for PTR, SRV, or A/AAAA records that might reveal a hostname.
     // The most reliable is the "Answer" section names or SRV target.
-    for record in msg.answers.iter().chain(msg.additionals().iter()) {
-        let hostname = match &record.data {
-            RData::PTR(name) => Some(name.to_string()),
-            RData::SRV(srv) => Some(srv.target.to_string()),
+    for record in msg.answers.iter().chain(msg.additionals.iter()) {
+        let hostname = match &record.rdata {
+            DnsRData::PTR(name) => Some(name.to_string()),
+            DnsRData::SRV { target, .. } => Some(target.to_string()),
             _ => None,
         };
 

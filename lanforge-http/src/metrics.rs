@@ -2,7 +2,7 @@ use lanforge_api::config::ApiConfig;
 use lanforge_core::context::{EventCounters, LanforgeContext};
 use lanforge_core::types::device::{Device, Origin};
 use lanforge_dns::server::DnsContext;
-use lanforge_dns::stats::DnsStats;
+use lanforge_dns::telemetry::DnsStats;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -143,7 +143,7 @@ fn append_dns_metrics(out: &mut String, ctx: &LanforgeContext) {
         );
         out.push_str("# TYPE lanforge_dns_upstream_failures_total counter\n");
 
-        for mgr in &dns_ctx.upstreams {
+        for mgr in &dns_ctx.recursive.upstreams {
             let target = &mgr.target.addr.to_string();
             let proto = format!("{:?}", mgr.target.protocol).to_lowercase();
             let rtt = mgr.health.rtt_ewma_us.load(Ordering::Relaxed);
