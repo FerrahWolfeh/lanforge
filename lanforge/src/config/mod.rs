@@ -409,7 +409,7 @@ impl Config {
             .dns_toml
             .upstreams
             .first()
-            .map(|u| format!("{}", String::from(u.target.clone())));
+            .map(|u| String::from(u.target.clone()));
         cfg.boot_dir = Some(self.tftp_toml.root_dir.to_string_lossy().to_string());
 
         // Inherit TLS from system if not set in HTTP
