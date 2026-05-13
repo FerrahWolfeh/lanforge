@@ -748,6 +748,14 @@ pub struct QueryRateEntry {
     pub count: u64,
 }
 
+/// A single entry in the protocol distribution list.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProtocolStatEntry {
+    pub protocol: String,
+    pub count: u64,
+    pub percentage: f32,
+}
+
 /// Response containing aggregated DNS analytics.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsAnalyticsResponse {
@@ -755,6 +763,7 @@ pub struct DnsAnalyticsResponse {
     pub query_types: Vec<QueryTypeEntry>,
     pub query_rate: Vec<QueryRateEntry>,
     pub top_clients: Vec<TopClientEntry>,
+    pub protocol_stats: Vec<ProtocolStatEntry>,
 }
 
 /// A single entry in the top clients list.

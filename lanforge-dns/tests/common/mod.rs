@@ -1,6 +1,6 @@
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
-use lanforge_core::types::{DeviceUpdate, MacAddr};
+use lanforge_core::types::{DeviceUpdate, MacAddr, TransportProtocol};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -11,11 +11,11 @@ use lanforge_dns::error::DnsError;
 use lanforge_dns::pipeline::{Pipeline, middleware::*};
 use lanforge_dns::resolver::LocalResolver;
 use lanforge_dns::resolver::filter::AdBlocker;
+use lanforge_dns::resolver::recursive::DnsCache;
 use lanforge_dns::resolver::recursive::UpstreamStrategy;
 use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::QueryRing;
 use lanforge_dns::telemetry::stats::DnsStats;
-use lanforge_dns::resolver::recursive::DnsCache;
 use lanforge_dns::wire::{WireHeader, WireQuestion};
 
 #[allow(dead_code)]
@@ -108,7 +108,15 @@ pub async fn process_query_test(
     let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
     let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
     ctx.pipeline
-        .run(ctx, data, &header, &question, src_ip, resp)
+        .run(
+            ctx,
+            data,
+            &header,
+            &question,
+            src_ip,
+            TransportProtocol::Udp,
+            resp,
+        )
         .await?;
     Ok(!resp.is_empty())
 }

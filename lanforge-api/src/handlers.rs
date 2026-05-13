@@ -32,7 +32,8 @@ use crate::api::{
 };
 
 use crate::api::{
-    DnsAnalyticsResponse, QueryRateEntry, QueryTypeEntry, TopClientEntry, TopDomainEntry,
+    DnsAnalyticsResponse, ProtocolStatEntry, QueryRateEntry, QueryTypeEntry, TopClientEntry,
+    TopDomainEntry,
 };
 use lanforge_core::types::DnsRecordType;
 
@@ -878,20 +879,40 @@ impl ClientContext {
             .collect();
 
         let top_clients_raw = db.get_dns_top_clients(limit).await.unwrap_or_default();
-        let state = self.ctx.read();
-        let top_clients = top_clients_raw
+        let top_clients = {
+            let state = self.ctx.read();
+            top_clients_raw
+                .into_iter()
+                .map(|(ip, count)| {
+                    let hostname = ip
+                        .parse::<IpAddr>()
+                        .ok()
+                        .and_then(|addr| state.get_mac_by_ip(addr))
+                        .and_then(|mac| state.devices.get(&mac))
+                        .map(|dev| dev.hostname.name.clone());
+                    TopClientEntry {
+                        ip,
+                        hostname,
+                        count,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let protocol_stats_raw = db.get_dns_protocol_stats().await.unwrap_or_default();
+        let total_proto_queries: u64 = protocol_stats_raw.iter().map(|(_, c)| c).sum();
+        let protocol_stats = protocol_stats_raw
             .into_iter()
-            .map(|(ip, count)| {
-                let hostname = ip
-                    .parse::<IpAddr>()
-                    .ok()
-                    .and_then(|addr| state.get_mac_by_ip(addr))
-                    .and_then(|mac| state.devices.get(&mac))
-                    .map(|dev| dev.hostname.name.clone());
-                TopClientEntry {
-                    ip,
-                    hostname,
+            .map(|(protocol, count)| {
+                let percentage = if total_proto_queries > 0 {
+                    (count as f32 / total_proto_queries as f32) * 100.0
+                } else {
+                    0.0
+                };
+                ProtocolStatEntry {
+                    protocol,
                     count,
+                    percentage,
                 }
             })
             .collect();
@@ -901,6 +922,7 @@ impl ClientContext {
             query_types,
             query_rate,
             top_clients,
+            protocol_stats,
         })
     }
 

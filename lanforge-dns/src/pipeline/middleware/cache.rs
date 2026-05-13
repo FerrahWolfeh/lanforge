@@ -1,12 +1,11 @@
-use lanforge_core::types::network::dns::{DnsRecordType, QueryResult};
+use lanforge_core::types::{DnsRecordType, QueryResult};
 
 use crate::error::DnsError;
-use crate::pipeline::Middleware;
+use crate::pipeline::{DnsPipelineRequest, Middleware};
 use crate::resolver::filter::labels_to_domain;
 use crate::server::{DnsContext, DnsLogEvent};
-use crate::wire::{WireDecoder, WireHeader, WireQuestion};
+use crate::wire::WireDecoder;
 use std::future::Future;
-use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -23,14 +22,11 @@ impl Middleware for CacheMiddleware {
     fn run<'a>(
         &'a self,
         ctx: &'a DnsContext,
-        data: &'a [u8],
-        _header: &'a WireHeader,
-        question: &'a WireQuestion<'a>,
-        src_ip: IpAddr,
+        req: DnsPipelineRequest<'a>,
         resp: &'a mut Vec<u8>,
     ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>> {
         Box::pin(async move {
-            if let Some((cached_resp, is_block)) = ctx.cache.get_wire(data, question) {
+            if let Some((cached_resp, is_block)) = ctx.cache.get_wire(req.data, req.question) {
                 *resp = cached_resp;
 
                 ctx.stats.inc_cache_hit();
@@ -41,8 +37,8 @@ impl Middleware for CacheMiddleware {
                     QueryResult::Cached
                 };
 
-                let domain = labels_to_domain(question.labels());
-                let src_mac = ctx.local.ctx.get_mac_by_ip(src_ip);
+                let domain = labels_to_domain(req.question.labels());
+                let src_mac = ctx.local.ctx.get_mac_by_ip(req.src_ip);
 
                 let mut answer = None;
                 let mut decoder = WireDecoder::new(resp);
@@ -53,14 +49,15 @@ impl Middleware for CacheMiddleware {
                 }
 
                 ctx.record_log(DnsLogEvent {
-                    src_ip,
+                    src_ip: req.src_ip,
                     src_mac,
                     domain: Arc::from(domain),
-                    qtype: DnsRecordType::from(question.qtype()),
+                    qtype: DnsRecordType::from(req.question.qtype()),
                     result,
                     upstream_us: 0,
                     cached: true,
                     answer,
+                    protocol: req.protocol,
                 });
 
                 return Ok(true);

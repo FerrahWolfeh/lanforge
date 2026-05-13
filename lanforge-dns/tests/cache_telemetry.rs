@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 use lanforge_core::types::{
-    DnsClass, DnsMessage, DnsQuestion, DnsRecordType, QueryLogEntry, QueryResult,
+    DnsClass, DnsMessage, DnsQuestion, DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol,
 };
 use lanforge_dns::resolver::recursive::cache::{CacheKey, DnsCache};
 use lanforge_dns::wire::{WireEncoder, WireQuestion};
@@ -118,6 +118,7 @@ async fn query_logging_ring_buffer() {
             cached: false,
             src_mac: None,
             answer: Some("1.1.1.1".to_string()),
+            protocol: TransportProtocol::Udp,
         });
     }
 

@@ -386,23 +386,34 @@ fn render_analytics_row(f: &mut Frame, area: Rect, state: &TuiState) {
     f.render_widget(query_types_table, chunks[1]);
 
     // 3. Protocol
-    let proto_rows = vec![
-        Row::new(vec![
-            Cell::from("UDP/53").style(Style::default().fg(theme::MOCHA_TEXT)),
-            Cell::from("91.9%").style(Style::default().fg(theme::TEXT_DIM)),
-        ]),
-        Row::new(vec![
-            Cell::from("DoT/853").style(Style::default().fg(theme::MOCHA_BLUE)),
-            Cell::from("5.4%").style(Style::default().fg(theme::TEXT_DIM)),
-        ]),
-        Row::new(vec![
-            Cell::from("DoQ/853").style(Style::default().fg(theme::MOCHA_MAUVE)),
-            Cell::from("2.6%").style(Style::default().fg(theme::TEXT_DIM)),
-        ]),
-    ];
+    let protocol_stats = analytics.map_or(Vec::new(), |a| a.protocol_stats.clone());
+    let total_queries: u64 = protocol_stats.iter().map(|s| s.count).sum();
+    let mut proto_rows = Vec::new();
+    for ps in protocol_stats.iter().take(5) {
+        let percent = if total_queries > 0 {
+            (ps.count as f64 / total_queries as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let style = match ps.protocol.to_lowercase().as_str() {
+            "udp" => Style::default().fg(theme::MOCHA_TEXT),
+            "tcp" => Style::default().fg(theme::MOCHA_BLUE),
+            "tls" | "dot" => Style::default().fg(theme::MOCHA_YELLOW),
+            "quic" | "doq" => Style::default().fg(theme::MOCHA_MAUVE),
+            "https" | "doh" => Style::default().fg(theme::MOCHA_GREEN),
+            _ => Style::default().fg(theme::TEXT_DIM),
+        };
+
+        proto_rows.push(Row::new(vec![
+            Cell::from(ps.protocol.clone().to_uppercase()).style(style),
+            Cell::from(format!("{percent:.1}%")).style(Style::default().fg(theme::TEXT_DIM)),
+        ]));
+    }
+
     let proto_table = Table::new(proto_rows, [Constraint::Fill(1), Constraint::Length(8)]).block(
         Block::default()
-            .title("── PROTOCOLO ──")
+            .title("── PROTOCOL ──")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );

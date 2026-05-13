@@ -142,6 +142,29 @@ pub enum QueryResult {
     CachedBlock = 7,
 }
 
+/// Transport protocols for incoming and outgoing DNS queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransportProtocol {
+    Udp,
+    Tcp,
+    Tls,
+    Quic,
+    Https,
+}
+
+impl std::fmt::Display for TransportProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Udp => write!(f, "UDP"),
+            Self::Tcp => write!(f, "TCP"),
+            Self::Tls => write!(f, "DoT"),
+            Self::Quic => write!(f, "DoQ"),
+            Self::Https => write!(f, "DoH"),
+        }
+    }
+}
+
 /// A single DNS query log entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryLogEntry {
@@ -163,6 +186,8 @@ pub struct QueryLogEntry {
     pub src_mac: Option<MacAddr>,
     /// Summary of the response data (e.g., first IP address).
     pub answer: Option<String>,
+    /// Transport protocol used.
+    pub protocol: TransportProtocol,
 }
 
 /// A single DNS record entry.

@@ -93,7 +93,8 @@ impl LogDb {
                 result      TEXT NOT NULL,
                 upstream_us INTEGER NOT NULL,
                 cached      INTEGER NOT NULL,
-                answer      TEXT
+                answer      TEXT,
+                protocol    TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_dns_queries_timestamp ON dns_queries(timestamp);
         "
@@ -205,8 +206,8 @@ impl LogDb {
     /// Records a resolved DNS query.
     pub async fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), LeaseDbError> {
         sqlx::query(
-            "INSERT INTO dns_queries (timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO dns_queries (timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer, protocol) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(entry.timestamp as i64)
         .bind(entry.src_ip.to_string())
@@ -217,6 +218,7 @@ impl LogDb {
         .bind(i64::from(entry.upstream_us))
         .bind(i32::from(entry.cached))
         .bind(entry.answer.as_ref())
+        .bind(entry.protocol.to_string().to_lowercase())
         .execute(&self.pool)
         .await?;
 
@@ -281,7 +283,7 @@ impl LogDb {
     ) -> Result<Vec<QueryLogEntry>, LeaseDbError> {
         let limit = limit as i64;
         let rows = sqlx::query(
-            "SELECT timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer 
+            "SELECT timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer, protocol 
              FROM dns_queries ORDER BY id DESC LIMIT ?",
         )
         .bind(limit)
@@ -299,6 +301,7 @@ impl LogDb {
             let upstream_us: i64 = row.get("upstream_us");
             let cached: i32 = row.get("cached");
             let answer: Option<String> = row.get("answer");
+            let protocol: String = row.get("protocol");
 
             entries.push(QueryLogEntry {
                 timestamp: timestamp as u64,
@@ -314,11 +317,20 @@ impl LogDb {
                     "error" => QueryResult::Error,
                     "cached" => QueryResult::Cached,
                     "rewritten" => QueryResult::Rewritten,
+                    "cachedblock" => QueryResult::CachedBlock,
                     _ => QueryResult::Local,
                 },
                 upstream_us: upstream_us as u32,
                 cached: cached != 0,
                 answer,
+                protocol: match protocol.as_str() {
+                    "udp" => lanforge_core::types::TransportProtocol::Udp,
+                    "tcp" => lanforge_core::types::TransportProtocol::Tcp,
+                    "dot" => lanforge_core::types::TransportProtocol::Tls,
+                    "doq" => lanforge_core::types::TransportProtocol::Quic,
+                    "doh" => lanforge_core::types::TransportProtocol::Https,
+                    _ => lanforge_core::types::TransportProtocol::Udp,
+                },
             });
         }
         Ok(entries)
@@ -406,6 +418,20 @@ impl LogDb {
             .collect())
     }
 
+    /// Retrieves query counts by protocol.
+    pub async fn get_dns_protocol_stats(&self) -> Result<Vec<(String, u64)>, LeaseDbError> {
+        let rows = sqlx::query(
+            "SELECT protocol, COUNT(*) as count FROM dns_queries GROUP BY protocol ORDER BY count DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("protocol"), r.get::<i64, _>("count") as u64))
+            .collect())
+    }
+
     /// Retrieves the most recent blocked DNS queries.
     #[cfg(feature = "adblock")]
     pub async fn get_dns_block_history(
@@ -473,5 +499,44 @@ impl LogDb {
         // Return in chronological order (oldest first for the UI)
         entries.reverse();
         Ok(entries)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lanforge_core::types::DnsRecordType;
+    use lanforge_core::types::QueryResult;
+    use lanforge_core::types::TransportProtocol;
+
+    #[tokio::test]
+    async fn test_dns_log_protocol_tracking() {
+        let db = LogDb::open("sqlite::memory:").await.unwrap();
+
+        let entry = QueryLogEntry {
+            timestamp: 123456789,
+            src_ip: "192.168.1.10".parse().unwrap(),
+            src_mac: Some("00:11:22:33:44:55".parse().unwrap()),
+            domain: "example.com".into(),
+            qtype: DnsRecordType::A,
+            result: QueryResult::Forwarded,
+            upstream_us: 15000,
+            cached: false,
+            answer: Some("1.2.3.4".to_string()),
+            protocol: TransportProtocol::Tls,
+        };
+
+        db.record_dns_query(&entry).await.unwrap();
+
+        // Check history
+        let history = db.get_dns_query_history(10).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].protocol, TransportProtocol::Tls);
+
+        // Check stats
+        let stats = db.get_dns_protocol_stats().await.unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].0, "dot");
+        assert_eq!(stats[0].1, 1);
     }
 }

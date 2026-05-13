@@ -1,3 +1,4 @@
+use lanforge_core::types::TransportProtocol;
 use quinn::{Endpoint, ServerConfig, TransportConfig};
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,7 +33,9 @@ impl DoqService {
 
 impl AsyncService for DoqService {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        let Some(addr) = self.cfg.doq_listen else { return Ok(()); };
+        let Some(addr) = self.cfg.doq_listen else {
+            return Ok(());
+        };
 
         let cert = self.cfg.tls_cert.as_deref().ok_or_else(|| {
             CoreError::Generic("DoQ requires tls_cert to be configured".to_string())
@@ -95,7 +98,9 @@ async fn handle_doq_connection(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let peer = connection.remote_address();
     let dns_ctx_any = ctx.get_dns_context().ok_or("DNS engine not ready")?;
-    let _ = dns_ctx_any.downcast_ref::<DnsContext>().ok_or("Invalid DNS context")?;
+    let _ = dns_ctx_any
+        .downcast_ref::<DnsContext>()
+        .ok_or("Invalid DNS context")?;
 
     loop {
         match connection.accept_bi().await {
@@ -103,31 +108,63 @@ async fn handle_doq_connection(
                 // Actually dns_ctx is Arc-wrapped inside LanforgeContext anyway if we downcast properly.
                 // Wait, get_dns_context() returns Arc<dyn Any + Send + Sync>.
                 // So we can clone the Arc.
-                let dns_ctx_arc = dns_ctx_any.clone().downcast::<DnsContext>().map_err(|_| "Downcast failed")?;
+                let dns_ctx_arc = dns_ctx_any
+                    .clone()
+                    .downcast::<DnsContext>()
+                    .map_err(|_| "Downcast failed")?;
 
                 tokio::spawn(async move {
                     let query_buf = match recv.read_to_end(4096).await {
                         Ok(buf) => buf,
-                        Err(e) => { debug!("DoQ stream read error: {}", e); return; }
+                        Err(e) => {
+                            debug!("DoQ stream read error: {}", e);
+                            return;
+                        }
                     };
-                    if query_buf.is_empty() { return; }
+                    if query_buf.is_empty() {
+                        return;
+                    }
 
-                    let header = match WireHeader::parse(&query_buf) { Some(h) => h, None => return };
-                    let question = match WireQuestion::parse(&query_buf) { Some(q) => q, None => return };
+                    let header = match WireHeader::parse(&query_buf) {
+                        Some(h) => h,
+                        None => return,
+                    };
+                    let question = match WireQuestion::parse(&query_buf) {
+                        Some(q) => q,
+                        None => return,
+                    };
 
                     let mut resp_buf = Vec::with_capacity(512);
-                    match dns_ctx_arc.pipeline.run(&dns_ctx_arc, &query_buf, &header, &question, peer.ip(), &mut resp_buf).await {
+                    match dns_ctx_arc
+                        .pipeline
+                        .run(
+                            &dns_ctx_arc,
+                            &query_buf,
+                            &header,
+                            &question,
+                            peer.ip(),
+                            TransportProtocol::Quic,
+                            &mut resp_buf,
+                        )
+                        .await
+                    {
                         Ok(()) => {
                             if !resp_buf.is_empty() {
-                                if let Err(e) = send.write_all(&resp_buf).await { debug!("DoQ stream write error: {}", e); }
+                                if let Err(e) = send.write_all(&resp_buf).await {
+                                    debug!("DoQ stream write error: {}", e);
+                                }
                                 let _ = send.finish();
                             }
                         }
-                        Err(e) => { debug!("DoQ pipeline error: {}", e); }
+                        Err(e) => {
+                            debug!("DoQ pipeline error: {}", e);
+                        }
                     }
                 });
             }
-            Err(e) => { return Err(e.into()); }
+            Err(e) => {
+                return Err(e.into());
+            }
         }
     }
 }

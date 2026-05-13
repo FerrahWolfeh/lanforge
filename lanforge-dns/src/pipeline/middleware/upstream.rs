@@ -1,16 +1,14 @@
-use lanforge_core::types::DnsResponseCode;
-use lanforge_core::types::ndp::QueryResult;
-use lanforge_core::types::ndp::dns::DnsRecordType;
+use lanforge_core::types::{DnsRecordType, DnsResponseCode, QueryResult};
 
 use crate::error::DnsError;
 use crate::pipeline::Middleware;
 use crate::resolver::filter::labels_to_domain;
-use crate::server::DnsContext;
-use crate::wire::{WireDecoder, WireHeader, WireQuestion};
+use crate::server::{DnsContext, DnsLogEvent};
+use crate::wire::WireDecoder;
 use std::future::Future;
-use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Default)]
 pub struct UpstreamMiddleware;
@@ -25,15 +23,12 @@ impl Middleware for UpstreamMiddleware {
     fn run<'a>(
         &'a self,
         ctx: &'a DnsContext,
-        data: &'a [u8],
-        _header: &'a WireHeader,
-        question: &'a WireQuestion<'a>,
-        src_ip: IpAddr,
+        req: crate::pipeline::DnsPipelineRequest<'a>,
         resp: &'a mut Vec<u8>,
     ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>> {
         Box::pin(async move {
-            let start = std::time::Instant::now();
-            match ctx.recursive.resolve(data).await {
+            let start = Instant::now();
+            match ctx.recursive.resolve(req.data).await {
                 Ok((upstream_resp, cached, is_block)) => {
                     let elapsed = start.elapsed().as_micros() as u32;
 
@@ -52,8 +47,8 @@ impl Middleware for UpstreamMiddleware {
                         QueryResult::Forwarded
                     };
 
-                    let domain = labels_to_domain(question.labels());
-                    let src_mac = ctx.local.ctx.get_mac_by_ip(src_ip);
+                    let domain = labels_to_domain(req.question.labels());
+                    let src_mac = ctx.local.ctx.get_mac_by_ip(req.src_ip);
 
                     *resp = upstream_resp;
 
@@ -67,15 +62,16 @@ impl Middleware for UpstreamMiddleware {
                         }
                     }
 
-                    ctx.record_log(crate::server::DnsLogEvent {
-                        src_ip,
+                    ctx.record_log(DnsLogEvent {
+                        src_ip: req.src_ip,
                         src_mac,
                         domain: Arc::from(domain),
-                        qtype: DnsRecordType::from(question.qtype()),
+                        qtype: DnsRecordType::from(req.question.qtype()),
                         result,
                         upstream_us: elapsed,
                         cached,
                         answer,
+                        protocol: req.protocol,
                     });
                     Ok(true)
                 }

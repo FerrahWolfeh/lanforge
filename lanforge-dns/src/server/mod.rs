@@ -7,7 +7,7 @@ use crate::pipeline::Pipeline;
 use crate::resolver::{LocalResolver, filter::AdBlocker, recursive::UpstreamStrategy};
 use crate::telemetry::{DnsStats, QueryRing};
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_core::types::{DnsRecordType, MacAddr, QueryLogEntry, QueryResult};
+use lanforge_core::types::{DnsRecordType, MacAddr, QueryLogEntry, QueryResult, TransportProtocol};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,6 +41,7 @@ pub struct DnsLogEvent {
     pub upstream_us: u32,
     pub cached: bool,
     pub answer: Option<String>,
+    pub protocol: TransportProtocol,
 }
 
 impl DnsContext {
@@ -65,6 +66,7 @@ impl DnsContext {
                 cached: event.cached,
                 src_mac: event.src_mac,
                 answer: event.answer,
+                protocol: event.protocol,
             };
             log.push(entry.clone());
 

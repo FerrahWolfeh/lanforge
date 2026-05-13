@@ -1,6 +1,8 @@
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
+use lanforge_core::types::TransportProtocol;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -85,6 +87,7 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     &header,
                                     &question,
                                     src.ip(),
+                                    TransportProtocol::Tcp,
                                     &mut resp_buf,
                                 )
                                 .await
@@ -109,7 +112,7 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 }
                 Err(e) => {
                     error!("TCP worker accept error: {}", e);
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
         }

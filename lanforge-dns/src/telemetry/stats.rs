@@ -1,5 +1,6 @@
 //! DNS service statistics using atomic counters.
 
+use lanforge_core::types::ndp::dns::TransportProtocol;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,6 +19,12 @@ pub struct DnsStats {
     pub blocked_queries: AtomicU64,
     pub cache_entries: AtomicU64,
     pub cache_capacity: AtomicU64,
+    // Protocol distribution
+    pub proto_udp: AtomicU64,
+    pub proto_tcp: AtomicU64,
+    pub proto_dot: AtomicU64,
+    pub proto_doq: AtomicU64,
+    pub proto_doh: AtomicU64,
 }
 
 impl DnsStats {
@@ -63,6 +70,16 @@ impl DnsStats {
         self.blocked_queries.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn inc_protocol(&self, proto: TransportProtocol) {
+        match proto {
+            TransportProtocol::Udp => self.proto_udp.fetch_add(1, Ordering::Relaxed),
+            TransportProtocol::Tcp => self.proto_tcp.fetch_add(1, Ordering::Relaxed),
+            TransportProtocol::Tls => self.proto_dot.fetch_add(1, Ordering::Relaxed),
+            TransportProtocol::Quic => self.proto_doq.fetch_add(1, Ordering::Relaxed),
+            TransportProtocol::Https => self.proto_doh.fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
     pub fn snapshot(&self) -> DnsStatsSnapshot {
         DnsStatsSnapshot {
             requests_total: self.requests_total.load(Ordering::Relaxed),
@@ -77,6 +94,11 @@ impl DnsStats {
             blocked_queries: self.blocked_queries.load(Ordering::Relaxed),
             cache_entries: self.cache_entries.load(Ordering::Relaxed),
             cache_capacity: self.cache_capacity.load(Ordering::Relaxed),
+            proto_udp: self.proto_udp.load(Ordering::Relaxed),
+            proto_tcp: self.proto_tcp.load(Ordering::Relaxed),
+            proto_dot: self.proto_dot.load(Ordering::Relaxed),
+            proto_doq: self.proto_doq.load(Ordering::Relaxed),
+            proto_doh: self.proto_doh.load(Ordering::Relaxed),
         }
     }
 }
@@ -95,6 +117,11 @@ pub struct DnsStatsSnapshot {
     pub blocked_queries: u64,
     pub cache_entries: u64,
     pub cache_capacity: u64,
+    pub proto_udp: u64,
+    pub proto_tcp: u64,
+    pub proto_dot: u64,
+    pub proto_doq: u64,
+    pub proto_doh: u64,
 }
 
 impl Default for DnsStats {
@@ -112,6 +139,11 @@ impl Default for DnsStats {
             blocked_queries: AtomicU64::new(0),
             cache_entries: AtomicU64::new(0),
             cache_capacity: AtomicU64::new(0),
+            proto_udp: AtomicU64::new(0),
+            proto_tcp: AtomicU64::new(0),
+            proto_dot: AtomicU64::new(0),
+            proto_doq: AtomicU64::new(0),
+            proto_doh: AtomicU64::new(0),
         }
     }
 }

@@ -1,6 +1,7 @@
 use crate::error::DnsError;
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
+use lanforge_core::types::TransportProtocol;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,7 +68,15 @@ async fn handle_udp_query(
 
     let mut resp_buf = Vec::with_capacity(512);
     ctx.pipeline
-        .run(&ctx, data, &header, &question, src.ip(), &mut resp_buf)
+        .run(
+            &ctx,
+            data,
+            &header,
+            &question,
+            src.ip(),
+            TransportProtocol::Udp,
+            &mut resp_buf,
+        )
         .await?;
 
     if !resp_buf.is_empty() {

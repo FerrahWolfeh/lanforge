@@ -23,7 +23,7 @@ pub use crate::network::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordEntry,
     DnsRecordType, DnsResponseCode, Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix,
     Ipv6Prefix, NeighborEvent, QueryLogEntry, QueryResult, UpstreamHealthSnapshot, classify_ip,
-    classify_ipv6,
+    classify_ipv6, dns::TransportProtocol,
 };
 pub use crate::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget};
 pub use crate::utils::network::{

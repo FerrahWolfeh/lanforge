@@ -55,14 +55,53 @@ impl UpstreamStrategy {
     }
 
     pub fn snapshots(&self) -> Vec<UpstreamHealthSnapshot> {
-        self.all_upstreams()
+        let mut snaps: Vec<_> = self
+            .all_upstreams()
             .map(|m| {
-                m.health.snapshot(
+                let mut snap = m.health.snapshot(
                     format!("{}", m.target.addr),
                     format!("{:?}", m.target.protocol),
-                )
+                );
+
+                #[cfg(not(feature = "dot"))]
+                if m.target.protocol == crate::config::UpstreamProtocol::Tls {
+                    snap.status = "Disabled (Feature)".to_string();
+                }
+
+                #[cfg(not(feature = "doq"))]
+                if m.target.protocol == crate::config::UpstreamProtocol::Quic {
+                    snap.status = "Disabled (Feature)".to_string();
+                }
+
+                #[cfg(not(feature = "doh-upstream"))]
+                if m.target.protocol == crate::config::UpstreamProtocol::Https {
+                    snap.status = "Disabled (Feature)".to_string();
+                }
+
+                snap
             })
-            .collect()
+            .collect();
+
+        // Sort by tier, then by status (Healthy first)
+        snaps.sort_by(|a, b| {
+            let tier = |p: &str| match p {
+                "Tls" | "Quic" => 0,
+                "Https" => 1,
+                "Udp" => 2,
+                _ => 3,
+            };
+            tier(&a.protocol).cmp(&tier(&b.protocol)).then_with(|| {
+                // Keep Healthy at top if possible
+                let status_rank = |s: &str| match s {
+                    "Healthy" => 0,
+                    "Degraded" => 1,
+                    _ => 2,
+                };
+                status_rank(&a.status).cmp(&status_rank(&b.status))
+            })
+        });
+
+        snaps
     }
 
     pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {

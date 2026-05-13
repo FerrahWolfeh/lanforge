@@ -1,3 +1,4 @@
+use lanforge_core::types::TransportProtocol;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,7 +36,9 @@ impl DotService {
 
 impl AsyncService for DotService {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        let Some(addr_str) = &self.cfg.dot_listen else { return Ok(()); };
+        let Some(addr_str) = &self.cfg.dot_listen else {
+            return Ok(());
+        };
 
         let cert = self.cfg.tls_cert.as_deref().ok_or_else(|| {
             CoreError::Generic("DoT requires tls_cert to be configured".to_string())
@@ -89,23 +92,50 @@ async fn handle_dot_connection(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut tls_stream = acceptor.accept(stream).await?;
     let dns_ctx_any = ctx.get_dns_context().ok_or("DNS engine not ready")?;
-    let dns_ctx = dns_ctx_any.clone().downcast::<DnsContext>().map_err(|_| "Downcast failed")?;
+    let dns_ctx = dns_ctx_any
+        .clone()
+        .downcast::<DnsContext>()
+        .map_err(|_| "Downcast failed")?;
 
     loop {
         let mut len_buf = [0u8; 2];
-        if tokio::time::timeout(Duration::from_secs(10), tls_stream.read_exact(&mut len_buf)).await.is_err() { break; }
+        if tokio::time::timeout(Duration::from_secs(10), tls_stream.read_exact(&mut len_buf))
+            .await
+            .is_err()
+        {
+            break;
+        }
 
         let len = u16::from_be_bytes(len_buf) as usize;
-        if len > 4096 || len == 0 { break; }
+        if len > 4096 || len == 0 {
+            break;
+        }
 
         let mut query_buf = vec![0u8; len];
         tls_stream.read_exact(&mut query_buf).await?;
 
-        let header = match WireHeader::parse(&query_buf) { Some(h) => h, None => break };
-        let question = match WireQuestion::parse(&query_buf) { Some(q) => q, None => break };
+        let header = match WireHeader::parse(&query_buf) {
+            Some(h) => h,
+            None => break,
+        };
+        let question = match WireQuestion::parse(&query_buf) {
+            Some(q) => q,
+            None => break,
+        };
 
         let mut resp_buf = Vec::with_capacity(512);
-        dns_ctx.pipeline.run(&dns_ctx, &query_buf, &header, &question, peer.ip(), &mut resp_buf).await?;
+        dns_ctx
+            .pipeline
+            .run(
+                &dns_ctx,
+                &query_buf,
+                &header,
+                &question,
+                peer.ip(),
+                TransportProtocol::Tls,
+                &mut resp_buf,
+            )
+            .await?;
 
         if !resp_buf.is_empty() {
             let resp_len = u16::try_from(resp_buf.len())?.to_be_bytes();
