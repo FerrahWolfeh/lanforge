@@ -186,14 +186,15 @@ impl AdBlocker {
             .map(crate::config::RewriteRule::parse_answer)
     }
 
-    pub fn load_from_urls(&self, urls: &[String]) -> Result<HashSet<String>, DnsError> {
+    pub fn load_from_urls(&self, name: &str, urls: &[String]) -> Result<HashSet<String>, DnsError> {
         let mut new_list = HashSet::new();
         let agent = ureq::Agent::new_with_defaults();
         let mut total_domains = 0;
         let mut successful_urls = 0;
 
         info!(
-            "🛡️ AdBlocker: Starting blocklist update from {} sources",
+            "🛡️ AdBlocker: Starting {} update from {} sources",
+            name,
             urls.len()
         );
 
@@ -211,18 +212,25 @@ impl AdBlocker {
                     }
                     let mut line_count = 0;
                     let buf_reader = BufReader::new(resp.into_body().into_reader());
-
                     for line in buf_reader.lines() {
                         let Ok(line) = line else {
                             continue;
                         };
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() || trimmed.starts_with('#') {
+                        let domain = line.trim();
+                        if domain.is_empty() || domain.starts_with('#') {
                             continue;
                         }
-                        let domain = trimmed.split_whitespace().last().unwrap_or("");
+
+                        // Handle both "domain" and "1.2.3.4 domain" (hosts file) formats
+                        let domain = if let Some((_ip, d)) = domain.split_once(char::is_whitespace)
+                        {
+                            d.trim()
+                        } else {
+                            domain
+                        };
+
                         if !domain.is_empty() {
-                            new_list.insert(domain.to_ascii_lowercase());
+                            new_list.insert(domain.to_lowercase());
                             line_count += 1;
                         }
                     }
@@ -236,7 +244,8 @@ impl AdBlocker {
             }
         }
         info!(
-            "🎉 AdBlocker: Update complete. Total unique domains: {} (from {} total lines). Sources: {}/{}",
+            "🎉 AdBlocker: {} update complete. Total unique domains: {} (from {} total lines). Sources: {}/{}",
+            name,
             new_list.len(),
             total_domains,
             successful_urls,

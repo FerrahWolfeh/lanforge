@@ -38,7 +38,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     ctx.cfg.adblock_urls.len()
                 );
 
-                if let Ok(new_list) = filter.load_from_urls(&ctx.cfg.adblock_urls) {
+                if let Ok(new_list) = filter.load_from_urls("blocklist", &ctx.cfg.adblock_urls) {
                     let count = new_list.len();
                     // Build DiskBlocklist (writes to disk + builds bloom)
                     match DiskBlocklist::build(new_list, cache_path, 50000) {
@@ -56,7 +56,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     }
                 }
 
-                if let Ok(new_allow) = filter.load_from_urls(&ctx.cfg.adblock_allowlist_urls) {
+                if let Ok(new_allow) =
+                    filter.load_from_urls("allowlist", &ctx.cfg.adblock_allowlist_urls)
+                {
                     filter.replace_allowlist(new_allow);
                 }
 

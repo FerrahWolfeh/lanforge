@@ -1,6 +1,6 @@
 [package]
 name = "lanforge"
-version = "0.20.0"
+version = "0.20.1"
 license.workspace = true
 edition = "2024"
 
@@ -54,7 +54,11 @@ https = ["dep:lanforge-http", "lanforge-http/server"]
 doh-server = ["dep:lanforge-http", "lanforge-http/doh"]
 
 # Core Features
-adblock = ["lanforge-dns/adblock", "lanforge-db/adblock"]
+adblock = [
+    "lanforge-dns/adblock",
+    "lanforge-db/adblock",
+    "lanforge-api/adblock",
+]
 zstd = ["lanforge-api/zstd"]
 
 # Meta-features
