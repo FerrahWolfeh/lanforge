@@ -14,7 +14,7 @@ use tracing::{error, info};
 pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         if let Some(filter) = &ctx.filter {
-            let cache_path = Path::new("blocklist.rkyv");
+            let cache_path = Path::new("blocklist.fst");
 
             // 1. Try to load from disk on startup
             if cache_path.exists()

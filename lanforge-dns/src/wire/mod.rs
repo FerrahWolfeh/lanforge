@@ -310,13 +310,37 @@ impl<'a> WireResponseScanner<'a> {
             }
 
             // TYPE(2), CLASS(2), TTL(4), RDLEN(2)
+            let rtype = u16::from_be_bytes([self.data[pos], self.data[pos + 1]]);
             let ttl_offset = pos + 4;
-            let ttl = u32::from_be_bytes([
+            let mut ttl = u32::from_be_bytes([
                 self.data[ttl_offset],
                 self.data[ttl_offset + 1],
                 self.data[ttl_offset + 2],
                 self.data[ttl_offset + 3],
             ]);
+
+            // RFC 2308: Negative caching TTL is the minimum of the SOA's TTL
+            // and the SOA's 'minimum' field (last field in RDATA).
+            if rtype == 6 {
+                // SOA RDATA starts at pos + 10
+                if let Some(mname_end) = skip_name(self.data, pos + 10)
+                    && let Some(rname_end) = skip_name(self.data, mname_end)
+                {
+                    // Serial(4), Refresh(4), Retry(4), Expire(4) = 16 bytes before Minimum(4)
+                    let minimum_offset = rname_end + 16;
+                    if minimum_offset + 4 <= self.data.len() {
+                        let minimum_ttl = u32::from_be_bytes([
+                            self.data[minimum_offset],
+                            self.data[minimum_offset + 1],
+                            self.data[minimum_offset + 2],
+                            self.data[minimum_offset + 3],
+                        ]);
+                        if minimum_ttl < ttl {
+                            ttl = minimum_ttl;
+                        }
+                    }
+                }
+            }
 
             if ttl < min_ttl {
                 min_ttl = ttl;

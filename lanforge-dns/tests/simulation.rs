@@ -8,9 +8,11 @@ use lanforge_core::types::{
 };
 use lanforge_dns::DnsService;
 use lanforge_dns::config::{DnsConfig, UpstreamEntry};
+use lanforge_dns::telemetry::DnsStats;
 use lanforge_dns::wire::{WireDecoder, WireEncoder};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
@@ -201,6 +203,98 @@ async fn dns_simulation_upstream() {
     assert_eq!(response.header.id, 5678);
     assert_eq!(response.header.rcode, DnsResponseCode::NoError);
     assert!(!response.answers.is_empty(), "No answers for google.com");
+
+    ctx.terminate();
+}
+
+#[tokio::test]
+#[ignore]
+async fn dns_simulation_cache_case_insensitive() {
+    let ctx = init_test_context();
+
+    let cfg = DnsConfig {
+        enabled: true,
+        listen: "127.0.0.1:1056".parse().unwrap(),
+        upstreams: vec![UpstreamEntry {
+            target: "1.1.1.1:53".parse().unwrap(),
+        }],
+        ..Default::default()
+    };
+
+    let mut service = DnsService::new(cfg, ctx.clone());
+    let ctrl = ServiceControl::new("dns-cache", ctx.clone());
+    ctx.set_db_ready(true);
+    let mut rx = ctx.bus().subscribe();
+
+    tokio::spawn(async move {
+        service.run(ctrl).await.expect("Service failed");
+    });
+
+    loop {
+        let event = rx.recv().await.expect("Bus closed");
+        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
+            && name == "dns-cache"
+        {
+            break;
+        }
+    }
+
+    let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
+    client_sock.connect("127.0.0.1:1056").await.unwrap();
+
+    // 1. First query: google.com (lowercase)
+    let mut query1 = DnsMessage::new();
+    query1.header.id = 1111;
+    query1.header.qdcount = 1;
+    query1.questions.push(DnsQuestion {
+        name: Arc::from("google.com"),
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+    let query1_bytes = WireEncoder::new().encode_message(&query1);
+    client_sock.send(&query1_bytes).await.unwrap();
+    let mut buf = [0u8; 1024];
+    tokio::time::timeout(Duration::from_secs(5), client_sock.recv(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let hits_before = ctx
+        .get_dns_stats()
+        .and_then(|s| s.downcast::<DnsStats>().ok())
+        .map(|s| s.cache_hits.load(Ordering::Relaxed))
+        .unwrap_or(0);
+
+    // 2. Second query: GoOgLe.CoM (mixed case)
+    let mut query2 = DnsMessage::new();
+    query2.header.id = 2222;
+    query2.header.qdcount = 1;
+    query2.questions.push(DnsQuestion {
+        name: Arc::from("GoOgLe.CoM"),
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+    let query2_bytes = WireEncoder::new().encode_message(&query2);
+    client_sock.send(&query2_bytes).await.unwrap();
+    let n2 = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let mut decoder = WireDecoder::new(&buf[..n2]);
+    let response = decoder.decode_message().unwrap();
+    assert_eq!(response.header.id, 2222);
+    assert!(!response.answers.is_empty());
+
+    let hits_after = ctx
+        .get_dns_stats()
+        .and_then(|s| s.downcast::<DnsStats>().ok())
+        .map(|s| s.cache_hits.load(Ordering::Relaxed))
+        .unwrap_or(0);
+    assert!(
+        hits_after > hits_before,
+        "Cache hit count did not increase for case-insensitive query"
+    );
 
     ctx.terminate();
 }

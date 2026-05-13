@@ -1,73 +1,69 @@
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::Write;
+use std::io::BufWriter;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
 use bloomfilter::Bloom;
+use fst::{Set, SetBuilder, Streamer};
 use lru::LruCache;
 use memmap2::Mmap;
 use parking_lot::Mutex;
-use rkyv::rancor::Error;
-use rkyv::{Archive, Archived, Deserialize, Serialize};
 
 use crate::error::DnsError;
 
-/// Memory-efficient blocklist using a Bloom filter, an LRU cache, and a disk-backed sorted list.
+/// Memory-efficient blocklist using a Bloom filter, an LRU cache, and a disk-backed FST.
 pub struct DiskBlocklist {
     /// Bloom filter for fast negative lookups (0.5% FP rate).
     bloom: Bloom<str>,
     /// LRU cache of recent lookup results (domain -> blocked?).
     lru: Arc<Mutex<LruCache<Box<str>, bool>>>,
-    /// Memory-mapped rkyv file with sorted domains.
-    mmap: Mmap,
-    /// Total number of domains in the blocklist.
-    domain_count: usize,
-}
-
-#[derive(Archive, Deserialize, Serialize, Debug)]
-#[rkyv(crate = rkyv)]
-pub struct BlocklistData {
-    pub domains: Vec<String>,
+    /// Memory-mapped FST (Finite State Transducer) set of domains.
+    fst: Set<Mmap>,
 }
 
 impl DiskBlocklist {
-    /// Build from a set of domains, deduplicate, sort, write to disk, and build bloom filter.
+    /// Build from a set of domains, deduplicate, sort, write to disk as FST, and build bloom filter.
     pub fn build(domains: HashSet<String>, path: &Path, lru_cap: usize) -> Result<Self, DnsError> {
         let mut sorted_domains: Vec<String> = domains.into_iter().collect();
         sorted_domains.sort_unstable();
 
-        let data = BlocklistData {
-            domains: sorted_domains,
-        };
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        let mut builder = SetBuilder::new(writer)
+            .map_err(|e| DnsError::Generic(format!("FST builder creation failed: {e}")))?;
 
-        // Serialize to disk using rkyv
-        let bytes = rkyv::to_bytes::<Error>(&data)
-            .map_err(|e| DnsError::Generic(format!("Serialization failed: {}", e)))?;
+        for domain in &sorted_domains {
+            builder
+                .insert(domain)
+                .map_err(|e| DnsError::Generic(format!("FST insertion failed: {e}")))?;
+        }
 
-        let mut file = File::create(path)?;
-        file.write_all(&bytes)?;
-        file.flush()?;
+        builder
+            .finish()
+            .map_err(|e| DnsError::Generic(format!("FST finalization failed: {e}")))?;
 
         Self::load(path, lru_cap)
     }
 
-    /// Load from an existing rkyv file on disk.
+    /// Load from an existing FST file on disk.
     pub fn load(path: &Path, lru_cap: usize) -> Result<Self, DnsError> {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
 
-        // Access archived data
-        let archived = unsafe { rkyv::access_unchecked::<Archived<BlocklistData>>(&mmap) };
-        let domain_count = archived.domains.len();
+        let fst = Set::new(mmap).map_err(|e| DnsError::Generic(format!("FST load failed: {e}")))?;
+        let domain_count = fst.len();
 
-        // Build Bloom filter from the sorted list in the mmap
+        // Build Bloom filter from the FST contents
         let mut bloom = Bloom::new_for_fp_rate(domain_count.max(100), 0.005)
-            .map_err(|e| DnsError::Generic(format!("Bloom filter creation failed: {}", e)))?;
+            .map_err(|e| DnsError::Generic(format!("Bloom filter creation failed: {e}")))?;
 
-        for domain in archived.domains.iter() {
-            bloom.set(domain.as_str());
+        let mut stream = fst.stream();
+        while let Some(domain_bytes) = stream.next() {
+            if let Ok(domain_str) = std::str::from_utf8(domain_bytes) {
+                bloom.set(domain_str);
+            }
         }
 
         Ok(Self {
@@ -75,8 +71,7 @@ impl DiskBlocklist {
             lru: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(lru_cap).unwrap(),
             ))),
-            mmap,
-            domain_count,
+            fst,
         })
     }
 
@@ -96,14 +91,8 @@ impl DiskBlocklist {
             return false;
         }
 
-        // 3. Binary search in the memory-mapped sorted list
-        let archived = unsafe { rkyv::access_unchecked::<Archived<BlocklistData>>(&self.mmap) };
-        let domains = &archived.domains;
-
-        // Binary search using rkyv's ArchivedVec
-        let result = domains
-            .binary_search_by(|probe| probe.as_str().cmp(domain))
-            .is_ok();
+        // 3. FST Lookup
+        let result = self.fst.contains(domain);
 
         // 4. Update LRU
         self.lru.lock().put(Box::from(domain), result);
@@ -113,11 +102,11 @@ impl DiskBlocklist {
 
     /// Get the number of domains in the blocklist.
     pub fn len(&self) -> usize {
-        self.domain_count
+        self.fst.len()
     }
 
     /// Check if the blocklist is empty.
     pub fn is_empty(&self) -> bool {
-        self.domain_count == 0
+        self.fst.is_empty()
     }
 }

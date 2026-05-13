@@ -39,8 +39,11 @@ impl DnsCache {
 
     #[must_use]
     pub fn get_wire(&self, query_data: &[u8], question: &WireQuestion<'_>) -> Option<(Vec<u8>, bool)> {
+        let mut qname = question.qname_raw().to_vec();
+        qname.make_ascii_lowercase();
+
         let key = CacheKey {
-            qname: question.qname_raw().to_vec(),
+            qname,
             qtype: question.qtype(),
             qclass: question.qclass(),
         };
@@ -84,12 +87,13 @@ impl DnsCache {
 
     pub fn insert(
         &self,
-        key: CacheKey,
+        mut key: CacheKey,
         response_data: Vec<u8>,
         ttl_offsets: Vec<usize>,
         min_ttl_found: u32,
         is_block: bool,
     ) {
+        key.qname.make_ascii_lowercase();
         // Enforce capacity (simple random eviction if full)
         if self.cache.len() as u64 >= self.capacity
             && self.capacity > 0
