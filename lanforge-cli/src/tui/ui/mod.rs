@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 pub mod devices;
+pub mod dns;
 pub mod events;
 pub mod explorer;
 pub mod header;
@@ -37,6 +38,7 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         "[4] Events",
         "[5] Services",
         "[6] Topology",
+        "[7] DNS",
     ];
     let tabs = Tabs::new(titles)
         .block(
@@ -61,13 +63,14 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         TuiTab::Events => events::render(f, chunks[2], &app.state, app.auto_scroll),
         TuiTab::Services => services::render(f, chunks[2], &app.state),
         TuiTab::Topology => topology::render(f, app, chunks[2]),
+        TuiTab::Dns => dns::render(f, chunks[2], &app.state),
     }
 
     // 4. Footer
     let help_text = if app.mode == TuiMode::Filtering {
         "TYPE TO FILTER...  Enter/Esc: Confirm"
     } else {
-        "q:Quit  1-6:Tabs  ↑↓:Navigate  Enter:Details  /:Search  r:Refresh"
+        "q:Quit  1-7:Tabs  ↑↓:Navigate  Enter:Details  /:Search  r:Refresh"
     };
     let footer = Paragraph::new(help_text).style(Style::default().fg(theme::TEXT_DIM));
     f.render_widget(footer, chunks[3]);

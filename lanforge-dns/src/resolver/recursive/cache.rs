@@ -22,13 +22,17 @@ pub struct CachedResponse {
 
 pub struct DnsCache {
     pub cache: DashMap<CacheKey, CachedResponse>,
+    capacity: u64,
+    min_ttl: u32,
 }
 
 impl DnsCache {
     #[must_use]
-    pub fn new(_capacity: u64) -> Self {
+    pub fn new(capacity: u64, min_ttl: u32) -> Self {
         Self {
-            cache: DashMap::new(),
+            cache: DashMap::with_capacity(capacity as usize),
+            capacity,
+            min_ttl,
         }
     }
 
@@ -82,10 +86,29 @@ impl DnsCache {
         key: CacheKey,
         response_data: Vec<u8>,
         ttl_offsets: Vec<usize>,
-        min_ttl: u32,
+        min_ttl_found: u32,
     ) {
+        // Enforce capacity (simple random eviction if full)
+        if self.cache.len() as u64 >= self.capacity
+            && self.capacity > 0
+            && let Some(entry) = self.cache.iter().next()
+        {
+            let k = entry.key().clone();
+            drop(entry);
+            self.cache.remove(&k);
+        }
+
         let now = Instant::now();
-        let ttl_secs = u64::from(min_ttl.clamp(5, 3600));
+
+        // Use original TTL if found, otherwise default to 24h (86400s).
+        // Floor at config min_ttl.
+        let effective_ttl = if min_ttl_found == 0 {
+            86400
+        } else {
+            min_ttl_found
+        };
+
+        let ttl_secs = u64::from(effective_ttl.max(self.min_ttl));
 
         let cached_response = CachedResponse {
             data: Bytes::from(response_data),

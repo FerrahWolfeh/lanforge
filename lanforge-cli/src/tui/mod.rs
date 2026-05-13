@@ -102,6 +102,18 @@ pub async fn run_tui(
                 AppEvent::DnsStatsUpdate(s) => {
                     app.state.dns_stats = Some(*s);
                 }
+                AppEvent::DnsAnalyticsUpdate(s) => {
+                    app.state.dns_analytics = Some(*s);
+                }
+                AppEvent::DnsUpstreamsUpdate(s) => {
+                    app.state.dns_upstreams = Some(*s);
+                }
+                AppEvent::DnsQueryLogUpdate(s) => {
+                    app.state.dns_query_log = Some(*s);
+                }
+                AppEvent::DnsAdblockStatusUpdate(s) => {
+                    app.state.dns_adblock_status = Some(*s);
+                }
                 AppEvent::Tick => {}
             }
         }
@@ -171,6 +183,51 @@ async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sende
                     .await
                 {
                     let _ = fetch_tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+                }
+
+                // DNS Analytics
+                if let Ok(Response::DnsAnalytics(s)) = fetch_client
+                    .send(Command::new(CommandAction::DnsAnalytics {
+                        limit: Some(10),
+                    }))
+                    .await
+                {
+                    let _ = fetch_tx
+                        .send(AppEvent::DnsAnalyticsUpdate(Box::new(s)))
+                        .await;
+                }
+
+                // DNS Upstreams
+                if let Ok(Response::DnsUpstreams(s)) = fetch_client
+                    .send(Command::new(CommandAction::DnsUpstreams))
+                    .await
+                {
+                    let _ = fetch_tx
+                        .send(AppEvent::DnsUpstreamsUpdate(Box::new(s)))
+                        .await;
+                }
+
+                // DNS Query Log
+                if let Ok(Response::DnsQueryLog(s)) = fetch_client
+                    .send(Command::new(CommandAction::DnsQueryLog {
+                        limit: Some(50),
+                        client: None,
+                    }))
+                    .await
+                {
+                    let _ = fetch_tx
+                        .send(AppEvent::DnsQueryLogUpdate(Box::new(s)))
+                        .await;
+                }
+
+                // DNS Adblock Status
+                if let Ok(Response::DnsAdblockStatus(s)) = fetch_client
+                    .send(Command::new(CommandAction::DnsAdblockStatus))
+                    .await
+                {
+                    let _ = fetch_tx
+                        .send(AppEvent::DnsAdblockStatusUpdate(Box::new(s)))
+                        .await;
                 }
 
                 last_refresh = Instant::now();
@@ -264,6 +321,65 @@ async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                             read_response(&mut reader, Encoding::Json, Compression::None).await
                     {
                         let _ = fetch_tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+                    }
+
+                    // DNS Analytics
+                    let mut cmd = Command::new(CommandAction::DnsAnalytics { limit: Some(10) });
+                    cmd.encoding = Some(Encoding::Json);
+                    if write_request(&mut writer, &cmd, Encoding::Json)
+                        .await
+                        .is_ok()
+                        && let Ok(Some(Response::DnsAnalytics(s))) =
+                            read_response(&mut reader, Encoding::Json, Compression::None).await
+                    {
+                        let _ = fetch_tx
+                            .send(AppEvent::DnsAnalyticsUpdate(Box::new(s)))
+                            .await;
+                    }
+
+                    // DNS Upstreams
+                    let mut cmd = Command::new(CommandAction::DnsUpstreams);
+                    cmd.encoding = Some(Encoding::Json);
+                    if write_request(&mut writer, &cmd, Encoding::Json)
+                        .await
+                        .is_ok()
+                        && let Ok(Some(Response::DnsUpstreams(s))) =
+                            read_response(&mut reader, Encoding::Json, Compression::None).await
+                    {
+                        let _ = fetch_tx
+                            .send(AppEvent::DnsUpstreamsUpdate(Box::new(s)))
+                            .await;
+                    }
+
+                    // DNS Query Log
+                    let mut cmd = Command::new(CommandAction::DnsQueryLog {
+                        limit: Some(50),
+                        client: None,
+                    });
+                    cmd.encoding = Some(Encoding::Json);
+                    if write_request(&mut writer, &cmd, Encoding::Json)
+                        .await
+                        .is_ok()
+                        && let Ok(Some(Response::DnsQueryLog(s))) =
+                            read_response(&mut reader, Encoding::Json, Compression::None).await
+                    {
+                        let _ = fetch_tx
+                            .send(AppEvent::DnsQueryLogUpdate(Box::new(s)))
+                            .await;
+                    }
+
+                    // DNS Adblock Status
+                    let mut cmd = Command::new(CommandAction::DnsAdblockStatus);
+                    cmd.encoding = Some(Encoding::Json);
+                    if write_request(&mut writer, &cmd, Encoding::Json)
+                        .await
+                        .is_ok()
+                        && let Ok(Some(Response::DnsAdblockStatus(s))) =
+                            read_response(&mut reader, Encoding::Json, Compression::None).await
+                    {
+                        let _ = fetch_tx
+                            .send(AppEvent::DnsAdblockStatusUpdate(Box::new(s)))
+                            .await;
                     }
                 }
                 last_refresh = Instant::now();

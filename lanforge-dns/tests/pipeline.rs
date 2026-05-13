@@ -36,6 +36,10 @@ async fn pipeline_nxdomain_basic() {
 #[tokio::test]
 #[cfg(feature = "adblock")]
 async fn pipeline_adblocking() {
+    use std::collections::HashSet;
+
+    use lanforge_dns::resolver::filter::DiskBlocklist;
+
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();
     cfg.adblock_enabled = true;
@@ -45,7 +49,14 @@ async fn pipeline_adblocking() {
         .filter
         .as_ref()
         .expect("Filter should be initialized");
-    filter.add_block("doubleclick.net");
+
+    let mut domains = HashSet::new();
+    domains.insert("doubleclick.net".to_string());
+    let temp_path = std::env::temp_dir().join("test_blocklist.rkyv");
+    let bl =
+        DiskBlocklist::build(domains, &temp_path, 100).expect("Failed to build test blocklist");
+
+    filter.replace_blocklist(bl);
     filter.set_enabled(true);
 
     let mut query = DnsMessage::new();

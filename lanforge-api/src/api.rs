@@ -213,9 +213,14 @@ pub enum CommandAction {
         /// Target MAC, IP, or Hostname.
         target: String,
     },
-    /// Retrieve DNS resolver statistics.
     #[dispatch(handler = "handle_dns_stats")]
     DnsStats,
+    /// Retrieve DNS analytics (top domains, query types, query rate).
+    #[dispatch(handler = "handle_dns_analytics", args(limit), readonly)]
+    DnsAnalytics {
+        /// Maximum number of top domains/clients to retrieve.
+        limit: Option<usize>,
+    },
     /// Retrieve DNS upstream status and health.
     #[dispatch(handler = "handle_dns_upstreams")]
     DnsUpstreams,
@@ -321,6 +326,8 @@ pub enum Response {
     Whois(Box<WhoisResponse>),
     /// Response for DNS statistics.
     DnsStats(DnsStatsResponse),
+    /// Response for DNS analytics.
+    DnsAnalytics(DnsAnalyticsResponse),
     /// Response for DNS upstreams status.
     DnsUpstreams(DnsUpstreamsResponse),
     /// Response for a DNS diagnostic query.
@@ -714,6 +721,48 @@ pub struct DnsStatsResponse {
     pub resolved_total: u64,
     /// Number of queries that failed to resolve.
     pub failed_total: u64,
+    /// Current number of entries in the DNS cache.
+    pub cache_entries: u64,
+    /// Maximum capacity of the DNS cache.
+    pub cache_capacity: u64,
+}
+
+/// A single entry in the top domains list.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TopDomainEntry {
+    pub domain: String,
+    pub count: u64,
+}
+
+/// A single entry in the query types list.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QueryTypeEntry {
+    pub qtype: String,
+    pub count: u64,
+}
+
+/// A single entry in the query rate timeline.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QueryRateEntry {
+    pub timestamp: u64,
+    pub count: u64,
+}
+
+/// Response containing aggregated DNS analytics.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsAnalyticsResponse {
+    pub top_domains: Vec<TopDomainEntry>,
+    pub query_types: Vec<QueryTypeEntry>,
+    pub query_rate: Vec<QueryRateEntry>,
+    pub top_clients: Vec<TopClientEntry>,
+}
+
+/// A single entry in the top clients list.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TopClientEntry {
+    pub ip: String,
+    pub hostname: Option<String>,
+    pub count: u64,
 }
 
 /// A response containing status for all configured DNS upstreams.

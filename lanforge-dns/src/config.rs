@@ -298,9 +298,13 @@ pub struct DnsConfig {
     /// Whether the micro-adblocker is enabled.
     pub adblock_enabled: bool,
     /// List of URLs to fetch blocklists from.
-    pub adblock_sources: Vec<String>,
+    pub adblock_urls: Vec<String>,
     /// List of URLs to fetch allowlists from.
     pub adblock_allowlist_urls: Vec<String>,
+    /// Hours between blocklist refreshes.
+    pub adblock_refresh_hours: u32,
+    /// Whether to prefer refreshing at night.
+    pub adblock_refresh_at_night: bool,
     /// How to respond to blocked queries.
     pub blocking_mode: BlockingMode,
     /// Custom IPv4 address for `BlockingMode::CustomIp`.
@@ -334,6 +338,10 @@ pub struct DnsConfig {
 
     /// Query logging configuration.
     pub query_log: QueryLogConfig,
+    /// Maximum number of entries in the DNS cache.
+    pub cache_size: u64,
+    /// Minimum TTL for cached records.
+    pub cache_min_ttl: u32,
 }
 
 impl Default for DnsConfig {
@@ -349,8 +357,10 @@ impl Default for DnsConfig {
             ttl: 60,
             multi_search_labels: vec![vec![b"lan".to_vec()]],
             adblock_enabled: false,
-            adblock_sources: Vec::new(),
+            adblock_urls: Vec::new(),
             adblock_allowlist_urls: Vec::new(),
+            adblock_refresh_hours: 12,
+            adblock_refresh_at_night: true,
             blocking_mode: BlockingMode::default(),
             blocking_ip_v4: None,
             blocking_ip_v6: None,
@@ -364,6 +374,8 @@ impl Default for DnsConfig {
             doq_listen: None,
             doq_enabled: false,
             query_log: QueryLogConfig::default(),
+            cache_size: 5000,
+            cache_min_ttl: 30,
         }
     }
 }

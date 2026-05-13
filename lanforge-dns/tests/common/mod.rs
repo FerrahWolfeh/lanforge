@@ -48,7 +48,7 @@ pub fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     let recursive = Arc::new(UpstreamStrategy::new(cfg_arc.upstream_mode, Vec::new()));
 
     let filter = if cfg_arc.adblock_enabled || !cfg_arc.rewrites.is_empty() {
-        let adblocker = AdBlocker::new();
+        let adblocker = AdBlocker::new(cfg_arc.adblock_enabled);
         if !cfg_arc.rewrites.is_empty() {
             *adblocker.rewrites.write() = cfg_arc.rewrites.clone();
         }

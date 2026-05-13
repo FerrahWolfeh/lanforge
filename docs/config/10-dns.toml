@@ -29,6 +29,12 @@ adblock_urls = [
     "https://adaway.org/hosts.txt",
 ]
 
+# How often to refresh blocklists (hours). Default: 12.
+adblock_refresh_hours = 12
+
+# Prefer updating blocklists at night. Default: true.
+adblock_refresh_at_night = true
+
 # Blocking mode: "nxdomain" (default), "null_ip" (0.0.0.0), "custom_ip", "refused"
 blocking_mode = "nxdomain"
 
@@ -79,5 +85,11 @@ doq_listen = "0.0.0.0:853"
 [dns.query_log]
 enabled = true
 ring_size = 1000
-persist = false      # If true, queries are saved to the long-term DB
+persist = false       # If true, queries are saved to the long-term DB
 retention_hours = 168 # 7 days
+
+# --- Cache ---
+# Maximum number of entries in the DNS cache.
+cache_size = 10000
+# Minimum TTL for cached records (seconds).
+cache_min_ttl = 30

@@ -3,7 +3,7 @@ use crate::pipeline::{Pipeline, middleware::*};
 use crate::resolver::{
     LocalResolver,
     filter::AdBlocker,
-    recursive::{UpstreamManager, UpstreamStrategy},
+    recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
 };
 use crate::server::DnsContext;
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
@@ -11,6 +11,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tracing::info;
 
 #[lanforge_macros::lanforge_service(
@@ -50,15 +51,19 @@ impl DnsService {
     }
 
     pub async fn init_dns_context(&self) -> Result<Arc<DnsContext>, CoreError> {
+        let cache = Arc::new(DnsCache::new(self.cfg.cache_size, self.cfg.cache_min_ttl));
+        self.stats
+            .cache_capacity
+            .store(self.cfg.cache_size, Ordering::Relaxed);
         let mut upstreams = Vec::new();
         for prioritized in &self.cfg.upstreams {
-            if let Ok(mgr) = UpstreamManager::new(&prioritized.target).await {
+            if let Ok(mgr) = UpstreamManager::new(&prioritized.target, Arc::clone(&cache)).await {
                 upstreams.push(mgr);
             }
         }
 
         let filter = if self.cfg.adblock_enabled && !upstreams.is_empty() {
-            Some(Arc::new(AdBlocker::new()))
+            Some(Arc::new(AdBlocker::new(self.cfg.adblock_enabled)))
         } else {
             None
         };
@@ -124,10 +129,17 @@ impl AsyncService for DnsService {
         info!("Starting DNS service with {} UDP handlers", parallelism);
 
         let mut workers = Vec::new();
+        let socket = Arc::new(
+            tokio::net::UdpSocket::bind(self.cfg.listen)
+                .await
+                .map_err(|e| CoreError::ServiceError(format!("Failed to bind UDP socket: {e}")))?,
+        );
+
         for _ in 0..parallelism {
-            workers.push(crate::server::worker::udp::spawn_udp_worker(Arc::clone(
-                &dns_ctx,
-            )));
+            workers.push(crate::server::worker::udp::spawn_udp_worker(
+                Arc::clone(&dns_ctx),
+                Arc::clone(&socket),
+            ));
         }
 
         let tcp_worker = crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(&dns_ctx));

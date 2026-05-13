@@ -4,7 +4,7 @@ use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter};
 use dashmap::DashMap;
-use lanforge_core::types::{DnsRecordType};
+use lanforge_core::types::DnsRecordType;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
@@ -13,8 +13,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tracing::{error, info, trace};
 
+pub mod blocklist;
+
+pub use blocklist::DiskBlocklist;
+
 pub struct AdBlocker {
-    blocklist: RwLock<Arc<HashSet<String>>>,
+    blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
     allowlist: RwLock<Arc<HashSet<String>>>,
     pub timer: Arc<AdblockTimerState>,
     pub rewrites: RwLock<Vec<crate::config::RewriteRule>>,
@@ -51,11 +55,11 @@ impl AdblockTimerState {
 
 impl AdBlocker {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(enabled: bool) -> Self {
         Self {
-            blocklist: RwLock::new(Arc::new(HashSet::new())),
+            blocklist: RwLock::new(None),
             allowlist: RwLock::new(Arc::new(HashSet::new())),
-            timer: Arc::new(AdblockTimerState::new(false)),
+            timer: Arc::new(AdblockTimerState::new(enabled)),
             rewrites: RwLock::new(Vec::new()),
             per_ip_stats: DashMap::new(),
         }
@@ -78,15 +82,18 @@ impl AdBlocker {
         }
         {
             let allow = self.allowlist.read();
-            if Self::match_recursive(&allow, qname) {
+            if Self::match_allow(&allow, qname) {
                 return false;
             }
         }
         let block = self.blocklist.read();
-        Self::match_recursive(&block, qname)
+        if let Some(bl) = block.as_ref() {
+            return Self::match_block(bl, qname);
+        }
+        false
     }
 
-    fn match_recursive(set: &HashSet<String>, qname: &str) -> bool {
+    fn match_allow(set: &HashSet<String>, qname: &str) -> bool {
         if set.contains(qname) {
             return true;
         }
@@ -103,6 +110,23 @@ impl AdBlocker {
         false
     }
 
+    fn match_block(bl: &DiskBlocklist, qname: &str) -> bool {
+        if bl.contains(qname) {
+            return true;
+        }
+        let mut current = qname;
+        while let Some(pos) = current.find('.') {
+            current = &current[pos + 1..];
+            if current.is_empty() {
+                break;
+            }
+            if bl.contains(current) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn inc_ip_stats(&self, ip: IpAddr) {
         self.per_ip_stats
             .entry(ip)
@@ -110,9 +134,9 @@ impl AdBlocker {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn replace_blocklist(&self, new_list: HashSet<String>) {
+    pub fn replace_blocklist(&self, new_list: DiskBlocklist) {
         let count = new_list.len();
-        *self.blocklist.write() = Arc::new(new_list);
+        *self.blocklist.write() = Some(Arc::new(new_list));
         info!("AdBlocker: blocklist updated with {} entries", count);
     }
 
@@ -122,11 +146,9 @@ impl AdBlocker {
         info!("AdBlocker: allowlist updated with {} entries", count);
     }
 
-    pub fn add_block(&self, domain: &str) {
-        let mut list = self.blocklist.write();
-        let mut new_set = (**list).clone();
-        new_set.insert(domain.to_lowercase());
-        *list = Arc::new(new_set);
+    pub fn add_block(&self, _domain: &str) {
+        // We no longer support manual ad-hoc blocks in the DiskBlocklist for now,
+        // as it is read-only from mmap. Manual blocks should be added to config.
     }
 
     pub fn add_allow(&self, domain: &str) {
@@ -138,7 +160,7 @@ impl AdBlocker {
 
     #[must_use]
     pub fn blocklist_size(&self) -> usize {
-        self.blocklist.read().len()
+        self.blocklist.read().as_ref().map_or(0, |bl| bl.len())
     }
 
     #[must_use]
@@ -324,7 +346,9 @@ impl AdBlocker {
 
         if let Some(answer) = self.resolve_rewrite(&domain) {
             match answer {
-                RewriteAnswer::A(ip) if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY => {
+                RewriteAnswer::A(ip)
+                    if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY =>
+                {
                     resp.clear();
                     resp.extend_from_slice(&rb.success_ips([IpAddr::V4(ip)])?);
                     return Ok(true);
@@ -342,10 +366,7 @@ impl AdBlocker {
                     return Ok(true);
                 }
                 RewriteAnswer::Device(hostname) => {
-                    if let Some(ips) = ctx
-                        .local
-                        .resolve_ip(&hostname, qtype)
-                    {
+                    if let Some(ips) = ctx.local.resolve_ip(&hostname, qtype) {
                         resp.clear();
                         resp.extend_from_slice(&rb.success_ips(ips)?);
                         return Ok(true);
@@ -458,7 +479,7 @@ impl AdBlocker {
 
 impl Default for AdBlocker {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 

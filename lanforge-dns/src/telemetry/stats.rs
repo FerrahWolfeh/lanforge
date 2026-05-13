@@ -16,6 +16,8 @@ pub struct DnsStats {
     pub failed_total: AtomicU64,
     #[cfg(feature = "adblock")]
     pub blocked_queries: AtomicU64,
+    pub cache_entries: AtomicU64,
+    pub cache_capacity: AtomicU64,
 }
 
 impl DnsStats {
@@ -73,6 +75,8 @@ impl DnsStats {
             failed_total: self.failed_total.load(Ordering::Relaxed),
             #[cfg(feature = "adblock")]
             blocked_queries: self.blocked_queries.load(Ordering::Relaxed),
+            cache_entries: self.cache_entries.load(Ordering::Relaxed),
+            cache_capacity: self.cache_capacity.load(Ordering::Relaxed),
         }
     }
 }
@@ -89,6 +93,8 @@ pub struct DnsStatsSnapshot {
     pub failed_total: u64,
     #[cfg(feature = "adblock")]
     pub blocked_queries: u64,
+    pub cache_entries: u64,
+    pub cache_capacity: u64,
 }
 
 impl Default for DnsStats {
@@ -104,6 +110,8 @@ impl Default for DnsStats {
             failed_total: AtomicU64::new(0),
             #[cfg(feature = "adblock")]
             blocked_queries: AtomicU64::new(0),
+            cache_entries: AtomicU64::new(0),
+            cache_capacity: AtomicU64::new(0),
         }
     }
 }

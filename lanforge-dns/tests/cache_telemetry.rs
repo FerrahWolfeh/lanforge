@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn cache_hit_and_ttl_scrubbing() {
-    let cache = DnsCache::new(100);
+    let cache = DnsCache::new(100, 30);
 
     // 1. Create a query
     let mut query = DnsMessage::new();
@@ -127,7 +127,7 @@ async fn query_logging_ring_buffer() {
 
 #[test]
 fn cache_expiration() {
-    let cache = DnsCache::new(10);
+    let cache = DnsCache::new(10, 30);
     let key = CacheKey {
         qname: b"\x04test\x00".to_vec(),
         qtype: 1,

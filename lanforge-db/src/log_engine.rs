@@ -20,7 +20,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::LeaseDbError;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
@@ -115,7 +115,7 @@ impl LogDb {
 
         sqlx::query(&init_query).execute(&pool).await?;
 
-        info!("In-memory log database initialized");
+        debug!("In-memory log database initialized");
         Ok(Self {
             pool,
             last_prune: Mutex::new(Instant::now()),
@@ -322,6 +322,88 @@ impl LogDb {
             });
         }
         Ok(entries)
+    }
+
+    /// Retrieves top domains by query count.
+    pub async fn get_dns_top_domains(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, LeaseDbError> {
+        let rows = sqlx::query(
+            "SELECT domain, COUNT(*) as count FROM dns_queries GROUP BY domain ORDER BY count DESC LIMIT ?"
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("domain"), r.get::<i64, _>("count") as u64))
+            .collect())
+    }
+
+    /// Retrieves query counts by type.
+    pub async fn get_dns_query_types(&self) -> Result<Vec<(u16, u64)>, LeaseDbError> {
+        let rows = sqlx::query(
+            "SELECT qtype, COUNT(*) as count FROM dns_queries GROUP BY qtype ORDER BY count DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.get::<i32, _>("qtype") as u16,
+                    r.get::<i64, _>("count") as u64,
+                )
+            })
+            .collect())
+    }
+
+    /// Retrieves query rate timeline (grouped by 30s buckets for the last 10 minutes).
+    pub async fn get_dns_query_rate(
+        &self,
+        since_secs: u64,
+    ) -> Result<Vec<(u64, u64)>, LeaseDbError> {
+        let rows = sqlx::query(
+            "SELECT (timestamp / 30) * 30 as bucket, COUNT(*) as count 
+             FROM dns_queries 
+             WHERE timestamp >= ? 
+             GROUP BY bucket 
+             ORDER BY bucket ASC",
+        )
+        .bind(since_secs as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.get::<i64, _>("bucket") as u64,
+                    r.get::<i64, _>("count") as u64,
+                )
+            })
+            .collect())
+    }
+
+    /// Retrieves top clients by query count.
+    pub async fn get_dns_top_clients(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, LeaseDbError> {
+        let rows = sqlx::query(
+            "SELECT src_ip, COUNT(*) as count FROM dns_queries GROUP BY src_ip ORDER BY count DESC LIMIT ?"
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("src_ip"), r.get::<i64, _>("count") as u64))
+            .collect())
     }
 
     /// Retrieves the most recent blocked DNS queries.

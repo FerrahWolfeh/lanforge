@@ -7,7 +7,7 @@
 use std::fs::metadata;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::Ordering;
-use std::time::{Instant, SystemTime};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use lanforge_core::bus::{
@@ -31,12 +31,16 @@ use crate::api::{
     ServicesStatus, SimpleSuccess, StatusResponse, TopologyEntry, TopologyResponse, WhoisResponse,
 };
 
+use crate::api::{
+    DnsAnalyticsResponse, QueryRateEntry, QueryTypeEntry, TopClientEntry, TopDomainEntry,
+};
+use lanforge_core::types::DnsRecordType;
+
 // Moved to lanforge-http
 
 use crate::api::Compression;
 use crate::server::ClientContext;
 
-use lanforge_core::types::DnsRecordType;
 use lanforge_dns::server::DnsContext;
 
 // ---------------------------------------------------------------------------
@@ -615,6 +619,8 @@ impl ClientContext {
                 blocked_queries: 0,
                 resolved_total: stats.resolved_total.load(Ordering::Relaxed),
                 failed_total: stats.failed_total.load(Ordering::Relaxed),
+                cache_entries: stats.cache_entries.load(Ordering::Relaxed),
+                cache_capacity: stats.cache_capacity.load(Ordering::Relaxed),
             });
         }
 
@@ -628,6 +634,8 @@ impl ClientContext {
             blocked_queries: 0,
             resolved_total: 0,
             failed_total: 0,
+            cache_entries: 0,
+            cache_capacity: 0,
         })
     }
 
@@ -825,6 +833,74 @@ impl ClientContext {
 
         Response::DnsQueryLog(DnsQueryLogResponse {
             entries: detailed_entries,
+        })
+    }
+
+    pub(crate) async fn handle_dns_analytics(&self, limit: Option<usize>) -> Response {
+        let limit = limit.unwrap_or(10);
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let ten_mins_ago = now_secs.saturating_sub(600);
+
+        let Ok(db) = LogDb::open(&self.cfg.log_db_url).await else {
+            return Response::Error {
+                error: "Failed to open log database".into(),
+            };
+        };
+
+        let top_domains = db
+            .get_dns_top_domains(limit)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(domain, count)| TopDomainEntry { domain, count })
+            .collect();
+
+        let query_types = db
+            .get_dns_query_types()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(qtype, count)| QueryTypeEntry {
+                qtype: DnsRecordType::from(qtype).to_string(),
+                count,
+            })
+            .collect();
+
+        let query_rate = db
+            .get_dns_query_rate(ten_mins_ago)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(timestamp, count)| QueryRateEntry { timestamp, count })
+            .collect();
+
+        let top_clients_raw = db.get_dns_top_clients(limit).await.unwrap_or_default();
+        let state = self.ctx.read();
+        let top_clients = top_clients_raw
+            .into_iter()
+            .map(|(ip, count)| {
+                let hostname = ip
+                    .parse::<IpAddr>()
+                    .ok()
+                    .and_then(|addr| state.get_mac_by_ip(addr))
+                    .and_then(|mac| state.devices.get(&mac))
+                    .map(|dev| dev.hostname.name.clone());
+                TopClientEntry {
+                    ip,
+                    hostname,
+                    count,
+                }
+            })
+            .collect();
+
+        Response::DnsAnalytics(DnsAnalyticsResponse {
+            top_domains,
+            query_types,
+            query_rate,
+            top_clients,
         })
     }
 

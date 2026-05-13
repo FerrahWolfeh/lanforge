@@ -45,7 +45,7 @@ rustls = { version = "0.23.40", default-features = false, features = [
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
@@ -53,7 +53,7 @@ panic = "abort"
 [profile.perf-release]
 inherits = "release"
 opt-level = 3
-lto = true
+lto = "thin"
 codegen-units = 1
 debug = true
 strip = false

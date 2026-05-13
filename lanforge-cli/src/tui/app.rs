@@ -11,6 +11,7 @@ pub enum TuiTab {
     Events,
     Services,
     Topology,
+    Dns,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,7 @@ impl TuiTab {
             3 => Self::Events,
             4 => Self::Services,
             5 => Self::Topology,
+            6 => Self::Dns,
             _ => Self::Overview,
         }
     }
@@ -42,6 +44,7 @@ impl TuiTab {
             Self::Events => 3,
             Self::Services => 4,
             Self::Topology => 5,
+            Self::Dns => 6,
         }
     }
 }
@@ -109,6 +112,7 @@ impl TuiApp {
             KeyCode::Char('4') => self.active_tab = TuiTab::Events,
             KeyCode::Char('5') => self.active_tab = TuiTab::Services,
             KeyCode::Char('6') => self.active_tab = TuiTab::Topology,
+            KeyCode::Char('7') => self.active_tab = TuiTab::Dns,
             KeyCode::Left => self.prev_tab(),
             KeyCode::Right => self.next_tab(),
             KeyCode::Char('/') => {
@@ -149,12 +153,12 @@ impl TuiApp {
 
     const fn next_tab(&mut self) {
         let i = self.active_tab.to_index();
-        self.active_tab = TuiTab::from_index((i + 1) % 6);
+        self.active_tab = TuiTab::from_index((i + 1) % 7);
     }
 
     const fn prev_tab(&mut self) {
         let i = self.active_tab.to_index();
-        self.active_tab = TuiTab::from_index((i + 5) % 6);
+        self.active_tab = TuiTab::from_index((i + 6) % 7);
     }
 
     fn move_up(&mut self) {

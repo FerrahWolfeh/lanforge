@@ -20,8 +20,6 @@ use tokio::sync::oneshot::{self, Sender};
 use tokio::time::timeout;
 use tracing::trace;
 
-const DNS_CACHE_SIZE: u64 = 5000;
-
 pub struct UpstreamManager {
     pub(crate) socket: Arc<UdpSocket>,
     pub(crate) pending: Arc<Mutex<HashMap<u16, Sender<Vec<u8>>>>>,
@@ -34,10 +32,9 @@ pub struct UpstreamManager {
 }
 
 impl UpstreamManager {
-    pub async fn new(target: &UpstreamTarget) -> Result<Arc<Self>, DnsError> {
+    pub async fn new(target: &UpstreamTarget, cache: Arc<DnsCache>) -> Result<Arc<Self>, DnsError> {
         let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
         let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
-        let cache = Arc::new(DnsCache::new(DNS_CACHE_SIZE));
 
         let s = Arc::clone(&socket);
         let p = Arc::clone(&pending);

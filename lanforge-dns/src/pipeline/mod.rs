@@ -44,6 +44,7 @@ impl Pipeline {
         src_ip: IpAddr,
         resp: &mut Vec<u8>,
     ) -> Result<(), DnsError> {
+        ctx.stats.inc_requests();
         for m in &self.middlewares {
             if m.run(ctx, data, header, question, src_ip, resp).await? {
                 return Ok(());
