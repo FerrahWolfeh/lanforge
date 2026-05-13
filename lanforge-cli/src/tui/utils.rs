@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local};
 use lanforge_core::types::{DeviceClass, IPv6State, InterfaceState, updates::StaticEntry};
 use std::time::SystemTime;
 
@@ -45,7 +45,7 @@ pub fn format_relative_time(st: SystemTime) -> String {
 /// Formats `SystemTime` into an absolute timestamp (HH:MM:SS).
 #[must_use]
 pub fn format_absolute_time(st: SystemTime) -> String {
-    let dt: DateTime<Utc> = st.into();
+    let dt: DateTime<Local> = st.into();
     dt.format("%H:%M:%S").to_string()
 }
 

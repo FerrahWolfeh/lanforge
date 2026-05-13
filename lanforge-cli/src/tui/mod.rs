@@ -243,153 +243,139 @@ async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sende
 }
 
 async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {
-    // 1. Watch Connection (persistent)
-    let watch_tx = tx.clone();
-    let watch_socket = socket_path.clone();
-    let watch_task = async move {
-        loop {
-            if let Ok(mut stream) = UnixStream::connect(&watch_socket).await {
+    tokio::select! {
+        () = run_daemon_watch(socket_path.clone(), tx.clone()) => {}
+        () = run_daemon_fetch(socket_path, tx) => {}
+    }
+}
+
+async fn run_daemon_watch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
+    loop {
+        if let Ok(mut stream) = UnixStream::connect(&socket_path).await {
+            let (reader, mut writer) = stream.split();
+            let mut reader = BufReader::new(reader);
+
+            let mut cmd = Command::new(CommandAction::Watch);
+            cmd.encoding = Some(Encoding::Json);
+            cmd.compression = Some(Compression::None);
+
+            if write_request(&mut writer, &cmd, Encoding::Json)
+                .await
+                .is_ok()
+            {
+                while let Ok(Some(resp)) =
+                    read_response(&mut reader, Encoding::Json, Compression::None).await
+                {
+                    if let Response::Event(event) = resp {
+                        let _ = tx.send(AppEvent::DaemonEvent(event)).await;
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
+    let mut last_refresh = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
+    loop {
+        if last_refresh.elapsed() >= Duration::from_secs(5) {
+            if let Ok(mut stream) = UnixStream::connect(&socket_path).await {
                 let (reader, mut writer) = stream.split();
                 let mut reader = BufReader::new(reader);
 
-                let mut cmd = Command::new(CommandAction::Watch);
+                // Status
+                let mut cmd = Command::new(CommandAction::Status);
                 cmd.encoding = Some(Encoding::Json);
-                cmd.compression = Some(Compression::None);
-
                 if write_request(&mut writer, &cmd, Encoding::Json)
                     .await
                     .is_ok()
-                {
-                    while let Ok(Some(resp)) =
+                    && let Ok(Some(Response::Status(s))) =
                         read_response(&mut reader, Encoding::Json, Compression::None).await
-                    {
-                        if let Response::Event(event) = resp {
-                            let _ = watch_tx.send(AppEvent::DaemonEvent(event)).await;
-                        }
-                    }
+                {
+                    let _ = tx.send(AppEvent::StatusUpdate(s)).await;
+                }
+
+                // State (ContextDump)
+                let mut cmd = Command::new(CommandAction::ContextDump {
+                    only_devices: false,
+                    only_orphans: false,
+                });
+                cmd.encoding = Some(Encoding::Json);
+                if write_request(&mut writer, &cmd, Encoding::Json)
+                    .await
+                    .is_ok()
+                    && let Ok(Some(Response::ContextDump(s))) =
+                        read_response(&mut reader, Encoding::Json, Compression::None).await
+                {
+                    let _ = tx.send(AppEvent::StateUpdate(s)).await;
+                }
+
+                // DNS Stats
+                let mut cmd = Command::new(CommandAction::DnsStats);
+                cmd.encoding = Some(Encoding::Json);
+                if write_request(&mut writer, &cmd, Encoding::Json)
+                    .await
+                    .is_ok()
+                    && let Ok(Some(Response::DnsStats(s))) =
+                        read_response(&mut reader, Encoding::Json, Compression::None).await
+                {
+                    let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+                }
+
+                // DNS Analytics
+                let mut cmd = Command::new(CommandAction::DnsAnalytics { limit: Some(10) });
+                cmd.encoding = Some(Encoding::Json);
+                if write_request(&mut writer, &cmd, Encoding::Json)
+                    .await
+                    .is_ok()
+                    && let Ok(Some(Response::DnsAnalytics(s))) =
+                        read_response(&mut reader, Encoding::Json, Compression::None).await
+                {
+                    let _ = tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
+                }
+
+                // DNS Upstreams
+                let mut cmd = Command::new(CommandAction::DnsUpstreams);
+                cmd.encoding = Some(Encoding::Json);
+                if write_request(&mut writer, &cmd, Encoding::Json)
+                    .await
+                    .is_ok()
+                    && let Ok(Some(Response::DnsUpstreams(s))) =
+                        read_response(&mut reader, Encoding::Json, Compression::None).await
+                {
+                    let _ = tx.send(AppEvent::DnsUpstreamsUpdate(Box::new(s))).await;
+                }
+
+                // DNS Query Log
+                let mut cmd = Command::new(CommandAction::DnsQueryLog {
+                    limit: Some(50),
+                    client: None,
+                });
+                cmd.encoding = Some(Encoding::Json);
+                if write_request(&mut writer, &cmd, Encoding::Json)
+                    .await
+                    .is_ok()
+                    && let Ok(Some(Response::DnsQueryLog(s))) =
+                        read_response(&mut reader, Encoding::Json, Compression::None).await
+                {
+                    let _ = tx.send(AppEvent::DnsQueryLogUpdate(Box::new(s))).await;
+                }
+
+                // DNS Adblock Status
+                let mut cmd = Command::new(CommandAction::DnsAdblockStatus);
+                cmd.encoding = Some(Encoding::Json);
+                if write_request(&mut writer, &cmd, Encoding::Json)
+                    .await
+                    .is_ok()
+                    && let Ok(Some(Response::DnsAdblockStatus(s))) =
+                        read_response(&mut reader, Encoding::Json, Compression::None).await
+                {
+                    let _ = tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
                 }
             }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            last_refresh = Instant::now();
         }
-    };
-
-    // 2. Fetch Connection (periodic)
-    let fetch_socket = socket_path.clone();
-    let fetch_tx = tx.clone();
-    let fetch_task = async move {
-        let mut last_refresh = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
-        loop {
-            if last_refresh.elapsed() >= Duration::from_secs(5) {
-                if let Ok(mut stream) = UnixStream::connect(&fetch_socket).await {
-                    let (reader, mut writer) = stream.split();
-                    let mut reader = BufReader::new(reader);
-
-                    // Status
-                    let mut cmd = Command::new(CommandAction::Status);
-                    cmd.encoding = Some(Encoding::Json);
-                    if write_request(&mut writer, &cmd, Encoding::Json)
-                        .await
-                        .is_ok()
-                        && let Ok(Some(Response::Status(s))) =
-                            read_response(&mut reader, Encoding::Json, Compression::None).await
-                    {
-                        let _ = fetch_tx.send(AppEvent::StatusUpdate(s)).await;
-                    }
-
-                    // State (ContextDump)
-                    let mut cmd = Command::new(CommandAction::ContextDump {
-                        only_devices: false,
-                        only_orphans: false,
-                    });
-                    cmd.encoding = Some(Encoding::Json);
-                    if write_request(&mut writer, &cmd, Encoding::Json)
-                        .await
-                        .is_ok()
-                        && let Ok(Some(Response::ContextDump(s))) =
-                            read_response(&mut reader, Encoding::Json, Compression::None).await
-                    {
-                        let _ = fetch_tx.send(AppEvent::StateUpdate(s)).await;
-                    }
-
-                    // DNS Stats
-                    let mut cmd = Command::new(CommandAction::DnsStats);
-                    cmd.encoding = Some(Encoding::Json);
-                    if write_request(&mut writer, &cmd, Encoding::Json)
-                        .await
-                        .is_ok()
-                        && let Ok(Some(Response::DnsStats(s))) =
-                            read_response(&mut reader, Encoding::Json, Compression::None).await
-                    {
-                        let _ = fetch_tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
-                    }
-
-                    // DNS Analytics
-                    let mut cmd = Command::new(CommandAction::DnsAnalytics { limit: Some(10) });
-                    cmd.encoding = Some(Encoding::Json);
-                    if write_request(&mut writer, &cmd, Encoding::Json)
-                        .await
-                        .is_ok()
-                        && let Ok(Some(Response::DnsAnalytics(s))) =
-                            read_response(&mut reader, Encoding::Json, Compression::None).await
-                    {
-                        let _ = fetch_tx
-                            .send(AppEvent::DnsAnalyticsUpdate(Box::new(s)))
-                            .await;
-                    }
-
-                    // DNS Upstreams
-                    let mut cmd = Command::new(CommandAction::DnsUpstreams);
-                    cmd.encoding = Some(Encoding::Json);
-                    if write_request(&mut writer, &cmd, Encoding::Json)
-                        .await
-                        .is_ok()
-                        && let Ok(Some(Response::DnsUpstreams(s))) =
-                            read_response(&mut reader, Encoding::Json, Compression::None).await
-                    {
-                        let _ = fetch_tx
-                            .send(AppEvent::DnsUpstreamsUpdate(Box::new(s)))
-                            .await;
-                    }
-
-                    // DNS Query Log
-                    let mut cmd = Command::new(CommandAction::DnsQueryLog {
-                        limit: Some(50),
-                        client: None,
-                    });
-                    cmd.encoding = Some(Encoding::Json);
-                    if write_request(&mut writer, &cmd, Encoding::Json)
-                        .await
-                        .is_ok()
-                        && let Ok(Some(Response::DnsQueryLog(s))) =
-                            read_response(&mut reader, Encoding::Json, Compression::None).await
-                    {
-                        let _ = fetch_tx
-                            .send(AppEvent::DnsQueryLogUpdate(Box::new(s)))
-                            .await;
-                    }
-
-                    // DNS Adblock Status
-                    let mut cmd = Command::new(CommandAction::DnsAdblockStatus);
-                    cmd.encoding = Some(Encoding::Json);
-                    if write_request(&mut writer, &cmd, Encoding::Json)
-                        .await
-                        .is_ok()
-                        && let Ok(Some(Response::DnsAdblockStatus(s))) =
-                            read_response(&mut reader, Encoding::Json, Compression::None).await
-                    {
-                        let _ = fetch_tx
-                            .send(AppEvent::DnsAdblockStatusUpdate(Box::new(s)))
-                            .await;
-                    }
-                }
-                last_refresh = Instant::now();
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-    };
-
-    tokio::select! {
-        _ = watch_task => {}
-        _ = fetch_task => {}
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }

@@ -2315,7 +2315,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.21.1"
+version = "0.21.2"
 dependencies = [
  "async-trait",
  "bincode",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-cli"
-version = "1.6.1"
+version = "1.6.2"
 dependencies = [
  "bincode",
  "bytesize",
@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-types"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "lanforge-macros",
  "serde",

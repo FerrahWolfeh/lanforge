@@ -43,7 +43,13 @@ fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
         ])
         .split(area);
 
-    // 1. Resolver Stats
+    render_resolver_stats(f, chunks[0], state);
+    render_upstreams_table(f, chunks[1], state);
+    render_cache_stats(f, chunks[2], state);
+    render_adblock_and_subservices(f, chunks[3], state);
+}
+
+fn render_resolver_stats(f: &mut Frame, area: Rect, state: &TuiState) {
     let dns_stats = state.dns_stats.as_ref();
     let stats_text = vec![
         Line::from(vec![
@@ -117,9 +123,10 @@ fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
         .title("── RESOLVER STATS ──")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER));
-    f.render_widget(Paragraph::new(stats_text).block(stats_block), chunks[0]);
+    f.render_widget(Paragraph::new(stats_text).block(stats_block), area);
+}
 
-    // 2. Upstreams
+fn render_upstreams_table(f: &mut Frame, area: Rect, state: &TuiState) {
     let upstreams = state.dns_upstreams.as_ref();
     let header = Row::new(vec!["HOST", "PROTO", "STATUS", "LAT", "OK%"])
         .style(Style::default().fg(theme::TEXT_DIM))
@@ -178,9 +185,10 @@ fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(upstreams_table, chunks[1]);
+    f.render_widget(upstreams_table, area);
+}
 
-    // 3. Cache
+fn render_cache_stats(f: &mut Frame, area: Rect, state: &TuiState) {
     let dns_stats = state.dns_stats.as_ref();
     let hit_rate = dns_stats.map_or(0.0, |s| {
         if s.total_requests > 0 {
@@ -220,14 +228,15 @@ fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
         .title("── CACHE ──")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER));
-    f.render_widget(Paragraph::new(cache_text).block(cache_block), chunks[2]);
+    f.render_widget(Paragraph::new(cache_text).block(cache_block), area);
+}
 
-    // 4. Adblock & Subservices
+fn render_adblock_and_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
     let adblock = state.dns_adblock_status.as_ref();
     let sub_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[3]);
+        .split(area);
 
     let adblock_text = vec![
         Line::from(vec![
@@ -440,7 +449,11 @@ fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
                 };
 
                 let time = chrono::DateTime::from_timestamp(e.timestamp.cast_signed(), 0)
-                    .map(|dt| dt.format("%H:%M:%S").to_string())
+                    .map(|dt| {
+                        dt.with_timezone(&chrono::Local)
+                            .format("%H:%M:%S")
+                            .to_string()
+                    })
                     .unwrap_or_default();
 
                 Row::new(vec![

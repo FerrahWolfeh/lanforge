@@ -16,6 +16,8 @@ pub enum DnsRecordType {
     AAAA = 28,
     SRV = 33,
     OPT = 41,
+    SVCB = 64,
+    HTTPS = 65,
     ANY = 255,
     Unknown(u16),
 }
@@ -33,6 +35,8 @@ impl From<u16> for DnsRecordType {
             28 => Self::AAAA,
             33 => Self::SRV,
             41 => Self::OPT,
+            64 => Self::SVCB,
+            65 => Self::HTTPS,
             255 => Self::ANY,
             v => Self::Unknown(v),
         }
@@ -52,6 +56,8 @@ impl From<DnsRecordType> for u16 {
             DnsRecordType::AAAA => 28,
             DnsRecordType::SRV => 33,
             DnsRecordType::OPT => 41,
+            DnsRecordType::SVCB => 64,
+            DnsRecordType::HTTPS => 65,
             DnsRecordType::ANY => 255,
             DnsRecordType::Unknown(v) => v,
         }
@@ -73,6 +79,8 @@ impl std::str::FromStr for DnsRecordType {
             "AAAA" => Ok(Self::AAAA),
             "SRV" => Ok(Self::SRV),
             "OPT" => Ok(Self::OPT),
+            "SVCB" => Ok(Self::SVCB),
+            "HTTPS" => Ok(Self::HTTPS),
             "ANY" => Ok(Self::ANY),
             _ => {
                 if s.starts_with("TYPE")
@@ -99,6 +107,8 @@ impl std::fmt::Display for DnsRecordType {
             Self::AAAA => write!(f, "AAAA"),
             Self::SRV => write!(f, "SRV"),
             Self::OPT => write!(f, "OPT"),
+            Self::SVCB => write!(f, "SVCB"),
+            Self::HTTPS => write!(f, "HTTPS"),
             Self::ANY => write!(f, "ANY"),
             Self::Unknown(v) => write!(f, "TYPE{v}"),
         }
@@ -430,5 +440,30 @@ impl DnsMessage {
 impl std::fmt::Display for DnsRecordEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:<5} {:<20} -> {}", self.kind, self.name, self.data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dns_record_type_parsing() {
+        assert_eq!(DnsRecordType::from(64), DnsRecordType::SVCB);
+        assert_eq!(DnsRecordType::from(65), DnsRecordType::HTTPS);
+        assert_eq!(u16::from(DnsRecordType::SVCB), 64);
+        assert_eq!(u16::from(DnsRecordType::HTTPS), 65);
+
+        assert_eq!(
+            "SVCB".parse::<DnsRecordType>().unwrap(),
+            DnsRecordType::SVCB
+        );
+        assert_eq!(
+            "https".parse::<DnsRecordType>().unwrap(),
+            DnsRecordType::HTTPS
+        );
+
+        assert_eq!(DnsRecordType::SVCB.to_string(), "SVCB");
+        assert_eq!(DnsRecordType::HTTPS.to_string(), "HTTPS");
     }
 }

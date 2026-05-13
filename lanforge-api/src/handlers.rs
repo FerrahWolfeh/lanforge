@@ -904,6 +904,7 @@ impl ClientContext {
         let protocol_stats = protocol_stats_raw
             .into_iter()
             .map(|(protocol, count)| {
+                #[allow(clippy::cast_precision_loss)]
                 let percentage = if total_proto_queries > 0 {
                     (count as f32 / total_proto_queries as f32) * 100.0
                 } else {
