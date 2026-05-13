@@ -99,12 +99,18 @@ impl<'a> WireHeader<'a> {
             z: (self.data[3] & 0x40) != 0,
             ad: (self.data[3] & 0x20) != 0,
             cd: (self.data[3] & 0x10) != 0,
-            rcode: DnsResponseCode::from(self.data[3] & 0x0F),
+            rcode: DnsResponseCode::from(self.rcode()),
             qdcount: self.qdcount(),
             ancount: self.ancount(),
             nscount: self.nscount(),
             arcount: self.arcount(),
         }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn rcode(&self) -> u8 {
+        self.data[3] & 0x0F
     }
 }
 

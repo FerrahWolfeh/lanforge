@@ -1,6 +1,7 @@
 pub mod tcp;
 pub mod udp;
 
+use crate::config::AdblockUrlKind;
 use crate::{resolver::filter::DiskBlocklist, server::DnsContext};
 use std::{
     path::Path,
@@ -8,13 +9,13 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Spawns the adblock list refresh manager.
 pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         if let Some(filter) = &ctx.filter {
-            let cache_path = Path::new("blocklist.fst");
+            let cache_path = Path::new("/var/lib/lanforge/blocklist.fst");
 
             // 1. Try to load from disk on startup
             if cache_path.exists()
@@ -33,33 +34,83 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 
             loop {
                 let start = Instant::now();
-                info!(
-                    "🛡️ Adblock: downloading {} blocklist sources...",
-                    ctx.cfg.adblock_urls.len()
-                );
 
-                if let Ok(new_list) = filter.load_from_urls("blocklist", &ctx.cfg.adblock_urls) {
-                    let count = new_list.len();
-                    // Build DiskBlocklist (writes to disk + builds bloom)
-                    match DiskBlocklist::build(new_list, cache_path, 50000) {
-                        Ok(bl) => {
-                            filter.replace_blocklist(bl);
+                // Load URLs from the database (the DB is the source of truth after the refactor)
+                let (blocklist_urls, allowlist_urls) = match ctx.db.load_adblock_urls().await {
+                    Ok(urls) => {
+                        let mut block = Vec::new();
+                        let mut allow = Vec::new();
+                        for (url, kind) in urls {
+                            match kind {
+                                AdblockUrlKind::Blocklist => block.push(url),
+                                AdblockUrlKind::Allowlist => allow.push(url),
+                            }
+                        }
+                        info!(
+                            "🛡️ Adblock: loaded {} blocklist and {} allowlist URLs from database",
+                            block.len(),
+                            allow.len()
+                        );
+                        (block, allow)
+                    }
+                    Err(e) => {
+                        error!("❌ Adblock: failed to load URLs from database: {e}");
+                        warn!("🛡️ Adblock: will retry on next refresh cycle");
+                        let sleep_dur = compute_next_refresh(
+                            ctx.cfg.adblock_refresh_hours,
+                            ctx.cfg.adblock_refresh_at_night,
+                        );
+                        tokio::time::sleep(sleep_dur).await;
+                        continue;
+                    }
+                };
+
+                if blocklist_urls.is_empty() {
+                    warn!(
+                        "🛡️ Adblock: no blocklist URLs configured in database — skipping download"
+                    );
+                } else {
+                    info!(
+                        "🛡️ Adblock: downloading {} blocklist sources...",
+                        blocklist_urls.len()
+                    );
+                    match filter.load_from_urls("blocklist", &blocklist_urls) {
+                        Ok(new_list) => {
+                            let count = new_list.len();
                             info!(
-                                "🛡️ Adblock: blocklist built and saved — {} domains in {:.1}s",
+                                "🛡️ Adblock: downloaded {} unique domains, building FST at {}...",
                                 count,
-                                start.elapsed().as_secs_f32()
+                                cache_path.display()
                             );
+                            match DiskBlocklist::build(new_list, cache_path, 50000) {
+                                Ok(bl) => {
+                                    filter.replace_blocklist(bl);
+                                    info!(
+                                        "🛡️ Adblock: blocklist built and saved — {} domains in {:.1}s",
+                                        count,
+                                        start.elapsed().as_secs_f32()
+                                    );
+                                }
+                                Err(e) => {
+                                    error!("❌ Adblock: failed to build disk blocklist: {e}");
+                                }
+                            }
                         }
                         Err(e) => {
-                            error!("❌ Adblock: failed to build disk blocklist: {}", e);
+                            error!("❌ Adblock: failed to download blocklist sources: {e}");
                         }
                     }
                 }
 
-                if let Ok(new_allow) =
-                    filter.load_from_urls("allowlist", &ctx.cfg.adblock_allowlist_urls)
-                {
-                    filter.replace_allowlist(new_allow);
+                if !allowlist_urls.is_empty() {
+                    info!(
+                        "🛡️ Adblock: downloading {} allowlist sources...",
+                        allowlist_urls.len()
+                    );
+                    match filter.load_from_urls("allowlist", &allowlist_urls) {
+                        Ok(new_allow) => filter.replace_allowlist(new_allow),
+                        Err(e) => error!("❌ Adblock: failed to download allowlist sources: {e}"),
+                    }
                 }
 
                 // Ensure enabled after first successful load
@@ -75,6 +126,10 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 let sleep_dur = compute_next_refresh(
                     ctx.cfg.adblock_refresh_hours,
                     ctx.cfg.adblock_refresh_at_night,
+                );
+                info!(
+                    "🛡️ Adblock: next refresh in {:.1}h",
+                    sleep_dur.as_secs_f64() / 3600.0
                 );
                 tokio::time::sleep(sleep_dur).await;
             }

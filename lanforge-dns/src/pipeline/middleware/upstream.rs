@@ -8,6 +8,7 @@ use crate::wire::WireDecoder;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 #[derive(Default)]
@@ -76,6 +77,14 @@ impl Middleware for UpstreamMiddleware {
                         answer,
                         protocol: req.protocol,
                     });
+
+                    // Update cache size counter in real-time
+                    if !cached && let Some(mgr) = ctx.recursive.all_upstreams().next() {
+                        ctx.stats
+                            .cache_entries
+                            .store(mgr.cache.cache.len() as u64, Ordering::Relaxed);
+                    }
+
                     Ok(true)
                 }
                 Err(e) => {

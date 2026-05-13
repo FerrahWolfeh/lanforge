@@ -20,6 +20,8 @@ use tokio::sync::oneshot::{self, Sender};
 use tokio::time::timeout;
 use tracing::trace;
 
+const DOT_POOL_MAX: usize = 8;
+
 pub struct UpstreamManager {
     pub(crate) socket: Arc<UdpSocket>,
     pub(crate) pending: Arc<Mutex<HashMap<u16, Sender<Vec<u8>>>>>,
@@ -31,8 +33,12 @@ pub struct UpstreamManager {
     pub doh_client: Option<crate::server::transport::doh::DohClient>,
     #[cfg(feature = "dot")]
     pub(crate) tls_connector: Option<tokio_rustls::TlsConnector>,
+    #[cfg(feature = "dot")]
+    pub(crate) dot_pool: tokio::sync::Mutex<Vec<tokio_rustls::client::TlsStream<TcpStream>>>,
     #[cfg(feature = "doq")]
-    pub(crate) quic_config: Option<quinn::ClientConfig>,
+    pub(crate) quic_endpoint: Option<quinn::Endpoint>,
+    #[cfg(feature = "doq")]
+    pub(crate) quic_conn: tokio::sync::Mutex<Option<quinn::Connection>>,
 }
 
 impl UpstreamManager {
@@ -82,7 +88,6 @@ impl UpstreamManager {
                         tokio::task::yield_now().await;
                     }
                     Err(_) => {
-                        // Persistent error, exit loop to avoid busy loop/leak
                         break;
                     }
                 }
@@ -95,6 +100,35 @@ impl UpstreamManager {
         root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         #[cfg(any(feature = "dot", feature = "doq"))]
         let shared_roots = Arc::new(root_cert_store);
+
+        #[cfg(feature = "doq")]
+        let quic_endpoint = if target.protocol == UpstreamProtocol::Quic {
+            let mut tls_config = rustls::ClientConfig::builder()
+                .with_root_certificates(Arc::clone(&shared_roots))
+                .with_no_client_auth();
+            tls_config.alpn_protocols = vec![b"doq".to_vec()];
+
+            let mut transport_config = quinn::TransportConfig::default();
+            transport_config.max_idle_timeout(Some(Duration::from_secs(30).try_into().unwrap()));
+            transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
+
+            let client_config = quinn::ClientConfig::new(Arc::new(
+                quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+                    .map_err(|e| DnsError::Tls(format!("QUIC config error: {e}")))?,
+            ));
+
+            let client_addr: SocketAddr = if target.addr.is_ipv6() {
+                "[::]:0".parse().unwrap()
+            } else {
+                "0.0.0.0:0".parse().unwrap()
+            };
+
+            let mut endpoint = quinn::Endpoint::client(client_addr).map_err(DnsError::Io)?;
+            endpoint.set_default_client_config(client_config);
+            Some(endpoint)
+        } else {
+            None
+        };
 
         Ok(Arc::new(Self {
             socket,
@@ -118,25 +152,12 @@ impl UpstreamManager {
             } else {
                 None
             },
+            #[cfg(feature = "dot")]
+            dot_pool: tokio::sync::Mutex::new(Vec::new()),
             #[cfg(feature = "doq")]
-            quic_config: if target.protocol == UpstreamProtocol::Quic {
-                let mut tls_config = rustls::ClientConfig::builder()
-                    .with_root_certificates(Arc::clone(&shared_roots))
-                    .with_no_client_auth();
-                tls_config.alpn_protocols = vec![b"doq".to_vec()];
-
-                let mut transport_config = quinn::TransportConfig::default();
-                transport_config.max_idle_timeout(Some(Duration::from_secs(5).try_into().unwrap()));
-
-                let mut client_config = quinn::ClientConfig::new(Arc::new(
-                    quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
-                        .map_err(|e| DnsError::Tls(format!("QUIC config error: {e}")))?,
-                ));
-                client_config.transport_config(Arc::new(transport_config));
-                Some(client_config)
-            } else {
-                None
-            },
+            quic_endpoint,
+            #[cfg(feature = "doq")]
+            quic_conn: tokio::sync::Mutex::new(None),
         }))
     }
 
@@ -208,8 +229,15 @@ impl UpstreamManager {
             qtype: question.qtype(),
             qclass: question.qclass(),
         };
-        self.cache
-            .insert(key, final_bytes.clone(), offsets, min_ttl, false);
+
+        // Only cache NOERROR (0) and NXDOMAIN (3)
+        if let Some(resp_header) = WireHeader::parse(&final_bytes) {
+            let rcode = resp_header.rcode();
+            if rcode == 0 || rcode == 3 {
+                self.cache
+                    .insert(key, final_bytes.clone(), offsets, min_ttl, false);
+            }
+        }
         Ok((final_bytes, false, false))
     }
 
@@ -248,6 +276,47 @@ impl UpstreamManager {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     #[cfg(feature = "dot")]
     async fn forward_dot(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
+        // 1. Try to grab a connection from the pool
+        let conn = {
+            let mut pool = self.dot_pool.lock().await;
+            pool.pop()
+        };
+
+        if let Some(mut stream) = conn {
+            match Self::dot_exchange(&mut stream, data).await {
+                Ok(resp) => {
+                    // Success, return to pool
+                    let mut pool = self.dot_pool.lock().await;
+                    if pool.len() < DOT_POOL_MAX {
+                        pool.push(stream);
+                    }
+                    return Ok(resp);
+                }
+                Err(_) => {
+                    // Connection dead, fall through to reconnect
+                    trace!("Cached DoT connection dead, reconnecting...");
+                }
+            }
+        }
+
+        // 2. Reconnect/Initial connect
+        let mut stream = self.dot_connect(target).await?;
+        let resp = Self::dot_exchange(&mut stream, data).await?;
+
+        // 3. Return to pool
+        let mut pool = self.dot_pool.lock().await;
+        if pool.len() < DOT_POOL_MAX {
+            pool.push(stream);
+        }
+
+        Ok(resp)
+    }
+
+    #[cfg(feature = "dot")]
+    async fn dot_connect(
+        &self,
+        target: &UpstreamTarget,
+    ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, DnsError> {
         use rustls_pki_types::ServerName;
 
         let hostname = target.hostname.as_deref().unwrap_or("dns.google");
@@ -264,19 +333,26 @@ impl UpstreamManager {
             .await
             .map_err(|_| DnsError::UpstreamTimeout)??;
 
-        let mut tls_stream = connector.connect(server_name, tcp_stream).await?;
+        let tls_stream = connector.connect(server_name, tcp_stream).await?;
+        Ok(tls_stream)
+    }
 
+    #[cfg(feature = "dot")]
+    async fn dot_exchange(
+        stream: &mut tokio_rustls::client::TlsStream<TcpStream>,
+        data: &[u8],
+    ) -> Result<Vec<u8>, DnsError> {
         timeout(Duration::from_secs(5), async {
             let len = u16::try_from(data.len()).unwrap_or(u16::MAX).to_be_bytes();
-            tls_stream.write_all(&len).await?;
-            tls_stream.write_all(data).await?;
+            stream.write_all(&len).await?;
+            stream.write_all(data).await?;
 
             let mut len_buf = [0u8; 2];
-            tls_stream.read_exact(&mut len_buf).await?;
+            stream.read_exact(&mut len_buf).await?;
             let resp_len = u16::from_be_bytes(len_buf) as usize;
 
             let mut resp_buf = vec![0u8; resp_len];
-            tls_stream.read_exact(&mut resp_buf).await?;
+            stream.read_exact(&mut resp_buf).await?;
             Ok::<Vec<u8>, Error>(resp_buf)
         })
         .await
@@ -295,34 +371,59 @@ impl UpstreamManager {
 
     #[cfg(feature = "doq")]
     async fn forward_doq(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
-        use quinn::Endpoint;
+        let mut guard = self.quic_conn.lock().await;
 
+        // 1. Try existing connection
+        if let Some(conn) = guard.as_ref() {
+            if conn.close_reason().is_none() {
+                match Self::doq_exchange(conn, data).await {
+                    Ok(resp) => return Ok(resp),
+                    Err(_) => {
+                        trace!("Cached DoQ connection dead, reconnecting...");
+                        *guard = None;
+                    }
+                }
+            } else {
+                *guard = None;
+            }
+        }
+
+        // 2. Reconnect
+        let conn = self.doq_connect(target).await?;
+        let resp = Self::doq_exchange(&conn, data).await?;
+
+        // 3. Store for reuse
+        *guard = Some(conn);
+        Ok(resp)
+    }
+
+    #[cfg(feature = "doq")]
+    async fn doq_connect(&self, target: &UpstreamTarget) -> Result<quinn::Connection, DnsError> {
         let hostname = target.hostname.as_deref().unwrap_or("dns.google");
-        let client_config = self
-            .quic_config
+        let endpoint = self
+            .quic_endpoint
             .as_ref()
-            .ok_or_else(|| DnsError::Generic("QUIC config not initialized".to_string()))?;
-
-        let client_addr: SocketAddr = if target.addr.is_ipv6() {
-            "[::]:0".parse().unwrap()
-        } else {
-            "0.0.0.0:0".parse().unwrap()
-        };
-        let mut endpoint = Endpoint::client(client_addr).map_err(DnsError::Io)?;
-        endpoint.set_default_client_config(client_config.clone());
+            .ok_or_else(|| DnsError::Generic("QUIC endpoint not initialized".to_string()))?;
 
         let conn = endpoint
             .connect(target.addr, hostname)
             .map_err(|e| DnsError::Tls(e.to_string()))?;
+
         let conn = timeout(Duration::from_secs(5), conn)
             .await
             .map_err(|_| DnsError::UpstreamTimeout)?
             .map_err(|e| DnsError::Tls(e.to_string()))?;
 
+        Ok(conn)
+    }
+
+    #[cfg(feature = "doq")]
+    async fn doq_exchange(conn: &quinn::Connection, data: &[u8]) -> Result<Vec<u8>, DnsError> {
         let (mut send, mut recv) = conn
             .open_bi()
             .await
             .map_err(|e| DnsError::Tls(e.to_string()))?;
+
         send.write_all(data)
             .await
             .map_err(|e| DnsError::Io(std::io::Error::other(e)))?;

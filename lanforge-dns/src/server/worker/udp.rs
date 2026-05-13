@@ -53,13 +53,15 @@ async fn handle_udp_query(
         _ => false,
     };
 
+    let edns = WireOptScanner::scan(data, &header, &question);
+
     if is_noise {
         let mut resp_buf = Vec::with_capacity(64);
         WireResponseWriter::write_error_response(
             data,
             &question,
             1, // FORMERR
-            WireOptScanner::scan(data, &header, &question),
+            edns,
             false,
             &mut resp_buf,
         );
@@ -68,13 +70,27 @@ async fn handle_udp_query(
     }
 
     let mut resp_buf = Vec::with_capacity(512);
-    ctx.pipeline
+    let run_res = ctx
+        .pipeline
         .run(
             &ctx,
             DnsPipelineRequest::new(data, &header, &question, src.ip(), TransportProtocol::Udp),
             &mut resp_buf,
         )
-        .await?;
+        .await;
+
+    if let Err(e) = run_res {
+        trace!("Pipeline error (sending SERVFAIL): {:?}", e);
+        resp_buf.clear();
+        WireResponseWriter::write_error_response(
+            data,
+            &question,
+            2, // SERVFAIL
+            edns,
+            !ctx.recursive.is_empty(),
+            &mut resp_buf,
+        );
+    }
 
     if !resp_buf.is_empty() {
         socket.send_to(&resp_buf, src).await?;

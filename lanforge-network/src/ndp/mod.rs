@@ -180,7 +180,11 @@ async fn run_subnet_scan_task(
             for target_ip in range {
                 if let Err(e) = probe_neighbor(&handle, ifindex, IpAddr::V4(target_ip), None).await
                 {
-                    debug!("NeighborMonitor: ARP probe failed for {target_ip}: {e}");
+                    // EEXIST (os error 17) is benign — neighbor already exists in kernel table.
+                    let msg = e.to_string();
+                    if !msg.contains("os error 17") {
+                        debug!("NeighborMonitor: ARP probe failed for {target_ip}: {e}");
+                    }
                 }
                 // Pacing for manual scan: from config to avoid CPU spikes
                 sleep(pacing).await;

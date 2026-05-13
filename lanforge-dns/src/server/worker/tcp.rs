@@ -54,13 +54,15 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 _ => false,
                             };
 
+                            let edns = WireOptScanner::scan(&data, &header, &question);
+
                             if is_noise {
                                 let mut resp_buf = Vec::with_capacity(64);
                                 WireResponseWriter::write_error_response(
                                     &data,
                                     &question,
                                     1, // FORMERR
-                                    WireOptScanner::scan(&data, &header, &question),
+                                    edns,
                                     false,
                                     &mut resp_buf,
                                 );
@@ -80,7 +82,7 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                             }
 
                             let mut resp_buf = Vec::with_capacity(len + 128);
-                            if let Err(e) = task_ctx
+                            let run_res = task_ctx
                                 .pipeline
                                 .run(
                                     &task_ctx,
@@ -93,10 +95,19 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     ),
                                     &mut resp_buf,
                                 )
-                                .await
-                            {
-                                trace!("TCP query handling failed: {:?}", e);
-                                break;
+                                .await;
+
+                            if let Err(e) = run_res {
+                                trace!("Pipeline error (sending SERVFAIL): {:?}", e);
+                                resp_buf.clear();
+                                WireResponseWriter::write_error_response(
+                                    &data,
+                                    &question,
+                                    2, // SERVFAIL
+                                    edns,
+                                    !task_ctx.recursive.is_empty(),
+                                    &mut resp_buf,
+                                );
                             }
 
                             if !resp_buf.is_empty() {
