@@ -674,7 +674,7 @@ impl ClientContext {
             message: if enabled {
                 "DNS Adblock enabled".to_string()
             } else if let Some(d) = duration_secs {
-                format!("DNS Adblock disabled for {} seconds", d)
+                format!("DNS Adblock disabled for {d} seconds")
             } else {
                 "DNS Adblock disabled permanently".to_string()
             },
