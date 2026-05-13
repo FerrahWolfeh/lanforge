@@ -3,22 +3,34 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_http::server::HttpService;
 use lanforge_core::types::device::Hostname;
 use lanforge_core::types::identifiers::MacAddr;
+use lanforge_db::config::DatabaseConfig;
+use lanforge_db::engine::LeaseDb;
+use lanforge_db::log_engine::LogDb;
+use lanforge_http::server::HttpService;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
-fn init_test_context() -> LanforgeContext {
+async fn init_test_context() -> (LanforgeContext, Arc<LeaseDb>, Arc<LogDb>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    LanforgeContext::new(bus, table, None)
+    let db = Arc::new(
+        LeaseDb::open(&DatabaseConfig {
+            url: "sqlite::memory:".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let log_db = Arc::new(LogDb::open("sqlite::memory:").await.unwrap());
+    (LanforgeContext::new(bus, table, None), db, log_db)
 }
 
 #[tokio::test]
 async fn test_http_simulation_basic() {
-    let ctx = init_test_context();
+    let (ctx, db, log_db) = init_test_context().await;
 
     // 1. Setup Config
     let api_cfg = ApiConfig {
@@ -29,7 +41,7 @@ async fn test_http_simulation_basic() {
     let cfg = Arc::new(api_cfg);
 
     // 2. Start HTTP Service
-    let mut service = HttpService::new(cfg, ctx.clone());
+    let mut service = HttpService::new(cfg, ctx.clone(), db, log_db);
     let ctrl = ServiceControl::new("http", ctx.clone());
 
     let mut rx = ctx.bus().subscribe();

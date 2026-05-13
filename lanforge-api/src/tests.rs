@@ -10,20 +10,33 @@ use std::time::{Duration, SystemTime};
 use crate::api::Response;
 use crate::config::ApiConfig;
 use crate::server::ClientContext;
+use lanforge_db::config::DatabaseConfig;
+use lanforge_db::engine::LeaseDb;
+use lanforge_db::log_engine::LogDb;
+use std::sync::atomic::AtomicUsize;
 
 fn make_dummy_config() -> ApiConfig {
     ApiConfig::dummy()
 }
 
-fn init_test_context() -> LanforgeContext {
+async fn init_test_context() -> (LanforgeContext, Arc<LeaseDb>, Arc<LogDb>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    LanforgeContext::new(bus, table, None)
+    let db = Arc::new(
+        LeaseDb::open(&DatabaseConfig {
+            url: "sqlite::memory:".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let log_db = Arc::new(LogDb::open("sqlite::memory:").await.unwrap());
+    (LanforgeContext::new(bus, table, None), db, log_db)
 }
 
 #[tokio::test]
 async fn test_host_list_returns_static_and_cli_only() {
-    let ctx_handle = init_test_context();
+    let (ctx_handle, db, log_db) = init_test_context().await;
     let cfg = Arc::new(make_dummy_config());
 
     let ctx = ClientContext {
@@ -32,6 +45,9 @@ async fn test_host_list_returns_static_and_cli_only() {
         last_scan_secs_ago: 5,
         cfg,
         ctx: ctx_handle.clone(),
+        db,
+        log_db,
+        active_clients: Arc::new(AtomicUsize::new(0)),
     };
 
     // 1. Add a CLI device
@@ -56,27 +72,27 @@ async fn test_host_list_returns_static_and_cli_only() {
         expires: SystemTime::now() + Duration::from_hours(1),
     });
 
-    // 3. Add a TOML device
-    let mac_toml = MacAddr::parse("00:00:00:00:00:03").unwrap();
+    // 3. Add a Static device
+    let mac_static = MacAddr::parse("00:00:00:00:00:03").unwrap();
     let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
-        mac: mac_toml,
+        mac: mac_static,
         update: CliHostUpdate {
             duid: FieldUpdate::NoChange,
-            hostname: FieldUpdate::Set("toml-host".to_string()),
+            hostname: FieldUpdate::Set("static-host".to_string()),
             v4_static: FieldUpdate::Set("192.168.1.5".parse().unwrap()),
             v6_suffix: FieldUpdate::NoChange,
-            origin: Origin::Toml,
+            origin: Origin::Static,
             boot_file: FieldUpdate::NoChange,
         },
     });
 
-    // 4. handle_hosts (called by HostList) should return ONLY CLI and TOML
+    // 4. handle_hosts (called by HostList) should return ONLY CLI and Static
     let resp = ctx.handle_hosts().await;
     if let Response::Hosts(d) = resp {
         assert_eq!(
             d.hosts.len(),
             2,
-            "Should return ONLY CLI and TOML devices, NOT dynamic ones"
+            "Should return ONLY CLI and Static devices, NOT dynamic ones"
         );
         assert!(
             d.hosts
@@ -86,7 +102,7 @@ async fn test_host_list_returns_static_and_cli_only() {
         assert!(
             d.hosts
                 .iter()
-                .any(|dev| dev.mac == mac_toml.to_string() && dev.origin == "toml")
+                .any(|dev| dev.mac == mac_static.to_string() && dev.origin == "static")
         );
         // Dynamic host should not be in d.hosts
         assert!(!d.hosts.iter().any(|dev| dev.mac == mac_dyn.to_string()));
@@ -107,7 +123,7 @@ async fn test_host_list_returns_static_and_cli_only() {
 
 #[tokio::test]
 async fn test_api_status_reports_gua_and_ula() {
-    let ctx_handle = init_test_context();
+    let (ctx_handle, db, log_db) = init_test_context().await;
 
     let gua = "2001:db8::1".to_string();
     let ula = "fd00::".to_string();
@@ -121,6 +137,9 @@ async fn test_api_status_reports_gua_and_ula() {
         last_scan_secs_ago: 10,
         cfg: cfg.clone(),
         ctx: ctx_handle,
+        db,
+        log_db,
+        active_clients: Arc::new(AtomicUsize::new(0)),
     };
 
     let resp = ctx.handle_status().await;
@@ -137,7 +156,7 @@ async fn test_api_status_reports_gua_and_ula() {
 async fn test_dump_command_simulation() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
 
-    let ctx_handle = init_test_context();
+    let (ctx_handle, db, log_db) = init_test_context().await;
     let cfg = Arc::new(make_dummy_config());
 
     // 1. Add a device to state
@@ -160,6 +179,9 @@ async fn test_dump_command_simulation() {
         last_scan_secs_ago: 45,
         cfg,
         ctx: ctx_handle,
+        db,
+        log_db,
+        active_clients: Arc::new(AtomicUsize::new(0)),
     };
 
     // 2. Create duplex stream
@@ -211,7 +233,7 @@ async fn test_dump_command_simulation() {
 
 #[tokio::test]
 async fn test_granular_querying() {
-    let ctx_handle = init_test_context();
+    let (ctx_handle, db, log_db) = init_test_context().await;
     let cfg = Arc::new(make_dummy_config());
 
     // Add a device
@@ -244,6 +266,9 @@ async fn test_granular_querying() {
         last_scan_secs_ago: 5,
         cfg,
         ctx: ctx_handle,
+        db,
+        log_db,
+        active_clients: Arc::new(AtomicUsize::new(0)),
     };
 
     // Test only_devices

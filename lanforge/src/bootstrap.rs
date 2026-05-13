@@ -7,6 +7,7 @@ use lanforge_core::context::state::State;
 use lanforge_core::types::InterfaceState;
 use lanforge_core::types::device::Origin;
 use lanforge_core::types::identifiers::MacAddr;
+use lanforge_core::types::network::Ipv6AddrOrSuffix;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_network::ifmon::AddressMonitor;
@@ -249,5 +250,31 @@ impl Bootstrapper {
             info!("║  GUA Prefix: {:<24}/64 ║", gua);
         }
         info!("╚══════════════════════════════════════════╝");
+    }
+
+    /// Reloads static devices from configuration into the provided state table.
+    pub fn reload_static_devices_into_state(table: &mut State, cfg: &Config) {
+        for dev in &cfg.devices {
+            let Some(mac) = MacAddr::parse(&dev.mac) else {
+                warn!("Invalid MAC '{}' in config", dev.mac);
+                continue;
+            };
+            let v4 = dev.v4_ip.as_ref().and_then(|s| s.parse().ok());
+            let duid = dev.duid.as_ref().and_then(|s| s.parse().ok());
+            let v6_suffix = dev
+                .v6_suffix
+                .as_ref()
+                .and_then(|s| Ipv6AddrOrSuffix::parse(s));
+
+            table.add_static_device(
+                mac,
+                dev.hostname.clone(),
+                duid,
+                v4,
+                v6_suffix,
+                dev.boot_file.clone(),
+                Origin::Static,
+            );
+        }
     }
 }

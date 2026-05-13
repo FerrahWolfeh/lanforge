@@ -81,6 +81,7 @@ impl LogDb {
             .await?;
         sqlx::query("PRAGMA page_size=4096").execute(&pool).await?;
 
+        #[cfg_attr(not(feature = "adblock"), allow(unused_mut))]
         let mut init_query = "
             CREATE TABLE IF NOT EXISTS system_logs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,

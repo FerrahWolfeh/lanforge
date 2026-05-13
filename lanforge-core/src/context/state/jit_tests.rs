@@ -80,10 +80,10 @@ fn test_static_devices_always_indexed() {
     let mac = MacAddr::parse("cc:cc:cc:cc:cc:cc").unwrap();
     let hostname = "static-device";
 
-    // Create a device with Static/Toml origin
+    // Create a device with Static origin
     let mut dev = Device::new(mac);
     dev.hostname.name = hostname.to_string();
-    dev.origin = Origin::Toml;
+    dev.origin = Origin::Static;
 
     // insert_device calls index_device
     ctx.insert_device(mac, dev);

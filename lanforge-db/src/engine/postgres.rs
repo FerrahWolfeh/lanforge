@@ -194,7 +194,7 @@ async fn persist_v6_prefixes(
         let px_str = prefix.prefix.to_string();
         let iaid = i64::from(prefix.iaid);
         let len = i32::from(prefix.len);
-        sqlx::query("INSERT INTO v6_prefixes (mac, iaid, prefix, len, expires) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(mac, iaid) DO NOTHING")
+        sqlx::query("INSERT INTO v6_prefixes (mac, iaid, cidr, expires) VALUES ($1, $2, ($3 || '/' || $4)::CIDR, $5) ON CONFLICT(mac, iaid) DO NOTHING")
             .bind(mac)
             .bind(iaid)
             .bind(px_str)
@@ -247,7 +247,7 @@ async fn persist_seen_v4(
 
 pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, LeaseDbError> {
     sqlx::query_as::<_, DeviceRow>(
-        "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated, boot_file FROM devices"
+        "SELECT mac::TEXT, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated, boot_file FROM devices"
     )
     .fetch_all(pool)
     .await
@@ -257,9 +257,11 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lea
 pub async fn load_v4_leases(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, String, i64)>, LeaseDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, expires FROM v4_leases")
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT mac::TEXT, ip::TEXT, expires FROM v4_leases",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 
@@ -267,7 +269,7 @@ pub async fn load_v6_leases(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, i64, String, i64)>, LeaseDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i64)>(
-        "SELECT mac, iaid, ip, expires FROM v6_leases",
+        "SELECT mac::TEXT, iaid, ip::TEXT, expires FROM v6_leases",
     )
     .fetch_all(pool)
     .await?;
@@ -278,7 +280,7 @@ pub async fn load_v6_prefixes(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, i64, String, i32, i64)>, LeaseDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i32, i64)>(
-        "SELECT mac, iaid, prefix, len, expires FROM v6_prefixes",
+        "SELECT mac::TEXT, iaid, host(cidr) as prefix, masklen(cidr) as len, expires FROM v6_prefixes",
     )
     .fetch_all(pool)
     .await?;
@@ -286,14 +288,14 @@ pub async fn load_v6_prefixes(
 }
 
 pub async fn load_slaac_addrs(pool: &sqlx::PgPool) -> Result<Vec<(String, String)>, LeaseDbError> {
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT mac, ip FROM slaac_addrs")
+    let rows = sqlx::query_as::<_, (String, String)>("SELECT mac::TEXT, ip::TEXT FROM slaac_addrs")
         .fetch_all(pool)
         .await?;
     Ok(rows)
 }
 
 pub async fn load_seen_v4(pool: &sqlx::PgPool) -> Result<Vec<(String, String)>, LeaseDbError> {
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT mac, ip FROM seen_v4")
+    let rows = sqlx::query_as::<_, (String, String)>("SELECT mac::TEXT, ip::TEXT FROM seen_v4")
         .fetch_all(pool)
         .await?;
     Ok(rows)
@@ -323,7 +325,7 @@ pub async fn get_lease_history(
     mac_str: &str,
 ) -> Result<Vec<(String, String, String, i64)>, LeaseDbError> {
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
-        "SELECT ip, lease_type, action, timestamp FROM lease_history WHERE mac = $1 ORDER BY timestamp DESC LIMIT 100"
+        "SELECT ip::TEXT, lease_type, action, timestamp FROM lease_history WHERE mac = $1::MACADDR ORDER BY timestamp DESC LIMIT 100"
     )
     .bind(mac_str)
     .fetch_all(pool).await?;

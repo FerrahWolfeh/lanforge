@@ -6,14 +6,17 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::ServiceControl;
-use lanforge_db::config::DatabaseConfig;
-use lanforge_db::worker::DbWorker;
 use lanforge_core::types::device::Origin;
 use lanforge_core::types::identifiers::MacAddr;
 use lanforge_core::types::updates::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+use lanforge_db::config::DatabaseConfig;
+use lanforge_db::worker::DbWorker;
 
+use lanforge_db::engine::LeaseDb;
+use lanforge_db::log_engine::LogDb;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tempfile::tempdir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
 use tokio::time::{Duration, sleep};
@@ -73,14 +76,18 @@ async fn test_full_db_reset_chain() {
 
     // 3. Spawn DbWorker
     let ctx_db = ctx.clone();
-    let mut db_worker = DbWorker::new(
-        DatabaseConfig {
-            url: db_url,
-            log_url: log_db_url,
-            ..Default::default()
-        },
-        ctx_db,
+    let db = Arc::new(
+        LeaseDb::open(&cfg.database)
+            .await
+            .expect("Failed to open DB"),
     );
+    let log_db = Arc::new(
+        LogDb::open(&cfg.database.log_url)
+            .await
+            .expect("Failed to open LogDB"),
+    );
+
+    let mut db_worker = DbWorker::new(cfg.database.clone(), ctx_db, db.clone(), log_db.clone());
     let ctrl = ServiceControl::new("db", ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
@@ -108,6 +115,9 @@ async fn test_full_db_reset_chain() {
         uptime_secs: 0,
         current_gua: None,
         last_scan_secs_ago: 0,
+        db,
+        log_db,
+        active_clients: Arc::new(AtomicUsize::new(0)),
     };
 
     tokio::spawn(async move {

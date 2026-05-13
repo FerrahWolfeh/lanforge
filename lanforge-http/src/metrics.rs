@@ -45,8 +45,15 @@ fn append_device_metrics(out: &mut String, devices: &[Arc<Device>]) {
     out.push_str("# TYPE lanforge_devices_online gauge\n");
     let _ = writeln!(out, "lanforge_devices_online {online_ct}");
 
-    let toml_ct = devices.iter().filter(|d| d.origin == Origin::Toml).count();
+    let static_ct = devices
+        .iter()
+        .filter(|d| matches!(d.origin, Origin::Static))
+        .count();
     let cli_ct = devices.iter().filter(|d| d.origin == Origin::Cli).count();
+    let sys_ct = devices
+        .iter()
+        .filter(|d| d.origin == Origin::System)
+        .count();
     let dyn_ct = devices
         .iter()
         .filter(|d| d.origin == Origin::Dynamic)
@@ -56,9 +63,13 @@ fn append_device_metrics(out: &mut String, devices: &[Arc<Device>]) {
     out.push_str("# TYPE lanforge_devices_by_origin gauge\n");
     let _ = writeln!(
         out,
-        "lanforge_devices_by_origin{{origin=\"toml\"}} {toml_ct}"
+        "lanforge_devices_by_origin{{origin=\"static\"}} {static_ct}"
     );
     let _ = writeln!(out, "lanforge_devices_by_origin{{origin=\"cli\"}} {cli_ct}");
+    let _ = writeln!(
+        out,
+        "lanforge_devices_by_origin{{origin=\"system\"}} {sys_ct}"
+    );
     let _ = writeln!(
         out,
         "lanforge_devices_by_origin{{origin=\"dynamic\"}} {dyn_ct}"

@@ -81,17 +81,23 @@ impl LeaseDb {
                     .map_err(|e| {
                         LeaseDbError::Migration("setting synchronous=NORMAL".into(), e.to_string())
                     })?;
-                sqlx::query("PRAGMA foreign_keys=ON")
+                sqlx::query("PRAGMA foreign_keys=OFF")
                     .execute(p)
                     .await
                     .map_err(|e| {
-                        LeaseDbError::Migration("enabling foreign keys".into(), e.to_string())
+                        LeaseDbError::Migration("disabling foreign keys".into(), e.to_string())
                     })?;
                 sqlx::migrate!("migrations/sqlite")
                     .run(p)
                     .await
                     .map_err(|e| {
                         LeaseDbError::Migration("applying sqlite migrations".into(), e.to_string())
+                    })?;
+                sqlx::query("PRAGMA foreign_keys=ON")
+                    .execute(p)
+                    .await
+                    .map_err(|e| {
+                        LeaseDbError::Migration("enabling foreign keys".into(), e.to_string())
                     })?;
             }
             #[cfg(feature = "postgres")]

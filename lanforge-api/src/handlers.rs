@@ -21,6 +21,7 @@ use lanforge_core::utils::auth::hash_password;
 use lanforge_db::engine::LeaseHistoryEntry;
 use lanforge_dns::telemetry::DnsStats;
 use std::str::FromStr;
+#[cfg(feature = "adblock")]
 use tracing::error;
 
 use crate::api::{
@@ -703,7 +704,6 @@ impl ClientContext {
         }
     }
 
-    /// Triggers a reload of DNS blocklists.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
         let _ = self
@@ -715,7 +715,14 @@ impl ClientContext {
         })
     }
 
-    /// Detailed status of the DNS adblocker.
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_adblock_status(&self) -> Response {
         use crate::api::DnsAdblockStatusResponse;
@@ -749,7 +756,14 @@ impl ClientContext {
         })
     }
 
-    /// Dynamically add a domain to the blocklist (persistent via rewrite to 0.0.0.0).
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_adblock_status(&self) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_block(&self, domain: String) -> Response {
         match self.db.upsert_dns_rewrite(&domain, "0.0.0.0").await {
@@ -770,7 +784,14 @@ impl ClientContext {
         }
     }
 
-    /// Dynamically add a domain to the permanent allowlist.
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_block(&self, _domain: String) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_allow(&self, domain: String) -> Response {
         match self.db.add_dns_allowlist(&domain).await {
@@ -789,7 +810,14 @@ impl ClientContext {
         }
     }
 
-    /// Remove a domain from the permanent allowlist.
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_allow(&self, _domain: String) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_unallow(&self, domain: String) -> Response {
         match self.db.remove_dns_allowlist(&domain).await {
@@ -805,6 +833,14 @@ impl ClientContext {
             Err(e) => Response::Error {
                 error: e.to_string(),
             },
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub(crate) async fn handle_dns_unallow(&self, _domain: String) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
         }
     }
 

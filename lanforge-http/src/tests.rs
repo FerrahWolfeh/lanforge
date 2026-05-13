@@ -2,13 +2,25 @@ use crate::auth::AuthManager;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_db::config::DatabaseConfig;
+use lanforge_db::engine::LeaseDb;
+use lanforge_db::log_engine::LogDb;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 #[cfg(feature = "server")]
-fn create_test_context() -> LanforgeContext {
+async fn create_test_context() -> (LanforgeContext, Arc<LeaseDb>, Arc<LogDb>) {
     let bus = Arc::new(EventBus::new());
-    LanforgeContext::new(bus, State::new(), None)
+    let db = Arc::new(
+        LeaseDb::open(&DatabaseConfig {
+            url: "sqlite::memory:".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let log_db = Arc::new(LogDb::open("sqlite::memory:").await.unwrap());
+    (LanforgeContext::new(bus, State::new(), None), db, log_db)
 }
 
 #[tokio::test]
@@ -81,7 +93,7 @@ async fn test_app_state_creation() {
     use crate::server::AppState;
     use lanforge_api::config::ApiConfig;
 
-    let ctx = create_test_context();
+    let (ctx, db, log_db) = create_test_context().await;
     let cfg = Arc::new(ApiConfig {
         socket_path: "/tmp/lanforge.sock".to_string(),
         lan_iface: "eth0".to_string(),
@@ -109,6 +121,8 @@ async fn test_app_state_creation() {
     let state = AppState {
         cfg,
         ctx,
+        db,
+        log_db,
         auth: Arc::new(AuthManager::new()),
         start_time: std::time::Instant::now(),
     };
