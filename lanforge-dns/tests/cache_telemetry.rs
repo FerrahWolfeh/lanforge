@@ -81,7 +81,7 @@ fn cache_hit_and_ttl_scrubbing() {
 async fn stats_gathering() {
     let ctx = init_test_context();
     let cfg = mock_config();
-    let dns_ctx = mock_dns_context(ctx, cfg);
+    let dns_ctx = mock_dns_context(ctx, cfg).await;
 
     // Simulate some activity
     dns_ctx.stats.inc_requests();
@@ -99,7 +99,7 @@ async fn stats_gathering() {
 async fn query_logging_ring_buffer() {
     let ctx = init_test_context();
     let cfg = mock_config();
-    let dns_ctx = mock_dns_context(ctx, cfg);
+    let dns_ctx = mock_dns_context(ctx, cfg).await;
 
     let query_log = dns_ctx
         .query_log

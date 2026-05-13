@@ -78,25 +78,20 @@ impl DnsService {
 
         let adblock_enabled = self.cfg.adblock_enabled || db_adblock.enabled;
         info!(
-            "🛡️ DNS: Adblock enabled (Config: {}, DB: {})",
-            self.cfg.adblock_enabled, db_adblock.enabled
+            "🛡️ DNS: Adblock feature is initializing (Adblock: {}, Rewrites: {})",
+            adblock_enabled,
+            !db_rewrites.is_empty()
         );
-        let filter = if adblock_enabled {
-            info!("🛡️ DNS: Adblocker is enabled. Initializing...");
-            let blocker = AdBlocker::new(adblock_enabled);
+        let blocker = AdBlocker::new(adblock_enabled);
 
-            // Populate from DB
-            *blocker.rewrites.write() = db_rewrites;
-            *blocker.allowlist.write() = Arc::new(db_allowlist.into_iter().collect());
-            *blocker.blocking_mode.write() = db_adblock.blocking_mode;
-            *blocker.blocking_ip_v4.write() = db_adblock.blocking_ip_v4;
-            *blocker.blocking_ip_v6.write() = db_adblock.blocking_ip_v6;
+        // Populate from DB
+        *blocker.rewrites.write() = db_rewrites;
+        *blocker.allowlist.write() = Arc::new(db_allowlist.into_iter().collect());
+        *blocker.blocking_mode.write() = db_adblock.blocking_mode;
+        *blocker.blocking_ip_v4.write() = db_adblock.blocking_ip_v4;
+        *blocker.blocking_ip_v6.write() = db_adblock.blocking_ip_v6;
 
-            Some(Arc::new(blocker))
-        } else {
-            info!("🛡️ DNS: Adblocker is disabled.");
-            None
-        };
+        let filter = Some(Arc::new(blocker));
 
         let domain_base = self
             .cfg

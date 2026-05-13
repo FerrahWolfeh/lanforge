@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 async fn dns_reacts_to_lease_grant() {
     let ctx = init_test_context();
     let cfg = mock_config();
-    let dns_ctx = mock_dns_context(ctx.clone(), cfg);
+    let dns_ctx = mock_dns_context(ctx.clone(), cfg).await;
 
     let mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
     let ip = Ipv4Addr::new(10, 0, 0, 50);
@@ -47,7 +47,7 @@ async fn dns_reacts_to_lease_grant() {
 async fn dns_reacts_to_hostname_change() {
     let ctx = init_test_context();
     let cfg = mock_config();
-    let dns_ctx = mock_dns_context(ctx.clone(), cfg);
+    let dns_ctx = mock_dns_context(ctx.clone(), cfg).await;
 
     let mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02]);
     let ip = Ipv4Addr::new(10, 0, 0, 60);
@@ -88,7 +88,7 @@ async fn complex_ipv6_merging_logic() {
     cfg.ula_prefix = Some(Ipv6Addr::from_str("fd00:1234::").unwrap());
     cfg.gua_prefix = Some(Ipv6Addr::from_str("2001:db8:abcd::").unwrap());
 
-    let dns_ctx = mock_dns_context(ctx.clone(), cfg);
+    let dns_ctx = mock_dns_context(ctx.clone(), cfg).await;
     let mac = MacAddr([0, 0, 0, 0, 0, 0xFF]);
 
     // 1. Add a hostname hint

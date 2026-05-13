@@ -1,6 +1,8 @@
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::types::{DeviceUpdate, MacAddr, TransportProtocol};
+use lanforge_db::config::DatabaseConfig;
+use lanforge_db::engine::LeaseDb;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -35,7 +37,7 @@ pub fn mock_config() -> DnsConfig {
 }
 
 #[allow(dead_code)]
-pub fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
+pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     let domain_base = cfg
         .search_domains
         .first()
@@ -49,14 +51,12 @@ pub fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     let cache = Arc::new(DnsCache::new(cfg_arc.cache_size, 30));
     let recursive = Arc::new(UpstreamStrategy::new(cfg_arc.upstream_mode, Vec::new()));
 
-    let filter = if cfg_arc.adblock_enabled || !cfg_arc.rewrites.is_empty() {
+    let filter = {
         let adblocker = AdBlocker::new(cfg_arc.adblock_enabled);
         if !cfg_arc.rewrites.is_empty() {
             *adblocker.rewrites.write() = cfg_arc.rewrites.clone();
         }
         Some(Arc::new(adblocker))
-    } else {
-        None
     };
 
     let mut pipeline = Pipeline::new();
@@ -67,12 +67,22 @@ pub fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     pipeline.push(AdblockMiddleware::new());
     pipeline.push(UpstreamMiddleware::new());
 
+    let db = Arc::new(
+        LeaseDb::open(&DatabaseConfig {
+            url: "sqlite::memory:".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+
     DnsContext {
         cfg: cfg_arc.clone(),
         stats: Arc::new(DnsStats::new()),
         bus: ctx.bus(),
         query_log: Some(Arc::new(QueryRing::new(100))),
         pipeline,
+        db,
         local: LocalResolver::new(cfg_arc, ctx),
         recursive,
         cache,

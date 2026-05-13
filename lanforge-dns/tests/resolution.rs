@@ -13,7 +13,7 @@ async fn resolve_local_a_record() {
     let ip = Ipv4Addr::new(192, 168, 1, 10);
     register_test_device(&ctx, "nas", mac, ip);
 
-    let dns_ctx = mock_dns_context(ctx, cfg);
+    let dns_ctx = mock_dns_context(ctx, cfg).await;
 
     // resolve_ip expects the bare hostname
     let results = dns_ctx.local.resolve_ip("nas", DnsRecordType::A).unwrap();
@@ -29,7 +29,7 @@ async fn resolve_local_ptr_ipv4() {
     let ip = Ipv4Addr::new(192, 168, 1, 20);
     register_test_device(&ctx, "printer", mac, ip);
 
-    let dns_ctx = mock_dns_context(ctx, cfg);
+    let dns_ctx = mock_dns_context(ctx, cfg).await;
 
     // Reverse DNS for 192.168.1.20
     let ptr_name = "20.1.168.192.in-addr.arpa";
@@ -56,7 +56,7 @@ async fn resolve_local_aaaa_with_prefixes() {
         is_active: true,
     });
 
-    let dns_ctx = mock_dns_context(ctx, cfg);
+    let dns_ctx = mock_dns_context(ctx, cfg).await;
 
     let results = dns_ctx
         .local
@@ -82,7 +82,7 @@ async fn multi_search_domain_resolution() {
     let mac = MacAddr([1, 2, 3, 4, 5, 3]);
     register_test_device(&ctx, "workstation", mac, Ipv4Addr::new(192, 168, 1, 50));
 
-    let dns_ctx = mock_dns_context(ctx, cfg);
+    let dns_ctx = mock_dns_context(ctx, cfg).await;
 
     // resolve_local handles the FQDN stripping
     assert!(
@@ -109,7 +109,7 @@ async fn multi_search_domain_resolution() {
 async fn nxdomain_for_unknown_host() {
     let ctx = init_test_context();
     let cfg = mock_config();
-    let dns_ctx = mock_dns_context(ctx, cfg);
+    let dns_ctx = mock_dns_context(ctx, cfg).await;
 
     let result = dns_ctx.local.resolve_ip("ghost", DnsRecordType::A);
     assert!(result.is_none());

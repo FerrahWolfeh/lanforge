@@ -662,7 +662,7 @@ impl ClientContext {
     ) -> Response {
         if duration_secs.is_none() {
             // Persistent change
-            let val = if enabled { "1" } else { "0" };
+            let val = if enabled { "true" } else { "false" };
             if let Err(e) = self.db.set_adblock_config_value("enabled", val).await {
                 error!("❌ API: Failed to persist adblock enabled status: {e}");
             }

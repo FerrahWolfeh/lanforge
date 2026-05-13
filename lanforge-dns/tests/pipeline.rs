@@ -8,7 +8,7 @@ use std::sync::Arc;
 async fn pipeline_nxdomain_basic() {
     let ctx_instance = init_test_context();
     let cfg = mock_config();
-    let ctx = mock_dns_context(ctx_instance, cfg);
+    let ctx = mock_dns_context(ctx_instance, cfg).await;
 
     let mut query = DnsMessage::new();
     query.header.id = 0x1234;
@@ -44,7 +44,7 @@ async fn pipeline_adblocking() {
     let mut cfg = mock_config();
     cfg.adblock_enabled = true;
 
-    let dns_ctx = mock_dns_context(ctx_instance, cfg);
+    let dns_ctx = mock_dns_context(ctx_instance, cfg).await;
     let filter = dns_ctx
         .filter
         .as_ref()
@@ -92,7 +92,7 @@ async fn pipeline_rewrite_rule() {
         answer: "10.10.10.10".to_string(),
     });
 
-    let ctx = mock_dns_context(ctx_instance, cfg);
+    let ctx = mock_dns_context(ctx_instance, cfg).await;
 
     let mut query = DnsMessage::new();
     query.header.qdcount = 1;
@@ -125,15 +125,15 @@ async fn pipeline_rewrite_rule() {
 #[tokio::test]
 #[cfg(feature = "adblock")]
 async fn pipeline_cached_block() {
-    use std::collections::HashSet;
-    use lanforge_dns::resolver::filter::DiskBlocklist;
     use lanforge_core::types::network::dns::QueryResult;
+    use lanforge_dns::resolver::filter::DiskBlocklist;
+    use std::collections::HashSet;
 
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();
     cfg.adblock_enabled = true;
 
-    let dns_ctx = mock_dns_context(ctx_instance, cfg);
+    let dns_ctx = mock_dns_context(ctx_instance, cfg).await;
     let filter = dns_ctx.filter.as_ref().unwrap();
 
     let mut domains = HashSet::new();
@@ -157,13 +157,22 @@ async fn pipeline_cached_block() {
     let mut resp_buf = Vec::new();
 
     // 1. First query -> Should be Blocked
-    let has_resp = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf).await.unwrap();
+    let has_resp = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+        .await
+        .unwrap();
     assert!(has_resp);
     assert_eq!(dns_ctx.stats.snapshot().blocked_queries, 1);
 
     // 2. Second query (same) -> Should be CachedBlock
     let mut resp_buf2 = Vec::new();
-    let has_resp2 = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf2).await.unwrap();
+    let has_resp2 = process_query_test(
+        &data,
+        &dns_ctx,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf2,
+    )
+    .await
+    .unwrap();
     assert!(has_resp2);
 
     // Check logs for the second query

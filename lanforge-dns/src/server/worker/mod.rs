@@ -18,24 +18,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         if let Some(filter) = &ctx.filter {
             let cache_path = Path::new("/var/lib/lanforge/blocklist.fst");
-
-            // 1. Try to load from disk on startup
-            if cache_path.exists()
-                && let Ok(metadata) = std::fs::metadata(cache_path)
-                && let Ok(modified) = metadata.modified()
-            {
-                let elapsed = modified.elapsed().unwrap_or_default().as_secs();
-                if elapsed < u64::from(ctx.cfg.adblock_refresh_hours) * 3600 {
-                    info!("🛡️ Adblock: loading cached blocklist from disk...");
-                    if let Ok(bl) = DiskBlocklist::load(cache_path, 50000) {
-                        info!("🛡️ Adblock: loaded {} domains from cache", bl.len());
-                        filter.replace_blocklist(bl);
-                    }
-                }
-            }
-
             let mut rx = ctx.bus.subscribe();
             let mut last_blocklist_hash = 0u64;
+            let mut cache_loaded = false;
 
             loop {
                 // Wait if disabled
@@ -53,6 +38,23 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                             }
                         }
                     }
+                }
+
+                // 1. Try to load from disk if not yet loaded
+                if !cache_loaded && cache_path.exists() {
+                    if let Ok(metadata) = std::fs::metadata(cache_path)
+                        && let Ok(modified) = metadata.modified()
+                    {
+                        let elapsed = modified.elapsed().unwrap_or_default().as_secs();
+                        if elapsed < u64::from(ctx.cfg.adblock_refresh_hours) * 3600 {
+                            info!("🛡️ Adblock: loading cached blocklist from disk...");
+                            if let Ok(bl) = DiskBlocklist::load(cache_path, 50000) {
+                                info!("🛡️ Adblock: loaded {} domains from cache", bl.len());
+                                filter.replace_blocklist(bl);
+                            }
+                        }
+                    }
+                    cache_loaded = true;
                 }
 
                 let start = Instant::now();

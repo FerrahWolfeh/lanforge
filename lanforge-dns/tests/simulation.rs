@@ -27,18 +27,28 @@ fn init_crypto() {
     });
 }
 
-fn init_test_context() -> LanforgeContext {
+use lanforge_db::engine::LeaseDb;
+
+async fn init_test_context() -> (LanforgeContext, Arc<LeaseDb>) {
     #[cfg(any(feature = "dot", feature = "doq", feature = "doh-upstream"))]
     init_crypto();
 
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    LanforgeContext::new(bus, table, None)
+    let db = Arc::new(
+        LeaseDb::open(&lanforge_db::config::DatabaseConfig {
+            url: "sqlite::memory:".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    (LanforgeContext::new(bus, table, None), db)
 }
 
 #[tokio::test]
 async fn dns_simulation_udp() {
-    let ctx = init_test_context();
+    let (ctx, db) = init_test_context().await;
 
     // 1. Setup Config
     let cfg = DnsConfig {
@@ -62,7 +72,7 @@ async fn dns_simulation_udp() {
     });
 
     // 3. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone());
+    let mut service = DnsService::new(cfg, ctx.clone(), db);
     let ctrl = ServiceControl::new("dns", ctx.clone());
 
     ctx.set_db_ready(true);
@@ -128,7 +138,7 @@ async fn dns_simulation_udp() {
 
 #[tokio::test]
 async fn dns_simulation_upstream() {
-    let ctx = init_test_context();
+    let (ctx, db) = init_test_context().await;
 
     // 1. Setup Config with multiple upstreams
     #[allow(unused_mut)]
@@ -152,7 +162,7 @@ async fn dns_simulation_upstream() {
     });
 
     // 2. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone());
+    let mut service = DnsService::new(cfg, ctx.clone(), db);
     let ctrl = ServiceControl::new("dns-upstream", ctx.clone());
 
     ctx.set_db_ready(true);
@@ -210,7 +220,7 @@ async fn dns_simulation_upstream() {
 #[tokio::test]
 #[ignore]
 async fn dns_simulation_cache_case_insensitive() {
-    let ctx = init_test_context();
+    let (ctx, db) = init_test_context().await;
 
     let cfg = DnsConfig {
         enabled: true,
@@ -221,7 +231,7 @@ async fn dns_simulation_cache_case_insensitive() {
         ..Default::default()
     };
 
-    let mut service = DnsService::new(cfg, ctx.clone());
+    let mut service = DnsService::new(cfg, ctx.clone(), db);
     let ctrl = ServiceControl::new("dns-cache", ctx.clone());
     ctx.set_db_ready(true);
     let mut rx = ctx.bus().subscribe();
