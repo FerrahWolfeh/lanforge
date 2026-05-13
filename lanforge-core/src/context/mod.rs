@@ -61,7 +61,7 @@ use lanforge_types::identifiers::MacAddr;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
@@ -182,6 +182,8 @@ struct LanforgeContextInner {
     event_counters: EventCounters,
     /// Timestamp of the last network scan.
     last_scan: RwLock<Instant>,
+    /// Global counter for active API connections (Control UDS, HTTP, etc.).
+    pub active_clients: Arc<AtomicUsize>,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -210,21 +212,21 @@ impl LanforgeContext {
     /// ```
     #[must_use]
     pub fn new(bus: Arc<EventBus>, state: State, target_ifindex: Option<u32>) -> Self {
-        Self {
-            inner: Arc::new(LanforgeContextInner {
-                bus,
-                state: RwLock::new(state),
-                target_ifindex,
-                running: AtomicBool::new(true),
-                db_ready: AtomicBool::new(false),
-                if_ready: AtomicBool::new(false),
-                dns_stats: RwLock::new(None),
-                dns_context: RwLock::new(None),
-                last_db_flush: RwLock::new(None),
-                event_counters: EventCounters::default(),
-                last_scan: RwLock::new(Instant::now()),
-            }),
-        }
+        let inner = Arc::new(LanforgeContextInner {
+            bus,
+            state: RwLock::new(state),
+            target_ifindex,
+            running: AtomicBool::new(true),
+            db_ready: AtomicBool::new(false),
+            if_ready: AtomicBool::new(false),
+            dns_stats: RwLock::new(None),
+            dns_context: RwLock::new(None),
+            last_db_flush: RwLock::new(None),
+            event_counters: EventCounters::default(),
+            last_scan: RwLock::new(Instant::now()),
+            active_clients: Arc::new(AtomicUsize::new(0)),
+        });
+        Self { inner }
     }
 
     /// Returns the target interface index for this context.
@@ -276,6 +278,12 @@ impl LanforgeContext {
     #[must_use]
     pub fn last_scan_secs_ago(&self) -> u64 {
         self.inner.last_scan.read().elapsed().as_secs()
+    }
+
+    /// Access the global active API clients counter.
+    #[must_use]
+    pub fn active_clients(&self) -> Arc<AtomicUsize> {
+        self.inner.active_clients.clone()
     }
 
     /// Returns the internal event counters.

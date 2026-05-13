@@ -445,6 +445,16 @@ impl State {
             }
         });
 
+        // Prune discovery caches
+        let now = SystemTime::now();
+        let cache_max_age = Duration::from_hours(2);
+        self.discovery.ndp_cache.retain(|_, (_, time)| {
+            now.duration_since(*time).is_ok_and(|d| d < cache_max_age)
+        });
+        self.discovery.orphaned_v6.retain(|_, (_, _, time)| {
+            now.duration_since(*time).is_ok_and(|d| d < cache_max_age)
+        });
+
         if !removed.is_empty() {
             self.rebuild_indices();
             return removed

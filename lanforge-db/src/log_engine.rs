@@ -23,6 +23,7 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::LeaseDbError;
+use futures::StreamExt;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 use sqlx::{Row, SqlitePool};
 
@@ -75,6 +76,10 @@ impl LogDb {
         sqlx::query("PRAGMA synchronous=NORMAL")
             .execute(&pool)
             .await?;
+        sqlx::query("PRAGMA auto_vacuum=INCREMENTAL")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA page_size=4096").execute(&pool).await?;
 
         let mut init_query = "
             CREATE TABLE IF NOT EXISTS system_logs (
@@ -164,6 +169,11 @@ impl LogDb {
                 .bind(json_buf.as_str())
                 .execute(&mut *tx)
                 .await?;
+
+            #[cfg(feature = "hotpath")]
+            {
+                hotpath::gauge!("log_db_system_count").inc(1.0);
+            }
         }
 
         tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
@@ -199,6 +209,11 @@ impl LogDb {
         .execute(&self.pool)
         .await?;
 
+        #[cfg(feature = "hotpath")]
+        {
+            hotpath::gauge!("log_db_blocked_count").inc(1.0);
+        }
+
         self.maybe_prune(now_secs).await?;
         Ok(())
     }
@@ -223,6 +238,11 @@ impl LogDb {
         .execute(&self.pool)
         .await?;
 
+        #[cfg(feature = "hotpath")]
+        {
+            hotpath::gauge!("log_db_dns_count").inc(1.0);
+        }
+
         self.maybe_prune(entry.timestamp as i64).await?;
         Ok(())
     }
@@ -240,7 +260,7 @@ impl LogDb {
                 .await?;
 
             sqlx::query(
-                "DELETE FROM system_logs WHERE id <= (SELECT MAX(id) FROM system_logs) - 50000",
+                "DELETE FROM system_logs WHERE id <= (SELECT MAX(id) FROM system_logs) - 10000",
             )
             .execute(&self.pool)
             .await?;
@@ -254,7 +274,7 @@ impl LogDb {
                     .await?;
 
                 sqlx::query(
-                    "DELETE FROM dns_blocked_logs WHERE id <= (SELECT MAX(id) FROM dns_blocked_logs) - 50000",
+                    "DELETE FROM dns_blocked_logs WHERE id <= (SELECT MAX(id) FROM dns_blocked_logs) - 10000",
                 )
                 .execute(&self.pool)
                 .await?;
@@ -267,13 +287,27 @@ impl LogDb {
                 .await?;
 
             sqlx::query(
-                "DELETE FROM dns_queries WHERE id <= (SELECT MAX(id) FROM dns_queries) - 100000",
+                "DELETE FROM dns_queries WHERE id <= (SELECT MAX(id) FROM dns_queries) - 20000",
             )
             .execute(&self.pool)
             .await?;
 
             *last_prune = Instant::now();
             debug!("Log database pruned");
+
+            #[cfg(feature = "hotpath")]
+            {
+                let sys_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM system_logs")
+                    .fetch_one(&self.pool)
+                    .await
+                    .unwrap_or((0,));
+                let dns_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM dns_queries")
+                    .fetch_one(&self.pool)
+                    .await
+                    .unwrap_or((0,));
+                hotpath::gauge!("log_db_system_count").set(sys_count.0 as f64);
+                hotpath::gauge!("log_db_dns_count").set(dns_count.0 as f64);
+            }
         }
         Ok(())
     }
@@ -477,27 +511,38 @@ impl LogDb {
     }
 
     /// Retrieves the most recent log entries.
-    pub async fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, LeaseDbError> {
+    /// Streams the most recent system events.
+    pub fn stream_history(
+        &self,
+        limit: usize,
+    ) -> impl futures::Stream<Item = Result<TimedEvent, LeaseDbError>> + '_ {
         let limit = limit as i64;
-        let rows =
+        let query =
             sqlx::query("SELECT timestamp, event_json FROM system_logs ORDER BY id DESC LIMIT ?")
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?;
+                .bind(limit);
 
-        let mut entries = Vec::new();
-        for row in rows {
+        query.fetch(&self.pool).map(|res| {
+            let row = res.map_err(|e| LeaseDbError::Internal(e.to_string()))?;
             let timestamp: i64 = row.get("timestamp");
             let event_json: String = row.get("event_json");
 
-            if let Ok(event) = serde_json::from_str::<LanforgeEvent>(&event_json) {
-                entries.push(TimedEvent {
-                    event,
-                    timestamp: UNIX_EPOCH + Duration::from_secs(timestamp as u64),
-                });
-            }
-        }
+            let event: LanforgeEvent = serde_json::from_str(&event_json)
+                .map_err(|e| LeaseDbError::Internal(format!("JSON error: {e}")))?;
 
+            Ok(TimedEvent {
+                timestamp: UNIX_EPOCH + Duration::from_secs(timestamp as u64),
+                event,
+            })
+        })
+    }
+
+    /// Retrieves the most recent log entries.
+    pub async fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, LeaseDbError> {
+        let mut stream = self.stream_history(limit);
+        let mut entries = Vec::new();
+        while let Some(res) = stream.next().await {
+            entries.push(res?);
+        }
         // Return in chronological order (oldest first for the UI)
         entries.reverse();
         Ok(entries)

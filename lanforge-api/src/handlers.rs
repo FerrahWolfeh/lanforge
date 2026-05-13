@@ -18,8 +18,7 @@ use lanforge_core::types::{
     Ipv6AddrOrSuffix, LeaseTarget, MacAddr, Origin,
 };
 use lanforge_core::utils::auth::hash_password;
-use lanforge_db::engine::{LeaseDb, LeaseHistoryEntry};
-use lanforge_db::log_engine::LogDb;
+use lanforge_db::engine::LeaseHistoryEntry;
 use lanforge_dns::telemetry::DnsStats;
 use std::str::FromStr;
 
@@ -532,11 +531,7 @@ impl ClientContext {
 
             // Fetch history from DB
             let history: Vec<LeaseHistoryEntry> =
-                if let Ok(db) = LeaseDb::open(&self.cfg.database).await {
-                    db.get_lease_history(mac).await.unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
+                self.db.get_lease_history(mac).await.unwrap_or_default();
 
             // Build DeviceEntry (reusing implementation from handle_devices)
             let gua_prefix = self
@@ -784,19 +779,16 @@ impl ClientContext {
             };
         };
 
-        let mut entries = if let Ok(db) = LogDb::open(&self.cfg.log_db_url).await {
-            db.get_dns_query_history(limit).await.unwrap_or_else(|_| {
+        let mut entries = self
+            .log_db
+            .get_dns_query_history(limit)
+            .await
+            .unwrap_or_else(|_| {
                 dns_ctx
                     .query_log
                     .as_ref()
                     .map_or_else(Vec::new, |log| log.get_recent(limit))
-            })
-        } else {
-            dns_ctx
-                .query_log
-                .as_ref()
-                .map_or_else(Vec::new, |log| log.get_recent(limit))
-        };
+            });
 
         if let Some(client_ip) = client_filter {
             entries.retain(|e| e.src_ip == client_ip);
@@ -845,11 +837,7 @@ impl ClientContext {
             .as_secs();
         let ten_mins_ago = now_secs.saturating_sub(600);
 
-        let Ok(db) = LogDb::open(&self.cfg.log_db_url).await else {
-            return Response::Error {
-                error: "Failed to open log database".into(),
-            };
-        };
+        let db = &self.log_db;
 
         let top_domains = db
             .get_dns_top_domains(limit)
@@ -1393,11 +1381,11 @@ impl ClientContext {
     /// Dummy handler for log (streaming is handled in server.rs)
     pub(crate) async fn handle_log(&self, _follow: bool, n: Option<usize>) -> Response {
         let n_lines = n.unwrap_or(100);
-        let history_len = if let Ok(db) = LogDb::open(&self.cfg.log_db_url).await {
-            db.get_history(n_lines).await.map_or(0, |h| h.len())
-        } else {
-            0
-        };
+        let history_len = self
+            .log_db
+            .get_history(n_lines)
+            .await
+            .map_or(0, |h| h.len());
 
         Response::Success(SimpleSuccess {
             message: format!("Starting event stream ({history_len} historical)..."),

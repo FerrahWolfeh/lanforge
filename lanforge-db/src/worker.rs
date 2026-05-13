@@ -16,6 +16,7 @@
 use lanforge_core::types::{
     DeviceEvent, DnsEvent, LanforgeEvent, MacAddr, StorageEvent, SystemEvent, TimedEvent,
 };
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{Interval, interval};
 use tracing::{debug, error, info, warn};
@@ -42,6 +43,8 @@ use crate::log_engine::LogDb;
 pub struct DbWorker {
     cfg: DatabaseConfig,
     ctx: LanforgeContext,
+    db: Arc<LeaseDb>,
+    log_db: Arc<LogDb>,
     dirty: bool,
     dirty_macs: HashSet<MacAddr>,
     dirty_lease_macs: HashSet<MacAddr>,
@@ -52,10 +55,17 @@ pub struct DbWorker {
 
 impl DbWorker {
     /// Creates a new `DbWorker` for the specified databases.
-    pub fn new(cfg: DatabaseConfig, ctx: LanforgeContext) -> Self {
+    pub fn new(
+        cfg: DatabaseConfig,
+        ctx: LanforgeContext,
+        db: Arc<LeaseDb>,
+        log_db: Arc<LogDb>,
+    ) -> Self {
         Self {
             cfg,
             ctx,
+            db,
+            log_db,
             dirty: false,
             dirty_macs: HashSet::new(),
             dirty_lease_macs: HashSet::new(),
@@ -172,15 +182,8 @@ impl DbWorker {
 
 impl AsyncService for DbWorker {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        let db = LeaseDb::open(&self.cfg).await.map_err(|e| {
-            error!("Failed to open lease database: {e}");
-            CoreError::Generic(e.to_string())
-        })?;
-
-        let log_db = LogDb::open(&self.cfg.log_url).await.map_err(|e| {
-            error!("Failed to open log database {}: {e}", self.cfg.log_url);
-            CoreError::Generic(e.to_string())
-        })?;
+        let db = self.db.clone();
+        let log_db = self.log_db.clone();
 
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));

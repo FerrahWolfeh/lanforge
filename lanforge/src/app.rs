@@ -144,11 +144,14 @@ impl Daemon {
     }
 
     fn spawn_services(&mut self) {
-        let cfg = &self.bootstrap.cfg;
+        let cfg = self.bootstrap.cfg.clone();
         let target_ifindex = self.bootstrap.target_ifindex;
-        let rt_handle = &self.bootstrap.rt_handle;
-        let messages = &self.bootstrap.messages;
-        let db = &self.bootstrap.db;
+        let rt_handle = self.bootstrap.rt_handle.clone();
+        let messages = self.bootstrap.messages.clone();
+        let db = self.bootstrap.db.clone();
+        let log_db = self.bootstrap.log_db.clone();
+        let ctx = self.ctx.clone();
+        let ifname = cfg.system.iface.clone();
 
         if !cfg.monitor_toml.enabled {
             tracing::warn!(
@@ -156,16 +159,8 @@ impl Daemon {
             );
         }
 
-        // 1. Core Services (DB, mDNS)
-        let rt_handle = rt_handle.clone();
-        let messages = messages.clone();
-        let ifname = cfg.system.iface.clone();
-
-        let ctx = self.ctx.clone();
-        let cfg = cfg.clone();
-
         lanforge_core::spawn_services!(self.registry, &self.ctx, {
-            async [ctx, cfg] => DbWorker::new(cfg.database.clone(), ctx),
+            async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
             async [ctx, cfg] if cfg.mdns_toml.enabled => MdnsProber::new(cfg.mdns_toml.clone(), ctx),
 
             // 2. Network Monitoring (Interface, Neighbors, LLDP)
@@ -190,10 +185,10 @@ impl Daemon {
             #[cfg(feature = "dns-doq")]
             async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.doq_enabled => DoqService::new(Arc::new(cfg.to_dns_config()), ctx),
 
-            async [ctx, cfg] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
+            async [ctx, cfg, db, log_db] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx, db, log_db),
 
             #[cfg(feature = "http")]
-            async [ctx, cfg] if cfg.http_toml.enabled => HttpService::new(Arc::new(cfg.to_api_config()), ctx),
+            async [ctx, cfg, db, log_db] if cfg.http_toml.enabled => HttpService::new(Arc::new(cfg.to_api_config()), ctx, db, log_db),
 
             async [ctx, cfg] if cfg.tftp_toml.enabled => TftpService::new(
                 ctx,

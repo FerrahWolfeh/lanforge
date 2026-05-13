@@ -24,10 +24,12 @@ use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     error::CoreError,
 };
-use lanforge_dns::server::transport::tls as tls_utils;
-use lanforge_core::types::{
-    CliHostUpdate, Device, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin,
+use lanforge_core::{
+    types::{CliHostUpdate, Device, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin},
+    utils::auth::verify_password,
 };
+use lanforge_db::{engine::LeaseDb, log_engine::LogDb};
+use lanforge_dns::server::transport::tls as tls_utils;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::{net::Ipv4Addr, time::Instant};
@@ -45,6 +47,8 @@ use lanforge_api::config::ApiConfig;
 pub struct AppState {
     pub cfg: Arc<ApiConfig>,
     pub ctx: LanforgeContext,
+    pub db: Arc<LeaseDb>,
+    pub log_db: Arc<LogDb>,
     pub auth: Arc<AuthManager>,
     pub start_time: Instant,
 }
@@ -85,12 +89,24 @@ pub struct RegisterRequest {
 pub struct HttpService {
     cfg: Arc<ApiConfig>,
     ctx: LanforgeContext,
+    db: Arc<LeaseDb>,
+    log_db: Arc<LogDb>,
 }
 
 impl HttpService {
     #[must_use]
-    pub const fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
-        Self { cfg, ctx }
+    pub const fn new(
+        cfg: Arc<ApiConfig>,
+        ctx: LanforgeContext,
+        db: Arc<LeaseDb>,
+        log_db: Arc<LogDb>,
+    ) -> Self {
+        Self {
+            cfg,
+            ctx,
+            db,
+            log_db,
+        }
     }
 }
 
@@ -105,6 +121,8 @@ impl AsyncService for HttpService {
         let state = AppState {
             cfg: cfg.clone(),
             ctx: self.ctx.clone(),
+            db: self.db.clone(),
+            log_db: self.log_db.clone(),
             auth: Arc::new(AuthManager::new()),
             start_time: Instant::now(),
         };
@@ -353,7 +371,7 @@ async fn handle_login(
             .into_response());
     };
 
-    if lanforge_core::utils::auth::verify_password(hash, &payload.password) {
+    if verify_password(hash, &payload.password) {
         let token = state.auth.generate_token("admin")?;
         Ok((StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response())
     } else {
@@ -376,6 +394,9 @@ async fn handle_rpc(
         last_scan_secs_ago: 0,
         cfg: state.cfg.clone(),
         ctx: state.ctx.clone(),
+        db: state.db.clone(),
+        log_db: state.log_db.clone(),
+        active_clients: state.ctx.active_clients(),
     };
 
     let resp = cmd.action.dispatch(&ctx).await;
@@ -500,7 +521,8 @@ async fn handle_dns_query(
                 (
                     [(axum::http::header::CONTENT_TYPE, "application/dns-message")],
                     resp_buf,
-                ).into_response()
+                )
+                    .into_response()
             } else {
                 StatusCode::NO_CONTENT.into_response()
             }

@@ -8,6 +8,7 @@ use lanforge_core::types::InterfaceState;
 use lanforge_core::types::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::types::identifiers::MacAddr;
 use lanforge_db::engine::LeaseDb;
+use lanforge_db::log_engine::LogDb;
 use lanforge_network::ifmon::AddressMonitor;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
@@ -37,6 +38,7 @@ pub struct BootstrapResult {
     pub messages: NetlinkMessages,
     pub target_ifindex: u32,
     pub db: Arc<LeaseDb>,
+    pub log_db: Arc<LogDb>,
 }
 
 /// Orchestrates the initial state of the Lanforge daemon.
@@ -54,8 +56,9 @@ impl Bootstrapper {
         );
 
         let bus = Arc::new(EventBus::new());
-        let (initial_table, db) = Self::init_device_table(&cfg).await?;
+        let (initial_table, db, log_db) = Self::init_device_table(&cfg).await?;
         let db = Arc::new(db);
+        let log_db = Arc::new(log_db);
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
@@ -95,6 +98,7 @@ impl Bootstrapper {
                 messages,
                 target_ifindex,
                 db,
+                log_db,
             },
             ctx,
         ))
@@ -120,9 +124,14 @@ impl Bootstrapper {
         cfg
     }
 
-    async fn init_device_table(cfg: &Config) -> Result<(State, LeaseDb)> {
+    async fn init_device_table(cfg: &Config) -> Result<(State, LeaseDb, LogDb)> {
         let db = LeaseDb::open(&cfg.database).await.map_err(|e| {
             error!("❌ Erro fatal abrindo leases DB: {e}");
+            e
+        })?;
+
+        let log_db = LogDb::open(&cfg.database.log_url).await.map_err(|e| {
+            error!("❌ Erro fatal abrindo logs DB: {e}");
             e
         })?;
 
@@ -131,13 +140,16 @@ impl Bootstrapper {
             State::new()
         });
 
-        info!("📦 Database loaded: {}", cfg.database.url);
+        info!(
+            "📦 Databases initialized (Main: {}, Logs: {})",
+            cfg.database.url, cfg.database.log_url
+        );
         Self::inject_self_device(&mut table, cfg);
 
         // Trigger early collision validation and logging
         let _ = table.get_static_registry();
 
-        Ok((table, db))
+        Ok((table, db, log_db))
     }
 
     /// Injects the host machine as a system device in the state table.

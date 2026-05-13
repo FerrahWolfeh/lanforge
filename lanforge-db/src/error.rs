@@ -75,4 +75,8 @@ pub enum LeaseDbError {
     /// Integer conversion failed during database deserialization.
     #[error("Invalid integer conversion: {0}")]
     IntConversion(#[from] TryFromIntError),
+
+    /// Internal error (e.g., serialization failure).
+    #[error("Internal database error: {0}")]
+    Internal(String),
 }

@@ -2326,6 +2326,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "chrono",
+ "futures",
  "hex",
  "hotpath",
  "lanforge-core",
@@ -2399,6 +2400,7 @@ name = "lanforge-db"
 version = "0.11.1"
 dependencies = [
  "chrono",
+ "futures",
  "hotpath",
  "lanforge-core",
  "lanforge-macros",
@@ -2465,6 +2467,7 @@ dependencies = [
  "jsonwebtoken",
  "lanforge-api",
  "lanforge-core",
+ "lanforge-db",
  "lanforge-dns",
  "lanforge-macros",
  "rand 0.10.1",

@@ -29,6 +29,10 @@ pub struct UpstreamManager {
     pub health: Arc<UpstreamHealth>,
     #[cfg(feature = "doh-upstream")]
     pub doh_client: Option<crate::server::transport::doh::DohClient>,
+    #[cfg(feature = "dot")]
+    pub(crate) tls_connector: Option<tokio_rustls::TlsConnector>,
+    #[cfg(feature = "doq")]
+    pub(crate) quic_config: Option<quinn::ClientConfig>,
 }
 
 impl UpstreamManager {
@@ -58,23 +62,39 @@ impl UpstreamManager {
         tokio::spawn(async move {
             let mut buf = vec![0u8; 4096];
             loop {
-                if let Ok((len, src)) = s.recv_from(&mut buf).await {
-                    if src != upstream_addr {
-                        continue;
-                    }
-                    if len >= 2 {
-                        let id = u16::from_be_bytes([buf[0], buf[1]]);
-                        let tx = {
-                            let mut map = p.lock().unwrap();
-                            map.remove(&id)
-                        };
-                        if let Some(tx) = tx {
-                            let _ = tx.send(buf[..len].to_vec());
+                match s.recv_from(&mut buf).await {
+                    Ok((len, src)) => {
+                        if src != upstream_addr {
+                            continue;
                         }
+                        if len >= 2 {
+                            let id = u16::from_be_bytes([buf[0], buf[1]]);
+                            let tx = {
+                                let mut map = p.lock().unwrap();
+                                map.remove(&id)
+                            };
+                            if let Some(tx) = tx {
+                                let _ = tx.send(buf[..len].to_vec());
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(_) => {
+                        // Persistent error, exit loop to avoid busy loop/leak
+                        break;
                     }
                 }
             }
         });
+
+        #[cfg(any(feature = "dot", feature = "doq"))]
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        #[cfg(any(feature = "dot", feature = "doq"))]
+        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        #[cfg(any(feature = "dot", feature = "doq"))]
+        let shared_roots = Arc::new(root_cert_store);
 
         Ok(Arc::new(Self {
             socket,
@@ -86,6 +106,34 @@ impl UpstreamManager {
             #[cfg(feature = "doh-upstream")]
             doh_client: if target.protocol == UpstreamProtocol::Https {
                 Some(crate::server::transport::doh::DohClient::new())
+            } else {
+                None
+            },
+            #[cfg(feature = "dot")]
+            tls_connector: if target.protocol == UpstreamProtocol::Tls {
+                let config = rustls::ClientConfig::builder()
+                    .with_root_certificates(Arc::clone(&shared_roots))
+                    .with_no_client_auth();
+                Some(tokio_rustls::TlsConnector::from(Arc::new(config)))
+            } else {
+                None
+            },
+            #[cfg(feature = "doq")]
+            quic_config: if target.protocol == UpstreamProtocol::Quic {
+                let mut tls_config = rustls::ClientConfig::builder()
+                    .with_root_certificates(Arc::clone(&shared_roots))
+                    .with_no_client_auth();
+                tls_config.alpn_protocols = vec![b"doq".to_vec()];
+
+                let mut transport_config = quinn::TransportConfig::default();
+                transport_config.max_idle_timeout(Some(Duration::from_secs(5).try_into().unwrap()));
+
+                let mut client_config = quinn::ClientConfig::new(Arc::new(
+                    quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+                        .map_err(|e| DnsError::Tls(format!("QUIC config error: {e}")))?,
+                ));
+                client_config.transport_config(Arc::new(transport_config));
+                Some(client_config)
             } else {
                 None
             },
@@ -201,21 +249,17 @@ impl UpstreamManager {
     #[cfg(feature = "dot")]
     async fn forward_dot(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
         use rustls_pki_types::ServerName;
-        use tokio_rustls::TlsConnector;
 
         let hostname = target.hostname.as_deref().unwrap_or("dns.google");
         let server_name = ServerName::try_from(hostname)
             .map_err(|e| DnsError::Tls(format!("Invalid upstream hostname: {e}")))?
             .to_owned();
 
-        let mut root_cert_store = rustls::RootCertStore::empty();
-        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let connector = self
+            .tls_connector
+            .as_ref()
+            .ok_or_else(|| DnsError::Generic("TLS connector not initialized".to_string()))?;
 
-        let config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-
-        let connector = TlsConnector::from(Arc::new(config));
         let tcp_stream = timeout(Duration::from_secs(5), TcpStream::connect(target.addr))
             .await
             .map_err(|_| DnsError::UpstreamTimeout)??;
@@ -251,26 +295,13 @@ impl UpstreamManager {
 
     #[cfg(feature = "doq")]
     async fn forward_doq(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
-        use quinn::{ClientConfig, Endpoint, TransportConfig};
-        use rustls::RootCertStore;
+        use quinn::Endpoint;
 
         let hostname = target.hostname.as_deref().unwrap_or("dns.google");
-        let mut root_cert_store = RootCertStore::empty();
-        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-        let mut tls_config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-        tls_config.alpn_protocols = vec![b"doq".to_vec()];
-
-        let mut transport_config = TransportConfig::default();
-        transport_config.max_idle_timeout(Some(Duration::from_secs(5).try_into().unwrap()));
-
-        let mut client_config = ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
-                .map_err(|e| DnsError::Tls(format!("QUIC config error: {e}")))?,
-        ));
-        client_config.transport_config(Arc::new(transport_config));
+        let client_config = self
+            .quic_config
+            .as_ref()
+            .ok_or_else(|| DnsError::Generic("QUIC config not initialized".to_string()))?;
 
         let client_addr: SocketAddr = if target.addr.is_ipv6() {
             "[::]:0".parse().unwrap()
@@ -278,7 +309,7 @@ impl UpstreamManager {
             "0.0.0.0:0".parse().unwrap()
         };
         let mut endpoint = Endpoint::client(client_addr).map_err(DnsError::Io)?;
-        endpoint.set_default_client_config(client_config);
+        endpoint.set_default_client_config(client_config.clone());
 
         let conn = endpoint
             .connect(target.addr, hostname)

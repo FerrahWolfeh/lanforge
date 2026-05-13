@@ -100,14 +100,26 @@ impl DnsCache {
         is_block: bool,
     ) {
         key.qname.make_ascii_lowercase();
-        // Enforce capacity (simple random eviction if full)
-        if self.cache.len() as u64 >= self.capacity
-            && self.capacity > 0
-            && let Some(entry) = self.cache.iter().next()
-        {
-            let k = entry.key().clone();
-            drop(entry);
-            self.cache.remove(&k);
+        // Enforce capacity (batch random eviction if full)
+        if self.cache.len() as u64 >= self.capacity && self.capacity > 0 {
+            let mut evicted = 0;
+            let batch_size = 10;
+            let now = Instant::now();
+
+            // First try to find expired ones
+            self.cache.retain(|_, v| v.expires_at > now);
+
+            // If still over capacity, remove random ones
+            while self.cache.len() as u64 >= self.capacity && evicted < batch_size {
+                if let Some(entry) = self.cache.iter().next() {
+                    let k = entry.key().clone();
+                    drop(entry);
+                    self.cache.remove(&k);
+                    evicted += 1;
+                } else {
+                    break;
+                }
+            }
         }
 
         let now = Instant::now();
@@ -130,6 +142,10 @@ impl DnsCache {
             is_block,
         };
         self.cache.insert(key, cached_response);
+        #[cfg(feature = "hotpath")]
+        {
+            hotpath::gauge!("dns_cache_size").set(self.cache.len() as f64);
+        }
     }
 
     pub fn invalidate_all(&self) {
@@ -166,5 +182,9 @@ impl DnsCache {
     pub fn cleanup(&self) {
         let now = Instant::now();
         self.cache.retain(|_, v| v.expires_at > now);
+        #[cfg(feature = "hotpath")]
+        {
+            hotpath::gauge!("dns_cache_size").set(self.cache.len() as f64);
+        }
     }
 }

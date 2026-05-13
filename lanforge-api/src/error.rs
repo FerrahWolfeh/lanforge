@@ -66,6 +66,10 @@ pub enum ApiError {
     /// Error during data encoding.
     #[error("Encoding error: {0}")]
     EncodingError(String),
+
+    /// Error during database operations.
+    #[error("Database error: {0}")]
+    Database(#[from] lanforge_db::LeaseDbError),
 }
 
 /// A specialized Result type for API operations.
