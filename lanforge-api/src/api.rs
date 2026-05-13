@@ -1,3 +1,4 @@
+use lanforge_core::config::RewriteRule;
 use lanforge_core::types::{DnsRecordEntry, LeaseTarget, UpstreamHealthSnapshot};
 use lanforge_core::{bus::TimedEvent, context::state::State};
 use serde::{Deserialize, Serialize};
@@ -261,18 +262,61 @@ pub enum CommandAction {
     /// Retrieve current adblock status and metrics.
     #[dispatch(handler = "handle_dns_adblock_status", readonly)]
     DnsAdblockStatus,
-    /// Add a domain to the blocklist.
+    /// Add a domain to the blocklist (persistent via rewrite to 0.0.0.0).
     #[dispatch(handler = "handle_dns_block", args(domain))]
     DnsBlock {
         /// Domain to block.
         domain: String,
     },
-    /// Add a domain to the allowlist.
+    /// Add a domain to the permanent allowlist.
     #[dispatch(handler = "handle_dns_allow", args(domain))]
     DnsAllow {
         /// Domain to allow.
         domain: String,
     },
+    /// Remove a domain from the permanent allowlist.
+    #[dispatch(handler = "handle_dns_unallow", args(domain))]
+    DnsUnallow {
+        /// Domain to remove from allowlist.
+        domain: String,
+    },
+    /// Add a DNS rewrite rule.
+    #[dispatch(handler = "handle_dns_rewrite_add", args(domain, answer))]
+    DnsRewriteAdd {
+        /// Domain name or pattern.
+        domain: String,
+        /// IPv4, IPv6, CNAME, or Device name.
+        answer: String,
+    },
+    /// Remove a DNS rewrite rule.
+    #[dispatch(handler = "handle_dns_rewrite_remove", args(domain))]
+    DnsRewriteRemove {
+        /// Domain to remove.
+        domain: String,
+    },
+    /// List all DNS rewrite rules.
+    #[dispatch(handler = "handle_dns_rewrites", readonly)]
+    DnsRewriteList,
+    /// List the permanent DNS allowlist.
+    #[dispatch(handler = "handle_dns_allowlist", readonly)]
+    DnsAllowlistList,
+    /// Add an adblock source URL.
+    #[dispatch(handler = "handle_dns_adblock_url_add", args(url, kind))]
+    DnsAdblockUrlAdd {
+        /// URL of the blocklist/allowlist.
+        url: String,
+        /// Kind: "blocklist" or "allowlist".
+        kind: String,
+    },
+    /// Remove an adblock source URL.
+    #[dispatch(handler = "handle_dns_adblock_url_remove", args(url))]
+    DnsAdblockUrlRemove {
+        /// URL to remove.
+        url: String,
+    },
+    /// List all adblock source URLs.
+    #[dispatch(handler = "handle_dns_adblock_urls", readonly)]
+    DnsAdblockUrlList,
     /// Dump the full system context (for debugging).
     #[dispatch(handler = "handle_context_dump", args(only_devices, only_orphans))]
     ContextDump {
@@ -346,6 +390,12 @@ pub enum Response {
     Leases(LeasesResponse),
     /// Hierarchical physical topology.
     Topology(TopologyResponse),
+    /// List of DNS rewrite rules.
+    DnsRewrites(DnsRewritesResponse),
+    /// List of DNS allowlist entries.
+    DnsAllowlist(DnsAllowlistResponse),
+    /// List of adblock source URLs.
+    DnsAdblockUrls(DnsAdblockUrlsResponse),
 }
 
 /// A simple success result containing a message.
@@ -842,14 +892,38 @@ pub struct DnsQueryLogResponse {
     pub entries: Vec<DnsQueryLogEntry>,
 }
 
-/// Detailed status of the DNS adblocker.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DnsAdblockStatusResponse {
     pub enabled: bool,
     pub disabled_until: Option<u64>,
     pub remaining_secs: Option<u64>,
     pub blocklist_size: usize,
     pub allowlist_size: usize,
+}
+
+/// Response containing all DNS rewrite rules.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsRewritesResponse {
+    pub rewrites: Vec<RewriteRule>,
+}
+
+/// Response containing the DNS allowlist.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsAllowlistResponse {
+    pub allowlist: Vec<String>,
+}
+
+/// Response containing adblock source URLs.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsAdblockUrlsResponse {
+    pub urls: Vec<AdblockUrlEntry>,
+}
+
+/// A single adblock source URL entry.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AdblockUrlEntry {
+    pub url: String,
+    pub kind: String,
 }
 
 #[cfg(test)]

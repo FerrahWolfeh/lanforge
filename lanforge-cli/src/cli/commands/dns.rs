@@ -3,9 +3,9 @@ use color_eyre::eyre::Result;
 use colored::Colorize;
 use iocraft::prelude::*;
 use lanforge_api::api::{
-    Command as ControlCommand, CommandAction, DnsCacheResponse, DnsQueryLogResponse,
-    DnsQueryResponse, DnsStatsResponse, DnsUpstreamsResponse, Response,
-    DnsAdblockStatusResponse,
+    Command as ControlCommand, CommandAction, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
+    DnsAllowlistResponse, DnsCacheResponse, DnsQueryLogResponse, DnsQueryResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, Response,
 };
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_core::types::network::{QueryLogEntry, QueryResult};
@@ -58,6 +58,44 @@ impl CliCommand for DnsCommand {
                         domain: domain.clone(),
                     }))
                 }
+                args::AdblockAction::Unallow { domain } => {
+                    Ok(ControlCommand::new(CommandAction::DnsUnallow {
+                        domain: domain.clone(),
+                    }))
+                }
+                args::AdblockAction::Allowlist => {
+                    Ok(ControlCommand::new(CommandAction::DnsAllowlistList))
+                }
+                args::AdblockAction::Sources { action } => match action {
+                    args::SourceAction::Add { url, kind } => {
+                        Ok(ControlCommand::new(CommandAction::DnsAdblockUrlAdd {
+                            url: url.clone(),
+                            kind: kind.clone(),
+                        }))
+                    }
+                    args::SourceAction::Remove { url } => {
+                        Ok(ControlCommand::new(CommandAction::DnsAdblockUrlRemove {
+                            url: url.clone(),
+                        }))
+                    }
+                    args::SourceAction::List => {
+                        Ok(ControlCommand::new(CommandAction::DnsAdblockUrlList))
+                    }
+                },
+            },
+            args::DnsCommand::Rewrite { action } => match action {
+                args::RewriteAction::Add { domain, answer } => {
+                    Ok(ControlCommand::new(CommandAction::DnsRewriteAdd {
+                        domain: domain.clone(),
+                        answer: answer.clone(),
+                    }))
+                }
+                args::RewriteAction::Remove { domain } => {
+                    Ok(ControlCommand::new(CommandAction::DnsRewriteRemove {
+                        domain: domain.clone(),
+                    }))
+                }
+                args::RewriteAction::List => Ok(ControlCommand::new(CommandAction::DnsRewriteList)),
             },
             args::DnsCommand::Cache { action } => match action {
                 args::CacheAction::Flush => Ok(ControlCommand::new(CommandAction::DnsCacheFlush)),
@@ -80,6 +118,9 @@ impl CliCommand for DnsCommand {
             Response::DnsCache(cache) => Self::render_cache(cache),
             Response::DnsQueryLog(log) => Self::render_logs(log),
             Response::DnsAdblockStatus(status) => Self::render_adblock_status(status),
+            Response::DnsRewrites(resp) => Self::render_rewrites(resp),
+            Response::DnsAllowlist(resp) => Self::render_allowlist(resp),
+            Response::DnsAdblockUrls(resp) => Self::render_adblock_urls(resp),
             Response::Event(timed_event) => {
                 if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) = &timed_event.event {
                     Self::print_log_line(entry);
@@ -273,6 +314,61 @@ impl DnsCommand {
                     }))
                     StatLine(label: "Blocklist Size", value: status.blocklist_size.to_string())
                     StatLine(label: "Allowlist Size", value: status.allowlist_size.to_string())
+                }
+            }
+        }.print();
+    }
+
+    fn render_rewrites(resp: &DnsRewritesResponse) {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " DNS REWRITE RULES ", color: Color::White, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
+                    #(resp.rewrites.iter().map(|r| element! {
+                        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
+                            Text(content: format!("{:<30}", r.domain), color: Color::Cyan)
+                            Text(content: " -> ", color: Color::DarkGrey)
+                            Text(content: r.answer.clone())
+                        }
+                    }))
+                }
+            }
+        }.print();
+    }
+
+    fn render_allowlist(resp: &DnsAllowlistResponse) {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " DNS PERMANENT ALLOWLIST ", color: Color::White, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
+                    #(resp.allowlist.iter().map(|domain| element! {
+                        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
+                            Text(content: "● ", color: Color::Green)
+                            Text(content: domain.clone())
+                        }
+                    }))
+                }
+            }
+        }.print();
+    }
+
+    fn render_adblock_urls(resp: &DnsAdblockUrlsResponse) {
+        element! {
+            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " DNS ADBLOCK SOURCES ", color: Color::White, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
+                    #(resp.urls.iter().map(|u| element! {
+                        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
+                            Text(content: format!("{:<10}", u.kind.to_uppercase()), color: if u.kind == "allowlist" { Color::Green } else { Color::Red })
+                            Text(content: format!(" {:<50}", u.url))
+                        }
+                    }))
                 }
             }
         }.print();

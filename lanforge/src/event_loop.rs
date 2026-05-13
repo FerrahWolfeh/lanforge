@@ -4,8 +4,8 @@ use crate::config::Config;
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_network::wol::send_wol_magic_packet;
 use lanforge_core::types::identifiers::MacAddr;
+use lanforge_network::wol::send_wol_magic_packet;
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;
@@ -241,12 +241,7 @@ fn handle_db_reset<S: BuildHasher>(l_ctx: &LoopContext<'_, S>) {
     info!("Database reset confirmed. Performing state refresh...");
     l_ctx.ctx.reset();
 
-    // Reload static devices from config
-    let mut state = l_ctx.ctx.write();
-    crate::bootstrap::Bootstrapper::reload_static_devices_into_state(&mut state, l_ctx.cfg);
-    drop(state);
-
-    info!("State re-seeded with static devices. Triggering new discovery scan...");
+    info!("State cleared. Triggering new discovery scan...");
     let _ = l_ctx
         .ctx
         .bus()

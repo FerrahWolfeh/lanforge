@@ -244,6 +244,21 @@ impl AsyncService for DnsService {
                                 }
                             }
                         }
+                        lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockToggle { enabled, duration_secs }) => {
+                            if let Some(filter) = &dns_ctx.filter {
+                                filter.set_enabled(enabled);
+                                if !enabled && let Some(secs) = duration_secs {
+                                    let until = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs() + secs;
+                                    filter.timer.disabled_until.store(until, std::sync::atomic::Ordering::Relaxed);
+                                    info!("🛡️ DNS: Adblocker disabled for {} seconds", secs);
+                                } else {
+                                    info!("🛡️ DNS: Adblocker {}", if enabled { "enabled" } else { "disabled indefinitely" });
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }

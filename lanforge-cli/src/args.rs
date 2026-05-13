@@ -303,11 +303,34 @@ pub enum DnsCommand {
         #[command(subcommand)]
         action: AdblockAction,
     },
+    /// Manage DNS rewrite rules
+    Rewrite {
+        #[command(subcommand)]
+        action: RewriteAction,
+    },
     /// Manage resolver cache
     Cache {
         #[command(subcommand)]
         action: CacheAction,
     },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum RewriteAction {
+    /// Add a DNS rewrite rule
+    Add {
+        /// Domain name or pattern (e.g. "example.lan" or "*.home")
+        domain: String,
+        /// Target answer (IP or CNAME)
+        answer: String,
+    },
+    /// Remove a DNS rewrite rule
+    Remove {
+        /// Domain to remove
+        domain: String,
+    },
+    /// List all DNS rewrite rules
+    List,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -347,6 +370,37 @@ pub enum AdblockAction {
         /// Domain to allow
         domain: String,
     },
+    /// Remove a domain from the permanent allowlist
+    Unallow {
+        /// Domain to remove
+        domain: String,
+    },
+    /// List the permanent DNS allowlist
+    Allowlist,
+    /// Manage adblock source URLs
+    Sources {
+        #[command(subcommand)]
+        action: SourceAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum SourceAction {
+    /// Add an adblock source URL
+    Add {
+        /// URL of the blocklist/allowlist
+        url: String,
+        /// Kind: "blocklist" or "allowlist"
+        #[arg(default_value = "blocklist")]
+        kind: String,
+    },
+    /// Remove an adblock source URL
+    Remove {
+        /// URL to remove
+        url: String,
+    },
+    /// List all adblock source URLs
+    List,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

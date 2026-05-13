@@ -1,4 +1,4 @@
-use crate::config::RewriteAnswer;
+use crate::config::{BlockingMode, RewriteAnswer};
 use crate::error::DnsError;
 use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
@@ -11,18 +11,21 @@ use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, trace};
 
 pub mod blocklist;
 
 pub use blocklist::DiskBlocklist;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
     pub allowlist: RwLock<Arc<HashSet<String>>>,
     pub timer: Arc<AdblockTimerState>,
     pub rewrites: RwLock<Vec<crate::config::RewriteRule>>,
-    pub blocking_mode: RwLock<crate::config::BlockingMode>,
+    pub blocking_mode: RwLock<BlockingMode>,
     pub blocking_ip_v4: RwLock<Option<Ipv4Addr>>,
     pub blocking_ip_v6: RwLock<Option<Ipv6Addr>>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
@@ -48,8 +51,8 @@ impl AdblockTimerState {
         if until == 0 {
             return None;
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         Some(until.saturating_sub(now))
@@ -64,7 +67,7 @@ impl AdBlocker {
             allowlist: RwLock::new(Arc::new(HashSet::new())),
             timer: Arc::new(AdblockTimerState::new(enabled)),
             rewrites: RwLock::new(Vec::new()),
-            blocking_mode: RwLock::new(crate::config::BlockingMode::default()),
+            blocking_mode: RwLock::new(BlockingMode::default()),
             blocking_ip_v4: RwLock::new(None),
             blocking_ip_v6: RwLock::new(None),
             per_ip_stats: DashMap::new(),
@@ -72,7 +75,24 @@ impl AdBlocker {
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.timer.enabled.load(Ordering::Relaxed)
+        if !self.timer.enabled.load(Ordering::Relaxed) {
+            let until = self.timer.disabled_until.load(Ordering::Relaxed);
+            if until > 0 {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if now < until {
+                    return false;
+                }
+                // Timer expired, auto-re-enable
+                self.timer.enabled.store(true, Ordering::Relaxed);
+                self.timer.disabled_until.store(0, Ordering::Relaxed);
+                return true;
+            }
+            return false;
+        }
+        true
     }
 
     pub fn set_enabled(&self, enabled: bool) {
@@ -146,6 +166,11 @@ impl AdBlocker {
         info!("AdBlocker: blocklist updated with {} entries", count);
     }
 
+    pub fn clear_blocklist(&self) {
+        *self.blocklist.write() = None;
+        info!("AdBlocker: blocklist cleared");
+    }
+
     pub fn replace_allowlist(&self, new_list: HashSet<String>) {
         let count = new_list.len();
         *self.allowlist.write() = Arc::new(new_list);
@@ -205,6 +230,16 @@ impl AdBlocker {
         );
 
         for url in urls {
+            if !self.is_enabled() {
+                info!(
+                    "🛡️ AdBlocker: stopping {} update — adblock was disabled",
+                    name
+                );
+                return Err(DnsError::Generic(format!(
+                    "Adblock disabled during {} update",
+                    name
+                )));
+            }
             trace!("AdBlocker: fetching {}", url);
             match agent.get(url).call() {
                 Ok(resp) => {
@@ -405,10 +440,10 @@ impl AdBlocker {
         let ra = !ctx.recursive.is_empty();
 
         match *self.blocking_mode.read() {
-            crate::config::BlockingMode::NxDomain => {
+            BlockingMode::NxDomain => {
                 WireResponseWriter::write_error_response(data, question, 3, edns, ra, resp);
             }
-            crate::config::BlockingMode::NullIp => {
+            BlockingMode::NullIp => {
                 let qtype = DnsRecordType::from(question.qtype());
                 let ips = if qtype == DnsRecordType::AAAA {
                     vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
@@ -417,7 +452,7 @@ impl AdBlocker {
                 };
                 WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
             }
-            crate::config::BlockingMode::CustomIp => {
+            BlockingMode::CustomIp => {
                 let qtype = DnsRecordType::from(question.qtype());
                 let ips = if qtype == DnsRecordType::AAAA {
                     vec![IpAddr::V6(
@@ -430,7 +465,7 @@ impl AdBlocker {
                 };
                 WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
             }
-            crate::config::BlockingMode::Refused => {
+            BlockingMode::Refused => {
                 WireResponseWriter::write_error_response(data, question, 5, edns, ra, resp);
             }
         }
@@ -457,10 +492,10 @@ impl AdBlocker {
         if self.should_block(&domain) {
             resp.clear();
             match *self.blocking_mode.read() {
-                crate::config::BlockingMode::NxDomain => {
+                BlockingMode::NxDomain => {
                     resp.extend_from_slice(&rb.nxdomain()?);
                 }
-                crate::config::BlockingMode::NullIp => {
+                BlockingMode::NullIp => {
                     let ips = if qtype == DnsRecordType::AAAA {
                         vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
                     } else {
@@ -468,7 +503,7 @@ impl AdBlocker {
                     };
                     resp.extend_from_slice(&rb.success_ips(ips)?);
                 }
-                crate::config::BlockingMode::CustomIp => {
+                BlockingMode::CustomIp => {
                     let ips = if qtype == DnsRecordType::AAAA {
                         vec![IpAddr::V6(
                             self.blocking_ip_v6.read().unwrap_or(Ipv6Addr::UNSPECIFIED),
@@ -482,7 +517,7 @@ impl AdBlocker {
                     };
                     resp.extend_from_slice(&rb.success_ips(ips)?);
                 }
-                crate::config::BlockingMode::Refused => {
+                BlockingMode::Refused => {
                     resp.extend_from_slice(&rb.refused()?);
                 }
             }
@@ -512,4 +547,15 @@ pub fn labels_to_domain(labels: WireLabelIter<'_>) -> String {
     }
     domain.make_ascii_lowercase();
     domain
+}
+
+#[must_use]
+pub fn hash_set_unordered<T: Hash>(set: &HashSet<T>) -> u64 {
+    let mut total_hash = 0u64;
+    for item in set {
+        let mut hasher = DefaultHasher::new();
+        item.hash(&mut hasher);
+        total_hash = total_hash.wrapping_add(hasher.finish());
+    }
+    total_hash
 }

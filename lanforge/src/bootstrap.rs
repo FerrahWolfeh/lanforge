@@ -5,13 +5,14 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::types::InterfaceState;
-use lanforge_core::types::device::{Ipv6AddrOrSuffix, Origin};
+use lanforge_core::types::device::Origin;
 use lanforge_core::types::identifiers::MacAddr;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_network::ifmon::AddressMonitor;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
+use pnet::ipnetwork::IpNetwork;
 use rtnetlink::new_connection;
 use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{Config, load_devices_only};
+use crate::config::Config;
 
 const RTNLGRP_NEIGH: u32 = 3;
 const RTNLGRP_IPV4_IFADDR: u32 = 5;
@@ -169,7 +170,7 @@ impl Bootstrapper {
 
             // Use current V4 if available to seed the device
             let v4_static = iface.ips.iter().find_map(|ip| {
-                if let pnet::ipnetwork::IpNetwork::V4(v4) = ip {
+                if let IpNetwork::V4(v4) = ip {
                     Some(v4.ip())
                 } else {
                     None
@@ -185,36 +186,6 @@ impl Bootstrapper {
                 None,
                 Origin::System,
             );
-        }
-    }
-
-    /// Reloads all static devices from the configuration into the given state.
-    pub fn reload_static_devices_into_state(table: &mut State, cfg: &Config) {
-        let mut all_static_devices = cfg.devices.clone();
-        if let Some(ref extra_path) = cfg.devices_file {
-            info!("📂 Carregando devices adicionais de {extra_path}");
-            let mut extra = load_devices_only(extra_path);
-            all_static_devices.append(&mut extra);
-        }
-
-        for e in &all_static_devices {
-            if let Some(mac) = MacAddr::parse(&e.mac) {
-                let v4_ip = e.v4_ip.as_ref().and_then(|s| s.parse().ok());
-                let v6_suffix = e
-                    .v6_suffix
-                    .as_ref()
-                    .and_then(|s| Ipv6AddrOrSuffix::parse(s));
-                let duid = e.duid.as_ref().and_then(|s| s.parse().ok());
-                table.add_static_device(
-                    mac,
-                    e.hostname.clone(),
-                    duid,
-                    v4_ip,
-                    v6_suffix,
-                    e.boot_file.clone(),
-                    Origin::Toml,
-                );
-            }
         }
     }
 

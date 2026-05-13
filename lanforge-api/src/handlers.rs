@@ -21,6 +21,7 @@ use lanforge_core::utils::auth::hash_password;
 use lanforge_db::engine::LeaseHistoryEntry;
 use lanforge_dns::telemetry::DnsStats;
 use std::str::FromStr;
+use tracing::error;
 
 use crate::api::{
     Capabilities, DbStatus, DeviceEntry, DevicesMeta, DevicesResponse, DevicesStats, DhcpPoolEntry,
@@ -659,6 +660,18 @@ impl ClientContext {
         enabled: bool,
         duration_secs: Option<u64>,
     ) -> Response {
+        if duration_secs.is_none() {
+            // Persistent change
+            let val = if enabled { "1" } else { "0" };
+            if let Err(e) = self.db.set_adblock_config_value("enabled", val).await {
+                error!("❌ API: Failed to persist adblock enabled status: {e}");
+            }
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+        }
+
         let _ = self
             .ctx
             .bus()
@@ -666,13 +679,14 @@ impl ClientContext {
                 enabled,
                 duration_secs,
             }));
+
         Response::Success(SimpleSuccess {
             message: if enabled {
                 "DNS Adblock enabled".to_string()
             } else if let Some(d) = duration_secs {
                 format!("DNS Adblock disabled for {d} seconds")
             } else {
-                "DNS Adblock disabled permanently".to_string()
+                "DNS Adblock disabled permanently in database".to_string()
             },
         })
     }
@@ -735,28 +749,175 @@ impl ClientContext {
         })
     }
 
-    /// Dynamically add a domain to the blocklist.
+    /// Dynamically add a domain to the blocklist (persistent via rewrite to 0.0.0.0).
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_block(&self, domain: String) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain.clone())));
-        Response::Success(SimpleSuccess {
-            message: format!("Domain '{domain}' added to blocklist"),
-        })
+        match self.db.upsert_dns_rewrite(&domain, "0.0.0.0").await {
+            Ok(()) => {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+                Response::Success(SimpleSuccess {
+                    message: format!(
+                        "Domain '{domain}' blocked persistently via rewrite to 0.0.0.0"
+                    ),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
     }
 
-    /// Dynamically add a domain to the allowlist.
+    /// Dynamically add a domain to the permanent allowlist.
     #[cfg(feature = "adblock")]
     pub(crate) async fn handle_dns_allow(&self, domain: String) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Dns(DnsEvent::AdblockAllow(domain.clone())));
-        Response::Success(SimpleSuccess {
-            message: format!("Domain '{domain}' added to allowlist"),
-        })
+        match self.db.add_dns_allowlist(&domain).await {
+            Ok(()) => {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
+                Response::Success(SimpleSuccess {
+                    message: format!("Domain '{domain}' added to permanent allowlist"),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Remove a domain from the permanent allowlist.
+    #[cfg(feature = "adblock")]
+    pub(crate) async fn handle_dns_unallow(&self, domain: String) -> Response {
+        match self.db.remove_dns_allowlist(&domain).await {
+            Ok(()) => {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
+                Response::Success(SimpleSuccess {
+                    message: format!("Domain '{domain}' removed from permanent allowlist"),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Add a DNS rewrite rule.
+    pub(crate) async fn handle_dns_rewrite_add(&self, domain: String, answer: String) -> Response {
+        match self.db.upsert_dns_rewrite(&domain, &answer).await {
+            Ok(()) => {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+                Response::Success(SimpleSuccess {
+                    message: format!("DNS rewrite rule added: {domain} -> {answer}"),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Remove a DNS rewrite rule.
+    pub(crate) async fn handle_dns_rewrite_remove(&self, domain: String) -> Response {
+        match self.db.delete_dns_rewrite(&domain).await {
+            Ok(()) => {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+                Response::Success(SimpleSuccess {
+                    message: format!("DNS rewrite rule removed: {domain}"),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// List all DNS rewrite rules.
+    pub(crate) async fn handle_dns_rewrites(&self) -> Response {
+        use crate::api::DnsRewritesResponse;
+        match self.db.load_dns_rewrites().await {
+            Ok(rewrites) => Response::DnsRewrites(DnsRewritesResponse { rewrites }),
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// List the DNS allowlist.
+    pub(crate) async fn handle_dns_allowlist(&self) -> Response {
+        use crate::api::DnsAllowlistResponse;
+        match self.db.load_dns_allowlist().await {
+            Ok(allowlist) => Response::DnsAllowlist(DnsAllowlistResponse { allowlist }),
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Add an adblock source URL.
+    pub(crate) async fn handle_dns_adblock_url_add(&self, url: String, kind: String) -> Response {
+        use lanforge_core::config::AdblockUrlKind;
+        let kind = match kind.parse::<AdblockUrlKind>() {
+            Ok(k) => k,
+            Err(e) => return Response::Error { error: e },
+        };
+        match self.db.add_adblock_url(&url, kind).await {
+            Ok(()) => {
+                // Adblock managers will pick this up when reload is triggered
+                Response::Success(SimpleSuccess {
+                    message: format!(
+                        "Adblock URL added ({kind}): {url}. Use 'dns adblock reload' to apply."
+                    ),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Remove an adblock source URL.
+    pub(crate) async fn handle_dns_adblock_url_remove(&self, url: String) -> Response {
+        match self.db.remove_adblock_url(&url).await {
+            Ok(()) => Response::Success(SimpleSuccess {
+                message: format!("Adblock URL removed: {url}"),
+            }),
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// List all adblock source URLs.
+    pub(crate) async fn handle_dns_adblock_urls(&self) -> Response {
+        use crate::api::{AdblockUrlEntry, DnsAdblockUrlsResponse};
+        match self.db.load_adblock_urls().await {
+            Ok(urls) => {
+                let entries = urls
+                    .into_iter()
+                    .map(|(url, kind)| AdblockUrlEntry {
+                        url,
+                        kind: kind.to_string(),
+                    })
+                    .collect();
+                Response::DnsAdblockUrls(DnsAdblockUrlsResponse { urls: entries })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
     }
 
     pub(crate) async fn handle_dns_query_log(
