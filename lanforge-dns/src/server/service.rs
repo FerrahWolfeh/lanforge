@@ -12,7 +12,7 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tracing::info;
+use tracing::{error, info};
 
 #[lanforge_macros::lanforge_service(
     id = "dns",
@@ -57,14 +57,27 @@ impl DnsService {
             .store(self.cfg.cache_size, Ordering::Relaxed);
         let mut upstreams = Vec::new();
         for entry in &self.cfg.upstreams {
-            if let Ok(mgr) = UpstreamManager::new(&entry.target, Arc::clone(&cache)).await {
-                upstreams.push(mgr);
+            match UpstreamManager::new(&entry.target, Arc::clone(&cache)).await {
+                Ok(mgr) => upstreams.push(mgr),
+                Err(e) => error!(
+                    "❌ DNS: Failed to initialize upstream {}: {}",
+                    entry.target.addr, e
+                ),
             }
         }
 
-        let filter = if self.cfg.adblock_enabled && !upstreams.is_empty() {
+        if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {
+            tracing::warn!("⚠️ DNS: No upstreams configured. Only local resolution will work.");
+        }
+        info!(
+            "🛡️ DNS: Adblock enabled in config: {}",
+            self.cfg.adblock_enabled
+        );
+        let filter = if self.cfg.adblock_enabled {
+            info!("🛡️ DNS: Adblocker is enabled. Initializing...");
             Some(Arc::new(AdBlocker::new(self.cfg.adblock_enabled)))
         } else {
+            info!("🛡️ DNS: Adblocker is disabled in configuration.");
             None
         };
 
@@ -143,6 +156,11 @@ impl AsyncService for DnsService {
         }
 
         let tcp_worker = crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(&dns_ctx));
+
+        #[cfg(feature = "adblock")]
+        info!("🛡️ DNS: Adblock feature is compiled in.");
+        #[cfg(not(feature = "adblock"))]
+        info!("🛡️ DNS: Adblock feature is NOT compiled in.");
 
         #[cfg(feature = "adblock")]
         let adblock_worker = if dns_ctx.filter.is_some() {

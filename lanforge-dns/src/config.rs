@@ -50,6 +50,7 @@ pub struct UpstreamTarget {
 
 /// An upstream target resolver.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct UpstreamEntry {
     /// The target resolver.
     pub target: UpstreamTarget,
@@ -173,7 +174,7 @@ impl TryFrom<String> for UpstreamTarget {
 
 /// Configuration for DNS query logging.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct QueryLogConfig {
     /// Whether query logging is enabled.
     pub enabled: bool,
@@ -278,7 +279,7 @@ pub enum RewriteAnswer {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
 #[config(key = "dns")]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct DnsConfig {
     /// Whether the DNS service is enabled.
     pub enabled: bool,
