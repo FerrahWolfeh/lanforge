@@ -1,6 +1,6 @@
 [package]
 name = "lanforge-dns"
-version = "2.0.1"
+version = "2.0.2"
 license.workspace = true
 edition = "2024"
 

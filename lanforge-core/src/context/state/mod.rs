@@ -78,7 +78,7 @@ impl State {
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
             DeviceUpdate::IpOffline { ip } => self.handle_ip_offline(ip),
             DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
-                self.handle_interface_ips_changed(ifindex, state)
+                self.handle_interface_ips_changed(ifindex, &state)
             }
             DeviceUpdate::PruneZombies => self.handle_prune_zombies(),
             DeviceUpdate::RebuildDnsIndices => self.handle_rebuild_dns_indices(),

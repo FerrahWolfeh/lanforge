@@ -1,6 +1,9 @@
+use crate::error::DnsError;
 use crate::server::DnsContext;
-use crate::wire::{WireHeader, WireQuestion};
+use crate::wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::{error, trace};
@@ -23,7 +26,7 @@ pub fn spawn_udp_worker(ctx: Arc<DnsContext>, socket: Arc<UdpSocket>) -> JoinHan
                 }
                 Err(e) => {
                     error!("UDP worker receive error: {}", e);
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
         }
@@ -35,10 +38,32 @@ async fn handle_udp_query(
     ctx: Arc<DnsContext>,
     socket: Arc<UdpSocket>,
     data: &[u8],
-    src: std::net::SocketAddr,
-) -> Result<(), crate::error::DnsError> {
-    let header = WireHeader::parse(data).ok_or(crate::error::DnsError::WireParseError)?;
-    let question = WireQuestion::parse(data).ok_or(crate::error::DnsError::WireParseError)?;
+    src: SocketAddr,
+) -> Result<(), DnsError> {
+    let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
+    let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
+
+    // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
+    let mut labels = question.labels();
+    let is_noise = match labels.next() {
+        None => true,                                             // Empty qname (.)
+        Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
+        _ => false,
+    };
+
+    if is_noise {
+        let mut resp_buf = Vec::with_capacity(64);
+        WireResponseWriter::write_error_response(
+            data,
+            &question,
+            1, // FORMERR
+            WireOptScanner::scan(data, &header, &question),
+            false,
+            &mut resp_buf,
+        );
+        socket.send_to(&resp_buf, src).await?;
+        return Ok(());
+    }
 
     let mut resp_buf = Vec::with_capacity(512);
     ctx.pipeline

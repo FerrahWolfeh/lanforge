@@ -26,6 +26,8 @@ pub enum Origin {
     Cli,
     #[enum_repr(alias = "api")]
     External,
+    #[enum_repr(alias = "system")]
+    System,
     #[default]
     Dynamic,
 }
@@ -42,6 +44,7 @@ impl Origin {
             Self::Toml => "★",
             Self::Cli => "·",
             Self::External => "ⓔ",
+            Self::System => "⚙",
             Self::Dynamic => "–",
         }
     }
@@ -764,7 +767,7 @@ impl Device {
     #[must_use]
     pub fn learning_method(&self) -> LearningMethod {
         match self.origin {
-            Origin::Toml => LearningMethod::Static,
+            Origin::Toml | Origin::System => LearningMethod::Static,
             Origin::Cli | Origin::External => LearningMethod::Managed,
             Origin::Dynamic => {
                 if matches!(self.v4, IPv4State::Dynamic(_)) {

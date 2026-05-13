@@ -12,6 +12,7 @@ use lanforge_types::device::{
     V6ObservationOrigin, classify_ipv6,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::Ipv6AddrOrSuffix;
 
 impl State {
     pub(crate) fn handle_v4_lease_granted(
@@ -365,20 +366,76 @@ impl State {
     pub(crate) fn handle_interface_ips_changed(
         &mut self,
         ifindex: u32,
-        state: InterfaceState,
+        state: &InterfaceState,
     ) -> EventVec {
-        self.interfaces.interface_ips.insert(ifindex, state);
-        vec![LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
+        self.interfaces.interface_ips.insert(ifindex, state.clone());
+        let mut events: EventVec = vec![LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
             ifindex,
         })]
-        .into()
+        .into();
+
+        // Update the System device (the host itself) if it exists
+        if let Some((mac, _)) = self
+            .devices
+            .iter()
+            .find(|(_, d)| d.origin == Origin::System)
+        {
+            let mac = *mac;
+            let mut system_events = self.mutate_device(mac, |dev| {
+                let mut changed = false;
+
+                // Sync IPv4
+                if let Some((v4, _)) = state.v4 {
+                    let new_v4 = IPv4State::Static(v4);
+                    if dev.v4 != new_v4 {
+                        dev.v4 = new_v4;
+                        changed = true;
+                    }
+                }
+
+                // Sync IPv6 (Link-Local, GUA, ULA)
+                // We treat system IPs as static entries in the device state
+                let mut new_v6 = Vec::new();
+                let now = SystemTime::now();
+
+                if let Some(ll) = state.link_local {
+                    new_v6.push(IPv6State::Static(Ipv6AddrOrSuffix::Full(ll), now));
+                }
+                if let Some(gua) = state.gua {
+                    new_v6.push(IPv6State::Static(Ipv6AddrOrSuffix::Full(gua), now));
+                }
+                if let Some(ula) = state.ula {
+                    new_v6.push(IPv6State::Static(Ipv6AddrOrSuffix::Full(ula), now));
+                }
+
+                // Only update if the set of IPs actually changed
+                if dev.v6.len() != new_v6.len()
+                    || dev.v6.iter().zip(new_v6.iter()).any(|(a, b)| a != b)
+                {
+                    dev.v6 = new_v6.into();
+                    changed = true;
+                }
+
+                if changed {
+                    Some(DeviceChange::StatusChanged {
+                        online: true,
+                        hostname: None,
+                    })
+                } else {
+                    None
+                }
+            });
+            events.append(&mut system_events);
+        }
+
+        events
     }
 
     pub(crate) fn handle_prune_zombies(&mut self) -> EventVec {
         let max_age = Duration::from_hours(1);
         let mut removed = Vec::new();
         self.devices.retain(|mac, dev| {
-            if dev.is_zombie(max_age) {
+            if dev.origin != Origin::System && dev.is_zombie(max_age) {
                 removed.push(*mac);
                 false
             } else {

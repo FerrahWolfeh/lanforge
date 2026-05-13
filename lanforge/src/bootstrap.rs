@@ -4,11 +4,11 @@ use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_db::engine::LeaseDb;
-use lanforge_network::ifmon::AddressMonitor;
 use lanforge_core::types::InterfaceState;
 use lanforge_core::types::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_core::types::identifiers::MacAddr;
+use lanforge_db::engine::LeaseDb;
+use lanforge_network::ifmon::AddressMonitor;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
 use rtnetlink::new_connection;
@@ -130,11 +130,48 @@ impl Bootstrapper {
 
         info!("📦 Database loaded: {}", cfg.database.url);
         Self::reload_static_devices_into_state(&mut table, cfg);
+        Self::inject_self_device(&mut table, cfg);
 
         // Trigger early collision validation and logging
         let _ = table.get_static_registry();
 
         Ok(table)
+    }
+
+    /// Injects the host machine as a system device in the state table.
+    fn inject_self_device(table: &mut State, cfg: &Config) {
+        let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .map_or_else(|_| "lanforge".to_string(), |s| s.trim().to_string());
+
+        let interfaces = interfaces();
+        if let Some(iface) = interfaces.iter().find(|i| i.name == cfg.system.iface)
+            && let Some(mac) = iface.mac
+        {
+            let mac = MacAddr(mac.octets());
+            info!(
+                "⚙️ Self-Resolution: Injecting system device '{}' ({})",
+                hostname, mac
+            );
+
+            // Use current V4 if available to seed the device
+            let v4_static = iface.ips.iter().find_map(|ip| {
+                if let pnet::ipnetwork::IpNetwork::V4(v4) = ip {
+                    Some(v4.ip())
+                } else {
+                    None
+                }
+            });
+
+            table.add_static_device(
+                mac,
+                hostname,
+                None, // DUID not required for the host itself here
+                v4_static,
+                None, // V6 suffix will be picked up by scan
+                None,
+                Origin::System,
+            );
+        }
     }
 
     /// Reloads all static devices from the configuration into the given state.

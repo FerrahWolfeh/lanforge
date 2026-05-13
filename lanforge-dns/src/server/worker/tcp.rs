@@ -1,5 +1,5 @@
 use crate::server::DnsContext;
-use crate::wire::{WireHeader, WireQuestion};
+use crate::wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -42,6 +42,39 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 Some(q) => q,
                                 None => break,
                             };
+
+                            // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
+                            let mut labels = question.labels();
+                            let is_noise = match labels.next() {
+                                None => true,                                             // Empty qname (.)
+                                Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
+                                _ => false,
+                            };
+
+                            if is_noise {
+                                let mut resp_buf = Vec::with_capacity(64);
+                                WireResponseWriter::write_error_response(
+                                    &data,
+                                    &question,
+                                    1, // FORMERR
+                                    WireOptScanner::scan(&data, &header, &question),
+                                    false,
+                                    &mut resp_buf,
+                                );
+
+                                if !resp_buf.is_empty() {
+                                    let resp_len = u16::try_from(resp_buf.len())
+                                        .unwrap_or(u16::MAX)
+                                        .to_be_bytes();
+                                    if stream.write_all(&resp_len).await.is_err() {
+                                        break;
+                                    }
+                                    if stream.write_all(&resp_buf).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                continue;
+                            }
 
                             let mut resp_buf = Vec::with_capacity(len + 128);
                             if let Err(e) = task_ctx

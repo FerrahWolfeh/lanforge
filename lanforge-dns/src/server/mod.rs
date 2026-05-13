@@ -44,6 +44,12 @@ pub struct DnsLogEvent {
 
 impl DnsContext {
     pub fn record_log(&self, event: DnsLogEvent) {
+        // Noise filtering
+        if event.domain.is_empty() || event.domain.as_ref() == "." || event.domain.as_ref() == ":0"
+        {
+            return;
+        }
+
         if let Some(log) = &self.query_log {
             let entry = QueryLogEntry {
                 timestamp: SystemTime::now()
