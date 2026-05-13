@@ -116,10 +116,10 @@ pub fn spawn_cache_handler(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            for mgr in &ctx.recursive.upstreams {
+            for mgr in ctx.recursive.all_upstreams() {
                 mgr.cache.cleanup();
             }
-            if let Some(mgr) = ctx.recursive.upstreams.first() {
+            if let Some(mgr) = ctx.recursive.all_upstreams().next() {
                 ctx.stats
                     .cache_entries
                     .store(mgr.cache.cache.len() as u64, Ordering::Relaxed);

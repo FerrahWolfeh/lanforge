@@ -7,14 +7,28 @@ use lanforge_core::types::{
     MacAddr,
 };
 use lanforge_dns::DnsService;
-use lanforge_dns::config::{DnsConfig, PrioritizedUpstream};
+use lanforge_dns::config::{DnsConfig, UpstreamEntry};
 use lanforge_dns::wire::{WireDecoder, WireEncoder};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
+#[cfg(any(feature = "dot", feature = "doq", feature = "doh-upstream"))]
+fn init_crypto() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install rustls crypto provider");
+    });
+}
+
 fn init_test_context() -> LanforgeContext {
+    #[cfg(any(feature = "dot", feature = "doq", feature = "doh-upstream"))]
+    init_crypto();
+
     let bus = Arc::new(EventBus::new());
     let table = State::new();
     LanforgeContext::new(bus, table, None)
@@ -119,23 +133,20 @@ async fn dns_simulation_upstream() {
     let mut cfg = DnsConfig {
         enabled: true,
         listen: "127.0.0.1:1054".parse().unwrap(),
-        upstreams: vec![PrioritizedUpstream {
+        upstreams: vec![UpstreamEntry {
             target: "1.1.1.1:53".parse().unwrap(),
-            priority: 0,
         }],
         ..Default::default()
     };
 
     #[cfg(feature = "dot")]
-    cfg.upstreams.push(PrioritizedUpstream {
+    cfg.upstreams.push(UpstreamEntry {
         target: "tls://1.1.1.1:853".parse().unwrap(),
-        priority: 1,
     });
 
     #[cfg(feature = "doq")]
-    cfg.upstreams.push(PrioritizedUpstream {
+    cfg.upstreams.push(UpstreamEntry {
         target: "quic://94.140.14.14:784".parse().unwrap(),
-        priority: 2,
     });
 
     // 2. Start DNS Service

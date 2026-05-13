@@ -13,9 +13,7 @@ name = "lanforge"
 path = "src/main.rs"
 
 [features]
-default = ["sqlite", "zstd", "tui", "remote"]
-sqlite = ["lanforge-db/sqlite"]
-postgres = ["lanforge-db/postgres"]
+default = ["zstd", "tui", "remote"]
 zstd = ["dep:zstd"]
 remote = [
     "dep:lanforge-http",

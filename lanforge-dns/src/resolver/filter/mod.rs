@@ -269,7 +269,7 @@ impl AdBlocker {
         resp: &mut Vec<u8>,
     ) -> bool {
         let edns = WireOptScanner::scan(data, header, question);
-        let ra = !ctx.recursive.upstreams.is_empty();
+        let ra = !ctx.recursive.is_empty();
         let qtype = DnsRecordType::from(question.qtype());
 
         match answer {
@@ -387,7 +387,7 @@ impl AdBlocker {
         resp: &mut Vec<u8>,
     ) {
         let edns = WireOptScanner::scan(data, header, question);
-        let ra = !ctx.cfg.upstreams.is_empty();
+        let ra = !ctx.recursive.is_empty();
 
         match ctx.cfg.blocking_mode {
             crate::config::BlockingMode::NxDomain => {

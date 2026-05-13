@@ -12,7 +12,7 @@ name = "lanforged"
 path = "src/main.rs"
 
 [features]
-default = ["sqlite"]
+default = ["sqlite", "dns-full", "adblock", "http"]
 debug-commands = []
 
 # Profiling & Diagnostics
@@ -42,19 +42,32 @@ jemalloc = ["dep:tikv-jemallocator"]
 sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]
 
+# DNS Upstream Protocols (Forwarding)
+dns-dot = ["lanforge-dns/dot"]
+dns-doq = ["lanforge-dns/doq"]
+dns-doh = ["lanforge-dns/doh-upstream"]
+dns-full = ["dns-dot", "dns-doq"]
+
 # Networking Protocols
 http = ["dep:lanforge-http", "lanforge-http/server"]
 https = ["dep:lanforge-http", "lanforge-http/server"]
-doh = ["dep:lanforge-http", "lanforge-http/doh"]
-dot = ["lanforge-dns/dot"]
-doq = ["lanforge-dns/doq"]
+doh-server = ["dep:lanforge-http", "lanforge-http/doh"]
 
 # Core Features
 adblock = ["lanforge-dns/adblock", "lanforge-db/adblock"]
 zstd = ["lanforge-api/zstd"]
 
 # Meta-features
-full = ["http", "https", "doh", "dot", "doq", "adblock", "postgres", "sqlite"]
+full = [
+    "dns-full",
+    "dns-doh",
+    "http",
+    "https",
+    "doh-server",
+    "adblock",
+    "postgres",
+    "sqlite",
+]
 
 
 [dependencies]

@@ -32,8 +32,23 @@ pub struct UpstreamManager {
 }
 
 impl UpstreamManager {
+    /// Bind a dual-stack (IPv6 + IPv4-mapped) UDP socket.
+    /// Falls back to IPv4-only if dual-stack is unavailable on the host.
+    async fn bind_dualstack() -> Result<UdpSocket, std::io::Error> {
+        use socket2::{Domain, Protocol, Socket, Type};
+        let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+        sock.set_only_v6(false).ok(); // allow IPv4-mapped addresses, ignore error if not supported
+        sock.set_nonblocking(true)?;
+        let addr: SocketAddr = "[::]:0".parse().unwrap();
+        sock.bind(&addr.into())?;
+        UdpSocket::from_std(sock.into())
+    }
+
     pub async fn new(target: &UpstreamTarget, cache: Arc<DnsCache>) -> Result<Arc<Self>, DnsError> {
-        let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+        let socket = match Self::bind_dualstack().await {
+            Ok(s) => Arc::new(s),
+            Err(_) => Arc::new(UdpSocket::bind("0.0.0.0:0").await?),
+        };
         let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
 
         let s = Arc::clone(&socket);
@@ -255,7 +270,11 @@ impl UpstreamManager {
         ));
         client_config.transport_config(Arc::new(transport_config));
 
-        let client_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let client_addr: SocketAddr = if target.addr.is_ipv6() {
+            "[::]:0".parse().unwrap()
+        } else {
+            "0.0.0.0:0".parse().unwrap()
+        };
         let mut endpoint = Endpoint::client(client_addr).map_err(DnsError::Io)?;
         endpoint.set_default_client_config(client_config);
 

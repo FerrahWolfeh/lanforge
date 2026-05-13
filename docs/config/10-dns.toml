@@ -8,15 +8,14 @@ listen = "0.0.0.0:53"
 # Multiple search domains for local resolution.
 search_domains = ["lan", "local"]
 
-# --- MODE 1: Recursive Forwarder (with prioritized upstreams) ---
-# Format: { target = "proto://ip:port", priority = number } (Lower priority is tried first)
+# --- MODE 1: Recursive Forwarder ---
+# Format: { target = "proto://[hostname@]ip:port" }
+# Protocol tiers are automatic: TLS/QUIC > HTTPS > UDP
 [[dns.upstreams]]
 target = "tls://1.1.1.1:853"
-priority = 10
 
 [[dns.upstreams]]
 target = "udp://8.8.8.8:53"
-priority = 20
 
 # --- MODE 2: Authoritative Only ---
 # To disable forwarding and only resolve local names, leave [[dns.upstreams]] empty.

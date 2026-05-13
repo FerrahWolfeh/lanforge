@@ -30,7 +30,7 @@ impl Middleware for LocalResolverMiddleware {
         resp: &'a mut Vec<u8>,
     ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>> {
         Box::pin(async move {
-            let has_upstreams = !ctx.recursive.upstreams.is_empty();
+            let has_upstreams = !ctx.recursive.is_empty();
             if ctx
                 .local
                 .resolve_local_wire(data, header, question, has_upstreams, resp)

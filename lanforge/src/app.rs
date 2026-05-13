@@ -12,9 +12,9 @@ use crate::registry::ServiceRegistry;
 use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
 use lanforge_dns::DnsService;
-#[cfg(feature = "doq")]
+#[cfg(feature = "dns-doq")]
 use lanforge_dns::DoqService;
-#[cfg(feature = "dot")]
+#[cfg(feature = "dns-dot")]
 use lanforge_dns::DotService;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
@@ -99,17 +99,17 @@ impl Daemon {
         #[allow(unused_variables)]
         let cfg = &self.bootstrap.cfg;
 
-        #[cfg(not(feature = "dot"))]
+        #[cfg(not(feature = "dns-dot"))]
         if cfg.dns_toml.dot_enabled {
             tracing::error!(
-                "❌ Feature 'dot' (DNS-over-TLS) is enabled in configuration but not compiled in the binary!"
+                "❌ Feature 'dns-dot' (DNS-over-TLS) is enabled in configuration but not compiled in the binary!"
             );
         }
 
-        #[cfg(not(feature = "doq"))]
+        #[cfg(not(feature = "dns-doq"))]
         if cfg.dns_toml.doq_enabled {
             tracing::error!(
-                "❌ Feature 'doq' (DNS-over-QUIC) is enabled in configuration but not compiled in the binary!"
+                "❌ Feature 'dns-doq' (DNS-over-QUIC) is enabled in configuration but not compiled in the binary!"
             );
         }
 
@@ -183,10 +183,10 @@ impl Daemon {
             // 5. Application Services (DNS, API, TFTP)
             async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
 
-            #[cfg(feature = "dot")]
+            #[cfg(feature = "dns-dot")]
             async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.dot_enabled => DotService::new(Arc::new(cfg.to_dns_config()), ctx),
 
-            #[cfg(feature = "doq")]
+            #[cfg(feature = "dns-doq")]
             async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.doq_enabled => DoqService::new(Arc::new(cfg.to_dns_config()), ctx),
 
             async [ctx, cfg] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx),

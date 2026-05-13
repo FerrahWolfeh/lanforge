@@ -24,6 +24,18 @@ pub enum UpstreamProtocol {
     Https,
 }
 
+impl UpstreamProtocol {
+    /// Returns the implicit security tier (lower = more preferred).
+    #[must_use]
+    pub const fn tier(self) -> u8 {
+        match self {
+            Self::Tls | Self::Quic => 0,
+            Self::Https => 1,
+            Self::Udp => 2,
+        }
+    }
+}
+
 /// An upstream resolver target with protocol and optional hostname for verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -36,13 +48,11 @@ pub struct UpstreamTarget {
     pub hostname: Option<String>,
 }
 
-/// An upstream target with an associated priority for failover/load-balancing.
+/// An upstream target resolver.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PrioritizedUpstream {
+pub struct UpstreamEntry {
     /// The target resolver.
     pub target: UpstreamTarget,
-    /// Priority (lower is higher priority).
-    pub priority: u32,
 }
 
 impl FromStr for UpstreamTarget {
@@ -274,9 +284,9 @@ pub struct DnsConfig {
     pub enabled: bool,
     /// Socket address to listen on for both UDP and TCP (e.g., `0.0.0.0:53`).
     pub listen: SocketAddr,
-    /// Upstream resolver targets with priorities.
+    /// Upstream resolver targets.
     /// If empty, non-local queries return `REFUSED`.
-    pub upstreams: Vec<PrioritizedUpstream>,
+    pub upstreams: Vec<UpstreamEntry>,
     /// Strategy for choosing an upstream resolver.
     pub upstream_mode: UpstreamMode,
     /// Local search domain suffixes (e.g., `["lan", "home.arpa"]`). Queries for

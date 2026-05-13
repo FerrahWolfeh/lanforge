@@ -1495,7 +1495,7 @@ impl ClientContext {
         };
 
         let mut entries = Vec::new();
-        for upstream in &dns_ctx.recursive.upstreams {
+        for upstream in dns_ctx.recursive.all_upstreams() {
             let dump = upstream.cache.dump();
             for (name, kind, data, expires_in_secs) in dump {
                 entries.push(DnsCacheEntry {

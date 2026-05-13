@@ -143,7 +143,7 @@ fn append_dns_metrics(out: &mut String, ctx: &LanforgeContext) {
         );
         out.push_str("# TYPE lanforge_dns_upstream_failures_total counter\n");
 
-        for mgr in &dns_ctx.recursive.upstreams {
+        for mgr in dns_ctx.recursive.all_upstreams() {
             let target = &mgr.target.addr.to_string();
             let proto = format!("{:?}", mgr.target.protocol).to_lowercase();
             let rtt = mgr.health.rtt_ewma_us.load(Ordering::Relaxed);

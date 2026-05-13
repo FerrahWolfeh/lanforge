@@ -62,7 +62,7 @@ impl<'a> ResponseBuilder<'a> {
                 resp.header = query.header.clone();
                 resp.header.qr = true;
                 resp.header.aa = true;
-                resp.header.ra = !self.ctx.recursive.upstreams.is_empty();
+                resp.header.ra = !self.ctx.recursive.is_empty();
                 resp.header.ancount = 0;
                 resp.header.nscount = 0;
                 resp.header.arcount = 0;
@@ -90,7 +90,7 @@ impl<'a> ResponseBuilder<'a> {
                 resp.header.id = *id;
                 resp.header.qr = true;
                 resp.header.aa = true;
-                resp.header.ra = !self.ctx.recursive.upstreams.is_empty();
+                resp.header.ra = !self.ctx.recursive.is_empty();
                 resp.header.qdcount = 1;
                 resp.questions.push(DnsQuestion {
                     name: qname.clone(),

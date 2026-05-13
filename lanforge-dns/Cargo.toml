@@ -62,11 +62,18 @@ adblock = [
 ]
 dot = [
     "dep:rustls",
+    "rustls/ring",
     "dep:rustls-pki-types",
     "dep:tokio-rustls",
     "dep:webpki-roots",
 ]
-doq = ["dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+doq = [
+    "dep:quinn",
+    "dep:rustls",
+    "rustls/ring",
+    "dep:rustls-pki-types",
+    "dep:webpki-roots",
+]
 doh-upstream = [
     "dep:hyper",
     "dep:hyper-util",
@@ -74,6 +81,7 @@ doh-upstream = [
     "dep:http-body-util",
     "dep:base64",
     "dep:rustls",
+    "rustls/ring",
     "dep:rustls-pki-types",
     "dep:webpki-roots",
 ]

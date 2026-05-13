@@ -17,23 +17,45 @@ pub enum UpstreamMode {
 
 pub struct UpstreamStrategy {
     pub mode: UpstreamMode,
-    pub upstreams: Vec<Arc<UpstreamManager>>,
+    /// Upstreams grouped by protocol tier. Index 0 = tier 0 (TLS/QUIC), etc.
+    tiers: Vec<Vec<Arc<UpstreamManager>>>,
     pub rr_index: AtomicUsize,
 }
 
 impl UpstreamStrategy {
     #[must_use]
-    pub const fn new(mode: UpstreamMode, upstreams: Vec<Arc<UpstreamManager>>) -> Self {
+    pub fn new(mode: UpstreamMode, upstreams: Vec<Arc<UpstreamManager>>) -> Self {
+        let max_tier = upstreams
+            .iter()
+            .map(|m| m.target.protocol.tier() as usize)
+            .max()
+            .unwrap_or(0);
+
+        let mut tiers = vec![Vec::new(); max_tier + 1];
+        for mgr in upstreams {
+            tiers[mgr.target.protocol.tier() as usize].push(mgr);
+        }
+
         Self {
             mode,
-            upstreams,
+            tiers,
             rr_index: AtomicUsize::new(0),
         }
     }
 
+    /// Flat iterator over all upstreams.
+    pub fn all_upstreams(&self) -> impl Iterator<Item = &Arc<UpstreamManager>> {
+        self.tiers.iter().flat_map(|t| t.iter())
+    }
+
+    /// Returns true if no upstreams are configured.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tiers.iter().all(|t| t.is_empty())
+    }
+
     pub fn snapshots(&self) -> Vec<UpstreamHealthSnapshot> {
-        self.upstreams
-            .iter()
+        self.all_upstreams()
             .map(|m| {
                 m.health.snapshot(
                     format!("{}", m.target.addr),
@@ -44,21 +66,40 @@ impl UpstreamStrategy {
     }
 
     pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
-        if self.upstreams.is_empty() {
-            return Err(DnsError::Refused);
-        }
+        let mut last_err = DnsError::Refused;
+        for tier in &self.tiers {
+            if tier.is_empty() {
+                continue;
+            }
 
+            match self.resolve_tier(tier, data).await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
+    }
+
+    async fn resolve_tier(
+        &self,
+        tier: &[Arc<UpstreamManager>],
+        data: &[u8],
+    ) -> Result<(Vec<u8>, bool), DnsError> {
         match self.mode {
-            UpstreamMode::Sequential => self.resolve_sequential(data).await,
-            UpstreamMode::Parallel => self.resolve_parallel(data).await,
-            UpstreamMode::Fastest => self.resolve_fastest(data).await,
-            UpstreamMode::RoundRobin => self.resolve_round_robin(data).await,
+            UpstreamMode::Sequential => self.resolve_sequential(tier, data).await,
+            UpstreamMode::Parallel => self.resolve_parallel(tier, data).await,
+            UpstreamMode::Fastest => self.resolve_fastest(tier, data).await,
+            UpstreamMode::RoundRobin => self.resolve_round_robin(tier, data).await,
         }
     }
 
-    async fn resolve_sequential(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
+    async fn resolve_sequential(
+        &self,
+        tier: &[Arc<UpstreamManager>],
+        data: &[u8],
+    ) -> Result<(Vec<u8>, bool), DnsError> {
         let mut last_err = DnsError::UpstreamTimeout;
-        for mgr in &self.upstreams {
+        for mgr in tier {
             if mgr.health.status() == UpstreamStatus::Degraded {
                 continue;
             }
@@ -70,17 +111,20 @@ impl UpstreamStrategy {
         Err(last_err)
     }
 
-    async fn resolve_parallel(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
+    async fn resolve_parallel(
+        &self,
+        tier: &[Arc<UpstreamManager>],
+        data: &[u8],
+    ) -> Result<(Vec<u8>, bool), DnsError> {
         use tokio::task::JoinSet;
         let mut set = JoinSet::new();
 
-        let mut available: Vec<_> = self
-            .upstreams
+        let mut available: Vec<_> = tier
             .iter()
             .filter(|m| m.health.status() != UpstreamStatus::Degraded)
             .collect();
         if available.is_empty() {
-            available = self.upstreams.iter().collect();
+            available = tier.iter().collect();
         }
 
         for mgr in available {
@@ -105,8 +149,12 @@ impl UpstreamStrategy {
         Err(last_err)
     }
 
-    async fn resolve_fastest(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
-        let mut sorted = self.upstreams.clone();
+    async fn resolve_fastest(
+        &self,
+        tier: &[Arc<UpstreamManager>],
+        data: &[u8],
+    ) -> Result<(Vec<u8>, bool), DnsError> {
+        let mut sorted = tier.to_vec();
         sorted.sort_by_key(|m| m.health.rtt_ewma_us.load(Ordering::Relaxed));
 
         let mut last_err = DnsError::UpstreamTimeout;
@@ -122,14 +170,18 @@ impl UpstreamStrategy {
         Err(last_err)
     }
 
-    async fn resolve_round_robin(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
-        let len = self.upstreams.len();
+    async fn resolve_round_robin(
+        &self,
+        tier: &[Arc<UpstreamManager>],
+        data: &[u8],
+    ) -> Result<(Vec<u8>, bool), DnsError> {
+        let len = tier.len();
         let start = self.rr_index.fetch_add(1, Ordering::Relaxed) % len;
 
         let mut last_err = DnsError::UpstreamTimeout;
         for i in 0..len {
             let idx = (start + i) % len;
-            let mgr = &self.upstreams[idx];
+            let mgr = &tier[idx];
             if mgr.health.status() == UpstreamStatus::Degraded {
                 continue;
             }

@@ -56,8 +56,8 @@ impl DnsService {
             .cache_capacity
             .store(self.cfg.cache_size, Ordering::Relaxed);
         let mut upstreams = Vec::new();
-        for prioritized in &self.cfg.upstreams {
-            if let Ok(mgr) = UpstreamManager::new(&prioritized.target, Arc::clone(&cache)).await {
+        for entry in &self.cfg.upstreams {
+            if let Ok(mgr) = UpstreamManager::new(&entry.target, Arc::clone(&cache)).await {
                 upstreams.push(mgr);
             }
         }

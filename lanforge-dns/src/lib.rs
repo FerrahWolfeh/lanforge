@@ -13,7 +13,7 @@ pub mod utils;
 pub mod wire;
 
 // Re-exports for convenience
-pub use config::{BlockingMode, DnsConfig, PrioritizedUpstream};
+pub use config::{BlockingMode, DnsConfig, UpstreamEntry};
 pub use error::DnsError;
 pub use resolver::LocalResolver;
 pub use resolver::filter::AdBlocker;

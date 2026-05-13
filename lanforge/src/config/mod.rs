@@ -32,7 +32,7 @@ pub use args::Command;
 use lanforge_api::config::{ApiConfig, HttpConfig};
 use lanforge_core::types::device::Ipv6AddrOrSuffix;
 use lanforge_db::config::DatabaseConfig;
-use lanforge_dns::{BlockingMode, DnsConfig, PrioritizedUpstream};
+use lanforge_dns::{BlockingMode, DnsConfig, UpstreamEntry};
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
 use lanforge_network::dhcp::v6::config::Dhcpv6Config;
 use lanforge_network::mdns::MdnsConfig;
@@ -409,7 +409,7 @@ impl Config {
             .dns_toml
             .upstreams
             .first()
-            .map(|u| format!("{} (prio {})", String::from(u.target.clone()), u.priority));
+            .map(|u| format!("{}", String::from(u.target.clone())));
         cfg.boot_dir = Some(self.tftp_toml.root_dir.to_string_lossy().to_string());
 
         // Inherit TLS from system if not set in HTTP
@@ -477,10 +477,7 @@ impl Config {
         if let Some(upstream) = &cli.dns_upstream
             && let Ok(target) = upstream.parse()
         {
-            d.upstreams = vec![PrioritizedUpstream {
-                target,
-                priority: 1,
-            }];
+            d.upstreams = vec![UpstreamEntry { target }];
         }
         if let Some(port) = cli.dns_port {
             d.listen.set_port(port);
