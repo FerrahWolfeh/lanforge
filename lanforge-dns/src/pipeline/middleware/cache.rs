@@ -32,6 +32,8 @@ impl Middleware for CacheMiddleware {
                 ctx.stats.inc_cache_hit();
 
                 let result = if is_block {
+                    #[cfg(feature = "adblock")]
+                    ctx.stats.inc_blocked();
                     QueryResult::CachedBlock
                 } else {
                     QueryResult::Cached

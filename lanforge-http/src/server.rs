@@ -437,6 +437,8 @@ async fn handle_dns_query(
     body: Bytes,
 ) -> impl IntoResponse {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use lanforge_core::types::TransportProtocol;
+    use lanforge_dns::pipeline::DnsPipelineRequest;
     use lanforge_dns::server::DnsContext;
     use lanforge_dns::wire::{WireHeader, WireQuestion};
 
@@ -484,7 +486,15 @@ async fn handle_dns_query(
     };
 
     let mut resp_buf = Vec::with_capacity(512);
-    match dns_ctx.pipeline.run(dns_ctx, &query_data, &header, &question, _src_ip, &mut resp_buf).await {
+    let req = DnsPipelineRequest::new(
+        &query_data,
+        &header,
+        &question,
+        _src_ip,
+        TransportProtocol::Https,
+    );
+
+    match dns_ctx.pipeline.run(dns_ctx, req, &mut resp_buf).await {
         Ok(()) => {
             if !resp_buf.is_empty() {
                 (

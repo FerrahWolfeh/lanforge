@@ -1,7 +1,7 @@
 use lanforge_core::types::{DnsRecordType, DnsResponseCode, QueryResult};
 
 use crate::error::DnsError;
-use crate::pipeline::Middleware;
+use crate::pipeline::{DnsPipelineRequest, Middleware};
 use crate::resolver::filter::labels_to_domain;
 use crate::server::{DnsContext, DnsLogEvent};
 use crate::wire::WireDecoder;
@@ -23,7 +23,7 @@ impl Middleware for UpstreamMiddleware {
     fn run<'a>(
         &'a self,
         ctx: &'a DnsContext,
-        req: crate::pipeline::DnsPipelineRequest<'a>,
+        req: DnsPipelineRequest<'a>,
         resp: &'a mut Vec<u8>,
     ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>> {
         Box::pin(async move {
@@ -40,6 +40,8 @@ impl Middleware for UpstreamMiddleware {
                     }
 
                     let result = if is_block {
+                        #[cfg(feature = "adblock")]
+                        ctx.stats.inc_blocked();
                         QueryResult::CachedBlock
                     } else if cached {
                         QueryResult::Cached

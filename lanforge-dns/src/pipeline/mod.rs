@@ -19,6 +19,24 @@ pub struct DnsPipelineRequest<'a> {
     pub protocol: TransportProtocol,
 }
 
+impl<'a> DnsPipelineRequest<'a> {
+    pub fn new(
+        data: &'a [u8],
+        header: &'a WireHeader<'a>,
+        question: &'a WireQuestion<'a>,
+        src_ip: IpAddr,
+        protocol: TransportProtocol,
+    ) -> Self {
+        Self {
+            data,
+            header,
+            question,
+            src_ip,
+            protocol,
+        }
+    }
+}
+
 pub trait Middleware: Send + Sync {
     fn run<'a>(
         &'a self,
@@ -47,26 +65,14 @@ impl Pipeline {
     pub async fn run(
         &self,
         ctx: &DnsContext,
-        data: &[u8],
-        header: &WireHeader<'_>,
-        question: &WireQuestion<'_>,
-        src_ip: IpAddr,
-        protocol: TransportProtocol,
+        req: DnsPipelineRequest<'_>,
         resp: &mut Vec<u8>,
     ) -> Result<(), DnsError> {
         ctx.stats.inc_requests();
-        ctx.stats.inc_protocol(protocol);
-
-        let req = DnsPipelineRequest {
-            data,
-            header,
-            question,
-            src_ip,
-            protocol,
-        };
+        ctx.stats.inc_protocol(req.protocol);
 
         for m in &self.middlewares {
-            if m.run(ctx, req.clone(), resp).await? {
+            if m.run(ctx, req, resp).await? {
                 return Ok(());
             }
         }

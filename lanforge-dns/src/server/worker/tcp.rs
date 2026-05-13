@@ -1,3 +1,4 @@
+use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_core::types::TransportProtocol;
@@ -83,11 +84,13 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 .pipeline
                                 .run(
                                     &task_ctx,
-                                    &data,
-                                    &header,
-                                    &question,
-                                    src.ip(),
-                                    TransportProtocol::Tcp,
+                                    DnsPipelineRequest::new(
+                                        &data,
+                                        &header,
+                                        &question,
+                                        src.ip(),
+                                        TransportProtocol::Tcp,
+                                    ),
                                     &mut resp_buf,
                                 )
                                 .await

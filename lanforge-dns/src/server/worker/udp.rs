@@ -1,4 +1,5 @@
 use crate::error::DnsError;
+use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_core::types::TransportProtocol;
@@ -70,11 +71,7 @@ async fn handle_udp_query(
     ctx.pipeline
         .run(
             &ctx,
-            data,
-            &header,
-            &question,
-            src.ip(),
-            TransportProtocol::Udp,
+            DnsPipelineRequest::new(data, &header, &question, src.ip(), TransportProtocol::Udp),
             &mut resp_buf,
         )
         .await?;

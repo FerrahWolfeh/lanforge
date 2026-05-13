@@ -2407,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dns"
-version = "2.1.1"
+version = "2.2.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-http"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "argon2",
  "async-trait",

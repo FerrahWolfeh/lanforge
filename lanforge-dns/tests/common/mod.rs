@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use lanforge_core::context::LanforgeContext;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::error::DnsError;
-use lanforge_dns::pipeline::{Pipeline, middleware::*};
+use lanforge_dns::pipeline::{DnsPipelineRequest, Pipeline, middleware::*};
 use lanforge_dns::resolver::LocalResolver;
 use lanforge_dns::resolver::filter::AdBlocker;
 use lanforge_dns::resolver::recursive::DnsCache;
@@ -110,11 +110,7 @@ pub async fn process_query_test(
     ctx.pipeline
         .run(
             ctx,
-            data,
-            &header,
-            &question,
-            src_ip,
-            TransportProtocol::Udp,
+            DnsPipelineRequest::new(data, &header, &question, src_ip, TransportProtocol::Udp),
             resp,
         )
         .await?;

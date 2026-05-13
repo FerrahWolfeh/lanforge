@@ -9,6 +9,7 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
 
 use crate::config::DnsConfig;
+use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
 use crate::server::transport::tls::load_tls_config;
 use crate::wire::{WireHeader, WireQuestion};
@@ -139,11 +140,13 @@ async fn handle_doq_connection(
                         .pipeline
                         .run(
                             &dns_ctx_arc,
-                            &query_buf,
-                            &header,
-                            &question,
-                            peer.ip(),
-                            TransportProtocol::Quic,
+                            DnsPipelineRequest::new(
+                                &query_buf,
+                                &header,
+                                &question,
+                                peer.ip(),
+                                TransportProtocol::Quic,
+                            ),
                             &mut resp_buf,
                         )
                         .await
