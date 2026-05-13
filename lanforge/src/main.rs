@@ -19,7 +19,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 fn main() -> Result<()> {
     let rt = Builder::new_multi_thread()
         .enable_all()
-        .thread_name("lanforge-worker")
+        .thread_name("Async Worker")
         .build()?;
 
     let res = rt.block_on(async_main());
