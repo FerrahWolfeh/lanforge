@@ -34,7 +34,7 @@ impl Middleware for UpstreamMiddleware {
         Box::pin(async move {
             let start = std::time::Instant::now();
             match ctx.recursive.resolve(data).await {
-                Ok((upstream_resp, cached)) => {
+                Ok((upstream_resp, cached, is_block)) => {
                     let elapsed = start.elapsed().as_micros() as u32;
 
                     ctx.stats.inc_resolved();
@@ -44,7 +44,9 @@ impl Middleware for UpstreamMiddleware {
                         ctx.stats.inc_cache_miss();
                     }
 
-                    let result = if cached {
+                    let result = if is_block {
+                        QueryResult::CachedBlock
+                    } else if cached {
                         QueryResult::Cached
                     } else {
                         QueryResult::Forwarded

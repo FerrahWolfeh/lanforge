@@ -93,12 +93,12 @@ impl UpstreamManager {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub async fn forward(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
+    pub async fn forward(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
         let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
 
-        if let Some(cached_resp) = self.cache.get_wire(data, &question) {
-            return Ok((cached_resp, true));
+        if let Some((cached_resp, is_block)) = self.cache.get_wire(data, &question) {
+            return Ok((cached_resp, true, is_block));
         }
 
         let orig_id = header.id();
@@ -161,8 +161,8 @@ impl UpstreamManager {
             qclass: question.qclass(),
         };
         self.cache
-            .insert(key, final_bytes.clone(), offsets, min_ttl);
-        Ok((final_bytes, false))
+            .insert(key, final_bytes.clone(), offsets, min_ttl, false);
+        Ok((final_bytes, false, false))
     }
 
     async fn forward_udp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {

@@ -421,6 +421,7 @@ fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
             .map(|e| {
                 let result_style = match e.result.to_lowercase().as_str() {
                     "cached" => Style::default().fg(theme::MOCHA_GREEN),
+                    "cachedblock" => Style::default().fg(theme::MOCHA_PEACH),
                     "forwarded" => Style::default().fg(theme::MOCHA_BLUE),
                     "blocked" => Style::default().fg(theme::MOCHA_RED),
                     "nxdomain" => Style::default().fg(theme::MOCHA_YELLOW),

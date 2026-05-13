@@ -15,6 +15,7 @@ use lanforge_dns::resolver::recursive::UpstreamStrategy;
 use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::QueryRing;
 use lanforge_dns::telemetry::stats::DnsStats;
+use lanforge_dns::resolver::recursive::DnsCache;
 use lanforge_dns::wire::{WireHeader, WireQuestion};
 
 #[allow(dead_code)]
@@ -45,6 +46,7 @@ pub fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
 
     let cfg_arc = Arc::new(cfg);
+    let cache = Arc::new(DnsCache::new(cfg_arc.cache_size, 30));
     let recursive = Arc::new(UpstreamStrategy::new(cfg_arc.upstream_mode, Vec::new()));
 
     let filter = if cfg_arc.adblock_enabled || !cfg_arc.rewrites.is_empty() {
@@ -60,6 +62,7 @@ pub fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
     let mut pipeline = Pipeline::new();
     pipeline.push(RewriteMiddleware::new());
     pipeline.push(LocalResolverMiddleware::new());
+    pipeline.push(CacheMiddleware::new());
     #[cfg(feature = "adblock")]
     pipeline.push(AdblockMiddleware::new());
     pipeline.push(UpstreamMiddleware::new());
@@ -72,6 +75,7 @@ pub fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
         pipeline,
         local: LocalResolver::new(cfg_arc, ctx),
         recursive,
+        cache,
         filter,
         soa_zone,
         soa_master_ns,

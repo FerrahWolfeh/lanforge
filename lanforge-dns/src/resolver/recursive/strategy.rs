@@ -65,7 +65,7 @@ impl UpstreamStrategy {
             .collect()
     }
 
-    pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool), DnsError> {
+    pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut last_err = DnsError::Refused;
         for tier in &self.tiers {
             if tier.is_empty() {
@@ -84,7 +84,7 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
-    ) -> Result<(Vec<u8>, bool), DnsError> {
+    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         match self.mode {
             UpstreamMode::Sequential => self.resolve_sequential(tier, data).await,
             UpstreamMode::Parallel => self.resolve_parallel(tier, data).await,
@@ -97,7 +97,7 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
-    ) -> Result<(Vec<u8>, bool), DnsError> {
+    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut last_err = DnsError::UpstreamTimeout;
         for mgr in tier {
             if mgr.health.status() == UpstreamStatus::Degraded {
@@ -115,7 +115,7 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
-    ) -> Result<(Vec<u8>, bool), DnsError> {
+    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         use tokio::task::JoinSet;
         let mut set = JoinSet::new();
 
@@ -153,7 +153,7 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
-    ) -> Result<(Vec<u8>, bool), DnsError> {
+    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut sorted = tier.to_vec();
         sorted.sort_by_key(|m| m.health.rtt_ewma_us.load(Ordering::Relaxed));
 
@@ -174,7 +174,7 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
-    ) -> Result<(Vec<u8>, bool), DnsError> {
+    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let len = tier.len();
         let start = self.rr_index.fetch_add(1, Ordering::Relaxed) % len;
 

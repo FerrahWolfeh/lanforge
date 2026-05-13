@@ -121,3 +121,53 @@ async fn pipeline_rewrite_rule() {
         panic!("Wrong RData type: {:?}", resp.answers[0].rdata);
     }
 }
+
+#[tokio::test]
+#[cfg(feature = "adblock")]
+async fn pipeline_cached_block() {
+    use std::collections::HashSet;
+    use lanforge_dns::resolver::filter::DiskBlocklist;
+    use lanforge_core::types::network::dns::QueryResult;
+
+    let ctx_instance = init_test_context();
+    let mut cfg = mock_config();
+    cfg.adblock_enabled = true;
+
+    let dns_ctx = mock_dns_context(ctx_instance, cfg);
+    let filter = dns_ctx.filter.as_ref().unwrap();
+
+    let mut domains = HashSet::new();
+    domains.insert("ads.com".to_string());
+    let temp_path = std::env::temp_dir().join("test_cache_block.rkyv");
+    let bl = DiskBlocklist::build(domains, &temp_path, 100).unwrap();
+    filter.replace_blocklist(bl);
+    filter.set_enabled(true);
+
+    let mut query = DnsMessage::new();
+    query.header.id = 0x1111;
+    query.header.qdcount = 1;
+    query.questions.push(DnsQuestion {
+        name: Arc::from("ads.com"),
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+
+    let mut encoder = WireEncoder::new();
+    let data = encoder.encode_message(&query);
+    let mut resp_buf = Vec::new();
+
+    // 1. First query -> Should be Blocked
+    let has_resp = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf).await.unwrap();
+    assert!(has_resp);
+    assert_eq!(dns_ctx.stats.snapshot().blocked_queries, 1);
+
+    // 2. Second query (same) -> Should be CachedBlock
+    let mut resp_buf2 = Vec::new();
+    let has_resp2 = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf2).await.unwrap();
+    assert!(has_resp2);
+
+    // Check logs for the second query
+    let recent = dns_ctx.query_log.as_ref().unwrap().get_recent(2);
+    assert_eq!(recent[0].result, QueryResult::CachedBlock);
+    assert_eq!(dns_ctx.stats.snapshot().cache_hits, 1);
+}

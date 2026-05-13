@@ -23,6 +23,7 @@ pub struct DnsContext {
     // Sub-components
     pub local: LocalResolver,
     pub recursive: Arc<UpstreamStrategy>,
+    pub cache: Arc<crate::resolver::recursive::DnsCache>,
     pub filter: Option<Arc<AdBlocker>>,
 
     // Pre-computed SOA names

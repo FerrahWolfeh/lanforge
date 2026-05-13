@@ -101,6 +101,7 @@ impl DnsService {
         let mut pipeline = Pipeline::new();
         pipeline.push(RewriteMiddleware::new());
         pipeline.push(LocalResolverMiddleware::new());
+        pipeline.push(CacheMiddleware::new());
         pipeline.push(AdblockMiddleware::new());
         pipeline.push(UpstreamMiddleware::new());
 
@@ -117,6 +118,7 @@ impl DnsService {
             pipeline,
             local: LocalResolver::new(Arc::clone(&self.cfg), self.ctx.clone()),
             recursive,
+            cache: Arc::clone(&cache),
             filter,
             soa_zone,
             soa_master_ns,

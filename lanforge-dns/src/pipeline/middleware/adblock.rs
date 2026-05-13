@@ -37,6 +37,16 @@ impl Middleware for AdblockMiddleware {
                     filter.inc_ip_stats(src_ip);
                     ctx.stats.inc_blocked();
 
+                    // Cache the block
+                    let scanner = crate::wire::WireResponseScanner::new(resp);
+                    let (offsets, min_ttl) = scanner.scan_ttls();
+                    let key = crate::resolver::recursive::cache::CacheKey {
+                        qname: question.qname_raw().to_vec(),
+                        qtype: question.qtype(),
+                        qclass: question.qclass(),
+                    };
+                    ctx.cache.insert(key, resp.clone(), offsets, min_ttl, true);
+
                     let src_mac = ctx.local.ctx.get_mac_by_ip(src_ip);
                     ctx.record_log(DnsLogEvent {
                         src_ip,

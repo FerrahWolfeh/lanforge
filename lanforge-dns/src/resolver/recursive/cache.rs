@@ -18,6 +18,7 @@ pub struct CachedResponse {
     pub created_at: Instant,
     pub expires_at: Instant,
     pub ttl_offsets: Vec<usize>,
+    pub is_block: bool,
 }
 
 pub struct DnsCache {
@@ -37,7 +38,7 @@ impl DnsCache {
     }
 
     #[must_use]
-    pub fn get_wire(&self, query_data: &[u8], question: &WireQuestion<'_>) -> Option<Vec<u8>> {
+    pub fn get_wire(&self, query_data: &[u8], question: &WireQuestion<'_>) -> Option<(Vec<u8>, bool)> {
         let key = CacheKey {
             qname: question.qname_raw().to_vec(),
             qtype: question.qtype(),
@@ -78,7 +79,7 @@ impl DnsCache {
             }
         }
 
-        Some(owned_data)
+        Some((owned_data, entry.is_block))
     }
 
     pub fn insert(
@@ -87,6 +88,7 @@ impl DnsCache {
         response_data: Vec<u8>,
         ttl_offsets: Vec<usize>,
         min_ttl_found: u32,
+        is_block: bool,
     ) {
         // Enforce capacity (simple random eviction if full)
         if self.cache.len() as u64 >= self.capacity
@@ -115,6 +117,7 @@ impl DnsCache {
             created_at: now,
             expires_at: now + Duration::from_secs(ttl_secs),
             ttl_offsets,
+            is_block,
         };
         self.cache.insert(key, cached_response);
     }

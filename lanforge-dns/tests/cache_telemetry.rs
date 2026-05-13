@@ -46,9 +46,10 @@ fn cache_hit_and_ttl_scrubbing() {
         resp_data.clone(),
         vec![ttl_offset],
         original_ttl,
+        false,
     );
 
-    let hit = cache
+    let (hit, _is_block) = cache
         .get_wire(&query_data, &question)
         .expect("Should be a cache hit");
     assert_eq!(
@@ -64,7 +65,7 @@ fn cache_hit_and_ttl_scrubbing() {
         entry.created_at -= Duration::from_secs(10);
     }
 
-    let hit_scrubbed = cache
+    let (hit_scrubbed, _) = cache
         .get_wire(&query_data, &question)
         .expect("Should be a cache hit");
     let scrubbed_ttl = u32::from_be_bytes([
@@ -135,7 +136,7 @@ fn cache_expiration() {
     };
 
     // Insert with very short TTL
-    cache.insert(key.clone(), vec![0; 64], vec![], 1);
+    cache.insert(key.clone(), vec![0; 64], vec![], 1, false);
 
     // Manually expire it
     {

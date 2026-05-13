@@ -138,6 +138,8 @@ pub enum QueryResult {
     Cached = 5,
     /// Answered via a DNS rewrite rule.
     Rewritten = 6,
+    /// Answered from the cache as a blocked domain.
+    CachedBlock = 7,
 }
 
 /// A single DNS query log entry.
