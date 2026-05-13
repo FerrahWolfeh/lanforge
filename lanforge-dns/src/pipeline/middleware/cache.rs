@@ -19,6 +19,7 @@ impl CacheMiddleware {
 }
 
 impl Middleware for CacheMiddleware {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn run<'a>(
         &'a self,
         ctx: &'a DnsContext,

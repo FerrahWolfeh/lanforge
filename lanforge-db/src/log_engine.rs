@@ -204,6 +204,7 @@ impl LogDb {
     }
 
     /// Records a resolved DNS query.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), LeaseDbError> {
         sqlx::query(
             "INSERT INTO dns_queries (timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer, protocol) 
@@ -226,6 +227,7 @@ impl LogDb {
         Ok(())
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn maybe_prune(&self, now_secs: i64) -> Result<(), LeaseDbError> {
         let mut last_prune = self.last_prune.lock().await;
         if last_prune.elapsed() >= Duration::from_secs(60) {

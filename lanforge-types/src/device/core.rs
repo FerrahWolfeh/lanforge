@@ -20,14 +20,23 @@ use crate::utils::serde::{
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
 )]
 pub enum Origin {
-    #[enum_repr(alias = "static")]
+    /// Device defined in a static configuration file (Deprecated for runtime, use Static).
+    #[deprecated(note = "Seeding from TOML is deprecated. Use Static for all user-defined entries.")]
+    #[enum_repr(alias = "toml")]
     Toml,
+    /// Device manually configured via the CLI or TUI.
     #[enum_repr(alias = "managed_cli")]
     Cli,
+    /// Device manually configured via a configuration import or static reservation.
+    #[enum_repr(alias = "static")]
+    Static,
+    /// Device managed via an external API.
     #[enum_repr(alias = "api")]
     External,
+    /// Internal system-defined device.
     #[enum_repr(alias = "system")]
     System,
+    /// Automatically discovered device (default).
     #[default]
     Dynamic,
 }
@@ -41,7 +50,8 @@ impl Origin {
     #[must_use]
     pub const fn symbol(&self) -> &'static str {
         match self {
-            Self::Toml => "★",
+            #[allow(deprecated)]
+            Self::Toml | Self::Static => "★",
             Self::Cli => "·",
             Self::External => "ⓔ",
             Self::System => "⚙",
@@ -767,7 +777,8 @@ impl Device {
     #[must_use]
     pub fn learning_method(&self) -> LearningMethod {
         match self.origin {
-            Origin::Toml | Origin::System => LearningMethod::Static,
+            #[allow(deprecated)]
+            Origin::Toml | Origin::Static | Origin::System => LearningMethod::Static,
             Origin::Cli | Origin::External => LearningMethod::Managed,
             Origin::Dynamic => {
                 if matches!(self.v4, IPv4State::Dynamic(_)) {

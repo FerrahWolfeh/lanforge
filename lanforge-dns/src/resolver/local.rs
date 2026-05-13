@@ -15,7 +15,7 @@ use crate::utils::{
 };
 use crate::wire::{PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::types::{DnsClass, DnsRecord, DnsRecordType, DnsRData};
+use lanforge_core::types::{DnsClass, DnsRData, DnsRecord, DnsRecordType};
 
 /// Resolves local DNS queries (A/AAAA/PTR) using the `LanforgeContext`.
 pub struct LocalResolver {
@@ -52,6 +52,7 @@ impl LocalResolver {
         None
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn resolve_ptr(&self, qname: &str) -> Result<Option<(String, String)>, DnsError> {
         let Some(target_ip) = parse_arpa(qname) else {
             return Ok(None);
@@ -123,7 +124,10 @@ impl LocalResolver {
         device: &Device,
         qtype: DnsRecordType,
     ) -> Option<Vec<DnsRecord>> {
-        if !matches!(qtype, DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY) {
+        if !matches!(
+            qtype,
+            DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY
+        ) {
             return None;
         }
 
@@ -173,6 +177,7 @@ impl LocalResolver {
         device.all_addresses_sorted(gua, ula)
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn resolve_local_wire(
         &self,
         data: &[u8],
@@ -253,6 +258,7 @@ impl LocalResolver {
         false
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn resolve_local_fallback(
         &self,
         rb: &ResponseBuilder,
@@ -260,14 +266,15 @@ impl LocalResolver {
         qtype: DnsRecordType,
         resp: &mut Vec<u8>,
     ) -> Result<bool, DnsError> {
-        if matches!(qtype, DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY) {
+        if matches!(
+            qtype,
+            DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY
+        ) {
             if let Some(hostname_slice) =
                 extract_local_hostname(qname, &self.cfg.multi_search_labels)
             {
                 let safe_hostname = fast_lowercase(hostname_slice);
-                if let Some(ips) =
-                    self.resolve_ip(&safe_hostname, qtype)
-                {
+                if let Some(ips) = self.resolve_ip(&safe_hostname, qtype) {
                     resp.clear();
                     resp.extend_from_slice(&rb.success_ips(ips)?);
                     return Ok(true);

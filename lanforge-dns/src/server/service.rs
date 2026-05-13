@@ -10,6 +10,7 @@ use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_db::engine::LeaseDb;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tracing::{error, info};
@@ -31,17 +32,19 @@ pub struct DnsService {
     cfg: Arc<DnsConfig>,
     stats: Arc<DnsStats>,
     ctx: LanforgeContext,
+    db: Arc<LeaseDb>,
 }
 
 impl DnsService {
     #[must_use]
-    pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
+    pub fn new(cfg: DnsConfig, ctx: LanforgeContext, db: Arc<LeaseDb>) -> Self {
         let stats = Arc::new(DnsStats::new());
         ctx.set_dns_stats(Arc::clone(&stats));
         Self {
             cfg: Arc::new(cfg),
             stats,
             ctx,
+            db,
         }
     }
 
@@ -69,15 +72,29 @@ impl DnsService {
         if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {
             tracing::warn!("⚠️ DNS: No upstreams configured. Only local resolution will work.");
         }
+        let db_adblock = self.db.load_adblock_config().await.unwrap_or_default();
+        let db_rewrites = self.db.load_dns_rewrites().await.unwrap_or_default();
+        let db_allowlist = self.db.load_dns_allowlist().await.unwrap_or_default();
+
+        let adblock_enabled = self.cfg.adblock_enabled || db_adblock.enabled;
         info!(
-            "🛡️ DNS: Adblock enabled in config: {}",
-            self.cfg.adblock_enabled
+            "🛡️ DNS: Adblock enabled (Config: {}, DB: {})",
+            self.cfg.adblock_enabled, db_adblock.enabled
         );
-        let filter = if self.cfg.adblock_enabled {
+        let filter = if adblock_enabled {
             info!("🛡️ DNS: Adblocker is enabled. Initializing...");
-            Some(Arc::new(AdBlocker::new(self.cfg.adblock_enabled)))
+            let blocker = AdBlocker::new(adblock_enabled);
+
+            // Populate from DB
+            *blocker.rewrites.write() = db_rewrites;
+            *blocker.allowlist.write() = Arc::new(db_allowlist.into_iter().collect());
+            *blocker.blocking_mode.write() = db_adblock.blocking_mode;
+            *blocker.blocking_ip_v4.write() = db_adblock.blocking_ip_v4;
+            *blocker.blocking_ip_v6.write() = db_adblock.blocking_ip_v6;
+
+            Some(Arc::new(blocker))
         } else {
-            info!("🛡️ DNS: Adblocker is disabled in configuration.");
+            info!("🛡️ DNS: Adblocker is disabled.");
             None
         };
 
@@ -110,7 +127,7 @@ impl DnsService {
         // We'll just transmute or find a better way. For now, let's use a simpler approach.
         // Since DnsContext is Arc-wrapped and stays alive, we can safely hold references.
 
-        let dns_ctx = Arc::new(DnsContext {
+        let dns_ctx = DnsContext {
             cfg: Arc::clone(&self.cfg),
             stats: Arc::clone(&self.stats),
             bus: self.ctx.bus(),
@@ -123,8 +140,10 @@ impl DnsService {
             soa_zone,
             soa_master_ns,
             soa_mailbox,
-        });
+            db: Arc::clone(&self.db),
+        };
 
+        let dns_ctx = Arc::new(dns_ctx);
         Ok(dns_ctx)
     }
 }
@@ -182,8 +201,50 @@ impl AsyncService for DnsService {
         loop {
             tokio::select! {
                 Ok(evt) = rx.recv() => {
-                    if matches!(evt.event, lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown)) {
-                        break;
+                    match evt.event {
+                        lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) => {
+                            break;
+                        }
+                        lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigRewritesChanged) => {
+                            info!("🔄 DNS: Reloading rewrites from DB...");
+                            if let Some(filter) = &dns_ctx.filter {
+                                match self.db.load_dns_rewrites().await {
+                                    Ok(rewrites) => {
+                                        *filter.rewrites.write() = rewrites;
+                                        info!("✅ DNS: Rewrites reloaded.");
+                                    }
+                                    Err(e) => error!("❌ DNS: Failed to load rewrites: {}", e),
+                                }
+                            }
+                        }
+                        lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAllowlistChanged) => {
+                            info!("🔄 DNS: Reloading allowlist from DB...");
+                            if let Some(filter) = &dns_ctx.filter {
+                                match self.db.load_dns_allowlist().await {
+                                    Ok(allow) => {
+                                        filter.replace_allowlist(allow.into_iter().collect());
+                                        info!("✅ DNS: Allowlist reloaded.");
+                                    }
+                                    Err(e) => error!("❌ DNS: Failed to load allowlist: {}", e),
+                                }
+                            }
+                        }
+                        lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAdblockChanged) => {
+                            info!("🔄 DNS: Reloading adblock config from DB...");
+                            if let Some(filter) = &dns_ctx.filter {
+                                match self.db.load_adblock_config().await {
+                                    Ok(cfg) => {
+                                        *filter.blocking_mode.write() = cfg.blocking_mode;
+                                        *filter.blocking_ip_v4.write() = cfg.blocking_ip_v4;
+                                        *filter.blocking_ip_v6.write() = cfg.blocking_ip_v6;
+                                        filter.set_enabled(self.cfg.adblock_enabled || cfg.enabled);
+                                        info!("✅ DNS: Adblock config reloaded.");
+                                    }
+                                    Err(e) => error!("❌ DNS: Failed to load adblock config: {}", e),
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 () = tokio::time::sleep(std::time::Duration::from_millis(500)) => {

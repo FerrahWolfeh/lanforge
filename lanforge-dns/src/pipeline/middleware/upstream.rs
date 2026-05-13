@@ -20,6 +20,7 @@ impl UpstreamMiddleware {
 }
 
 impl Middleware for UpstreamMiddleware {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn run<'a>(
         &'a self,
         ctx: &'a DnsContext,

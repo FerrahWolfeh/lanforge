@@ -2428,6 +2428,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "lanforge-core",
+ "lanforge-db",
  "lanforge-macros",
  "lru 0.18.0",
  "memmap2",

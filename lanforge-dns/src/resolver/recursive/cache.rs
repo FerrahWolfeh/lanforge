@@ -37,8 +37,13 @@ impl DnsCache {
         }
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     #[must_use]
-    pub fn get_wire(&self, query_data: &[u8], question: &WireQuestion<'_>) -> Option<(Vec<u8>, bool)> {
+    pub fn get_wire(
+        &self,
+        query_data: &[u8],
+        question: &WireQuestion<'_>,
+    ) -> Option<(Vec<u8>, bool)> {
         let mut qname = question.qname_raw().to_vec();
         qname.make_ascii_lowercase();
 
@@ -85,6 +90,7 @@ impl DnsCache {
         Some((owned_data, entry.is_block))
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn insert(
         &self,
         mut key: CacheKey,

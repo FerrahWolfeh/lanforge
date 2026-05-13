@@ -175,6 +175,84 @@ impl std::fmt::Display for TransportProtocol {
     }
 }
 
+/// A manual DNS rewrite rule.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RewriteRule {
+    /// The domain name to match (e.g., "nas.example.com").
+    pub domain: String,
+    /// The answer to return. Can be an IP, another domain, or a device reference.
+    pub answer: String,
+}
+
+/// How to respond to queries blocked by the adblocker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BlockingMode {
+    /// Return NXDOMAIN (default).
+    #[default]
+    NxDomain,
+    /// Return 0.0.0.0 (A) and :: (AAAA).
+    NullIp,
+    /// Return a custom user-specified IP address.
+    CustomIp,
+    /// Return REFUSED.
+    Refused,
+}
+
+impl std::str::FromStr for BlockingMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "nxdomain" => Ok(Self::NxDomain),
+            "null_ip" | "null" | "zero" => Ok(Self::NullIp),
+            "custom_ip" | "custom" => Ok(Self::CustomIp),
+            "refused" => Ok(Self::Refused),
+            _ => Err(format!("Invalid blocking mode: {s}")),
+        }
+    }
+}
+
+/// Adblock source URL kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AdblockUrlKind {
+    #[default]
+    Block,
+    Allow,
+}
+
+impl std::fmt::Display for AdblockUrlKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Block => write!(f, "block"),
+            Self::Allow => write!(f, "allow"),
+        }
+    }
+}
+
+impl std::str::FromStr for AdblockUrlKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "block" => Ok(Self::Block),
+            "allow" => Ok(Self::Allow),
+            _ => Err(format!("Invalid adblock URL kind: {s}")),
+        }
+    }
+}
+
+/// Consolidated adblock configuration from the database.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AdblockDbConfig {
+    pub enabled: bool,
+    pub blocking_mode: BlockingMode,
+    pub blocking_ip_v4: Option<std::net::Ipv4Addr>,
+    pub blocking_ip_v6: Option<std::net::Ipv6Addr>,
+    pub refresh_hours: u32,
+    pub refresh_at_night: bool,
+}
+
 /// A single DNS query log entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryLogEntry {

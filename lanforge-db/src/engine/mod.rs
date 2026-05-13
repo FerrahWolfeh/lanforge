@@ -12,6 +12,7 @@ use lanforge_core::types::device::{
     Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, TopologyInfo,
 };
 use lanforge_core::types::identifiers::{Duid, MacAddr};
+use lanforge_core::config::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 
 pub mod types;
 pub mod utils;
@@ -20,6 +21,7 @@ pub mod utils;
 pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+pub mod dns_config;
 
 use crate::LeaseDbError;
 pub use types::{DeviceRow, LeaseAction, LeaseHistoryEntry, Pool};
@@ -420,8 +422,10 @@ impl LeaseDb {
                 };
                 device.last_seen = unix_to_system_time(row.last_seen);
                 device.origin = match row.origin.as_str() {
-                    "toml" => Origin::Toml,
+                    #[allow(deprecated)]
+                    "toml" => Origin::Static,
                     "cli" => Origin::Cli,
+                    "static" => Origin::Static,
                     _ => Origin::Dynamic,
                 };
                 device.managed_at = row.managed_at.map(unix_to_system_time);
@@ -450,7 +454,7 @@ impl LeaseDb {
                     });
                 }
 
-                if row.origin == "cli" {
+                if row.origin == "cli" || row.origin == "static" || row.origin == "toml" {
                     table.add_static_entry(
                         mac,
                         StaticEntry {
@@ -673,5 +677,106 @@ impl LeaseDb {
                 timestamp: unix_to_system_time(ts),
             })
             .collect())
+    }
+
+    // --- DNS Configuration delegation methods ---
+
+    pub async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::load_dns_rewrites_sqlite(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::load_dns_rewrites_postgres(p).await,
+        }
+    }
+
+    pub async fn upsert_dns_rewrite(&self, domain: &str, answer: &str) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::upsert_dns_rewrite_sqlite(p, domain, answer).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::upsert_dns_rewrite_postgres(p, domain, answer).await,
+        }
+    }
+
+    pub async fn delete_dns_rewrite(&self, domain: &str) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::delete_dns_rewrite_sqlite(p, domain).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::delete_dns_rewrite_postgres(p, domain).await,
+        }
+    }
+
+    pub async fn load_dns_allowlist(&self) -> Result<Vec<String>, LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::load_dns_allowlist_sqlite(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::load_dns_allowlist_postgres(p).await,
+        }
+    }
+
+    pub async fn add_dns_allowlist(&self, domain: &str) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::add_dns_allowlist_sqlite(p, domain).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::add_dns_allowlist_postgres(p, domain).await,
+        }
+    }
+
+    pub async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::remove_dns_allowlist_sqlite(p, domain).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::remove_dns_allowlist_postgres(p, domain).await,
+        }
+    }
+
+    pub async fn load_adblock_config(&self) -> Result<AdblockDbConfig, LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::load_adblock_config_sqlite(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::load_adblock_config_postgres(p).await,
+        }
+    }
+
+    pub async fn set_adblock_config_value(&self, key: &str, value: &str) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::set_adblock_config_value_sqlite(p, key, value).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::set_adblock_config_value_postgres(p, key, value).await,
+        }
+    }
+
+    pub async fn load_adblock_urls(&self) -> Result<Vec<(String, AdblockUrlKind)>, LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::load_adblock_urls_sqlite(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::load_adblock_urls_postgres(p).await,
+        }
+    }
+
+    pub async fn add_adblock_url(&self, url: &str, kind: AdblockUrlKind) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::add_adblock_url_sqlite(p, url, kind).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::add_adblock_url_postgres(p, url, kind).await,
+        }
+    }
+
+    pub async fn remove_adblock_url(&self, url: &str) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::remove_adblock_url_sqlite(p, url).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::remove_adblock_url_postgres(p, url).await,
+        }
     }
 }

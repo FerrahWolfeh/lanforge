@@ -23,4 +23,10 @@ pub enum DnsEvent {
     /// Flush the DNS cache.
     #[default]
     CacheFlush,
+    /// DNS rewrite rules changed in the database.
+    ConfigRewritesChanged,
+    /// DNS allowlist changed in the database.
+    ConfigAllowlistChanged,
+    /// Adblock configuration changed in the database.
+    ConfigAdblockChanged,
 }

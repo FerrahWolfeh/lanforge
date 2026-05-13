@@ -36,6 +36,7 @@ pub struct BootstrapResult {
     pub rt_handle: rtnetlink::Handle,
     pub messages: NetlinkMessages,
     pub target_ifindex: u32,
+    pub db: Arc<LeaseDb>,
 }
 
 /// Orchestrates the initial state of the Lanforge daemon.
@@ -53,7 +54,8 @@ impl Bootstrapper {
         );
 
         let bus = Arc::new(EventBus::new());
-        let initial_table = Self::init_device_table(&cfg).await?;
+        let (initial_table, db) = Self::init_device_table(&cfg).await?;
+        let db = Arc::new(db);
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
@@ -92,6 +94,7 @@ impl Bootstrapper {
                 rt_handle: handle,
                 messages,
                 target_ifindex,
+                db,
             },
             ctx,
         ))
@@ -117,7 +120,7 @@ impl Bootstrapper {
         cfg
     }
 
-    async fn init_device_table(cfg: &Config) -> Result<State> {
+    async fn init_device_table(cfg: &Config) -> Result<(State, LeaseDb)> {
         let db = LeaseDb::open(&cfg.database).await.map_err(|e| {
             error!("❌ Erro fatal abrindo leases DB: {e}");
             e
@@ -129,13 +132,12 @@ impl Bootstrapper {
         });
 
         info!("📦 Database loaded: {}", cfg.database.url);
-        Self::reload_static_devices_into_state(&mut table, cfg);
         Self::inject_self_device(&mut table, cfg);
 
         // Trigger early collision validation and logging
         let _ = table.get_static_registry();
 
-        Ok(table)
+        Ok((table, db))
     }
 
     /// Injects the host machine as a system device in the state table.

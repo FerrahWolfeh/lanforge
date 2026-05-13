@@ -62,6 +62,7 @@ impl Pipeline {
         self.middlewares.push(Box::new(m));
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn run(
         &self,
         ctx: &DnsContext,

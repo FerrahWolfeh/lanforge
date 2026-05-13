@@ -79,12 +79,12 @@ impl Daemon {
                     let new_cfg = Arc::new(crate::bootstrap::Bootstrapper::load_config());
                     self.bootstrap.cfg = new_cfg.clone();
 
-                    // 5. Re-synchronize static devices from new config into existing state
-                    let mut state = self.ctx.write();
-                    crate::bootstrap::Bootstrapper::reload_static_devices_into_state(
-                        &mut state, &new_cfg,
-                    );
-                    drop(state);
+                    // 5. Re-synchronize static devices from new config into existing state (Deprecated)
+                    // let mut state = self.ctx.write();
+                    // crate::bootstrap::Bootstrapper::reload_static_devices_into_state(
+                    //     &mut state, &new_cfg,
+                    // );
+                    // drop(state);
 
                     info!("Daemon: Soft-reboot complete. Restarting services...");
                 }
@@ -148,6 +148,7 @@ impl Daemon {
         let target_ifindex = self.bootstrap.target_ifindex;
         let rt_handle = &self.bootstrap.rt_handle;
         let messages = &self.bootstrap.messages;
+        let db = &self.bootstrap.db;
 
         if !cfg.monitor_toml.enabled {
             tracing::warn!(
@@ -181,7 +182,7 @@ impl Daemon {
             async [ctx, cfg] if cfg.dhcpv6_enabled => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
 
             // 5. Application Services (DNS, API, TFTP)
-            async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
+            async [ctx, cfg, db] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx, db),
 
             #[cfg(feature = "dns-dot")]
             async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.dot_enabled => DotService::new(Arc::new(cfg.to_dns_config()), ctx),

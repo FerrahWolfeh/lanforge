@@ -15,6 +15,7 @@ use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::Ipv6AddrOrSuffix;
 
 impl State {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_v4_lease_granted(
         &mut self,
         mac: MacAddr,
@@ -24,6 +25,7 @@ impl State {
         self.mutate_device(mac, |dev| dev.apply_v4_lease(ip, expires))
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_v6_lease_granted(
         &mut self,
         mac: Option<MacAddr>,

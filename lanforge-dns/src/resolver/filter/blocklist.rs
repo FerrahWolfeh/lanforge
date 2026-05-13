@@ -76,6 +76,7 @@ impl DiskBlocklist {
     }
 
     /// Check if a domain is in the blocklist.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn contains(&self, domain: &str) -> bool {
         // 1. Check LRU cache
         {

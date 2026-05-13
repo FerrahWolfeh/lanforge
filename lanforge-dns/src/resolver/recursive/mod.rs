@@ -165,6 +165,7 @@ impl UpstreamManager {
         Ok((final_bytes, false, false))
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn forward_udp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
         let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let mut data_to_send = data.to_vec();
@@ -196,6 +197,7 @@ impl UpstreamManager {
         }
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     #[cfg(feature = "dot")]
     async fn forward_dot(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
         use rustls_pki_types::ServerName;
@@ -303,6 +305,7 @@ impl UpstreamManager {
         Ok(resp)
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn forward_tcp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
         let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(upstream))
             .await

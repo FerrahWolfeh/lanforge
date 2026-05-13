@@ -18,10 +18,13 @@ pub mod blocklist;
 pub use blocklist::DiskBlocklist;
 
 pub struct AdBlocker {
-    blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
-    allowlist: RwLock<Arc<HashSet<String>>>,
+    pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
+    pub allowlist: RwLock<Arc<HashSet<String>>>,
     pub timer: Arc<AdblockTimerState>,
     pub rewrites: RwLock<Vec<crate::config::RewriteRule>>,
+    pub blocking_mode: RwLock<crate::config::BlockingMode>,
+    pub blocking_ip_v4: RwLock<Option<Ipv4Addr>>,
+    pub blocking_ip_v6: RwLock<Option<Ipv6Addr>>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
 }
 
@@ -61,6 +64,9 @@ impl AdBlocker {
             allowlist: RwLock::new(Arc::new(HashSet::new())),
             timer: Arc::new(AdblockTimerState::new(enabled)),
             rewrites: RwLock::new(Vec::new()),
+            blocking_mode: RwLock::new(crate::config::BlockingMode::default()),
+            blocking_ip_v4: RwLock::new(None),
+            blocking_ip_v6: RwLock::new(None),
             per_ip_stats: DashMap::new(),
         }
     }
@@ -398,7 +404,7 @@ impl AdBlocker {
         let edns = WireOptScanner::scan(data, header, question);
         let ra = !ctx.recursive.is_empty();
 
-        match ctx.cfg.blocking_mode {
+        match *self.blocking_mode.read() {
             crate::config::BlockingMode::NxDomain => {
                 WireResponseWriter::write_error_response(data, question, 3, edns, ra, resp);
             }
@@ -415,11 +421,11 @@ impl AdBlocker {
                 let qtype = DnsRecordType::from(question.qtype());
                 let ips = if qtype == DnsRecordType::AAAA {
                     vec![IpAddr::V6(
-                        ctx.cfg.blocking_ip_v6.unwrap_or(Ipv6Addr::UNSPECIFIED),
+                        self.blocking_ip_v6.read().unwrap_or(Ipv6Addr::UNSPECIFIED),
                     )]
                 } else {
                     vec![IpAddr::V4(
-                        ctx.cfg.blocking_ip_v4.unwrap_or(Ipv4Addr::UNSPECIFIED),
+                        self.blocking_ip_v4.read().unwrap_or(Ipv4Addr::UNSPECIFIED),
                     )]
                 };
                 WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
@@ -432,7 +438,7 @@ impl AdBlocker {
 
     pub fn apply_adblock_fallback(
         &self,
-        ctx: &DnsContext,
+        _ctx: &DnsContext,
         rb: &ResponseBuilder,
         qname: &str,
         qtype: DnsRecordType,
@@ -450,7 +456,7 @@ impl AdBlocker {
 
         if self.should_block(&domain) {
             resp.clear();
-            match ctx.cfg.blocking_mode {
+            match *self.blocking_mode.read() {
                 crate::config::BlockingMode::NxDomain => {
                     resp.extend_from_slice(&rb.nxdomain()?);
                 }
@@ -465,12 +471,12 @@ impl AdBlocker {
                 crate::config::BlockingMode::CustomIp => {
                     let ips = if qtype == DnsRecordType::AAAA {
                         vec![IpAddr::V6(
-                            ctx.cfg.blocking_ip_v6.unwrap_or(Ipv6Addr::UNSPECIFIED),
+                            self.blocking_ip_v6.read().unwrap_or(Ipv6Addr::UNSPECIFIED),
                         )]
                     } else {
                         vec![IpAddr::V4(
-                            ctx.cfg
-                                .blocking_ip_v4
+                            self.blocking_ip_v4
+                                .read()
                                 .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
                         )]
                     };

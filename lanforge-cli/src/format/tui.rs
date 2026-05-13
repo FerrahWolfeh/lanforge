@@ -371,6 +371,33 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
                 Style::default().fg(theme::MOCHA_GREEN).add_modifier(Modifier::BOLD),
             ));
         }
+        DnsEvent::ConfigRewritesChanged => {
+            spans.push(Span::styled(
+                "DNS  ",
+                Style::default()
+                    .fg(theme::MOCHA_TEAL)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("Rewrites configuration updated."));
+        }
+        DnsEvent::ConfigAllowlistChanged => {
+            spans.push(Span::styled(
+                "DNS  ",
+                Style::default()
+                    .fg(theme::MOCHA_TEAL)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("Allowlist configuration updated."));
+        }
+        DnsEvent::ConfigAdblockChanged => {
+            spans.push(Span::styled(
+                "DNS  ",
+                Style::default()
+                    .fg(theme::MOCHA_TEAL)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("Adblock configuration updated."));
+        }
         DnsEvent::QueryResolved(_) | DnsEvent::CacheFlush => {}
     }
 }
