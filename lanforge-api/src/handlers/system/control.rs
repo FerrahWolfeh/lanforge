@@ -1,6 +1,6 @@
 use crate::api::{Response, SimpleSuccess};
 use crate::server::ClientContext;
-use lanforge_core::types::{LanforgeEvent, NetworkEvent, SystemEvent};
+use lanforge_types::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::utils::auth::hash_password;
 
 impl ClientContext {

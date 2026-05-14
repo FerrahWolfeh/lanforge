@@ -1,6 +1,6 @@
 use crate::api::{HostConfigEntry, HostsResponse, Response, SimpleSuccess};
 use crate::server::ClientContext;
-use lanforge_core::types::{CliHostUpdate, DeviceUpdate, FieldUpdate, IPv4State, IPv6State, MacAddr, Origin};
+use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate, IPv4State, IPv6State, MacAddr, Origin};
 
 impl ClientContext {
     /// Generates a `HostsResponse` containing all manually configured host entries.

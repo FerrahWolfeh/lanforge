@@ -1,7 +1,7 @@
 use super::types::DeviceRow;
 use super::utils::system_time_to_unix;
 use crate::LeaseDbError;
-use lanforge_core::types::device::{Device, IPv4State, IPv6State, V6PrefixLease};
+use lanforge_types::device::{Device, IPv4State, IPv6State, V6PrefixLease};
 use sqlx::{Postgres, Transaction};
 use std::net::Ipv4Addr;
 
@@ -369,7 +369,7 @@ pub async fn find_mac_by_hostname(
     pool: &sqlx::PgPool,
     hostname: &str,
     since_unix: i64,
-) -> Result<Option<lanforge_core::types::identifiers::MacAddr>, crate::LeaseDbError> {
+) -> Result<Option<lanforge_types::identifiers::MacAddr>, crate::LeaseDbError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT mac FROM devices WHERE (hostname = $1 OR LOWER(hostname) = LOWER($1)) AND last_seen >= $2 LIMIT 1",
     )
@@ -378,7 +378,7 @@ pub async fn find_mac_by_hostname(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.and_then(|(mac,)| lanforge_core::types::identifiers::MacAddr::parse(&mac)))
+    Ok(row.and_then(|(mac,)| lanforge_types::identifiers::MacAddr::parse(&mac)))
 }
 
 pub async fn store_api_token(

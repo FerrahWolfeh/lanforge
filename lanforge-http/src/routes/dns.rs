@@ -13,7 +13,7 @@ use futures::stream::Stream;
 use lanforge_api::api::Response;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::config::RewriteRule;
-use lanforge_core::types::DnsRecordType;
+use lanforge_types::DnsRecordType;
 use serde::Deserialize;
 use std::convert::Infallible;
 

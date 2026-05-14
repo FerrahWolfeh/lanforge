@@ -8,6 +8,7 @@ edition = "2024"
 # Lanforge
 lanforge-core = { path = "../lanforge-core" }
 lanforge-macros = { path = "../lanforge-macros" }
+lanforge-types = { path = "../lanforge-types" }
 
 # Workspace
 tokio = { workspace = true, features = [

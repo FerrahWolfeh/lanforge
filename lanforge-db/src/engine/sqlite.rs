@@ -1,8 +1,8 @@
 use super::types::DeviceRow;
 use super::utils::system_time_to_unix;
 use crate::LeaseDbError;
-use lanforge_core::types::device::{IPv4State, IPv6State, V6PrefixLease};
-use lanforge_core::types::{Device, MacAddr};
+use lanforge_types::device::{IPv4State, IPv6State, V6PrefixLease};
+use lanforge_types::{Device, MacAddr};
 use sqlx::{Sqlite, Transaction};
 use std::net::Ipv4Addr;
 

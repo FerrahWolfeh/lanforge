@@ -1,6 +1,6 @@
 use crate::api::{DnsQueryLogEntry, DnsQueryLogResponse, DnsQueryResponse, Response};
 use crate::server::ClientContext;
-use lanforge_core::types::{DnsRecordEntry, DnsRecordType};
+use lanforge_types::{DnsRecordEntry, DnsRecordType};
 use lanforge_dns::server::DnsContext;
 use std::str::FromStr;
 use std::time::Instant;

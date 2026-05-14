@@ -1,15 +1,14 @@
 use crate::api::{
     AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpPoolsResponse,
-    DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse,
-    DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
-    DnsQueryResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
-    HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError, SimpleSuccess,
-    StatusResponse, TopologyResponse, WhoisResponse,
+    DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
+    DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse,
+    LeasesResponse, RpcCallError, SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
 };
 use lanforge_core::config::RewriteRule;
 use lanforge_core::context::state::State;
-use lanforge_core::types::LeaseTarget;
 use lanforge_macros::lanforge_rpc;
+use lanforge_types::LeaseTarget;
 
 #[lanforge_rpc]
 #[async_trait::async_trait]
@@ -27,11 +26,9 @@ pub trait LanforgeRpc {
     async fn log(&self, follow: bool, n: Option<usize>) -> Result<(), RpcCallError>;
     async fn scan(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn shutdown(&self) -> Result<SimpleSuccess, RpcCallError>;
-    async fn host_add(
-        &self,
-        entry: HostConfigEntry,
-    ) -> Result<SimpleSuccess, RpcCallError>;
-    async fn host_import(&self, hosts: Vec<HostConfigEntry>) -> Result<SimpleSuccess, RpcCallError>;
+    async fn host_add(&self, entry: HostConfigEntry) -> Result<SimpleSuccess, RpcCallError>;
+    async fn host_import(&self, hosts: Vec<HostConfigEntry>)
+    -> Result<SimpleSuccess, RpcCallError>;
     async fn host_set(
         &self,
         mac: String,
@@ -87,13 +84,13 @@ pub trait LanforgeRpc {
     async fn dns_block(&self, domain: String) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_allow(&self, domain: String) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_unallow(&self, domain: String) -> Result<SimpleSuccess, RpcCallError>;
-    async fn dns_rewrite_add(
-        &self,
-        rule: RewriteRule,
-    ) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_rewrite_add(&self, rule: RewriteRule) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_rewrite_remove(&self, id: i64) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_rewrite_clear(&self) -> Result<SimpleSuccess, RpcCallError>;
-    async fn dns_rewrite_import(&self, rules: Vec<RewriteRule>) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_rewrite_import(
+        &self,
+        rules: Vec<RewriteRule>,
+    ) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_rewrite_export(&self) -> Result<DnsRewritesResponse, RpcCallError>;
     async fn dns_rewrites(&self) -> Result<DnsRewritesResponse, RpcCallError>;
     async fn dns_allowlist(&self) -> Result<DnsAllowlistResponse, RpcCallError>;

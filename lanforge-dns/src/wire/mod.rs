@@ -3,7 +3,7 @@
 //! Replaces full Hickory Message parsing for local/upstream routing decisions.
 //! Optimized for performance by avoiding UTF-8 validation and heap allocations.
 
-use lanforge_core::types::{
+use lanforge_types::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
     DnsResponseCode,
 };

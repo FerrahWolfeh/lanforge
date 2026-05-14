@@ -1,4 +1,4 @@
-use lanforge_core::types::device::Ipv6AddrOrSuffix;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 use std::array::from_fn;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

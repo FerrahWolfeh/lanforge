@@ -3,7 +3,7 @@ use crate::api::{
     Response, ServiceStatusInfo, ServicesStatus, StatusResponse,
 };
 use crate::server::ClientContext;
-use lanforge_core::types::{Device, IPv6State, Origin};
+use lanforge_types::{Device, IPv6State, Origin};
 use std::fs::metadata;
 use std::sync::Arc;
 

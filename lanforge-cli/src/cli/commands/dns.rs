@@ -9,7 +9,7 @@ use lanforge_api::api::{DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
 };
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_core::types::network::{QueryLogEntry, QueryResult};
+use lanforge_types::network::{QueryLogEntry, QueryResult};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DnsArgs {

@@ -1,6 +1,6 @@
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::theme;
-use lanforge_core::types::device::Device;
+use lanforge_types::device::Device;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};

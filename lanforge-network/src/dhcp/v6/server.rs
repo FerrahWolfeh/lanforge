@@ -44,7 +44,7 @@ use dhcproto::v6::{
 };
 use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::types::identifiers::{Duid, MacAddr};
+use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_core::utils::mac_from_eui64_link_local;
 use std::net::{Ipv6Addr, UdpSocket};
 use std::str::FromStr;
@@ -922,7 +922,7 @@ mod tests {
         Decodable, Decoder,
         v6::{DhcpOptions, IANA, OptionCode},
     };
-    use lanforge_core::types::{
+    use lanforge_types::{
         CliHostUpdate, Device, DeviceUpdate, FieldUpdate, InterfaceState, Ipv6AddrOrSuffix, Origin,
     };
     use std::collections::HashMap;

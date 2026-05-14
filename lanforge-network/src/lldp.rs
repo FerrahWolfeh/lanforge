@@ -16,7 +16,7 @@ use std::ptr::from_mut;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_core::types::{DeviceUpdate, MacAddr};
+use lanforge_types::{DeviceUpdate, MacAddr};
 use pnet::packet::Packet;
 use pnet::packet::ethernet::EthernetPacket;
 use socket2::{Domain, Protocol, Socket, Type};

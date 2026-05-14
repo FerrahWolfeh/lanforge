@@ -13,7 +13,7 @@
 //!
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
-use lanforge_core::types::{
+use lanforge_types::{
     DeviceEvent, DnsEvent, LanforgeEvent, MacAddr, StorageEvent, SystemEvent, TimedEvent,
 };
 use std::sync::Arc;

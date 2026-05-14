@@ -1,6 +1,6 @@
 use crate::LeaseDbError;
 use lanforge_core::config::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
-use lanforge_core::types::DnsRecordType;
+use lanforge_types::DnsRecordType;
 #[cfg(feature = "postgres")]
 use sqlx::Postgres;
 use sqlx::{Pool, Sqlite};

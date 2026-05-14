@@ -7,7 +7,7 @@ use crate::pipeline::Pipeline;
 use crate::resolver::{LocalResolver, filter::AdBlocker, recursive::UpstreamStrategy};
 use crate::telemetry::{DnsStats, QueryRing};
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_core::types::{DnsRecordType, MacAddr, QueryLogEntry, QueryResult, TransportProtocol};
+use lanforge_types::{DnsRecordType, MacAddr, QueryLogEntry, QueryResult, TransportProtocol};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

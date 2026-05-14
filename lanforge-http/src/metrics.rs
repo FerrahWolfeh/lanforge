@@ -1,6 +1,6 @@
 use lanforge_api::config::ApiConfig;
 use lanforge_core::context::{EventCounters, LanforgeContext};
-use lanforge_core::types::device::{Device, Origin};
+use lanforge_types::device::{Device, Origin};
 use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::DnsStats;
 use std::fmt::Write;

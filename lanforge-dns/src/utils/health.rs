@@ -1,4 +1,4 @@
-use lanforge_core::types::network::dns::UpstreamHealthSnapshot;
+use lanforge_types::network::dns::UpstreamHealthSnapshot;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 

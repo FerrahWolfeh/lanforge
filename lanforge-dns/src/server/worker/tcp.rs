@@ -1,7 +1,7 @@
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
-use lanforge_core::types::TransportProtocol;
+use lanforge_types::TransportProtocol;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

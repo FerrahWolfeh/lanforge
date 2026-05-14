@@ -4,7 +4,7 @@ use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::WhoisResponse;
-use lanforge_core::types::device::Origin;
+use lanforge_types::device::Origin;
 use lanforge_db::engine::LeaseHistoryEntry;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]

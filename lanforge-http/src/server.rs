@@ -293,7 +293,7 @@ async fn handle_dns_query(
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use lanforge_core::types::TransportProtocol;
+    use lanforge_types::TransportProtocol;
     use lanforge_dns::pipeline::DnsPipelineRequest;
     use lanforge_dns::server::DnsContext;
     use lanforge_dns::wire::{WireHeader, WireQuestion};

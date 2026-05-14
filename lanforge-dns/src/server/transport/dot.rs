@@ -1,4 +1,4 @@
-use lanforge_core::types::TransportProtocol;
+use lanforge_types::TransportProtocol;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

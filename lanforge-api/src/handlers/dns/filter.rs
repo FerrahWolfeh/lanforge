@@ -1,7 +1,7 @@
 use crate::api::{DnsAllowlistResponse, Response, SimpleSuccess};
 use crate::server::ClientContext;
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_core::types::DnsRecordType;
+use lanforge_types::DnsRecordType;
 
 impl ClientContext {
     #[cfg(feature = "adblock")]

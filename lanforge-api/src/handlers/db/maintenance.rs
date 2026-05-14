@@ -1,6 +1,6 @@
 use crate::api::{Response, SimpleSuccess};
 use crate::server::ClientContext;
-use lanforge_core::types::{LanforgeEvent, StorageEvent};
+use lanforge_types::{LanforgeEvent, StorageEvent};
 
 impl ClientContext {
     pub async fn handle_db_vacuum(&self) -> Response {

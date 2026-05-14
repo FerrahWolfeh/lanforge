@@ -6,7 +6,7 @@ pub mod dns;
 pub mod host;
 pub mod system;
 
-use lanforge_core::types::IPv6State;
+use lanforge_types::IPv6State;
 use std::time::SystemTime;
 
 /// Formats a `SystemTime` into an ISO 8601 string.

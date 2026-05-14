@@ -30,7 +30,7 @@ pub use args::CliArgs;
 #[cfg(feature = "debug-commands")]
 pub use args::Command;
 use lanforge_api::config::{ApiConfig, HttpConfig};
-use lanforge_core::types::device::Ipv6AddrOrSuffix;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_dns::{BlockingMode, DnsConfig, UpstreamEntry};
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;

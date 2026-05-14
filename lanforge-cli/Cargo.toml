@@ -27,6 +27,7 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:tui-tree-widget"]
 
 [dependencies]
 # Lanforge
+lanforge-types = { path = "../lanforge-types" }
 lanforge-core = { path = "../lanforge-core", features = ["adblock"] }
 lanforge-db = { path = "../lanforge-db", features = ["adblock"] }
 lanforge-macros = { path = "../lanforge-macros" }

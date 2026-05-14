@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::wire::{WireDecoder, WireQuestion};
-use lanforge_core::types::DnsRecordType;
+use lanforge_types::DnsRecordType;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct CacheKey {

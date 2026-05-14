@@ -4,7 +4,7 @@ use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter};
 use dashmap::DashMap;
-use lanforge_core::types::DnsRecordType;
+use lanforge_types::DnsRecordType;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};

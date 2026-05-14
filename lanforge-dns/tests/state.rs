@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use lanforge_core::types::{
+use lanforge_types::{
     CliHostUpdate, DeviceUpdate, DnsRecordType, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin,
 };
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

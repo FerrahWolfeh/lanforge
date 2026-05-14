@@ -1,6 +1,6 @@
 use lanforge_core::context::PersistenceSnapshot;
-use lanforge_core::types::updates::StaticEntry;
-use lanforge_core::types::{DeviceUpdate, DnsRecordType};
+use lanforge_types::updates::StaticEntry;
+use lanforge_types::{DeviceUpdate, DnsRecordType};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
@@ -9,11 +9,11 @@ use tracing::{debug, info};
 
 use lanforge_core::config::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_core::context::state::State;
-use lanforge_core::types::device::{
+use lanforge_types::device::{
     Device, DeviceClass, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
     TopologyInfo,
 };
-use lanforge_core::types::identifiers::{Duid, MacAddr};
+use lanforge_types::identifiers::{Duid, MacAddr};
 
 pub mod types;
 pub mod utils;

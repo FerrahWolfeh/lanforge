@@ -1,6 +1,6 @@
 //! DNS service statistics using atomic counters.
 
-use lanforge_core::types::ndp::dns::TransportProtocol;
+use lanforge_types::ndp::dns::TransportProtocol;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 

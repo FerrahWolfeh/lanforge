@@ -46,8 +46,8 @@ use lanforge_core::bus::{
 };
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::utils::mac_from_eui64_link_local;
-use lanforge_core::types::device::IPv6State;
-use lanforge_core::types::{DeviceUpdate, Duid, LeaseTarget, MacAddr};
+use lanforge_types::device::IPv6State;
+use lanforge_types::{DeviceUpdate, Duid, LeaseTarget, MacAddr};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

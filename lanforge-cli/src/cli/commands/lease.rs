@@ -2,7 +2,7 @@ use super::CliCommand;
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
-use lanforge_core::types::LeaseTarget;
+use lanforge_types::LeaseTarget;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct LeaseArgs {

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use parking_lot::Mutex;
-use lanforge_core::types::network::dns::QueryLogEntry;
+use lanforge_types::network::dns::QueryLogEntry;
 
 /// A fixed-size, thread-safe ring buffer for DNS query logs.
 pub struct QueryRing {

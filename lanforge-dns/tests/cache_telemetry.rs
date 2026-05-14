@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use lanforge_core::types::{
+use lanforge_types::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol,
 };
 use lanforge_dns::resolver::recursive::cache::{CacheKey, DnsCache};

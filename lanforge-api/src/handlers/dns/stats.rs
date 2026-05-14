@@ -5,7 +5,7 @@ use crate::api::{
 use crate::server::ClientContext;
 use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::DnsStats;
-use lanforge_core::types::DnsRecordType;
+use lanforge_types::DnsRecordType;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 

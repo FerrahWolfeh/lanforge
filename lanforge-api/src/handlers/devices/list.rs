@@ -51,7 +51,7 @@ impl ClientContext {
 
     fn device_matches_filter(
         &self,
-        dev: &lanforge_core::types::Device,
+        dev: &lanforge_types::Device,
         filter: Option<&String>,
         method: Option<&String>,
     ) -> bool {
@@ -79,13 +79,13 @@ impl ClientContext {
 
     pub fn map_device(
         &self,
-        dev: &lanforge_core::types::Device,
+        dev: &lanforge_types::Device,
         gua_prefix: Option<std::net::Ipv6Addr>,
         ula_prefix: Option<std::net::Ipv6Addr>,
     ) -> crate::api::DeviceEntry {
         use crate::api::{Ipv6Entry, LeaseInfo};
         use crate::handlers::{format_iso8601, get_v6_kind};
-        use lanforge_core::types::IPv4State;
+        use lanforge_types::IPv4State;
 
         crate::api::DeviceEntry {
             mac: dev.mac.to_string(),

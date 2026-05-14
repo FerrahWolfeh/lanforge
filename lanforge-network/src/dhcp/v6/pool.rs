@@ -29,8 +29,8 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::time::Instant;
 
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::types::device::{IPv6State, Ipv6AddrOrSuffix};
-use lanforge_core::types::{Duid, MacAddr};
+use lanforge_types::device::{IPv6State, Ipv6AddrOrSuffix};
+use lanforge_types::{Duid, MacAddr};
 use rand::random;
 
 use crate::dhcp::v6::config::Dhcpv6PoolConfig;
@@ -681,7 +681,7 @@ impl Ipv6Pool {
 #[cfg(test)]
 mod tests {
     use crate::test_utils::init_test_context;
-    use lanforge_core::types::{
+    use lanforge_types::{
         CliHostUpdate, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, Origin,
     };
 

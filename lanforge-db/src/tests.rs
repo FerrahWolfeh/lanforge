@@ -8,8 +8,8 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_core::types::device::{V4Lease, V6PrefixLease};
-use lanforge_core::types::{
+use lanforge_types::device::{V4Lease, V6PrefixLease};
+use lanforge_types::{
     Device, DeviceUpdate, Duid, HostnameOrigin, IPv4State, IPv6State, MacAddr,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};

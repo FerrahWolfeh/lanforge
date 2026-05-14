@@ -360,7 +360,7 @@ where
     async fn lease_renew(
         &self,
         mac: String,
-        target: Option<lanforge_core::types::LeaseTarget>,
+        target: Option<lanforge_types::LeaseTarget>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.ctx.handle_lease_renew(mac, target).await {
             Response::Success(s) => Ok(s),
@@ -372,7 +372,7 @@ where
     async fn lease_release(
         &self,
         mac: String,
-        target: Option<lanforge_core::types::LeaseTarget>,
+        target: Option<lanforge_types::LeaseTarget>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.ctx.handle_lease_release(mac, target).await {
             Response::Success(s) => Ok(s),

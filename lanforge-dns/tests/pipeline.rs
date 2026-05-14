@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use lanforge_core::types::{
+use lanforge_types::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
 };
 use lanforge_dns::{
@@ -132,7 +132,7 @@ async fn pipeline_rewrite_rule() {
 #[tokio::test]
 #[cfg(feature = "adblock")]
 async fn pipeline_cached_block() {
-    use lanforge_core::types::network::dns::QueryResult;
+    use lanforge_types::network::dns::QueryResult;
     use lanforge_dns::resolver::filter::DiskBlocklist;
     use std::collections::HashSet;
 

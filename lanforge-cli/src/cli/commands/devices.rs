@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
-use lanforge_core::types::device::Origin;
+use lanforge_types::device::Origin;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DevicesArgs {

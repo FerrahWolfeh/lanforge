@@ -3,7 +3,7 @@
 use crate::error::DnsError;
 use crate::server::DnsContext;
 use crate::wire::{WireEncoder, WireOptScanner};
-use lanforge_core::types::{
+use lanforge_types::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
 use std::net::IpAddr;

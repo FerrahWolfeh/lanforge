@@ -1,6 +1,6 @@
 use crate::error::DnsError;
 use crate::wire::{WireHeader, WireQuestion, WireDecoder};
-use lanforge_core::types::DnsMessage;
+use lanforge_types::DnsMessage;
 use once_cell::sync::OnceCell;
 use std::net::IpAddr;
 use std::sync::Arc;

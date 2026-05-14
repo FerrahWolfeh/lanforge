@@ -12,8 +12,8 @@
 //!
 //! Pruning runs at most once every 60 seconds to avoid overhead.
 
-use lanforge_core::types::QueryResult;
-use lanforge_core::types::network::{DnsRecordType, QueryLogEntry};
+use lanforge_types::QueryResult;
+use lanforge_types::network::{DnsRecordType, QueryLogEntry};
 use serde_json;
 use std::fs::{OpenOptions, create_dir_all};
 use std::net::{IpAddr, Ipv4Addr};
@@ -361,12 +361,12 @@ impl LogDb {
                 cached: cached != 0,
                 answer,
                 protocol: match protocol.as_str() {
-                    "udp" => lanforge_core::types::TransportProtocol::Udp,
-                    "tcp" => lanforge_core::types::TransportProtocol::Tcp,
-                    "dot" => lanforge_core::types::TransportProtocol::Tls,
-                    "doq" => lanforge_core::types::TransportProtocol::Quic,
-                    "doh" => lanforge_core::types::TransportProtocol::Https,
-                    _ => lanforge_core::types::TransportProtocol::Udp,
+                    "udp" => lanforge_types::TransportProtocol::Udp,
+                    "tcp" => lanforge_types::TransportProtocol::Tcp,
+                    "dot" => lanforge_types::TransportProtocol::Tls,
+                    "doq" => lanforge_types::TransportProtocol::Quic,
+                    "doh" => lanforge_types::TransportProtocol::Https,
+                    _ => lanforge_types::TransportProtocol::Udp,
                 },
             });
         }
@@ -553,9 +553,9 @@ impl LogDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lanforge_core::types::DnsRecordType;
-    use lanforge_core::types::QueryResult;
-    use lanforge_core::types::TransportProtocol;
+    use lanforge_types::DnsRecordType;
+    use lanforge_types::QueryResult;
+    use lanforge_types::TransportProtocol;
 
     #[tokio::test]
     async fn test_dns_log_protocol_tracking() {

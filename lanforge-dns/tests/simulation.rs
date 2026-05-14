@@ -2,7 +2,7 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_core::types::{
+use lanforge_types::{
     DeviceUpdate, DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
     MacAddr,
 };

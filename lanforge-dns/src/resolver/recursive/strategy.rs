@@ -2,8 +2,8 @@ use crate::error::DnsError;
 use crate::resolver::recursive::UpstreamManager;
 use crate::utils::health::UpstreamStatus;
 use crate::wire::{WireDecoder, WireEncoder};
-use lanforge_core::types::network::dns::UpstreamHealthSnapshot;
-use lanforge_core::types::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
+use lanforge_types::network::dns::UpstreamHealthSnapshot;
+use lanforge_types::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

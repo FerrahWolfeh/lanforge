@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
 
-use lanforge_core::types::device::Ipv6AddrOrSuffix;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 
 /// Configuration for a single `DHCPv6` address pool.
 ///

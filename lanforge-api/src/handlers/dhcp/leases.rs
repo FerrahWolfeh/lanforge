@@ -4,7 +4,7 @@ use crate::api::{
     SimpleSuccess,
 };
 use crate::server::ClientContext;
-use lanforge_core::types::{IPv6State, LanforgeEvent, LeaseTarget, MacAddr, NetworkEvent};
+use lanforge_types::{IPv6State, LanforgeEvent, LeaseTarget, MacAddr, NetworkEvent};
 use super::super::format_iso8601;
 
 impl ClientContext {
@@ -89,7 +89,7 @@ impl ClientContext {
         let mut leases = Vec::new();
 
         for dev in &devices {
-            if let lanforge_core::types::IPv4State::Dynamic(lease) = &dev.v4 {
+            if let lanforge_types::IPv4State::Dynamic(lease) = &dev.v4 {
                 leases.push(LeaseEntry {
                     mac: dev.mac.to_string(),
                     hostname: dev.display_hostname().to_string(),

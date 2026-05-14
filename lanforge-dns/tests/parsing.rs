@@ -1,4 +1,4 @@
-use lanforge_core::types::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
+use lanforge_types::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
 use lanforge_dns::wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use std::sync::Arc;
 

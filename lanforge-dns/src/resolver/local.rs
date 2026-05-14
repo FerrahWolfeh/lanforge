@@ -1,6 +1,6 @@
 //! Local DNS resolver backed by the `LanforgeContext`.
 
-use lanforge_core::types::Device;
+use lanforge_types::Device;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::IpAddr;
@@ -15,7 +15,7 @@ use crate::utils::{
 };
 use crate::wire::{PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::types::{DnsClass, DnsRData, DnsRecord, DnsRecordType};
+use lanforge_types::{DnsClass, DnsRData, DnsRecord, DnsRecordType};
 
 /// Resolves local DNS queries (A/AAAA/PTR) using the `LanforgeContext`.
 pub struct LocalResolver {

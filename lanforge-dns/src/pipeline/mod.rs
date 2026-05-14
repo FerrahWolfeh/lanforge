@@ -1,6 +1,6 @@
 pub mod middleware;
 
-use lanforge_core::types::network::dns::TransportProtocol;
+use lanforge_types::network::dns::TransportProtocol;
 
 use crate::error::DnsError;
 use crate::server::DnsContext;
