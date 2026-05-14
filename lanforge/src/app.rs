@@ -7,6 +7,7 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::bootstrap::BootstrapResult;
+use crate::config::Config;
 use crate::event_loop::{LoopResult, run_event_loop};
 use crate::registry::ServiceRegistry;
 use lanforge_api::server::ControlService;
@@ -76,7 +77,7 @@ impl Daemon {
                     self.ctx.reset_lifecycle();
 
                     // 4. Reload configuration from disk
-                    let new_cfg = Arc::new(crate::bootstrap::Bootstrapper::load_config());
+                    let new_cfg = Arc::new(Config::load());
                     self.bootstrap.cfg = new_cfg.clone();
 
                     // 5. Re-synchronize static devices from new config into existing state (Deprecated)

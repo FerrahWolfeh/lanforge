@@ -1,26 +1,9 @@
 use clap::Parser;
-#[cfg(feature = "debug-commands")]
-use clap::Subcommand;
 use std::net::Ipv4Addr;
-
-#[cfg(feature = "debug-commands")]
-#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum Command {
-    /// Start all enabled services with optional module filtering (debug only)
-    Run {
-        /// Run only a specific subsystem (e.g. ra, dhcpv4, dhcpv6, dns, slaac)
-        #[arg(long)]
-        only: Option<String>,
-    },
-}
 
 #[derive(Parser, Debug)]
 #[command(name = "lanforge", version, about, long_about = None)]
 pub struct CliArgs {
-    #[cfg(feature = "debug-commands")]
-    #[command(subcommand)]
-    pub command: Option<Command>,
-
     /// Path to the TOML configuration file.
     #[arg(
         short,
@@ -169,26 +152,4 @@ pub struct CliArgs {
     /// Listen address for the HTTP REST API (e.g. 0.0.0.0:8080).
     #[arg(long, env = "LANFORGE_HTTP_LISTEN")]
     pub http_listen: Option<String>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cli_args_parsing() {
-        // Just verify it doesn't panic on a simple case
-        #[cfg(feature = "debug-commands")]
-        {
-            let args = CliArgs::try_parse_from(["lanforge", "run"]);
-            assert!(args.is_ok());
-            let args = args.unwrap();
-            assert!(matches!(args.command, Some(Command::Run { .. })));
-        }
-        #[cfg(not(feature = "debug-commands"))]
-        {
-            let args = CliArgs::try_parse_from(["lanforge"]);
-            assert!(args.is_ok());
-        }
-    }
 }

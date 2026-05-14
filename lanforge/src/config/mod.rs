@@ -27,10 +27,7 @@ pub mod args;
 pub mod toml;
 
 pub use args::CliArgs;
-#[cfg(feature = "debug-commands")]
-pub use args::Command;
 use lanforge_api::config::{ApiConfig, HttpConfig};
-use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_dns::{BlockingMode, DnsConfig, UpstreamEntry};
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
@@ -39,6 +36,7 @@ use lanforge_network::mdns::MdnsConfig;
 use lanforge_network::ndp::config::MonitorConfig;
 use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
 use lanforge_tftp::config::TftpConfig;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
 
 use clap::Parser;
@@ -58,9 +56,6 @@ use crate::config::toml::SystemCfg;
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Config {
-    // general
-    #[cfg(feature = "debug-commands")]
-    pub command: Command,
     pub system: SystemCfg,
     pub database: DatabaseConfig,
 
@@ -177,8 +172,6 @@ impl Config {
         search_domains: Vec<String>,
     ) -> Self {
         Self {
-            #[cfg(feature = "debug-commands")]
-            command: cli.command.clone().unwrap_or(Command::Run { only: None }),
             system: {
                 let mut s = toml_cfg.system;
                 if let Some(ref iface) = cli.iface_lan {
@@ -515,8 +508,6 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            #[cfg(feature = "debug-commands")]
-            command: args::Command::Run { only: None },
             system: SystemCfg::default(),
             database: DatabaseConfig::default(),
             ra_enabled: true,

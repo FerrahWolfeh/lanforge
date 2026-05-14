@@ -4,13 +4,13 @@ use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_db::engine::LeaseDb;
+use lanforge_db::log_engine::LogDb;
+use lanforge_network::ifmon::AddressMonitor;
 use lanforge_types::InterfaceState;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::Ipv6AddrOrSuffix;
-use lanforge_db::engine::LeaseDb;
-use lanforge_db::log_engine::LogDb;
-use lanforge_network::ifmon::AddressMonitor;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
 use pnet::ipnetwork::IpNetwork;
@@ -50,7 +50,7 @@ impl Bootstrapper {
     /// Executes the full bootstrap sequence.
     pub async fn run() -> Result<(BootstrapResult, LanforgeContext)> {
         // --- PHASE 1: Initialization ---
-        let cfg = Arc::new(Self::load_config());
+        let cfg = Arc::new(Config::load());
 
         info!(
             "🚀 Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
@@ -104,26 +104,6 @@ impl Bootstrapper {
             },
             ctx,
         ))
-    }
-
-    pub(crate) fn load_config() -> Config {
-        #[cfg(feature = "debug-commands")]
-        let mut cfg = Config::load();
-
-        #[cfg(not(feature = "debug-commands"))]
-        let cfg = Config::load();
-
-        #[cfg(feature = "debug-commands")]
-        if let crate::config::Command::Run { only: Some(s) } = &cfg.command {
-            let modules: Vec<&str> = s.split(',').collect();
-            cfg.ra_enabled = modules.contains(&"ra");
-            cfg.dhcpv4_enabled = modules.contains(&"dhcpv4") || modules.contains(&"dhcp");
-            cfg.dhcpv6_enabled = modules.contains(&"dhcpv6") || modules.contains(&"dhcp");
-            cfg.dns_enabled = modules.contains(&"dns");
-            info!("🎯 Running ONLY (Debug Mode): {:?}", modules);
-        }
-
-        cfg
     }
 
     async fn init_device_table(cfg: &Config) -> Result<(State, LeaseDb, LogDb)> {
