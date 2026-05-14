@@ -388,14 +388,14 @@ pub async fn store_api_token(
     token: &str,
     name: &str,
     now: i64,
-) -> Result<(), LeaseDbError> {
-    sqlx::query("INSERT INTO api_tokens (token, name, created_at) VALUES (?, ?, ?)")
+) -> Result<i64, LeaseDbError> {
+    let res = sqlx::query("INSERT INTO api_tokens (token, name, created_at) VALUES (?, ?, ?)")
         .bind(token)
         .bind(name)
         .bind(now)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(res.last_insert_rowid())
 }
 
 pub async fn validate_api_token(
@@ -426,4 +426,39 @@ pub async fn delete_api_token(pool: &sqlx::SqlitePool, token: &str) -> Result<()
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn delete_api_token_by_id_or_name(
+    pool: &sqlx::SqlitePool,
+    id_or_name: &str,
+) -> Result<(), LeaseDbError> {
+    if let Ok(id) = id_or_name.parse::<i64>() {
+        sqlx::query("DELETE FROM api_tokens WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    } else {
+        sqlx::query("DELETE FROM api_tokens WHERE name = ?")
+            .bind(id_or_name)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn load_api_tokens(pool: &sqlx::SqlitePool) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
+    sqlx::query_as::<_, crate::engine::types::ApiTokenRow>(
+        "SELECT id, token, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC"
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn get_api_token_name(pool: &sqlx::SqlitePool, id: i64) -> Result<Option<String>, LeaseDbError> {
+    let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(res.map(|(n,)| n))
 }

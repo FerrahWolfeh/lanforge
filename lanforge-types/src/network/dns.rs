@@ -1,16 +1,21 @@
 use crate::identifiers::MacAddr;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    sync::Arc,
+};
 
 /// Supported DNS record types in Lanforge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[repr(u16)]
 pub enum DnsRecordType {
+    #[default]
     A = 1,
     NS = 2,
     CNAME = 5,
     SOA = 6,
     PTR = 12,
+    HINFO = 13,
     MX = 15,
     TXT = 16,
     AAAA = 28,
@@ -30,6 +35,7 @@ impl From<u16> for DnsRecordType {
             5 => Self::CNAME,
             6 => Self::SOA,
             12 => Self::PTR,
+            13 => Self::HINFO,
             15 => Self::MX,
             16 => Self::TXT,
             28 => Self::AAAA,
@@ -51,6 +57,7 @@ impl From<DnsRecordType> for u16 {
             DnsRecordType::CNAME => 5,
             DnsRecordType::SOA => 6,
             DnsRecordType::PTR => 12,
+            DnsRecordType::HINFO => 13,
             DnsRecordType::MX => 15,
             DnsRecordType::TXT => 16,
             DnsRecordType::AAAA => 28,
@@ -74,6 +81,7 @@ impl std::str::FromStr for DnsRecordType {
             "CNAME" => Ok(Self::CNAME),
             "SOA" => Ok(Self::SOA),
             "PTR" => Ok(Self::PTR),
+            "HINFO" => Ok(Self::HINFO),
             "MX" => Ok(Self::MX),
             "TXT" => Ok(Self::TXT),
             "AAAA" => Ok(Self::AAAA),
@@ -102,6 +110,7 @@ impl std::fmt::Display for DnsRecordType {
             Self::CNAME => write!(f, "CNAME"),
             Self::SOA => write!(f, "SOA"),
             Self::PTR => write!(f, "PTR"),
+            Self::HINFO => write!(f, "HINFO"),
             Self::MX => write!(f, "MX"),
             Self::TXT => write!(f, "TXT"),
             Self::AAAA => write!(f, "AAAA"),
@@ -247,8 +256,8 @@ impl std::str::FromStr for AdblockUrlKind {
 pub struct AdblockDbConfig {
     pub enabled: bool,
     pub blocking_mode: BlockingMode,
-    pub blocking_ip_v4: Option<std::net::Ipv4Addr>,
-    pub blocking_ip_v6: Option<std::net::Ipv6Addr>,
+    pub blocking_ip_v4: Option<Ipv4Addr>,
+    pub blocking_ip_v6: Option<Ipv6Addr>,
     pub refresh_hours: u32,
     pub refresh_at_night: bool,
 }
@@ -282,7 +291,7 @@ pub struct QueryLogEntry {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DnsRecordEntry {
     pub name: String,
-    pub kind: String,
+    pub kind: DnsRecordType,
     pub data: String,
     pub ttl: u32,
 }
@@ -437,8 +446,8 @@ pub struct DnsQuestion {
 /// DNS Resource Data variants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DnsRData {
-    A(std::net::Ipv4Addr),
-    AAAA(std::net::Ipv6Addr),
+    A(Ipv4Addr),
+    AAAA(Ipv6Addr),
     CNAME(Arc<str>),
     PTR(Arc<str>),
     MX {

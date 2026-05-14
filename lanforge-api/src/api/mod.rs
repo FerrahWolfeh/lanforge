@@ -67,4 +67,8 @@ pub enum Response {
     DnsAdblockUrls(DnsAdblockUrlsResponse),
     /// Response for a generated API token.
     AuthToken(AuthTokenResponse),
+    /// List of all API tokens.
+    AuthTokens(AuthTokensResponse),
+    /// In-depth DNS cache stats.
+    DnsCacheStatsExt(DnsCacheStatsExtResponse),
 }

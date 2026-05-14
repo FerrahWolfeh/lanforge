@@ -12,6 +12,8 @@ use axum::{
 use futures::stream::Stream;
 use lanforge_api::api::Response;
 use lanforge_core::bus::LanforgeEvent;
+use lanforge_core::config::RewriteRule;
+use lanforge_core::types::DnsRecordType;
 use serde::Deserialize;
 use std::convert::Infallible;
 
@@ -54,12 +56,13 @@ pub struct AdblockUrlDeleteRequest {
 #[derive(Debug, Deserialize)]
 pub struct RewriteRequest {
     pub domain: String,
+    pub rtype: DnsRecordType,
     pub answer: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RewriteDeleteRequest {
-    pub domain: String,
+    pub id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,7 +209,7 @@ async fn handle_adblock_reload(State(state): State<AppState>) -> AxumJson<Respon
 
 async fn handle_adblock_urls(State(state): State<AppState>) -> AxumJson<Response> {
     let ctx = create_client_ctx(&state);
-    AxumJson(ctx.handle_dns_adblock_urls().await)
+    AxumJson(ctx.handle_dns_adblock_url_list().await)
 }
 
 async fn handle_adblock_url_add(
@@ -239,8 +242,13 @@ async fn handle_rewrite_add(
 ) -> AxumJson<Response> {
     let ctx = create_client_ctx(&state);
     AxumJson(
-        ctx.handle_dns_rewrite_add(payload.domain, payload.answer)
-            .await,
+        ctx.handle_dns_rewrite_add(RewriteRule {
+            id: None,
+            domain: payload.domain,
+            rtype: payload.rtype,
+            answer: payload.answer,
+        })
+        .await,
     )
 }
 
@@ -249,7 +257,7 @@ async fn handle_rewrite_remove(
     AxumJson(payload): AxumJson<RewriteDeleteRequest>,
 ) -> AxumJson<Response> {
     let ctx = create_client_ctx(&state);
-    AxumJson(ctx.handle_dns_rewrite_remove(payload.domain).await)
+    AxumJson(ctx.handle_dns_rewrite_remove(payload.id).await)
 }
 
 async fn handle_allowlist(State(state): State<AppState>) -> AxumJson<Response> {

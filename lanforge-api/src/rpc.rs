@@ -1,10 +1,12 @@
 use crate::api::{
-    AuthTokenResponse, DevicesResponse, DhcpPoolsResponse, DnsAdblockStatusResponse,
-    DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
-    DnsQueryLogResponse, DnsQueryResponse, DnsRewritesResponse, DnsStatsResponse,
-    DnsUpstreamsResponse, HostsResponse, LeasesResponse, RpcCallError, SimpleSuccess,
+    AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpPoolsResponse,
+    DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse,
+    DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
+    DnsQueryResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
+    HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError, SimpleSuccess,
     StatusResponse, TopologyResponse, WhoisResponse,
 };
+use lanforge_core::config::RewriteRule;
 use lanforge_core::context::state::State;
 use lanforge_core::types::LeaseTarget;
 use lanforge_macros::lanforge_rpc;
@@ -27,11 +29,9 @@ pub trait LanforgeRpc {
     async fn shutdown(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn host_add(
         &self,
-        mac: Option<String>,
-        hostname: Option<String>,
-        v4: Option<String>,
-        v6_suffix: Option<String>,
+        entry: HostConfigEntry,
     ) -> Result<SimpleSuccess, RpcCallError>;
+    async fn host_import(&self, hosts: Vec<HostConfigEntry>) -> Result<SimpleSuccess, RpcCallError>;
     async fn host_set(
         &self,
         mac: String,
@@ -70,6 +70,7 @@ pub trait LanforgeRpc {
     ) -> Result<DnsQueryResponse, RpcCallError>;
     async fn dns_cache_flush(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_cache_dump(&self) -> Result<DnsCacheResponse, RpcCallError>;
+    async fn dns_cache_stats_ext(&self) -> Result<DnsCacheStatsExtResponse, RpcCallError>;
     async fn dns_adblock_set(
         &self,
         enabled: bool,
@@ -88,10 +89,12 @@ pub trait LanforgeRpc {
     async fn dns_unallow(&self, domain: String) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_rewrite_add(
         &self,
-        domain: String,
-        answer: String,
+        rule: RewriteRule,
     ) -> Result<SimpleSuccess, RpcCallError>;
-    async fn dns_rewrite_remove(&self, domain: String) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_rewrite_remove(&self, id: i64) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_rewrite_clear(&self) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_rewrite_import(&self, rules: Vec<RewriteRule>) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_rewrite_export(&self) -> Result<DnsRewritesResponse, RpcCallError>;
     async fn dns_rewrites(&self) -> Result<DnsRewritesResponse, RpcCallError>;
     async fn dns_allowlist(&self) -> Result<DnsAllowlistResponse, RpcCallError>;
     async fn dns_adblock_url_add(
@@ -110,5 +113,8 @@ pub trait LanforgeRpc {
     async fn leases(&self, count: bool) -> Result<LeasesResponse, RpcCallError>;
     async fn topology(&self) -> Result<TopologyResponse, RpcCallError>;
     async fn config_set_password(&self, password: String) -> Result<SimpleSuccess, RpcCallError>;
-    async fn auth_generate_token(&self, name: String) -> Result<AuthTokenResponse, RpcCallError>;
+    async fn ak_generate(&self, name: String) -> Result<AuthTokenResponse, RpcCallError>;
+    async fn ak_delete(&self, id_or_name: String) -> Result<SimpleSuccess, RpcCallError>;
+    async fn ak_renew(&self, id_or_name: String) -> Result<AuthTokenResponse, RpcCallError>;
+    async fn ak_list(&self) -> Result<AuthTokensResponse, RpcCallError>;
 }

@@ -1,6 +1,6 @@
 use lanforge_core::context::PersistenceSnapshot;
-use lanforge_core::types::DeviceUpdate;
 use lanforge_core::types::updates::StaticEntry;
+use lanforge_core::types::{DeviceUpdate, DnsRecordType};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
@@ -698,25 +698,50 @@ impl LeaseDb {
         }
     }
 
-    pub async fn upsert_dns_rewrite(&self, domain: &str, answer: &str) -> Result<(), LeaseDbError> {
+    pub async fn upsert_dns_rewrite(
+        &self,
+        domain: &str,
+        rtype: DnsRecordType,
+        answer: &str,
+    ) -> Result<(), LeaseDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::upsert_dns_rewrite_sqlite(p, domain, answer).await,
+            Pool::Sqlite(p) => {
+                dns_config::upsert_dns_rewrite_sqlite(p, domain, rtype, answer).await
+            }
             #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::upsert_dns_rewrite_postgres(p, domain, answer).await,
+            Pool::Postgres(p) => {
+                dns_config::upsert_dns_rewrite_postgres(p, domain, rtype, answer).await
+            }
         }
     }
 
-    pub async fn delete_dns_rewrite(&self, domain: &str) -> Result<(), LeaseDbError> {
+    pub async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), LeaseDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::delete_dns_rewrite_sqlite(p, domain).await,
+            Pool::Sqlite(p) => dns_config::delete_dns_rewrite_by_id_sqlite(p, id).await,
             #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::delete_dns_rewrite_postgres(p, domain).await,
+            Pool::Postgres(p) => dns_config::delete_dns_rewrite_by_id_postgres(p, id).await,
         }
     }
 
-    pub async fn load_dns_allowlist(&self) -> Result<Vec<String>, LeaseDbError> {
+    pub async fn clear_dns_rewrites(&self) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::clear_dns_rewrites_sqlite(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::clear_dns_rewrites_postgres(p).await,
+        }
+    }
+
+    pub async fn delete_dns_rewrite(&self, _domain: &str) -> Result<(), LeaseDbError> {
+        // Deprecated, use delete_dns_rewrite_by_id
+        Err(LeaseDbError::Generic(
+            "delete_dns_rewrite is deprecated".into(),
+        ))
+    }
+
+    pub async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, LeaseDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::load_dns_allowlist_sqlite(p).await,
@@ -765,7 +790,9 @@ impl LeaseDb {
         }
     }
 
-    pub async fn load_adblock_urls(&self) -> Result<Vec<(String, AdblockUrlKind)>, LeaseDbError> {
+    pub async fn load_adblock_urls(
+        &self,
+    ) -> Result<Vec<(i64, String, AdblockUrlKind)>, LeaseDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::load_adblock_urls_sqlite(p).await,
@@ -798,7 +825,7 @@ impl LeaseDb {
 
     // --- API Token methods ---
 
-    pub async fn store_api_token(&self, token: &str, name: &str) -> Result<(), LeaseDbError> {
+    pub async fn store_api_token(&self, token: &str, name: &str) -> Result<i64, LeaseDbError> {
         let now = utils::system_time_to_unix(SystemTime::now());
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -824,6 +851,38 @@ impl LeaseDb {
             Pool::Sqlite(p) => sqlite::delete_api_token(p, token).await,
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => postgres::delete_api_token(p, token).await,
+        }
+    }
+
+    pub async fn delete_api_token_by_id_or_name(
+        &self,
+        id_or_name: &str,
+    ) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::delete_api_token_by_id_or_name(p, id_or_name).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::delete_api_token_by_id_or_name(p, id_or_name).await,
+        }
+    }
+
+    pub async fn load_api_tokens(
+        &self,
+    ) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::load_api_tokens(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::load_api_tokens(p).await,
+        }
+    }
+
+    pub async fn get_api_token_name(&self, id: i64) -> Result<Option<String>, LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::get_api_token_name(p, id).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::get_api_token_name(p, id).await,
         }
     }
 }

@@ -79,4 +79,8 @@ pub enum LeaseDbError {
     /// Internal error (e.g., serialization failure).
     #[error("Internal database error: {0}")]
     Internal(String),
+
+    /// A generic database error with a custom message.
+    #[error("Database error: {0}")]
+    Generic(String),
 }

@@ -386,14 +386,14 @@ pub async fn store_api_token(
     token: &str,
     name: &str,
     now: i64,
-) -> Result<(), LeaseDbError> {
-    sqlx::query("INSERT INTO api_tokens (token, name, created_at) VALUES ($1, $2, $3)")
+) -> Result<i64, LeaseDbError> {
+    let row: (i32,) = sqlx::query_as("INSERT INTO api_tokens (token, name, created_at) VALUES ($1, $2, $3) RETURNING id")
         .bind(token)
         .bind(name)
         .bind(now)
-        .execute(pool)
+        .fetch_one(pool)
         .await?;
-    Ok(())
+    Ok(i64::from(row.0))
 }
 
 pub async fn validate_api_token(
@@ -424,4 +424,46 @@ pub async fn delete_api_token(pool: &sqlx::PgPool, token: &str) -> Result<(), Le
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn delete_api_token_by_id_or_name(
+    pool: &sqlx::PgPool,
+    id_or_name: &str,
+) -> Result<(), LeaseDbError> {
+    if let Ok(id) = id_or_name.parse::<i32>() {
+        sqlx::query("DELETE FROM api_tokens WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    } else {
+        sqlx::query("DELETE FROM api_tokens WHERE name = $1")
+            .bind(id_or_name)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn load_api_tokens(pool: &sqlx::PgPool) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
+    let rows = sqlx::query_as::<_, (i32, String, String, i64, Option<i64>)>(
+        "SELECT id, token, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|(id, token, name, created_at, last_used)| crate::engine::types::ApiTokenRow {
+        id: i64::from(id),
+        token,
+        name,
+        created_at,
+        last_used,
+    }).collect())
+}
+
+pub async fn get_api_token_name(pool: &sqlx::PgPool, id: i64) -> Result<Option<String>, LeaseDbError> {
+    let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE id = $1")
+        .bind(id as i32)
+        .fetch_optional(pool)
+        .await?;
+    Ok(res.map(|(n,)| n))
 }

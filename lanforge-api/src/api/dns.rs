@@ -1,6 +1,8 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
 use lanforge_core::config::RewriteRule;
-use lanforge_core::types::{DnsRecordEntry, UpstreamHealthSnapshot};
+use lanforge_core::types::{DnsRecordEntry, DnsRecordType, UpstreamHealthSnapshot};
+use serde::{Deserialize, Serialize};
 
 /// A snapshot of DNS resolver statistics.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -102,7 +104,7 @@ pub struct DnsCacheResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DnsCacheEntry {
     pub name: String,
-    pub kind: String,
+    pub kind: DnsRecordType,
     pub data: String,
     pub expires_in_secs: u64,
 }
@@ -115,7 +117,7 @@ pub struct DnsQueryLogEntry {
     pub src_mac: Option<String>,
     pub src_hostname: Option<String>,
     pub domain: String,
-    pub qtype: String,
+    pub qtype: DnsRecordType,
     pub result: String,
     pub upstream_us: u32,
     pub cached: bool,
@@ -158,6 +160,16 @@ pub struct DnsAdblockUrlsResponse {
 /// A single adblock source URL entry.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockUrlEntry {
+    pub id: Option<i64>,
     pub url: String,
     pub kind: String,
+}
+
+/// In-depth DNS cache statistics.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsCacheStatsExtResponse {
+    pub total_entries: u64,
+    pub entries_by_type: HashMap<DnsRecordType, u64>,
+    pub memory_usage_bytes: u64,
+    pub average_ttl_secs: u64,
 }

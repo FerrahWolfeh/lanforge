@@ -1,7 +1,12 @@
 mod common;
 use common::*;
-use lanforge_core::types::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType, DnsResponseCode};
-use lanforge_dns::wire::{WireDecoder, WireEncoder};
+use lanforge_core::types::{
+    DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
+};
+use lanforge_dns::{
+    config::RewriteRule,
+    wire::{WireDecoder, WireEncoder},
+};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -87,9 +92,11 @@ async fn pipeline_adblocking() {
 async fn pipeline_rewrite_rule() {
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();
-    cfg.rewrites.push(lanforge_dns::config::RewriteRule {
+    cfg.rewrites.push(RewriteRule {
+        id: None,
         domain: "portal.local".to_string(),
         answer: "10.10.10.10".to_string(),
+        rtype: DnsRecordType::A,
     });
 
     let ctx = mock_dns_context(ctx_instance, cfg).await;
@@ -115,7 +122,7 @@ async fn pipeline_rewrite_rule() {
     let resp = decoder.decode_message().unwrap();
     assert_eq!(resp.header.rcode, DnsResponseCode::NoError);
     assert_eq!(resp.answers.len(), 1);
-    if let lanforge_core::types::DnsRData::A(ip) = &resp.answers[0].rdata {
+    if let DnsRData::A(ip) = &resp.answers[0].rdata {
         assert_eq!(ip.to_string(), "10.10.10.10");
     } else {
         panic!("Wrong RData type: {:?}", resp.answers[0].rdata);

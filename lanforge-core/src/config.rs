@@ -3,7 +3,11 @@
 //! Each service defines its own configuration structure that can be
 //! automatically mapped to a section in the main TOML file.
 
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use serde::{Deserialize, Serialize};
+
+use crate::types::DnsRecordType;
 
 /// Trait implemented by service-specific configuration structures.
 ///
@@ -24,16 +28,18 @@ pub trait ServiceConfig: Serialize + for<'de> Deserialize<'de> + Default + Clone
 /// Represents a DNS rewrite rule (domain -> IP/Hostname).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct RewriteRule {
+    pub id: Option<i64>,
     pub domain: String,
+    pub rtype: DnsRecordType,
     pub answer: String,
 }
 
 impl RewriteRule {
     #[must_use]
     pub fn parse_answer(&self) -> RewriteAnswer {
-        self.answer.parse::<std::net::Ipv4Addr>().map_or_else(
+        self.answer.parse::<Ipv4Addr>().map_or_else(
             |_| {
-                self.answer.parse::<std::net::Ipv6Addr>().map_or_else(
+                self.answer.parse::<Ipv6Addr>().map_or_else(
                     |_| {
                         if self.answer.contains('.') {
                             RewriteAnswer::Cname(self.answer.clone())
@@ -52,8 +58,8 @@ impl RewriteRule {
 /// Parsed DNS rewrite answer.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum RewriteAnswer {
-    A(std::net::Ipv4Addr),
-    Aaaa(std::net::Ipv6Addr),
+    A(Ipv4Addr),
+    Aaaa(Ipv6Addr),
     Cname(String),
     Device(String),
 }
@@ -98,8 +104,8 @@ impl std::fmt::Display for BlockingMode {
 pub struct AdblockDbConfig {
     pub enabled: bool,
     pub blocking_mode: BlockingMode,
-    pub blocking_ip_v4: Option<std::net::Ipv4Addr>,
-    pub blocking_ip_v6: Option<std::net::Ipv6Addr>,
+    pub blocking_ip_v4: Option<Ipv4Addr>,
+    pub blocking_ip_v6: Option<Ipv6Addr>,
     pub refresh_hours: u32,
     pub refresh_at_night: bool,
 }

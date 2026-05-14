@@ -1,6 +1,9 @@
 use bytes::Bytes;
 use dashmap::DashMap;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use crate::wire::{WireDecoder, WireQuestion};
 use lanforge_core::types::DnsRecordType;
@@ -153,7 +156,7 @@ impl DnsCache {
     }
 
     #[must_use]
-    pub fn dump(&self) -> Vec<(String, String, String, u64)> {
+    pub fn dump(&self) -> Vec<(String, DnsRecordType, String, u64)> {
         let now = Instant::now();
         self.cache
             .iter()
@@ -163,7 +166,7 @@ impl DnsCache {
                 let name = name_decoder
                     .decode_name()
                     .map_or_else(|| "invalid".to_string(), |n| n.to_string());
-                let kind = DnsRecordType::from(key.qtype).to_string();
+                let kind = DnsRecordType::from(key.qtype);
 
                 let mut msg_decoder = WireDecoder::new(&value.data);
                 let data = if let Some(msg) = msg_decoder.decode_message() {
@@ -186,5 +189,27 @@ impl DnsCache {
         {
             hotpath::gauge!("dns_cache_size").set(self.cache.len() as f64);
         }
+    }
+
+    #[must_use]
+    pub fn get_stats_ext(&self) -> (u64, HashMap<DnsRecordType, u64>, u64, u64) {
+        let mut stats = HashMap::new();
+        let mut total_mem = 0;
+        let mut total_ttl = 0;
+        let count = self.cache.len() as u64;
+        let now = Instant::now();
+
+        for entry in self.cache.iter() {
+            let (key, value) = entry.pair();
+            let kind = DnsRecordType::from(key.qtype);
+            *stats.entry(kind).or_insert(0) += 1;
+
+            // Heuristic memory usage: key size + data size + fixed overhead
+            total_mem += (key.qname.len() + value.data.len() + 64) as u64;
+            total_ttl += value.expires_at.saturating_duration_since(now).as_secs();
+        }
+
+        let avg_ttl = total_ttl.checked_div(count).unwrap_or(0);
+        (count, stats, total_mem, avg_ttl)
     }
 }

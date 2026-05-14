@@ -64,7 +64,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     Ok(urls) => {
                         let mut block = Vec::new();
                         let mut allow = Vec::new();
-                        for (url, kind) in urls {
+                        for (_id, url, kind) in urls {
                             match kind {
                                 AdblockUrlKind::Blocklist => block.push(url),
                                 AdblockUrlKind::Allowlist => allow.push(url),

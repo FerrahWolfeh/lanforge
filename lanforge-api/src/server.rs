@@ -1,7 +1,8 @@
 use crate::api::{
-    DevicesResponse, LeasesResponse, Response, RpcCallError, SimpleSuccess, StatusResponse,
-    TopologyResponse,
+    DevicesResponse, HostConfigEntry, LeasesResponse, Response, RpcCallError, SimpleSuccess,
+    StatusResponse, TopologyResponse,
 };
+use lanforge_core::config::RewriteRule;
 use lanforge_core::context::state::State;
 use lanforge_core::error::CoreError;
 use lanforge_db::engine::LeaseDb;
@@ -308,14 +309,19 @@ where
         }
     }
 
-    async fn host_add(
+    async fn host_add(&self, entry: HostConfigEntry) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_host_add(entry).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn host_import(
         &self,
-        mac: Option<String>,
-        hostname: Option<String>,
-        v4: Option<String>,
-        v6_suffix: Option<String>,
+        hosts: Vec<HostConfigEntry>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.ctx.handle_host_add(mac, hostname, v4, v6_suffix).await {
+        match self.ctx.handle_host_import(hosts).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -486,6 +492,16 @@ where
         }
     }
 
+    async fn dns_cache_stats_ext(
+        &self,
+    ) -> Result<crate::api::DnsCacheStatsExtResponse, RpcCallError> {
+        match self.ctx.handle_dns_cache_stats_ext().await {
+            Response::DnsCacheStatsExt(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
     async fn dns_adblock_set(
         &self,
         enabled: bool,
@@ -603,21 +619,44 @@ where
         }
     }
 
-    async fn dns_rewrite_add(
-        &self,
-        domain: String,
-        answer: String,
-    ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.ctx.handle_dns_rewrite_add(domain, answer).await {
+    async fn dns_rewrite_add(&self, rule: RewriteRule) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_rewrite_add(rule).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_rewrite_remove(&self, domain: String) -> Result<SimpleSuccess, RpcCallError> {
-        match self.ctx.handle_dns_rewrite_remove(domain).await {
+    async fn dns_rewrite_remove(&self, id: i64) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_rewrite_remove(id).await {
             Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_rewrite_clear(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_rewrite_clear().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_rewrite_import(
+        &self,
+        rules: Vec<RewriteRule>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_rewrite_import(rules).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_rewrite_export(&self) -> Result<crate::api::DnsRewritesResponse, RpcCallError> {
+        match self.ctx.handle_dns_rewrite_export().await {
+            Response::DnsRewrites(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }
@@ -662,7 +701,7 @@ where
     async fn dns_adblock_url_list(
         &self,
     ) -> Result<crate::api::DnsAdblockUrlsResponse, RpcCallError> {
-        match self.ctx.handle_dns_adblock_urls().await {
+        match self.ctx.handle_dns_adblock_url_list().await {
             Response::DnsAdblockUrls(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -717,12 +756,39 @@ where
         }
     }
 
-    async fn auth_generate_token(
+    async fn ak_generate(
         &self,
         name: String,
     ) -> Result<crate::api::AuthTokenResponse, RpcCallError> {
-        match self.ctx.handle_auth_generate_token(name).await {
+        match self.ctx.handle_ak_generate(name).await {
             Response::AuthToken(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn ak_delete(&self, id_or_name: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_ak_delete(id_or_name).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn ak_renew(
+        &self,
+        id_or_name: String,
+    ) -> Result<crate::api::AuthTokenResponse, RpcCallError> {
+        match self.ctx.handle_ak_renew(id_or_name).await {
+            Response::AuthToken(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn ak_list(&self) -> Result<crate::api::AuthTokensResponse, RpcCallError> {
+        match self.ctx.handle_ak_list().await {
+            Response::AuthTokens(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

@@ -86,7 +86,7 @@ impl DnsService {
 
         // Populate from DB
         blocker.replace_rewrites(db_rewrites);
-        blocker.replace_allowlist(db_allowlist.into_iter().collect());
+        blocker.replace_allowlist(db_allowlist.into_iter().map(|(_, d)| d).collect());
         blocker.replace_config(
             db_adblock.blocking_mode,
             db_adblock.blocking_ip_v4,
@@ -219,7 +219,7 @@ impl AsyncService for DnsService {
                             if let Some(filter) = &dns_ctx.filter {
                                 match self.db.load_dns_allowlist().await {
                                     Ok(allow) => {
-                                        filter.replace_allowlist(allow.into_iter().collect());
+                                        filter.replace_allowlist(allow.into_iter().map(|(_, d)| d).collect());
                                         info!("✅ DNS: Allowlist reloaded.");
                                     }
                                     Err(e) => error!("❌ DNS: Failed to load allowlist: {}", e),

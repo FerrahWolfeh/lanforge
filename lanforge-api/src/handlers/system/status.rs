@@ -1,12 +1,9 @@
 use crate::api::{
     Capabilities, Compression, DbStatus, DevicesStats, Encoding, NetworkStatus, ResourcesStatus,
-    Response, ServiceStatusInfo, ServicesStatus, SimpleSuccess, StatusResponse,
+    Response, ServiceStatusInfo, ServicesStatus, StatusResponse,
 };
 use crate::server::ClientContext;
-use lanforge_core::types::{
-    Device, IPv6State, LanforgeEvent, NetworkEvent, Origin, StorageEvent, SystemEvent,
-};
-use lanforge_core::utils::auth::hash_password;
+use lanforge_core::types::{Device, IPv6State, Origin};
 use std::fs::metadata;
 use std::sync::Arc;
 
@@ -209,114 +206,5 @@ impl ClientContext {
         status.services.ndp_monitor.addrs_tracked = counts.5;
         status.services.ndp_monitor.state = "online".to_string();
         status.services.ndp_monitor.uptime_secs = self.uptime_secs;
-    }
-
-    pub async fn handle_reload(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-        Response::Success(SimpleSuccess {
-            message: "Configuration reload triggered".to_string(),
-        })
-    }
-
-    pub async fn handle_shutdown(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::Shutdown));
-        Response::Success(SimpleSuccess {
-            message: "Daemon shutdown initiated".to_string(),
-        })
-    }
-
-    pub async fn handle_db_vacuum(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Storage(StorageEvent::DbVacuum));
-        Response::Success(SimpleSuccess {
-            message: "Database VACUUM task queued".to_string(),
-        })
-    }
-
-    pub async fn handle_db_log_clean(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Storage(StorageEvent::DbLogClean));
-        Response::Success(SimpleSuccess {
-            message: "Transient log cleanup task queued".to_string(),
-        })
-    }
-
-    pub async fn handle_db_prune(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Storage(StorageEvent::DbPrune));
-        Response::Success(SimpleSuccess {
-            message: "Database pruning task queued".to_string(),
-        })
-    }
-
-    pub async fn handle_db_reset(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Storage(StorageEvent::DbReset));
-        Response::Success(SimpleSuccess {
-            message: "Factory reset initiated. Database will be cleared and daemon restarted."
-                .to_string(),
-        })
-    }
-
-    pub async fn handle_config_set_password(&self, password: String) -> Response {
-        let hash = hash_password(&password);
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigUpdate {
-                password_hash: hash,
-            }));
-        Response::Success(SimpleSuccess {
-            message: "API password updated and persisted to database".to_string(),
-        })
-    }
-
-    pub async fn handle_context_dump(&self, only_devices: bool, only_orphans: bool) -> Response {
-        let mut state = self.ctx.read().clone();
-        if only_devices {
-            state.discovery.orphaned_v6.clear();
-        }
-        if only_orphans {
-            state.devices.clear();
-        }
-        Response::ContextDump(Box::new(state))
-    }
-
-    pub async fn handle_watch(&self) -> Response {
-        // Handled by the server loop to upgrade connection
-        Response::Success(SimpleSuccess {
-            message: "Watch mode initiated".to_string(),
-        })
-    }
-
-    pub async fn handle_log(&self, _follow: bool, _n: Option<usize>) -> Response {
-        // Handled by the server loop to upgrade connection
-        Response::Success(SimpleSuccess {
-            message: "Log stream initiated".to_string(),
-        })
-    }
-
-    pub async fn handle_scan(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Network(NetworkEvent::ScanRequested));
-        Response::Success(SimpleSuccess {
-            message: "Network scan triggered".to_string(),
-        })
     }
 }

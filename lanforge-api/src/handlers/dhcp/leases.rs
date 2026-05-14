@@ -1,12 +1,11 @@
 use std::time::SystemTime;
-
-use super::format_iso8601;
 use crate::api::{
     DhcpPoolEntry, DhcpPoolsResponse, LeaseEntry, LeaseKind, LeasesResponse, Response,
     SimpleSuccess,
 };
 use crate::server::ClientContext;
 use lanforge_core::types::{IPv6State, LanforgeEvent, LeaseTarget, MacAddr, NetworkEvent};
+use super::super::format_iso8601;
 
 impl ClientContext {
     pub async fn handle_lease_renew(
@@ -100,7 +99,7 @@ impl ClientContext {
                     remaining_secs: lease
                         .expires
                         .duration_since(SystemTime::now())
-                        .map_or(0, |d| d.as_secs().cast_signed()),
+                        .map_or(0, |d| d.as_secs() as i64),
                 });
             }
             for v6_state in &dev.v6 {
@@ -114,7 +113,7 @@ impl ClientContext {
                         remaining_secs: lease
                             .expires
                             .duration_since(SystemTime::now())
-                            .map_or(0, |d| d.as_secs().cast_signed()),
+                            .map_or(0, |d| d.as_secs() as i64),
                     });
                 }
             }

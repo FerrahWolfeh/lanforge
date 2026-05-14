@@ -154,3 +154,12 @@ impl Default for LeaseHistoryEntry {
         }
     }
 }
+
+#[derive(sqlx::FromRow)]
+pub struct ApiTokenRow {
+    pub id: i64,
+    pub token: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used: Option<i64>,
+}
