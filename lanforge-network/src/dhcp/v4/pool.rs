@@ -314,6 +314,8 @@ mod tests {
                 v6_suffix: FieldUpdate::NoChange,
                 origin: Origin::Cli,
                 boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
             },
         });
 

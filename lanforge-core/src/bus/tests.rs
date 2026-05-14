@@ -124,6 +124,8 @@ async fn cli_host_update_publishes_events() {
             v6_suffix: FieldUpdate::NoChange,
             origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 
@@ -152,6 +154,8 @@ async fn cli_host_update_publishes_events() {
             v6_suffix: FieldUpdate::NoChange,
             origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 

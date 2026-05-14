@@ -19,7 +19,7 @@ use std::str::FromStr;
 /// assert_eq!(mac.0, [0x00, 0xde, 0xad, 0xbe, 0xef, 0x00]);
 /// assert_eq!(mac.to_string(), "00:de:ad:be:ef:00");
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Identifier, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Identifier, PartialOrd, Ord, Default)]
 pub struct MacAddr(pub [u8; 6]);
 
 impl MacAddr {

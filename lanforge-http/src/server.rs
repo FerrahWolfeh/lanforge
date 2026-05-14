@@ -267,6 +267,8 @@ fn process_registration(ctx: &LanforgeContext, req: RegisterRequest) -> impl Int
             boot_file: req
                 .boot_file
                 .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 

@@ -248,6 +248,8 @@ fn format_network_event(now: &str, event: &NetworkEvent) {
             };
             println!("[{now}] {} {}", "SYS".yellow().bold(), msg.dimmed());
         }
+        NetworkEvent::LeaseRenewRequested { mac, target } => todo!(),
+        NetworkEvent::LeaseReleaseRequested { mac, target } => todo!(),
     }
 }
 

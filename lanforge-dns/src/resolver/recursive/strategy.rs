@@ -1,7 +1,9 @@
 use crate::error::DnsError;
 use crate::resolver::recursive::UpstreamManager;
 use crate::utils::health::UpstreamStatus;
+use crate::wire::{WireDecoder, WireEncoder};
 use lanforge_core::types::network::dns::UpstreamHealthSnapshot;
+use lanforge_core::types::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -209,7 +211,7 @@ impl UpstreamStrategy {
         Err(last_err)
     }
 
-    async fn resolve_round_robin(
+    pub async fn resolve_round_robin(
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
@@ -230,5 +232,28 @@ impl UpstreamStrategy {
             }
         }
         Err(last_err)
+    }
+
+    /// Resolves a higher-level query message.
+    pub async fn resolve_recursive(
+        &self,
+        name: &str,
+        qtype: DnsRecordType,
+    ) -> Result<DnsMessage, DnsError> {
+        let mut query = DnsMessage::new();
+        query.header.rd = true;
+        query.header.qdcount = 1;
+        query.questions.push(DnsQuestion {
+            name: Arc::from(name),
+            qtype,
+            qclass: DnsClass::IN,
+        });
+
+        let mut encoder = WireEncoder::new();
+        let wire_query = encoder.encode_message(&query);
+
+        let (wire_resp, _, _) = self.resolve(&wire_query).await?;
+        let mut decoder = WireDecoder::new(&wire_resp);
+        decoder.decode_message().ok_or(DnsError::WireParseError)
     }
 }

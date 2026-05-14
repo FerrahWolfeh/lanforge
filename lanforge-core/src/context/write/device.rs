@@ -62,6 +62,8 @@ impl LanforgeContext {
                 v6_suffix: FieldUpdate::from(v6_suffix),
                 origin,
                 boot_file: FieldUpdate::from(boot_file),
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
             },
         });
     }

@@ -1,12 +1,20 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::{IpAddr, Ipv6Addr};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(try_from = "String", into = "String")]
 pub enum Ipv6AddrOrSuffix {
     Full(Ipv6Addr),
     Suffix([u8; 8]),
+}
+
+impl FromStr for Ipv6AddrOrSuffix {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| format!("Invalid IPv6 address or suffix: {s}"))
+    }
 }
 
 impl Ipv6AddrOrSuffix {

@@ -259,6 +259,12 @@ impl State {
             } else if update.boot_file == FieldUpdate::Clear {
                 dev.boot_file = None;
             }
+            if let FieldUpdate::Set(df) = update.dns_fallback {
+                dev.dns_fallback = df;
+            }
+            if let FieldUpdate::Set(c) = update.class {
+                dev.class = c;
+            }
             dev.origin = update.origin;
             dev.managed_at = Some(SystemTime::now());
             Some(DeviceChange::CliHostUpdated)

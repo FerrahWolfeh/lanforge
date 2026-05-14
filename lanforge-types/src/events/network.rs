@@ -1,4 +1,4 @@
-use crate::identifiers::MacAddr;
+use crate::{identifiers::MacAddr, update::LeaseTarget};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -24,5 +24,13 @@ pub enum NetworkEvent {
     },
     RsReceived {
         mac: MacAddr,
+    },
+    LeaseRenewRequested {
+        mac: MacAddr,
+        target: Option<LeaseTarget>,
+    },
+    LeaseReleaseRequested {
+        mac: MacAddr,
+        target: Option<LeaseTarget>,
     },
 }

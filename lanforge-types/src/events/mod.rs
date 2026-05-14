@@ -53,7 +53,9 @@ impl TimedEvent {
                 | NetworkEvent::RsReceived { .. }
                 | NetworkEvent::ScanRequested
                 | NetworkEvent::NeighborScanRequested
-                | NetworkEvent::SubnetScanStarted { .. } => true,
+                | NetworkEvent::SubnetScanStarted { .. }
+                | NetworkEvent::LeaseRenewRequested { .. }
+                | NetworkEvent::LeaseReleaseRequested { .. } => true,
             },
             LanforgeEvent::System(e) => matches!(
                 e,

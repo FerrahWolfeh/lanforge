@@ -61,6 +61,8 @@ async fn test_host_list_returns_static_and_cli_only() {
             v6_suffix: FieldUpdate::NoChange,
             origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 
@@ -83,6 +85,8 @@ async fn test_host_list_returns_static_and_cli_only() {
             v6_suffix: FieldUpdate::NoChange,
             origin: Origin::Static,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 
@@ -170,6 +174,8 @@ async fn test_dump_command_simulation() {
             v6_suffix: FieldUpdate::NoChange,
             origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 
@@ -247,6 +253,8 @@ async fn test_granular_querying() {
             v6_suffix: FieldUpdate::NoChange,
             origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 

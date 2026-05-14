@@ -681,7 +681,9 @@ impl Ipv6Pool {
 #[cfg(test)]
 mod tests {
     use crate::test_utils::init_test_context;
-    use lanforge_core::types::{CliHostUpdate, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, Origin};
+    use lanforge_core::types::{
+        CliHostUpdate, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, Origin,
+    };
 
     use super::*;
     use std::time::{Duration, SystemTime};
@@ -901,6 +903,8 @@ mod tests {
                 v6_suffix: FieldUpdate::Set(static_suffix),
                 origin: Origin::Cli,
                 boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
             },
         });
 
@@ -954,6 +958,8 @@ mod tests {
                 v6_suffix: FieldUpdate::Set(static_suffix),
                 origin: Origin::Cli,
                 boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
             },
         });
 
@@ -1097,6 +1103,8 @@ mod tests {
                 v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
                 origin: Origin::Cli,
                 boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
             },
         });
 
@@ -1124,6 +1132,8 @@ mod tests {
                 v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::cafe").unwrap()),
                 origin: Origin::Cli,
                 boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
             },
         });
 

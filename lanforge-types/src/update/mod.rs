@@ -47,6 +47,8 @@ pub struct CliHostUpdate {
     pub v4_static: FieldUpdate<Ipv4Addr>,
     pub v6_suffix: FieldUpdate<Ipv6AddrOrSuffix>,
     pub boot_file: FieldUpdate<String>,
+    pub dns_fallback: FieldUpdate<String>,
+    pub class: FieldUpdate<DeviceClass>,
     pub origin: Origin,
 }
 
@@ -134,6 +136,10 @@ pub enum DeviceUpdate {
     HostRemoved {
         mac: MacAddr,
     },
+    /// Explicit request to remove a device from the active table.
+    Remove(MacAddr),
+    /// Explicit request to purge a device from both memory and database.
+    Purge(MacAddr),
     LeaseReleased {
         mac: MacAddr,
         target: LeaseTarget,

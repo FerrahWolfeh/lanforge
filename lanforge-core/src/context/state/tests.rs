@@ -362,6 +362,8 @@ fn test_cli_host_updated_sync() {
             v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::10").unwrap()),
             origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 
@@ -397,6 +399,8 @@ fn test_cli_host_updated_sync() {
             v6_suffix: FieldUpdate::NoChange, // No change
             origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 
@@ -851,6 +855,8 @@ fn test_handle_ip_offline_static_ula_persistence() {
             })),
             origin: Origin::Cli,
             boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
         },
     });
 

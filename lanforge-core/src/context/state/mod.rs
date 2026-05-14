@@ -73,7 +73,9 @@ impl State {
             DeviceUpdate::CliHostUpdated { mac, update } => {
                 self.handle_cli_host_updated(mac, update)
             }
-            DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
+            DeviceUpdate::HostRemoved { mac }
+            | DeviceUpdate::Remove(mac)
+            | DeviceUpdate::Purge(mac) => self.handle_host_removed(mac),
             DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, target),
             DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
             DeviceUpdate::IpOffline { ip } => self.handle_ip_offline(ip),
@@ -248,6 +250,8 @@ impl State {
                 v4_static: v4_static.into(),
                 v6_suffix: v6_suffix.into(),
                 boot_file: boot_file.into(),
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
                 origin,
             },
         });

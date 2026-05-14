@@ -44,8 +44,8 @@ use dhcproto::v6::{
 };
 use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::utils::mac_from_eui64_link_local;
 use lanforge_core::types::identifiers::{Duid, MacAddr};
+use lanforge_core::utils::mac_from_eui64_link_local;
 use std::net::{Ipv6Addr, UdpSocket};
 use std::str::FromStr;
 use std::string::ToString;
@@ -1370,6 +1370,8 @@ mod tests {
                 v6_suffix: FieldUpdate::NoChange,
                 origin: Origin::Cli,
                 boot_file: FieldUpdate::Set("http://custom/boot.efi".to_string()),
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
             },
         });
 
