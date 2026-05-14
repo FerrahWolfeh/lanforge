@@ -115,7 +115,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     }
 
     // 5. handle_devices (called by Devices) should still return all 3
-    let resp = ctx.handle_devices(None, None, None).await;
+    let resp = ctx.handle_devices(None, None, None, None).await;
     if let Response::Devices(d) = resp {
         assert_eq!(
             d.devices.len(),
@@ -158,7 +158,7 @@ async fn test_api_status_reports_gua_and_ula() {
 
 #[tokio::test]
 async fn test_dump_command_simulation() {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
+    use tokio::io::duplex;
 
     let (ctx_handle, db, log_db) = init_test_context().await;
     let cfg = Arc::new(make_dummy_config());
@@ -200,40 +200,28 @@ async fn test_dump_command_simulation() {
             .expect("handle_client failed");
     });
 
-    // 4. Send "context_dump" command as JSON line
-    let (reader, mut writer) = tokio::io::split(client);
-    let mut reader = BufReader::new(reader);
+    // 4. Connect with RPC Client
+    let mut client = crate::rpc::LanforgeRpcClient::new(client);
 
-    writer
-        .write_all(b"{\"command\":\"context_dump\"}\n")
+    // 5. Call context_dump
+    let state = client
+        .context_dump(false, false)
         .await
-        .unwrap();
+        .expect("RPC call failed");
 
-    // 5. Read and verify response
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .await
-        .expect("Failed to read line from server");
+    // 6. Verify response
+    assert!(
+        state.devices.contains_key(&mac),
+        "Dumped state missing target device"
+    );
+    assert_eq!(
+        state.devices.get(&mac).unwrap().hostname.name,
+        "dump-target",
+        "Hostname mismatch in dumped state"
+    );
 
-    let resp: Response = serde_json::from_str(&line).expect("Failed to deserialize Response");
-    if let Response::ContextDump(state) = resp {
-        assert!(
-            state.devices.contains_key(&mac),
-            "Dumped state missing target device"
-        );
-        assert_eq!(
-            state.devices.get(&mac).unwrap().hostname.name,
-            "dump-target",
-            "Hostname mismatch in dumped state"
-        );
-    } else {
-        panic!("Expected Response::ContextDump, got {resp:?}");
-    }
-
-    // 6. Cleanup (closing connection should terminate handle_client)
-    writer.shutdown().await.expect("Failed to shutdown writer");
-    drop(writer);
+    // 7. Cleanup (closing connection should terminate handle_client)
+    drop(client);
     let _ = server_handle.await;
 }
 

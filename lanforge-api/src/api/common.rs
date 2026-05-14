@@ -7,15 +7,15 @@ use std::fmt;
 pub enum Encoding {
     /// JSON line-based (standard).
     Json,
-    /// Bincode binary (length-prefixed).
-    Bincode,
+    /// Postcard binary (length-prefixed).
+    Postcard,
 }
 
 impl fmt::Display for Encoding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Json => write!(f, "json"),
-            Self::Bincode => write!(f, "bincode"),
+            Self::Postcard => write!(f, "postcard"),
         }
     }
 }

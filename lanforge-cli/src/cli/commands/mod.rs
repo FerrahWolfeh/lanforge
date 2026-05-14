@@ -16,52 +16,13 @@ pub mod wol;
 
 use chrono::{DateTime, Datelike, Utc};
 use color_eyre::eyre::Result;
-use lanforge_api::api::Command as ControlCommand;
-use lanforge_api::api::Response;
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
+#[async_trait::async_trait]
+pub trait CliCommand: Send + Sync {
+    /// Execute using the new RPC system.
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()>;
 
-pub trait CliCommand: Send {
-    /// Builds the request to be sent to the daemon.
-    fn prepare(&mut self) -> Result<ControlCommand>;
-
-    /// Handles the response from the daemon.
-    /// Returns `Ok(Some(Command))` if another command should be sent immediately.
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::Error { error } => {
-                println!("Error: {error}");
-            }
-            Response::Success(success) => {
-                println!("✓ {}", success.message);
-            }
-            Response::Event(e) => {
-                println!("Event: {e:?}");
-            }
-            _ => {
-                println!("Unexpected response: {response:?}");
-            }
-        }
-        Ok(None)
-    }
-
-    /// Indicates if this command expects a stream of responses (e.g. watch, log).
-    fn is_streaming(&self) -> bool {
-        false
-    }
-}
-
-pub struct GenericHandler {
-    pub cmd: ControlCommand,
-    pub streaming: bool,
-}
-
-impl CliCommand for GenericHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(self.cmd.clone())
-    }
-
-    fn is_streaming(&self) -> bool {
-        self.streaming
-    }
 }
 
 #[must_use]

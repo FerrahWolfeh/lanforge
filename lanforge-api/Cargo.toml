@@ -22,7 +22,7 @@ hotpath = { workspace = true, optional = true }
 
 hex = { version = "0.4.3", features = ["serde"] }
 tokio-util = { version = "0.7.18" }
-bincode = "1.3.3"
+postcard.workspace = true
 async-trait = "0.1.86"
 zstd = { version = "0.13.3", optional = true }
 futures.workspace = true

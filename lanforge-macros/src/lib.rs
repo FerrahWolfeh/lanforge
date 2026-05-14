@@ -1,7 +1,9 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::Parse;
-use syn::{Data, DeriveInput, Fields, Ident, ItemStruct, LitStr, Meta, parse_macro_input};
+use syn::{
+    Data, DeriveInput, Fields, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_macro_input,
+};
 
 /// Attribute macro that automatically implements `LanforgeService` for a struct.
 ///
@@ -441,6 +443,180 @@ pub fn update_dispatch_derive(input: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+#[proc_macro_attribute]
+pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
+    let input_trait = parse_macro_input!(input as ItemTrait);
+    let trait_name = &input_trait.ident;
+
+    let mut request_variants = Vec::new();
+    let mut response_variants = Vec::new();
+    let mut dispatch_arms = Vec::new();
+    let mut client_methods = Vec::new();
+
+    for item in &input_trait.items {
+        if let syn::TraitItem::Fn(method) = item {
+            let method_name = &method.sig.ident;
+            let variant_name = Ident::new(
+                &to_pascal_case(&method_name.to_string()),
+                method_name.span(),
+            );
+
+            let mut args = Vec::new();
+            let mut arg_names = Vec::new();
+
+            for arg in &method.sig.inputs {
+                if let syn::FnArg::Typed(pat_type) = arg
+                    && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
+                {
+                    let arg_name = &pat_ident.ident;
+                    let arg_type = &pat_type.ty;
+                    args.push(quote! { #arg_name: #arg_type });
+                    arg_names.push(arg_name);
+                }
+            }
+
+            let return_type = match &method.sig.output {
+                syn::ReturnType::Default => quote! { () },
+                syn::ReturnType::Type(_, ty) => quote! { #ty },
+            };
+
+            request_variants.push(quote! {
+                #variant_name { #(#args),* }
+            });
+
+            response_variants.push(quote! {
+                #variant_name(#return_type)
+            });
+
+            dispatch_arms.push(quote! {
+                RpcRequest::#variant_name { #(#arg_names),* } => {
+                    let res = self.#method_name(#(#arg_names),*).await;
+                    RpcResponse::#variant_name(res)
+                }
+            });
+
+            client_methods.push(quote! {
+                pub async fn #method_name(&mut self, #(#args),*) -> Result<#return_type, LanforgeRpcError> {
+                    let req = RpcRequest::#variant_name { #(#arg_names),* };
+                    match self.call(req).await? {
+                        RpcResponse::#variant_name(res) => Ok(res),
+                        RpcResponse::Error(e) => Err(LanforgeRpcError::Remote(e)),
+                        _ => Err(LanforgeRpcError::ProtocolMismatch),
+                    }
+                }
+            });
+        }
+    }
+
+    let expanded = quote! {
+        #input_trait
+
+        #[derive(serde::Serialize, serde::Deserialize, Debug)]
+        pub enum RpcRequest {
+            #(#request_variants),*
+        }
+
+        #[derive(serde::Serialize, serde::Deserialize, Debug)]
+        pub enum RpcResponse {
+            #(#response_variants),*,
+            Event(lanforge_core::bus::TimedEvent),
+            Error(String),
+        }
+
+        #[async_trait::async_trait]
+        pub trait LanforgeRpcDispatcher: #trait_name {
+            async fn dispatch(&self, req: RpcRequest) -> RpcResponse {
+                match req {
+                    #(#dispatch_arms)*
+                }
+            }
+        }
+
+        impl<T: #trait_name + Send + Sync> LanforgeRpcDispatcher for T {}
+
+        pub struct LanforgeRpcClient<S> {
+            stream: S,
+            buffer: Vec<u8>,
+        }
+
+        #[derive(thiserror::Error, Debug)]
+        pub enum LanforgeRpcError {
+            #[error("IO error: {0}")]
+            Io(#[from] std::io::Error),
+            #[error("Serialization error: {0}")]
+            Serialization(String),
+            #[error("Remote error: {0}")]
+            Remote(String),
+            #[error("Protocol mismatch")]
+            ProtocolMismatch,
+        }
+
+        impl<S> LanforgeRpcClient<S>
+        where
+            S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+        {
+            pub fn new(stream: S) -> Self {
+                Self {
+                    stream,
+                    buffer: Vec::with_capacity(8192),
+                }
+            }
+
+            async fn call(&mut self, req: RpcRequest) -> Result<RpcResponse, LanforgeRpcError> {
+                use tokio::io::AsyncWriteExt;
+
+                let mut buffer = std::mem::take(&mut self.buffer);
+                buffer.clear();
+                let buffer = postcard::to_extend(&req, buffer)
+                    .map_err(|e| LanforgeRpcError::Serialization(e.to_string()))?;
+                let len = buffer.len() as u32;
+                self.buffer = buffer;
+
+                self.stream.write_all(&len.to_be_bytes()).await?;
+                self.stream.write_all(&self.buffer).await?;
+                self.stream.flush().await?;
+
+                self.next_response().await
+            }
+
+            pub async fn next_response(&mut self) -> Result<RpcResponse, LanforgeRpcError> {
+                use tokio::io::AsyncReadExt;
+                let mut len_bytes = [0u8; 4];
+                self.stream.read_exact(&mut len_bytes).await?;
+                let resp_len = u32::from_be_bytes(len_bytes) as usize;
+
+                self.buffer.resize(resp_len, 0);
+                self.stream.read_exact(&mut self.buffer).await?;
+
+                let resp: RpcResponse = postcard::from_bytes(&self.buffer)
+                    .map_err(|e| LanforgeRpcError::Serialization(e.to_string()))?;
+
+                Ok(resp)
+            }
+
+            #(#client_methods)*
+        }
+    };
+
+    expanded.into()
+}
+
+fn to_pascal_case(s: &str) -> String {
+    let mut pascal = String::new();
+    let mut capitalize = true;
+    for ch in s.chars() {
+        if ch == '_' {
+            capitalize = true;
+        } else if capitalize {
+            pascal.push(ch.to_ascii_uppercase());
+            capitalize = false;
+        } else {
+            pascal.push(ch);
+        }
+    }
+    pascal
 }
 
 fn to_snake_case(s: &str) -> String {

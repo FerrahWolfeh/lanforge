@@ -1,8 +1,8 @@
+use crate::network::Ipv6AddrOrSuffix;
+use crate::utils::serde::{deserialize_time, serialize_time};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
-use crate::network::Ipv6AddrOrSuffix;
-use crate::utils::serde::{deserialize_time, serialize_time};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct V4Lease {
@@ -29,6 +29,10 @@ pub struct V6Lease {
         deserialize_with = "deserialize_time"
     )]
     pub expires: SystemTime,
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
     pub last_seen: SystemTime,
 }
 

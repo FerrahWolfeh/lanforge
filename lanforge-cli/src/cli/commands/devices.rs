@@ -4,8 +4,6 @@ use crate::cli::{Execute, LanforgeClient};
 use clap::ValueEnum;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::Response;
-use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
 use lanforge_core::types::device::Origin;
 
@@ -70,41 +68,32 @@ pub struct DevicesHandler {
     pub show_vendor: bool,
 }
 
-impl CliCommand for DevicesHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(ControlCommand::new(CommandAction::Devices {
-            filter: self.filter.clone(),
-            vendor: self.vendor.clone(),
-            method: self.method.clone(),
-            format: self.format.clone(),
-        }))
-    }
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
 
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::Devices(resp) => {
-                let mut owned_resp = resp.clone();
-                if let Some(v) = &self.vendor {
-                    let v_lower = v.to_lowercase();
-                    owned_resp.devices.retain(|d| {
-                        resolve_vendor(&d.mac)
-                            .is_some_and(|name| name.to_lowercase().contains(&v_lower))
-                    });
-                }
-                sort_devices(&mut owned_resp.devices, self.sort);
-                render_devices(&owned_resp, self.verbose, self.show_vendor);
-            }
-            Response::Error { error } => {
-                println!("Error: {error}");
-            }
-            Response::Event(e) => {
-                println!("Event: {e:?}");
-            }
-            _ => {
-                println!("Unexpected response for devices: {response:?}");
-            }
+#[async_trait::async_trait]
+impl CliCommand for DevicesHandler {
+    #[allow(clippy::too_many_lines)]
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
+        let resp = client
+            .list_devices(
+                self.filter.clone(),
+                self.vendor.clone(),
+                self.method.clone(),
+                self.format.clone(),
+            )
+            .await?;
+
+        let mut owned_resp = resp;
+        if let Some(v) = &self.vendor {
+            let v_lower = v.to_lowercase();
+            owned_resp.devices.retain(|d| {
+                resolve_vendor(&d.mac).is_some_and(|name| name.to_lowercase().contains(&v_lower))
+            });
         }
-        Ok(None)
+        sort_devices(&mut owned_resp.devices, self.sort);
+        render_devices(&owned_resp, self.verbose, self.show_vendor);
+        Ok(())
     }
 }
 

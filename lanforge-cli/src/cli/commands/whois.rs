@@ -3,7 +3,7 @@ use crate::cli::vendor::resolve_vendor;
 use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::{Command as ControlCommand, CommandAction, Response, WhoisResponse};
+use lanforge_api::api::WhoisResponse;
 use lanforge_core::types::device::Origin;
 use lanforge_db::engine::LeaseHistoryEntry;
 
@@ -27,26 +27,15 @@ pub struct WhoisHandler {
     pub target: String,
 }
 
-impl CliCommand for WhoisHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(ControlCommand::new(CommandAction::Whois {
-            target: self.target.clone(),
-        }))
-    }
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
 
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::Whois(resp) => {
-                render_whois(resp);
-            }
-            Response::Error { error } => {
-                println!("Error: {error}");
-            }
-            _ => {
-                println!("Unexpected response for whois: {response:?}");
-            }
-        }
-        Ok(None)
+#[async_trait::async_trait]
+impl CliCommand for WhoisHandler {
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
+        let resp = client.whois(self.target.clone()).await?;
+        render_whois(&resp);
+        Ok(())
     }
 }
 

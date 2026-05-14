@@ -4,9 +4,6 @@ use chrono::DateTime;
 use chrono::Local;
 use color_eyre::eyre::Result;
 use colored::Colorize;
-use lanforge_api::api::Response;
-use lanforge_api::api::SimpleSuccess;
-use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_core::bus::TimedEvent;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -41,32 +38,27 @@ pub struct LogHandler {
     pub lines: usize,
 }
 
+use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
+use tokio::net::UnixStream;
+
+#[async_trait::async_trait]
 impl CliCommand for LogHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(ControlCommand::new(CommandAction::Log {
-            follow: self.follow,
-            n: Some(self.lines),
-        }))
-    }
-
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::Success(SimpleSuccess { message }) => {
-                println!("{} {}", "i".blue(), message.italic());
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
+        client.log(self.follow, Some(self.lines)).await?;
+        loop {
+            match client.next_response().await {
+                Ok(RpcResponse::Event(event)) => self.print_event(&event),
+                Ok(RpcResponse::Error(e)) => eprintln!("Error: {e}"),
+                Ok(_) => {}
+                Err(lanforge_api::rpc::LanforgeRpcError::Io(e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break;
+                }
+                Err(e) => return Err(e.into()),
             }
-            Response::Error { error } => {
-                eprintln!("{} {}", "✘".red().bold(), error);
-            }
-            Response::Event(event) => self.print_event(event),
-            _ => {} // Ignore other responses in log stream
         }
-        Ok(None)
-    }
-
-    fn is_streaming(&self) -> bool {
-        // We always return true because even if follow is false,
-        // we expect the daemon to stream historical entries.
-        true
+        Ok(())
     }
 }
 

@@ -41,6 +41,7 @@ rustls = { version = "0.23.40", default-features = false, features = [
     "ring",
     "std",
 ] }
+postcard = { version = "1.1.1", features = ["alloc", "use-std"] }
 
 
 [profile.release]

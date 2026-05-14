@@ -2,7 +2,6 @@ use super::CliCommand;
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
-use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
 use lanforge_core::types::LeaseTarget;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -45,42 +44,32 @@ pub struct LeaseHandler {
     pub action: LeaseAction,
 }
 
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
+
+#[async_trait::async_trait]
 impl CliCommand for LeaseHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
         match &self.action {
-            LeaseAction::Renew { mac, v6 } => Ok(ControlCommand::new(CommandAction::LeaseRenew {
-                mac: mac.clone(),
-                target: Some(if *v6 {
+            LeaseAction::Renew { mac, v6 } => {
+                let target = if *v6 {
                     LeaseTarget::V6 { iaid: 0 }
                 } else {
                     LeaseTarget::V4
-                }),
-            })),
+                };
+                let resp = client.lease_renew(mac.clone(), Some(target)).await?;
+                println!("✓ {}", resp.message);
+            }
             LeaseAction::Release { mac, v6 } => {
-                Ok(ControlCommand::new(CommandAction::LeaseRelease {
-                    mac: mac.clone(),
-                    target: Some(if *v6 {
-                        LeaseTarget::V6 { iaid: 0 }
-                    } else {
-                        LeaseTarget::V4
-                    }),
-                }))
+                let target = if *v6 {
+                    LeaseTarget::V6 { iaid: 0 }
+                } else {
+                    LeaseTarget::V4
+                };
+                let resp = client.lease_release(mac.clone(), Some(target)).await?;
+                println!("✓ {}", resp.message);
             }
         }
-    }
-
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::Success(s) => {
-                println!("✓ {}", s.message);
-            }
-            Response::Error { error } => {
-                println!("✗ Error: {error}");
-            }
-            _ => {
-                println!("Unexpected response: {response:?}");
-            }
-        }
-        Ok(None)
+        Ok(())
     }
 }

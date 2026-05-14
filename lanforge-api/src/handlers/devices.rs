@@ -19,6 +19,7 @@ impl ClientContext {
         filter: Option<String>,
         _vendor: Option<String>,
         method: Option<String>,
+        _format: Option<String>,
     ) -> Response {
         let devices = self.ctx.all_devices();
         let mut api_devices = Vec::new();

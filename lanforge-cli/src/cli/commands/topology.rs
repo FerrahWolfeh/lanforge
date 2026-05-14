@@ -1,7 +1,7 @@
 use super::{CliCommand, format_relative_iso8601};
 use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
-use lanforge_api::api::{Command as ControlCommand, CommandAction, Response, TopologyEntry};
+use lanforge_api::api::TopologyEntry;
 use std::collections::HashMap;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -15,81 +15,72 @@ impl Execute for TopologyArgs {
 
 pub struct TopologyHandler;
 
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
+
+#[async_trait::async_trait]
 impl CliCommand for TopologyHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(ControlCommand::new(CommandAction::Topology))
-    }
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
+        let resp = client.topology().await?;
+        println!("Network Topology Hierarchy\n");
 
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::Topology(resp) => {
-                println!("Network Topology Hierarchy\n");
+        // Build a tree of parent MAC -> list of children
+        let mut parent_to_children: HashMap<String, Vec<&TopologyEntry>> = HashMap::new();
+        let mut orphans: Vec<&TopologyEntry> = Vec::new();
 
-                // Build a tree of parent MAC -> list of children
-                let mut parent_to_children: HashMap<String, Vec<&TopologyEntry>> = HashMap::new();
-                let mut orphans: Vec<&TopologyEntry> = Vec::new();
-
-                for entry in &resp.entries {
-                    if let Some(parent) = &entry.parent_mac {
-                        parent_to_children
-                            .entry(parent.clone())
-                            .or_default()
-                            .push(entry);
-                    } else {
-                        orphans.push(entry);
-                    }
-                }
-
-                // If a parent is also a child, it shouldn't be printed as a root.
-                // Roots are devices that are parents but not children themselves.
-                let mut roots: Vec<String> = parent_to_children
-                    .keys()
-                    .filter(|k| {
-                        !resp
-                            .entries
-                            .iter()
-                            .any(|e| &&e.mac == k && e.parent_mac.is_some())
-                    })
-                    .cloned()
-                    .collect();
-
-                roots.sort();
-
-                if roots.is_empty() && orphans.is_empty() {
-                    println!("No topology data available.");
-                    return Ok(None);
-                }
-
-                for root_mac in roots {
-                    // Try to find the root's hostname if it exists in the entries
-                    let root_hostname = resp
-                        .entries
-                        .iter()
-                        .find(|e| e.mac == root_mac)
-                        .map_or("Unknown Switch", |e| e.hostname.as_str());
-
-                    println!("┏━ 🖧  {root_hostname} [{root_mac}]");
-                    print_children(&root_mac, &parent_to_children, "┃  ", true);
-                    println!();
-                }
-
-                if !orphans.is_empty() {
-                    println!("┏━ ❓ Unlinked Devices");
-                    for (i, orphan) in orphans.iter().enumerate() {
-                        let is_last = i == orphans.len() - 1;
-                        let prefix = if is_last { "┗━" } else { "┣━" };
-                        println!("   {prefix} 💻 {} [{}]", orphan.hostname, orphan.mac);
-                    }
-                }
-            }
-            Response::Error { error } => {
-                println!("Error fetching topology: {error}");
-            }
-            _ => {
-                println!("Unexpected response: {response:?}");
+        for entry in &resp.entries {
+            if let Some(parent) = &entry.parent_mac {
+                parent_to_children
+                    .entry(parent.clone())
+                    .or_default()
+                    .push(entry);
+            } else {
+                orphans.push(entry);
             }
         }
-        Ok(None)
+
+        // If a parent is also a child, it shouldn't be printed as a root.
+        // Roots are devices that are parents but not children themselves.
+        let mut roots: Vec<String> = parent_to_children
+            .keys()
+            .filter(|k| {
+                !resp
+                    .entries
+                    .iter()
+                    .any(|e| &&e.mac == k && e.parent_mac.is_some())
+            })
+            .cloned()
+            .collect();
+
+        roots.sort();
+
+        if roots.is_empty() && orphans.is_empty() {
+            println!("No topology data available.");
+            return Ok(());
+        }
+
+        for root_mac in roots {
+            // Try to find the root's hostname if it exists in the entries
+            let root_hostname = resp
+                .entries
+                .iter()
+                .find(|e| e.mac == root_mac)
+                .map_or("Unknown Switch", |e| e.hostname.as_str());
+
+            println!("┏━ 🖧  {root_hostname} [{root_mac}]");
+            print_children(&root_mac, &parent_to_children, "┃  ", true);
+            println!();
+        }
+
+        if !orphans.is_empty() {
+            println!("┏━ ❓ Unlinked Devices");
+            for (i, orphan) in orphans.iter().enumerate() {
+                let is_last = i == orphans.len() - 1;
+                let prefix = if is_last { "┗━" } else { "┣━" };
+                println!("   {prefix} 💻 {} [{}]", orphan.hostname, orphan.mac);
+            }
+        }
+        Ok(())
     }
 }
 

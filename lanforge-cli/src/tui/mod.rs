@@ -1,16 +1,15 @@
-use crate::cli::client::{read_response, write_request};
 use color_eyre::Result;
 use crossterm::{
     event as ct_event, execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use lanforge_api::api::{Command, CommandAction, Compression, Encoding, Response};
+use lanforge_api::api::{Command, CommandAction, Response};
+use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::stdout;
 #[cfg(feature = "remote")]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::BufReader;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
@@ -212,6 +211,7 @@ async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sende
                     .send(Command::new(CommandAction::DnsQueryLog {
                         limit: Some(50),
                         client: None,
+                        follow: false,
                     }))
                     .await
                 {
@@ -251,22 +251,11 @@ async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {
 
 async fn run_daemon_watch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
     loop {
-        if let Ok(mut stream) = UnixStream::connect(&socket_path).await {
-            let (reader, mut writer) = stream.split();
-            let mut reader = BufReader::new(reader);
-
-            let mut cmd = Command::new(CommandAction::Watch);
-            cmd.encoding = Some(Encoding::Json);
-            cmd.compression = Some(Compression::None);
-
-            if write_request(&mut writer, &cmd, Encoding::Json)
-                .await
-                .is_ok()
-            {
-                while let Ok(Some(resp)) =
-                    read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
-                    if let Response::Event(event) = resp {
+        if let Ok(stream) = UnixStream::connect(&socket_path).await {
+            let mut client = LanforgeRpcClient::new(stream);
+            if client.watch().await.is_ok() {
+                while let Ok(resp) = client.next_response().await {
+                    if let RpcResponse::Event(event) = resp {
                         let _ = tx.send(AppEvent::DaemonEvent(event)).await;
                     }
                 }
@@ -280,97 +269,41 @@ async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
     let mut last_refresh = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
     loop {
         if last_refresh.elapsed() >= Duration::from_secs(5) {
-            if let Ok(mut stream) = UnixStream::connect(&socket_path).await {
-                let (reader, mut writer) = stream.split();
-                let mut reader = BufReader::new(reader);
+            if let Ok(stream) = UnixStream::connect(&socket_path).await {
+                let mut client = LanforgeRpcClient::new(stream);
 
                 // Status
-                let mut cmd = Command::new(CommandAction::Status);
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::Status(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
+                if let Ok(s) = client.status().await {
                     let _ = tx.send(AppEvent::StatusUpdate(s)).await;
                 }
 
                 // State (ContextDump)
-                let mut cmd = Command::new(CommandAction::ContextDump {
-                    only_devices: false,
-                    only_orphans: false,
-                });
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::ContextDump(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
+                if let Ok(s) = client.context_dump(false, false).await {
                     let _ = tx.send(AppEvent::StateUpdate(s)).await;
                 }
 
                 // DNS Stats
-                let mut cmd = Command::new(CommandAction::DnsStats);
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::DnsStats(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
+                if let Ok(s) = client.dns_stats().await {
                     let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
                 }
 
                 // DNS Analytics
-                let mut cmd = Command::new(CommandAction::DnsAnalytics { limit: Some(10) });
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::DnsAnalytics(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
+                if let Ok(s) = client.dns_analytics(Some(10)).await {
                     let _ = tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
                 }
 
                 // DNS Upstreams
-                let mut cmd = Command::new(CommandAction::DnsUpstreams);
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::DnsUpstreams(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
+                if let Ok(s) = client.dns_upstreams().await {
                     let _ = tx.send(AppEvent::DnsUpstreamsUpdate(Box::new(s))).await;
                 }
 
                 // DNS Query Log
-                let mut cmd = Command::new(CommandAction::DnsQueryLog {
-                    limit: Some(50),
-                    client: None,
-                });
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::DnsQueryLog(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
+                if let Ok(s) = client.dns_query_log(Some(50), None, false).await {
                     let _ = tx.send(AppEvent::DnsQueryLogUpdate(Box::new(s))).await;
                 }
 
                 // DNS Adblock Status
-                let mut cmd = Command::new(CommandAction::DnsAdblockStatus);
-                cmd.encoding = Some(Encoding::Json);
-                if write_request(&mut writer, &cmd, Encoding::Json)
-                    .await
-                    .is_ok()
-                    && let Ok(Some(Response::DnsAdblockStatus(s))) =
-                        read_response(&mut reader, Encoding::Json, Compression::None).await
-                {
+                if let Ok(s) = client.dns_adblock_status().await {
                     let _ = tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
                 }
             }

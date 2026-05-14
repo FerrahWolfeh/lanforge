@@ -11,7 +11,7 @@ where
     match time {
         Some(t) => {
             let elapsed = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
-            serializer.serialize_u64(elapsed.as_secs())
+            serializer.serialize_some(&elapsed.as_secs())
         }
         None => serializer.serialize_none(),
     }

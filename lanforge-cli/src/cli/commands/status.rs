@@ -3,8 +3,6 @@ use crate::cli::{Execute, LanforgeClient};
 use bytesize::ByteSize;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::Command as ControlCommand;
-use lanforge_api::api::Response;
 use lanforge_api::api::ServiceStatusInfo;
 use lanforge_api::api::StatusResponse;
 
@@ -18,30 +16,15 @@ impl Execute for StatusArgs {
 }
 
 pub struct StatusHandler;
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
 
+#[async_trait::async_trait]
 impl CliCommand for StatusHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
-        Ok(ControlCommand::new(
-            lanforge_api::api::CommandAction::Status,
-        ))
-    }
-
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::Status(st) => {
-                render_status(st);
-            }
-            Response::Error { error } => {
-                println!("Error: {error}");
-            }
-            Response::Event(e) => {
-                println!("Event: {e:?}");
-            }
-            _ => {
-                println!("Unexpected response for status: {response:?}");
-            }
-        }
-        Ok(None)
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
+        let st = client.status().await?;
+        render_status(&st);
+        Ok(())
     }
 }
 

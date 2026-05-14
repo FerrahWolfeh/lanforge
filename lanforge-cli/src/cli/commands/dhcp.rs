@@ -3,7 +3,7 @@ use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::{Command as ControlCommand, CommandAction, DhcpPoolEntry, Response};
+use lanforge_api::api::DhcpPoolEntry;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DhcpArgs {
@@ -31,50 +31,43 @@ pub struct DhcpHandler {
     pub action: DhcpAction,
 }
 
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
+
+#[async_trait::async_trait]
 impl CliCommand for DhcpHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
         match &self.action {
-            DhcpAction::Pool => Ok(ControlCommand::new(CommandAction::DhcpPools)),
-        }
-    }
-
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::DhcpPools(pools) => {
+            DhcpAction::Pool => {
+                let pools = client.dhcp_pools().await?;
                 element! {
-                    View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                        View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                            Text(content: " DHCP POOL UTILIZATION ", color: Color::White, weight: Weight::Bold)
+                        View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                            View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                                Text(content: " DHCP POOL UTILIZATION ", color: Color::White, weight: Weight::Bold)
+                            }
+
+                            #(pools.v4_pools.is_empty().then(|| element! {
+                                 Text(content: "No IPv4 pools configured.", color: Color::DarkGrey)
+                            }))
+
+                            #(pools.v4_pools.iter().map(|p| element! {
+                                PoolSection(title: "IPv4 Subnet".to_string(), pool: p.clone())
+                            }))
+
+                            View(margin_top: 1)
+
+                            #(pools.v6_pools.is_empty().then(|| element! {
+                                 Text(content: "No IPv6 pools configured.", color: Color::DarkGrey)
+                            }))
+
+                            #(pools.v6_pools.iter().map(|p| element! {
+                                PoolSection(title: "IPv6 Prefix".to_string(), pool: p.clone())
+                            }))
                         }
-                        
-                        #(pools.v4_pools.is_empty().then(|| element! {
-                             Text(content: "No IPv4 pools configured.", color: Color::DarkGrey)
-                        }))
-
-                        #(pools.v4_pools.iter().map(|p| element! {
-                            PoolSection(title: "IPv4 Subnet", pool: p.clone())
-                        }))
-
-                        View(margin_top: 1)
-                        
-                        #(pools.v6_pools.is_empty().then(|| element! {
-                             Text(content: "No IPv6 pools configured.", color: Color::DarkGrey)
-                        }))
-
-                        #(pools.v6_pools.iter().map(|p| element! {
-                            PoolSection(title: "IPv6 Prefix", pool: p.clone())
-                        }))
-                    }
-                }.print();
-            }
-            Response::Error { error } => {
-                println!("Error: {error}");
-            }
-            _ => {
-                println!("Unexpected response: {response:?}");
+                    }.print();
             }
         }
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -121,10 +114,12 @@ fn ProgressBar(props: &ProgressBarProps) -> impl Into<AnyElement<'_>> {
         #[allow(clippy::cast_precision_loss)]
         let f = (props.percent / 100.0).clamp(0.0, 1.0) * width as f32;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        { f as usize }
+        {
+            f as usize
+        }
     };
     let empty = width.saturating_sub(filled);
-    
+
     let filled_str = "█".repeat(filled);
     let empty_str = "░".repeat(empty);
 

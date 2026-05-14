@@ -1,10 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use crate::api::{
-    AdblockUrlEntry, DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse,
-    DnsAnalyticsResponse, DnsCacheEntry, DnsCacheResponse, DnsQueryResponse, DnsRewritesResponse,
-    DnsStatsResponse, DnsUpstreamsResponse, ProtocolStatEntry, QueryRateEntry, QueryTypeEntry,
-    Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
+    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheEntry, DnsCacheResponse, DnsQueryResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, ProtocolStatEntry, QueryRateEntry,
+    QueryTypeEntry, Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
 };
+
+#[cfg(feature = "adblock")]
+use crate::api::{AdblockUrlEntry, DnsAdblockStatusResponse, DnsAdblockUrlsResponse};
+
 use crate::server::ClientContext;
 use lanforge_core::types::{DnsEvent, DnsRecordEntry, DnsRecordType, LanforgeEvent};
 use lanforge_dns::server::DnsContext;
@@ -572,6 +575,7 @@ impl ClientContext {
         &self,
         limit: Option<usize>,
         _client: Option<String>,
+        _follow: bool,
     ) -> Response {
         use crate::api::{DnsQueryLogEntry, DnsQueryLogResponse};
         let limit = limit.unwrap_or(100);

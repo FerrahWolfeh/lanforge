@@ -51,5 +51,6 @@ pub mod config;
 pub mod error;
 pub mod handlers;
 pub mod server;
+pub mod rpc;
 #[cfg(test)]
 pub mod tests;

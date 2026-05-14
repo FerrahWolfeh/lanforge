@@ -57,7 +57,7 @@ pub enum CommandAction {
     #[dispatch(handler = "handle_status", readonly)]
     Status,
     /// List all managed devices with optional filtering.
-    #[dispatch(handler = "handle_devices", args(filter, vendor, method), readonly)]
+    #[dispatch(handler = "handle_devices", args(filter, vendor, method, format), readonly)]
     Devices {
         /// Filter by hostname, MAC, or IP address.
         filter: Option<String>,
@@ -203,12 +203,15 @@ pub enum CommandAction {
     #[dispatch(handler = "handle_dns_adblock_reload")]
     DnsAdblockReload,
     /// Retrieve recent DNS query logs.
-    #[dispatch(handler = "handle_dns_query_log", args(limit, client), readonly)]
+    #[dispatch(handler = "handle_dns_query_log", args(limit, client, follow), readonly)]
     DnsQueryLog {
         /// Maximum number of entries to retrieve.
         limit: Option<usize>,
         /// Filter by client IP address.
         client: Option<String>,
+        /// Whether to follow live logs.
+        #[serde(default)]
+        follow: bool,
     },
     /// Retrieve current adblock status and metrics.
     #[dispatch(handler = "handle_dns_adblock_status", readonly)]

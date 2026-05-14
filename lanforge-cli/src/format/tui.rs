@@ -294,6 +294,7 @@ fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>)
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
     match event {
         DnsEvent::AdblockToggle {
@@ -355,7 +356,9 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
             spans.push(Span::raw(" Manual block: "));
             spans.push(Span::styled(
                 domain,
-                Style::default().fg(theme::MOCHA_RED).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::MOCHA_RED)
+                    .add_modifier(Modifier::BOLD),
             ));
         }
         DnsEvent::AdblockAllow(domain) => {
@@ -368,7 +371,9 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
             spans.push(Span::raw(" Manual allow: "));
             spans.push(Span::styled(
                 domain,
-                Style::default().fg(theme::MOCHA_GREEN).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::MOCHA_GREEN)
+                    .add_modifier(Modifier::BOLD),
             ));
         }
         DnsEvent::ConfigRewritesChanged => {

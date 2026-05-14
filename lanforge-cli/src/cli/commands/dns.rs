@@ -4,10 +4,9 @@ use clap::Subcommand;
 use color_eyre::eyre::Result;
 use colored::Colorize;
 use iocraft::prelude::*;
-use lanforge_api::api::{
-    Command as ControlCommand, CommandAction, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
+use lanforge_api::api::{DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
     DnsAllowlistResponse, DnsCacheResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, Response,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
 };
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_core::types::network::{QueryLogEntry, QueryResult};
@@ -135,123 +134,136 @@ pub struct DnsCommand {
     pub action: DnsAction,
 }
 
+use tokio::net::UnixStream;
+use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
+
+#[async_trait::async_trait]
 impl CliCommand for DnsCommand {
-    fn prepare(&mut self) -> Result<ControlCommand> {
+    #[allow(clippy::too_many_lines)]
+    async fn execute_rpc(
+        &mut self,
+        client: &mut LanforgeRpcClient<UnixStream>,
+    ) -> Result<()> {
         match &self.action {
-            DnsAction::Stats => Ok(ControlCommand::new(CommandAction::DnsStats)),
-            DnsAction::Upstreams => Ok(ControlCommand::new(CommandAction::DnsUpstreams)),
-            DnsAction::Query { name, record_type } => {
-                Ok(ControlCommand::new(CommandAction::DnsQuery {
-                    name: name.clone(),
-                    record_type: Some(record_type.clone()),
-                }))
-            }
-            DnsAction::Adblock { action } => match action {
-                AdblockAction::Status => Ok(ControlCommand::new(CommandAction::DnsAdblockStatus)),
-                AdblockAction::Enable => Ok(ControlCommand::new(CommandAction::DnsAdblockSet {
-                    enabled: true,
-                    duration_secs: None,
-                })),
-                AdblockAction::Disable { duration } => {
-                    let secs = duration
-                        .as_ref()
-                        .and_then(|d| duration_str::parse_std(d).ok())
-                        .map(|d| d.as_secs());
-                    Ok(ControlCommand::new(CommandAction::DnsAdblockSet {
-                        enabled: false,
-                        duration_secs: secs,
-                    }))
+                DnsAction::Stats => {
+                    let res = client.dns_stats().await?;
+                    Self::render_stats(&res);
                 }
-                AdblockAction::Reload => Ok(ControlCommand::new(CommandAction::DnsAdblockReload)),
-                AdblockAction::Block { domain } => Ok(ControlCommand::new(CommandAction::DnsBlock {
-                    domain: domain.clone(),
-                })),
-                AdblockAction::Allow { domain } => Ok(ControlCommand::new(CommandAction::DnsAllow {
-                    domain: domain.clone(),
-                })),
-                AdblockAction::Unallow { domain } => {
-                    Ok(ControlCommand::new(CommandAction::DnsUnallow {
-                        domain: domain.clone(),
-                    }))
+                DnsAction::Upstreams => {
+                    let res = client.dns_upstreams().await?;
+                    Self::render_upstreams(&res);
                 }
-                AdblockAction::Allowlist => Ok(ControlCommand::new(CommandAction::DnsAllowlistList)),
-                AdblockAction::Sources { action } => match action {
-                    SourceAction::Add { url, kind } => {
-                        Ok(ControlCommand::new(CommandAction::DnsAdblockUrlAdd {
-                            url: url.clone(),
-                            kind: kind.clone(),
-                        }))
+                DnsAction::Query { name, record_type } => {
+                    let res = client.dns_query(name.clone(), Some(record_type.clone())).await?;
+                    Self::render_query(&res);
+                }
+                DnsAction::Adblock { action } => match action {
+                    AdblockAction::Status => {
+                        let res = client.dns_adblock_status().await?;
+                        Self::render_adblock_status(&res);
                     }
-                    SourceAction::Remove { url } => {
-                        Ok(ControlCommand::new(CommandAction::DnsAdblockUrlRemove {
-                            url: url.clone(),
-                        }))
+                    AdblockAction::Enable => {
+                        let res = client.dns_adblock_set(true, None).await?;
+                        println!("{}", res.message);
                     }
-                    SourceAction::List => Ok(ControlCommand::new(CommandAction::DnsAdblockUrlList)),
+                    AdblockAction::Disable { duration } => {
+                        let secs = duration
+                            .as_ref()
+                            .and_then(|d| duration_str::parse_std(d).ok())
+                            .map(|d| d.as_secs());
+                        let res = client.dns_adblock_set(false, secs).await?;
+                        println!("{}", res.message);
+                    }
+                    AdblockAction::Reload => {
+                        let res = client.dns_adblock_reload().await?;
+                        println!("{}", res.message);
+                    }
+                    AdblockAction::Block { domain } => {
+                        let res = client.dns_block(domain.clone()).await?;
+                        println!("{}", res.message);
+                    }
+                    AdblockAction::Allow { domain } => {
+                        let res = client.dns_allow(domain.clone()).await?;
+                        println!("{}", res.message);
+                    }
+                    AdblockAction::Unallow { domain } => {
+                        let res = client.dns_unallow(domain.clone()).await?;
+                        println!("{}", res.message);
+                    }
+                    AdblockAction::Allowlist => {
+                        let res = client.dns_allowlist().await?;
+                        Self::render_allowlist(&res);
+                    }
+                    AdblockAction::Sources { action } => match action {
+                        SourceAction::Add { url, kind } => {
+                            let res = client.dns_adblock_url_add(url.clone(), kind.clone()).await?;
+                            println!("{}", res.message);
+                        }
+                        SourceAction::Remove { url } => {
+                            let res = client.dns_adblock_url_remove(url.clone()).await?;
+                            println!("{}", res.message);
+                        }
+                        SourceAction::List => {
+                            let res = client.dns_adblock_url_list().await?;
+                            Self::render_adblock_urls(&res);
+                        }
+                    },
                 },
-            },
-            DnsAction::Rewrite { action } => match action {
-                RewriteAction::Add { domain, answer } => {
-                    Ok(ControlCommand::new(CommandAction::DnsRewriteAdd {
-                        domain: domain.clone(),
-                        answer: answer.clone(),
-                    }))
+                DnsAction::Rewrite { action } => match action {
+                    RewriteAction::Add { domain, answer } => {
+                        let res = client.dns_rewrite_add(domain.clone(), answer.clone()).await?;
+                        println!("{}", res.message);
+                    }
+                    RewriteAction::Remove { domain } => {
+                        let res = client.dns_rewrite_remove(domain.clone()).await?;
+                        println!("{}", res.message);
+                    }
+                    RewriteAction::List => {
+                        let res = client.dns_rewrites().await?;
+                        Self::render_rewrites(&res);
+                    }
+                },
+                DnsAction::Cache { action } => match action {
+                    CacheAction::Flush => {
+                        let res = client.dns_cache_flush().await?;
+                        println!("{}", res.message);
+                    }
+                    CacheAction::Dump => {
+                        let res = client.dns_cache_dump().await?;
+                        Self::render_cache(&res);
+                    }
+                },
+                DnsAction::Log {
+                    limit,
+                    client: filter,
+                    follow,
+                } => {
+                    let log = client.dns_query_log(Some(*limit), filter.clone(), *follow).await?;
+                    Self::render_logs(&log);
+                    if *follow {
+                        loop {
+                            match client.next_response().await {
+                                Ok(RpcResponse::Event(timed_event)) => {
+                                    if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) =
+                                        &timed_event.event
+                                    {
+                                        Self::print_log_line(entry);
+                                    }
+                                }
+                                Ok(RpcResponse::Error(e)) => eprintln!("Error: {e}"),
+                                Ok(_) => {}
+                                Err(lanforge_api::rpc::LanforgeRpcError::Io(e))
+                                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                                {
+                                    break;
+                                }
+                                Err(e) => return Err(e.into()),
+                            }
+                        }
+                    }
                 }
-                RewriteAction::Remove { domain } => {
-                    Ok(ControlCommand::new(CommandAction::DnsRewriteRemove {
-                        domain: domain.clone(),
-                    }))
-                }
-                RewriteAction::List => Ok(ControlCommand::new(CommandAction::DnsRewriteList)),
-            },
-            DnsAction::Cache { action } => match action {
-                CacheAction::Flush => Ok(ControlCommand::new(CommandAction::DnsCacheFlush)),
-                CacheAction::Dump => Ok(ControlCommand::new(CommandAction::DnsCacheDump)),
-            },
-            DnsAction::Log { limit, client, .. } => {
-                Ok(ControlCommand::new(CommandAction::DnsQueryLog {
-                    limit: Some(*limit),
-                    client: client.clone(),
-                }))
             }
-        }
-    }
-
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::DnsStats(stats) => Self::render_stats(stats),
-            Response::DnsUpstreams(resp) => Self::render_upstreams(resp),
-            Response::DnsQuery(query) => Self::render_query(query),
-            Response::DnsCache(cache) => Self::render_cache(cache),
-            Response::DnsQueryLog(log) => Self::render_logs(log),
-            Response::DnsAdblockStatus(status) => Self::render_adblock_status(status),
-            Response::DnsRewrites(resp) => Self::render_rewrites(resp),
-            Response::DnsAllowlist(resp) => Self::render_allowlist(resp),
-            Response::DnsAdblockUrls(resp) => Self::render_adblock_urls(resp),
-            Response::Event(timed_event) => {
-                if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) = &timed_event.event {
-                    Self::print_log_line(entry);
-                }
-            }
-            Response::Error { error } => {
-                println!("Error: {error}");
-            }
-            Response::Success(msg) => {
-                println!("{}", msg.message);
-            }
-            _ => {
-                println!("Unexpected response: {response:?}");
-            }
-        }
-        Ok(None)
-    }
-
-    fn is_streaming(&self) -> bool {
-        if let DnsAction::Log { follow, .. } = &self.action {
-            *follow
-        } else {
-            false
-        }
+            Ok(())
     }
 }
 

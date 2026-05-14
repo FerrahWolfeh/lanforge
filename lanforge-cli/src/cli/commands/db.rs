@@ -3,7 +3,6 @@ use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
 use colored::Colorize;
-use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DbArgs {
@@ -39,33 +38,34 @@ pub struct DbHandler {
     pub action: DbAction,
 }
 
-impl CliCommand for DbHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
-        match self.action {
-            DbAction::Vacuum => Ok(ControlCommand::new(CommandAction::DbVacuum)),
-            DbAction::LogClean => Ok(ControlCommand::new(CommandAction::DbLogClean)),
-            DbAction::Prune => Ok(ControlCommand::new(CommandAction::DbPrune)),
-            DbAction::Snapshot => Ok(ControlCommand::new(CommandAction::ContextDump {
-                only_devices: false,
-                only_orphans: false,
-            })),
-            DbAction::Reset => Ok(ControlCommand::new(CommandAction::DbReset)),
-        }
-    }
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
 
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::ContextDump(state) => {
-                println!("{}", serde_json::to_string_pretty(&state)?);
+#[async_trait::async_trait]
+impl CliCommand for DbHandler {
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
+        match self.action {
+            DbAction::Vacuum => {
+                let resp = client.db_vacuum().await?;
+                println!("{} {}", "✓".green().bold(), resp.message.bright_green());
             }
-            Response::Success(s) => {
-                println!("{} {}", "✓".green().bold(), s.message.bright_green());
+            DbAction::LogClean => {
+                let resp = client.db_log_clean().await?;
+                println!("{} {}", "✓".green().bold(), resp.message.bright_green());
             }
-            Response::Error { error } => {
-                eprintln!("{} {}", "✘".red().bold(), error.red());
+            DbAction::Prune => {
+                let resp = client.db_prune().await?;
+                println!("{} {}", "✓".green().bold(), resp.message.bright_green());
             }
-            _ => {}
+            DbAction::Snapshot => {
+                let resp = client.context_dump(false, false).await?;
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+            }
+            DbAction::Reset => {
+                let resp = client.db_reset().await?;
+                println!("{} {}", "✓".green().bold(), resp.message.bright_green());
+            }
         }
-        Ok(None)
+        Ok(())
     }
 }

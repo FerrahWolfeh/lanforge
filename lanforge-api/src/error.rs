@@ -15,9 +15,6 @@ pub enum ApiError {
     #[error("Bus receive error: {0}")]
     Bus(#[from] tokio::sync::broadcast::error::RecvError),
 
-    /// Error during Bincode serialization or deserialization.
-    #[error("Bincode error: {0}")]
-    Bincode(String),
 
     /// Error during Zstd compression or decompression.
     #[error("Zstd error: {0}")]

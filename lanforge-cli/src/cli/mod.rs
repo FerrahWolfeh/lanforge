@@ -4,7 +4,7 @@ pub mod vendor;
 
 use std::future::Future;
 
-pub use client::{ClientOptions, LanforgeClient};
+pub use client::LanforgeClient;
 use color_eyre::eyre::Result;
 
 pub trait Execute {

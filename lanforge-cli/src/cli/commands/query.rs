@@ -2,7 +2,6 @@ use super::CliCommand;
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
-use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct QueryArgs {
@@ -54,63 +53,65 @@ pub struct QueryHandler {
     pub target: QueryAction,
 }
 
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
+
+#[async_trait::async_trait]
 impl CliCommand for QueryHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
-        match self.target {
-            QueryAction::Status => Ok(ControlCommand::new(CommandAction::Status)),
-            QueryAction::Devices => Ok(ControlCommand::new(CommandAction::Devices {
-                filter: None,
-                vendor: None,
-                method: None,
-                format: None,
-            })),
-            QueryAction::Hosts => Ok(ControlCommand::new(CommandAction::HostList)),
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
+        match &self.target {
+            QueryAction::Status => {
+                let res = client.status().await?;
+                println!("{}", serde_json::to_string_pretty(&res)?);
+            }
+            QueryAction::Devices => {
+                let res = client.list_devices(None, None, None, None).await?;
+                println!("{}", serde_json::to_string_pretty(&res)?);
+            }
+            QueryAction::Hosts => {
+                let res = client.host_list().await?;
+                println!("{}", serde_json::to_string_pretty(&res)?);
+            }
             QueryAction::State {
                 only_devices,
                 only_orphans,
-            } => Ok(ControlCommand::new(CommandAction::ContextDump {
-                only_devices,
-                only_orphans,
-            })),
-            QueryAction::Leases { count, .. } => {
-                Ok(ControlCommand::new(CommandAction::Leases { count }))
+            } => {
+                let res = client.context_dump(*only_devices, *only_orphans).await?;
+                println!("{}", serde_json::to_string_pretty(&res)?);
             }
-            QueryAction::Topology => Ok(ControlCommand::new(CommandAction::Topology)),
-        }
-    }
-
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        if let QueryAction::Leases { count, plain } = &self.target
-            && let Response::Leases(res) = response
-        {
-            if *plain {
-                if *count {
-                    println!("{}", res.leases.len());
-                } else {
-                    for lease in &res.leases {
-                        println!(
-                            "{} {} {} {:?} {}",
-                            lease.mac,
-                            lease.hostname,
-                            lease.address,
-                            lease.kind,
-                            lease.remaining_secs
-                        );
+            QueryAction::Leases { count, plain } => {
+                let res = client.leases(*count).await?;
+                if *plain {
+                    if *count {
+                        println!("{}", res.leases.len());
+                    } else {
+                        for lease in &res.leases {
+                            println!(
+                                "{} {} {} {:?} {}",
+                                lease.mac,
+                                lease.hostname,
+                                lease.address,
+                                lease.kind,
+                                lease.remaining_secs
+                            );
+                        }
                     }
+                } else if *count {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "count": res.leases.len()
+                        }))?
+                    );
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&res)?);
                 }
-                return Ok(None);
-            } else if *count {
-                serde_json::to_writer(
-                    std::io::stdout(),
-                    &serde_json::json!({ "count": res.leases.len() }),
-                )?;
-                println!();
-                return Ok(None);
+            }
+            QueryAction::Topology => {
+                let res = client.topology().await?;
+                println!("{}", serde_json::to_string_pretty(&res)?);
             }
         }
-
-        serde_json::to_writer(std::io::stdout(), response)?;
-        println!();
-        Ok(None)
+        Ok(())
     }
 }

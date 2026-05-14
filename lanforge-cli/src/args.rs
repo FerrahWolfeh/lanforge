@@ -94,9 +94,9 @@ pub struct LanforgeArgs {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// Use Bincode binary protocol instead of JSON.
+    /// Use Postcard binary protocol instead of JSON.
     #[arg(long, global = true)]
-    pub bincode: bool,
+    pub postcard: bool,
 
     /// Disable response compression.
     #[arg(long, global = true)]

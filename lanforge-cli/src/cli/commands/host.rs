@@ -5,7 +5,6 @@ use color_eyre::Result;
 use color_eyre::eyre::bail;
 use inquire::{Confirm, Select, Text as InquireText};
 use iocraft::prelude::*;
-use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct HostArgs {
@@ -37,6 +36,7 @@ pub enum HostAction {
 }
 
 impl Execute for HostArgs {
+    #[allow(clippy::too_many_lines)]
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         client
             .execute_handler(Box::new(HostHandler {
@@ -50,8 +50,13 @@ pub struct HostHandler {
     pub action: HostAction,
 }
 
+use lanforge_api::rpc::LanforgeRpcClient;
+use tokio::net::UnixStream;
+
+#[async_trait::async_trait]
 impl CliCommand for HostHandler {
-    fn prepare(&mut self) -> Result<ControlCommand> {
+    #[allow(clippy::too_many_lines)]
+    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
         match &self.action {
             HostAction::Add {
                 mac,
@@ -64,8 +69,6 @@ impl CliCommand for HostHandler {
                 } else {
                     let ans = InquireText::new("MAC address:").prompt()?;
                     if ans.trim().is_empty() {
-                        // user skipped, we probably want to return an error or a dummy command handled gracefully.
-                        // Actually, if it's empty, returning an error exits early.
                         bail!("MAC address is required");
                     }
                     ans.trim().to_string()
@@ -105,22 +108,22 @@ impl CliCommand for HostHandler {
                     }
 
                     element! {
-                        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
-                            View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                                Text(content: " CONFIRM ADDITION ", color: Color::White, weight: Weight::Bold)
+                            View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+                                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                                    Text(content: " CONFIRM ADDITION ", color: Color::White, weight: Weight::Bold)
+                                }
+                                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                                    SummaryLine(label: "MAC".to_string(), value: final_mac.clone(), color: Color::Cyan)
+                                    SummaryLine(label: "Hostname".to_string(), value: final_hostname.clone(), color: Color::Cyan)
+                                    #(final_v4.as_ref().map(|v| element! {
+                                        SummaryLine(label: "Fixed IPv4".to_string(), value: v.clone(), color: Color::Green)
+                                    }))
+                                    #(final_v6.as_ref().map(|v| element! {
+                                        SummaryLine(label: "V6 Suffix".to_string(), value: v.clone(), color: Color::Yellow)
+                                    }))
+                                }
                             }
-                            View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                                SummaryLine(label: "MAC", value: final_mac.clone(), color: Color::Cyan)
-                                SummaryLine(label: "Hostname", value: final_hostname.clone(), color: Color::Cyan)
-                                #(final_v4.as_ref().map(|v| element! {
-                                    SummaryLine(label: "Fixed IPv4", value: v.clone(), color: Color::Green)
-                                }))
-                                #(final_v6.as_ref().map(|v| element! {
-                                    SummaryLine(label: "V6 Suffix", value: v.clone(), color: Color::Yellow)
-                                }))
-                            }
-                        }
-                    }.print();
+                        }.print();
 
                     let confirm = Confirm::new("Save host configuration?")
                         .with_default(true)
@@ -130,62 +133,45 @@ impl CliCommand for HostHandler {
                     }
                 }
 
-                Ok(ControlCommand::new(CommandAction::HostAdd {
-                    mac: Some(final_mac),
-                    hostname: Some(final_hostname),
-                    v4: final_v4,
-                    v6_suffix: final_v6,
-                }))
-            }
-            HostAction::Set { mac, field, value } => {
-                Ok(ControlCommand::new(CommandAction::HostSet {
-                    mac: mac.clone(),
-                    field: field.clone(),
-                    value: value.clone(),
-                }))
-            }
-            HostAction::Remove { mac } => Ok(ControlCommand::new(CommandAction::HostRemove {
-                mac: mac.clone(),
-            })),
-            HostAction::List => Ok(ControlCommand::new(CommandAction::HostList)),
-        }
-    }
-
-    fn on_response(&self, response: &Response) -> Result<Option<ControlCommand>> {
-        match response {
-            Response::Hosts(resp) => {
-                super::devices::render_hosts(resp);
-            }
-            Response::Error { error } => {
-                element! {
-                    View(padding_left: 2, margin_top: 1) {
-                        Text(content: "✘ ", color: Color::Red)
-                        Text(content: format!("Error: {error}"), color: Color::Red, weight: Weight::Bold)
-                    }
-                }.print();
-            }
-            Response::Success(success) => {
+                let resp = client
+                    .host_add(Some(final_mac), Some(final_hostname), final_v4, final_v6)
+                    .await?;
                 element! {
                     View(padding_left: 2, margin_top: 1) {
                         Text(content: "✓ ", color: Color::Green)
-                        Text(content: success.message.clone(), color: Color::Green, weight: Weight::Bold)
-                    }
-                }.print();
-            }
-            Response::Event(e) => {
-                element! {
-                    View(padding_left: 2, margin_top: 1) {
-                        Text(content: "● ", color: Color::Yellow)
-                        Text(content: format!("Event: {e:?}"), color: Color::Yellow)
+                        Text(content: resp.message, color: Color::Green, weight: Weight::Bold)
                     }
                 }
                 .print();
             }
-            _ => {
-                println!("Unexpected response: {response:?}");
+            HostAction::Set { mac, field, value } => {
+                let resp = client
+                    .host_set(mac.clone(), field.clone(), value.clone())
+                    .await?;
+                element! {
+                    View(padding_left: 2, margin_top: 1) {
+                        Text(content: "✓ ", color: Color::Green)
+                        Text(content: resp.message, color: Color::Green, weight: Weight::Bold)
+                    }
+                }
+                .print();
+            }
+            HostAction::Remove { mac } => {
+                let resp = client.host_remove(mac.clone()).await?;
+                element! {
+                    View(padding_left: 2, margin_top: 1) {
+                        Text(content: "✓ ", color: Color::Green)
+                        Text(content: resp.message, color: Color::Green, weight: Weight::Bold)
+                    }
+                }
+                .print();
+            }
+            HostAction::List => {
+                let resp = client.host_list().await?;
+                super::devices::render_hosts(&resp);
             }
         }
-        Ok(None)
+        Ok(())
     }
 }
 

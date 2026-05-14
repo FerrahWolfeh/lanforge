@@ -13,10 +13,10 @@ pub struct Indices {
     /// DUID to MAC index for `DHCPv6` correlation.
     pub duid_index: HashMap<Duid, MacAddr>,
     /// Hostname (lowercase) → MAC index.
-    #[serde(skip_serializing, default)]
+    #[serde(skip)]
     pub name_index: HashMap<String, MacAddr>,
     /// IP address → MAC index.
-    #[serde(skip_serializing, default)]
+    #[serde(skip)]
     pub ip_index: HashMap<IpAddr, MacAddr>,
 }
 

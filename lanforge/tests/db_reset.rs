@@ -18,7 +18,7 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use tempfile::tempdir;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
+use tokio::io::duplex;
 use tokio::time::{Duration, sleep};
 
 #[tokio::test]
@@ -126,9 +126,6 @@ async fn test_full_db_reset_chain() {
         let _ = handle_client(server, client_ctx).await;
     });
 
-    let (reader, mut writer) = tokio::io::split(client);
-    let mut reader = BufReader::new(reader);
-
     // 5. Mock Event Loop for DbResetCompleted
     let ctx_loop = ctx.clone();
     let cfg_loop = cfg.clone();
@@ -147,18 +144,13 @@ async fn test_full_db_reset_chain() {
         }
     });
 
-    // 6. Send DB Reset Command
-    writer
-        .write_all(b"{\"command\":\"db_reset\"}\n")
-        .await
-        .unwrap();
-
-    let mut line = String::new();
-    reader.read_line(&mut line).await.unwrap();
+    // 6. Send DB Reset Command via RPC Client
+    let mut rpc_client = lanforge_api::rpc::LanforgeRpcClient::new(client);
+    let resp = rpc_client.db_reset().await.expect("RPC db_reset failed");
     assert!(
-        line.contains("Simulating cold start"),
+        resp.message.contains("Factory reset initiated"),
         "Expected reset message, got: {}",
-        line
+        resp.message
     );
 
     // 7. Verify result

@@ -26,10 +26,6 @@ async fn main() -> Result<()> {
             if let Some(cmd) = args.command {
                 let client = cli::LanforgeClient {
                     socket: args.socket,
-                    opts: cli::ClientOptions {
-                        bincode: args.bincode,
-                        no_compress: args.no_compress,
-                    },
                     #[cfg(feature = "remote")]
                     remote: args.remote,
                     #[cfg(feature = "remote")]
@@ -45,10 +41,6 @@ async fn main() -> Result<()> {
         Cli::Wake { target, socket } => {
             let client = cli::LanforgeClient {
                 socket,
-                opts: cli::ClientOptions {
-                    bincode: false,
-                    no_compress: false,
-                },
                 #[cfg(feature = "remote")]
                 remote: None,
                 #[cfg(feature = "remote")]
@@ -62,10 +54,6 @@ async fn main() -> Result<()> {
         Cli::LfStatus { socket } => {
             let client = cli::LanforgeClient {
                 socket,
-                opts: cli::ClientOptions {
-                    bincode: false,
-                    no_compress: false,
-                },
                 #[cfg(feature = "remote")]
                 remote: None,
                 #[cfg(feature = "remote")]
@@ -88,10 +76,6 @@ async fn main() -> Result<()> {
         } => {
             let client = cli::LanforgeClient {
                 socket,
-                opts: cli::ClientOptions {
-                    bincode: false,
-                    no_compress: false,
-                },
                 #[cfg(feature = "remote")]
                 remote: None,
                 #[cfg(feature = "remote")]
@@ -113,10 +97,6 @@ async fn main() -> Result<()> {
         Cli::LfScan { socket } => {
             let client = cli::LanforgeClient {
                 socket,
-                opts: cli::ClientOptions {
-                    bincode: false,
-                    no_compress: false,
-                },
                 #[cfg(feature = "remote")]
                 remote: None,
                 #[cfg(feature = "remote")]
@@ -130,10 +110,6 @@ async fn main() -> Result<()> {
         Cli::LfTopology { socket } => {
             let client = cli::LanforgeClient {
                 socket,
-                opts: cli::ClientOptions {
-                    bincode: false,
-                    no_compress: false,
-                },
                 #[cfg(feature = "remote")]
                 remote: None,
                 #[cfg(feature = "remote")]
