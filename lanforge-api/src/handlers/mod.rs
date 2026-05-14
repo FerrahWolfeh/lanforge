@@ -12,12 +12,14 @@ pub mod dhcp;
 pub mod dns;
 pub mod system;
 
-pub(crate) fn format_iso8601(time: SystemTime) -> String {
+#[must_use]
+pub fn format_iso8601(time: SystemTime) -> String {
     let dt: DateTime<Utc> = time.into();
     dt.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-pub(crate) fn get_v6_kind(state: &IPv6State, prefix: Option<Ipv6Addr>) -> String {
+#[must_use]
+pub fn get_v6_kind(state: &IPv6State, prefix: Option<Ipv6Addr>) -> String {
     let ip = state.ip_with_prefix(prefix);
     let bits_kind = ip.map_or("Unknown", |addr| {
         let segments = addr.segments();
@@ -40,7 +42,8 @@ pub(crate) fn get_v6_kind(state: &IPv6State, prefix: Option<Ipv6Addr>) -> String
 }
 
 impl crate::server::ClientContext {
-    pub(crate) fn device_matches_filter(
+    #[must_use]
+    pub fn device_matches_filter(
         dev: &Device,
         filter: Option<&String>,
         method: Option<&String>,
@@ -72,7 +75,8 @@ impl crate::server::ClientContext {
         matches_filter && matches_method
     }
 
-    pub(crate) fn map_device(
+    #[must_use]
+    pub fn map_device(
         dev: &Device,
         gua_prefix: Option<Ipv6Addr>,
         ula_prefix: Option<Ipv6Addr>,

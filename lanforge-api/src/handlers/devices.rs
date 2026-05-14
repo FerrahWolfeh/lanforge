@@ -14,7 +14,7 @@ use std::net::{IpAddr, Ipv6Addr};
 impl ClientContext {
     /// Generates a `DevicesResponse`, optionally filtering by a search string.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub(crate) async fn handle_devices(
+    pub async fn handle_devices(
         &self,
         filter: Option<String>,
         _vendor: Option<String>,
@@ -59,7 +59,7 @@ impl ClientContext {
     }
 
     /// Generates a `HostsResponse` containing all manually configured host entries.
-    pub(crate) async fn handle_hosts(&self) -> Response {
+    pub async fn handle_hosts(&self) -> Response {
         let devices = self.ctx.all_devices();
         let mut hosts = Vec::new();
 
@@ -91,7 +91,7 @@ impl ClientContext {
 
     /// Gathers detailed information and history for a device.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub(crate) async fn handle_whois(&self, target: String) -> Response {
+    pub async fn handle_whois(&self, target: String) -> Response {
         let device = MacAddr::parse(&target).map_or_else(
             || {
                 target.parse::<IpAddr>().map_or_else(
@@ -183,7 +183,7 @@ impl ClientContext {
     }
 
     /// Triggers a Wake-on-LAN magic packet.
-    pub(crate) async fn handle_wol(&self, target: String) -> Response {
+    pub async fn handle_wol(&self, target: String) -> Response {
         let mac = if let Some(m) = MacAddr::parse(&target) {
             m
         } else {
@@ -219,7 +219,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_host_add(
+    pub async fn handle_host_add(
         &self,
         mac: Option<String>,
         hostname: Option<String>,
@@ -251,7 +251,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_host_set(
+    pub async fn handle_host_set(
         &self,
         mac: String,
         field: String,
@@ -324,7 +324,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_host_remove(&self, mac: String) -> Response {
+    pub async fn handle_host_remove(&self, mac: String) -> Response {
         let Some(mac_addr) = MacAddr::parse(&mac) else {
             return Response::Error {
                 error: format!("Invalid MAC address: {mac}"),
@@ -342,7 +342,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_purge(&self, mac: String) -> Response {
+    pub async fn handle_purge(&self, mac: String) -> Response {
         let Some(mac_addr) = MacAddr::parse(&mac) else {
             return Response::Error {
                 error: format!("Invalid MAC address: {mac}"),
@@ -361,7 +361,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_topology(&self) -> Response {
+    pub async fn handle_topology(&self) -> Response {
         let mut entries = Vec::new();
 
         for dev in self.ctx.all_devices() {

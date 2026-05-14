@@ -1,38 +1,34 @@
 use crate::{
     auth::{AuthManager, Claims},
     error::{HttpError, Result as HttpResult},
+    routes,
 };
 use axum::{
     Json, Router,
     extract::{
-        Query, State,
+        State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
     response::{IntoResponse, Response as AxumResponse},
-    routing::{get, post},
+    routing::get,
 };
 #[cfg(feature = "doh")]
 use axum::{
     body::Bytes,
+    extract::Query,
     http::{HeaderMap, Method},
 };
 use axum_server::tls_rustls::RustlsConfig;
-use lanforge_api::api::{Command, Response};
-use lanforge_api::server::ClientContext;
+use lanforge_api::api::Response;
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     error::CoreError,
 };
-use lanforge_core::{
-    types::{CliHostUpdate, Device, DeviceUpdate, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin},
-    utils::auth::verify_password,
-};
 use lanforge_db::{engine::LeaseDb, log_engine::LogDb};
 use lanforge_dns::server::transport::tls as tls_utils;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::{net::Ipv4Addr, time::Instant};
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 use tracing::{error, info};
@@ -57,21 +53,6 @@ impl axum::extract::FromRef<AppState> for AuthManager {
     fn from_ref(state: &AppState) -> Self {
         (*state.auth).clone()
     }
-}
-
-/// Parameters for the /register endpoint (Query or JSON).
-#[derive(Debug, Deserialize, Serialize)]
-pub struct RegisterRequest {
-    /// MAC address of the device (required).
-    pub mac: String,
-    /// Destination hostname (optional).
-    pub hostname: Option<String>,
-    /// Static IPv4 address (optional).
-    pub ip: Option<String>,
-    /// IPv6 Interface ID / Suffix (optional).
-    pub v6_suffix: Option<String>,
-    /// Custom boot file URL or path (optional).
-    pub boot_file: Option<String>,
 }
 
 #[lanforge_macros::lanforge_service(
@@ -128,14 +109,8 @@ impl AsyncService for HttpService {
         };
 
         let mut app = Router::new()
-            .route(
-                "/register",
-                get(handle_register_get).post(handle_register_post),
-            )
-            .route("/devices", get(handle_devices))
-            .route("/status", get(handle_status))
-            .route("/metrics", get(handle_metrics))
-            .route("/login", post(handle_login));
+            .nest("/api", routes::router())
+            .route("/metrics", get(handle_metrics));
 
         if let Some(boot_dir) = &cfg.boot_dir {
             info!("📂 Serving boot files from {}", boot_dir);
@@ -150,12 +125,10 @@ impl AsyncService for HttpService {
         }
 
         if cfg.auth_password_hash.is_some() {
-            info!("🔐 API Authentication enabled. RPC routes active.");
-            app = app
-                .route("/api/rpc", post(handle_rpc))
-                .route("/api/ws", get(handle_ws));
+            info!("🔐 API Authentication enabled. WebSocket event stream active.");
+            app = app.route("/api/ws", get(handle_ws));
         } else {
-            info!("🔓 No password hash set. API RPC routes disabled for safety.");
+            info!("🔓 No password hash set. WebSocket event stream disabled for safety.");
         }
 
         let app = app.with_state(state);
@@ -226,97 +199,6 @@ impl AsyncService for HttpService {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_register_get(
-    State(state): State<AppState>,
-    Query(payload): Query<RegisterRequest>,
-) -> impl IntoResponse {
-    process_registration(&state.ctx, payload)
-}
-
-async fn handle_register_post(
-    State(state): State<AppState>,
-    Json(payload): Json<RegisterRequest>,
-) -> impl IntoResponse {
-    process_registration(&state.ctx, payload)
-}
-
-fn process_registration(ctx: &LanforgeContext, req: RegisterRequest) -> impl IntoResponse + use<> {
-    let Some(mac_addr) = MacAddr::parse(&req.mac) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid MAC address format" })),
-        );
-    };
-
-    let v4_static = req.ip.and_then(|s| s.parse::<Ipv4Addr>().ok());
-    let v6_suffix = req.v6_suffix.and_then(|s| Ipv6AddrOrSuffix::parse(&s));
-
-    info!(
-        "📝 Pre-registration request for {} (host={:?}, v4={:?}, v6={:?})",
-        mac_addr, req.hostname, v4_static, v6_suffix
-    );
-
-    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
-        mac: mac_addr,
-        update: CliHostUpdate {
-            hostname: req.hostname.map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-            duid: FieldUpdate::NoChange,
-            v4_static: FieldUpdate::from(v4_static),
-            v6_suffix: FieldUpdate::from(v6_suffix),
-            origin: Origin::External,
-            boot_file: req
-                .boot_file
-                .map_or(FieldUpdate::NoChange, FieldUpdate::Set),
-            dns_fallback: FieldUpdate::NoChange,
-            class: FieldUpdate::NoChange,
-        },
-    });
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "status": "success",
-            "message": format!("Device {} registered with origin External", mac_addr),
-            "mac": mac_addr.to_string()
-        })),
-    )
-}
-
-async fn handle_devices(State(state): State<AppState>) -> impl IntoResponse {
-    let devices = state.ctx.all_devices();
-    Json(devices)
-}
-
-async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
-    let devices = state.ctx.all_devices();
-    let total = devices.len();
-    let online = devices
-        .iter()
-        .filter(|d: &&Arc<Device>| d.is_online())
-        .count();
-    let static_ct = devices
-        .iter()
-        .filter(|d: &&Arc<Device>| d.is_static())
-        .count();
-
-    Json(serde_json::json!({
-        "service": "lanforge",
-        "status": "running",
-        "interface": state.cfg.lan_iface,
-        "counts": {
-            "total_devices": total,
-            "online": online,
-            "static": static_ct,
-        },
-        "capabilities": {
-            "ra": state.cfg.ra_enabled,
-            "dhcpv4": state.cfg.dhcp_v4_enabled,
-            "dhcpv6": state.cfg.dhcp_v6_enabled,
-            "dns": state.cfg.dns_enabled,
-        }
-    }))
-}
-
 async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoResponse> {
     let uptime = state.start_time.elapsed().as_secs();
     let body = crate::metrics::generate_metrics(&state.ctx, &state.cfg, uptime);
@@ -352,59 +234,6 @@ impl IntoResponse for HttpError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Authentication & RPC Handlers
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-pub struct LoginRequest {
-    pub password: String,
-}
-
-async fn handle_login(
-    State(state): State<AppState>,
-    Json(payload): Json<LoginRequest>,
-) -> HttpResult<impl IntoResponse> {
-    let Some(hash) = &state.cfg.auth_password_hash else {
-        return Ok((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Authentication not configured on this daemon" })),
-        )
-            .into_response());
-    };
-
-    if verify_password(hash, &payload.password) {
-        let token = state.auth.generate_token("admin")?;
-        Ok((StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response())
-    } else {
-        Ok((
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid password" })),
-        )
-            .into_response())
-    }
-}
-
-async fn handle_rpc(
-    State(state): State<AppState>,
-    _claims: Claims,
-    Json(cmd): Json<Command>,
-) -> impl IntoResponse {
-    let ctx = ClientContext {
-        current_gua: None, // Will fallback to config in handle_status
-        uptime_secs: state.start_time.elapsed().as_secs(),
-        last_scan_secs_ago: 0,
-        cfg: state.cfg.clone(),
-        ctx: state.ctx.clone(),
-        db: state.db.clone(),
-        log_db: state.log_db.clone(),
-        active_clients: state.ctx.active_clients(),
-    };
-
-    let resp = cmd.action.dispatch(&ctx).await;
-    Json(resp)
-}
-
 async fn handle_ws(
     State(state): State<AppState>,
     _claims: Claims,
@@ -416,8 +245,6 @@ async fn handle_ws(
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut rx = state.ctx.bus().subscribe();
 
-    // In a real implementation, we would also handle incoming messages (e.g. RPC over WS)
-    // For now, we just stream events.
     loop {
         tokio::select! {
             event = rx.recv() => {
@@ -454,10 +281,10 @@ pub struct DnsQueryParams {
 #[cfg(feature = "doh")]
 async fn handle_dns_query(
     State(state): State<AppState>,
-    Query(params): Query<DnsQueryParams>,
-    method: Method,
-    headers: HeaderMap,
-    body: Bytes,
+    axum::extract::Query(params): axum::extract::Query<DnsQueryParams>,
+    method: axum::http::Method,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use lanforge_core::types::TransportProtocol;
@@ -465,7 +292,7 @@ async fn handle_dns_query(
     use lanforge_dns::server::DnsContext;
     use lanforge_dns::wire::{WireHeader, WireQuestion};
 
-    let query_data = if method == Method::GET {
+    let query_data = if method == axum::http::Method::GET {
         let Some(dns_base64) = params.dns else {
             return (StatusCode::BAD_REQUEST, "Missing dns parameter").into_response();
         };
@@ -491,7 +318,6 @@ async fn handle_dns_query(
         None => return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid DNS context").into_response(),
     };
 
-    // For DoH, we don't have a simple source IP like UDP, but we can try to get it from headers
     let _src_ip: std::net::IpAddr = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())

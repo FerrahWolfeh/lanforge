@@ -14,7 +14,7 @@ use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::DnsStats;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "adblock")]
 use lanforge_core::config::AdblockUrlKind;
@@ -24,7 +24,7 @@ use tracing::error;
 
 impl ClientContext {
     /// Snapshot of DNS resolver statistics.
-    pub(crate) async fn handle_dns_stats(&self) -> Response {
+    pub async fn handle_dns_stats(&self) -> Response {
         if let Some(stats_any) = self.ctx.get_dns_stats()
             && let Some(stats) = stats_any.downcast_ref::<DnsStats>()
         {
@@ -61,7 +61,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_dns_upstreams(&self) -> Response {
+    pub async fn handle_dns_upstreams(&self) -> Response {
         if let Some(dns_ctx_any) = self.ctx.get_dns_context()
             && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
         {
@@ -77,7 +77,7 @@ impl ClientContext {
 
     /// Toggles the DNS adblocker.
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_adblock_set(
+    pub async fn handle_dns_adblock_set(
         &self,
         enabled: bool,
         duration_secs: Option<u64>,
@@ -114,7 +114,7 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_adblock_set(
+    pub async fn handle_dns_adblock_set(
         &self,
         _enabled: bool,
         _duration_secs: Option<u64>,
@@ -126,7 +126,7 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
+    pub async fn handle_dns_adblock_reload(&self) -> Response {
         let _ = self
             .ctx
             .bus()
@@ -137,7 +137,7 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_adblock_reload(&self) -> Response {
+    pub async fn handle_dns_adblock_reload(&self) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -145,7 +145,7 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_adblock_status(&self) -> Response {
+    pub async fn handle_dns_adblock_status(&self) -> Response {
         let Some(dns_ctx_any) = self.ctx.get_dns_context() else {
             return Response::Error {
                 error: "DNS service not initialized".into(),
@@ -175,7 +175,7 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_adblock_status(&self) -> Response {
+    pub async fn handle_dns_adblock_status(&self) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -183,7 +183,7 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_block(&self, domain: String) -> Response {
+    pub async fn handle_dns_block(&self, domain: String) -> Response {
         match self.db.upsert_dns_rewrite(&domain, "0.0.0.0").await {
             Ok(()) => {
                 let _ = self
@@ -203,7 +203,7 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_block(&self, _domain: String) -> Response {
+    pub async fn handle_dns_block(&self, _domain: String) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -211,7 +211,7 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_allow(&self, domain: String) -> Response {
+    pub async fn handle_dns_allow(&self, domain: String) -> Response {
         match self.db.add_dns_allowlist(&domain).await {
             Ok(()) => {
                 let _ = self
@@ -229,7 +229,7 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_allow(&self, _domain: String) -> Response {
+    pub async fn handle_dns_allow(&self, _domain: String) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -237,7 +237,7 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_unallow(&self, domain: String) -> Response {
+    pub async fn handle_dns_unallow(&self, domain: String) -> Response {
         match self.db.remove_dns_allowlist(&domain).await {
             Ok(()) => {
                 let _ = self
@@ -255,14 +255,14 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_unallow(&self, _domain: String) -> Response {
+    pub async fn handle_dns_unallow(&self, _domain: String) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
         }
     }
 
-    pub(crate) async fn handle_dns_rewrite_add(&self, domain: String, answer: String) -> Response {
+    pub async fn handle_dns_rewrite_add(&self, domain: String, answer: String) -> Response {
         match self.db.upsert_dns_rewrite(&domain, &answer).await {
             Ok(()) => {
                 let _ = self
@@ -279,7 +279,7 @@ impl ClientContext {
         }
     }
 
-    pub(crate) async fn handle_dns_rewrite_remove(&self, domain: String) -> Response {
+    pub async fn handle_dns_rewrite_remove(&self, domain: String) -> Response {
         match self.db.delete_dns_rewrite(&domain).await {
             Ok(()) => {
                 let _ = self
@@ -296,7 +296,7 @@ impl ClientContext {
         }
     }
 
-    pub(crate) async fn handle_dns_rewrites(&self) -> Response {
+    pub async fn handle_dns_rewrites(&self) -> Response {
         match self.db.load_dns_rewrites().await {
             Ok(rewrites) => Response::DnsRewrites(DnsRewritesResponse { rewrites }),
             Err(e) => Response::Error {
@@ -305,7 +305,7 @@ impl ClientContext {
         }
     }
 
-    pub(crate) async fn handle_dns_allowlist(&self) -> Response {
+    pub async fn handle_dns_allowlist(&self) -> Response {
         match self.db.load_dns_allowlist().await {
             Ok(allowlist) => Response::DnsAllowlist(DnsAllowlistResponse { allowlist }),
             Err(e) => Response::Error {
@@ -315,7 +315,7 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_adblock_url_add(&self, url: String, kind: String) -> Response {
+    pub async fn handle_dns_adblock_url_add(&self, url: String, kind: String) -> Response {
         let kind_enum = AdblockUrlKind::from_str(&kind).unwrap_or(AdblockUrlKind::Blocklist);
         match self.db.add_adblock_url(&url, kind_enum).await {
             Ok(()) => {
@@ -334,7 +334,7 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_adblock_url_add(&self, _url: String, _kind: String) -> Response {
+    pub async fn handle_dns_adblock_url_add(&self, _url: String, _kind: String) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -342,7 +342,7 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_adblock_url_remove(&self, url: String) -> Response {
+    pub async fn handle_dns_adblock_url_remove(&self, url: String) -> Response {
         match self.db.remove_adblock_url(&url).await {
             Ok(()) => {
                 let _ = self
@@ -360,7 +360,7 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_adblock_url_remove(&self, _url: String) -> Response {
+    pub async fn handle_dns_adblock_url_remove(&self, _url: String) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -368,7 +368,7 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub(crate) async fn handle_dns_adblock_urls(&self) -> Response {
+    pub async fn handle_dns_adblock_urls(&self) -> Response {
         match self.db.load_adblock_urls().await {
             Ok(urls) => Response::DnsAdblockUrls(DnsAdblockUrlsResponse {
                 urls: urls
@@ -386,18 +386,14 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub(crate) async fn handle_dns_adblock_urls(&self) -> Response {
+    pub async fn handle_dns_adblock_urls(&self) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
         }
     }
 
-    pub(crate) async fn handle_dns_query(
-        &self,
-        name: String,
-        record_type: Option<String>,
-    ) -> Response {
+    pub async fn handle_dns_query(&self, name: String, record_type: Option<String>) -> Response {
         let qtype = record_type
             .as_ref()
             .and_then(|s| DnsRecordType::from_str(s).ok())
@@ -461,7 +457,7 @@ impl ClientContext {
         }
     }
 
-    pub(crate) async fn handle_dns_cache_flush(&self) -> Response {
+    pub async fn handle_dns_cache_flush(&self) -> Response {
         let _ = self
             .ctx
             .bus()
@@ -471,7 +467,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_dns_cache_dump(&self) -> Response {
+    pub async fn handle_dns_cache_dump(&self) -> Response {
         if let Some(dns_ctx_any) = self.ctx.get_dns_context()
             && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
         {
@@ -492,7 +488,12 @@ impl ClientContext {
         }
     }
 
-    pub(crate) async fn handle_dns_analytics(&self, limit: Option<usize>) -> Response {
+    /// .
+    ///
+    /// # Panics
+    ///
+    /// Panics if .
+    pub async fn handle_dns_analytics(&self, limit: Option<usize>) -> Response {
         let limit = limit.unwrap_or(10);
         let top_domains = self
             .log_db
@@ -503,8 +504,8 @@ impl ClientContext {
         let query_rate = self
             .log_db
             .get_dns_query_rate(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs()
                     .saturating_sub(600),
@@ -571,7 +572,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_dns_query_log(
+    pub async fn handle_dns_query_log(
         &self,
         limit: Option<usize>,
         _client: Option<String>,

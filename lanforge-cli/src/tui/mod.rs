@@ -3,7 +3,7 @@ use crossterm::{
     event as ct_event, execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use lanforge_api::api::{Command, CommandAction, Response};
+use lanforge_api::api::Response;
 use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::stdout;
@@ -163,71 +163,38 @@ async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sende
         loop {
             if last_refresh.elapsed() >= Duration::from_secs(5) {
                 // Status
-                if let Ok(Response::Status(s)) = fetch_client.send(Command::STATUS).await {
+                if let Ok(Response::Status(s)) = fetch_client.get("/system/status").await {
                     let _ = fetch_tx.send(AppEvent::StatusUpdate(s)).await;
                 }
 
                 // State (ContextDump)
-                let cmd = Command::new(CommandAction::ContextDump {
-                    only_devices: false,
-                    only_orphans: false,
-                });
-                if let Ok(Response::ContextDump(s)) = fetch_client.send(cmd).await {
+                if let Ok(Response::ContextDump(s)) = fetch_client.get("/system/context").await {
                     let _ = fetch_tx.send(AppEvent::StateUpdate(s)).await;
                 }
 
                 // DNS Stats
-                if let Ok(Response::DnsStats(s)) = fetch_client
-                    .send(Command::new(CommandAction::DnsStats))
-                    .await
-                {
+                if let Ok(Response::DnsStats(s)) = fetch_client.get("/dns/stats").await {
                     let _ = fetch_tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
                 }
 
                 // DNS Analytics
-                if let Ok(Response::DnsAnalytics(s)) = fetch_client
-                    .send(Command::new(CommandAction::DnsAnalytics {
-                        limit: Some(10),
-                    }))
-                    .await
-                {
-                    let _ = fetch_tx
-                        .send(AppEvent::DnsAnalyticsUpdate(Box::new(s)))
-                        .await;
+                if let Ok(Response::DnsAnalytics(s)) = fetch_client.get("/dns/analytics?limit=10").await {
+                    let _ = fetch_tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
                 }
 
                 // DNS Upstreams
-                if let Ok(Response::DnsUpstreams(s)) = fetch_client
-                    .send(Command::new(CommandAction::DnsUpstreams))
-                    .await
-                {
-                    let _ = fetch_tx
-                        .send(AppEvent::DnsUpstreamsUpdate(Box::new(s)))
-                        .await;
+                if let Ok(Response::DnsUpstreams(s)) = fetch_client.get("/dns/upstreams").await {
+                    let _ = fetch_tx.send(AppEvent::DnsUpstreamsUpdate(Box::new(s))).await;
                 }
 
                 // DNS Query Log
-                if let Ok(Response::DnsQueryLog(s)) = fetch_client
-                    .send(Command::new(CommandAction::DnsQueryLog {
-                        limit: Some(50),
-                        client: None,
-                        follow: false,
-                    }))
-                    .await
-                {
-                    let _ = fetch_tx
-                        .send(AppEvent::DnsQueryLogUpdate(Box::new(s)))
-                        .await;
+                if let Ok(Response::DnsQueryLog(s)) = fetch_client.get("/dns/logs?limit=50").await {
+                    let _ = fetch_tx.send(AppEvent::DnsQueryLogUpdate(Box::new(s))).await;
                 }
 
                 // DNS Adblock Status
-                if let Ok(Response::DnsAdblockStatus(s)) = fetch_client
-                    .send(Command::new(CommandAction::DnsAdblockStatus))
-                    .await
-                {
-                    let _ = fetch_tx
-                        .send(AppEvent::DnsAdblockStatusUpdate(Box::new(s)))
-                        .await;
+                if let Ok(Response::DnsAdblockStatus(s)) = fetch_client.get("/dns/adblock/status").await {
+                    let _ = fetch_tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
                 }
 
                 last_refresh = Instant::now();

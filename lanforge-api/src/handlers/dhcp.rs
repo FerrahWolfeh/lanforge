@@ -9,7 +9,7 @@ use crate::server::ClientContext;
 use lanforge_core::types::{IPv6State, LanforgeEvent, LeaseTarget, MacAddr, NetworkEvent};
 
 impl ClientContext {
-    pub(crate) async fn handle_lease_renew(
+    pub async fn handle_lease_renew(
         &self,
         mac: String,
         target: Option<LeaseTarget>,
@@ -33,7 +33,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_lease_release(
+    pub async fn handle_lease_release(
         &self,
         mac: String,
         target: Option<LeaseTarget>,
@@ -56,7 +56,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_dhcp_pools(&self) -> Response {
+    pub async fn handle_dhcp_pools(&self) -> Response {
         let state = self.ctx.read();
         let mut v4_pools = Vec::new();
         let mut v6_pools = Vec::new();
@@ -85,7 +85,7 @@ impl ClientContext {
         Response::DhcpPools(DhcpPoolsResponse { v4_pools, v6_pools })
     }
 
-    pub(crate) async fn handle_leases(&self, _count: bool) -> Response {
+    pub async fn handle_leases(&self, _count: bool) -> Response {
         let devices = self.ctx.all_devices();
         let mut leases = Vec::new();
 

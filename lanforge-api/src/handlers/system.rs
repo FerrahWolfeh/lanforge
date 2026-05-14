@@ -14,7 +14,7 @@ impl ClientContext {
     /// Generates a full `StatusResponse` by gathering data from the configuration
     /// and the active device table.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub(crate) async fn handle_status(&self) -> Response {
+    pub async fn handle_status(&self) -> Response {
         let mut status = StatusResponse {
             uptime_secs: self.uptime_secs,
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -32,7 +32,8 @@ impl ClientContext {
         Response::Status(Box::new(status))
     }
 
-    pub(crate) fn gather_db_status(&self) -> DbStatus {
+    #[must_use]
+    pub fn gather_db_status(&self) -> DbStatus {
         let mut db = DbStatus {
             path: self.cfg.db_path.clone(),
             ..Default::default()
@@ -46,7 +47,8 @@ impl ClientContext {
         db
     }
 
-    pub(crate) fn gather_resource_status() -> ResourcesStatus {
+    #[must_use]
+    pub fn gather_resource_status() -> ResourcesStatus {
         let mut res = ResourcesStatus::default();
         if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
             let mut parts = statm.split_whitespace();
@@ -59,7 +61,7 @@ impl ClientContext {
         res
     }
 
-    pub(crate) async fn gather_network_status(&self) -> NetworkStatus {
+    pub async fn gather_network_status(&self) -> NetworkStatus {
         let mut net = NetworkStatus {
             lan_iface: self.cfg.lan_iface.clone(),
             ..Default::default()
@@ -85,7 +87,8 @@ impl ClientContext {
         net
     }
 
-    pub(crate) fn gather_capabilities() -> Capabilities {
+    #[must_use]
+    pub fn gather_capabilities() -> Capabilities {
         Capabilities {
             encodings: vec![Encoding::Json, Encoding::Postcard],
             compression: {
@@ -101,7 +104,7 @@ impl ClientContext {
         }
     }
 
-    pub(crate) fn populate_service_and_device_stats(
+    pub fn populate_service_and_device_stats(
         &self,
         status: &mut StatusResponse,
         devices: &[Arc<Device>],
@@ -208,7 +211,7 @@ impl ClientContext {
         status.services.ndp_monitor.uptime_secs = self.uptime_secs;
     }
 
-    pub(crate) async fn handle_reload(&self) -> Response {
+    pub async fn handle_reload(&self) -> Response {
         let _ = self
             .ctx
             .bus()
@@ -218,7 +221,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_shutdown(&self) -> Response {
+    pub async fn handle_shutdown(&self) -> Response {
         let _ = self
             .ctx
             .bus()
@@ -228,7 +231,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_db_vacuum(&self) -> Response {
+    pub async fn handle_db_vacuum(&self) -> Response {
         let _ = self
             .ctx
             .bus()
@@ -238,7 +241,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_db_log_clean(&self) -> Response {
+    pub async fn handle_db_log_clean(&self) -> Response {
         let _ = self
             .ctx
             .bus()
@@ -248,7 +251,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_db_prune(&self) -> Response {
+    pub async fn handle_db_prune(&self) -> Response {
         let _ = self
             .ctx
             .bus()
@@ -258,7 +261,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_db_reset(&self) -> Response {
+    pub async fn handle_db_reset(&self) -> Response {
         let _ = self
             .ctx
             .bus()
@@ -269,7 +272,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_config_set_password(&self, password: String) -> Response {
+    pub async fn handle_config_set_password(&self, password: String) -> Response {
         let hash = hash_password(&password);
         let _ = self
             .ctx
@@ -282,11 +285,7 @@ impl ClientContext {
         })
     }
 
-    pub(crate) async fn handle_context_dump(
-        &self,
-        only_devices: bool,
-        only_orphans: bool,
-    ) -> Response {
+    pub async fn handle_context_dump(&self, only_devices: bool, only_orphans: bool) -> Response {
         let mut state = self.ctx.read().clone();
         if only_devices {
             state.discovery.orphaned_v6.clear();
@@ -297,21 +296,21 @@ impl ClientContext {
         Response::ContextDump(Box::new(state))
     }
 
-    pub(crate) async fn handle_watch(&self) -> Response {
+    pub async fn handle_watch(&self) -> Response {
         // Handled by the server loop to upgrade connection
         Response::Success(SimpleSuccess {
             message: "Watch mode initiated".to_string(),
         })
     }
 
-    pub(crate) async fn handle_log(&self, _follow: bool, _n: Option<usize>) -> Response {
+    pub async fn handle_log(&self, _follow: bool, _n: Option<usize>) -> Response {
         // Handled by the server loop to upgrade connection
         Response::Success(SimpleSuccess {
             message: "Log stream initiated".to_string(),
         })
     }
 
-    pub(crate) async fn handle_scan(&self) -> Response {
+    pub async fn handle_scan(&self) -> Response {
         let _ = self
             .ctx
             .bus()

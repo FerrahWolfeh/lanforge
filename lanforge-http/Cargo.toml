@@ -45,6 +45,7 @@ rand = "0.10.1"
 # Client dependencies
 rustls = { workspace = true, optional = true }
 lanforge-db = { version = "0.11.1", path = "../lanforge-db" }
+async-stream = "0.3.6"
 
 [features]
 default = ["server"]

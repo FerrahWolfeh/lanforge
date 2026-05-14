@@ -11,6 +11,8 @@ pub mod metrics;
 pub mod remote;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
+pub mod routes;
 
 #[cfg(feature = "remote")]
 pub use remote::RemoteClient;
