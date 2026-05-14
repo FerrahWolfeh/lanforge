@@ -85,11 +85,13 @@ impl DnsService {
         let blocker = AdBlocker::new(adblock_enabled);
 
         // Populate from DB
-        *blocker.rewrites.write() = db_rewrites;
-        *blocker.allowlist.write() = Arc::new(db_allowlist.into_iter().collect());
-        *blocker.blocking_mode.write() = db_adblock.blocking_mode;
-        *blocker.blocking_ip_v4.write() = db_adblock.blocking_ip_v4;
-        *blocker.blocking_ip_v6.write() = db_adblock.blocking_ip_v6;
+        blocker.replace_rewrites(db_rewrites);
+        blocker.replace_allowlist(db_allowlist.into_iter().collect());
+        blocker.replace_config(
+            db_adblock.blocking_mode,
+            db_adblock.blocking_ip_v4,
+            db_adblock.blocking_ip_v6,
+        );
 
         let filter = Some(Arc::new(blocker));
 
@@ -205,7 +207,7 @@ impl AsyncService for DnsService {
                             if let Some(filter) = &dns_ctx.filter {
                                 match self.db.load_dns_rewrites().await {
                                     Ok(rewrites) => {
-                                        *filter.rewrites.write() = rewrites;
+                                        filter.replace_rewrites(rewrites);
                                         info!("✅ DNS: Rewrites reloaded.");
                                     }
                                     Err(e) => error!("❌ DNS: Failed to load rewrites: {}", e),
@@ -229,9 +231,7 @@ impl AsyncService for DnsService {
                             if let Some(filter) = &dns_ctx.filter {
                                 match self.db.load_adblock_config().await {
                                     Ok(cfg) => {
-                                        *filter.blocking_mode.write() = cfg.blocking_mode;
-                                        *filter.blocking_ip_v4.write() = cfg.blocking_ip_v4;
-                                        *filter.blocking_ip_v6.write() = cfg.blocking_ip_v6;
+                                        filter.replace_config(cfg.blocking_mode, cfg.blocking_ip_v4, cfg.blocking_ip_v6);
                                         filter.set_enabled(self.cfg.adblock_enabled || cfg.enabled);
                                         info!("✅ DNS: Adblock config reloaded.");
                                     }

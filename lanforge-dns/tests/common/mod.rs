@@ -54,8 +54,13 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
     let filter = {
         let adblocker = AdBlocker::new(cfg_arc.adblock_enabled);
         if !cfg_arc.rewrites.is_empty() {
-            *adblocker.rewrites.write() = cfg_arc.rewrites.clone();
+            adblocker.replace_rewrites(cfg_arc.rewrites.clone());
         }
+        adblocker.replace_config(
+            cfg_arc.blocking_mode,
+            cfg_arc.blocking_ip_v4,
+            cfg_arc.blocking_ip_v6,
+        );
         Some(Arc::new(adblocker))
     };
 

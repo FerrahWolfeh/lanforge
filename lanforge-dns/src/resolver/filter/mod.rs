@@ -24,11 +24,16 @@ pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
     pub allowlist: RwLock<Arc<HashSet<String>>>,
     pub timer: Arc<AdblockTimerState>,
-    pub rewrites: RwLock<Vec<crate::config::RewriteRule>>,
-    pub blocking_mode: RwLock<BlockingMode>,
-    pub blocking_ip_v4: RwLock<Option<Ipv4Addr>>,
-    pub blocking_ip_v6: RwLock<Option<Ipv6Addr>>,
+    pub rewrites: RwLock<Arc<Vec<crate::config::RewriteRule>>>,
+    pub config: RwLock<Arc<AdblockRuntimeConfig>>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AdblockRuntimeConfig {
+    pub mode: BlockingMode,
+    pub ipv4: Option<Ipv4Addr>,
+    pub ipv6: Option<Ipv6Addr>,
 }
 
 pub struct AdblockTimerState {
@@ -66,10 +71,8 @@ impl AdBlocker {
             blocklist: RwLock::new(None),
             allowlist: RwLock::new(Arc::new(HashSet::new())),
             timer: Arc::new(AdblockTimerState::new(enabled)),
-            rewrites: RwLock::new(Vec::new()),
-            blocking_mode: RwLock::new(BlockingMode::default()),
-            blocking_ip_v4: RwLock::new(None),
-            blocking_ip_v6: RwLock::new(None),
+            rewrites: RwLock::new(Arc::new(Vec::new())),
+            config: RwLock::new(Arc::new(AdblockRuntimeConfig::default())),
             per_ip_stats: DashMap::new(),
         }
     }
@@ -177,16 +180,32 @@ impl AdBlocker {
         info!("AdBlocker: allowlist updated with {} entries", count);
     }
 
+    pub fn replace_rewrites(&self, new_rules: Vec<crate::config::RewriteRule>) {
+        let count = new_rules.len();
+        *self.rewrites.write() = Arc::new(new_rules);
+        info!("AdBlocker: rewrites updated with {} entries", count);
+    }
+
+    pub fn replace_config(
+        &self,
+        mode: BlockingMode,
+        ipv4: Option<Ipv4Addr>,
+        ipv6: Option<Ipv6Addr>,
+    ) {
+        *self.config.write() = Arc::new(AdblockRuntimeConfig { mode, ipv4, ipv6 });
+        info!("AdBlocker: runtime config updated (mode: {:?})", mode);
+    }
+
     pub fn add_block(&self, _domain: &str) {
         // We no longer support manual ad-hoc blocks in the DiskBlocklist for now,
         // as it is read-only from mmap. Manual blocks should be added to config.
     }
 
     pub fn add_allow(&self, domain: &str) {
-        let mut list = self.allowlist.write();
-        let mut new_set = (**list).clone();
+        let mut list_lock = self.allowlist.write();
+        let mut new_set = (**list_lock).clone();
         new_set.insert(domain.to_lowercase());
-        *list = Arc::new(new_set);
+        *list_lock = Arc::new(new_set);
     }
 
     #[must_use]
@@ -200,7 +219,7 @@ impl AdBlocker {
     }
 
     pub fn resolve_rewrite(&self, qname: &str) -> Option<RewriteAnswer> {
-        let rewrites = self.rewrites.read();
+        let rewrites = Arc::clone(&*self.rewrites.read());
         if let Some(rule) = rewrites.iter().find(|r| r.domain == qname) {
             return Some(rule.parse_answer());
         }
@@ -438,8 +457,9 @@ impl AdBlocker {
     ) {
         let edns = WireOptScanner::scan(data, header, question);
         let ra = !ctx.recursive.is_empty();
+        let config = Arc::clone(&*self.config.read());
 
-        match *self.blocking_mode.read() {
+        match config.mode {
             BlockingMode::NxDomain => {
                 WireResponseWriter::write_error_response(data, question, 3, edns, ra, resp);
             }
@@ -455,13 +475,9 @@ impl AdBlocker {
             BlockingMode::CustomIp => {
                 let qtype = DnsRecordType::from(question.qtype());
                 let ips = if qtype == DnsRecordType::AAAA {
-                    vec![IpAddr::V6(
-                        self.blocking_ip_v6.read().unwrap_or(Ipv6Addr::UNSPECIFIED),
-                    )]
+                    vec![IpAddr::V6(config.ipv6.unwrap_or(Ipv6Addr::UNSPECIFIED))]
                 } else {
-                    vec![IpAddr::V4(
-                        self.blocking_ip_v4.read().unwrap_or(Ipv4Addr::UNSPECIFIED),
-                    )]
+                    vec![IpAddr::V4(config.ipv4.unwrap_or(Ipv4Addr::UNSPECIFIED))]
                 };
                 WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
             }
@@ -491,7 +507,8 @@ impl AdBlocker {
 
         if self.should_block(&domain) {
             resp.clear();
-            match *self.blocking_mode.read() {
+            let config = Arc::clone(&*self.config.read());
+            match config.mode {
                 BlockingMode::NxDomain => {
                     resp.extend_from_slice(&rb.nxdomain()?);
                 }
@@ -505,14 +522,10 @@ impl AdBlocker {
                 }
                 BlockingMode::CustomIp => {
                     let ips = if qtype == DnsRecordType::AAAA {
-                        vec![IpAddr::V6(
-                            self.blocking_ip_v6.read().unwrap_or(Ipv6Addr::UNSPECIFIED),
-                        )]
+                        vec![IpAddr::V6(config.ipv6.unwrap_or(Ipv6Addr::UNSPECIFIED))]
                     } else {
                         vec![IpAddr::V4(
-                            self.blocking_ip_v4
-                                .read()
-                                .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
+                            config.ipv4.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
                         )]
                     };
                     resp.extend_from_slice(&rb.success_ips(ips)?);
