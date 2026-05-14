@@ -1,5 +1,5 @@
 use crate::{
-    auth::{AuthManager, Claims},
+    auth::{AuthManager, AuthenticatedUser},
     error::{HttpError, Result as HttpResult},
     routes,
 };
@@ -52,6 +52,12 @@ pub struct AppState {
 impl axum::extract::FromRef<AppState> for AuthManager {
     fn from_ref(state: &AppState) -> Self {
         (*state.auth).clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for Arc<LeaseDb> {
+    fn from_ref(state: &AppState) -> Self {
+        state.db.clone()
     }
 }
 
@@ -109,7 +115,7 @@ impl AsyncService for HttpService {
         };
 
         let mut app = Router::new()
-            .nest("/api", routes::router())
+            .nest("/api", routes::router().layer(axum::middleware::from_fn_with_state(state.clone(), crate::auth::middleware)))
             .route("/metrics", get(handle_metrics));
 
         if let Some(boot_dir) = &cfg.boot_dir {
@@ -236,7 +242,7 @@ impl IntoResponse for HttpError {
 
 async fn handle_ws(
     State(state): State<AppState>,
-    _claims: Claims,
+    _user: AuthenticatedUser,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))

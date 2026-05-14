@@ -1,13 +1,35 @@
 use crate::error::{HttpError, Result as HttpResult};
+use axum::extract::State;
+use axum::http::header::AUTHORIZATION;
+use axum::middleware::Next;
+use axum::response::Response as AxumResponse;
+use axum::{
+    body::Body,
+    extract::{FromRef, FromRequestParts},
+    http::{Request, request::Parts},
+};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// JWT Claims.
+/// JWT Claims (Legacy/Internal).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String, // Subject (e.g., "admin")
     pub exp: usize,  // Expiration
+}
+
+/// Represents an authenticated user (either via JWT or API Token).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthenticatedUser {
+    pub name: String,
+    pub method: AuthMethod,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum AuthMethod {
+    Jwt,
+    ApiToken,
 }
 
 #[derive(Clone)]
@@ -57,14 +79,6 @@ impl Default for AuthManager {
     }
 }
 
-// Using lanforge_core::utils::auth::hash_password
-// Using lanforge_core::utils::auth::verify_password
-
-use axum::{
-    extract::{FromRef, FromRequestParts},
-    http::request::Parts,
-};
-
 impl<S> FromRequestParts<S> for Claims
 where
     S: Send + Sync,
@@ -78,7 +92,7 @@ where
         // Extract the token from the Authorization header
         let auth_header = parts
             .headers
-            .get(axum::http::header::AUTHORIZATION)
+            .get(AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .ok_or_else(|| HttpError::Auth("Missing Authorization header".into()))?;
 
@@ -92,4 +106,105 @@ where
             .validate_token(token)
             .map_err(|_| HttpError::Auth("Invalid or expired token".into()))
     }
+}
+
+use lanforge_db::engine::LeaseDb;
+use std::sync::Arc;
+
+impl<S> FromRequestParts<S> for AuthenticatedUser
+where
+    S: Send + Sync,
+    AuthManager: FromRef<S>,
+    Arc<LeaseDb>: FromRef<S>,
+{
+    type Rejection = HttpError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
+        let auth_manager = AuthManager::from_ref(state);
+        let db = Arc::<LeaseDb>::from_ref(state);
+
+        // Extract the token from the Authorization header
+        let auth_header = parts
+            .headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| HttpError::Auth("Missing Authorization header".into()))?;
+
+        if !auth_header.starts_with("Bearer ") {
+            return Err(HttpError::Auth("Invalid Authorization header".into()));
+        }
+
+        let token = &auth_header[7..];
+
+        // 1. Try validating as API Token from DB
+        match db.validate_api_token(token).await {
+            Ok(Some(name)) => {
+                return Ok(Self {
+                    name,
+                    method: AuthMethod::ApiToken,
+                });
+            }
+            Ok(None) => {} // Continue to JWT
+            Err(e) => {
+                tracing::error!("Database error during token validation: {e}");
+                return Err(HttpError::Internal("Auth database error".into()));
+            }
+        }
+
+        // 2. Try validating as JWT
+        match auth_manager.validate_token(token) {
+            Ok(claims) => Ok(Self {
+                name: claims.sub,
+                method: AuthMethod::Jwt,
+            }),
+            Err(_) => Err(HttpError::Auth("Invalid or expired token".into())),
+        }
+    }
+}
+
+pub async fn middleware(
+    State(db): State<Arc<LeaseDb>>,
+    State(auth_manager): State<AuthManager>,
+    mut req: Request<Body>,
+    next: Next,
+) -> HttpResult<AxumResponse> {
+    // Extract token
+    let auth_header = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| HttpError::Auth("Missing Authorization header".into()))?;
+
+    if !auth_header.starts_with("Bearer ") {
+        return Err(HttpError::Auth("Invalid Authorization header".into()));
+    }
+
+    let token = &auth_header[7..];
+
+    // Validate
+    let user = match db.validate_api_token(token).await {
+        Ok(Some(name)) => AuthenticatedUser {
+            name,
+            method: AuthMethod::ApiToken,
+        },
+        Ok(None) => {
+            // Try JWT
+            match auth_manager.validate_token(token) {
+                Ok(claims) => AuthenticatedUser {
+                    name: claims.sub,
+                    method: AuthMethod::Jwt,
+                },
+                Err(_) => return Err(HttpError::Auth("Invalid or expired token".into())),
+            }
+        }
+        Err(e) => {
+            tracing::error!("Database error during token validation: {e}");
+            return Err(HttpError::Internal("Auth database error".into()));
+        }
+    };
+
+    // Store user in extensions for handlers to use if needed
+    req.extensions_mut().insert(user);
+
+    Ok(next.run(req).await)
 }

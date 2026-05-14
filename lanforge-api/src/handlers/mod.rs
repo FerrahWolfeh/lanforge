@@ -11,6 +11,7 @@ pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod system;
+pub mod auth;
 
 #[must_use]
 pub fn format_iso8601(time: SystemTime) -> String {

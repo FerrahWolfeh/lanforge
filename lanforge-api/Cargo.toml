@@ -26,6 +26,7 @@ postcard.workspace = true
 async-trait = "0.1.86"
 zstd = { version = "0.13.3", optional = true }
 futures.workspace = true
+rand = "0.10.1"
 
 
 # No optional dependencies here, they moved to lanforge-http and lanforge-dns

@@ -7,12 +7,14 @@ pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod system;
+pub mod auth;
 
 pub use common::*;
 pub use devices::*;
 pub use dhcp::*;
 pub use dns::*;
 pub use system::*;
+pub use auth::*;
 
 /// Represents a response sent from the daemon to a client.
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,4 +65,6 @@ pub enum Response {
     DnsAllowlist(DnsAllowlistResponse),
     /// List of adblock source URLs.
     DnsAdblockUrls(DnsAdblockUrlsResponse),
+    /// Response for a generated API token.
+    AuthToken(AuthTokenResponse),
 }

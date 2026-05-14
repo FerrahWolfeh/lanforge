@@ -2399,6 +2399,7 @@ dependencies = [
  "lanforge-dns",
  "lanforge-macros",
  "postcard",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

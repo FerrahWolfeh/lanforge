@@ -785,4 +785,35 @@ impl LeaseDb {
             Pool::Postgres(p) => dns_config::remove_adblock_url_postgres(p, url).await,
         }
     }
+
+    // --- API Token methods ---
+
+    pub async fn store_api_token(&self, token: &str, name: &str) -> Result<(), LeaseDbError> {
+        let now = utils::system_time_to_unix(SystemTime::now());
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::store_api_token(p, token, name, now).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::store_api_token(p, token, name, now).await,
+        }
+    }
+
+    pub async fn validate_api_token(&self, token: &str) -> Result<Option<String>, LeaseDbError> {
+        let now = utils::system_time_to_unix(SystemTime::now());
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::validate_api_token(p, token, now).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::validate_api_token(p, token, now).await,
+        }
+    }
+
+    pub async fn delete_api_token(&self, token: &str) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::delete_api_token(p, token).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::delete_api_token(p, token).await,
+        }
+    }
 }

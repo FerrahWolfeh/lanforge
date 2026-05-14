@@ -368,3 +368,48 @@ pub async fn find_mac_by_hostname(
 
     Ok(row.and_then(|(mac,)| lanforge_core::types::identifiers::MacAddr::parse(&mac)))
 }
+
+pub async fn store_api_token(
+    pool: &sqlx::PgPool,
+    token: &str,
+    name: &str,
+    now: i64,
+) -> Result<(), LeaseDbError> {
+    sqlx::query("INSERT INTO api_tokens (token, name, created_at) VALUES ($1, $2, $3)")
+        .bind(token)
+        .bind(name)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn validate_api_token(
+    pool: &sqlx::PgPool,
+    token: &str,
+    now: i64,
+) -> Result<Option<String>, LeaseDbError> {
+    let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE token = $1")
+        .bind(token)
+        .fetch_optional(pool)
+        .await?;
+
+    if let Some((name,)) = res {
+        sqlx::query("UPDATE api_tokens SET last_used = $1 WHERE token = $2")
+            .bind(now)
+            .bind(token)
+            .execute(pool)
+            .await?;
+        Ok(Some(name))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn delete_api_token(pool: &sqlx::PgPool, token: &str) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM api_tokens WHERE token = $1")
+        .bind(token)
+        .execute(pool)
+        .await?;
+    Ok(())
+}

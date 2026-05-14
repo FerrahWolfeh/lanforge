@@ -676,6 +676,14 @@ where
             panic!("Invalid response type")
         }
     }
+
+    async fn auth_generate_token(&self, name: String) -> crate::api::AuthTokenResponse {
+        if let Response::AuthToken(r) = self.ctx.handle_auth_generate_token(name).await {
+            r
+        } else {
+            panic!("Invalid response type")
+        }
+    }
 }
 
 async fn handle_client_inner<S>(stream: S, ctx: ClientContext) -> Result<(), ApiError>

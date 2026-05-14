@@ -3,6 +3,7 @@ use crate::api::{
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsQueryLogResponse,
     DnsQueryResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, HostsResponse,
     LeasesResponse, SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
+    AuthTokenResponse,
 };
 use lanforge_core::context::state::State;
 use lanforge_core::types::LeaseTarget;
@@ -73,4 +74,5 @@ pub trait LanforgeRpc {
     async fn leases(&self, count: bool) -> LeasesResponse;
     async fn topology(&self) -> TopologyResponse;
     async fn config_set_password(&self, password: String) -> SimpleSuccess;
+    async fn auth_generate_token(&self, name: String) -> AuthTokenResponse;
 }

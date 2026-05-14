@@ -128,7 +128,7 @@ pub struct LanforgeArgs {
 }
 
 use crate::cli::commands::{
-    config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs, dns::DnsArgs,
+    auth::AuthArgs, config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs, dns::DnsArgs,
     host::HostArgs, lease::LeaseArgs, log::LogArgs, query::QueryArgs, simple::PurgeArgs,
     simple::ReloadArgs, simple::ScanArgs, simple::WatchArgs, status::StatusArgs,
     topology::TopologyArgs, tui::TuiArgs, whois::WhoisArgs, wol::WolArgs,
@@ -176,6 +176,8 @@ pub enum Command {
     Topology(TopologyArgs),
     /// Daemon configuration management
     Config(ConfigArgs),
+    /// Authentication management (tokens)
+    Auth(AuthArgs),
 }
 
 impl Execute for Command {
@@ -200,6 +202,7 @@ impl Execute for Command {
             Self::Query(args) => args.execute(client).await,
             Self::Topology(args) => args.execute(client).await,
             Self::Config(args) => args.execute(client).await,
+            Self::Auth(args) => args.execute(client).await,
         }
     }
 }
