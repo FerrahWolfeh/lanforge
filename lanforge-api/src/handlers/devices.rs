@@ -234,7 +234,7 @@ impl ClientContext {
                 v4_static: v4.and_then(|v| v.parse().ok()).into(),
                 v6_suffix: v6_suffix.and_then(|v| v.parse().ok()).into(),
                 boot_file: FieldUpdate::NoChange,
-                origin: Origin::Cli,
+                origin: Origin::Static,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
             },
@@ -251,12 +251,7 @@ impl ClientContext {
         })
     }
 
-    pub async fn handle_host_set(
-        &self,
-        mac: String,
-        field: String,
-        value: String,
-    ) -> Response {
+    pub async fn handle_host_set(&self, mac: String, field: String, value: String) -> Response {
         let Some(mac_addr) = MacAddr::parse(&mac) else {
             return Response::Error {
                 error: format!("Invalid MAC address: {mac}"),
@@ -309,7 +304,7 @@ impl ClientContext {
                 } else {
                     FieldUpdate::NoChange
                 },
-                origin: Origin::Cli,
+                origin: Origin::Static,
             },
         };
 

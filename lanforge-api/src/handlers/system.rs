@@ -145,7 +145,7 @@ impl ClientContext {
                     )
                 })
                 .count();
-            if dev.origin == Origin::Cli {
+            if dev.origin == Origin::Static {
                 counts.6 += 1;
             }
         }

@@ -40,81 +40,87 @@ async fn upsert_base_device_internal(
     device: &Device,
     mac_str: &str,
 ) -> Result<(), LeaseDbError> {
-    let row = DeviceRow {
-        mac: mac_str.to_string(),
-        hostname: device.hostname.name.clone(),
-        hostname_origin: device.hostname.origin as i64,
-        is_static: i64::from(device.is_static()),
-        duid: device.duid.as_ref().map(|d| d.bytes.to_vec()),
-        last_seen: system_time_to_unix(device.last_seen),
-        origin: device.origin.as_str().to_string(),
-        managed_at: device.managed_at.map(system_time_to_unix),
-        v4_static: match &device.v4 {
-            IPv4State::Static(ip) => Some(ip.to_string()),
-            _ => None,
-        },
-        v6_suffix: device
-            .v6
-            .iter()
-            .filter(|s| !matches!(s, IPv6State::Slaac(..)))
-            .find_map(|s| {
-                if let IPv6State::Static(suf, _) = s {
-                    Some(suf.to_string())
-                } else {
-                    None
-                }
-            }),
-        parent_mac: device
-            .topology
-            .as_ref()
-            .and_then(|t| t.parent_mac.map(|m| m.to_string())),
-        parent_port: device.topology.as_ref().and_then(|t| t.port.clone()),
-        local_ifindex: device
-            .topology
-            .as_ref()
-            .map_or(0, |t| i64::from(t.local_ifindex)),
-        topo_updated: device
-            .topology
-            .as_ref()
-            .map_or(0, |t| system_time_to_unix(t.last_updated)),
-        boot_file: device.boot_file.clone(),
-    };
-
+    // 1. Core devices table
     sqlx::query(
-        "INSERT INTO devices (mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated, boot_file)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO devices (mac, hostname, hostname_origin, duid, last_seen, origin, managed_at, class)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(mac) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             hostname_origin = EXCLUDED.hostname_origin,
-            is_static = EXCLUDED.is_static,
             duid = EXCLUDED.duid,
             last_seen = EXCLUDED.last_seen,
             origin = EXCLUDED.origin,
             managed_at = EXCLUDED.managed_at,
-            v4_static = EXCLUDED.v4_static,
-            v6_suffix = EXCLUDED.v6_suffix,
-            parent_mac = EXCLUDED.parent_mac,
-            parent_port = EXCLUDED.parent_port,
-            local_ifindex = EXCLUDED.local_ifindex,
-            topo_updated = EXCLUDED.topo_updated,
-            boot_file = EXCLUDED.boot_file"
+            class = EXCLUDED.class"
     )
-    .bind(&row.mac)
-    .bind(&row.hostname)
-    .bind(row.hostname_origin)
-    .bind(row.is_static)
-    .bind(&row.duid)
-    .bind(row.last_seen)
-    .bind(&row.origin)
-    .bind(row.managed_at)
-    .bind(&row.v4_static)
-    .bind(&row.v6_suffix)
-    .bind(&row.parent_mac)
-    .bind(&row.parent_port)
-    .bind(row.local_ifindex)
-    .bind(row.topo_updated)
-    .bind(&row.boot_file)
+    .bind(mac_str)
+    .bind(&device.hostname.name)
+    .bind(device.hostname.origin as i64)
+    .bind(device.duid.as_ref().map(|d| d.bytes.to_vec()))
+    .bind(system_time_to_unix(device.last_seen))
+    .bind(device.origin.as_str())
+    .bind(device.managed_at.map(system_time_to_unix))
+    .bind(device.class as i64)
     .execute(&mut **tx).await?;
+
+    // 2. Topology table
+    if let Some(topo) = &device.topology {
+        sqlx::query(
+            "INSERT INTO device_topology (mac, parent_mac, parent_port, local_ifindex, topo_updated)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(mac) DO UPDATE SET
+                parent_mac = EXCLUDED.parent_mac,
+                parent_port = EXCLUDED.parent_port,
+                local_ifindex = EXCLUDED.local_ifindex,
+                topo_updated = EXCLUDED.topo_updated"
+        )
+        .bind(mac_str)
+        .bind(topo.parent_mac.map(|m| m.to_string()))
+        .bind(&topo.port)
+        .bind(i64::from(topo.local_ifindex))
+        .bind(system_time_to_unix(topo.last_updated))
+        .execute(&mut **tx).await?;
+    } else {
+        sqlx::query("DELETE FROM device_topology WHERE mac = ?")
+            .bind(mac_str)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    // 3. Static devices table
+    let v4_static = match &device.v4 {
+        IPv4State::Static(ip) => Some(ip.to_string()),
+        _ => None,
+    };
+    let v6_suffix = device.v6.iter().find_map(|s| {
+        if let IPv6State::Static(suf, _) = s {
+            Some(suf.to_string())
+        } else {
+            None
+        }
+    });
+
+    if v4_static.is_some() || v6_suffix.is_some() || device.boot_file.is_some() {
+        sqlx::query(
+            "INSERT INTO static_devices (mac, v4_static, v6_suffix, boot_file)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(mac) DO UPDATE SET
+                v4_static = EXCLUDED.v4_static,
+                v6_suffix = EXCLUDED.v6_suffix,
+                boot_file = EXCLUDED.boot_file",
+        )
+        .bind(mac_str)
+        .bind(v4_static)
+        .bind(v6_suffix)
+        .bind(&device.boot_file)
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query("DELETE FROM static_devices WHERE mac = ?")
+            .bind(mac_str)
+            .execute(&mut **tx)
+            .await?;
+    }
 
     Ok(())
 }
@@ -246,7 +252,13 @@ async fn persist_seen_v4(
 
 pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>, LeaseDbError> {
     sqlx::query_as::<_, DeviceRow>(
-        "SELECT mac, hostname, hostname_origin, is_static, duid, last_seen, origin, managed_at, v4_static, v6_suffix, parent_mac, parent_port, local_ifindex, topo_updated, boot_file FROM devices"
+        "SELECT 
+            d.mac, d.hostname, d.hostname_origin, d.duid, d.last_seen, d.origin, d.managed_at, d.class,
+            t.parent_mac, t.parent_port, t.local_ifindex, t.topo_updated,
+            s.v4_static, s.v6_suffix, s.boot_file
+         FROM devices d
+         LEFT JOIN device_topology t ON d.mac = t.mac
+         LEFT JOIN static_devices s ON d.mac = s.mac"
     )
     .fetch_all(pool)
     .await

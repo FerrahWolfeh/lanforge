@@ -69,7 +69,7 @@ async fn test_full_db_reset_chain() {
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::Set("192.168.1.20".parse::<Ipv4Addr>().unwrap()),
             v6_suffix: FieldUpdate::NoChange,
-            origin: Origin::Cli,
+            origin: Origin::Static,
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,

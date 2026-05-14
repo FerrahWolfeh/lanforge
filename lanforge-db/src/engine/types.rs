@@ -79,20 +79,25 @@ impl Pool {
 /// Internal representation of a device row read from the `devices` table.
 #[derive(sqlx::FromRow)]
 pub struct DeviceRow {
+    // devices table
     pub mac: String,
     pub hostname: String,
     pub hostname_origin: i64,
-    pub is_static: i64,
     pub duid: Option<Vec<u8>>,
     pub last_seen: i64,
     pub origin: String,
     pub managed_at: Option<i64>,
-    pub v4_static: Option<String>,
-    pub v6_suffix: Option<String>,
+    pub class: i64,
+
+    // device_topology table (LEFT JOIN)
     pub parent_mac: Option<String>,
     pub parent_port: Option<String>,
-    pub local_ifindex: i64,
-    pub topo_updated: i64,
+    pub local_ifindex: Option<i64>,
+    pub topo_updated: Option<i64>,
+
+    // static_devices table (LEFT JOIN)
+    pub v4_static: Option<String>,
+    pub v6_suffix: Option<String>,
     pub boot_file: Option<String>,
 }
 

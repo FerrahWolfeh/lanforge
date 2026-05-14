@@ -1,7 +1,7 @@
 use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
 use crate::device::state::{
@@ -20,24 +20,17 @@ use crate::utils::serde::{
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
 )]
 pub enum Origin {
-    /// Device defined in a static configuration file (Deprecated for runtime, use Static).
-    #[deprecated(note = "Seeding from TOML is deprecated. Use Static for all user-defined entries.")]
-    #[enum_repr(alias = "toml")]
-    Toml,
-    /// Device manually configured via the CLI or TUI.
-    #[enum_repr(alias = "managed_cli")]
-    Cli,
-    /// Device manually configured via a configuration import or static reservation.
+    /// Device manually configured or reserved.
     #[enum_repr(alias = "static")]
-    Static,
-    /// Device managed via an external API.
+    #[enum_repr(alias = "managed_cli")]
     #[enum_repr(alias = "api")]
-    External,
+    Static,
     /// Internal system-defined device.
     #[enum_repr(alias = "system")]
     System,
     /// Automatically discovered device (default).
     #[default]
+    #[enum_repr(alias = "dynamic")]
     Dynamic,
 }
 
@@ -50,10 +43,7 @@ impl Origin {
     #[must_use]
     pub const fn symbol(&self) -> &'static str {
         match self {
-            #[allow(deprecated)]
-            Self::Toml | Self::Static => "★",
-            Self::Cli => "·",
-            Self::External => "ⓔ",
+            Self::Static => "★",
             Self::System => "⚙",
             Self::Dynamic => "–",
         }
@@ -97,6 +87,21 @@ pub enum DeviceClass {
     #[enum_repr(alias = "router")]
     #[enum_repr(alias = "ap")]
     Network = 6,
+}
+
+impl DeviceClass {
+    pub fn from_repr(repr: u8) -> Option<Self> {
+        match repr {
+            0 => Some(Self::None),
+            1 => Some(Self::Computer),
+            2 => Some(Self::Mobile),
+            3 => Some(Self::Printer),
+            4 => Some(Self::Media),
+            5 => Some(Self::IoT),
+            6 => Some(Self::Network),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,7 +203,7 @@ impl Device {
         &mut self,
         duid: &Duid,
         iaid: u32,
-        ip: std::net::Ipv6Addr,
+        ip: Ipv6Addr,
         expires: SystemTime,
     ) -> Option<DeviceChange> {
         let mut changed = if self.duid.as_ref() == Some(duid) {
@@ -247,7 +252,7 @@ impl Device {
         &mut self,
         duid: &Duid,
         iaid: u32,
-        prefix: std::net::Ipv6Addr,
+        prefix: Ipv6Addr,
         len: u8,
         expires: SystemTime,
     ) -> Option<DeviceChange> {
@@ -291,7 +296,7 @@ impl Device {
 
     pub fn apply_v6_observation(
         &mut self,
-        addr: std::net::Ipv6Addr,
+        addr: Ipv6Addr,
         is_active: bool,
         origin: V6ObservationOrigin,
     ) -> Option<DeviceChange> {
@@ -602,12 +607,12 @@ impl Device {
     #[must_use]
     pub fn primary_v6(
         &self,
-        gua_prefix: Option<std::net::Ipv6Addr>,
-        ula_prefix: Option<std::net::Ipv6Addr>,
-    ) -> Option<std::net::Ipv6Addr> {
+        gua_prefix: Option<Ipv6Addr>,
+        ula_prefix: Option<Ipv6Addr>,
+    ) -> Option<Ipv6Addr> {
         use crate::network::is_ula;
-        let mut best: Option<(u8, std::net::Ipv6Addr)> = None;
-        let mut update_best = |prio: u8, addr: std::net::Ipv6Addr| {
+        let mut best: Option<(u8, Ipv6Addr)> = None;
+        let mut update_best = |prio: u8, addr: Ipv6Addr| {
             if best.as_ref().is_none_or(|(b_prio, _)| prio < *b_prio) {
                 best = Some((prio, addr));
             }
@@ -639,8 +644,8 @@ impl Device {
     #[must_use]
     pub fn all_addresses_sorted(
         &self,
-        gua_prefix: Option<std::net::Ipv6Addr>,
-        ula_prefix: Option<std::net::Ipv6Addr>,
+        gua_prefix: Option<Ipv6Addr>,
+        ula_prefix: Option<Ipv6Addr>,
     ) -> SmallVec<[std::net::IpAddr; 32]> {
         use crate::network::{Ipv6AddrOrSuffix, classify_ip};
         let mut addrs: SmallVec<[std::net::IpAddr; 32]> = SmallVec::new();
@@ -765,11 +770,7 @@ impl Device {
     }
 
     #[must_use]
-    pub fn display_v6(
-        &self,
-        gua_prefix: Option<std::net::Ipv6Addr>,
-        ula_prefix: Option<std::net::Ipv6Addr>,
-    ) -> String {
+    pub fn display_v6(&self, gua_prefix: Option<Ipv6Addr>, ula_prefix: Option<Ipv6Addr>) -> String {
         self.primary_v6(gua_prefix, ula_prefix)
             .map_or_else(|| "—".to_string(), |ip| ip.to_string())
     }
@@ -777,9 +778,14 @@ impl Device {
     #[must_use]
     pub fn learning_method(&self) -> LearningMethod {
         match self.origin {
-            #[allow(deprecated)]
-            Origin::Toml | Origin::Static | Origin::System => LearningMethod::Static,
-            Origin::Cli | Origin::External => LearningMethod::Managed,
+            Origin::Static => {
+                if self.managed_at.is_some() {
+                    LearningMethod::Managed
+                } else {
+                    LearningMethod::Static
+                }
+            }
+            Origin::System => LearningMethod::Static,
             Origin::Dynamic => {
                 if matches!(self.v4, IPv4State::Dynamic(_)) {
                     LearningMethod::DhcpV4

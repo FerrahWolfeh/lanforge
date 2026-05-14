@@ -105,7 +105,7 @@ async fn complex_ipv6_merging_logic() {
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
             v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::dead:beef").unwrap()),
-            origin: Origin::Cli,
+            origin: Origin::Static,
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,

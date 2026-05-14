@@ -7,21 +7,22 @@ use std::path::Path;
 use std::time::SystemTime;
 use tracing::{debug, info};
 
+use lanforge_core::config::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_core::context::state::State;
 use lanforge_core::types::device::{
-    Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, TopologyInfo,
+    Device, DeviceClass, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
+    TopologyInfo,
 };
 use lanforge_core::types::identifiers::{Duid, MacAddr};
-use lanforge_core::config::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 
 pub mod types;
 pub mod utils;
 
+pub mod dns_config;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
-pub mod dns_config;
 
 use crate::LeaseDbError;
 pub use types::{DeviceRow, LeaseAction, LeaseHistoryEntry, Pool};
@@ -428,14 +429,13 @@ impl LeaseDb {
                 };
                 device.last_seen = unix_to_system_time(row.last_seen);
                 device.origin = match row.origin.as_str() {
-                    #[allow(deprecated)]
-                    "toml" => Origin::Static,
-                    "cli" => Origin::Cli,
                     "static" => Origin::Static,
+                    "system" => Origin::System,
                     _ => Origin::Dynamic,
                 };
                 device.managed_at = row.managed_at.map(unix_to_system_time);
                 device.boot_file.clone_from(&row.boot_file);
+                device.class = DeviceClass::from_repr(row.class as u8).unwrap_or_default();
 
                 if let Some(v4) = &row.v4_static
                     && let Ok(ip) = v4.parse::<Ipv4Addr>()
@@ -451,16 +451,18 @@ impl LeaseDb {
                     device.duid = Some(Duid::new(bytes.clone()));
                 }
 
-                if row.topo_updated > 0 {
+                if let Some(topo_updated) = row.topo_updated
+                    && topo_updated > 0
+                {
                     device.topology = Some(TopologyInfo {
                         parent_mac: row.parent_mac.as_ref().and_then(|m| MacAddr::parse(m)),
                         port: row.parent_port.clone(),
-                        local_ifindex: u32::try_from(row.local_ifindex).unwrap_or(0),
-                        last_updated: unix_to_system_time(row.topo_updated),
+                        local_ifindex: row.local_ifindex.map(|i| i as u32).unwrap_or(0),
+                        last_updated: unix_to_system_time(topo_updated),
                     });
                 }
 
-                if row.origin == "cli" || row.origin == "static" || row.origin == "toml" {
+                if matches!(device.origin, Origin::Static) {
                     table.add_static_entry(
                         mac,
                         StaticEntry {
@@ -750,7 +752,11 @@ impl LeaseDb {
         }
     }
 
-    pub async fn set_adblock_config_value(&self, key: &str, value: &str) -> Result<(), LeaseDbError> {
+    pub async fn set_adblock_config_value(
+        &self,
+        key: &str,
+        value: &str,
+    ) -> Result<(), LeaseDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::set_adblock_config_value_sqlite(p, key, value).await,
@@ -768,7 +774,11 @@ impl LeaseDb {
         }
     }
 
-    pub async fn add_adblock_url(&self, url: &str, kind: AdblockUrlKind) -> Result<(), LeaseDbError> {
+    pub async fn add_adblock_url(
+        &self,
+        url: &str,
+        kind: AdblockUrlKind,
+    ) -> Result<(), LeaseDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::add_adblock_url_sqlite(p, url, kind).await,

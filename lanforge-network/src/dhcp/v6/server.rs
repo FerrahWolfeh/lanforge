@@ -1358,7 +1358,7 @@ mod tests {
         // 2. Per-device override
         let mut dev = Device::new(mac);
         dev.hostname.name = "host".to_string();
-        dev.origin = Origin::Cli;
+        dev.origin = Origin::Static;
         dev.boot_file = Some("http://custom/boot.efi".into());
         // Register it so srv.ctx can find it
         let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
@@ -1368,7 +1368,7 @@ mod tests {
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::NoChange,
                 v6_suffix: FieldUpdate::NoChange,
-                origin: Origin::Cli,
+                origin: Origin::Static,
                 boot_file: FieldUpdate::Set("http://custom/boot.efi".to_string()),
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,

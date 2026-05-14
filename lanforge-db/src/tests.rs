@@ -9,7 +9,9 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_core::types::device::{V4Lease, V6PrefixLease};
-use lanforge_core::types::{Device, DeviceUpdate, Duid, HostnameOrigin, IPv4State, IPv6State, MacAddr};
+use lanforge_core::types::{
+    Device, DeviceUpdate, Duid, HostnameOrigin, IPv4State, IPv6State, MacAddr,
+};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -326,10 +328,9 @@ async fn test_invalid_data_resilience() {
     let pool = db.pool.as_sqlite();
 
     // Insert malformed MAC
-    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, is_static, last_seen, origin) VALUES (?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, last_seen, origin) VALUES (?, ?, ?, ?, ?)")
         .bind("not-a-mac")
         .bind("Garbage")
-        .bind(0)
         .bind(0)
         .bind(0)
         .bind("dynamic")
@@ -339,10 +340,9 @@ async fn test_invalid_data_resilience() {
 
     // Insert valid device but malformed lease IP
     let mac = make_mac(0x50);
-    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, is_static, last_seen, origin) VALUES (?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, last_seen, origin) VALUES (?, ?, ?, ?, ?)")
         .bind(mac.to_string())
         .bind("ValidDevice")
-        .bind(0)
         .bind(0)
         .bind(0)
         .bind("dynamic")
@@ -380,10 +380,12 @@ async fn test_ipv4_int_computed_column() {
     let db = create_test_db().await;
     let pool = db.pool.as_sqlite();
     let mac = make_mac(0x60);
-    
+
     // Add device first
-    db.upsert_device(&create_test_device(0x60, "IPTest")).await.unwrap();
-    
+    db.upsert_device(&create_test_device(0x60, "IPTest"))
+        .await
+        .unwrap();
+
     // Add seen IP
     sqlx::query("INSERT INTO seen_v4 (mac, ip) VALUES (?, ?)")
         .bind(mac.to_string())
@@ -391,27 +393,28 @@ async fn test_ipv4_int_computed_column() {
         .execute(&pool)
         .await
         .unwrap();
-        
+
     // Check computed column
     let ip_int: i64 = sqlx::query_scalar("SELECT ip_int FROM seen_v4 WHERE ip = '192.168.1.5'")
         .fetch_one(&pool)
         .await
         .unwrap();
-        
+
     // 192.168.1.5 -> (192 << 24) | (168 << 16) | (1 << 8) | 5
     let expected = (192u32 << 24) | (168u32 << 16) | (1u32 << 8) | 5u32;
     // SQLite INTEGER is signed i64, so we cast u32 to i64
     assert_eq!(ip_int, expected as i64);
-    
+
     // Test range scan
     let start = (192u32 << 24) | (168u32 << 16) | (1u32 << 8) | 1u32;
     let end = (192u32 << 24) | (168u32 << 16) | (1u32 << 8) | 10u32;
-    
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seen_v4 WHERE ip_int BETWEEN ? AND ?")
-        .bind(start as i64)
-        .bind(end as i64)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM seen_v4 WHERE ip_int BETWEEN ? AND ?")
+            .bind(start as i64)
+            .bind(end as i64)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(count, 1);
 }

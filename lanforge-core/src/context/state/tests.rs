@@ -58,7 +58,7 @@ fn apply_update_hostname_hint_respects_static() {
         None,
         None,
         None,
-        Origin::Cli,
+        Origin::Static,
     );
 
     let changed = ctx.apply(DeviceUpdate::DhcpHostnameHint {
@@ -360,7 +360,7 @@ fn test_cli_host_updated_sync() {
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::Set("192.168.1.10".parse().unwrap()),
             v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::parse("::10").unwrap()),
-            origin: Origin::Cli,
+            origin: Origin::Static,
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
@@ -397,7 +397,7 @@ fn test_cli_host_updated_sync() {
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange, // No change
             v6_suffix: FieldUpdate::NoChange, // No change
-            origin: Origin::Cli,
+            origin: Origin::Static,
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
@@ -767,7 +767,7 @@ fn test_static_registry_validation() {
         Some(ip1),
         Some(suf1),
         None,
-        Origin::Cli,
+        Origin::Static,
     );
 
     // 2. Add conflicting registrations for mac2
@@ -779,7 +779,7 @@ fn test_static_registry_validation() {
         Some(ip1),
         Some(suf1),
         None,
-        Origin::Cli,
+        Origin::Static,
     );
 
     // 3. Get registry - should perform collision detection
@@ -853,7 +853,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
                 IpAddr::V6(a) => a,
                 IpAddr::V4(_) => unreachable!(),
             })),
-            origin: Origin::Cli,
+            origin: Origin::Static,
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,

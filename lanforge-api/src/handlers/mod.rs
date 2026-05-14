@@ -7,11 +7,11 @@ use lanforge_core::types::{Device, IPv6State};
 use std::net::Ipv6Addr;
 use std::time::SystemTime;
 
+pub mod auth;
 pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod system;
-pub mod auth;
 
 #[must_use]
 pub fn format_iso8601(time: SystemTime) -> String {
