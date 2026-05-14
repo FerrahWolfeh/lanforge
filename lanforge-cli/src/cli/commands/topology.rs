@@ -1,7 +1,17 @@
 use super::{CliCommand, format_relative_iso8601};
+use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
 use lanforge_api::api::{Command as ControlCommand, CommandAction, Response, TopologyEntry};
 use std::collections::HashMap;
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct TopologyArgs {}
+
+impl Execute for TopologyArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client.execute_handler(Box::new(TopologyHandler)).await
+    }
+}
 
 pub struct TopologyHandler;
 

@@ -8,6 +8,8 @@ use crate::args::{Cli, Command};
 use clap::Parser;
 use color_eyre::Result;
 
+use crate::cli::Execute;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
@@ -22,83 +24,57 @@ async fn main() -> Result<()> {
     match cli {
         Cli::Lanforge(args) => {
             if let Some(cmd) = args.command {
-                #[cfg(feature = "remote")]
-                if let Some(remote_url) = &args.remote {
-                    {
-                        use lanforge_http::RemoteClient;
-                        let mut client = RemoteClient::new(remote_url.clone(), args.token.clone());
-                        if let Some(pwd) = &args.password {
-                            client
-                                .login(pwd)
-                                .await
-                                .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
-                        }
-
-                        #[cfg(feature = "tui")]
-                        if cmd == Command::Tui {
-                            return crate::tui::run_tui(None, Some(client)).await;
-                        }
-
-                        let mut handler = match cmd {
-                            #[cfg(feature = "tui")]
-                            Command::Tui => unreachable!("TUI handled above"),
-                            c => c.to_handler(),
-                        };
-
-                        let control_cmd = handler.prepare()?;
-                        let resp = client
-                            .send(control_cmd)
-                            .await
-                            .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
-                        let _ = handler.on_response(&resp)?;
-                        return Ok(());
-                    }
-                }
-
-                #[cfg(feature = "tui")]
-                if cmd == Command::Tui {
-                    return crate::tui::run_tui(
-                        Some(args.socket.clone()),
-                        #[cfg(feature = "remote")]
-                        None,
-                    )
-                    .await;
-                }
-
-                cli::run_client(
-                    cmd,
-                    &args.socket,
-                    cli::ClientOptions {
+                let client = cli::LanforgeClient {
+                    socket: args.socket,
+                    opts: cli::ClientOptions {
                         bincode: args.bincode,
                         no_compress: args.no_compress,
                     },
-                )
-                .await?;
+                    #[cfg(feature = "remote")]
+                    remote: args.remote,
+                    #[cfg(feature = "remote")]
+                    token: args.token,
+                    #[cfg(feature = "remote")]
+                    password: args.password,
+                };
+                cmd.execute(&client).await?;
             } else {
                 println!("No command specified. Use --help to see available options.");
             }
         }
         Cli::Wake { target, socket } => {
-            cli::run_client(
-                Command::Wol { target },
-                &socket,
-                cli::ClientOptions {
+            let client = cli::LanforgeClient {
+                socket,
+                opts: cli::ClientOptions {
                     bincode: false,
                     no_compress: false,
                 },
-            )
-            .await?;
+                #[cfg(feature = "remote")]
+                remote: None,
+                #[cfg(feature = "remote")]
+                token: None,
+                #[cfg(feature = "remote")]
+                password: None,
+            };
+            let cmd = Command::Wol(crate::cli::commands::wol::WolArgs { target });
+            cmd.execute(&client).await?;
         }
         Cli::LfStatus { socket } => {
-            cli::run_client(
-                Command::Status,
-                &socket,
-                cli::ClientOptions {
+            let client = cli::LanforgeClient {
+                socket,
+                opts: cli::ClientOptions {
                     bincode: false,
                     no_compress: false,
                 },
-            )
-            .await?;
+                #[cfg(feature = "remote")]
+                remote: None,
+                #[cfg(feature = "remote")]
+                token: None,
+                #[cfg(feature = "remote")]
+                password: None,
+            };
+            let cmd = Command::Status(crate::cli::commands::status::StatusArgs {});
+            cmd.execute(&client).await?;
         }
         Cli::LfDevices {
             verbose,
@@ -110,45 +86,63 @@ async fn main() -> Result<()> {
             show_vendor,
             socket,
         } => {
-            cli::run_client(
-                Command::Devices {
-                    verbose,
-                    filter,
-                    vendor,
-                    method,
-                    format,
-                    sort,
-                    show_vendor,
-                },
-                &socket,
-                cli::ClientOptions {
+            let client = cli::LanforgeClient {
+                socket,
+                opts: cli::ClientOptions {
                     bincode: false,
                     no_compress: false,
                 },
-            )
-            .await?;
+                #[cfg(feature = "remote")]
+                remote: None,
+                #[cfg(feature = "remote")]
+                token: None,
+                #[cfg(feature = "remote")]
+                password: None,
+            };
+            let cmd = Command::Devices(crate::cli::commands::devices::DevicesArgs {
+                verbose,
+                filter,
+                vendor,
+                method,
+                format,
+                sort,
+                show_vendor,
+            });
+            cmd.execute(&client).await?;
         }
         Cli::LfScan { socket } => {
-            cli::run_client(
-                Command::Scan,
-                &socket,
-                cli::ClientOptions {
+            let client = cli::LanforgeClient {
+                socket,
+                opts: cli::ClientOptions {
                     bincode: false,
                     no_compress: false,
                 },
-            )
-            .await?;
+                #[cfg(feature = "remote")]
+                remote: None,
+                #[cfg(feature = "remote")]
+                token: None,
+                #[cfg(feature = "remote")]
+                password: None,
+            };
+            let cmd = Command::Scan(crate::cli::commands::simple::ScanArgs {});
+            cmd.execute(&client).await?;
         }
         Cli::LfTopology { socket } => {
-            cli::run_client(
-                Command::Topology,
-                &socket,
-                cli::ClientOptions {
+            let client = cli::LanforgeClient {
+                socket,
+                opts: cli::ClientOptions {
                     bincode: false,
                     no_compress: false,
                 },
-            )
-            .await?;
+                #[cfg(feature = "remote")]
+                remote: None,
+                #[cfg(feature = "remote")]
+                token: None,
+                #[cfg(feature = "remote")]
+                password: None,
+            };
+            let cmd = Command::Topology(crate::cli::commands::topology::TopologyArgs {});
+            cmd.execute(&client).await?;
         }
     }
 

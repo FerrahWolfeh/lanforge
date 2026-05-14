@@ -1,19 +1,59 @@
 use super::CliCommand;
-use crate::args::HostCommand;
+use crate::cli::{Execute, LanforgeClient};
+use clap::Subcommand;
 use color_eyre::Result;
 use color_eyre::eyre::bail;
 use inquire::{Confirm, Select, Text as InquireText};
 use iocraft::prelude::*;
 use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
 
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct HostArgs {
+    #[command(subcommand)]
+    pub action: HostAction,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum HostAction {
+    Add {
+        /// Prefix MAC with this argument, or run interactively
+        mac: Option<String>,
+        #[arg(long)]
+        hostname: Option<String>,
+        #[arg(long)]
+        v4: Option<String>,
+        #[arg(long)]
+        v6_suffix: Option<String>,
+    },
+    Set {
+        mac: String,
+        field: String,
+        value: String,
+    },
+    List,
+    Remove {
+        mac: String,
+    },
+}
+
+impl Execute for HostArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client
+            .execute_handler(Box::new(HostHandler {
+                action: self.action,
+            }))
+            .await
+    }
+}
+
 pub struct HostHandler {
-    pub action: HostCommand,
+    pub action: HostAction,
 }
 
 impl CliCommand for HostHandler {
     fn prepare(&mut self) -> Result<ControlCommand> {
         match &self.action {
-            HostCommand::Add {
+            HostAction::Add {
                 mac,
                 hostname,
                 v4,
@@ -97,17 +137,17 @@ impl CliCommand for HostHandler {
                     v6_suffix: final_v6,
                 }))
             }
-            HostCommand::Set { mac, field, value } => {
+            HostAction::Set { mac, field, value } => {
                 Ok(ControlCommand::new(CommandAction::HostSet {
                     mac: mac.clone(),
                     field: field.clone(),
                     value: value.clone(),
                 }))
             }
-            HostCommand::Remove { mac } => Ok(ControlCommand::new(CommandAction::HostRemove {
+            HostAction::Remove { mac } => Ok(ControlCommand::new(CommandAction::HostRemove {
                 mac: mac.clone(),
             })),
-            HostCommand::List => Ok(ControlCommand::new(CommandAction::HostList)),
+            HostAction::List => Ok(ControlCommand::new(CommandAction::HostList)),
         }
     }
 

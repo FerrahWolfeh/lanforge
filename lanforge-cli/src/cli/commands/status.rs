@@ -1,4 +1,5 @@
 use super::{CliCommand, format_uptime};
+use crate::cli::{Execute, LanforgeClient};
 use bytesize::ByteSize;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
@@ -6,6 +7,15 @@ use lanforge_api::api::Command as ControlCommand;
 use lanforge_api::api::Response;
 use lanforge_api::api::ServiceStatusInfo;
 use lanforge_api::api::StatusResponse;
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct StatusArgs {}
+
+impl Execute for StatusArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client.execute_handler(Box::new(StatusHandler)).await
+    }
+}
 
 pub struct StatusHandler;
 

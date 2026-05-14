@@ -2,7 +2,6 @@ use color_eyre::eyre::{Context, Result, eyre};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use crate::args::Command;
 use crate::cli::commands::CliCommand;
 use lanforge_api::api::{Compression, Encoding, Response};
 
@@ -11,19 +10,54 @@ pub struct ClientOptions {
     pub no_compress: bool,
 }
 
-pub async fn run_client(command: Command, socket_path: &str, opts: ClientOptions) -> Result<()> {
+pub struct LanforgeClient {
+    pub socket: String,
+    pub opts: ClientOptions,
+    #[cfg(feature = "remote")]
+    pub remote: Option<String>,
+    #[cfg(feature = "remote")]
+    pub token: Option<String>,
+    #[cfg(feature = "remote")]
+    pub password: Option<String>,
+}
+
+impl LanforgeClient {
+    pub async fn execute_handler(&self, mut handler: Box<dyn CliCommand>) -> Result<()> {
+        #[cfg(feature = "remote")]
+        if let Some(remote_url) = &self.remote {
+            use lanforge_http::RemoteClient;
+            let mut client = RemoteClient::new(remote_url.clone(), self.token.clone());
+            if let Some(pwd) = &self.password {
+                client
+                    .login(pwd)
+                    .await
+                    .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
+            }
+
+            let control_cmd = handler.prepare()?;
+            let resp = client
+                .send(control_cmd)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
+            let _ = handler.on_response(&resp)?;
+            return Ok(());
+        }
+
+        run_local_with_handler(handler, &self.socket, &self.opts).await
+    }
+}
+
+pub async fn run_local_with_handler(
+    mut handler: Box<dyn CliCommand>,
+    socket_path: &str,
+    opts: &ClientOptions,
+) -> Result<()> {
     let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
         format!("Failed to connect to daemon at '{socket_path}'. Is the daemon running?")
     })?;
 
     let (reader, mut writer) = stream.split();
     let mut reader = BufReader::new(reader);
-
-    let mut handler: Box<dyn CliCommand> = match command {
-        #[cfg(feature = "tui")]
-        Command::Tui => return Err(eyre!("TUI should be handled in main.rs")),
-        cmd => cmd.to_handler(),
-    };
 
     let mut control_cmd = match handler.prepare() {
         Ok(cmd) => cmd,
@@ -36,7 +70,7 @@ pub async fn run_client(command: Command, socket_path: &str, opts: ClientOptions
     };
 
     // --- Capabilities Check & Negotiation ---
-    let (encoding, compression) = negotiate_protocol(&mut reader, &mut writer, &opts).await?;
+    let (encoding, compression) = negotiate_protocol(&mut reader, &mut writer, opts).await?;
 
     control_cmd.encoding = Some(encoding);
     control_cmd.compression = Some(compression);

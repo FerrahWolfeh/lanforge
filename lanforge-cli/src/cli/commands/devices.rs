@@ -1,12 +1,64 @@
 use super::{CliCommand, format_relative_iso8601, format_short_relative};
-use crate::args::SortMode;
 use crate::cli::vendor::resolve_vendor;
+use crate::cli::{Execute, LanforgeClient};
+use clap::ValueEnum;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::Response;
 use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
 use lanforge_core::types::device::Origin;
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DevicesArgs {
+    #[arg(short, long)]
+    pub verbose: bool,
+    #[arg(long)]
+    pub filter: Option<String>,
+    #[arg(long)]
+    pub vendor: Option<String>,
+    #[arg(long)]
+    pub method: Option<String>,
+    #[arg(long)]
+    pub format: Option<String>,
+    #[arg(short, long, value_enum, default_value_t = SortMode::LastSeen)]
+    pub sort: SortMode,
+    /// Resolve and display vendor names (can be slow)
+    #[arg(long)]
+    pub show_vendor: bool,
+}
+
+impl Execute for DevicesArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client
+            .execute_handler(Box::new(DevicesHandler {
+                verbose: self.verbose,
+                filter: self.filter,
+                vendor: self.vendor,
+                method: self.method,
+                format: self.format,
+                sort: self.sort,
+                show_vendor: self.show_vendor,
+            }))
+            .await
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    /// Sort by MAC address
+    Mac,
+    /// Sort by hostname
+    Host,
+    /// Sort by last seen timestamp
+    LastSeen,
+    /// Sort by IPv4 address
+    Ip,
+    /// Sort by IPv6 address
+    Ipv6,
+    /// Sort by online status
+    Online,
+}
 
 pub struct DevicesHandler {
     pub verbose: bool,

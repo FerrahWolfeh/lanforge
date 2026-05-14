@@ -1,4 +1,6 @@
-use crate::{args, cli::commands::CliCommand};
+use crate::cli::commands::CliCommand;
+use crate::cli::{Execute, LanforgeClient};
+use clap::Subcommand;
 use color_eyre::eyre::Result;
 use colored::Colorize;
 use iocraft::prelude::*;
@@ -10,32 +12,147 @@ use lanforge_api::api::{
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_core::types::network::{QueryLogEntry, QueryResult};
 
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DnsArgs {
+    #[command(subcommand)]
+    pub action: DnsAction,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DnsAction {
+    /// Show resolver performance and cache statistics
+    Stats,
+    /// List upstream DNS servers and their health/latency
+    Upstreams,
+    /// Perform a DNS lookup through the Lanforge resolver
+    Query {
+        /// Domain name to query
+        name: String,
+        /// Record type (A, AAAA, MX, etc.)
+        #[arg(default_value = "A")]
+        record_type: String,
+    },
+    /// Manage the domain-based adblocker
+    Adblock {
+        #[command(subcommand)]
+        action: AdblockAction,
+    },
+    /// Manage local DNS rewrites
+    Rewrite {
+        #[command(subcommand)]
+        action: RewriteAction,
+    },
+    /// Manage the DNS cache
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
+    /// View or follow the DNS query log
+    Log {
+        /// Follow new queries in real-time
+        #[arg(short, long)]
+        follow: bool,
+        /// Limit the number of historical entries shown
+        #[arg(short, long, default_value = "50")]
+        limit: usize,
+        /// Filter by client IP or MAC
+        #[arg(short, long)]
+        client: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum AdblockAction {
+    /// Show current adblocker status and blocklist size
+    Status,
+    /// Enable the adblocker globally
+    Enable,
+    /// Disable the adblocker (optionally for a duration)
+    Disable {
+        /// Duration to stay disabled (ex: 5m, 1h)
+        duration: Option<String>,
+    },
+    /// Reload blocklists from sources
+    Reload,
+    /// Force-block a specific domain (local blocklist)
+    Block { domain: String },
+    /// Force-allow a specific domain (local allowlist)
+    Allow { domain: String },
+    /// Remove a domain from the local allowlist
+    Unallow { domain: String },
+    /// List all domains in the local allowlist
+    Allowlist,
+    /// Manage blocklist sources (URLs)
+    Sources {
+        #[command(subcommand)]
+        action: SourceAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum SourceAction {
+    /// Add a new blocklist URL
+    Add {
+        url: String,
+        #[arg(short, long, default_value = "blocklist")]
+        kind: String,
+    },
+    /// Remove a blocklist URL
+    Remove { url: String },
+    /// List all configured blocklist sources
+    List,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum RewriteAction {
+    /// Add a local DNS rewrite (A/AAAA/CNAME)
+    Add { domain: String, answer: String },
+    /// Remove a local DNS rewrite
+    Remove { domain: String },
+    /// List all local DNS rewrites
+    List,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum CacheAction {
+    /// Clear all entries from the DNS cache
+    Flush,
+    /// Dump all current DNS cache entries
+    Dump,
+}
+
+impl Execute for DnsArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client
+            .execute_handler(Box::new(DnsCommand {
+                action: self.action,
+            }))
+            .await
+    }
+}
+
 pub struct DnsCommand {
-    pub action: args::DnsCommand,
+    pub action: DnsAction,
 }
 
 impl CliCommand for DnsCommand {
     fn prepare(&mut self) -> Result<ControlCommand> {
         match &self.action {
-            args::DnsCommand::Stats => Ok(ControlCommand::new(CommandAction::DnsStats)),
-            args::DnsCommand::Upstreams => Ok(ControlCommand::new(CommandAction::DnsUpstreams)),
-            args::DnsCommand::Query { name, record_type } => {
+            DnsAction::Stats => Ok(ControlCommand::new(CommandAction::DnsStats)),
+            DnsAction::Upstreams => Ok(ControlCommand::new(CommandAction::DnsUpstreams)),
+            DnsAction::Query { name, record_type } => {
                 Ok(ControlCommand::new(CommandAction::DnsQuery {
                     name: name.clone(),
-                    record_type: record_type.clone(),
+                    record_type: Some(record_type.clone()),
                 }))
             }
-            args::DnsCommand::Adblock { action } => match action {
-                args::AdblockAction::Status => {
-                    Ok(ControlCommand::new(CommandAction::DnsAdblockStatus))
-                }
-                args::AdblockAction::Enable => {
-                    Ok(ControlCommand::new(CommandAction::DnsAdblockSet {
-                        enabled: true,
-                        duration_secs: None,
-                    }))
-                }
-                args::AdblockAction::Disable { duration } => {
+            DnsAction::Adblock { action } => match action {
+                AdblockAction::Status => Ok(ControlCommand::new(CommandAction::DnsAdblockStatus)),
+                AdblockAction::Enable => Ok(ControlCommand::new(CommandAction::DnsAdblockSet {
+                    enabled: true,
+                    duration_secs: None,
+                })),
+                AdblockAction::Disable { duration } => {
                     let secs = duration
                         .as_ref()
                         .and_then(|d| duration_str::parse_std(d).ok())
@@ -45,63 +162,53 @@ impl CliCommand for DnsCommand {
                         duration_secs: secs,
                     }))
                 }
-                args::AdblockAction::Reload => {
-                    Ok(ControlCommand::new(CommandAction::DnsAdblockReload))
-                }
-                args::AdblockAction::Block { domain } => {
-                    Ok(ControlCommand::new(CommandAction::DnsBlock {
-                        domain: domain.clone(),
-                    }))
-                }
-                args::AdblockAction::Allow { domain } => {
-                    Ok(ControlCommand::new(CommandAction::DnsAllow {
-                        domain: domain.clone(),
-                    }))
-                }
-                args::AdblockAction::Unallow { domain } => {
+                AdblockAction::Reload => Ok(ControlCommand::new(CommandAction::DnsAdblockReload)),
+                AdblockAction::Block { domain } => Ok(ControlCommand::new(CommandAction::DnsBlock {
+                    domain: domain.clone(),
+                })),
+                AdblockAction::Allow { domain } => Ok(ControlCommand::new(CommandAction::DnsAllow {
+                    domain: domain.clone(),
+                })),
+                AdblockAction::Unallow { domain } => {
                     Ok(ControlCommand::new(CommandAction::DnsUnallow {
                         domain: domain.clone(),
                     }))
                 }
-                args::AdblockAction::Allowlist => {
-                    Ok(ControlCommand::new(CommandAction::DnsAllowlistList))
-                }
-                args::AdblockAction::Sources { action } => match action {
-                    args::SourceAction::Add { url, kind } => {
+                AdblockAction::Allowlist => Ok(ControlCommand::new(CommandAction::DnsAllowlistList)),
+                AdblockAction::Sources { action } => match action {
+                    SourceAction::Add { url, kind } => {
                         Ok(ControlCommand::new(CommandAction::DnsAdblockUrlAdd {
                             url: url.clone(),
                             kind: kind.clone(),
                         }))
                     }
-                    args::SourceAction::Remove { url } => {
+                    SourceAction::Remove { url } => {
                         Ok(ControlCommand::new(CommandAction::DnsAdblockUrlRemove {
                             url: url.clone(),
                         }))
                     }
-                    args::SourceAction::List => {
-                        Ok(ControlCommand::new(CommandAction::DnsAdblockUrlList))
-                    }
+                    SourceAction::List => Ok(ControlCommand::new(CommandAction::DnsAdblockUrlList)),
                 },
             },
-            args::DnsCommand::Rewrite { action } => match action {
-                args::RewriteAction::Add { domain, answer } => {
+            DnsAction::Rewrite { action } => match action {
+                RewriteAction::Add { domain, answer } => {
                     Ok(ControlCommand::new(CommandAction::DnsRewriteAdd {
                         domain: domain.clone(),
                         answer: answer.clone(),
                     }))
                 }
-                args::RewriteAction::Remove { domain } => {
+                RewriteAction::Remove { domain } => {
                     Ok(ControlCommand::new(CommandAction::DnsRewriteRemove {
                         domain: domain.clone(),
                     }))
                 }
-                args::RewriteAction::List => Ok(ControlCommand::new(CommandAction::DnsRewriteList)),
+                RewriteAction::List => Ok(ControlCommand::new(CommandAction::DnsRewriteList)),
             },
-            args::DnsCommand::Cache { action } => match action {
-                args::CacheAction::Flush => Ok(ControlCommand::new(CommandAction::DnsCacheFlush)),
-                args::CacheAction::Dump => Ok(ControlCommand::new(CommandAction::DnsCacheDump)),
+            DnsAction::Cache { action } => match action {
+                CacheAction::Flush => Ok(ControlCommand::new(CommandAction::DnsCacheFlush)),
+                CacheAction::Dump => Ok(ControlCommand::new(CommandAction::DnsCacheDump)),
             },
-            args::DnsCommand::Log { limit, client, .. } => {
+            DnsAction::Log { limit, client, .. } => {
                 Ok(ControlCommand::new(CommandAction::DnsQueryLog {
                     limit: Some(*limit),
                     client: client.clone(),
@@ -140,7 +247,7 @@ impl CliCommand for DnsCommand {
     }
 
     fn is_streaming(&self) -> bool {
-        if let args::DnsCommand::Log { follow, .. } = &self.action {
+        if let DnsAction::Log { follow, .. } = &self.action {
             *follow
         } else {
             false

@@ -1,16 +1,40 @@
-use crate::{args, cli::commands::CliCommand};
+use crate::cli::commands::CliCommand;
+use crate::cli::{Execute, LanforgeClient};
+use clap::Subcommand;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{Command as ControlCommand, CommandAction, DhcpPoolEntry, Response};
 
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DhcpArgs {
+    #[command(subcommand)]
+    pub action: DhcpAction,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DhcpAction {
+    /// Show DHCP pool utilization and availability
+    Pool,
+}
+
+impl Execute for DhcpArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client
+            .execute_handler(Box::new(DhcpHandler {
+                action: self.action,
+            }))
+            .await
+    }
+}
+
 pub struct DhcpHandler {
-    pub action: args::DhcpCommand,
+    pub action: DhcpAction,
 }
 
 impl CliCommand for DhcpHandler {
     fn prepare(&mut self) -> Result<ControlCommand> {
         match &self.action {
-            args::DhcpCommand::Pool => Ok(ControlCommand::new(CommandAction::DhcpPools)),
+            DhcpAction::Pool => Ok(ControlCommand::new(CommandAction::DhcpPools)),
         }
     }
 

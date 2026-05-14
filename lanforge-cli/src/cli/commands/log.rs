@@ -1,4 +1,5 @@
 use super::CliCommand;
+use crate::cli::{Execute, LanforgeClient};
 use chrono::DateTime;
 use chrono::Local;
 use color_eyre::eyre::Result;
@@ -7,6 +8,30 @@ use lanforge_api::api::Response;
 use lanforge_api::api::SimpleSuccess;
 use lanforge_api::api::{Command as ControlCommand, CommandAction};
 use lanforge_core::bus::TimedEvent;
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct LogArgs {
+    #[arg(long)]
+    pub follow: bool,
+    /// Show more detailed events (like ARP/NDP activity)
+    #[arg(short, long)]
+    pub verbose: bool,
+    /// Number of historical lines to show
+    #[arg(short = 'n', long, default_value = "50")]
+    pub lines: usize,
+}
+
+impl Execute for LogArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client
+            .execute_handler(Box::new(LogHandler {
+                follow: self.follow,
+                verbose: self.verbose,
+                lines: self.lines,
+            }))
+            .await
+    }
+}
 
 use crate::format::CliFormat;
 

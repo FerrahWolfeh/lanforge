@@ -248,8 +248,38 @@ fn format_network_event(now: &str, event: &NetworkEvent) {
             };
             println!("[{now}] {} {}", "SYS".yellow().bold(), msg.dimmed());
         }
-        NetworkEvent::LeaseRenewRequested { mac, target } => todo!(),
-        NetworkEvent::LeaseReleaseRequested { mac, target } => todo!(),
+        NetworkEvent::LeaseRenewRequested { mac, target } => {
+            let tag = match target {
+                Some(LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. }) => {
+                    "DHCP6".magenta().bold()
+                }
+                _ => "DHCP4".blue().bold(),
+            };
+            let target_str = target
+                .as_ref()
+                .map(|t| format!(" ({t})"))
+                .unwrap_or_default();
+            println!(
+                "[{now}] {tag} {} {mac}{target_str}",
+                "Lease Renew Requested:".white()
+            );
+        }
+        NetworkEvent::LeaseReleaseRequested { mac, target } => {
+            let tag = match target {
+                Some(LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. }) => {
+                    "DHCP6".magenta().bold()
+                }
+                _ => "DHCP4".blue().bold(),
+            };
+            let target_str = target
+                .as_ref()
+                .map(|t| format!(" ({t})"))
+                .unwrap_or_default();
+            println!(
+                "[{now}] {tag} {} {mac}{target_str}",
+                "Lease Release Requested:".white()
+            );
+        }
     }
 }
 

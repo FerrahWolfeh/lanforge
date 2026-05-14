@@ -1,10 +1,27 @@
 use super::{CliCommand, format_relative_iso8601};
 use crate::cli::vendor::resolve_vendor;
+use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{Command as ControlCommand, CommandAction, Response, WhoisResponse};
-use lanforge_db::engine::LeaseHistoryEntry;
 use lanforge_core::types::device::Origin;
+use lanforge_db::engine::LeaseHistoryEntry;
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct WhoisArgs {
+    /// Target MAC, IP, or Hostname
+    pub target: String,
+}
+
+impl Execute for WhoisArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client
+            .execute_handler(Box::new(WhoisHandler {
+                target: self.target,
+            }))
+            .await
+    }
+}
 
 pub struct WhoisHandler {
     pub target: String,

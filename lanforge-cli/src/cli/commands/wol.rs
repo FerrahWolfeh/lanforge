@@ -1,7 +1,24 @@
 use crate::cli::commands::CliCommand;
+use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
 use inquire::Select;
 use lanforge_api::api::{Command as ControlCommand, CommandAction, Response};
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct WolArgs {
+    /// Target device MAC or Hostname. Run without target for interactive menu.
+    pub target: Option<String>,
+}
+
+impl Execute for WolArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        client
+            .execute_handler(Box::new(WolCommand {
+                target: self.target,
+            }))
+            .await
+    }
+}
 
 pub struct WolCommand {
     pub target: Option<String>,

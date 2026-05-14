@@ -7,24 +7,12 @@ pub mod host;
 pub mod lease;
 pub mod log;
 pub mod query;
+pub mod simple;
 pub mod status;
 pub mod topology;
+pub mod tui;
 pub mod whois;
 pub mod wol;
-
-pub use config::ConfigHandler;
-pub use db::DbHandler;
-pub use devices::DevicesHandler;
-pub use dhcp::DhcpHandler;
-pub use dns::DnsCommand;
-pub use host::HostHandler;
-pub use lease::LeaseHandler;
-pub use log::LogHandler;
-pub use query::QueryHandler;
-pub use status::StatusHandler;
-pub use topology::TopologyHandler;
-pub use whois::WhoisHandler;
-pub use wol::WolCommand;
 
 use chrono::{DateTime, Datelike, Utc};
 use color_eyre::eyre::Result;
