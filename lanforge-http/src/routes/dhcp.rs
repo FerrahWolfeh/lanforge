@@ -1,6 +1,10 @@
-use axum::{Router, routing::{get, post}, extract::{State, Query, Path}, Json};
-use crate::server::AppState;
 use crate::routes::create_client_ctx;
+use crate::server::AppState;
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    routing::{get, post},
+};
 use lanforge_api::api::Response;
 use lanforge_core::types::LeaseTarget;
 use serde::Deserialize;
@@ -20,8 +24,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/pools", get(handle_pools))
         .route("/leases", get(handle_leases))
-        .route("/leases/:mac/renew", post(handle_renew))
-        .route("/leases/:mac/release", post(handle_release))
+        .route("/leases/{mac}/renew", post(handle_renew))
+        .route("/leases/{mac}/release", post(handle_release))
 }
 
 async fn handle_pools(State(state): State<AppState>) -> Json<Response> {
