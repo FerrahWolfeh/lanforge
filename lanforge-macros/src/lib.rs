@@ -454,6 +454,7 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut response_variants = Vec::new();
     let mut dispatch_arms = Vec::new();
     let mut client_methods = Vec::new();
+    let mut global_error_type = quote! { String };
 
     for item in &input_trait.items {
         if let syn::TraitItem::Fn(method) = item {
@@ -477,9 +478,30 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
                 }
             }
 
-            let return_type = match &method.sig.output {
-                syn::ReturnType::Default => quote! { () },
-                syn::ReturnType::Type(_, ty) => quote! { #ty },
+            let mut is_result = false;
+            let mut inner_type = quote! { () };
+
+            match &method.sig.output {
+                syn::ReturnType::Default => {}
+                syn::ReturnType::Type(_, ty) => {
+                    if let syn::Type::Path(type_path) = &**ty
+                        && let Some(segment) = type_path.path.segments.last()
+                        && segment.ident == "Result"
+                        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                    {
+                        if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                            is_result = true;
+                            inner_type = quote! { #inner };
+                        }
+                        if args.args.len() > 1
+                            && let Some(syn::GenericArgument::Type(err)) = args.args.iter().nth(1) {
+                                global_error_type = quote! { #err };
+                            }
+                    }
+                    if !is_result {
+                        inner_type = quote! { #ty };
+                    }
+                }
             };
 
             request_variants.push(quote! {
@@ -487,18 +509,29 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
             });
 
             response_variants.push(quote! {
-                #variant_name(#return_type)
+                #variant_name(#inner_type)
             });
 
-            dispatch_arms.push(quote! {
-                RpcRequest::#variant_name { #(#arg_names),* } => {
-                    let res = self.#method_name(#(#arg_names),*).await;
-                    RpcResponse::#variant_name(res)
-                }
-            });
+            if is_result {
+                dispatch_arms.push(quote! {
+                    RpcRequest::#variant_name { #(#arg_names),* } => {
+                        match self.#method_name(#(#arg_names),*).await {
+                            Ok(res) => RpcResponse::#variant_name(res),
+                            Err(e) => RpcResponse::Error(e),
+                        }
+                    }
+                });
+            } else {
+                dispatch_arms.push(quote! {
+                    RpcRequest::#variant_name { #(#arg_names),* } => {
+                        let res = self.#method_name(#(#arg_names),*).await;
+                        RpcResponse::#variant_name(res)
+                    }
+                });
+            }
 
             client_methods.push(quote! {
-                pub async fn #method_name(&mut self, #(#args),*) -> Result<#return_type, LanforgeRpcError> {
+                pub async fn #method_name(&mut self, #(#args),*) -> Result<#inner_type, LanforgeRpcError<#global_error_type>> {
                     let req = RpcRequest::#variant_name { #(#arg_names),* };
                     match self.call(req).await? {
                         RpcResponse::#variant_name(res) => Ok(res),
@@ -522,7 +555,7 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
         pub enum RpcResponse {
             #(#response_variants),*,
             Event(lanforge_core::bus::TimedEvent),
-            Error(String),
+            Error(#global_error_type),
         }
 
         #[async_trait::async_trait]
@@ -542,13 +575,13 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         #[derive(thiserror::Error, Debug)]
-        pub enum LanforgeRpcError {
+        pub enum LanforgeRpcError<E> {
             #[error("IO error: {0}")]
             Io(#[from] std::io::Error),
             #[error("Serialization error: {0}")]
             Serialization(String),
             #[error("Remote error: {0}")]
-            Remote(String),
+            Remote(E),
             #[error("Protocol mismatch")]
             ProtocolMismatch,
         }
@@ -564,7 +597,7 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
                 }
             }
 
-            async fn call(&mut self, req: RpcRequest) -> Result<RpcResponse, LanforgeRpcError> {
+            async fn call(&mut self, req: RpcRequest) -> Result<RpcResponse, LanforgeRpcError<#global_error_type>> {
                 use tokio::io::AsyncWriteExt;
 
                 let mut buffer = std::mem::take(&mut self.buffer);
@@ -581,7 +614,7 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
                 self.next_response().await
             }
 
-            pub async fn next_response(&mut self) -> Result<RpcResponse, LanforgeRpcError> {
+            pub async fn next_response(&mut self) -> Result<RpcResponse, LanforgeRpcError<#global_error_type>> {
                 use tokio::io::AsyncReadExt;
                 let mut len_bytes = [0u8; 4];
                 self.stream.read_exact(&mut len_bytes).await?;

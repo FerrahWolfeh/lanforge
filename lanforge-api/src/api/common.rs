@@ -54,3 +54,18 @@ pub struct SimpleSuccess {
     /// Informational message about the operation.
     pub message: String,
 }
+
+/// Errors that can occur during RPC calls.
+#[derive(Debug, Serialize, Deserialize, thiserror::Error, Clone)]
+pub enum RpcCallError {
+    #[error("Invalid MAC address: {0}")]
+    InvalidMac(String),
+    #[error("Device not found: {0}")]
+    DeviceNotFound(String),
+    #[error("Failed to apply update")]
+    UpdateFailed,
+    #[error("Internal error: {0}")]
+    Internal(String),
+    #[error("Invalid response type")]
+    InvalidResponseType,
+}

@@ -1,6 +1,11 @@
-use crate::api::Response;
+use crate::api::{
+    DevicesResponse, LeasesResponse, Response, RpcCallError, SimpleSuccess, StatusResponse,
+    TopologyResponse,
+};
+use lanforge_core::context::state::State;
 use lanforge_core::error::CoreError;
 use lanforge_db::engine::LeaseDb;
+use tokio::sync::Mutex;
 
 use crate::config::ApiConfig;
 use crate::error::ApiError;
@@ -223,8 +228,22 @@ use crate::rpc::{LanforgeRpc, LanforgeRpcDispatcher, RpcRequest, RpcResponse};
 
 pub struct RpcServer<W> {
     ctx: ClientContext,
-    writer: Arc<tokio::sync::Mutex<W>>,
-    buf: Arc<tokio::sync::Mutex<Vec<u8>>>,
+    writer: Arc<Mutex<W>>,
+    buf: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<W> RpcServer<W> {
+    fn map_error(err: String) -> RpcCallError {
+        if err.contains("Invalid MAC") {
+            RpcCallError::InvalidMac(err)
+        } else if err.contains("not found") {
+            RpcCallError::DeviceNotFound(err)
+        } else if err.contains("Failed to update") {
+            RpcCallError::UpdateFailed
+        } else {
+            RpcCallError::Internal(err)
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -232,11 +251,11 @@ impl<W> LanforgeRpc for RpcServer<W>
 where
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    async fn status(&self) -> Box<crate::api::StatusResponse> {
-        if let Response::Status(s) = self.ctx.handle_status().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn status(&self) -> Result<Box<StatusResponse>, RpcCallError> {
+        match self.ctx.handle_status().await {
+            Response::Status(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -246,42 +265,46 @@ where
         vendor: Option<String>,
         method: Option<String>,
         format: Option<String>,
-    ) -> crate::api::DevicesResponse {
-        if let Response::Devices(r) = self
+    ) -> Result<DevicesResponse, RpcCallError> {
+        match self
             .ctx
             .handle_devices(filter, vendor, method, format)
             .await
         {
-            r
-        } else {
-            panic!("Invalid response type")
+            Response::Devices(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn reload(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_reload().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn reload(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_reload().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn watch(&self) -> () {}
-    async fn log(&self, _follow: bool, _n: Option<usize>) -> () {}
+    async fn watch(&self) -> Result<(), RpcCallError> {
+        Ok(())
+    }
+    async fn log(&self, _follow: bool, _n: Option<usize>) -> Result<(), RpcCallError> {
+        Ok(())
+    }
 
-    async fn scan(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_scan().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn scan(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_scan().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn shutdown(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_shutdown().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn shutdown(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_shutdown().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -291,11 +314,11 @@ where
         hostname: Option<String>,
         v4: Option<String>,
         v6_suffix: Option<String>,
-    ) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_host_add(mac, hostname, v4, v6_suffix).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_host_add(mac, hostname, v4, v6_suffix).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -304,27 +327,27 @@ where
         mac: String,
         field: String,
         value: String,
-    ) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_host_set(mac, field, value).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_host_set(mac, field, value).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn host_remove(&self, mac: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_host_remove(mac).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn host_remove(&self, mac: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_host_remove(mac).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn host_list(&self) -> crate::api::HostsResponse {
-        if let Response::Hosts(r) = self.ctx.handle_hosts().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn host_list(&self) -> Result<crate::api::HostsResponse, RpcCallError> {
+        match self.ctx.handle_hosts().await {
+            Response::Hosts(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -332,11 +355,11 @@ where
         &self,
         mac: String,
         target: Option<lanforge_core::types::LeaseTarget>,
-    ) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_lease_renew(mac, target).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_lease_renew(mac, target).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -344,91 +367,94 @@ where
         &self,
         mac: String,
         target: Option<lanforge_core::types::LeaseTarget>,
-    ) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_lease_release(mac, target).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_lease_release(mac, target).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dhcp_pools(&self) -> crate::api::DhcpPoolsResponse {
-        if let Response::DhcpPools(r) = self.ctx.handle_dhcp_pools().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dhcp_pools(&self) -> Result<crate::api::DhcpPoolsResponse, RpcCallError> {
+        match self.ctx.handle_dhcp_pools().await {
+            Response::DhcpPools(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn db_vacuum(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_db_vacuum().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn db_vacuum(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_db_vacuum().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn db_log_clean(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_db_log_clean().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn db_log_clean(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_db_log_clean().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn db_prune(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_db_prune().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn db_prune(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_db_prune().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn purge(&self, mac: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_purge(mac).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn purge(&self, mac: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_purge(mac).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn wol(&self, target: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_wol(target).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn wol(&self, target: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_wol(target).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn whois(&self, target: String) -> Box<crate::api::WhoisResponse> {
-        if let Response::Whois(r) = self.ctx.handle_whois(target).await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn whois(&self, target: String) -> Result<Box<crate::api::WhoisResponse>, RpcCallError> {
+        match self.ctx.handle_whois(target).await {
+            Response::Whois(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_stats(&self) -> crate::api::DnsStatsResponse {
-        if let Response::DnsStats(r) = self.ctx.handle_dns_stats().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dns_stats(&self) -> Result<crate::api::DnsStatsResponse, RpcCallError> {
+        match self.ctx.handle_dns_stats().await {
+            Response::DnsStats(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_analytics(&self, limit: Option<usize>) -> crate::api::DnsAnalyticsResponse {
-        if let Response::DnsAnalytics(r) = self.ctx.handle_dns_analytics(limit).await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dns_analytics(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<crate::api::DnsAnalyticsResponse, RpcCallError> {
+        match self.ctx.handle_dns_analytics(limit).await {
+            Response::DnsAnalytics(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_upstreams(&self) -> crate::api::DnsUpstreamsResponse {
-        if let Response::DnsUpstreams(r) = self.ctx.handle_dns_upstreams().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dns_upstreams(&self) -> Result<crate::api::DnsUpstreamsResponse, RpcCallError> {
+        match self.ctx.handle_dns_upstreams().await {
+            Response::DnsUpstreams(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -436,27 +462,27 @@ where
         &self,
         name: String,
         record_type: Option<String>,
-    ) -> crate::api::DnsQueryResponse {
-        if let Response::DnsQuery(r) = self.ctx.handle_dns_query(name, record_type).await {
-            r
-        } else {
-            panic!("Invalid response type")
+    ) -> Result<crate::api::DnsQueryResponse, RpcCallError> {
+        match self.ctx.handle_dns_query(name, record_type).await {
+            Response::DnsQuery(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_cache_flush(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_cache_flush().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_cache_flush(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_cache_flush().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_cache_dump(&self) -> crate::api::DnsCacheResponse {
-        if let Response::DnsCache(r) = self.ctx.handle_dns_cache_dump().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dns_cache_dump(&self) -> Result<crate::api::DnsCacheResponse, RpcCallError> {
+        match self.ctx.handle_dns_cache_dump().await {
+            Response::DnsCache(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -464,23 +490,23 @@ where
         &self,
         enabled: bool,
         duration_secs: Option<u64>,
-    ) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self
             .ctx
             .handle_dns_adblock_set(enabled, duration_secs)
             .await
         {
-            s
-        } else {
-            panic!("Invalid response type")
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_adblock_reload(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_adblock_reload().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_adblock_reload(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_adblock_reload().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -489,13 +515,15 @@ where
         limit: Option<usize>,
         client: Option<String>,
         follow: bool,
-    ) -> crate::api::DnsQueryLogResponse {
-        let Response::DnsQueryLog(res) = self
+    ) -> Result<crate::api::DnsQueryLogResponse, RpcCallError> {
+        let res = match self
             .ctx
             .handle_dns_query_log(limit, client.clone(), follow)
             .await
-        else {
-            panic!("Invalid response type")
+        {
+            Response::DnsQueryLog(res) => res,
+            Response::Error { error } => return Err(Self::map_error(error)),
+            _ => return Err(RpcCallError::InvalidResponseType),
         };
 
         if follow {
@@ -538,94 +566,106 @@ where
             });
         }
 
-        res
+        Ok(res)
     }
 
-    async fn dns_adblock_status(&self) -> crate::api::DnsAdblockStatusResponse {
-        if let Response::DnsAdblockStatus(r) = self.ctx.handle_dns_adblock_status().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dns_adblock_status(
+        &self,
+    ) -> Result<crate::api::DnsAdblockStatusResponse, RpcCallError> {
+        match self.ctx.handle_dns_adblock_status().await {
+            Response::DnsAdblockStatus(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_block(&self, domain: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_block(domain).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_block(&self, domain: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_block(domain).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_allow(&self, domain: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_allow(domain).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_allow(&self, domain: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_allow(domain).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_unallow(&self, domain: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_unallow(domain).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_unallow(&self, domain: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_unallow(domain).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_rewrite_add(&self, domain: String, answer: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_rewrite_add(domain, answer).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_rewrite_add(
+        &self,
+        domain: String,
+        answer: String,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_rewrite_add(domain, answer).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_rewrite_remove(&self, domain: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_rewrite_remove(domain).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_rewrite_remove(&self, domain: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_rewrite_remove(domain).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_rewrites(&self) -> crate::api::DnsRewritesResponse {
-        if let Response::DnsRewrites(r) = self.ctx.handle_dns_rewrites().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dns_rewrites(&self) -> Result<crate::api::DnsRewritesResponse, RpcCallError> {
+        match self.ctx.handle_dns_rewrites().await {
+            Response::DnsRewrites(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_allowlist(&self) -> crate::api::DnsAllowlistResponse {
-        if let Response::DnsAllowlist(r) = self.ctx.handle_dns_allowlist().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dns_allowlist(&self) -> Result<crate::api::DnsAllowlistResponse, RpcCallError> {
+        match self.ctx.handle_dns_allowlist().await {
+            Response::DnsAllowlist(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_adblock_url_add(&self, url: String, kind: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_adblock_url_add(url, kind).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_adblock_url_add(
+        &self,
+        url: String,
+        kind: String,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_adblock_url_add(url, kind).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_adblock_url_remove(&self, url: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_dns_adblock_url_remove(url).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn dns_adblock_url_remove(&self, url: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_dns_adblock_url_remove(url).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dns_adblock_url_list(&self) -> crate::api::DnsAdblockUrlsResponse {
-        if let Response::DnsAdblockUrls(r) = self.ctx.handle_dns_adblock_urls().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn dns_adblock_url_list(
+        &self,
+    ) -> Result<crate::api::DnsAdblockUrlsResponse, RpcCallError> {
+        match self.ctx.handle_dns_adblock_urls().await {
+            Response::DnsAdblockUrls(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
@@ -633,55 +673,58 @@ where
         &self,
         only_devices: bool,
         only_orphans: bool,
-    ) -> Box<lanforge_core::context::state::State> {
-        if let Response::ContextDump(s) = self
+    ) -> Result<Box<State>, RpcCallError> {
+        match self
             .ctx
             .handle_context_dump(only_devices, only_orphans)
             .await
         {
-            s
-        } else {
-            panic!("Invalid response type")
+            Response::ContextDump(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn db_reset(&self) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_db_reset().await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn db_reset(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_db_reset().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn leases(&self, count: bool) -> crate::api::LeasesResponse {
-        if let Response::Leases(r) = self.ctx.handle_leases(count).await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn leases(&self, count: bool) -> Result<LeasesResponse, RpcCallError> {
+        match self.ctx.handle_leases(count).await {
+            Response::Leases(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn topology(&self) -> crate::api::TopologyResponse {
-        if let Response::Topology(r) = self.ctx.handle_topology().await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn topology(&self) -> Result<TopologyResponse, RpcCallError> {
+        match self.ctx.handle_topology().await {
+            Response::Topology(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn config_set_password(&self, password: String) -> crate::api::SimpleSuccess {
-        if let Response::Success(s) = self.ctx.handle_config_set_password(password).await {
-            s
-        } else {
-            panic!("Invalid response type")
+    async fn config_set_password(&self, password: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.ctx.handle_config_set_password(password).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn auth_generate_token(&self, name: String) -> crate::api::AuthTokenResponse {
-        if let Response::AuthToken(r) = self.ctx.handle_auth_generate_token(name).await {
-            r
-        } else {
-            panic!("Invalid response type")
+    async fn auth_generate_token(
+        &self,
+        name: String,
+    ) -> Result<crate::api::AuthTokenResponse, RpcCallError> {
+        match self.ctx.handle_auth_generate_token(name).await {
+            Response::AuthToken(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 }
@@ -692,8 +735,8 @@ where
 {
     let (reader, writer) = split(stream);
     let mut reader = BufReader::new(reader);
-    let writer = Arc::new(tokio::sync::Mutex::new(writer));
-    let buf = Arc::new(tokio::sync::Mutex::new(Vec::with_capacity(8192)));
+    let writer = Arc::new(Mutex::new(writer));
+    let buf = Arc::new(Mutex::new(Vec::with_capacity(8192)));
     let rpc_server = RpcServer {
         ctx: ctx.clone(),
         writer: writer.clone(),
@@ -763,11 +806,11 @@ where
 ///
 /// Returns an `ApiError` if the database query fails or the client disconnects unexpectedly.
 pub async fn handle_log_stream<W, R>(
-    writer: Arc<tokio::sync::Mutex<W>>,
+    writer: Arc<Mutex<W>>,
     mut reader: R,
     ctx: ClientContext,
     n: Option<usize>,
-    buf: Arc<tokio::sync::Mutex<Vec<u8>>>,
+    buf: Arc<Mutex<Vec<u8>>>,
     follow: bool,
 ) -> Result<(), ApiError>
 where
@@ -825,10 +868,10 @@ where
 
 /// Handles the 'Watch' command by streaming live state changes.
 async fn handle_watch_stream<W, R>(
-    writer: Arc<tokio::sync::Mutex<W>>,
+    writer: Arc<Mutex<W>>,
     mut reader: R,
     ctx: ClientContext,
-    buf: Arc<tokio::sync::Mutex<Vec<u8>>>,
+    buf: Arc<Mutex<Vec<u8>>>,
 ) -> Result<(), ApiError>
 where
     W: AsyncWrite + Unpin,
