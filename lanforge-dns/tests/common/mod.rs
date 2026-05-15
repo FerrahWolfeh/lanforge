@@ -1,8 +1,10 @@
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
-use lanforge_types::{DeviceUpdate, MacAddr, TransportProtocol};
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LeaseDb;
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::TransportProtocol;
+use lanforge_types::update::DeviceUpdate;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

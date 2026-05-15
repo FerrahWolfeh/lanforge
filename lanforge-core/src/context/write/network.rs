@@ -1,7 +1,7 @@
 //! Network-specific mutation wrappers.
 
 use crate::context::LanforgeContext;
-use lanforge_types::updates::{DeviceUpdate, InterfaceState};
+use lanforge_types::update::{DeviceUpdate, InterfaceState};
 use std::net::Ipv6Addr;
 
 impl LanforgeContext {

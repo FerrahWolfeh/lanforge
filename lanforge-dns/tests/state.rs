@@ -1,8 +1,9 @@
 mod common;
 use common::*;
-use lanforge_types::{
-    CliHostUpdate, DeviceUpdate, DnsRecordType, FieldUpdate, Ipv6AddrOrSuffix, MacAddr, Origin,
-};
+use lanforge_types::device::{Ipv6AddrOrSuffix, Origin};
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::DnsRecordType;
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};

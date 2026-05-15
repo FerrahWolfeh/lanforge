@@ -1,10 +1,10 @@
-use crate::config::{BlockingMode, RewriteAnswer};
 use crate::error::DnsError;
 use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
 use crate::wire::{WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter};
 use dashmap::DashMap;
-use lanforge_types::DnsRecordType;
+use lanforge_types::network::dns::DnsRecordType;
+use lanforge_types::network::dns::adblock::{BlockingMode, RewriteAnswer, RewriteRule};
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
@@ -24,7 +24,7 @@ pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
     pub allowlist: RwLock<Arc<HashSet<String>>>,
     pub timer: Arc<AdblockTimerState>,
-    pub rewrites: RwLock<Arc<Vec<crate::config::RewriteRule>>>,
+    pub rewrites: RwLock<Arc<Vec<RewriteRule>>>,
     pub config: RwLock<Arc<AdblockRuntimeConfig>>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
 }
@@ -180,7 +180,7 @@ impl AdBlocker {
         info!("AdBlocker: allowlist updated with {} entries", count);
     }
 
-    pub fn replace_rewrites(&self, new_rules: Vec<crate::config::RewriteRule>) {
+    pub fn replace_rewrites(&self, new_rules: Vec<RewriteRule>) {
         let count = new_rules.len();
         *self.rewrites.write() = Arc::new(new_rules);
         info!("AdBlocker: rewrites updated with {} entries", count);
@@ -233,7 +233,7 @@ impl AdBlocker {
                     false
                 }
             })
-            .map(crate::config::RewriteRule::parse_answer)
+            .map(RewriteRule::parse_answer)
     }
 
     pub fn load_from_urls(&self, name: &str, urls: &[String]) -> Result<HashSet<String>, DnsError> {

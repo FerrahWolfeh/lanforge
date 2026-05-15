@@ -1721,9 +1721,6 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "hickory-proto"
@@ -2364,6 +2361,7 @@ dependencies = [
  "futures",
  "hotpath",
  "lanforge-api",
+ "lanforge-api-dispatch",
  "lanforge-core",
  "lanforge-db",
  "lanforge-dns",
@@ -2371,6 +2369,7 @@ dependencies = [
  "lanforge-network",
  "lanforge-tftp",
  "lanforge-types",
+ "lanforge-uds",
  "netlink-sys",
  "pnet",
  "rtnetlink",
@@ -2392,22 +2391,36 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "lanforge-macros",
+ "lanforge-types",
+ "postcard",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "lanforge-api-dispatch"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
  "hex",
  "hotpath",
+ "lanforge-api",
  "lanforge-core",
  "lanforge-db",
  "lanforge-dns",
  "lanforge-macros",
  "lanforge-types",
- "postcard",
  "rand 0.10.1",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tracing",
- "zstd",
 ]
 
 [[package]]
@@ -2539,6 +2552,7 @@ dependencies = [
  "http-body-util",
  "jsonwebtoken",
  "lanforge-api",
+ "lanforge-api-dispatch",
  "lanforge-core",
  "lanforge-db",
  "lanforge-dns",
@@ -2616,6 +2630,33 @@ dependencies = [
  "lanforge-macros",
  "serde",
  "smallvec",
+]
+
+[[package]]
+name = "lanforge-uds"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "hex",
+ "hotpath",
+ "lanforge-api",
+ "lanforge-api-dispatch",
+ "lanforge-core",
+ "lanforge-db",
+ "lanforge-dns",
+ "lanforge-macros",
+ "lanforge-types",
+ "parking_lot",
+ "postcard",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

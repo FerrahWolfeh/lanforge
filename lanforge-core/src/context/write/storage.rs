@@ -4,7 +4,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use lanforge_types::DeviceUpdate;
+use lanforge_types::update::DeviceUpdate;
 
 use crate::context::LanforgeContext;
 

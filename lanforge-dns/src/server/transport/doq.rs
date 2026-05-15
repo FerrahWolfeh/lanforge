@@ -1,4 +1,4 @@
-use lanforge_types::TransportProtocol;
+use lanforge_types::network::dns::TransportProtocol;
 use quinn::{Endpoint, ServerConfig, TransportConfig};
 use std::sync::Arc;
 use std::time::Duration;

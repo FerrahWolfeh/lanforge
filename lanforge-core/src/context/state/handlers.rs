@@ -6,9 +6,8 @@ use crate::bus::{DeviceChange, DeviceEvent, EventVec, LanforgeEvent, NetworkEven
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
-use lanforge_types::Origin;
 use lanforge_types::device::{
-    Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, TopologyInfo,
+    Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Origin, TopologyInfo,
     V6ObservationOrigin, classify_ipv6,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};

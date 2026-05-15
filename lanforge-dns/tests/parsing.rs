@@ -1,5 +1,5 @@
-use lanforge_types::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
 use lanforge_dns::wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
+use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
 use std::sync::Arc;
 
 #[test]

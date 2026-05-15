@@ -36,12 +36,12 @@ use tracing::{error, info};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceControl};
 
-use lanforge_api::config::ApiConfig;
+use crate::config::HttpConfig;
 
 /// State shared across Axum handlers.
 #[derive(Clone)]
 pub struct AppState {
-    pub cfg: Arc<ApiConfig>,
+    pub cfg: Arc<HttpConfig>,
     pub ctx: LanforgeContext,
     pub db: Arc<LeaseDb>,
     pub log_db: Arc<LogDb>,
@@ -52,6 +52,12 @@ pub struct AppState {
 impl axum::extract::FromRef<AppState> for AuthManager {
     fn from_ref(state: &AppState) -> Self {
         (*state.auth).clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for Arc<HttpConfig> {
+    fn from_ref(state: &AppState) -> Self {
+        state.cfg.clone()
     }
 }
 
@@ -70,11 +76,11 @@ impl axum::extract::FromRef<AppState> for Arc<LeaseDb> {
     max_backoff = 60,
     describe = format!(
         "HTTP API on {}",
-        self.cfg.http_listen.map_or_else(|| "0.0.0.0:8080".to_string(), |a| a.to_string())
+        self.cfg.listen
     )
 )]
 pub struct HttpService {
-    cfg: Arc<ApiConfig>,
+    cfg: Arc<HttpConfig>,
     ctx: LanforgeContext,
     db: Arc<LeaseDb>,
     log_db: Arc<LogDb>,
@@ -83,7 +89,7 @@ pub struct HttpService {
 impl HttpService {
     #[must_use]
     pub const fn new(
-        cfg: Arc<ApiConfig>,
+        cfg: Arc<HttpConfig>,
         ctx: LanforgeContext,
         db: Arc<LeaseDb>,
         log_db: Arc<LogDb>,
@@ -101,9 +107,7 @@ impl AsyncService for HttpService {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
 
-        let addr = cfg
-            .http_listen
-            .unwrap_or_else(|| "0.0.0.0:8080".parse().unwrap());
+        let addr = cfg.listen;
 
         let state = AppState {
             cfg: cfg.clone(),
@@ -115,7 +119,13 @@ impl AsyncService for HttpService {
         };
 
         let mut app = Router::new()
-            .nest("/api", routes::router().layer(axum::middleware::from_fn_with_state(state.clone(), crate::auth::middleware)))
+            .nest(
+                "/api",
+                routes::router().layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::auth::middleware,
+                )),
+            )
             .route("/metrics", get(handle_metrics));
 
         if let Some(boot_dir) = &cfg.boot_dir {
@@ -207,7 +217,7 @@ impl AsyncService for HttpService {
 
 async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoResponse> {
     let uptime = state.start_time.elapsed().as_secs();
-    let body = crate::metrics::generate_metrics(&state.ctx, &state.cfg, uptime);
+    let body = crate::metrics::generate_metrics(&state.ctx, uptime);
 
     axum::response::Response::builder()
         .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -293,10 +303,10 @@ async fn handle_dns_query(
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use lanforge_types::TransportProtocol;
     use lanforge_dns::pipeline::DnsPipelineRequest;
     use lanforge_dns::server::DnsContext;
     use lanforge_dns::wire::{WireHeader, WireQuestion};
+    use lanforge_types::network::dns::TransportProtocol;
 
     let query_data = if method == axum::http::Method::GET {
         let Some(dns_base64) = params.dns else {

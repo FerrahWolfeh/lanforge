@@ -1,6 +1,4 @@
 #[cfg(feature = "doh-upstream")]
-use crate::config::UpstreamTarget;
-#[cfg(feature = "doh-upstream")]
 use crate::error::DnsError;
 #[cfg(feature = "doh-upstream")]
 use http_body_util::{BodyExt, Full};
@@ -12,6 +10,8 @@ use hyper::{Method, Request};
 use hyper_util::client::legacy::Client;
 #[cfg(feature = "doh-upstream")]
 use hyper_util::rt::TokioExecutor;
+#[cfg(feature = "doh-upstream")]
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 #[cfg(feature = "doh-upstream")]
 use std::time::Duration;
 
@@ -38,14 +38,14 @@ impl DohClient {
         let client = Client::builder(TokioExecutor::new())
             .pool_idle_timeout(Duration::from_secs(90))
             .build(https);
-            
+
         Self { client }
     }
 
     pub async fn resolve(&self, target: &UpstreamTarget, data: &[u8]) -> Result<Vec<u8>, DnsError> {
         let hostname = target.hostname.as_deref().unwrap_or("dns.google");
         let uri = format!("https://{}/dns-query", hostname);
-        
+
         let req = Request::builder()
             .method(Method::POST)
             .uri(uri)
@@ -54,18 +54,31 @@ impl DohClient {
             .body(Full::new(Bytes::copy_from_slice(data)))
             .map_err(|e| DnsError::Generic(e.to_string()))?;
 
-        let resp = self.client.request(req).await.map_err(|e| DnsError::Generic(e.to_string()))?;
-        
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|e| DnsError::Generic(e.to_string()))?;
+
         if !resp.status().is_success() {
-            return Err(DnsError::Generic(format!("DoH server returned status {}", resp.status())));
+            return Err(DnsError::Generic(format!(
+                "DoH server returned status {}",
+                resp.status()
+            )));
         }
 
-        let body = resp.collect().await.map_err(|e| DnsError::Generic(e.to_string()))?.to_bytes();
+        let body = resp
+            .collect()
+            .await
+            .map_err(|e| DnsError::Generic(e.to_string()))?
+            .to_bytes();
         Ok(body.to_vec())
     }
 }
 
 #[cfg(feature = "doh-upstream")]
 impl Default for DohClient {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

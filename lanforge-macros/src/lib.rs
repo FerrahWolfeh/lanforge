@@ -554,7 +554,7 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
         #[derive(serde::Serialize, serde::Deserialize, Debug)]
         pub enum RpcResponse {
             #(#response_variants),*,
-            Event(lanforge_core::bus::TimedEvent),
+            Event(lanforge_types::events::TimedEvent),
             Error(#global_error_type),
         }
 

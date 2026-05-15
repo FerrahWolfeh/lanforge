@@ -1,15 +1,15 @@
-use lanforge_api::config::ApiConfig;
 use lanforge_core::context::{EventCounters, LanforgeContext};
-use lanforge_types::device::{Device, Origin};
 use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::DnsStats;
+use lanforge_types::device::{Device, Origin};
+use lanforge_types::system::SystemStatus;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 /// Generates a Prometheus-formatted metrics string.
 #[must_use]
-pub fn generate_metrics(ctx: &LanforgeContext, cfg: &ApiConfig, uptime_secs: u64) -> String {
+pub fn generate_metrics(ctx: &LanforgeContext, uptime_secs: u64) -> String {
     let mut out = String::with_capacity(4096);
     let (devices, v4_leases, v6_leases) = {
         let state = ctx.read();
@@ -25,12 +25,13 @@ pub fn generate_metrics(ctx: &LanforgeContext, cfg: &ApiConfig, uptime_secs: u64
         (devices, v4_leases, v6_leases)
     };
     let counters = ctx.counters();
+    let status = ctx.get_status().unwrap_or_default();
 
     append_device_metrics(&mut out, &devices);
-    append_dhcp_metrics(&mut out, cfg, v4_leases, v6_leases);
+    append_dhcp_metrics(&mut out, &status, v4_leases, v6_leases);
     append_dns_metrics(&mut out, ctx);
     append_core_metrics(&mut out, counters);
-    append_system_metrics(&mut out, cfg, uptime_secs);
+    append_system_metrics(&mut out, &status, uptime_secs);
 
     out
 }
@@ -67,7 +68,12 @@ fn append_device_metrics(out: &mut String, devices: &[Arc<Device>]) {
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn append_dhcp_metrics(out: &mut String, cfg: &ApiConfig, v4_leases: usize, v6_leases: usize) {
+fn append_dhcp_metrics(
+    out: &mut String,
+    status: &SystemStatus,
+    v4_leases: usize,
+    v6_leases: usize,
+) {
     out.push_str("# HELP lanforge_dhcp_leases_active Total active dynamic leases\n");
     out.push_str("# TYPE lanforge_dhcp_leases_active gauge\n");
     let _ = writeln!(
@@ -79,8 +85,8 @@ fn append_dhcp_metrics(out: &mut String, cfg: &ApiConfig, v4_leases: usize, v6_l
         "lanforge_dhcp_leases_active{{proto=\"v6\"}} {v6_leases}"
     );
 
-    if cfg.dhcp_v4_range_size > 0 {
-        let ratio = (v4_leases as f64) / (f64::from(cfg.dhcp_v4_range_size));
+    if status.dhcp_v4_range_size > 0 {
+        let ratio = (v4_leases as f64) / (f64::from(status.dhcp_v4_range_size));
         out.push_str(
             "# HELP lanforge_dhcp_pool_usage_ratio Ratio of IP pool currently allocated\n",
         );
@@ -91,7 +97,7 @@ fn append_dhcp_metrics(out: &mut String, cfg: &ApiConfig, v4_leases: usize, v6_l
         );
     }
 
-    if let Some(pool_size) = cfg.dhcp_v6_pool_size
+    if let Some(pool_size) = status.dhcp_v6_pool_size
         && pool_size > 0
     {
         let ratio = (v6_leases as f64) / (pool_size as f64);
@@ -187,12 +193,14 @@ fn append_core_metrics(out: &mut String, counters: &EventCounters) {
     );
 }
 
-fn append_system_metrics(out: &mut String, cfg: &ApiConfig, uptime_secs: u64) {
+fn append_system_metrics(out: &mut String, status: &SystemStatus, uptime_secs: u64) {
     out.push_str("# HELP lanforge_uptime_seconds Daemon uptime in seconds\n");
     out.push_str("# TYPE lanforge_uptime_seconds counter\n");
     let _ = writeln!(out, "lanforge_uptime_seconds {uptime_secs}");
 
-    if let Ok(metadata) = std::fs::metadata(&cfg.db_path) {
+    if !status.db_path.is_empty()
+        && let Ok(metadata) = std::fs::metadata(&status.db_path)
+    {
         out.push_str("# HELP lanforge_db_size_bytes Size of the SQLite persistence database\n");
         out.push_str("# TYPE lanforge_db_size_bytes gauge\n");
         let _ = writeln!(
@@ -201,7 +209,9 @@ fn append_system_metrics(out: &mut String, cfg: &ApiConfig, uptime_secs: u64) {
             metadata.len()
         );
     }
-    if let Ok(metadata) = std::fs::metadata(&cfg.log_db_path) {
+    if !status.log_db_path.is_empty()
+        && let Ok(metadata) = std::fs::metadata(&status.log_db_path)
+    {
         let _ = writeln!(
             out,
             "lanforge_db_size_bytes{{file=\"logs\"}} {}",

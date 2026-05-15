@@ -1,15 +1,13 @@
-pub mod system;
 pub mod auth;
+pub mod db;
 pub mod devices;
 pub mod dhcp;
 pub mod dns;
-pub mod db;
+pub mod system;
 
-use axum::Router;
 use crate::server::AppState;
-use lanforge_api::server::ClientContext;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use axum::Router;
+use lanforge_api_dispatch::ClientContext;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -27,10 +25,9 @@ pub fn create_client_ctx(state: &AppState) -> ClientContext {
         current_gua: None,
         uptime_secs: state.start_time.elapsed().as_secs(),
         last_scan_secs_ago: state.ctx.last_scan_secs_ago(),
-        cfg: state.cfg.clone(),
         ctx: state.ctx.clone(),
         db: state.db.clone(),
         log_db: state.log_db.clone(),
-        active_clients: Arc::new(AtomicUsize::new(0)),
+        active_clients: state.ctx.active_clients(),
     }
 }

@@ -7,7 +7,7 @@ use lanforge_core::context::state::State;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_network::ifmon::AddressMonitor;
-use lanforge_types::InterfaceState;
+use lanforge_types::update::InterfaceState;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::Ipv6AddrOrSuffix;
@@ -64,6 +64,7 @@ impl Bootstrapper {
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
+        ctx.set_status(cfg.to_system_status());
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 
         // --- PHASE 2: Netlink Setup ---

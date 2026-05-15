@@ -2,14 +2,16 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_types::{
-    DeviceUpdate, DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
-    MacAddr,
-};
-use lanforge_dns::DnsService;
-use lanforge_dns::config::{DnsConfig, UpstreamEntry};
+use lanforge_dns::config::DnsConfig;
+use lanforge_dns::server::service::DnsService;
 use lanforge_dns::telemetry::DnsStats;
 use lanforge_dns::wire::{WireDecoder, WireEncoder};
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::upstream::UpstreamEntry;
+use lanforge_types::network::dns::{
+    DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
+};
+use lanforge_types::update::DeviceUpdate;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

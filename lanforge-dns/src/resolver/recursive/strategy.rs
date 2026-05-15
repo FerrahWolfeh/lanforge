@@ -2,10 +2,14 @@ use crate::error::DnsError;
 use crate::resolver::recursive::UpstreamManager;
 use crate::utils::health::UpstreamStatus;
 use crate::wire::{WireDecoder, WireEncoder};
-use lanforge_types::network::dns::UpstreamHealthSnapshot;
-use lanforge_types::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
+#[cfg(not(feature = "doh-upstream"))]
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::{
+    DnsClass, DnsMessage, DnsQuestion, DnsRecordType, UpstreamHealthSnapshot,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::task::JoinSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -66,17 +70,17 @@ impl UpstreamStrategy {
                 );
 
                 #[cfg(not(feature = "dot"))]
-                if m.target.protocol == crate::config::UpstreamProtocol::Tls {
+                if m.target.protocol == UpstreamProtocol::Tls {
                     snap.status = "Disabled (Feature)".to_string();
                 }
 
                 #[cfg(not(feature = "doq"))]
-                if m.target.protocol == crate::config::UpstreamProtocol::Quic {
+                if m.target.protocol == UpstreamProtocol::Quic {
                     snap.status = "Disabled (Feature)".to_string();
                 }
 
                 #[cfg(not(feature = "doh-upstream"))]
-                if m.target.protocol == crate::config::UpstreamProtocol::Https {
+                if m.target.protocol == UpstreamProtocol::Https {
                     snap.status = "Disabled (Feature)".to_string();
                 }
 
@@ -157,7 +161,6 @@ impl UpstreamStrategy {
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
-        use tokio::task::JoinSet;
         let mut set = JoinSet::new();
 
         let mut available: Vec<_> = tier

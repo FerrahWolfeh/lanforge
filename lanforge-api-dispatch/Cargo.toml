@@ -1,0 +1,32 @@
+[package]
+name = "lanforge-api-dispatch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lanforge-types = { path = "../lanforge-types" }
+lanforge-core = { path = "../lanforge-core" }
+lanforge-db = { path = "../lanforge-db" }
+lanforge-api = { path = "../lanforge-api" }
+lanforge-dns = { path = "../lanforge-dns" }
+lanforge-macros = { path = "../lanforge-macros" }
+
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+serde = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1.86"
+serde_json = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+rand = "0.10.1"
+hex = "0.4.3"
+hotpath = { workspace = true, optional = true }
+
+[features]
+adblock = [
+    "lanforge-types/adblock",
+    "lanforge-core/adblock",
+    "lanforge-dns/adblock",
+]
+zstd = []
+hotpath = ["dep:hotpath", "lanforge-core/hotpath", "lanforge-dns/hotpath"]

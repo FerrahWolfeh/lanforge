@@ -38,7 +38,7 @@ use lanforge_core::bus::{
 };
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::{DeviceUpdate, LeaseTarget};
+use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, SystemTime};

@@ -1,5 +1,5 @@
-use lanforge_core::bus::TimedEvent;
-use lanforge_core::context::state::State;
+use lanforge_types::events::TimedEvent;
+use serde_json::Value;
 use serde::{Deserialize, Serialize};
 
 pub mod common;
@@ -54,7 +54,7 @@ pub enum Response {
     /// Response for DNS cache dump.
     DnsCache(DnsCacheResponse),
     /// Response for a full context dump.
-    ContextDump(Box<State>),
+    ContextDump(Box<Value>),
     /// List of active DHCP leases.
     Leases(LeasesResponse),
     /// Hierarchical physical topology.

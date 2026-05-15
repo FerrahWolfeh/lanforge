@@ -2,9 +2,15 @@ pub mod cache;
 pub mod strategy;
 
 pub use cache::DnsCache;
+#[cfg(feature = "doq")]
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 pub use strategy::{UpstreamMode, UpstreamStrategy};
+#[cfg(feature = "dot")]
+use tokio_rustls::TlsConnector;
+#[cfg(feature = "dot")]
+use tokio_rustls::client::TlsStream;
 
-use crate::config::{UpstreamProtocol, UpstreamTarget};
 use crate::error::DnsError;
 use crate::utils::health::UpstreamHealth;
 use crate::wire::{WireHeader, WireQuestion};
@@ -32,9 +38,9 @@ pub struct UpstreamManager {
     #[cfg(feature = "doh-upstream")]
     pub doh_client: Option<crate::server::transport::doh::DohClient>,
     #[cfg(feature = "dot")]
-    pub(crate) tls_connector: Option<tokio_rustls::TlsConnector>,
+    pub(crate) tls_connector: Option<TlsConnector>,
     #[cfg(feature = "dot")]
-    pub(crate) dot_pool: tokio::sync::Mutex<Vec<tokio_rustls::client::TlsStream<TcpStream>>>,
+    pub(crate) dot_pool: tokio::sync::Mutex<Vec<TlsStream<TcpStream>>>,
     #[cfg(feature = "doq")]
     pub(crate) quic_endpoint: Option<quinn::Endpoint>,
     #[cfg(feature = "doq")]
@@ -148,7 +154,7 @@ impl UpstreamManager {
                 let config = rustls::ClientConfig::builder()
                     .with_root_certificates(Arc::clone(&shared_roots))
                     .with_no_client_auth();
-                Some(tokio_rustls::TlsConnector::from(Arc::new(config)))
+                Some(TlsConnector::from(Arc::new(config)))
             } else {
                 None
             },
@@ -313,10 +319,7 @@ impl UpstreamManager {
     }
 
     #[cfg(feature = "dot")]
-    async fn dot_connect(
-        &self,
-        target: &UpstreamTarget,
-    ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, DnsError> {
+    async fn dot_connect(&self, target: &UpstreamTarget) -> Result<TlsStream<TcpStream>, DnsError> {
         use rustls_pki_types::ServerName;
 
         let hostname = target.hostname.as_deref().unwrap_or("dns.google");
@@ -339,7 +342,7 @@ impl UpstreamManager {
 
     #[cfg(feature = "dot")]
     async fn dot_exchange(
-        stream: &mut tokio_rustls::client::TlsStream<TcpStream>,
+        stream: &mut TlsStream<TcpStream>,
         data: &[u8],
     ) -> Result<Vec<u8>, DnsError> {
         timeout(Duration::from_secs(5), async {

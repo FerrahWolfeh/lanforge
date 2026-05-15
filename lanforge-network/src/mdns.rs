@@ -21,9 +21,32 @@
 //!
 //! Marked as `critical: false` — failure does not halt the daemon.
 
-use lanforge_types::DeviceClass;
 use lanforge_macros::ServiceConfig;
+use lanforge_types::device::DeviceClass;
+use lanforge_types::network::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType};
+use lanforge_types::update::DeviceUpdate;
 use serde::{Deserialize, Serialize};
+
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{AsyncService, ServiceControl};
+use pnet::datalink::interfaces;
+use std::fmt::Write;
+use std::io::ErrorKind;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc::{self, Receiver, Sender};
+use tracing::{debug, error, warn};
+
+use lanforge_dns::wire::{WireDecoder, WireEncoder};
+
+use crate::error::NetworkError;
+
+const MDNS_PORT: u16 = 5353;
+const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
+const MDNS_IPV6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
 
 /// Configuration for the mDNS prober.
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
@@ -44,30 +67,6 @@ impl Default for MdnsConfig {
         }
     }
 }
-
-use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
-use lanforge_core::context::LanforgeContext;
-use lanforge_types::DeviceUpdate;
-use pnet::datalink::interfaces;
-use std::fmt::Write;
-use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::mpsc::{self, Receiver, Sender};
-use tracing::{debug, error, warn};
-
-use lanforge_types::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType};
-use lanforge_dns::wire::{WireDecoder, WireEncoder};
-
-use crate::error::NetworkError;
-
-const MDNS_PORT: u16 = 5353;
-const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
-const MDNS_IPV6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
-
-use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
 
 enum MdnsCommand {
     ProbeAll,

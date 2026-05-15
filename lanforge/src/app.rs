@@ -10,13 +10,12 @@ use crate::bootstrap::BootstrapResult;
 use crate::config::Config;
 use crate::event_loop::{LoopResult, run_event_loop};
 use crate::registry::ServiceRegistry;
-use lanforge_api::server::ControlService;
 use lanforge_db::worker::DbWorker;
-use lanforge_dns::DnsService;
+use lanforge_dns::server::service::DnsService;
 #[cfg(feature = "dns-doq")]
-use lanforge_dns::DoqService;
+use lanforge_dns::server::transport::doq::DoqService;
 #[cfg(feature = "dns-dot")]
-use lanforge_dns::DotService;
+use lanforge_dns::server::transport::dot::DotService;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
 use lanforge_network::dhcp::v4::Dhcpv4Service;
@@ -28,6 +27,7 @@ use lanforge_network::ndp::NeighborMonitor;
 use lanforge_network::ra::RaService;
 use lanforge_network::slaac::SlaacTracker;
 use lanforge_tftp::TftpService;
+use lanforge_uds::server::ControlService;
 
 /// The central application controller for the Lanforge daemon.
 pub struct Daemon {
@@ -189,7 +189,7 @@ impl Daemon {
             async [ctx, cfg, db, log_db] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx, db, log_db),
 
             #[cfg(feature = "http")]
-            async [ctx, cfg, db, log_db] if cfg.http_toml.enabled => HttpService::new(Arc::new(cfg.to_api_config()), ctx, db, log_db),
+            async [ctx, cfg, db, log_db] if cfg.http_toml.enabled => HttpService::new(Arc::new(cfg.to_http_config()), ctx, db, log_db),
 
             async [ctx, cfg] if cfg.tftp_toml.enabled => TftpService::new(
                 ctx,

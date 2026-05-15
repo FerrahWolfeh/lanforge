@@ -162,12 +162,20 @@ where
     }
 }
 
+use crate::config::HttpConfig;
+
 pub async fn middleware(
+    State(cfg): State<Arc<HttpConfig>>,
     State(db): State<Arc<LeaseDb>>,
     State(auth_manager): State<AuthManager>,
     mut req: Request<Body>,
     next: Next,
 ) -> HttpResult<AxumResponse> {
+    // If no password hash is set, authentication is globally disabled.
+    if cfg.auth_password_hash.is_none() {
+        return Ok(next.run(req).await);
+    }
+
     // Extract token
     let auth_header = req
         .headers()

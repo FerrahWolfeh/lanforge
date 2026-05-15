@@ -5,10 +5,8 @@ use crate::api::{
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse,
     LeasesResponse, RpcCallError, SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
 };
-use lanforge_core::config::RewriteRule;
-use lanforge_core::context::state::State;
 use lanforge_macros::lanforge_rpc;
-use lanforge_types::LeaseTarget;
+use lanforge_types::{network::dns::adblock::RewriteRule, update::LeaseTarget};
 
 #[lanforge_rpc]
 #[async_trait::async_trait]
@@ -105,7 +103,7 @@ pub trait LanforgeRpc {
         &self,
         only_devices: bool,
         only_orphans: bool,
-    ) -> Result<Box<State>, RpcCallError>;
+    ) -> Result<Box<serde_json::Value>, RpcCallError>;
     async fn db_reset(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn leases(&self, count: bool) -> Result<LeasesResponse, RpcCallError>;
     async fn topology(&self) -> Result<TopologyResponse, RpcCallError>;

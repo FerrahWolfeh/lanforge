@@ -1,11 +1,13 @@
 #![cfg(test)]
 
-use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent};
+use crate::bus::EventBus;
 use crate::context::LanforgeContext;
+use crate::context::state::State;
 use lanforge_types::device::Device;
 use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
+use lanforge_types::events::{DeviceChange, DeviceEvent, LanforgeEvent};
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::updates::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -13,7 +15,7 @@ use std::time::{Duration, SystemTime};
 
 fn setup() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
-    LanforgeContext::new(bus, crate::context::state::State::new(), None)
+    LanforgeContext::new(bus, State::new(), None)
 }
 
 // --- apply_update: casos básicos ---

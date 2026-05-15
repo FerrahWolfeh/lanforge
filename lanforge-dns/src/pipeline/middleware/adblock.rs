@@ -1,4 +1,4 @@
-use lanforge_types::{DnsRecordType, QueryResult};
+use lanforge_types::network::dns::{DnsRecordType, QueryResult};
 
 use crate::error::DnsError;
 use crate::pipeline::{DnsPipelineRequest, Middleware};

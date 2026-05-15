@@ -1,4 +1,4 @@
-use lanforge_types::updates::InterfaceState;
+use lanforge_types::update::InterfaceState;
 use serde::{Deserialize, Serialize, de::Error};
 use std::{
     collections::HashMap,

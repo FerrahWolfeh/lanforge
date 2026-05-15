@@ -11,8 +11,9 @@ pub mod tests;
 
 use crate::bus::{DeviceChange, DeviceEvent, LanforgeEvent};
 use lanforge_types::device::{Device, DeviceClass, Ipv6AddrOrSuffix, Origin};
+use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::updates::{
+use lanforge_types::update::{
     CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget, StaticEntry,
 };
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,7 @@ pub use self::network::NetworkState;
 // ---------------------------------------------------------------------------
 
 impl State {
-    pub fn apply_update(&mut self, update: DeviceUpdate) -> crate::bus::EventVec {
+    pub fn apply_update(&mut self, update: DeviceUpdate) -> EventVec {
         match update {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
                 self.handle_v4_lease_granted(mac, ip, expires)
@@ -287,7 +288,7 @@ impl State {
         &mut self,
         mac: MacAddr,
         f: impl FnOnce(&mut Device) -> Option<DeviceChange>,
-    ) -> crate::bus::EventVec {
+    ) -> EventVec {
         let was_in_table = self.devices.contains_key(&mac);
         let mut dev_arc = self
             .devices
@@ -296,7 +297,7 @@ impl State {
 
         let was_worthy = was_in_table && dev_arc.is_worthy();
         let was_online = dev_arc.is_online();
-        let mut events = crate::bus::EventVec::new();
+        let mut events = EventVec::new();
 
         {
             let dev = Arc::make_mut(&mut dev_arc);

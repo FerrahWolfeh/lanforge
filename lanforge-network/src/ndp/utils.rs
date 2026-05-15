@@ -18,7 +18,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use futures::TryStreamExt;
-use lanforge_types::{MacAddr, ndp::NeighborEvent};
+use lanforge_types::{identifiers::MacAddr, network::NeighborEvent};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::{
     Handle, IpVersion,

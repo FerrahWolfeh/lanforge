@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use lanforge_api::api::Response;
-use lanforge_types::LeaseTarget;
+use lanforge_types::update::LeaseTarget;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

@@ -45,7 +45,11 @@ use std::{
     sync::Arc,
 };
 
-use lanforge_types::{Device, Duid, InterfaceState, MacAddr};
+use lanforge_types::{
+    device::Device,
+    identifiers::{Duid, MacAddr},
+    update::InterfaceState,
+};
 use parking_lot::RwLockReadGuard;
 
 use crate::{

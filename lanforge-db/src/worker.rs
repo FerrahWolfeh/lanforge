@@ -13,11 +13,13 @@
 //!
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
-use lanforge_types::{
-    DeviceEvent, DnsEvent, LanforgeEvent, MacAddr, StorageEvent, SystemEvent, TimedEvent,
+use lanforge_core::bus::{
+    DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
+use lanforge_types::identifiers::MacAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Interval, interval};
 use tracing::{debug, error, info, warn};
 
@@ -203,7 +205,7 @@ impl AsyncService for DbWorker {
                 // Event handling
                 res = bus_rx.recv() => {
                     let Ok(timed_event) = res else {
-                        if let Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) = res {
+                        if let Err(RecvError::Lagged(n)) = res {
                             warn!(service = "DbWorker", lost = n, "Event bus lagged");
                             continue;
                         }

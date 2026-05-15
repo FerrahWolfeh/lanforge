@@ -1,6 +1,6 @@
 use super::types::DeviceRow;
 use super::utils::system_time_to_unix;
-use crate::LeaseDbError;
+use crate::error::LeaseDbError;
 use lanforge_types::device::{Device, IPv4State, IPv6State, V6PrefixLease};
 use sqlx::{Postgres, Transaction};
 use std::net::Ipv4Addr;
@@ -369,7 +369,7 @@ pub async fn find_mac_by_hostname(
     pool: &sqlx::PgPool,
     hostname: &str,
     since_unix: i64,
-) -> Result<Option<lanforge_types::identifiers::MacAddr>, crate::LeaseDbError> {
+) -> Result<Option<lanforge_types::identifiers::MacAddr>, LeaseDbError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT mac FROM devices WHERE (hostname = $1 OR LOWER(hostname) = LOWER($1)) AND last_seen >= $2 LIMIT 1",
     )
@@ -387,12 +387,14 @@ pub async fn store_api_token(
     name: &str,
     now: i64,
 ) -> Result<i64, LeaseDbError> {
-    let row: (i32,) = sqlx::query_as("INSERT INTO api_tokens (token, name, created_at) VALUES ($1, $2, $3) RETURNING id")
-        .bind(token)
-        .bind(name)
-        .bind(now)
-        .fetch_one(pool)
-        .await?;
+    let row: (i32,) = sqlx::query_as(
+        "INSERT INTO api_tokens (token, name, created_at) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(token)
+    .bind(name)
+    .bind(now)
+    .fetch_one(pool)
+    .await?;
     Ok(i64::from(row.0))
 }
 
@@ -444,23 +446,33 @@ pub async fn delete_api_token_by_id_or_name(
     Ok(())
 }
 
-pub async fn load_api_tokens(pool: &sqlx::PgPool) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
+pub async fn load_api_tokens(
+    pool: &sqlx::PgPool,
+) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
     let rows = sqlx::query_as::<_, (i32, String, String, i64, Option<i64>)>(
-        "SELECT id, token, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC"
+        "SELECT id, token, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|(id, token, name, created_at, last_used)| crate::engine::types::ApiTokenRow {
-        id: i64::from(id),
-        token,
-        name,
-        created_at,
-        last_used,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, token, name, created_at, last_used)| crate::engine::types::ApiTokenRow {
+                id: i64::from(id),
+                token,
+                name,
+                created_at,
+                last_used,
+            },
+        )
+        .collect())
 }
 
-pub async fn get_api_token_name(pool: &sqlx::PgPool, id: i64) -> Result<Option<String>, LeaseDbError> {
+pub async fn get_api_token_name(
+    pool: &sqlx::PgPool,
+    id: i64,
+) -> Result<Option<String>, LeaseDbError> {
     let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE id = $1")
         .bind(id as i32)
         .fetch_optional(pool)

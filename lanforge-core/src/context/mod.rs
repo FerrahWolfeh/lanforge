@@ -56,8 +56,9 @@
 use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
 use crate::context::state::State;
 use crate::error::CoreError;
-use lanforge_types::Device;
+use lanforge_types::device::Device;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::system::SystemStatus;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -182,7 +183,9 @@ struct LanforgeContextInner {
     event_counters: EventCounters,
     /// Timestamp of the last network scan.
     last_scan: RwLock<Instant>,
-    /// Global counter for active API connections (Control UDS, HTTP, etc.).
+    /// Global system status for reporting.
+    status: RwLock<Option<SystemStatus>>,
+    /// Global counter for active API clients (Control UDS, HTTP, etc.).
     pub active_clients: Arc<AtomicUsize>,
 }
 
@@ -224,6 +227,7 @@ impl LanforgeContext {
             last_db_flush: RwLock::new(None),
             event_counters: EventCounters::default(),
             last_scan: RwLock::new(Instant::now()),
+            status: RwLock::new(None),
             active_clients: Arc::new(AtomicUsize::new(0)),
         });
         Self { inner }
@@ -329,6 +333,17 @@ impl LanforgeContext {
             devices: state.devices.clone(),
             timestamp: SystemTime::now(),
         }
+    }
+
+    /// Sets the global system status.
+    pub fn set_status(&self, status: SystemStatus) {
+        *self.inner.status.write() = Some(status);
+    }
+
+    /// Returns a copy of the current system status, if set.
+    #[must_use]
+    pub fn get_status(&self) -> Option<SystemStatus> {
+        self.inner.status.read().clone()
     }
 }
 

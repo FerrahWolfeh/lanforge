@@ -1,6 +1,6 @@
-use lanforge_api::config::{ApiConfig, HttpConfig};
 use lanforge_db::config::DatabaseConfig;
-use lanforge_dns::DnsConfig;
+use lanforge_dns::config::DnsConfig;
+use lanforge_http::config::HttpConfig;
 use lanforge_network::{
     dhcp::{v4::config::Dhcpv4Config, v6::config::Dhcpv6Config},
     mdns::MdnsConfig,
@@ -8,6 +8,7 @@ use lanforge_network::{
     ra::RaServiceConfig,
 };
 use lanforge_tftp::config::TftpConfig;
+use lanforge_uds::config::ApiConfig;
 use serde::{Deserialize, Serialize};
 
 use std::path::Path;

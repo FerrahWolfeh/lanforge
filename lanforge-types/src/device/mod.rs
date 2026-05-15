@@ -1,6 +1,9 @@
-mod core;
-mod state;
-mod topology;
+pub mod core;
+pub mod history;
+pub mod state;
+pub mod topology;
+
+pub use history::{LeaseAction, LeaseHistoryEntry};
 
 pub use core::{Device, DeviceClass, LearningMethod, Origin};
 pub use state::{IPv4State, IPv6State, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease};

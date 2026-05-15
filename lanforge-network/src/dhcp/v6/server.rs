@@ -44,8 +44,8 @@ use dhcproto::v6::{
 };
 use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_core::utils::mac_from_eui64_link_local;
+use lanforge_types::identifiers::{Duid, MacAddr};
 use std::net::{Ipv6Addr, UdpSocket};
 use std::str::FromStr;
 use std::string::ToString;
@@ -923,7 +923,8 @@ mod tests {
         v6::{DhcpOptions, IANA, OptionCode},
     };
     use lanforge_types::{
-        CliHostUpdate, Device, DeviceUpdate, FieldUpdate, InterfaceState, Ipv6AddrOrSuffix, Origin,
+        device::{Device, Ipv6AddrOrSuffix, Origin},
+        update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState},
     };
     use std::collections::HashMap;
     use std::net::{Ipv6Addr, UdpSocket};

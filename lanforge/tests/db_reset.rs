@@ -1,19 +1,20 @@
 use lanforge::bootstrap::Bootstrapper;
 use lanforge::config::Config;
 use lanforge::config::toml::StaticDeviceCfg;
-use lanforge_api::server::{ClientContext, handle_client};
+use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::ServiceControl;
-use lanforge_types::device::Origin;
-use lanforge_types::identifiers::MacAddr;
-use lanforge_types::updates::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::worker::DbWorker;
+use lanforge_types::device::Origin;
+use lanforge_types::identifiers::MacAddr;
 
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::log_engine::LogDb;
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+use lanforge_uds::server::handle_client;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -108,12 +109,10 @@ async fn test_full_db_reset_chain() {
     // 4. Setup Mock Client and API handler
     let (client, server) = duplex(1024);
     let ctx_api = ctx.clone();
-    let api_cfg = Arc::new(cfg.to_api_config());
 
     // We need a dummy ClientContext
     let client_ctx = ClientContext {
         ctx: ctx_api,
-        cfg: api_cfg,
         uptime_secs: 0,
         current_gua: None,
         last_scan_secs_ago: 0,

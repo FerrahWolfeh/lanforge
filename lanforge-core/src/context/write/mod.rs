@@ -4,7 +4,7 @@ pub(crate) mod device;
 pub(crate) mod network;
 pub(crate) mod storage;
 
-use lanforge_types::{Device, DeviceUpdate, events::EventVec};
+use lanforge_types::{device::Device, events::EventVec, update::DeviceUpdate};
 use parking_lot::RwLockWriteGuard;
 use std::{net::IpAddr, sync::atomic::Ordering};
 

@@ -517,7 +517,8 @@ mod tests {
     use dhcproto::v4::{Architecture, DhcpOption, Message, MessageType, Opcode};
     use dhcproto::{Decodable, Decoder, Encodable, Encoder};
     use lanforge_core::context::LanforgeContext;
-    use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate, Origin};
+    use lanforge_types::device::Origin;
+    use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
     use std::collections::HashMap;
     use std::net::Ipv4Addr;
     use std::time::{Duration, SystemTime};

@@ -1,0 +1,35 @@
+[package]
+name = "lanforge-uds"
+version = "0.1.0"
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+# Lanforge
+lanforge-api = { path = "../lanforge-api" }
+lanforge-api-dispatch = { path = "../lanforge-api-dispatch" }
+lanforge-core = { path = "../lanforge-core" }
+lanforge-db = { path = "../lanforge-db" }
+lanforge-dns = { path = "../lanforge-dns" }
+lanforge-macros = { path = "../lanforge-macros" }
+lanforge-types = { path = "../lanforge-types" }
+
+# Workspace
+tokio = { workspace = true, features = ["io-util", "net", "sync", "rt"] }
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1.86"
+futures = { workspace = true }
+postcard = { workspace = true }
+tokio-util = { version = "0.7.18" }
+parking_lot = { workspace = true }
+chrono = { workspace = true }
+rand = "0.10.1"
+hex = "0.4.3"
+hotpath = { workspace = true, optional = true }
+
+[features]
+adblock = ["lanforge-core/adblock"]
+hotpath = ["dep:hotpath"]

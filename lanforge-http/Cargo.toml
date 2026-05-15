@@ -8,6 +8,8 @@ edition = "2024"
 # Lanforge
 lanforge-core = { path = "../lanforge-core" }
 lanforge-api = { path = "../lanforge-api" }
+lanforge-api-dispatch = { path = "../lanforge-api-dispatch" }
+lanforge-db = { path = "../lanforge-db" }
 lanforge-dns = { path = "../lanforge-dns" }
 lanforge-macros = { path = "../lanforge-macros" }
 lanforge-types = { path = "../lanforge-types" }
@@ -45,7 +47,6 @@ rand = "0.10.1"
 
 # Client dependencies
 rustls = { workspace = true, optional = true }
-lanforge-db = { version = "0.11.1", path = "../lanforge-db" }
 async-stream = "0.3.6"
 
 [features]
@@ -57,7 +58,6 @@ server = [
     "dep:jsonwebtoken",
     "dep:axum-server",
     "dep:futures",
-    "lanforge-dns/dot",
     "dep:rustls",
 ]
 remote = ["dep:reqwest", "dep:url"]

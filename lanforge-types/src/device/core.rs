@@ -90,7 +90,8 @@ pub enum DeviceClass {
 }
 
 impl DeviceClass {
-    pub fn from_repr(repr: u8) -> Option<Self> {
+    #[must_use]
+    pub const fn from_repr(repr: u8) -> Option<Self> {
         match repr {
             0 => Some(Self::None),
             1 => Some(Self::Computer),
@@ -135,8 +136,8 @@ pub struct Device {
 }
 
 impl Device {
-    pub const ONLINE_THRESHOLD: Duration = Duration::from_secs(300);
-    pub const ACTIVITY_DEBOUNCE: Duration = Duration::from_secs(60);
+    pub const ONLINE_THRESHOLD: Duration = Duration::from_mins(5);
+    pub const ACTIVITY_DEBOUNCE: Duration = Duration::from_mins(1);
 
     #[must_use]
     pub fn new(mac: MacAddr) -> Self {
@@ -230,15 +231,13 @@ impl Device {
                 *lease = new_lease;
                 changed = true;
             }
-        } else {
-            if !self
-                .v6
-                .iter()
-                .any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == ip && l.iaid == iaid))
-            {
-                self.v6.push(IPv6State::Dynamic(new_lease));
-                changed = true;
-            }
+        } else if !self
+            .v6
+            .iter()
+            .any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == ip && l.iaid == iaid))
+        {
+            self.v6.push(IPv6State::Dynamic(new_lease));
+            changed = true;
         }
 
         if changed {
@@ -276,15 +275,13 @@ impl Device {
                 *lease = new_lease;
                 changed = true;
             }
-        } else {
-            if !self
-                .v6_prefixes
-                .iter()
-                .any(|l| l.prefix == prefix && l.iaid == iaid)
-            {
-                self.v6_prefixes.push(new_lease);
-                changed = true;
-            }
+        } else if !self
+            .v6_prefixes
+            .iter()
+            .any(|l| l.prefix == prefix && l.iaid == iaid)
+        {
+            self.v6_prefixes.push(new_lease);
+            changed = true;
         }
 
         if changed {
@@ -740,9 +737,7 @@ impl Device {
                     _ => true,
                 });
 
-                if self.v6.len() != initial_len {
-                    changed = true;
-                } else {
+                if self.v6.len() == initial_len {
                     for state in &mut self.v6 {
                         match state {
                             IPv6State::Static(crate::network::Ipv6AddrOrSuffix::Full(addr), ts)
@@ -760,6 +755,8 @@ impl Device {
                             _ => {}
                         }
                     }
+                } else {
+                    changed = true;
                 }
             }
         }

@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use lanforge_core::utils::{ip_matches_prefix, mac_from_eui64_link_local};
-use lanforge_types::{DeviceUpdate, MacAddr, ndp::NeighborEvent};
+use lanforge_types::{identifiers::MacAddr, network::NeighborEvent, update::DeviceUpdate};
 use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};
 use rtnetlink::packet_route::{
     AddressFamily, RouteNetlinkMessage,

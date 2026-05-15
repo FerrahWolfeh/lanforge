@@ -1,10 +1,10 @@
 pub mod tcp;
 pub mod udp;
 
-use crate::config::AdblockUrlKind;
 use crate::resolver::filter::{DiskBlocklist, hash_set_unordered};
 use crate::server::DnsContext;
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+use lanforge_types::network::dns::adblock::AdblockUrlKind;
 use std::{
     path::Path,
     sync::{Arc, atomic::Ordering},

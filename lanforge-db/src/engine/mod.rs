@@ -1,19 +1,19 @@
 use lanforge_core::context::PersistenceSnapshot;
-use lanforge_types::updates::StaticEntry;
-use lanforge_types::{DeviceUpdate, DnsRecordType};
+use lanforge_types::update::DeviceUpdate;
+use lanforge_types::{network::dns::DnsRecordType, update::StaticEntry};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::time::SystemTime;
 use tracing::{debug, info};
 
-use lanforge_core::config::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_core::context::state::State;
 use lanforge_types::device::{
     Device, DeviceClass, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
     TopologyInfo,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 
 pub mod types;
 pub mod utils;
@@ -24,7 +24,7 @@ pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
-use crate::LeaseDbError;
+use crate::error::LeaseDbError;
 pub use types::{DeviceRow, LeaseAction, LeaseHistoryEntry, Pool};
 use utils::{system_time_to_unix, unix_to_system_time};
 

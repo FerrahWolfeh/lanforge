@@ -56,9 +56,9 @@ doh-server = ["dep:lanforge-http", "lanforge-http/doh"]
 adblock = [
     "lanforge-dns/adblock",
     "lanforge-db/adblock",
-    "lanforge-api/adblock",
+    "lanforge-uds/adblock",
 ]
-zstd = ["lanforge-api/zstd"]
+zstd = []
 
 # Meta-features
 full = [
@@ -81,6 +81,7 @@ lanforge-db = { path = "../lanforge-db" }
 lanforge-dns = { path = "../lanforge-dns" }
 lanforge-network = { path = "../lanforge-network" }
 lanforge-api = { path = "../lanforge-api" }
+lanforge-uds = { path = "../lanforge-uds" }
 lanforge-http = { path = "../lanforge-http", optional = true }
 lanforge-tftp = { path = "../lanforge-tftp" }
 
@@ -125,3 +126,4 @@ tikv-jemallocator = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full", "io-util"] }
 tempfile = "3.10.1"
 serde_json = { workspace = true }
+lanforge-api-dispatch = { path = "../lanforge-api-dispatch" }

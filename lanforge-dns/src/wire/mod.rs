@@ -3,12 +3,13 @@
 //! Replaces full Hickory Message parsing for local/upstream routing decisions.
 //! Optimized for performance by avoiding UTF-8 validation and heap allocations.
 
-use lanforge_types::{
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use lanforge_types::network::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
     DnsResponseCode,
 };
-use std::net::IpAddr;
-use std::sync::Arc;
 
 /// Simple view into the DNS message header.
 pub struct WireHeader<'a> {

@@ -6,11 +6,8 @@ edition = "2024"
 
 [dependencies]
 # Lanforge
-lanforge-core = { path = "../lanforge-core" }
-lanforge-db = { path = "../lanforge-db" }
-lanforge-dns = { path = "../lanforge-dns" }
-lanforge-macros = { path = "../lanforge-macros" }
 lanforge-types = { path = "../lanforge-types" }
+lanforge-macros = { path = "../lanforge-macros" }
 
 # Workspace
 tokio = { workspace = true, features = ["io-util"] }
@@ -19,25 +16,10 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-hotpath = { workspace = true, optional = true }
 
-hex = { version = "0.4.3", features = ["serde"] }
-tokio-util = { version = "0.7.18" }
 postcard.workspace = true
 async-trait = "0.1.86"
-zstd = { version = "0.13.3", optional = true }
 futures.workspace = true
-rand = "0.10.1"
-
-
-# No optional dependencies here, they moved to lanforge-http and lanforge-dns
 
 [features]
-adblock = ["lanforge-core/adblock", "lanforge-dns/adblock"]
 default = []
-zstd = ["dep:zstd"]
-hotpath = ["dep:hotpath"]
-hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
-
-[dev-dependencies]
-tokio = { version = "1", features = ["full"] }

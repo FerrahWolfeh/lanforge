@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serializer};
 use smallvec::SmallVec;

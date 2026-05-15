@@ -1,14 +1,21 @@
 //! Device-specific mutation wrappers.
 
-#[cfg(test)]
-use std::net::Ipv4Addr;
+use crate::context::LanforgeContext;
+use lanforge_types::identifiers::MacAddr;
 use std::time::Duration;
 
-use lanforge_types::MacAddr;
 #[cfg(test)]
-use lanforge_types::{Device, Duid, Ipv6AddrOrSuffix, Origin};
-
-use crate::context::LanforgeContext;
+use lanforge_types::device::Device;
+#[cfg(test)]
+use lanforge_types::device::Ipv6AddrOrSuffix;
+#[cfg(test)]
+use lanforge_types::device::Origin;
+#[cfg(test)]
+use lanforge_types::identifiers::Duid;
+#[cfg(test)]
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+#[cfg(test)]
+use std::net::Ipv4Addr;
 
 impl LanforgeContext {
     /// Triggers the background garbage collection process.
@@ -51,8 +58,6 @@ impl LanforgeContext {
         boot_file: Option<String>,
         origin: Origin,
     ) {
-        use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate};
-
         let _ = self.apply(DeviceUpdate::CliHostUpdated {
             mac,
             update: CliHostUpdate {

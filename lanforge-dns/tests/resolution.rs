@@ -1,7 +1,9 @@
 mod common;
 
 use common::*;
-use lanforge_types::{DnsRecordType, MacAddr};
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::DnsRecordType;
+use lanforge_types::update::DeviceUpdate;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
@@ -50,7 +52,7 @@ async fn resolve_local_aaaa_with_prefixes() {
 
     // Add SLAAC address
     let slaac_addr = Ipv6Addr::from_str("2001:db8::beef").unwrap();
-    let _ = ctx.apply(lanforge_types::DeviceUpdate::SlaacObserved {
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr: slaac_addr,
         is_active: true,

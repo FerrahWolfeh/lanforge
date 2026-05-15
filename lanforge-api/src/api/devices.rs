@@ -1,3 +1,4 @@
+use lanforge_types::device::LeaseHistoryEntry;
 use serde::{Deserialize, Serialize};
 
 /// A response containing a list of devices and metadata.
@@ -100,7 +101,7 @@ pub struct WhoisResponse {
     /// Current device state.
     pub entry: DeviceEntry,
     /// Historical lease assignments.
-    pub history: Vec<lanforge_db::engine::LeaseHistoryEntry>,
+    pub history: Vec<LeaseHistoryEntry>,
 }
 
 /// A response containing the discovered physical topology.

@@ -27,9 +27,9 @@ pub mod args;
 pub mod toml;
 
 pub use args::CliArgs;
-use lanforge_api::config::{ApiConfig, HttpConfig};
 use lanforge_db::config::DatabaseConfig;
-use lanforge_dns::{BlockingMode, DnsConfig, UpstreamEntry};
+use lanforge_dns::config::DnsConfig;
+use lanforge_http::config::HttpConfig;
 use lanforge_network::dhcp::v4::config::Dhcpv4Config;
 use lanforge_network::dhcp::v6::config::Dhcpv6Config;
 use lanforge_network::mdns::MdnsConfig;
@@ -37,6 +37,10 @@ use lanforge_network::ndp::config::MonitorConfig;
 use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
 use lanforge_tftp::config::TftpConfig;
 use lanforge_types::device::Ipv6AddrOrSuffix;
+use lanforge_types::network::dns::adblock::BlockingMode;
+use lanforge_types::network::dns::upstream::UpstreamEntry;
+use lanforge_types::system::SystemStatus;
+use lanforge_uds::config::ApiConfig;
 pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
 
 use clap::Parser;
@@ -341,98 +345,98 @@ impl Config {
     /// Builds an `ApiConfig` for the control service.
     #[must_use]
     pub fn to_api_config(&self) -> ApiConfig {
+        self.api_toml.clone()
+    }
+
+    /// Builds an `HttpConfig` for the HTTP service.
+    #[must_use]
+    pub fn to_http_config(&self) -> HttpConfig {
+        let mut cfg = self.http_toml.clone();
+
         // Resolve password hash from dedicated file, falling back to TOML
-        let auth_password_hash = std::fs::read_to_string(self.get_password_hash_path())
+        cfg.auth_password_hash = std::fs::read_to_string(self.get_password_hash_path())
             .map(|s| s.trim().to_string())
             .ok()
-            .or_else(|| self.api_toml.auth_password_hash.clone());
-
-        let mut cfg = self.api_toml.clone();
-        cfg.auth_password_hash = auth_password_hash;
-        cfg.database = self.database.clone();
-        cfg.http_enabled = self.http_toml.enabled;
-        cfg.http_listen = Some(self.http_toml.listen);
-
-        // Reporting fields
-        cfg.db_url.clone_from(&self.database.url);
-        cfg.log_db_url.clone_from(&self.database.log_url);
-        cfg.db_path = if self.database.url.starts_with("sqlite://") {
-            self.database
-                .url
-                .strip_prefix("sqlite://")
-                .unwrap_or(&self.database.url)
-                .to_string()
-        } else {
-            self.database.url.clone()
-        };
-        cfg.lan_iface.clone_from(&self.system.iface);
-        cfg.ula_prefix = if self.system.target_prefix.starts_with("fe80") {
-            None
-        } else {
-            Some(self.system.target_prefix.clone())
-        };
-        cfg.ra_enabled = self.ra_enabled;
-        cfg.dhcp_v4_enabled = self.dhcpv4_enabled;
-        cfg.dhcp_v4_range_size = self
-            .dhcpv4_toml
-            .pools
-            .iter()
-            .map(|p| {
-                let start = u32::from(p.range_start);
-                let end = u32::from(p.range_end);
-                end.saturating_sub(start).saturating_add(1)
-            })
-            .sum();
-        cfg.dhcp_v6_enabled = self.dhcpv6_enabled;
-        cfg.dhcp_v6_pool_size = self
-            .dhcpv6_toml
-            .pools
-            .iter()
-            .map(|p| match (&p.range_start, &p.range_end) {
-                (Some(Ipv6AddrOrSuffix::Full(s)), Some(Ipv6AddrOrSuffix::Full(e))) => {
-                    let start = u128::from_be_bytes(s.octets());
-                    let end = u128::from_be_bytes(e.octets());
-                    u64::try_from(end.saturating_sub(start).saturating_add(1)).ok()
-                }
-                _ => None,
-            })
-            .sum();
-        cfg.dns_enabled = self.dns_enabled;
-        cfg.dns_upstream = self
-            .dns_toml
-            .upstreams
-            .first()
-            .map(|u| String::from(u.target.clone()));
-        cfg.boot_dir = Some(self.tftp_toml.root_dir.to_string_lossy().to_string());
+            .or_else(|| self.http_toml.auth_password_hash.clone());
 
         // Inherit TLS from system if not set in HTTP
-        cfg.tls_cert = self
-            .http_toml
-            .tls_cert
-            .clone()
-            .or_else(|| self.system.tls_cert.clone());
-        cfg.tls_key = self
-            .http_toml
-            .tls_key
-            .clone()
-            .or_else(|| self.system.tls_key.clone());
+        if cfg.tls_cert.is_none() {
+            cfg.tls_cert.clone_from(&self.system.tls_cert);
+        }
+        if cfg.tls_key.is_none() {
+            cfg.tls_key.clone_from(&self.system.tls_key);
+        }
 
-        cfg.dot_listen = self.dns_toml.dot_listen;
-        cfg.dot_enabled = self.dns_toml.dot_enabled;
-        cfg.doh_enabled = self.http_toml.doh_enabled;
-        cfg.https_enabled = self.http_toml.https_enabled;
-
-        cfg.log_db_path = if self.database.log_url.starts_with("sqlite://") {
-            self.database
-                .log_url
-                .strip_prefix("sqlite://")
-                .unwrap_or(&self.database.log_url)
-                .to_string()
-        } else {
-            self.database.log_url.clone()
-        };
+        if cfg.boot_dir.is_none() {
+            cfg.boot_dir = Some(self.tftp_toml.root_dir.to_string_lossy().to_string());
+        }
 
         cfg
+    }
+
+    /// Builds a `SystemStatus` snapshot from the current configuration.
+    #[must_use]
+    pub fn to_system_status(&self) -> SystemStatus {
+        SystemStatus {
+            db_path: if self.database.url.starts_with("sqlite://") {
+                self.database
+                    .url
+                    .strip_prefix("sqlite://")
+                    .unwrap_or(&self.database.url)
+                    .to_string()
+            } else {
+                self.database.url.clone()
+            },
+            log_db_path: if self.database.log_url.starts_with("sqlite://") {
+                self.database
+                    .log_url
+                    .strip_prefix("sqlite://")
+                    .unwrap_or(&self.database.log_url)
+                    .to_string()
+            } else {
+                self.database.log_url.clone()
+            },
+            lan_iface: self.system.iface.clone(),
+            ula_prefix: if self.system.target_prefix.starts_with("fe80") {
+                None
+            } else {
+                Some(self.system.target_prefix.clone())
+            },
+            ra_enabled: self.ra_enabled,
+            dhcp_v4_enabled: self.dhcpv4_enabled,
+            dhcp_v4_range_size: self
+                .dhcpv4_toml
+                .pools
+                .iter()
+                .map(|p| {
+                    let start = u32::from(p.range_start);
+                    let end = u32::from(p.range_end);
+                    end.saturating_sub(start).saturating_add(1)
+                })
+                .sum(),
+            dhcp_v6_enabled: self.dhcpv6_enabled,
+            dhcp_v6_pool_size: self
+                .dhcpv6_toml
+                .pools
+                .iter()
+                .map(|p| match (&p.range_start, &p.range_end) {
+                    (Some(Ipv6AddrOrSuffix::Full(s)), Some(Ipv6AddrOrSuffix::Full(e))) => {
+                        let start = u128::from_be_bytes(s.octets());
+                        let end = u128::from_be_bytes(e.octets());
+                        u64::try_from(end.saturating_sub(start).saturating_add(1)).ok()
+                    }
+                    _ => None,
+                })
+                .sum(),
+            dns_enabled: self.dns_enabled,
+            dns_upstream: self
+                .dns_toml
+                .upstreams
+                .first()
+                .map(|u| u.target.addr.to_string()),
+            boot_dir: Some(self.tftp_toml.root_dir.to_string_lossy().to_string()),
+            http_enabled: self.http_toml.enabled,
+        }
     }
 
     const fn merge_ra_overrides(mut r: RaServiceConfig, cli: &CliArgs) -> RaServiceConfig {

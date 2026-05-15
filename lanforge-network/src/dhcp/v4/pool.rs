@@ -240,7 +240,11 @@ impl IpPool {
 
 #[cfg(test)]
 mod tests {
-    use lanforge_types::{CliHostUpdate, DeviceUpdate, FieldUpdate, Origin};
+
+    use lanforge_types::{
+        device::Origin,
+        update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
+    };
 
     use super::*;
     use crate::dhcp::v4::config::Dhcpv4PoolConfig;

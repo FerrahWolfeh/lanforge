@@ -12,17 +12,18 @@
 //!
 //! Pruning runs at most once every 60 seconds to avoid overhead.
 
-use lanforge_types::QueryResult;
-use lanforge_types::network::{DnsRecordType, QueryLogEntry};
+use lanforge_types::network::dns::TransportProtocol;
+use lanforge_types::network::{DnsRecordType, QueryLogEntry, QueryResult};
 use serde_json;
 use std::fs::{OpenOptions, create_dir_all};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::debug;
 
-use crate::LeaseDbError;
+use crate::error::LeaseDbError;
 use futures::StreamExt;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 use sqlx::{Row, SqlitePool};
@@ -344,7 +345,7 @@ impl LogDb {
                 timestamp: timestamp as u64,
                 src_ip: src_ip.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
                 src_mac: src_mac.and_then(|m| m.parse().ok()),
-                domain: std::sync::Arc::from(domain),
+                domain: Arc::from(domain),
                 qtype: DnsRecordType::from(qtype as u16),
                 result: match result.as_str() {
                     "local" => QueryResult::Local,
@@ -361,12 +362,12 @@ impl LogDb {
                 cached: cached != 0,
                 answer,
                 protocol: match protocol.as_str() {
-                    "udp" => lanforge_types::TransportProtocol::Udp,
-                    "tcp" => lanforge_types::TransportProtocol::Tcp,
-                    "dot" => lanforge_types::TransportProtocol::Tls,
-                    "doq" => lanforge_types::TransportProtocol::Quic,
-                    "doh" => lanforge_types::TransportProtocol::Https,
-                    _ => lanforge_types::TransportProtocol::Udp,
+                    "udp" => TransportProtocol::Udp,
+                    "tcp" => TransportProtocol::Tcp,
+                    "dot" => TransportProtocol::Tls,
+                    "doq" => TransportProtocol::Quic,
+                    "doh" => TransportProtocol::Https,
+                    _ => TransportProtocol::Udp,
                 },
             });
         }
@@ -553,9 +554,6 @@ impl LogDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lanforge_types::DnsRecordType;
-    use lanforge_types::QueryResult;
-    use lanforge_types::TransportProtocol;
 
     #[tokio::test]
     async fn test_dns_log_protocol_tracking() {

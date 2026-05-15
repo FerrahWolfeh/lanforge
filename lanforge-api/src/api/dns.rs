@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use lanforge_core::config::RewriteRule;
-use lanforge_types::{DnsRecordEntry, DnsRecordType, UpstreamHealthSnapshot};
+use lanforge_types::network::{
+    DnsRecordEntry, DnsRecordType, UpstreamHealthSnapshot, dns::adblock::RewriteRule,
+};
 use serde::{Deserialize, Serialize};
 
 /// A snapshot of DNS resolver statistics.

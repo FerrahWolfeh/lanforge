@@ -1,8 +1,8 @@
 use super::types::DeviceRow;
 use super::utils::system_time_to_unix;
-use crate::LeaseDbError;
+use crate::error::LeaseDbError;
 use lanforge_types::device::{IPv4State, IPv6State, V6PrefixLease};
-use lanforge_types::{Device, MacAddr};
+use lanforge_types::{device::Device, identifiers::MacAddr};
 use sqlx::{Sqlite, Transaction};
 use std::net::Ipv4Addr;
 
@@ -370,7 +370,7 @@ pub async fn find_mac_by_hostname(
     pool: &sqlx::SqlitePool,
     hostname: &str,
     since_unix: i64,
-) -> Result<Option<MacAddr>, crate::LeaseDbError> {
+) -> Result<Option<MacAddr>, LeaseDbError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT mac FROM devices WHERE (hostname = ? OR hostname = ?) AND last_seen >= ? LIMIT 1",
     )
@@ -446,16 +446,21 @@ pub async fn delete_api_token_by_id_or_name(
     Ok(())
 }
 
-pub async fn load_api_tokens(pool: &sqlx::SqlitePool) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
+pub async fn load_api_tokens(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
     sqlx::query_as::<_, crate::engine::types::ApiTokenRow>(
-        "SELECT id, token, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC"
+        "SELECT id, token, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
     .map_err(Into::into)
 }
 
-pub async fn get_api_token_name(pool: &sqlx::SqlitePool, id: i64) -> Result<Option<String>, LeaseDbError> {
+pub async fn get_api_token_name(
+    pool: &sqlx::SqlitePool,
+    id: i64,
+) -> Result<Option<String>, LeaseDbError> {
     let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)

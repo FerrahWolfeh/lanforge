@@ -1,14 +1,16 @@
 use crate::bus::EventBus;
 use crate::context::LanforgeContext;
-use crate::context::state::DeviceUpdate;
-use lanforge_types::device::{Device, Origin};
+use crate::context::state::State;
+use lanforge_types::device::Device;
+use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::update::DeviceUpdate;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 fn setup() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
-    LanforgeContext::new(bus, crate::context::state::State::new(), None)
+    LanforgeContext::new(bus, State::new(), None)
 }
 
 #[test]

@@ -1,11 +1,9 @@
 mod common;
 use common::*;
-use lanforge_types::{
+use lanforge_dns::wire::{WireDecoder, WireEncoder};
+use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
-};
-use lanforge_dns::{
-    config::RewriteRule,
-    wire::{WireDecoder, WireEncoder},
+    adblock::RewriteRule,
 };
 use std::sync::Arc;
 
@@ -132,8 +130,8 @@ async fn pipeline_rewrite_rule() {
 #[tokio::test]
 #[cfg(feature = "adblock")]
 async fn pipeline_cached_block() {
-    use lanforge_types::network::dns::QueryResult;
     use lanforge_dns::resolver::filter::DiskBlocklist;
+    use lanforge_types::network::dns::QueryResult;
     use std::collections::HashSet;
 
     let ctx_instance = init_test_context();

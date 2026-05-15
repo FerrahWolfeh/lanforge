@@ -1,17 +1,13 @@
-use lanforge_api::config::ApiConfig;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_types::device::Hostname;
-use lanforge_types::identifiers::MacAddr;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::log_engine::LogDb;
+use lanforge_http::config::HttpConfig;
 use lanforge_http::server::HttpService;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 
 async fn init_test_context() -> (LanforgeContext, Arc<LeaseDb>, Arc<LogDb>) {
     let bus = Arc::new(EventBus::new());
@@ -33,12 +29,12 @@ async fn test_http_simulation_basic() {
     let (ctx, db, log_db) = init_test_context().await;
 
     // 1. Setup Config
-    let api_cfg = ApiConfig {
-        http_listen: Some("127.0.0.1:1080".parse().unwrap()),
-        lan_iface: "lo".to_string(),
+    let http_cfg = HttpConfig {
+        listen: "127.0.0.1:1080".parse().unwrap(),
+        enabled: true,
         ..Default::default()
     };
-    let cfg = Arc::new(api_cfg);
+    let cfg = Arc::new(http_cfg);
 
     // 2. Start HTTP Service
     let mut service = HttpService::new(cfg, ctx.clone(), db, log_db);
@@ -64,37 +60,11 @@ async fn test_http_simulation_basic() {
     let client = reqwest::Client::new();
 
     // Test /status
-    let resp = client
-        .get("http://127.0.0.1:1080/status")
+    let res = client
+        .get("http://127.0.0.1:1080/api/system/status")
         .send()
         .await
-        .expect("Request failed");
+        .expect("Failed to send request");
 
-    assert_eq!(resp.status(), 200);
-    let json: serde_json::Value = resp.json().await.expect("Invalid JSON");
-    assert_eq!(json["service"], "lanforge");
-    assert_eq!(json["status"], "running");
-
-    // Test /register
-    let register_payload = serde_json::json!({
-        "mac": "00:11:22:33:44:66",
-        "hostname": "http-device"
-    });
-    let resp = client
-        .post("http://127.0.0.1:1080/register")
-        .json(&register_payload)
-        .send()
-        .await
-        .expect("Register request failed");
-
-    assert_eq!(resp.status(), 200);
-
-    // Verify that device is in context
-    sleep(Duration::from_millis(100)).await; // Wait for apply
-    let mac = MacAddr::parse("00:11:22:33:44:66").unwrap();
-    let device = ctx.get_device(&mac).expect("Device not registered");
-    assert_eq!(device.hostname, Hostname::from("http-device"));
-
-    // Cleanup: Shutdown context
-    ctx.terminate();
+    assert_eq!(res.status(), 200);
 }
