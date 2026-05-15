@@ -1,8 +1,9 @@
 [package]
 name = "lanforge-dns"
-version = "2.3.0"
+version = "2.3.3"
 license.workspace = true
-edition = "2024"
+edition.workspace = true
+authors.workspace = true
 
 [dependencies]
 # Lanforge

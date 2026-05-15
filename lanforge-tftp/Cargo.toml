@@ -2,7 +2,8 @@
 name = "lanforge-tftp"
 version = "1.0.0"
 license.workspace = true
-edition = "2024"
+edition.workspace = true
+authors.workspace = true
 
 [dependencies]
 # Lanforge

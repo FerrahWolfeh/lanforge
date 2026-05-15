@@ -1,8 +1,9 @@
 [package]
 name = "lanforge-types"
-version = "0.4.2"
+version = "0.6.0"
 license.workspace = true
-edition = "2024"
+edition.workspace = true
+authors.workspace = true
 
 [features]
 adblock = []

@@ -1,7 +1,8 @@
 [package]
 name = "lanforge-api-dispatch"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+authors.workspace = true
 
 [dependencies]
 lanforge-types = { path = "../lanforge-types" }

@@ -1,8 +1,9 @@
 [package]
 name = "lanforge-macros"
-version = "1.0.0"
+version = "1.0.2"
 license.workspace = true
-edition = "2024"
+edition.workspace = true
+authors.workspace = true
 
 [lib]
 proc-macro = true
