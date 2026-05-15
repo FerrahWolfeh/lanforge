@@ -96,6 +96,7 @@ impl Daemon {
         self.shutdown().await
     }
 
+    #[allow(clippy::missing_const_for_fn)]
     fn validate_features(&self) {
         #[allow(unused_variables)]
         let cfg = &self.bootstrap.cfg;

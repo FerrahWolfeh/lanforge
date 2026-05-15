@@ -125,7 +125,7 @@ async fn handle_dns_query(
     Query(params): Query<DnsQueryRequest>,
 ) -> AxumJson<Response> {
     let ctx = create_client_ctx(&state);
-    AxumJson(ctx.handle_dns_query(params.name, params.record_type).await)
+    AxumJson(Box::pin(ctx.handle_dns_query(params.name, params.record_type)).await)
 }
 
 async fn handle_dns_cache_dump(State(state): State<AppState>) -> AxumJson<Response> {

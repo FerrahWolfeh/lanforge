@@ -22,6 +22,7 @@ hotpath = [
     "hotpath/threads",
     "hotpath/tokio",
     "lanforge-core/hotpath",
+    "lanforge-api-dispatch/hotpath",
     "lanforge-dns/hotpath",
     "lanforge-network/hotpath",
     "lanforge-db/hotpath",
@@ -58,6 +59,7 @@ adblock = [
     "lanforge-dns/adblock",
     "lanforge-db/adblock",
     "lanforge-uds/adblock",
+    "lanforge-http/adblock",
 ]
 zstd = []
 

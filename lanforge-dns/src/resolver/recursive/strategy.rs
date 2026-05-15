@@ -64,6 +64,7 @@ impl UpstreamStrategy {
         let mut snaps: Vec<_> = self
             .all_upstreams()
             .map(|m| {
+                #[allow(unused_mut)]
                 let mut snap = m.health.snapshot(
                     format!("{}", m.target.addr),
                     format!("{:?}", m.target.protocol),

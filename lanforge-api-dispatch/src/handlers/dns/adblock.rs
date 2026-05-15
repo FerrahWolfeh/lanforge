@@ -1,10 +1,18 @@
 use crate::ClientContext;
+#[cfg(feature = "adblock")]
 use lanforge_api::api::{
     AdblockUrlEntry, DnsAdblockStatusResponse, DnsAdblockUrlsResponse, Response, SimpleSuccess,
 };
+#[cfg(not(feature = "adblock"))]
+use lanforge_api::api::Response;
+
+#[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+#[cfg(feature = "adblock")]
 use lanforge_dns::server::DnsContext;
+#[cfg(feature = "adblock")]
 use std::sync::atomic::Ordering;
+#[cfg(feature = "adblock")]
 use tracing::error;
 
 #[cfg(feature = "adblock")]

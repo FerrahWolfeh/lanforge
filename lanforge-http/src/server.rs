@@ -14,11 +14,7 @@ use axum::{
     routing::get,
 };
 #[cfg(feature = "doh")]
-use axum::{
-    body::Bytes,
-    extract::Query,
-    http::{HeaderMap, Method},
-};
+use axum::{body::Bytes, extract::Query, http::HeaderMap, http::Method};
 use axum_server::tls_rustls::RustlsConfig;
 use lanforge_api::api::Response;
 use lanforge_core::{
@@ -297,10 +293,10 @@ pub struct DnsQueryParams {
 #[cfg(feature = "doh")]
 async fn handle_dns_query(
     State(state): State<AppState>,
-    axum::extract::Query(params): axum::extract::Query<DnsQueryParams>,
-    method: axum::http::Method,
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
+    Query(params): Query<DnsQueryParams>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use lanforge_dns::pipeline::DnsPipelineRequest;
@@ -324,30 +320,26 @@ async fn handle_dns_query(
         return (StatusCode::BAD_REQUEST, "Empty query").into_response();
     }
 
-    let dns_ctx_any = match state.ctx.get_dns_context() {
-        Some(c) => c,
-        None => return (StatusCode::SERVICE_UNAVAILABLE, "DNS engine not ready").into_response(),
+    let Some(dns_ctx_any) = state.ctx.get_dns_context() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "DNS engine not ready").into_response();
     };
 
-    let dns_ctx = match dns_ctx_any.downcast_ref::<DnsContext>() {
-        Some(c) => c,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid DNS context").into_response(),
+    let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid DNS context").into_response();
     };
 
-    let _src_ip: std::net::IpAddr = headers
+    let src_ip: std::net::IpAddr = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.split(',').next())
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or_else(|| "127.0.0.1".parse().unwrap());
 
-    let header = match WireHeader::parse(&query_data) {
-        Some(h) => h,
-        None => return (StatusCode::BAD_REQUEST, "Invalid DNS header").into_response(),
+    let Some(header) = WireHeader::parse(&query_data) else {
+        return (StatusCode::BAD_REQUEST, "Invalid DNS header").into_response();
     };
-    let question = match WireQuestion::parse(&query_data) {
-        Some(q) => q,
-        None => return (StatusCode::BAD_REQUEST, "Invalid DNS question").into_response(),
+    let Some(question) = WireQuestion::parse(&query_data) else {
+        return (StatusCode::BAD_REQUEST, "Invalid DNS question").into_response();
     };
 
     let mut resp_buf = Vec::with_capacity(512);
@@ -355,20 +347,20 @@ async fn handle_dns_query(
         &query_data,
         &header,
         &question,
-        _src_ip,
+        src_ip,
         TransportProtocol::Https,
     );
 
     match dns_ctx.pipeline.run(dns_ctx, req, &mut resp_buf).await {
         Ok(()) => {
-            if !resp_buf.is_empty() {
+            if resp_buf.is_empty() {
+                StatusCode::NO_CONTENT.into_response()
+            } else {
                 (
                     [(axum::http::header::CONTENT_TYPE, "application/dns-message")],
                     resp_buf,
                 )
                     .into_response()
-            } else {
-                StatusCode::NO_CONTENT.into_response()
             }
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),

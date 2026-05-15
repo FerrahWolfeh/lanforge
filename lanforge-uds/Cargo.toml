@@ -32,5 +32,16 @@ hex = "0.4.3"
 hotpath = { workspace = true, optional = true }
 
 [features]
-adblock = ["lanforge-core/adblock"]
-hotpath = ["dep:hotpath"]
+adblock = [
+    "lanforge-api-dispatch/adblock",
+    "lanforge-core/adblock",
+    "lanforge-db/adblock",
+    "lanforge-dns/adblock",
+]
+hotpath = [
+    "dep:hotpath",
+    "lanforge-api-dispatch/hotpath",
+    "lanforge-core/hotpath",
+    "lanforge-db/hotpath",
+    "lanforge-dns/hotpath",
+]

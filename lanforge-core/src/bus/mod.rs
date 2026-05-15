@@ -34,6 +34,7 @@ impl EventBus {
     pub fn publish(&self, event: LanforgeEvent) -> usize {
         #[cfg(feature = "hotpath")]
         {
+            #[allow(clippy::cast_precision_loss)]
             hotpath::gauge!("event_bus_receivers").set(self.tx.receiver_count() as f64);
         }
         self.tx.send(TimedEvent::new(event)).unwrap_or(0)

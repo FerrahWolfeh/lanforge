@@ -68,4 +68,3 @@ opt-level = 3
 lto = "thin"
 debug = true
 strip = false
-debuginfo = 2

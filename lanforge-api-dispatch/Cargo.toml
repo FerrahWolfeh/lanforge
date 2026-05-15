@@ -27,7 +27,8 @@ hotpath = { workspace = true, optional = true }
 adblock = [
     "lanforge-types/adblock",
     "lanforge-core/adblock",
+    "lanforge-db/adblock",
     "lanforge-dns/adblock",
 ]
 zstd = []
-hotpath = ["dep:hotpath", "lanforge-core/hotpath", "lanforge-dns/hotpath"]
+hotpath = ["dep:hotpath", "lanforge-core/hotpath", "lanforge-db/hotpath", "lanforge-dns/hotpath"]

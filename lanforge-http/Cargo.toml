@@ -63,6 +63,17 @@ server = [
 ]
 remote = ["dep:reqwest", "dep:url"]
 doh = ["server", "dep:base64"]
+adblock = [
+    "lanforge-api-dispatch/adblock",
+    "lanforge-db/adblock",
+    "lanforge-dns/adblock",
+]
+hotpath = [
+    "lanforge-core/hotpath",
+    "lanforge-api-dispatch/hotpath",
+    "lanforge-db/hotpath",
+    "lanforge-dns/hotpath",
+]
 
 [dev-dependencies]
 tower = { version = "0.5.2", features = ["util"] }
