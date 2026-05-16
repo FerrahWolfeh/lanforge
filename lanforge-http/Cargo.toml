@@ -26,7 +26,7 @@ chrono = { workspace = true }
 futures = { workspace = true, optional = true }
 
 # Server dependencies
-axum = { version = "0.8.8", features = ["ws"], optional = true }
+axum = { version = "0.8.8", optional = true }
 tower-http = { version = "0.6.8", features = [
     "cors",
     "fs",
@@ -62,7 +62,8 @@ server = [
     "dep:futures",
     "dep:rustls",
 ]
-remote = ["dep:reqwest", "dep:url"]
+client = ["dep:reqwest", "dep:url"]
+remote = ["client"]
 doh = ["server", "dep:base64"]
 adblock = [
     "lanforge-api-dispatch/adblock",

@@ -8,14 +8,14 @@ pub mod error;
 pub mod auth;
 #[cfg(feature = "server")]
 pub mod metrics;
-#[cfg(feature = "remote")]
+#[cfg(feature = "client")]
 pub mod remote;
 #[cfg(feature = "server")]
 pub mod routes;
 #[cfg(feature = "server")]
 pub mod server;
 
-#[cfg(feature = "remote")]
+#[cfg(feature = "client")]
 pub use remote::RemoteClient;
 #[cfg(feature = "server")]
 pub use server::HttpService;

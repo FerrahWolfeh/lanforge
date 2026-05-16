@@ -32,6 +32,7 @@ async fn test_http_simulation_basic() {
     let http_cfg = HttpConfig {
         listen: "127.0.0.1:1080".parse().unwrap(),
         enabled: true,
+        allow_plaintext_http: true,
         ..Default::default()
     };
     let cfg = Arc::new(http_cfg);
@@ -61,7 +62,7 @@ async fn test_http_simulation_basic() {
 
     // Test /status
     let res = client
-        .get("http://127.0.0.1:1080/api/system/status")
+        .get("http://127.0.0.1:1080/api/v1/status")
         .send()
         .await
         .expect("Failed to send request");

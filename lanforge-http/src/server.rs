@@ -1,15 +1,12 @@
 use crate::{
-    auth::{AuthManager, AuthenticatedUser},
+    auth::AuthManager,
     error::{HttpError, Result as HttpResult},
     routes,
 };
 use axum::{
     Json, Router,
     body::Body,
-    extract::{
-        State,
-        ws::{Message, WebSocket, WebSocketUpgrade},
-    },
+    extract::State,
     http::StatusCode,
     middleware::from_fn_with_state,
     response::{IntoResponse, Response as AxumResponse},
@@ -18,7 +15,6 @@ use axum::{
 #[cfg(feature = "doh")]
 use axum::{body::Bytes, extract::Query, http::HeaderMap, http::Method};
 use axum_server::{Handle, tls_rustls::RustlsConfig};
-use lanforge_api::api::Response;
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     error::CoreError,
@@ -140,10 +136,9 @@ impl AsyncService for HttpService {
         }
 
         if cfg.auth_password_hash.is_some() {
-            info!("🔐 API Authentication enabled. WebSocket event stream active.");
-            app = app.route("/api/ws", get(handle_ws));
+            info!("🔐 API Authentication enabled.");
         } else {
-            info!("🔓 No password hash set. WebSocket event stream disabled for safety.");
+            info!("🔓 No password hash set. API Authentication disabled.");
         }
 
         let app = app.with_state(state);
@@ -194,7 +189,7 @@ impl AsyncService for HttpService {
                 .serve(app.into_make_service())
                 .await
                 .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))?;
-        } else {
+        } else if cfg.allow_plaintext_http {
             info!("🚀 HTTP API listening on http://{}", addr);
             let tcp_listener = TcpListener::bind(&addr)
                 .await
@@ -204,6 +199,10 @@ impl AsyncService for HttpService {
                 .with_graceful_shutdown(shutdown_signal)
                 .await
                 .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))?;
+        } else {
+            let msg = "❌ TLS configuration missing (tls_cert/tls_key) and plaintext HTTP is not explicitly allowed (allow_plaintext_http = false). Refusing to start unencrypted server in production.";
+            error!("{msg}");
+            return Err(CoreError::Generic(msg.to_string()));
         }
 
         Ok(())
@@ -246,40 +245,6 @@ impl IntoResponse for HttpError {
         }));
 
         (status, body).into_response()
-    }
-}
-
-async fn handle_ws(
-    State(state): State<AppState>,
-    _user: AuthenticatedUser,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
-}
-
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
-    let mut rx = state.ctx.bus().subscribe();
-
-    loop {
-        tokio::select! {
-            event = rx.recv() => {
-                match event {
-                    Ok(timed_event) => {
-                        let Ok(json) = serde_json::to_string(&Response::Event(timed_event)) else { continue };
-                        if socket.send(Message::Text(json.into())).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            msg = socket.recv() => {
-                match msg {
-                    Some(Ok(Message::Close(_))) | None => break,
-                    _ => {} // Ignore other incoming messages for now
-                }
-            }
-        }
     }
 }
 

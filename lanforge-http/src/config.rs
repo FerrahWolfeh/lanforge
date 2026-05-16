@@ -7,13 +7,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
 #[config(key = "http")]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct HttpConfig {
     /// Whether the HTTP service is enabled.
     pub enabled: bool,
-    /// Listen address (e.g., "0.0.0.0:8080").
+    /// Listen address (e.g., "0.0.0.0:9090").
     pub listen: SocketAddr,
     /// Whether HTTPS is explicitly enabled.
     pub https_enabled: bool,
+    /// Whether plaintext HTTP is explicitly allowed (for local development only).
+    pub allow_plaintext_http: bool,
     /// Whether `DoH` (DNS-over-HTTPS) is explicitly enabled.
     pub doh_enabled: bool,
     /// TLS certificate path.
@@ -33,8 +36,9 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            listen: "0.0.0.0:8080".parse().unwrap(),
+            listen: "0.0.0.0:9090".parse().unwrap(),
             https_enabled: false,
+            allow_plaintext_http: false,
             doh_enabled: false,
             tls_cert: None,
             tls_key: None,
