@@ -29,6 +29,12 @@ adblock = [
     "lanforge-core/adblock",
     "lanforge-db/adblock",
     "lanforge-dns/adblock",
+    "lanforge-api/adblock",
 ]
 zstd = []
-hotpath = ["dep:hotpath", "lanforge-core/hotpath", "lanforge-db/hotpath", "lanforge-dns/hotpath"]
+hotpath = [
+    "dep:hotpath",
+    "lanforge-core/hotpath",
+    "lanforge-db/hotpath",
+    "lanforge-dns/hotpath",
+]
