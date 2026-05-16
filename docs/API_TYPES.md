@@ -113,7 +113,7 @@ classDiagram
 
 | Method | Parameters | Return Type | Notes |
 | :--- | :--- | :--- | :--- |
-| `list_devices` | `filter`, `vendor`, `method`, `format` (all optional) | `DevicesResponse` | Lists all discovered devices with optional filtering. |
+| `list_devices` | `filter`, `vendor`, `method`, `format`, `limit`, `offset` (all optional) | `DevicesResponse` | Lists all discovered devices with optional filtering and pagination. |
 | `whois` | `target: String` (MAC, IP, or Hostname) | `WhoisResponse` | Detailed information and history for a specific device. |
 | `host_add` | `entry: HostConfigEntry` | `SimpleSuccess` | Full upsert of a static host configuration. Promotes device to `Static` origin. |
 | `host_set` | `mac: String`, `field: String`, `value: String` | `SimpleSuccess` | Partial update of a single field (`hostname`, `v4`, `v6_suffix`). Promotes device to `Static` origin. |
@@ -141,9 +141,9 @@ classDiagram
 | `dns_stats` | None | `DnsStatsResponse` | High-level resolver performance statistics. |
 | `dns_analytics` | `limit: Option<usize>` | `DnsAnalyticsResponse` | Top domains, top clients, and query rate trends. |
 | `dns_query` | `name: String`, `record_type: Option<String>` | `DnsQueryResponse` | Diagnostic DNS lookup through the resolver. Supports automatic PTR reverse lookup formatting when an IP address is provided. |
-| `dns_query_log` | `follow: bool`, `n: Option<usize>`, `client: Option<String>` | `HybridStream<DnsQueryLogEntry>` | **HybridStream.** DNS query history with optional client IP filter. |
+| `dns_query_log` | `follow: bool`, `n: Option<usize>`, `client: Option<String>`, `offset: Option<usize>` | `HybridStream<DnsQueryLogEntry>` | **HybridStream.** DNS query history with optional client IP filter and pagination. |
 | `dns_upstreams` | None | `Vec<DnsUpstreamEntry>` | Health and performance stats for all configured upstream resolvers. |
-| `dns_cache_dump` | None | `DnsCacheResponse` | Dumps the current contents of the DNS cache. |
+| `dns_cache_dump` | `limit: Option<usize>`, `offset: Option<usize>` | `DnsCacheResponse` | Dumps the current contents of the DNS cache with optional pagination. |
 | `dns_cache_flush` | None | `SimpleSuccess` | Clears the DNS cache. |
 | `dns_cache_stats_ext` | None | `DnsCacheStatsResponse` | In-depth cache statistics and memory usage. |
 | `dns_adblock_status` | None | `DnsAdblockStatusResponse` | Current adblocker state, list sizes, and active timer if any. |
@@ -299,6 +299,9 @@ Returned by `dns_rewrite_list`. Represents a configured DNS rewrite rule.
 - **TopClientEntry:** `ip` (String), `hostname` (Option\<String\>), `count` (u64).
 - **QueryTypeEntry:** `qtype` (String), `count` (u64).
 - **ProtocolStatEntry:** `protocol` (String), `count` (u64), `percentage` (f32).
+
+### DnsCacheResponse & DnsQueryLogResponse
+Both responses include `entries` (the list of items) and `total` (usize, representing the total number of records available before pagination).
 
 ### DnsRecordType
 Supported DNS record types: `A`, `AAAA`, `CNAME`, `NS`, `PTR`, `MX`, `TXT`, `SOA`, `SRV`, `HTTPS`, `SVCB`, `ANY`.

@@ -35,7 +35,7 @@ Endpoints that follow this pattern are marked **HybridStream**.
 
 | Method | Description | Input | Output |
 | :--- | :--- | :--- | :--- |
-| `list_devices` | Returns a list of all discovered and known devices. | Optional: `filter`, `vendor`, `method`, `format` | List of device api types |
+| `list_devices` | Returns a list of all discovered and known devices. | Optional: `filter`, `vendor`, `method`, `format`, `limit`, `offset` | List of device api types |
 | `whois` | Returns detailed information and history for a specific device. | MAC, IP, or Hostname | Device api type |
 | `wol` | Triggers a Wake-on-LAN magic packet for a device. | MAC or Hostname | Empty on success, error on failure |
 | `topology` | Returns the inferred physical network topology. | No | Topology api type |
@@ -65,7 +65,7 @@ Endpoints that follow this pattern are marked **HybridStream**.
 | `dns_stats` | Returns performance and state counters of the DNS resolver. | No | No | DNS stats api type |
 | `dns_analytics` | Returns top domains, top clients, query rates, and protocol stats. | No | `limit: Option<usize>` | DNS analytics api type |
 | `dns_query` | Performs a diagnostic DNS resolution via the daemon. Supports automatic PTR reverse lookup formatting when an IP address is provided. | No | Domain name or hostname (PTR), optional record type | DNS query result api type |
-| `dns_query_log` | Retrieves or streams the DNS query history. Follows the **HybridStream** pattern. | Optional | `follow: bool`, `n: Option<usize>`, `client: Option<String>` | HybridStream of DNS query log entry api types |
+| `dns_query_log` | Retrieves or streams the DNS query history. Follows the **HybridStream** pattern. | Optional | `follow: bool`, `n: Option<usize>`, `client: Option<String>`, `offset: Option<usize>` | HybridStream of DNS query log entry api types |
 | `dns_upstreams` | Returns health and performance statistics for all configured upstream resolvers. | No | No | List of DNS upstream status api types |
 | `dns_rewrite_list` | Returns all DNS rewrite rules. | No | No | List of DNS rewrite rule api types |
 | `dns_rewrite_add` | Adds a new DNS rewrite rule or updates an existing one. A, AAAA, and CNAME rules for the same domain follow individual merging rules (see note). | No | DNS rewrite rule api type | Empty on success, error on failure |
@@ -85,7 +85,7 @@ Endpoints that follow this pattern are marked **HybridStream**.
 | Method | Description | Input | Output |
 | :--- | :--- | :--- | :--- |
 | `dns_cache_flush` | Clears all entries from the DNS cache. | No | Empty on success, error on failure |
-| `dns_cache_dump` | Lists all current entries in the DNS cache. | No | List of DNS cache entry api types |
+| `dns_cache_dump` | Lists all current entries in the DNS cache. | Optional: `limit`, `offset` | List of DNS cache entry api types |
 | `dns_cache_stats_ext` | Returns in-depth cache statistics and memory usage. | No | DNS cache stats api type |
 
 ---
