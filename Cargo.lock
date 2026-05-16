@@ -2585,6 +2585,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanforge-dhcp"
+version = "0.1.0"
+
+[[package]]
 name = "lanforge-dns"
 version = "2.3.3"
 dependencies = [
@@ -2623,6 +2627,10 @@ dependencies = [
  "ureq",
  "webpki-roots 1.0.7",
 ]
+
+[[package]]
+name = "lanforge-host"
+version = "0.1.0"
 
 [[package]]
 name = "lanforge-http"
@@ -2668,6 +2676,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanforge-ndp"
+version = "0.1.0"
+
+[[package]]
 name = "lanforge-network"
 version = "0.19.0"
 dependencies = [
@@ -2692,6 +2704,14 @@ dependencies = [
  "tokio",
  "tracing",
 ]
+
+[[package]]
+name = "lanforge-probe"
+version = "0.1.0"
+
+[[package]]
+name = "lanforge-ra"
+version = "0.1.0"
 
 [[package]]
 name = "lanforge-tftp"
@@ -2745,6 +2765,10 @@ dependencies = [
  "tokio-util",
  "tracing",
 ]
+
+[[package]]
+name = "lanforge-wol"
+version = "0.1.0"
 
 [[package]]
 name = "lazy_static"

@@ -6,13 +6,19 @@ members = [
     "lanforge-cli",
     "lanforge-core",
     "lanforge-db",
+    "lanforge-dhcp",
     "lanforge-dns",
+    "lanforge-host",
     "lanforge-http",
     "lanforge-macros",
+    "lanforge-ndp",
     "lanforge-network",
+    "lanforge-probe",
+    "lanforge-ra",
     "lanforge-tftp",
     "lanforge-types",
     "lanforge-uds",
+    "lanforge-wol",
 ]
 resolver = "3"
 
