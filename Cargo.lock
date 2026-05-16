@@ -2354,7 +2354,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "lanforge"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2386,7 +2386,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.21.2"
+version = "0.30.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2463,7 +2463,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-core"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "argon2",
  "hotpath",
@@ -2480,7 +2480,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2499,7 +2499,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dns"
-version = "2.3.0"
+version = "2.3.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -2539,7 +2539,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-http"
-version = "0.2.1"
+version = "0.4.0"
 dependencies = [
  "argon2",
  "async-stream",
@@ -2573,7 +2573,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-macros"
-version = "1.0.0"
+version = "1.0.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2625,7 +2625,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-types"
-version = "0.4.2"
+version = "0.6.0"
 dependencies = [
  "lanforge-macros",
  "serde",

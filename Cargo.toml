@@ -20,7 +20,7 @@ resolver = "3"
 license = "MPL-2.0"
 edition = "2024"
 version = "0.11.2"
-authors = ["FerrahWolfeh"]
+authors = ["Ferrah Aiko <ferrahwolfeh@proton.me>"]
 
 [workspace.dependencies]
 hotpath = { version = "0.16", default-features = false }
