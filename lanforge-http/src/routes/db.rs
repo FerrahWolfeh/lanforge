@@ -8,7 +8,6 @@ use axum::{
     response::IntoResponse,
     routing::{delete, post},
 };
-use lanforge_api::api::Response;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -20,53 +19,17 @@ pub fn router() -> Router<AppState> {
 
 async fn handle_vacuum(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_db_vacuum().await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_db_vacuum().await, Success => NoContent)
 }
 
 async fn handle_prune(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_db_prune().await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_db_prune().await, Success => NoContent)
 }
 
 async fn handle_log_clean(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_db_log_clean().await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_db_log_clean().await, Success => NoContent)
 }
 
 async fn handle_reset(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
@@ -80,17 +43,5 @@ async fn handle_reset(State(state): State<AppState>, headers: HeaderMap) -> impl
     }
 
     let ctx = create_client_ctx(&state);
-    match ctx.handle_db_reset().await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_db_reset().await, Success => NoContent)
 }

@@ -3,7 +3,6 @@ use crate::server::AppState;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
     response::{
         IntoResponse,
         sse::{Event, Sse},
@@ -11,7 +10,6 @@ use axum::{
     routing::{delete, get, post},
 };
 use futures::stream::Stream;
-use lanforge_api::api::Response;
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_types::network::{DnsRecordType, dns::adblock::RewriteRule};
 use serde::Deserialize;
@@ -113,21 +111,7 @@ pub fn router() -> Router<AppState> {
 
 async fn handle_dns_stats(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_stats().await {
-        Response::DnsStats(res) => {
-            (StatusCode::OK, Json(serde_json::json!({ "data": res }))).into_response()
-        }
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_stats().await, DnsStats, res => serde_json::json!({ "data": res }))
 }
 
 async fn handle_dns_analytics(
@@ -135,40 +119,12 @@ async fn handle_dns_analytics(
     Query(params): Query<AnalyticsQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_analytics(params.limit).await {
-        Response::DnsAnalytics(res) => {
-            (StatusCode::OK, Json(serde_json::json!({ "data": res }))).into_response()
-        }
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_analytics(params.limit).await, DnsAnalytics, res => serde_json::json!({ "data": res }))
 }
 
 async fn handle_dns_upstreams(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_upstreams().await {
-        Response::DnsUpstreams(res) => {
-            (StatusCode::OK, Json(serde_json::json!({ "data": res }))).into_response()
-        }
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_upstreams().await, DnsUpstreams, res => serde_json::json!({ "data": res }))
 }
 
 async fn handle_dns_query(
@@ -176,21 +132,7 @@ async fn handle_dns_query(
     Query(params): Query<DnsQueryRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match Box::pin(ctx.handle_dns_query(params.name, params.record_type)).await {
-        Response::DnsQuery(res) => {
-            (StatusCode::OK, Json(serde_json::json!({ "data": res }))).into_response()
-        }
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(Box::pin(ctx.handle_dns_query(params.name, params.record_type)).await, DnsQuery, res => serde_json::json!({ "data": res }))
 }
 
 async fn handle_dns_cache_dump(
@@ -198,66 +140,28 @@ async fn handle_dns_cache_dump(
     Query(params): Query<CacheQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_cache_dump(params.limit, params.offset).await {
-        Response::DnsCache(res) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "data": res.entries,
-                "meta": {
-                    "total": res.total,
-                    "limit": params.limit.unwrap_or(50),
-                    "offset": params.offset.unwrap_or(0),
-                }
-            })),
-        )
-            .into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(
+        ctx.handle_dns_cache_dump(params.limit, params.offset).await,
+        DnsCache,
+        res => serde_json::json!({
+            "data": res.entries,
+            "meta": {
+                "total": res.total,
+                "limit": params.limit.unwrap_or(50),
+                "offset": params.offset.unwrap_or(0),
+            }
+        })
+    )
 }
 
 async fn handle_dns_cache_flush(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_cache_flush().await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_cache_flush().await, Success => NoContent)
 }
 
 async fn handle_dns_cache_stats(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_cache_stats_ext().await {
-        Response::DnsCacheStatsExt(res) => {
-            (StatusCode::OK, Json(serde_json::json!({ "data": res }))).into_response()
-        }
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_cache_stats_ext().await, DnsCacheStatsExt, res => serde_json::json!({ "data": res }))
 }
 
 async fn handle_dns_logs(
@@ -269,33 +173,18 @@ async fn handle_dns_logs(
         Sse::new(stream).into_response()
     } else {
         let ctx = create_client_ctx(&state);
-        match ctx
-            .handle_dns_query_log(params.limit, params.client, false, params.offset)
-            .await
-        {
-            Response::DnsQueryLog(res) => (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "data": res.entries,
-                    "meta": {
-                        "total": res.total,
-                        "limit": params.limit.unwrap_or(100),
-                        "offset": params.offset.unwrap_or(0),
-                    }
-                })),
-            )
-                .into_response(),
-            Response::Error { error } => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": error })),
-            )
-                .into_response(),
-            _ => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Invalid response type" })),
-            )
-                .into_response(),
-        }
+        crate::http_response!(
+            ctx.handle_dns_query_log(params.limit, params.client, false, params.offset).await,
+            DnsQueryLog,
+            res => serde_json::json!({
+                "data": res.entries,
+                "meta": {
+                    "total": res.total,
+                    "limit": params.limit.unwrap_or(100),
+                    "offset": params.offset.unwrap_or(0),
+                }
+            })
+        )
     }
 }
 
@@ -329,21 +218,7 @@ fn handle_dns_logs_follow(
 
 async fn handle_adblock_status(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_adblock_status().await {
-        Response::DnsAdblockStatus(res) => {
-            (StatusCode::OK, Json(serde_json::json!({ "data": res }))).into_response()
-        }
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_adblock_status().await, DnsAdblockStatus, res => serde_json::json!({ "data": res }))
 }
 
 async fn handle_adblock_set(
@@ -351,60 +226,17 @@ async fn handle_adblock_set(
     Json(payload): Json<AdblockSetRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx
-        .handle_dns_adblock_set(payload.enabled, payload.duration_secs)
-        .await
-    {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_adblock_set(payload.enabled, payload.duration_secs).await, Success => NoContent)
 }
 
 async fn handle_adblock_reload(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_adblock_reload().await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_adblock_reload().await, Success => NoContent)
 }
 
 async fn handle_adblock_urls(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_adblock_url_list().await {
-        Response::DnsAdblockUrls(res) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "data": res.urls })),
-        )
-            .into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_adblock_url_list().await, DnsAdblockUrls, res => serde_json::json!({ "data": res.urls }))
 }
 
 async fn handle_adblock_url_add(
@@ -412,22 +244,7 @@ async fn handle_adblock_url_add(
     Json(payload): Json<AdblockUrlRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx
-        .handle_dns_adblock_url_add(payload.url, payload.kind)
-        .await
-    {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_adblock_url_add(payload.url, payload.kind).await, Success => NoContent)
 }
 
 async fn handle_adblock_url_remove(
@@ -435,40 +252,12 @@ async fn handle_adblock_url_remove(
     Json(payload): Json<AdblockUrlDeleteRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_adblock_url_remove(payload.url).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_adblock_url_remove(payload.url).await, Success => NoContent)
 }
 
 async fn handle_rewrites(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_rewrites().await {
-        Response::DnsRewrites(res) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "data": res.rewrites })),
-        )
-            .into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_rewrites().await, DnsRewrites, res => serde_json::json!({ "data": res.rewrites }))
 }
 
 async fn handle_rewrite_add(
@@ -476,27 +265,16 @@ async fn handle_rewrite_add(
     Json(payload): Json<RewriteRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx
-        .handle_dns_rewrite_add(RewriteRule {
+    crate::http_response!(
+        ctx.handle_dns_rewrite_add(RewriteRule {
             id: None,
             domain: payload.domain,
             rtype: payload.rtype,
             answer: payload.answer,
         })
-        .await
-    {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+        .await,
+        Success => NoContent
+    )
 }
 
 async fn handle_rewrite_remove(
@@ -504,57 +282,17 @@ async fn handle_rewrite_remove(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_rewrite_remove(id).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_rewrite_remove(id).await, Success => NoContent)
 }
 
 async fn handle_rewrite_clear(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_rewrite_clear().await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_rewrite_clear().await, Success => NoContent)
 }
 
 async fn handle_rewrite_export(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_rewrite_export().await {
-        Response::DnsRewrites(res) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "data": res.rewrites })),
-        )
-            .into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_rewrite_export().await, DnsRewrites, res => serde_json::json!({ "data": res.rewrites }))
 }
 
 async fn handle_rewrite_import(
@@ -562,40 +300,12 @@ async fn handle_rewrite_import(
     Json(rules): Json<Vec<RewriteRule>>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_rewrite_import(rules).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_rewrite_import(rules).await, Success => NoContent)
 }
 
 async fn handle_allowlist(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_allowlist().await {
-        Response::DnsAllowlist(res) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "data": res.allowlist })),
-        )
-            .into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_allowlist().await, DnsAllowlist, res => serde_json::json!({ "data": res.allowlist }))
 }
 
 async fn handle_allow(
@@ -603,19 +313,7 @@ async fn handle_allow(
     Json(payload): Json<DomainRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_allow(payload.domain).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_allow(payload.domain).await, Success => NoContent)
 }
 
 async fn handle_unallow(
@@ -623,19 +321,7 @@ async fn handle_unallow(
     Path(target): Path<String>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_unallow(target).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_unallow(target).await, Success => NoContent)
 }
 
 async fn handle_block(
@@ -643,17 +329,5 @@ async fn handle_block(
     Json(payload): Json<DomainRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dns_block(payload.domain).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dns_block(payload.domain).await, Success => NoContent)
 }

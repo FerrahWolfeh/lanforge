@@ -3,9 +3,9 @@ pub mod db;
 pub mod devices;
 pub mod dhcp;
 pub mod dns;
-pub mod system;
 pub mod events;
 pub mod hosts;
+pub mod system;
 
 use crate::server::AppState;
 use axum::Router;
@@ -36,4 +36,50 @@ pub fn create_client_ctx(state: &AppState) -> ClientContext {
         log_db: state.log_db.clone(),
         active_clients: state.ctx.active_clients(),
     }
+}
+
+#[macro_export]
+macro_rules! http_response {
+    // 1. Success => 204 No Content
+    ($expr:expr, Success => NoContent) => {
+        match $expr {
+            lanforge_api::api::Response::Success(_) => {
+                axum::http::StatusCode::NO_CONTENT.into_response()
+            }
+            lanforge_api::api::Response::Error { error } => {
+                let status = if error.contains("not found") {
+                    axum::http::StatusCode::NOT_FOUND
+                } else {
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                };
+                (status, axum::Json(serde_json::json!({ "error": error }))).into_response()
+            }
+            _ => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": "Invalid response type" })),
+            )
+                .into_response(),
+        }
+    };
+    // 2. Custom mapping expression for any variant (e.g. Status, res => serde_json::json!({ "data": res }))
+    ($expr:expr, $variant:ident, $res:ident => $body:expr) => {
+        match $expr {
+            lanforge_api::api::Response::$variant($res) => {
+                (axum::http::StatusCode::OK, axum::Json($body)).into_response()
+            }
+            lanforge_api::api::Response::Error { error } => {
+                let status = if error.contains("not found") {
+                    axum::http::StatusCode::NOT_FOUND
+                } else {
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                };
+                (status, axum::Json(serde_json::json!({ "error": error }))).into_response()
+            }
+            _ => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": "Invalid response type" })),
+            )
+                .into_response(),
+        }
+    };
 }

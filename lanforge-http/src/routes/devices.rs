@@ -1,13 +1,11 @@
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
 use axum::{
-    Json, Router,
+    Router,
     extract::{Path, Query, State},
-    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
-use lanforge_api::api::Response;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -33,8 +31,8 @@ async fn handle_list_devices(
     Query(params): Query<DeviceListQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx
-        .handle_devices(
+    crate::http_response!(
+        ctx.handle_devices(
             params.filter,
             params.vendor,
             params.method.or(params.sort),
@@ -42,24 +40,10 @@ async fn handle_list_devices(
             params.limit,
             params.offset,
         )
-        .await
-    {
-        Response::Devices(res) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "data": res.devices, "meta": res.meta })),
-        )
-            .into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+        .await,
+        Devices,
+        res => serde_json::json!({ "data": res.devices, "meta": res.meta })
+    )
 }
 
 async fn handle_wake(
@@ -67,19 +51,7 @@ async fn handle_wake(
     Path(target): Path<String>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_wol(target).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_wol(target).await, Success => NoContent)
 }
 
 async fn handle_whois(
@@ -87,24 +59,7 @@ async fn handle_whois(
     Path(target): Path<String>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_whois(target.clone()).await {
-        Response::Whois(res) => {
-            (StatusCode::OK, Json(serde_json::json!({ "data": res }))).into_response()
-        }
-        Response::Error { error } => {
-            let status = if error.contains("not found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (status, Json(serde_json::json!({ "error": error }))).into_response()
-        }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_whois(target.clone()).await, Whois, res => serde_json::json!({ "data": res }))
 }
 
 async fn handle_purge(
@@ -112,17 +67,5 @@ async fn handle_purge(
     Path(target): Path<String>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_purge(target).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_purge(target).await, Success => NoContent)
 }

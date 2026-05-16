@@ -3,11 +3,9 @@ use crate::server::AppState;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
-use lanforge_api::api::Response;
 use lanforge_types::update::LeaseTarget;
 use serde::Deserialize;
 
@@ -32,21 +30,7 @@ pub fn router() -> Router<AppState> {
 
 async fn handle_pools(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_dhcp_pools().await {
-        Response::DhcpPools(res) => {
-            (StatusCode::OK, Json(serde_json::json!({ "data": res }))).into_response()
-        }
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_dhcp_pools().await, DhcpPools, res => serde_json::json!({ "data": res }))
 }
 
 async fn handle_leases(
@@ -54,23 +38,7 @@ async fn handle_leases(
     Query(params): Query<LeasesQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_leases(params.count).await {
-        Response::Leases(res) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "data": res.leases })),
-        )
-            .into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_leases(params.count).await, Leases, res => serde_json::json!({ "data": res.leases }))
 }
 
 async fn handle_renew(
@@ -79,19 +47,7 @@ async fn handle_renew(
     Json(payload): Json<LeaseActionRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_lease_renew(mac, payload.target).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_lease_renew(mac, payload.target).await, Success => NoContent)
 }
 
 async fn handle_release(
@@ -100,17 +56,5 @@ async fn handle_release(
     Json(payload): Json<LeaseActionRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    match ctx.handle_lease_release(mac, payload.target).await {
-        Response::Success(_) => StatusCode::NO_CONTENT.into_response(),
-        Response::Error { error } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Invalid response type" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_lease_release(mac, payload.target).await, Success => NoContent)
 }
