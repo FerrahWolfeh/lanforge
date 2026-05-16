@@ -320,7 +320,7 @@ fn handle_dns_logs_follow(
                         continue;
                     }
 
-                let json = serde_json::to_string(&Response::Event(event)).unwrap();
+                let json = serde_json::to_string(&event).unwrap();
                 yield Event::default().data(json);
             }
         }

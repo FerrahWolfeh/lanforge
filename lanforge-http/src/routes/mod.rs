@@ -4,6 +4,8 @@ pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod system;
+pub mod events;
+pub mod hosts;
 
 use crate::server::AppState;
 use axum::Router;
@@ -16,7 +18,9 @@ pub fn router() -> Router<AppState> {
         .nest("/devices", devices::router())
         .nest("/dhcp", dhcp::router())
         .nest("/dns", dns::router())
-        .nest("/db", db::router());
+        .nest("/db", db::router())
+        .nest("/events", events::router())
+        .nest("/hosts", hosts::router());
 
     Router::new().nest("/v1", v1)
 }
