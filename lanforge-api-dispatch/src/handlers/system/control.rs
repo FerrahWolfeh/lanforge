@@ -1,9 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
-use lanforge_core::{
-    bus::{LanforgeEvent, NetworkEvent, SystemEvent},
-    utils::auth::hash_password,
-};
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 
 impl ClientContext {
     pub async fn handle_reload(&self) -> Response {
@@ -35,17 +32,5 @@ impl ClientContext {
             message: "Network scan triggered".to_string(),
         })
     }
-
-    pub async fn handle_config_set_password(&self, password: String) -> Response {
-        let hash = hash_password(&password);
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigUpdate {
-                password_hash: hash,
-            }));
-        Response::Success(SimpleSuccess {
-            message: "API password updated and persisted to database".to_string(),
-        })
-    }
 }
+

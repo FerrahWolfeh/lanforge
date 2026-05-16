@@ -1,5 +1,8 @@
 use chrono::{DateTime, Local};
-use lanforge_types::{DeviceClass, IPv6State, InterfaceState, updates::StaticEntry};
+use lanforge_types::{
+    device::{DeviceClass, IPv6State},
+    update::{InterfaceState, StaticEntry},
+};
 use std::time::SystemTime;
 
 /// Returns an emoji icon for a device class.

@@ -57,7 +57,7 @@ impl crate::cli::commands::CliCommand for WatchHandler {
         &mut self,
         client: &mut LanforgeRpcClient<UnixStream>,
     ) -> color_eyre::eyre::Result<()> {
-        client.watch().await?;
+        client.log(true, None, None).await?;
         println!("Watching for events... (Ctrl+C to stop)");
         loop {
             match client.next_response().await {

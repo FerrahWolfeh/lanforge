@@ -2,7 +2,7 @@ use crate::api::{
     AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpPoolsResponse,
     DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
     LeasesResponse, RpcCallError, SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
@@ -20,8 +20,12 @@ pub trait LanforgeRpc {
         format: Option<String>,
     ) -> Result<DevicesResponse, RpcCallError>;
     async fn reload(&self) -> Result<SimpleSuccess, RpcCallError>;
-    async fn watch(&self) -> Result<(), RpcCallError>;
-    async fn log(&self, follow: bool, n: Option<usize>) -> Result<(), RpcCallError>;
+    async fn log(
+        &self,
+        follow: bool,
+        n: Option<usize>,
+        filter: Option<Vec<EventKind>>,
+    ) -> Result<(), RpcCallError>;
     async fn scan(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn shutdown(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn host_add(&self, entry: HostConfigEntry) -> Result<SimpleSuccess, RpcCallError>;
@@ -74,9 +78,9 @@ pub trait LanforgeRpc {
     async fn dns_adblock_reload(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_query_log(
         &self,
-        limit: Option<usize>,
-        client: Option<String>,
         follow: bool,
+        n: Option<usize>,
+        client: Option<String>,
     ) -> Result<DnsQueryLogResponse, RpcCallError>;
     async fn dns_adblock_status(&self) -> Result<DnsAdblockStatusResponse, RpcCallError>;
     async fn dns_block(&self, domain: String) -> Result<SimpleSuccess, RpcCallError>;
@@ -107,9 +111,9 @@ pub trait LanforgeRpc {
     async fn db_reset(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn leases(&self, count: bool) -> Result<LeasesResponse, RpcCallError>;
     async fn topology(&self) -> Result<TopologyResponse, RpcCallError>;
-    async fn config_set_password(&self, password: String) -> Result<SimpleSuccess, RpcCallError>;
     async fn ak_generate(&self, name: String) -> Result<AuthTokenResponse, RpcCallError>;
     async fn ak_delete(&self, id_or_name: String) -> Result<SimpleSuccess, RpcCallError>;
     async fn ak_renew(&self, id_or_name: String) -> Result<AuthTokenResponse, RpcCallError>;
     async fn ak_list(&self) -> Result<AuthTokensResponse, RpcCallError>;
 }
+

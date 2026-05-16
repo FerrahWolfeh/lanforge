@@ -133,9 +133,14 @@ impl CliCommand for HostHandler {
                     }
                 }
 
-                let resp = client
-                    .host_add(Some(final_mac), Some(final_hostname), final_v4, final_v6)
-                    .await?;
+                let entry = lanforge_api::api::HostConfigEntry {
+                    mac: final_mac,
+                    hostname: final_hostname,
+                    v4_fixed: final_v4,
+                    v6_suffix: final_v6,
+                    origin: "Cli".to_string(),
+                };
+                let resp = client.host_add(entry).await?;
                 element! {
                     View(padding_left: 2, margin_top: 1) {
                         Text(content: "✓ ", color: Color::Green)

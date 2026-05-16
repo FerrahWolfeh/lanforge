@@ -69,3 +69,103 @@ pub enum RpcCallError {
     #[error("Invalid response type")]
     InvalidResponseType,
 }
+
+use lanforge_types::events::{DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, SystemEvent};
+
+/// Event categories used for filtering event streams.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    DeviceOnline,
+    DeviceOffline,
+    DeviceUpdated,
+    DevicePurged,
+    DhcpLeaseGranted,
+    DhcpLeaseReleased,
+    DnsQuery,
+    DnsBlocked,
+    DnsRewriteUpdated,
+    AdblockToggled,
+    ScanCompleted,
+    ConfigReloaded,
+}
+
+impl EventKind {
+    #[must_use]
+    pub fn matches(&self, event: &LanforgeEvent) -> bool {
+        match self {
+            Self::DeviceOnline => match event {
+                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => {
+                    matches!(&**change, DeviceChange::StatusChanged { online: true, .. })
+                }
+                _ => false,
+            },
+            Self::DeviceOffline => match event {
+                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => {
+                    matches!(
+                        &**change,
+                        DeviceChange::StatusChanged { online: false, .. }
+                            | DeviceChange::HostRemoved
+                            | DeviceChange::IpOffline { .. }
+                    )
+                }
+                _ => false,
+            },
+            Self::DeviceUpdated => {
+                matches!(event, LanforgeEvent::Device(DeviceEvent::Updated { .. }))
+            }
+            Self::DevicePurged => {
+                matches!(event, LanforgeEvent::Device(DeviceEvent::Purged { .. }))
+            }
+            Self::DhcpLeaseGranted => match event {
+                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => matches!(
+                    &**change,
+                    DeviceChange::V4Assigned { .. }
+                        | DeviceChange::V6Assigned { .. }
+                        | DeviceChange::V6PrefixAssigned { .. }
+                ),
+                LanforgeEvent::Device(DeviceEvent::LeaseRenew { .. }) => true,
+                _ => false,
+            },
+            Self::DhcpLeaseReleased => match event {
+                LanforgeEvent::Device(
+                    DeviceEvent::LeaseRelease { .. } | DeviceEvent::Expired { .. },
+                ) => true,
+                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => {
+                    matches!(&**change, DeviceChange::LeaseExpired { .. })
+                }
+                _ => false,
+            },
+            Self::DnsQuery => matches!(event, LanforgeEvent::Dns(DnsEvent::QueryResolved(_))),
+            Self::DnsBlocked => match event {
+                LanforgeEvent::Dns(DnsEvent::QueryBlocked { .. }) => true,
+                #[cfg(feature = "adblock")]
+                LanforgeEvent::Dns(DnsEvent::AdblockBlock(_)) => true,
+                _ => false,
+            },
+            Self::DnsRewriteUpdated => {
+                matches!(event, LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged))
+            }
+            Self::AdblockToggled => {
+                #[cfg(feature = "adblock")]
+                {
+                    matches!(event, LanforgeEvent::Dns(DnsEvent::AdblockToggle { .. }))
+                }
+                #[cfg(not(feature = "adblock"))]
+                {
+                    false
+                }
+            }
+            Self::ScanCompleted => {
+                matches!(
+                    event,
+                    LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary { .. })
+                )
+            }
+            Self::ConfigReloaded => matches!(
+                event,
+                LanforgeEvent::System(SystemEvent::ReloadConfig | SystemEvent::ConfigUpdate { .. },)
+            ),
+        }
+    }
+}

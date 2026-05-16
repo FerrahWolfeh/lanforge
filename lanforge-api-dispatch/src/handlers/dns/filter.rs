@@ -97,7 +97,10 @@ impl ClientContext {
     pub async fn handle_dns_allowlist(&self) -> Response {
         match self.db.load_dns_allowlist().await {
             Ok(allowlist) => Response::DnsAllowlist(DnsAllowlistResponse {
-                allowlist: allowlist.into_iter().map(|(_, d)| d).collect(),
+                allowlist: allowlist
+                    .into_iter()
+                    .map(|(id, domain)| lanforge_api::api::AllowlistEntry { id, domain })
+                    .collect(),
             }),
             Err(e) => Response::Error {
                 error: e.to_string(),

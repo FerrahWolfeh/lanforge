@@ -34,13 +34,11 @@ use tokio::net::UnixStream;
 
 #[async_trait::async_trait]
 impl CliCommand for ConfigHandler {
-    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
+    async fn execute_rpc(&mut self, _client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
         match &self.action {
-            ConfigAction::SetPassword { password } => {
-                let resp = client.config_set_password(password.clone()).await?;
-                println!("✅ {}", resp.message);
+            ConfigAction::SetPassword { .. } => {
+                color_eyre::eyre::bail!("Legacy endpoint removed; password-based auth replaced by API token family (use 'lanforge auth gen', etc.)");
             }
         }
-        Ok(())
     }
 }

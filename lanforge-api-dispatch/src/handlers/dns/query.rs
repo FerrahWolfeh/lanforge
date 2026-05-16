@@ -71,11 +71,11 @@ impl ClientContext {
 
     pub async fn handle_dns_query_log(
         &self,
-        limit: Option<usize>,
+        n: Option<usize>,
         _client: Option<String>,
         _follow: bool,
     ) -> Response {
-        let limit = limit.unwrap_or(100);
+        let limit = n.unwrap_or(100);
         match self.log_db.get_dns_query_history(limit).await {
             Ok(queries) => Response::DnsQueryLog(DnsQueryLogResponse {
                 entries: queries

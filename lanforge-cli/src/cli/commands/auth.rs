@@ -23,7 +23,7 @@ impl Execute for AuthArgs {
         match self.command {
             AuthCommand::GenerateToken { name } => {
                 let mut rpc = client.connect_rpc().await?;
-                let resp = rpc.auth_generate_token(name).await?;
+                let resp = rpc.ak_generate(name).await?;
                 println!("✓ Token generated successfully for: {}", resp.name);
                 println!("  Token: {}", resp.token);
                 println!("\nIMPORTANT: This token will only be shown once. Please save it securely.");

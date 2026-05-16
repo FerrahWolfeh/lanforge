@@ -461,7 +461,7 @@ fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
                     Cell::from(e.src_hostname.as_ref().unwrap_or(&e.src_ip).clone())
                         .style(Style::default().fg(theme::MOCHA_TEXT)),
                     Cell::from(e.domain.clone()).style(Style::default().fg(theme::MOCHA_BLUE)),
-                    Cell::from(e.qtype.clone()).style(Style::default().fg(theme::MOCHA_GREEN)),
+                    Cell::from(e.qtype.to_string()).style(Style::default().fg(theme::MOCHA_GREEN)),
                     Cell::from(e.result.clone()).style(result_style),
                     Cell::from(format!("{}ms", e.upstream_us / 1000))
                         .style(Style::default().fg(theme::TEXT_DIM)),

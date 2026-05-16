@@ -211,12 +211,34 @@ impl CliCommand for DnsCommand {
                 },
                 DnsAction::Rewrite { action } => match action {
                     RewriteAction::Add { domain, answer } => {
-                        let res = client.dns_rewrite_add(domain.clone(), answer.clone()).await?;
+                        let rtype = if answer.parse::<std::net::Ipv4Addr>().is_ok() {
+                            lanforge_types::network::DnsRecordType::A
+                        } else if answer.parse::<std::net::Ipv6Addr>().is_ok() {
+                            lanforge_types::network::DnsRecordType::AAAA
+                        } else {
+                            lanforge_types::network::DnsRecordType::CNAME
+                        };
+                        let rule = lanforge_types::network::dns::adblock::RewriteRule {
+                            id: None,
+                            domain: domain.clone(),
+                            rtype,
+                            answer: answer.clone(),
+                        };
+                        let res = client.dns_rewrite_add(rule).await?;
                         println!("{}", res.message);
                     }
                     RewriteAction::Remove { domain } => {
-                        let res = client.dns_rewrite_remove(domain.clone()).await?;
-                        println!("{}", res.message);
+                        let rewrites = client.dns_rewrites().await?;
+                        if let Some(rule) = rewrites.rewrites.iter().find(|r| r.domain == *domain) {
+                            if let Some(id) = rule.id {
+                                let res = client.dns_rewrite_remove(id).await?;
+                                println!("{}", res.message);
+                            } else {
+                                println!("Error: Rule ID not found.");
+                            }
+                        } else {
+                            println!("Error: Rewrite rule for domain '{domain}' not found.");
+                        }
                     }
                     RewriteAction::List => {
                         let res = client.dns_rewrites().await?;
@@ -238,7 +260,7 @@ impl CliCommand for DnsCommand {
                     client: filter,
                     follow,
                 } => {
-                    let log = client.dns_query_log(Some(*limit), filter.clone(), *follow).await?;
+                    let log = client.dns_query_log(*follow, Some(*limit), filter.clone()).await?;
                     Self::render_logs(&log);
                     if *follow {
                         loop {
@@ -464,10 +486,10 @@ impl DnsCommand {
                     Text(content: " DNS PERMANENT ALLOWLIST ", color: Color::White, weight: Weight::Bold)
                 }
                 View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
-                    #(resp.allowlist.iter().map(|domain| element! {
+                    #(resp.allowlist.iter().map(|entry| element! {
                         View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
                             Text(content: "● ", color: Color::Green)
-                            Text(content: domain.clone())
+                            Text(content: format!("{:<6} {}", entry.id, entry.domain))
                         }
                     }))
                 }

@@ -72,13 +72,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn watch(&self) -> Result<(), RpcCallError> {
+    async fn log(&self, _follow: bool, _n: Option<usize>, _filter: Option<Vec<lanforge_api::api::EventKind>>) -> Result<(), RpcCallError> {
         Ok(())
     }
 
-    async fn log(&self, _follow: bool, _n: Option<usize>) -> Result<(), RpcCallError> {
-        Ok(())
-    }
 
     async fn scan(&self) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_scan().await {
@@ -309,11 +306,11 @@ impl LanforgeRpc for ClientContext {
 
     async fn dns_query_log(
         &self,
-        limit: Option<usize>,
-        client: Option<String>,
         follow: bool,
+        n: Option<usize>,
+        client: Option<String>,
     ) -> Result<DnsQueryLogResponse, RpcCallError> {
-        match self.handle_dns_query_log(limit, client, follow).await {
+        match self.handle_dns_query_log(n, client, follow).await {
             Response::DnsQueryLog(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -472,14 +469,6 @@ impl LanforgeRpc for ClientContext {
     async fn topology(&self) -> Result<TopologyResponse, RpcCallError> {
         match self.handle_topology().await {
             Response::Topology(r) => Ok(r),
-            Response::Error { error } => Err(Self::map_error(error)),
-            _ => Err(RpcCallError::InvalidResponseType),
-        }
-    }
-
-    async fn config_set_password(&self, password: String) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_config_set_password(password).await {
-            Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

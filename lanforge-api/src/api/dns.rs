@@ -146,11 +146,19 @@ pub struct DnsRewritesResponse {
     pub rewrites: Vec<RewriteRule>,
 }
 
+/// A single entry in the DNS allowlist.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AllowlistEntry {
+    pub id: i64,
+    pub domain: String,
+}
+
 /// Response containing the DNS allowlist.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsAllowlistResponse {
-    pub allowlist: Vec<String>,
+    pub allowlist: Vec<AllowlistEntry>,
 }
+
 
 /// Response containing adblock source URLs.
 #[derive(Debug, Serialize, Deserialize, Clone)]

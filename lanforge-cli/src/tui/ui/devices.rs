@@ -1,6 +1,6 @@
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
-use lanforge_types::IPv6State;
+use lanforge_types::device::IPv6State;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},

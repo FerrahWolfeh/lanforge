@@ -44,7 +44,7 @@ use tokio::net::UnixStream;
 #[async_trait::async_trait]
 impl CliCommand for LogHandler {
     async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
-        client.log(self.follow, Some(self.lines)).await?;
+        client.log(self.follow, Some(self.lines), None).await?;
         loop {
             match client.next_response().await {
                 Ok(RpcResponse::Event(event)) => self.print_event(&event),

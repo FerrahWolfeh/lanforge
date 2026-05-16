@@ -46,9 +46,11 @@ async fn handle_login(
 }
 
 async fn handle_password_update(
-    State(state): State<AppState>,
-    Json(payload): Json<PasswordUpdateRequest>,
+    State(_state): State<AppState>,
+    Json(_payload): Json<PasswordUpdateRequest>,
 ) -> impl IntoResponse {
-    let ctx = create_client_ctx(&state);
-    Json(ctx.handle_config_set_password(payload.password).await)
+    Json(lanforge_api::api::Response::Error {
+        error: "Password-based authentication is deprecated in V3. Use API tokens (ak_*) instead.".to_string(),
+    })
 }
+

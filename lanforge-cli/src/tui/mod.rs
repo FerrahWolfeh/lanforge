@@ -168,8 +168,10 @@ async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sende
                 }
 
                 // State (ContextDump)
-                if let Ok(Response::ContextDump(s)) = fetch_client.get("/system/context").await {
-                    let _ = fetch_tx.send(AppEvent::StateUpdate(s)).await;
+                if let Ok(Response::ContextDump(val)) = fetch_client.get("/system/context").await {
+                    if let Ok(state) = serde_json::from_value(*val) {
+                        let _ = fetch_tx.send(AppEvent::StateUpdate(Box::new(state))).await;
+                    }
                 }
 
                 // DNS Stats
@@ -220,7 +222,7 @@ async fn run_daemon_watch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
     loop {
         if let Ok(stream) = UnixStream::connect(&socket_path).await {
             let mut client = LanforgeRpcClient::new(stream);
-            if client.watch().await.is_ok() {
+            if client.log(true, None, None).await.is_ok() {
                 while let Ok(resp) = client.next_response().await {
                     if let RpcResponse::Event(event) = resp {
                         let _ = tx.send(AppEvent::DaemonEvent(event)).await;
@@ -245,8 +247,10 @@ async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                 }
 
                 // State (ContextDump)
-                if let Ok(s) = client.context_dump(false, false).await {
-                    let _ = tx.send(AppEvent::StateUpdate(s)).await;
+                if let Ok(val) = client.context_dump(false, false).await {
+                    if let Ok(state) = serde_json::from_value(*val) {
+                        let _ = tx.send(AppEvent::StateUpdate(Box::new(state))).await;
+                    }
                 }
 
                 // DNS Stats
@@ -265,7 +269,7 @@ async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                 }
 
                 // DNS Query Log
-                if let Ok(s) = client.dns_query_log(Some(50), None, false).await {
+                if let Ok(s) = client.dns_query_log(false, Some(50), None).await {
                     let _ = tx.send(AppEvent::DnsQueryLogUpdate(Box::new(s))).await;
                 }
 
