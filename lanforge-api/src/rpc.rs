@@ -18,6 +18,8 @@ pub trait LanforgeRpc {
         vendor: Option<String>,
         method: Option<String>,
         format: Option<String>,
+        limit: Option<usize>,
+        offset: Option<usize>,
     ) -> Result<DevicesResponse, RpcCallError>;
     async fn reload(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn log(
@@ -68,7 +70,11 @@ pub trait LanforgeRpc {
         record_type: Option<String>,
     ) -> Result<DnsQueryResponse, RpcCallError>;
     async fn dns_cache_flush(&self) -> Result<SimpleSuccess, RpcCallError>;
-    async fn dns_cache_dump(&self) -> Result<DnsCacheResponse, RpcCallError>;
+    async fn dns_cache_dump(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<DnsCacheResponse, RpcCallError>;
     async fn dns_cache_stats_ext(&self) -> Result<DnsCacheStatsExtResponse, RpcCallError>;
     async fn dns_adblock_set(
         &self,
@@ -81,6 +87,7 @@ pub trait LanforgeRpc {
         follow: bool,
         n: Option<usize>,
         client: Option<String>,
+        offset: Option<usize>,
     ) -> Result<DnsQueryLogResponse, RpcCallError>;
     async fn dns_adblock_status(&self) -> Result<DnsAdblockStatusResponse, RpcCallError>;
     async fn dns_block(&self, domain: String) -> Result<SimpleSuccess, RpcCallError>;

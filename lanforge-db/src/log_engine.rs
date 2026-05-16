@@ -318,13 +318,22 @@ impl LogDb {
     pub async fn get_dns_query_history(
         &self,
         limit: usize,
-    ) -> Result<Vec<QueryLogEntry>, LeaseDbError> {
+        offset: Option<usize>,
+    ) -> Result<(Vec<QueryLogEntry>, usize), LeaseDbError> {
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM dns_queries")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or((0,));
+        let total = total.0 as usize;
+
         let limit = limit as i64;
+        let offset = offset.unwrap_or(0) as i64;
         let rows = sqlx::query(
             "SELECT timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer, protocol 
-             FROM dns_queries ORDER BY id DESC LIMIT ?",
+             FROM dns_queries ORDER BY id DESC LIMIT ? OFFSET ?",
         )
         .bind(limit)
+        .bind(offset)
         .fetch_all(&self.pool)
         .await?;
 
@@ -371,7 +380,7 @@ impl LogDb {
                 },
             });
         }
-        Ok(entries)
+        Ok((entries, total))
     }
 
     /// Retrieves top domains by query count.
@@ -575,7 +584,8 @@ mod tests {
         db.record_dns_query(&entry).await.unwrap();
 
         // Check history
-        let history = db.get_dns_query_history(10).await.unwrap();
+        let (history, total) = db.get_dns_query_history(10, None).await.unwrap();
+        assert_eq!(total, 1);
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].protocol, TransportProtocol::Tls);
 

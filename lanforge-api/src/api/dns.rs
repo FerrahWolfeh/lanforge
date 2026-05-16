@@ -100,6 +100,7 @@ pub struct DnsQueryResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DnsCacheResponse {
     pub entries: Vec<DnsCacheEntry>,
+    pub total: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -129,6 +130,7 @@ pub struct DnsQueryLogEntry {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsQueryLogResponse {
     pub entries: Vec<DnsQueryLogEntry>,
+    pub total: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

@@ -1,6 +1,5 @@
 pub mod handlers;
 
-use lanforge_api::rpc::LanforgeRpc;
 use lanforge_api::api::{
     AuthTokenResponse, DevicesResponse, DhcpPoolsResponse, DnsAdblockUrlsResponse,
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
@@ -8,6 +7,7 @@ use lanforge_api::api::{
     DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse, Response, RpcCallError,
     SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
 };
+use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::log_engine::LogDb;
@@ -56,8 +56,13 @@ impl LanforgeRpc for ClientContext {
         vendor: Option<String>,
         method: Option<String>,
         format: Option<String>,
+        limit: Option<usize>,
+        offset: Option<usize>,
     ) -> Result<DevicesResponse, RpcCallError> {
-        match self.handle_devices(filter, vendor, method, format).await {
+        match self
+            .handle_devices(filter, vendor, method, format, limit, offset)
+            .await
+        {
             Response::Devices(d) => Ok(d),
             Response::Error { error } => Err(RpcCallError::Internal(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -72,10 +77,14 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn log(&self, _follow: bool, _n: Option<usize>, _filter: Option<Vec<lanforge_api::api::EventKind>>) -> Result<(), RpcCallError> {
+    async fn log(
+        &self,
+        _follow: bool,
+        _n: Option<usize>,
+        _filter: Option<Vec<lanforge_api::api::EventKind>>,
+    ) -> Result<(), RpcCallError> {
         Ok(())
     }
-
 
     async fn scan(&self) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_scan().await {
@@ -268,8 +277,12 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn dns_cache_dump(&self) -> Result<DnsCacheResponse, RpcCallError> {
-        match self.handle_dns_cache_dump().await {
+    async fn dns_cache_dump(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<DnsCacheResponse, RpcCallError> {
+        match self.handle_dns_cache_dump(limit, offset).await {
             Response::DnsCache(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -309,8 +322,9 @@ impl LanforgeRpc for ClientContext {
         follow: bool,
         n: Option<usize>,
         client: Option<String>,
+        offset: Option<usize>,
     ) -> Result<DnsQueryLogResponse, RpcCallError> {
-        match self.handle_dns_query_log(n, client, follow).await {
+        match self.handle_dns_query_log(n, client, follow, offset).await {
             Response::DnsQueryLog(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

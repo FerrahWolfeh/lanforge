@@ -222,12 +222,32 @@ where
         // Handle RPC requests
         match req {
             RpcRequest::Log { follow, n, filter } => {
-                handle_log_stream(writer.clone(), reader, ctx.clone(), n, buf.clone(), follow, filter)
-                    .await?;
+                handle_log_stream(
+                    writer.clone(),
+                    reader,
+                    ctx.clone(),
+                    n,
+                    buf.clone(),
+                    follow,
+                    filter,
+                )
+                .await?;
                 return Ok(());
             }
-            RpcRequest::DnsQueryLog { follow, n, client } => {
-                let resp = ctx.dispatch(RpcRequest::DnsQueryLog { follow, n, client: client.clone() }).await;
+            RpcRequest::DnsQueryLog {
+                follow,
+                n,
+                client,
+                offset,
+            } => {
+                let resp = ctx
+                    .dispatch(RpcRequest::DnsQueryLog {
+                        follow,
+                        n,
+                        client: client.clone(),
+                        offset,
+                    })
+                    .await;
                 {
                     let mut writer_lock = writer.lock().await;
                     let mut buf_lock = buf.lock().await;
@@ -236,7 +256,14 @@ where
                     drop(writer_lock);
                 }
                 if follow {
-                    handle_dns_query_log_stream(writer.clone(), reader, ctx.clone(), client, buf.clone()).await?;
+                    handle_dns_query_log_stream(
+                        writer.clone(),
+                        reader,
+                        ctx.clone(),
+                        client,
+                        buf.clone(),
+                    )
+                    .await?;
                 }
                 return Ok(());
             }
@@ -293,10 +320,10 @@ where
         let mut buf_lock = buf.lock().await;
         while let Some(res) = history.next().await {
             let event = res?;
-            if let Some(ref filters) = filter {
-                if !filters.iter().any(|f| f.matches(&event.event)) {
-                    continue;
-                }
+            if let Some(ref filters) = filter
+                && !filters.iter().any(|f| f.matches(&event.event))
+            {
+                continue;
             }
             write_rpc_response(&mut *writer_lock, &RpcResponse::Event(event), &mut buf_lock)
                 .await?;
@@ -317,11 +344,10 @@ where
             res = bus_rx.recv() => {
                 match res {
                     Ok(event) => {
-                        if let Some(ref filters) = filter {
-                            if !filters.iter().any(|f| f.matches(&event.event)) {
+                        if let Some(ref filters) = filter
+                            && !filters.iter().any(|f| f.matches(&event.event)) {
                                 continue;
                             }
-                        }
                         let mut writer_lock = writer.lock().await;
                         let mut buf_lock = buf.lock().await;
                         write_rpc_response(&mut *writer_lock, &RpcResponse::Event(event), &mut buf_lock).await?;
@@ -365,11 +391,10 @@ where
                 match res {
                     Ok(event) => {
                         if let lanforge_types::events::LanforgeEvent::Dns(lanforge_types::events::DnsEvent::QueryResolved(ref q)) = event.event {
-                            if let Some(ref client_ip) = client_filter {
-                                if q.src_ip.to_string() != *client_ip {
+                            if let Some(ref client_ip) = client_filter
+                                && q.src_ip.to_string() != *client_ip {
                                     continue;
                                 }
-                            }
                             let mut writer_lock = writer.lock().await;
                             let mut buf_lock = buf.lock().await;
                             write_rpc_response(&mut *writer_lock, &RpcResponse::Event(event), &mut buf_lock).await?;

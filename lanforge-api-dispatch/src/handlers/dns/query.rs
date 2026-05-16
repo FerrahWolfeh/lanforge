@@ -74,10 +74,11 @@ impl ClientContext {
         n: Option<usize>,
         _client: Option<String>,
         _follow: bool,
+        offset: Option<usize>,
     ) -> Response {
         let limit = n.unwrap_or(100);
-        match self.log_db.get_dns_query_history(limit).await {
-            Ok(queries) => Response::DnsQueryLog(DnsQueryLogResponse {
+        match self.log_db.get_dns_query_history(limit, offset).await {
+            Ok((queries, total)) => Response::DnsQueryLog(DnsQueryLogResponse {
                 entries: queries
                     .into_iter()
                     .map(|q| {
@@ -100,6 +101,7 @@ impl ClientContext {
                         }
                     })
                     .collect(),
+                total,
             }),
             Err(e) => Response::Error {
                 error: e.to_string(),

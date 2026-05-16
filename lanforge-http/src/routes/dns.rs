@@ -30,9 +30,16 @@ pub struct DnsQueryRequest {
 #[derive(Debug, Deserialize)]
 pub struct DnsLogQuery {
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
     pub client: Option<String>,
     #[serde(default)]
     pub follow: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CacheQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,9 +135,12 @@ async fn handle_dns_query(
     AxumJson(Box::pin(ctx.handle_dns_query(params.name, params.record_type)).await)
 }
 
-async fn handle_dns_cache_dump(State(state): State<AppState>) -> AxumJson<Response> {
+async fn handle_dns_cache_dump(
+    State(state): State<AppState>,
+    Query(params): Query<CacheQuery>,
+) -> AxumJson<Response> {
     let ctx = create_client_ctx(&state);
-    AxumJson(ctx.handle_dns_cache_dump().await)
+    AxumJson(ctx.handle_dns_cache_dump(params.limit, params.offset).await)
 }
 
 async fn handle_dns_cache_flush(State(state): State<AppState>) -> AxumJson<Response> {
@@ -148,7 +158,7 @@ async fn handle_dns_logs(
     } else {
         let ctx = create_client_ctx(&state);
         AxumJson(
-            ctx.handle_dns_query_log(params.limit, params.client, false)
+            ctx.handle_dns_query_log(params.limit, params.client, false, params.offset)
                 .await,
         )
         .into_response()

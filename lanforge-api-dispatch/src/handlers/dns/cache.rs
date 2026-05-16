@@ -1,5 +1,7 @@
-use lanforge_api::api::{DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, Response, SimpleSuccess};
 use crate::ClientContext;
+use lanforge_api::api::{
+    DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, Response, SimpleSuccess,
+};
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_dns::server::DnsContext;
 
@@ -14,7 +16,11 @@ impl ClientContext {
         })
     }
 
-    pub async fn handle_dns_cache_dump(&self) -> Response {
+    pub async fn handle_dns_cache_dump(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Response {
         if let Some(dns_ctx_any) = self.ctx.get_dns_context()
             && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
         {
@@ -27,7 +33,15 @@ impl ClientContext {
                     expires_in_secs,
                 });
             }
-            return Response::DnsCache(DnsCacheResponse { entries });
+            let total = entries.len();
+            let start = offset.unwrap_or(0).min(total);
+            let end = (start + limit.unwrap_or(total)).min(total);
+            let paginated = entries[start..end].to_vec();
+
+            return Response::DnsCache(DnsCacheResponse {
+                entries: paginated,
+                total,
+            });
         }
 
         Response::Error {
@@ -39,9 +53,9 @@ impl ClientContext {
         if let Some(dns_ctx_any) = self.ctx.get_dns_context()
             && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
         {
-            let (total_entries, entries_by_type, memory_usage_bytes, average_ttl_secs) = 
+            let (total_entries, entries_by_type, memory_usage_bytes, average_ttl_secs) =
                 dns_ctx.cache.get_stats_ext();
-            
+
             return Response::DnsCacheStatsExt(DnsCacheStatsExtResponse {
                 total_entries,
                 entries_by_type,

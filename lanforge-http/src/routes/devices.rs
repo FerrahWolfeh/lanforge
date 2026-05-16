@@ -14,6 +14,8 @@ pub struct DeviceListQuery {
     pub vendor: Option<String>,
     pub method: Option<String>,
     pub format: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -30,8 +32,15 @@ async fn handle_list_devices(
 ) -> Json<Response> {
     let ctx = create_client_ctx(&state);
     Json(
-        ctx.handle_devices(params.filter, params.vendor, params.method, params.format)
-            .await,
+        ctx.handle_devices(
+            params.filter,
+            params.vendor,
+            params.method,
+            params.format,
+            params.limit,
+            params.offset,
+        )
+        .await,
     )
 }
 

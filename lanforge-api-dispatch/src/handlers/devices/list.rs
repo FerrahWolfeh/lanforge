@@ -17,6 +17,8 @@ impl ClientContext {
         _vendor: Option<String>,
         method: Option<String>,
         _format: Option<String>,
+        limit: Option<usize>,
+        offset: Option<usize>,
     ) -> Response {
         let devices = self.ctx.all_devices();
         let mut api_devices = Vec::new();
@@ -45,10 +47,15 @@ impl ClientContext {
             api_devices.push(self.map_device(dev, gua_prefix, ula_prefix));
         }
 
+        let total = api_devices.len();
+        let start = offset.unwrap_or(0).min(total);
+        let end = (start + limit.unwrap_or(total)).min(total);
+        let paginated = api_devices[start..end].to_vec();
+
         Response::Devices(DevicesResponse {
-            devices: api_devices,
+            devices: paginated,
             meta: DevicesMeta {
-                total: devices.len(),
+                total,
                 online,
                 last_scan_secs_ago: self.last_scan_secs_ago,
             },
