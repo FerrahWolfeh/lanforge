@@ -1,56 +1,59 @@
-use axum::{Router, routing::post, extract::State, Json, response::IntoResponse, http::StatusCode};
+use axum::{Router, routing::{get, post, delete}, extract::{State, Path}, Json, response::IntoResponse, http::StatusCode};
 use crate::server::AppState;
-use crate::error::Result as HttpResult;
 use crate::routes::create_client_ctx;
-use lanforge_core::utils::auth::verify_password;
+use lanforge_api::api::Response;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-pub struct LoginRequest {
-    pub password: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PasswordUpdateRequest {
-    pub password: String,
+pub struct ValidateRequest {
+    pub token: String,
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/login", post(handle_login))
-        .route("/password", post(handle_password_update))
+        .route("/tokens", get(handle_list_tokens).post(handle_generate_token))
+        .route("/tokens/{id}", delete(handle_delete_token))
+        .route("/tokens/{id}/renew", post(handle_renew_token))
+        .route("/validate", post(handle_validate))
 }
 
-async fn handle_login(
-    State(state): State<AppState>,
-    Json(payload): Json<LoginRequest>,
-) -> HttpResult<impl IntoResponse> {
-    let Some(hash) = &state.cfg.auth_password_hash else {
-        return Ok((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Authentication not configured on this daemon" })),
-        )
-            .into_response());
-    };
-
-    if verify_password(hash, &payload.password) {
-        let token = state.auth.generate_token("admin")?;
-        Ok((StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response())
-    } else {
-        Ok((
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid password" })),
-        )
-            .into_response())
+async fn handle_list_tokens(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    match ctx.handle_ak_list().await {
+        Response::AuthTokens(res) => (StatusCode::OK, Json(serde_json::json!({ "data": res.tokens }))).into_response(),
+        Response::Error { error } => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error }))).into_response(),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Invalid response type" }))).into_response(),
     }
 }
 
-async fn handle_password_update(
-    State(_state): State<AppState>,
-    Json(_payload): Json<PasswordUpdateRequest>,
-) -> impl IntoResponse {
-    Json(lanforge_api::api::Response::Error {
-        error: "Password-based authentication is deprecated in V3. Use API tokens (ak_*) instead.".to_string(),
-    })
+async fn handle_generate_token() -> impl IntoResponse {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": "This operation is only available via local socket" })),
+    )
 }
 
+async fn handle_delete_token(Path(_id): Path<String>) -> impl IntoResponse {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": "This operation is only available via local socket" })),
+    )
+}
+
+async fn handle_renew_token(Path(_id): Path<String>) -> impl IntoResponse {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": "This operation is only available via local socket" })),
+    )
+}
+
+async fn handle_validate(
+    State(state): State<AppState>,
+    Json(payload): Json<ValidateRequest>,
+) -> impl IntoResponse {
+    let valid = match state.db.validate_api_token(&payload.token).await {
+        Ok(Some(_)) => true,
+        _ => state.auth.validate_token(&payload.token).is_ok(),
+    };
+    Json(serde_json::json!({ "data": { "valid": valid } }))
+}

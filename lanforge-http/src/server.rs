@@ -5,17 +5,19 @@ use crate::{
 };
 use axum::{
     Json, Router,
+    body::Body,
     extract::{
         State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
+    middleware::from_fn_with_state,
     response::{IntoResponse, Response as AxumResponse},
     routing::get,
 };
 #[cfg(feature = "doh")]
 use axum::{body::Bytes, extract::Query, http::HeaderMap, http::Method};
-use axum_server::tls_rustls::RustlsConfig;
+use axum_server::{Handle, tls_rustls::RustlsConfig};
 use lanforge_api::api::Response;
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
@@ -23,10 +25,11 @@ use lanforge_core::{
 };
 use lanforge_db::{engine::LeaseDb, log_engine::LogDb};
 use lanforge_dns::server::transport::tls as tls_utils;
+use lanforge_macros::lanforge_service;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
-use tower_http::services::ServeDir;
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, services::ServeDir};
 use tracing::{error, info};
 
 use lanforge_core::context::LanforgeContext;
@@ -63,7 +66,7 @@ impl axum::extract::FromRef<AppState> for Arc<LeaseDb> {
     }
 }
 
-#[lanforge_macros::lanforge_service(
+#[lanforge_service(
     id = "http",
     name = "HTTP API",
     critical = false,
@@ -117,10 +120,10 @@ impl AsyncService for HttpService {
         let mut app = Router::new()
             .nest(
                 "/api",
-                routes::router().layer(axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::auth::middleware,
-                )),
+                routes::router()
+                    .layer(CompressionLayer::new())
+                    .layer(from_fn_with_state(state.clone(), crate::auth::middleware))
+                    .layer(CorsLayer::permissive()),
             )
             .route("/metrics", get(handle_metrics));
 
@@ -187,7 +190,7 @@ impl AsyncService for HttpService {
             info!("🚀 HTTPS API listening on https://{}", addr);
             let config = RustlsConfig::from_config(Arc::new(tls_config));
             axum_server::bind_rustls(addr, config)
-                .handle(axum_server::Handle::new()) // For graceful shutdown if needed, but we use .serve
+                .handle(Handle::new()) // For graceful shutdown if needed, but we use .serve
                 .serve(app.into_make_service())
                 .await
                 .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))?;
@@ -217,7 +220,7 @@ async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoRe
 
     axum::response::Response::builder()
         .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-        .body(axum::body::Body::from(body))
+        .body(Body::from(body))
         .map_err(|e| HttpError::Internal(format!("Failed to build metrics response: {e}")))
 }
 

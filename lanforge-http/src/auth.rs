@@ -176,6 +176,15 @@ pub async fn middleware(
         return Ok(next.run(req).await);
     }
 
+    if req.method() == axum::http::Method::OPTIONS {
+        return Ok(next.run(req).await);
+    }
+
+    let path = req.uri().path();
+    if path == "/api/v1/auth/validate" || path == "/api/auth/login" || path == "/api/v1/auth/login" {
+        return Ok(next.run(req).await);
+    }
+
     // Extract token
     let auth_header = req
         .headers()

@@ -10,13 +10,15 @@ use axum::Router;
 use lanforge_api_dispatch::ClientContext;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .nest("/system", system::router())
+    let v1 = Router::new()
+        .merge(system::router())
         .nest("/auth", auth::router())
         .nest("/devices", devices::router())
         .nest("/dhcp", dhcp::router())
         .nest("/dns", dns::router())
-        .nest("/db", db::router())
+        .nest("/db", db::router());
+
+    Router::new().nest("/v1", v1)
 }
 
 #[must_use]
