@@ -1,4 +1,8 @@
 use color_eyre::eyre::{Context, Result};
+#[cfg(feature = "remote")]
+use directories::ProjectDirs;
+#[cfg(feature = "remote")]
+use reqwest::Client;
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
@@ -11,6 +15,9 @@ use lanforge_api::api::{
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{network::dns::adblock::RewriteRule, update::LeaseTarget};
 
+use crate::args::LanforgeArgs;
+
+#[allow(clippy::struct_excessive_bools)]
 pub struct LanforgeClient {
     pub socket: String,
     #[cfg(feature = "remote")]
@@ -23,21 +30,76 @@ pub struct LanforgeClient {
     pub ascii: bool,
     pub yes: bool,
     #[cfg(feature = "remote")]
-    pub http_client: reqwest::Client,
+    pub http_client: Client,
+}
+
+macro_rules! dispatch {
+    ($self:expr, get => $path:expr, $rpc_method:ident($($rpc_arg:expr),*)) => {{
+        #[cfg(feature = "remote")]
+        if $self.remote.is_some() {
+            return $self.http_get(&$path).await;
+        }
+        let mut rpc = $self.connect_rpc().await?;
+        rpc.$rpc_method($($rpc_arg),*)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+    }};
+    ($self:expr, get_box => $path:expr, $rpc_method:ident($($rpc_arg:expr),*)) => {{
+        #[cfg(feature = "remote")]
+        if $self.remote.is_some() {
+            return Ok(Box::new($self.http_get(&$path).await?));
+        }
+        let mut rpc = $self.connect_rpc().await?;
+        rpc.$rpc_method($($rpc_arg),*)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+    }};
+    ($self:expr, post => $path:expr, $body:expr, $rpc_method:ident($($rpc_arg:expr),*)) => {{
+        #[cfg(feature = "remote")]
+        if $self.remote.is_some() {
+            return $self.http_post(&$path, &$body).await;
+        }
+        let mut rpc = $self.connect_rpc().await?;
+        rpc.$rpc_method($($rpc_arg),*)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+    }};
+    ($self:expr, delete => $path:expr, $rpc_method:ident($($rpc_arg:expr),*)) => {{
+        #[cfg(feature = "remote")]
+        if $self.remote.is_some() {
+            return $self.http_delete(&$path).await;
+        }
+        let mut rpc = $self.connect_rpc().await?;
+        rpc.$rpc_method($($rpc_arg),*)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+    }};
+    ($self:expr, patch => $path:expr, $body:expr, $rpc_method:ident($($rpc_arg:expr),*)) => {{
+        #[cfg(feature = "remote")]
+        if $self.remote.is_some() {
+            return $self.http_patch(&$path, &$body).await;
+        }
+        let mut rpc = $self.connect_rpc().await?;
+        rpc.$rpc_method($($rpc_arg),*)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+    }};
 }
 
 impl LanforgeClient {
-    pub fn from_args(args: &crate::args::LanforgeArgs) -> Result<Self> {
+    pub fn from_args(args: &LanforgeArgs) -> Result<Self> {
         #[cfg(feature = "remote")]
         let mut token = args.token.clone();
 
         #[cfg(feature = "remote")]
         if args.remote.is_some()
             && token.is_none()
-            && let Some(proj_dirs) = directories::ProjectDirs::from("", "lanforge", "lanforge")
+            && let Some(proj_dirs) = ProjectDirs::from("", "lanforge", "lanforge")
         {
+            use std::fs::read_to_string;
+
             let login_path = proj_dirs.data_dir().join("login.json");
-            if let Ok(content) = std::fs::read_to_string(login_path)
+            if let Ok(content) = read_to_string(login_path)
                 && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
                 && let Some(t) = val.get("token").and_then(|v| v.as_str())
             {
@@ -46,7 +108,7 @@ impl LanforgeClient {
         }
 
         #[cfg(feature = "remote")]
-        let http_client = reqwest::Client::builder()
+        let http_client = Client::builder()
             .danger_accept_invalid_certs(true)
             .build()?;
 
@@ -133,12 +195,14 @@ impl LanforgeClient {
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() {
+            use color_eyre::eyre::bail;
+
             let err_body: serde_json::Value = resp.json().await.unwrap_or_default();
             let err_msg = err_body["error"]
                 .as_str()
                 .unwrap_or("Unknown API error")
                 .to_string();
-            color_eyre::eyre::bail!("API Error ({status}): {err_msg}");
+            bail!("API Error ({status}): {err_msg}");
         }
         Ok(resp.json().await?)
     }
@@ -171,14 +235,7 @@ impl LanforgeClient {
     // --- System & Status ---
 
     pub async fn status(&self) -> Result<Box<StatusResponse>> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return Ok(Box::new(self.http_get("/status").await?));
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.status()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get_box => "/status", status())
     }
 
     pub async fn context_dump(
@@ -186,48 +243,23 @@ impl LanforgeClient {
         only_devices: bool,
         only_orphans: bool,
     ) -> Result<Box<serde_json::Value>> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            let path = format!("/context?only_devices={only_devices}&only_orphans={only_orphans}");
-            return Ok(Box::new(self.http_get(&path).await?));
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.context_dump(only_devices, only_orphans)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(
+            self,
+            get_box => format!("/context?only_devices={only_devices}&only_orphans={only_orphans}"),
+            context_dump(only_devices, only_orphans)
+        )
     }
 
     pub async fn reload(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/reload", &serde_json::json!({})).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.reload()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/reload", serde_json::json!({}), reload())
     }
 
     pub async fn scan(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/scan", &serde_json::json!({})).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.scan()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/scan", serde_json::json!({}), scan())
     }
 
     pub async fn shutdown(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/shutdown", &serde_json::json!({})).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.shutdown()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/shutdown", serde_json::json!({}), shutdown())
     }
 
     // --- Devices & Topology ---
@@ -276,64 +308,25 @@ impl LanforgeClient {
     }
 
     pub async fn whois(&self, target: String) -> Result<Box<WhoisResponse>> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return Ok(Box::new(
-                self.http_get(&format!("/devices/{target}/whois")).await?,
-            ));
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.whois(target)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get_box => format!("/devices/{target}/whois"), whois(target))
     }
 
     pub async fn wol(&self, target: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post(&format!("/devices/{target}/wol"), &serde_json::json!({}))
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.wol(target)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => format!("/devices/{target}/wol"), serde_json::json!({}), wol(target))
     }
 
     pub async fn purge(&self, mac: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_delete(&format!("/devices/{mac}")).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.purge(mac)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, delete => format!("/devices/{mac}"), purge(mac))
     }
 
     pub async fn topology(&self) -> Result<TopologyResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/topology").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.topology()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/topology", topology())
     }
 
     // --- DHCP & Leases ---
 
     pub async fn leases(&self, count: bool) -> Result<LeasesResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get(&format!("/leases?count={count}")).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.leases(count)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => format!("/leases?count={count}"), leases(count))
     }
 
     pub async fn lease_renew(
@@ -341,20 +334,8 @@ impl LanforgeClient {
         mac: String,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            let t_str = target.map(|t| t.to_string());
-            return self
-                .http_post(
-                    &format!("/leases/{mac}/renew"),
-                    &serde_json::json!({ "target": t_str }),
-                )
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.lease_renew(mac, target)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        let t_str = target.as_ref().map(std::string::ToString::to_string);
+        dispatch!(self, post => format!("/leases/{mac}/renew"), serde_json::json!({ "target": t_str }), lease_renew(mac, target))
     }
 
     pub async fn lease_release(
@@ -362,77 +343,30 @@ impl LanforgeClient {
         mac: String,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            let t_str = target.map(|t| t.to_string());
-            return self
-                .http_post(
-                    &format!("/leases/{mac}/release"),
-                    &serde_json::json!({ "target": t_str }),
-                )
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.lease_release(mac, target)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        let t_str = target.as_ref().map(std::string::ToString::to_string);
+        dispatch!(self, post => format!("/leases/{mac}/release"), serde_json::json!({ "target": t_str }), lease_release(mac, target))
     }
 
     pub async fn dhcp_pools(&self) -> Result<DhcpPoolsResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dhcp/pools").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dhcp_pools()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dhcp/pools", dhcp_pools())
     }
 
     // --- Hosts Management ---
 
     pub async fn host_list(&self) -> Result<HostsResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/hosts").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.host_list()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/hosts", host_list())
     }
 
     pub async fn host_add(&self, entry: HostConfigEntry) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/hosts", &entry).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.host_add(entry)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/hosts", entry, host_add(entry))
     }
 
     pub async fn host_import(&self, hosts: Vec<HostConfigEntry>) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/hosts", &hosts).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.host_import(hosts)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/hosts", hosts, host_import(hosts))
     }
 
     pub async fn host_remove(&self, mac: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_delete(&format!("/hosts/{mac}")).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.host_remove(mac)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, delete => format!("/hosts/{mac}"), host_remove(mac))
     }
 
     pub async fn host_set(
@@ -441,122 +375,43 @@ impl LanforgeClient {
         field: String,
         value: String,
     ) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_patch(
-                    &format!("/hosts/{mac}"),
-                    &serde_json::json!({ "field": field, "value": value }),
-                )
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.host_set(mac, field, value)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, patch => format!("/hosts/{mac}"), serde_json::json!({ "field": &field, "value": &value }), host_set(mac, field, value))
     }
 
     // --- Database Maintenance ---
 
     pub async fn db_reset(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/db/reset", &serde_json::json!({})).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.db_reset()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/db/reset", serde_json::json!({}), db_reset())
     }
 
     pub async fn db_vacuum(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/db/vacuum", &serde_json::json!({})).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.db_vacuum()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/db/vacuum", serde_json::json!({}), db_vacuum())
     }
 
     pub async fn db_prune(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/db/prune", &serde_json::json!({})).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.db_prune()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/db/prune", serde_json::json!({}), db_prune())
     }
 
     pub async fn db_log_clean(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post("/db/log-clean", &serde_json::json!({}))
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.db_log_clean()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/db/log-clean", serde_json::json!({}), db_log_clean())
     }
 
     // --- Authentication & Tokens ---
 
     pub async fn ak_list(&self) -> Result<AuthTokensResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/auth/tokens").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.ak_list()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/auth/tokens", ak_list())
     }
 
     pub async fn ak_generate(&self, name: String) -> Result<AuthTokenResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post("/auth/tokens", &serde_json::json!({ "name": name }))
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.ak_generate(name)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/auth/tokens", serde_json::json!({ "name": &name }), ak_generate(name))
     }
 
     pub async fn ak_delete(&self, id_or_name: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_delete(&format!("/auth/tokens/{id_or_name}"))
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.ak_delete(id_or_name)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, delete => format!("/auth/tokens/{id_or_name}"), ak_delete(id_or_name))
     }
 
     pub async fn ak_renew(&self, id_or_name: String) -> Result<AuthTokenResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post(
-                    &format!("/auth/tokens/{id_or_name}/renew"),
-                    &serde_json::json!({}),
-                )
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.ak_renew(id_or_name)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => format!("/auth/tokens/{id_or_name}/renew"), serde_json::json!({}), ak_renew(id_or_name))
     }
 
     #[cfg(feature = "remote")]
@@ -581,37 +436,16 @@ impl LanforgeClient {
     // --- DNS Resolver & Adblock ---
 
     pub async fn dns_stats(&self) -> Result<DnsStatsResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dns/stats").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_stats()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dns/stats", dns_stats())
     }
 
     pub async fn dns_analytics(&self, limit: Option<usize>) -> Result<DnsAnalyticsResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            let q = limit.map_or_else(String::new, |l| format!("?limit={l}"));
-            return self.http_get(&format!("/dns/analytics{q}")).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_analytics(limit)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        let q = limit.map_or_else(String::new, |l| format!("?limit={l}"));
+        dispatch!(self, get => format!("/dns/analytics{q}"), dns_analytics(limit))
     }
 
     pub async fn dns_upstreams(&self) -> Result<DnsUpstreamsResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dns/upstreams").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_upstreams()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dns/upstreams", dns_upstreams())
     }
 
     pub async fn dns_query(
@@ -619,17 +453,8 @@ impl LanforgeClient {
         name: String,
         record_type: Option<String>,
     ) -> Result<DnsQueryResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            let rt = record_type.as_deref().unwrap_or("A");
-            return self
-                .http_get(&format!("/dns/query?name={name}&record_type={rt}"))
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_query(name, record_type)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        let rt = record_type.as_deref().unwrap_or("A");
+        dispatch!(self, get => format!("/dns/query?name={name}&record_type={rt}"), dns_query(name, record_type))
     }
 
     pub async fn dns_cache_dump(
@@ -660,36 +485,15 @@ impl LanforgeClient {
     }
 
     pub async fn dns_cache_flush(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_delete("/dns/cache").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_cache_flush()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, delete => "/dns/cache", dns_cache_flush())
     }
 
     pub async fn dns_cache_stats_ext(&self) -> Result<DnsCacheStatsExtResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dns/cache/stats").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_cache_stats_ext()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dns/cache/stats", dns_cache_stats_ext())
     }
 
     pub async fn dns_adblock_status(&self) -> Result<DnsAdblockStatusResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dns/adblock/status").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_status()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dns/adblock/status", dns_adblock_status())
     }
 
     pub async fn dns_adblock_set(
@@ -697,196 +501,65 @@ impl LanforgeClient {
         enabled: bool,
         duration_secs: Option<u64>,
     ) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            let action = if enabled { "enable" } else { "disable" };
-            let q = duration_secs.map_or_else(String::new, |d| format!("?duration_secs={d}"));
-            return self
-                .http_post(&format!("/dns/adblock/{action}{q}"), &serde_json::json!({}))
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_set(enabled, duration_secs)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        let action = if enabled { "enable" } else { "disable" };
+        let q = duration_secs.map_or_else(String::new, |d| format!("?duration_secs={d}"));
+        dispatch!(self, post => format!("/dns/adblock/{action}{q}"), serde_json::json!({}), dns_adblock_set(enabled, duration_secs))
     }
 
     pub async fn dns_adblock_reload(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post("/dns/adblock/reload", &serde_json::json!({}))
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_reload()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/dns/adblock/reload", serde_json::json!({}), dns_adblock_reload())
     }
 
     pub async fn dns_block(&self, domain: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post(
-                    &format!("/dns/adblock/block?domain={domain}"),
-                    &serde_json::json!({}),
-                )
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_block(domain)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => format!("/dns/adblock/block?domain={domain}"), serde_json::json!({}), dns_block(domain))
     }
 
     pub async fn dns_allow(&self, domain: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post(
-                    &format!("/dns/adblock/allow?domain={domain}"),
-                    &serde_json::json!({}),
-                )
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_allow(domain)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => format!("/dns/adblock/allow?domain={domain}"), serde_json::json!({}), dns_allow(domain))
     }
 
     pub async fn dns_unallow(&self, domain: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post(
-                    &format!("/dns/adblock/unallow?domain={domain}"),
-                    &serde_json::json!({}),
-                )
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_unallow(domain)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => format!("/dns/adblock/unallow?domain={domain}"), serde_json::json!({}), dns_unallow(domain))
     }
 
     pub async fn dns_allowlist(&self) -> Result<DnsAllowlistResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dns/adblock/allowlist").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_allowlist()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dns/adblock/allowlist", dns_allowlist())
     }
 
     pub async fn dns_adblock_url_list(&self) -> Result<DnsAdblockUrlsResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dns/adblock/sources").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_url_list()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dns/adblock/sources", dns_adblock_url_list())
     }
 
     pub async fn dns_adblock_url_add(&self, url: String, kind: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_post(
-                    &format!("/dns/adblock/sources?url={url}&kind={kind}"),
-                    &serde_json::json!({}),
-                )
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_url_add(url, kind)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => format!("/dns/adblock/sources?url={url}&kind={kind}"), serde_json::json!({}), dns_adblock_url_add(url, kind))
     }
 
     pub async fn dns_adblock_url_remove(&self, url: String) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self
-                .http_delete(&format!("/dns/adblock/sources?url={url}"))
-                .await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_url_remove(url)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, delete => format!("/dns/adblock/sources?url={url}"), dns_adblock_url_remove(url))
     }
 
     pub async fn dns_rewrites(&self) -> Result<DnsRewritesResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dns/rewrites").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_rewrites()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dns/rewrites", dns_rewrites())
     }
 
     pub async fn dns_rewrite_add(&self, rule: RewriteRule) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/dns/rewrites", &rule).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_rewrite_add(rule)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/dns/rewrites", rule, dns_rewrite_add(rule))
     }
 
     pub async fn dns_rewrite_remove(&self, id: i64) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_delete(&format!("/dns/rewrites/{id}")).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_rewrite_remove(id)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, delete => format!("/dns/rewrites/{id}"), dns_rewrite_remove(id))
     }
 
     pub async fn dns_rewrite_clear(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_delete("/dns/rewrites").await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_rewrite_clear()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, delete => "/dns/rewrites", dns_rewrite_clear())
     }
 
     pub async fn dns_rewrite_import(&self, rules: Vec<RewriteRule>) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/dns/rewrites", &rules).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_rewrite_import(rules)
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, post => "/dns/rewrites", rules, dns_rewrite_import(rules))
     }
 
     pub async fn dns_rewrite_export(&self) -> Result<DnsRewritesResponse> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_get("/dns/rewrites").await; // Export is same as get list
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_rewrite_export()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+        dispatch!(self, get => "/dns/rewrites", dns_rewrite_export())
     }
 
     pub async fn dns_query_log(

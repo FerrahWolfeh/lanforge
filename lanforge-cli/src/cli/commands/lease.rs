@@ -1,5 +1,5 @@
 use super::format_relative_iso8601;
-use crate::cli::{Execute, LanforgeClient};
+use crate::cli::{Execute, LanforgeClient, wizard::fuzzy_select_lease};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
 use lanforge_api::api::LeasesResponse;
@@ -48,16 +48,11 @@ impl Execute for LeaseArgs {
                 render_leases(&resp, client.ascii);
             }
             LeaseAction::Renew { mac, v6 } => {
-                let final_mac = match mac {
-                    Some(m) => m,
-                    None => {
-                        let lease = crate::cli::wizard::fuzzy_select_lease(
-                            client,
-                            "Select lease to renew:",
-                        )
-                        .await?;
-                        lease.mac
-                    }
+                let final_mac = if let Some(m) = mac {
+                    m
+                } else {
+                    let lease = fuzzy_select_lease(client, "Select lease to renew:").await?;
+                    lease.mac
                 };
 
                 let target = if v6 {
@@ -69,16 +64,11 @@ impl Execute for LeaseArgs {
                 println!("✓ {}", resp.message);
             }
             LeaseAction::Release { mac, v6 } => {
-                let final_mac = match mac {
-                    Some(m) => m,
-                    None => {
-                        let lease = crate::cli::wizard::fuzzy_select_lease(
-                            client,
-                            "Select lease to release:",
-                        )
-                        .await?;
-                        lease.mac
-                    }
+                let final_mac = if let Some(m) = mac {
+                    m
+                } else {
+                    let lease = fuzzy_select_lease(client, "Select lease to release:").await?;
+                    lease.mac
                 };
 
                 let target = if v6 {
@@ -98,8 +88,8 @@ pub fn render_leases(resp: &LeasesResponse, ascii: bool) {
     let hline = if ascii { "-" } else { "─" };
     println!(" ACTIVE DHCP LEASES \n");
     println!(
-        "  {:<20} | {:<20} | {:<18} | {:<10} | {}",
-        "MAC ADDRESS", "HOSTNAME", "IP ADDRESS", "TYPE", "EXPIRES"
+        "  {:<20} | {:<20} | {:<18} | {:<10} | EXPIRES",
+        "MAC ADDRESS", "HOSTNAME", "IP ADDRESS", "TYPE"
     );
     println!("{}", hline.repeat(90));
     for lease in &resp.leases {

@@ -1,5 +1,8 @@
 use super::format_relative_iso8601;
-use crate::cli::{Execute, LanforgeClient};
+use crate::cli::{
+    Execute, LanforgeClient,
+    wizard::{confirm_destructive, fuzzy_select_token, prompt_text},
+};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use color_eyre::eyre::Result;
@@ -44,7 +47,7 @@ impl Execute for AuthArgs {
             AuthCommand::GenerateToken { name } => {
                 let final_name = match name {
                     Some(n) => n,
-                    None => crate::cli::wizard::prompt_text("Token name/label:", None)?,
+                    None => prompt_text("Token name/label:", None)?,
                 };
                 let resp = client.ak_generate(final_name).await?;
                 println!("✓ Token generated successfully for: {}", resp.name);
@@ -57,13 +60,11 @@ impl Execute for AuthArgs {
                 let final_id = if let Some(id) = id_or_name {
                     id
                 } else {
-                    let token =
-                        crate::cli::wizard::fuzzy_select_token(client, "Select token to delete:")
-                            .await?;
+                    let token = fuzzy_select_token(client, "Select token to delete:").await?;
                     token.id.to_string()
                 };
 
-                if !crate::cli::wizard::confirm_destructive(
+                if !confirm_destructive(
                     client,
                     &format!("Are you sure you want to delete token {final_id}?"),
                 )? {
@@ -77,9 +78,7 @@ impl Execute for AuthArgs {
                 let final_id = if let Some(id) = id_or_name {
                     id
                 } else {
-                    let token =
-                        crate::cli::wizard::fuzzy_select_token(client, "Select token to renew:")
-                            .await?;
+                    let token = fuzzy_select_token(client, "Select token to renew:").await?;
                     token.id.to_string()
                 };
 

@@ -1,17 +1,9 @@
-mod args;
-mod cli;
-mod format;
-#[cfg(feature = "tui")]
-mod tui;
-
-use crate::{
-    args::{Cli, Command},
-    cli::LanforgeClient,
-};
 use clap::Parser;
 use color_eyre::Result;
-
-use crate::cli::Execute;
+use lanforge_cli::{
+    args::{Cli, Command},
+    cli::{Execute, LanforgeClient},
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,7 +27,7 @@ async fn main() -> Result<()> {
         }
         #[cfg(feature = "tui")]
         Cli::LanforgeTui(args) => {
-            use crate::cli::commands::tui::TuiArgs;
+            use lanforge_cli::cli::commands::tui::TuiArgs;
 
             let client = LanforgeClient::from_args(&args)?;
             let cmd = Command::Tui(TuiArgs {});

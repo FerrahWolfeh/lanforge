@@ -1,4 +1,7 @@
-use crate::cli::{Execute, LanforgeClient};
+use crate::cli::{
+    Execute, LanforgeClient,
+    wizard::{confirm_destructive, confirm_wipe},
+};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
 
@@ -34,10 +37,7 @@ impl Execute for DbArgs {
                 println!("✓ {}", resp.message);
             }
             DbAction::Prune => {
-                if !crate::cli::wizard::confirm_destructive(
-                    client,
-                    "Are you sure you want to prune zombie entries?",
-                )? {
+                if !confirm_destructive(client, "Are you sure you want to prune zombie entries?")? {
                     return Ok(());
                 }
                 let resp = client.db_prune().await?;
@@ -48,7 +48,7 @@ impl Execute for DbArgs {
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             }
             DbAction::Reset => {
-                if !crate::cli::wizard::confirm_wipe(client)? {
+                if !confirm_wipe(client)? {
                     return Ok(());
                 }
                 let resp = client.db_reset().await?;

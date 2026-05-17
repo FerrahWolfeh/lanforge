@@ -1,6 +1,8 @@
 use super::format_relative_iso8601;
 use crate::cli::vendor::resolve_vendor;
+use crate::cli::wizard::fuzzy_select_device;
 use crate::cli::{Execute, LanforgeClient};
+use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::WhoisResponse;
@@ -14,14 +16,11 @@ pub struct WhoisArgs {
 
 impl Execute for WhoisArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        let target = match self.target {
-            Some(t) => t,
-            None => {
-                let dev =
-                    crate::cli::wizard::fuzzy_select_device(client, "Select device for whois:")
-                        .await?;
-                dev.mac
-            }
+        let target = if let Some(t) = self.target { t } else {
+            let dev =
+                fuzzy_select_device(client, "Select device for whois:")
+                    .await?;
+            dev.mac
         };
 
         let resp = client.whois(target).await?;
@@ -119,7 +118,6 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
 
 #[component]
 fn HistoryRow(props: &HistoryRowProps) -> impl Into<AnyElement<'_>> {
-    use chrono::{DateTime, Utc};
     let h = &props.history;
     let dt: DateTime<Utc> = h.timestamp.into();
     let time = format_relative_iso8601(&dt.to_rfc3339());

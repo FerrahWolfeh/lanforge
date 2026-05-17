@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use super::{format_relative_iso8601, format_short_relative};
 use crate::cli::vendor::resolve_vendor;
 use crate::cli::{Execute, LanforgeClient};
@@ -245,9 +247,9 @@ fn sort_devices(devices: &mut [DeviceEntry], mode: SortMode) {
         SortMode::Mac => a.mac.cmp(&b.mac),
         SortMode::Host => {
             if a.hostname.is_empty() && !b.hostname.is_empty() {
-                std::cmp::Ordering::Greater
+                Ordering::Greater
             } else if !a.hostname.is_empty() && b.hostname.is_empty() {
-                std::cmp::Ordering::Less
+                Ordering::Less
             } else {
                 a.hostname.to_lowercase().cmp(&b.hostname.to_lowercase())
             }
@@ -326,7 +328,11 @@ fn render_verbose_device(dev: &DeviceEntry, ascii: bool) {
     let origin_str = dev.origin.clone();
     let last_seen_str = format_relative_iso8601(&dev.last_seen);
     let vendor = resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string());
-    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
+    let border = if ascii {
+        BorderStyle::Classic
+    } else {
+        BorderStyle::Round
+    };
 
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_bottom: 1) {

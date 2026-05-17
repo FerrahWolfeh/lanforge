@@ -1,5 +1,14 @@
-use crate::cli::{Execute, LanforgeClient};
+use std::io::ErrorKind;
+
+use crate::cli::{
+    Execute, LanforgeClient,
+    wizard::{confirm_destructive, fuzzy_select_device, prompt_text},
+};
 use color_eyre::eyre::Result;
+use lanforge_api::rpc::{LanforgeRpcError, RpcResponse};
+use lanforge_types::events::TimedEvent;
+#[cfg(feature = "remote")]
+use reqwest::Client;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct ScanArgs {}
@@ -41,17 +50,14 @@ pub struct PurgeArgs {
 
 impl Execute for PurgeArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        let mac = match self.mac {
-            Some(m) => m,
-            None => {
-                let dev =
-                    crate::cli::wizard::fuzzy_select_device(client, "Select device to purge:")
-                        .await?;
-                dev.mac
-            }
+        let mac = if let Some(m) = self.mac {
+            m
+        } else {
+            let dev = fuzzy_select_device(client, "Select device to purge:").await?;
+            dev.mac
         };
 
-        if !crate::cli::wizard::confirm_destructive(
+        if !confirm_destructive(
             client,
             &format!("Are you sure you want to purge device {mac}?"),
         )? {
@@ -84,7 +90,7 @@ impl Execute for ContextArgs {
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct LoginArgs {
-    /// Remote daemon URL (e.g., https://192.168.1.1:8080)
+    /// Remote daemon URL (e.g., <https://192.168.1.1:8080>)
     pub url: Option<String>,
     /// Plaintext API token or password
     pub secret: Option<String>,
@@ -94,14 +100,14 @@ impl Execute for LoginArgs {
     async fn execute(self, _client: &LanforgeClient) -> Result<()> {
         let url = match self.url {
             Some(u) => u,
-            None => crate::cli::wizard::prompt_text(
+            None => prompt_text(
                 "Daemon URL (e.g. https://localhost:8080):",
                 Some("https://localhost:8080"),
             )?,
         };
         let secret = match self.secret {
             Some(s) => s,
-            None => crate::cli::wizard::prompt_text("API Token:", None)?,
+            None => prompt_text("API Token:", None)?,
         };
 
         // Create temporary client to validate token
@@ -117,15 +123,17 @@ impl Execute for LoginArgs {
             ascii: false,
             yes: false,
             #[cfg(feature = "remote")]
-            http_client: reqwest::Client::builder()
+            http_client: Client::builder()
                 .danger_accept_invalid_certs(true)
                 .build()?,
         };
 
         #[cfg(feature = "remote")]
         {
+            use directories::ProjectDirs;
+
             temp_client.ak_validate(&secret).await?;
-            if let Some(proj_dirs) = directories::ProjectDirs::from("", "lanforge", "lanforge") {
+            if let Some(proj_dirs) = ProjectDirs::from("", "lanforge", "lanforge") {
                 let data_dir = proj_dirs.data_dir();
                 std::fs::create_dir_all(data_dir)?;
                 let login_path = data_dir.join("login.json");
@@ -139,7 +147,9 @@ impl Execute for LoginArgs {
         }
         #[cfg(not(feature = "remote"))]
         {
-            color_eyre::eyre::bail!("Remote feature not enabled in this build.");
+            use color_eyre::eyre::bail;
+
+            bail!("Remote feature not enabled in this build.");
         }
 
         Ok(())
@@ -153,6 +163,8 @@ impl Execute for WatchArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         #[cfg(feature = "remote")]
         if let Some(base) = &client.remote {
+            use futures::StreamExt;
+
             let url = format!("{base}/api/v1/events?follow=true&n=50&filter=dhcp,dns");
             let mut req = client.http_client.get(&url);
             if let Some(t) = &client.token {
@@ -160,19 +172,14 @@ impl Execute for WatchArgs {
             }
             let mut resp = req.send().await?.bytes_stream();
             println!("Watching for remote events... (Ctrl+C to stop)");
-            use futures::StreamExt;
             while let Some(chunk) = resp.next().await {
                 if let Ok(bytes) = chunk {
                     let s = String::from_utf8_lossy(&bytes);
                     for line in s.lines() {
-                        if line.starts_with("data: ") {
-                            let json_str = &line[6..];
-                            if let Ok(event) = serde_json::from_str::<
-                                lanforge_types::events::TimedEvent,
-                            >(json_str)
-                            {
-                                render_watch_event(&event);
-                            }
+                        if let Some(json_str) = line.strip_prefix("data: ")
+                            && let Ok(event) = serde_json::from_str::<TimedEvent>(json_str)
+                        {
+                            render_watch_event(&event);
                         }
                     }
                 }
@@ -185,15 +192,13 @@ impl Execute for WatchArgs {
         println!("Watching for events... (Ctrl+C to stop)");
         loop {
             match rpc.next_response().await {
-                Ok(lanforge_api::rpc::RpcResponse::Event(event)) => {
+                Ok(RpcResponse::Event(event)) => {
                     render_watch_event(&event);
                 }
-                Ok(lanforge_api::rpc::RpcResponse::Error(e)) => eprintln!("Error: {e}"),
+                Ok(RpcResponse::Error(e)) => eprintln!("Error: {e}"),
                 Ok(_) => {}
-                Err(lanforge_api::rpc::LanforgeRpcError::Io(e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
-                    break
+                Err(LanforgeRpcError::Io(e)) if e.kind() == ErrorKind::UnexpectedEof => {
+                    break;
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -202,7 +207,7 @@ impl Execute for WatchArgs {
     }
 }
 
-fn render_watch_event(e: &lanforge_types::events::TimedEvent) {
+fn render_watch_event(e: &TimedEvent) {
     use chrono::{DateTime, Utc};
     let dt: DateTime<Utc> = e.timestamp.into();
     let time = dt.format("%Y-%m-%d %H:%M:%S").to_string();
