@@ -27,7 +27,7 @@ flush_interval = 60
 # Enable the Unix Domain Socket control API.
 enabled = true
 # Path to the control socket.
-socket_path = "/var/run/lanforge.sock"
+socket_path = "/run/lanforge/control.sock"
 # Optional TCP port for remote debugging (not recommended for production).
 # tcp_port = 50051
 
@@ -35,13 +35,20 @@ socket_path = "/var/run/lanforge.sock"
 # Enable the REST API and Prometheus metrics exporter.
 enabled = true
 # Listen address for the HTTP service.
-listen = "0.0.0.0:8080"
+listen = "0.0.0.0:9090"
 # Enable HTTPS (inherits global system TLS if paths are omitted).
 https_enabled = false
+# Whether plaintext HTTP is explicitly allowed (for local development only).
+allow_plaintext_http = false
 # Enable DNS-over-HTTPS (DoH).
 doh_enabled = false
 # tls_cert = "/etc/lanforge/certs/http.crt"
 # tls_key = "/etc/lanforge/certs/http.key"
+
+# Secure hash of the API password (Argon2 or similar).
+# auth_password_hash = "$argon2id$..."
+# Directory for serving PXE/boot files over HTTP.
+# boot_dir = "/var/lib/lanforge/tftp"
 
 [ra]
 # Enable Router Advertisements (IPv6).

@@ -4,21 +4,28 @@
 [api]
 # Local CLI control via Unix Socket.
 enabled = true
-socket_path = "/var/run/lanforge.sock"
+socket_path = "/run/lanforge/control.sock"
 
-# Shared authentication password hash (Argon2 or similar).
-# auth_password_hash = "$argon2id$..."
+# Optional TCP port for the control API (debug).
+# tcp_port = 50051
 
 [http]
 # REST API and Prometheus metrics exporter.
 enabled = true
-listen = "0.0.0.0:8080"
+listen = "0.0.0.0:9090"
 
-# Secure the API with HTTPS.
+# Secure the API with HTTPS (inherits global system TLS from [system] if paths are omitted).
 https_enabled = true
+
+# Whether plaintext HTTP is explicitly allowed (for local development only).
+# allow_plaintext_http = false
 
 # DNS-over-HTTPS (DoH)
 doh_enabled = true
 
-# tls_cert = "/etc/lanforge/cert.pem" # Optional override
-# tls_key = "/etc/lanforge/key.pem"   # Optional override
+# Optional overrides for HTTP-specific TLS certificate and key (defaults to system TLS):
+# tls_cert = "/etc/lanforge/cert.pem"
+# tls_key = "/etc/lanforge/key.pem"
+
+# Directory for serving PXE/boot files over HTTP.
+# boot_dir = "/var/lib/lanforge/tftp"
