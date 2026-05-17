@@ -10,4 +10,3 @@ pub mod resolver;
 pub mod server;
 pub mod telemetry;
 pub mod utils;
-pub mod wire;

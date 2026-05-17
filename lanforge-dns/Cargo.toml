@@ -11,6 +11,7 @@ lanforge-core = { path = "../lanforge-core" }
 lanforge-macros = { path = "../lanforge-macros" }
 lanforge-db = { path = "../lanforge-db" }
 lanforge-types = { path = "../lanforge-types" }
+lanforge-dns-wire = { path = "../lanforge-dns-wire" }
 
 # Workspace
 tokio = { workspace = true, features = ["io-util", "net", "time", "rt"] }

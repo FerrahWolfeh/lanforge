@@ -1,8 +1,10 @@
 use crate::error::DnsError;
 use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
-use crate::wire::{WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter};
 use dashmap::DashMap;
+use lanforge_dns_wire::{
+    WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter,
+};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{BlockingMode, RewriteAnswer, RewriteRule};
 use parking_lot::RwLock;

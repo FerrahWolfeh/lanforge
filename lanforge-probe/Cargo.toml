@@ -10,7 +10,7 @@ authors.workspace = true
 lanforge-core = { path = "../lanforge-core" }
 lanforge-macros = { path = "../lanforge-macros" }
 lanforge-types = { path = "../lanforge-types" }
-lanforge-dns = { path = "../lanforge-dns" }
+lanforge-dns-wire = { path = "../lanforge-dns-wire" }
 
 # Workspace
 thiserror = { workspace = true }

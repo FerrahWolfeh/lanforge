@@ -5,7 +5,7 @@ use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
 use lanforge_dns::telemetry::DnsStats;
-use lanforge_dns::wire::{WireDecoder, WireEncoder};
+use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::upstream::UpstreamEntry;
 use lanforge_types::network::dns::{

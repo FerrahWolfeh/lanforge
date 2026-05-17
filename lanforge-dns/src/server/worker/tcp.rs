@@ -1,6 +1,6 @@
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
-use crate::wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
+use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::TransportProtocol;
 use std::sync::Arc;
 use std::time::Duration;

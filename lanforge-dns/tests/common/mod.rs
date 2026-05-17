@@ -20,7 +20,7 @@ use lanforge_dns::resolver::recursive::UpstreamStrategy;
 use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::QueryRing;
 use lanforge_dns::telemetry::stats::DnsStats;
-use lanforge_dns::wire::{WireHeader, WireQuestion};
+use lanforge_dns_wire::{WireHeader, WireQuestion};
 
 #[allow(dead_code)]
 pub fn init_test_context() -> LanforgeContext {

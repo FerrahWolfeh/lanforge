@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 use lanforge_dns::resolver::recursive::cache::{CacheKey, DnsCache};
-use lanforge_dns::wire::{WireEncoder, WireQuestion};
+use lanforge_dns_wire::{WireEncoder, WireQuestion};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol,
 };

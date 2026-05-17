@@ -1,10 +1,10 @@
+use lanforge_dns_wire::WireDecoder;
 use lanforge_types::network::dns::{DnsRecordType, QueryResult};
 
 use crate::error::DnsError;
 use crate::pipeline::{DnsPipelineRequest, Middleware};
 use crate::resolver::filter::labels_to_domain;
 use crate::server::{DnsContext, DnsLogEvent};
-use crate::wire::WireDecoder;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;

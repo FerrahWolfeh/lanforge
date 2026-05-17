@@ -13,8 +13,10 @@ use crate::utils::{
     extract_local_hostname, extract_local_hostname_wire, fast_lowercase, parse_arpa,
     parse_arpa_wire,
 };
-use crate::wire::{PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_core::context::LanforgeContext;
+use lanforge_dns_wire::{
+    PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, WireResponseWriter,
+};
 use lanforge_types::network::dns::{DnsClass, DnsRData, DnsRecord, DnsRecordType};
 
 /// Resolves local DNS queries (A/AAAA/PTR) using the `LanforgeContext`.

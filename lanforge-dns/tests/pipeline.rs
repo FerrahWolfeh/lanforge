@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use lanforge_dns::wire::{WireDecoder, WireEncoder};
+use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
     adblock::RewriteRule,

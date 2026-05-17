@@ -1,10 +1,10 @@
 pub mod middleware;
 
+use lanforge_dns_wire::{WireHeader, WireQuestion};
 use lanforge_types::network::dns::TransportProtocol;
 
 use crate::error::DnsError;
 use crate::server::DnsContext;
-use crate::wire::{WireHeader, WireQuestion};
 use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;

@@ -2629,6 +2629,7 @@ dependencies = [
  "hyper-util",
  "lanforge-core",
  "lanforge-db",
+ "lanforge-dns-wire",
  "lanforge-macros",
  "lanforge-types",
  "lru 0.18.0",
@@ -2649,6 +2650,14 @@ dependencies = [
  "tracing",
  "ureq",
  "webpki-roots 1.0.7",
+]
+
+[[package]]
+name = "lanforge-dns-wire"
+version = "1.0.0"
+dependencies = [
+ "hotpath",
+ "lanforge-types",
 ]
 
 [[package]]
@@ -2735,7 +2744,7 @@ version = "1.0.0"
 dependencies = [
  "hotpath",
  "lanforge-core",
- "lanforge-dns",
+ "lanforge-dns-wire",
  "lanforge-macros",
  "lanforge-types",
  "libc",

@@ -13,7 +13,7 @@ use tokio_rustls::client::TlsStream;
 
 use crate::error::DnsError;
 use crate::utils::health::UpstreamHealth;
-use crate::wire::{WireHeader, WireQuestion};
+use lanforge_dns_wire::{WireHeader, WireQuestion, WireResponseScanner};
 use std::collections::HashMap;
 use std::io::Error;
 use std::net::SocketAddr;
@@ -227,7 +227,7 @@ impl UpstreamManager {
             final_bytes[1] = id_bytes[1];
         }
 
-        let scanner = crate::wire::WireResponseScanner::new(&final_bytes);
+        let scanner = WireResponseScanner::new(&final_bytes);
         let (offsets, min_ttl) = scanner.scan_ttls();
 
         let key = cache::CacheKey {

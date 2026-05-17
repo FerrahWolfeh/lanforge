@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::from_utf8;
 
-use crate::wire::WireLabelIter;
+use lanforge_dns_wire::WireLabelIter;
 
 /// Parses an IPv4 or IPv6 address from an ARPA domain name (reverse DNS).
 #[must_use]
@@ -13,7 +13,9 @@ pub fn parse_arpa(name: &str) -> Option<IpAddr> {
     // DNS names often have a trailing dot, so split will have an empty string at the end.
     // If we rev(), the first element might be empty.
     let mut iter = labels;
-    if let Some(first) = iter.next() && first.is_empty() {
+    if let Some(first) = iter.next()
+        && first.is_empty()
+    {
         byte_parse_arpa(iter)
     } else {
         // No trailing dot case
@@ -174,7 +176,10 @@ pub fn extract_local_hostname<'a>(
             continue;
         }
 
-        if !first_actual.as_bytes().eq_ignore_ascii_case(&search_labels[0]) {
+        if !first_actual
+            .as_bytes()
+            .eq_ignore_ascii_case(&search_labels[0])
+        {
             continue;
         }
 

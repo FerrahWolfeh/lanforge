@@ -40,7 +40,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{debug, error, warn};
 
-use lanforge_dns::wire::{WireDecoder, WireEncoder};
+use lanforge_dns_wire::{WireDecoder, WireEncoder};
 
 use crate::error::NetworkError;
 

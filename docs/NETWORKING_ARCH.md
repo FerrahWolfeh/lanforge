@@ -19,6 +19,7 @@ The networking engine of Lanforge is modularized into specialized crates. It man
 | `lanforge-wol` | Wake-on-LAN magic packet injection |
 | `lanforge-probe` | Active/passive discovery: mDNS prober and LLDP topology monitor |
 | `lanforge-host` | Netlink interface address monitoring (`IFA_CACHEINFO`, link-local, GUA, ULA) |
+| `lanforge-dns-wire` | Zero-allocation DNS wire parser and encoder for hot-path routing and mDNS |
 
 ---
 

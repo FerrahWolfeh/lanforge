@@ -12,7 +12,7 @@ use crate::config::DnsConfig;
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
 use crate::server::transport::tls::load_tls_config;
-use crate::wire::{WireHeader, WireQuestion};
+use lanforge_dns_wire::{WireHeader, WireQuestion};
 
 #[lanforge_macros::lanforge_service(
     id = "doq",

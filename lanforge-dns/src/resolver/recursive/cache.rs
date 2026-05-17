@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::wire::{WireDecoder, WireQuestion};
+use lanforge_dns_wire::{WireDecoder, WireQuestion};
 use lanforge_types::network::dns::DnsRecordType;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]

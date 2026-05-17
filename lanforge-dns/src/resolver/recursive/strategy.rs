@@ -1,7 +1,7 @@
 use crate::error::DnsError;
 use crate::resolver::recursive::UpstreamManager;
 use crate::utils::health::UpstreamStatus;
-use crate::wire::{WireDecoder, WireEncoder};
+use lanforge_dns_wire::{WireDecoder, WireEncoder};
 #[cfg(not(feature = "doh-upstream"))]
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{

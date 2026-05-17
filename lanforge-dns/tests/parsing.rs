@@ -1,4 +1,6 @@
-use lanforge_dns::wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
+use lanforge_dns_wire::{
+    WireDecoder, WireEncoder, WireHeader, WireOptScanner, WireQuestion, skip_name,
+};
 use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
 use std::sync::Arc;
 
@@ -83,7 +85,6 @@ fn name_decompression_complex() {
 
 #[test]
 fn skip_name_malformed() {
-    use lanforge_dns::wire::skip_name;
     let data = vec![0xC0]; // Too short for pointer
     assert!(skip_name(&data, 0).is_none());
 }
@@ -98,8 +99,6 @@ fn wire_label_iter_malformed() {
 
 #[test]
 fn wire_opt_scanner_multiple_additionals() {
-    use lanforge_dns::wire::{WireHeader, WireOptScanner, WireQuestion};
-
     // Header with 2 additionals
     let mut data = vec![0u8; 12];
     data[11] = 2; // ARCOUNT = 2

@@ -217,7 +217,7 @@ impl<'a> WireQuestion<'a> {
     /// # Example
     ///
     /// ```rust
-    /// use lanforge_dns::wire::WireQuestion;
+    /// use lanforge_dns_wire::WireQuestion;
     ///
     /// // Raw DNS question for "host.lan"
     /// let data = b"\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04host\x03lan\x00\x00\x01\x00\x01";
@@ -659,7 +659,7 @@ impl WireResponseWriter {
 /// Full-featured DNS wire decoder.
 pub struct WireDecoder<'a> {
     data: &'a [u8],
-    pos: usize,
+    pub pos: usize,
 }
 
 impl<'a> WireDecoder<'a> {

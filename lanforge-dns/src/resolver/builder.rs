@@ -2,7 +2,7 @@
 
 use crate::error::DnsError;
 use crate::server::DnsContext;
-use crate::wire::{WireEncoder, WireOptScanner};
+use lanforge_dns_wire::{WireEncoder, WireOptScanner};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
