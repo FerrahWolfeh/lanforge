@@ -1,14 +1,10 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! # Lanforge DHCP
+//!
+//! `DHCPv4` and `DHCPv6` server implementations for Lanforge.
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
+pub mod dhcp;
+pub mod error;
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod test_utils;

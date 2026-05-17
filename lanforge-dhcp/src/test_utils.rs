@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 /// Initializes a fresh `LanforgeContext` for unit tests.
 /// This ensures that the global singleton is NOT reused and tests are isolated.
+#[must_use]
 pub fn init_test_context() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
     let table = State::new();

@@ -11,21 +11,20 @@ use crate::config::Config;
 use crate::event_loop::{LoopResult, run_event_loop};
 use crate::registry::ServiceRegistry;
 use lanforge_db::worker::DbWorker;
+use lanforge_dhcp::dhcp::v4::Dhcpv4Service;
+use lanforge_dhcp::dhcp::v6::Dhcpv6Service;
 use lanforge_dns::server::service::DnsService;
 #[cfg(feature = "dns-doq")]
 use lanforge_dns::server::transport::doq::DoqService;
 #[cfg(feature = "dns-dot")]
 use lanforge_dns::server::transport::dot::DotService;
+use lanforge_host::ifmon::AddressMonitor;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
-use lanforge_network::dhcp::v4::Dhcpv4Service;
-use lanforge_network::dhcp::v6::Dhcpv6Service;
-use lanforge_network::ifmon::AddressMonitor;
-use lanforge_network::lldp::LldpMonitor;
-use lanforge_network::mdns::MdnsProber;
-use lanforge_network::ndp::NeighborMonitor;
-use lanforge_network::ra::RaService;
-use lanforge_network::slaac::SlaacTracker;
+use lanforge_ndp::ndp::NeighborMonitor;
+use lanforge_probe::lldp::LldpMonitor;
+use lanforge_probe::mdns::MdnsProber;
+use lanforge_ra::ra::RaService;
 use lanforge_tftp::TftpService;
 use lanforge_uds::server::ControlService;
 
@@ -170,9 +169,8 @@ impl Daemon {
             async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => NeighborMonitor::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), target_ifindex, ctx),
             async [ctx, ifname] => LldpMonitor::new(ifname, target_ifindex, ctx),
 
-            // 3. IPv6 Protocol Services (RA, SLAAC)
+            // 3. IPv6 Protocol Services (RA)
             async [ctx, cfg] if cfg.ra_enabled => RaService::new(cfg.to_ra_config(), ctx),
-            async [ctx] if cfg.ra_enabled => SlaacTracker::new(target_ifindex, ctx),
 
             // 4. Address Assignment (DHCPv4, DHCPv6)
             async [ctx, cfg] if cfg.dhcpv4_enabled => Dhcpv4Service::new(cfg.to_dhcpv4_config(), ctx),

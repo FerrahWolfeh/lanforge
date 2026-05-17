@@ -5,7 +5,7 @@ use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_network::wol::send_wol_magic_packet;
+use lanforge_wol::wol::send_wol_magic_packet;
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;

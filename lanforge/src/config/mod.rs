@@ -28,13 +28,13 @@ pub mod toml;
 
 pub use args::CliArgs;
 use lanforge_db::config::DatabaseConfig;
+use lanforge_dhcp::dhcp::v4::config::Dhcpv4Config;
+use lanforge_dhcp::dhcp::v6::config::Dhcpv6Config;
 use lanforge_dns::config::DnsConfig;
 use lanforge_http::config::HttpConfig;
-use lanforge_network::dhcp::v4::config::Dhcpv4Config;
-use lanforge_network::dhcp::v6::config::Dhcpv6Config;
-use lanforge_network::mdns::MdnsConfig;
-use lanforge_network::ndp::config::MonitorConfig;
-use lanforge_network::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
+use lanforge_ndp::ndp::config::MonitorConfig;
+use lanforge_probe::mdns::MdnsConfig;
+use lanforge_ra::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
 use lanforge_tftp::config::TftpConfig;
 use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_types::network::dns::adblock::BlockingMode;

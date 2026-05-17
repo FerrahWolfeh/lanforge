@@ -28,7 +28,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 ///
 /// ```ignore
 /// use lanforge_types::identifiers::MacAddr;
-/// use lanforge_network::wol::send_wol_magic_packet;
+/// use lanforge_wol::wol::send_wol_magic_packet;
 ///
 /// let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
 /// send_wol_magic_packet(

@@ -1,8 +1,43 @@
 [package]
 name = "lanforge-ndp"
+version = "1.0.0"
 license.workspace = true
 edition.workspace = true
-version = "0.1.0"
 authors.workspace = true
 
 [dependencies]
+# Lanforge
+lanforge-core = { path = "../lanforge-core" }
+lanforge-macros = { path = "../lanforge-macros" }
+lanforge-types = { path = "../lanforge-types" }
+
+# Workspace
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "time",
+    "net",
+    "io-util",
+    "macros",
+    "sync",
+] }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+# Third party
+netlink-packet-core = "0.8.1"
+rtnetlink = "0.20.0"
+netlink-sys = "0.8.8"
+futures = "0.3.32"
+hotpath = { workspace = true, optional = true }
+
+[features]
+hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath-alloc = [
+    "hotpath",
+    "hotpath/hotpath-alloc",
+    "lanforge-core/hotpath-alloc",
+]
+default = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

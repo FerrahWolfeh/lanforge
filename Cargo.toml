@@ -12,7 +12,6 @@ members = [
     "lanforge-http",
     "lanforge-macros",
     "lanforge-ndp",
-    "lanforge-network",
     "lanforge-probe",
     "lanforge-ra",
     "lanforge-tftp",
@@ -25,11 +24,10 @@ resolver = "3"
 [workspace.package]
 license = "MPL-2.0"
 edition = "2024"
-version = "0.11.2"
 authors = ["Ferrah Aiko <ferrahwolfeh@proton.me>"]
 
 [workspace.dependencies]
-hotpath = { version = "0.16", default-features = false }
+hotpath = { version = "0.16.1", default-features = false }
 tikv-jemallocator = { version = "0.6.1", features = ["profiling"] }
 tokio = { version = "1.52.3" }
 serde = { version = "1.0.228", features = ["derive"] }

@@ -1859,10 +1859,11 @@ dependencies = [
 
 [[package]]
 name = "hotpath"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0482d7c2c47acfec79b90e55188e8b86c66fd9d541335eac3ce3f73055984643"
+checksum = "bff002d5c53fa1c6891f32156b9451d16654bc8a761894d7660b25c0a332d517"
 dependencies = [
+ "arc-swap",
  "axum",
  "cfg-if",
  "crossbeam-channel",
@@ -1886,9 +1887,9 @@ dependencies = [
 
 [[package]]
 name = "hotpath-macros"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0a541a2ab3263fcf42ff399ec68ddd458f4883aa656c6229f59092f94058eb2"
+checksum = "9e2f4ac4534511584b7082657e133dcf3d8727b2f456a6b2a2c3eb02b82c1277"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1897,15 +1898,15 @@ dependencies = [
 
 [[package]]
 name = "hotpath-macros-meta"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08986d10e50e7c6c8e1798fb1bd63cdf275c0b59d6aad05989d5d86a0f2cb06e"
+checksum = "a6a87070853e9402ec79184f8d8d930d7eb86cd274aecdcf973f73b6f40271b0"
 
 [[package]]
 name = "hotpath-meta"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec29ccaa713ecf406bb6717331972fd2b932d889ddcc2bada67b264693fb9bf"
+checksum = "c31cfef2b9d280ad754c23b40b50cc74676489597f3cebfe0c180389e08a53ed"
 dependencies = [
  "hotpath-macros-meta",
 ]
@@ -2450,12 +2451,17 @@ dependencies = [
  "lanforge-api-dispatch",
  "lanforge-core",
  "lanforge-db",
+ "lanforge-dhcp",
  "lanforge-dns",
+ "lanforge-host",
  "lanforge-http",
- "lanforge-network",
+ "lanforge-ndp",
+ "lanforge-probe",
+ "lanforge-ra",
  "lanforge-tftp",
  "lanforge-types",
  "lanforge-uds",
+ "lanforge-wol",
  "netlink-sys",
  "pnet",
  "rtnetlink",
@@ -2586,7 +2592,24 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dhcp"
-version = "0.1.0"
+version = "1.0.0"
+dependencies = [
+ "dhcproto",
+ "hex",
+ "hotpath",
+ "lanforge-core",
+ "lanforge-dns",
+ "lanforge-macros",
+ "lanforge-types",
+ "pnet",
+ "rand 0.10.1",
+ "roaring",
+ "serde",
+ "socket2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "lanforge-dns"
@@ -2630,7 +2653,20 @@ dependencies = [
 
 [[package]]
 name = "lanforge-host"
-version = "0.1.0"
+version = "1.0.0"
+dependencies = [
+ "futures",
+ "hotpath",
+ "lanforge-core",
+ "lanforge-macros",
+ "lanforge-types",
+ "netlink-packet-core",
+ "netlink-sys",
+ "rtnetlink",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "lanforge-http"
@@ -2677,27 +2713,33 @@ dependencies = [
 
 [[package]]
 name = "lanforge-ndp"
-version = "0.1.0"
+version = "1.0.0"
+dependencies = [
+ "futures",
+ "hotpath",
+ "lanforge-core",
+ "lanforge-macros",
+ "lanforge-types",
+ "netlink-packet-core",
+ "netlink-sys",
+ "rtnetlink",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
-name = "lanforge-network"
-version = "0.19.0"
+name = "lanforge-probe"
+version = "1.0.0"
 dependencies = [
- "dhcproto",
- "futures",
- "hex",
  "hotpath",
  "lanforge-core",
  "lanforge-dns",
  "lanforge-macros",
  "lanforge-types",
  "libc",
- "netlink-packet-core",
- "netlink-sys",
  "pnet",
- "rand 0.10.1",
- "roaring",
- "rtnetlink",
  "serde",
  "socket2",
  "thiserror 2.0.18",
@@ -2706,12 +2748,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "lanforge-probe"
-version = "0.1.0"
-
-[[package]]
 name = "lanforge-ra"
-version = "0.1.0"
+version = "1.0.0"
+dependencies = [
+ "hotpath",
+ "lanforge-core",
+ "lanforge-macros",
+ "lanforge-types",
+ "libc",
+ "rand 0.10.1",
+ "serde",
+ "socket2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "lanforge-tftp"
@@ -2768,7 +2819,14 @@ dependencies = [
 
 [[package]]
 name = "lanforge-wol"
-version = "0.1.0"
+version = "1.0.0"
+dependencies = [
+ "lanforge-types",
+ "socket2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "lazy_static"
@@ -2787,9 +2845,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
-version = "0.2.183"
+version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
+checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libm"

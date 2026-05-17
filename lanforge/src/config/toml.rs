@@ -1,12 +1,10 @@
 use lanforge_db::config::DatabaseConfig;
+use lanforge_dhcp::dhcp::{v4::config::Dhcpv4Config, v6::config::Dhcpv6Config};
 use lanforge_dns::config::DnsConfig;
 use lanforge_http::config::HttpConfig;
-use lanforge_network::{
-    dhcp::{v4::config::Dhcpv4Config, v6::config::Dhcpv6Config},
-    mdns::MdnsConfig,
-    ndp::config::MonitorConfig,
-    ra::RaServiceConfig,
-};
+use lanforge_ndp::ndp::config::MonitorConfig;
+use lanforge_probe::mdns::MdnsConfig;
+use lanforge_ra::ra::RaServiceConfig;
 use lanforge_tftp::config::TftpConfig;
 use lanforge_uds::config::ApiConfig;
 use serde::{Deserialize, Serialize};

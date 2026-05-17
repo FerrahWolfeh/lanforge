@@ -24,7 +24,11 @@ hotpath = [
     "lanforge-core/hotpath",
     "lanforge-api-dispatch/hotpath",
     "lanforge-dns/hotpath",
-    "lanforge-network/hotpath",
+    "lanforge-dhcp/hotpath",
+    "lanforge-ra/hotpath",
+    "lanforge-ndp/hotpath",
+    "lanforge-probe/hotpath",
+    "lanforge-host/hotpath",
     "lanforge-db/hotpath",
 ]
 hotpath-mcp = ["hotpath", "hotpath/hotpath-mcp"]
@@ -33,7 +37,11 @@ hotpath-alloc = [
     "hotpath/hotpath-alloc",
     "lanforge-core/hotpath-alloc",
     "lanforge-dns/hotpath-alloc",
-    "lanforge-network/hotpath-alloc",
+    "lanforge-dhcp/hotpath-alloc",
+    "lanforge-ra/hotpath-alloc",
+    "lanforge-ndp/hotpath-alloc",
+    "lanforge-probe/hotpath-alloc",
+    "lanforge-host/hotpath-alloc",
     "lanforge-db/hotpath-alloc",
 ]
 jemalloc = ["dep:tikv-jemallocator"]
@@ -82,7 +90,12 @@ lanforge-types = { path = "../lanforge-types" }
 lanforge-core = { path = "../lanforge-core" }
 lanforge-db = { path = "../lanforge-db" }
 lanforge-dns = { path = "../lanforge-dns" }
-lanforge-network = { path = "../lanforge-network" }
+lanforge-dhcp = { path = "../lanforge-dhcp" }
+lanforge-ra = { path = "../lanforge-ra" }
+lanforge-ndp = { path = "../lanforge-ndp" }
+lanforge-wol = { path = "../lanforge-wol" }
+lanforge-probe = { path = "../lanforge-probe" }
+lanforge-host = { path = "../lanforge-host" }
 lanforge-api = { path = "../lanforge-api" }
 lanforge-uds = { path = "../lanforge-uds" }
 lanforge-http = { path = "../lanforge-http", optional = true }

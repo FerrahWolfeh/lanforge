@@ -1,28 +1,24 @@
-# `lanforge-network` — Library Architecture
+# Lanforge Networking Architecture (`lanforge-dhcp`, `lanforge-ra`, `lanforge-ndp`, `lanforge-wol`, `lanforge-probe`, `lanforge-host`)
 
 Low-level networking and address assignment protocols for the Lanforge daemon.
-Implements DHCPv4, DHCPv6, RA, SLAAC, NDP, mDNS, WoL, and interface monitoring — all integrating with `lanforge-core` via `LanforgeContext`, `EventBus`, and `DeviceUpdate` events.
+Implements DHCPv4, DHCPv6, RA, NDP, mDNS, WoL, and interface monitoring — all integrating with `lanforge-core` via `LanforgeContext`, `EventBus`, and `DeviceUpdate` events.
 
 ---
 
 ## Overview
 
-This crate is the networking engine of Lanforge. It manages every aspect of LAN client lifecycle: IP address assignment (DHCPv4/v6), router advertisement broadcasting (RA/ICMPv6), neighbor discovery (NDP/ARP), mDNS hostname probing, and Wake-on-LAN. All services run either as `SyncService` (blocking I/O for DHCP) or `AsyncService` (async for RA, NDP, mDNS, ifmon).
+The networking engine of Lanforge is modularized into specialized crates. It manages every aspect of LAN client lifecycle: IP address assignment (DHCPv4/v6), router advertisement broadcasting (RA/ICMPv6), neighbor discovery (NDP/ARP), mDNS hostname probing, Wake-on-LAN, and interface address tracking. All services run either as `SyncService` (blocking I/O for DHCP) or `AsyncService` (async for RA, NDP, mDNS, ifmon).
 
-### Dependencies
+### Crate Breakdown
 
-| Crate | Usage |
+| Crate | Purpose |
 | :--- | :--- |
-| `dhcproto` | DHCPv4/v6 message encoding/decoding |
-| `pnet` | `AF_PACKET` raw socket channel for L2 packet injection |
-| `rtnetlink` | Netlink RTNL for interface queries, neighbor events |
-| `roaring` | Efficient IPv4 address pool tracking (`RoaringBitmap`) |
-| `socket2` | Low-level socket configuration (`SO_BINDTODEVICE`, raw ICMPv6) |
-| `lanforge-dns` | Native DNS wire parser and message types |
-| `lanforge-core` | `LanforgeContext`, `EventBus`, `DeviceUpdate`, service traits |
-| `tokio` | Async runtime, `AsyncFd`, `select!`, `spawn_blocking` |
-| `tracing` | Diagnostic logging |
-| `thiserror` | `NetworkError` |
+| `lanforge-dhcp` | DHCPv4 and DHCPv6 servers, IP pools, L2 raw packet injection |
+| `lanforge-ra` | ICMPv6 Router Advertisement daemon, RDNSS/DNSSL options |
+| `lanforge-ndp` | Netlink neighbor tracking, ARP/NDP probing, subnet scanning |
+| `lanforge-wol` | Wake-on-LAN magic packet injection |
+| `lanforge-probe` | Active/passive discovery: mDNS prober and LLDP topology monitor |
+| `lanforge-host` | Netlink interface address monitoring (`IFA_CACHEINFO`, link-local, GUA, ULA) |
 
 ---
 
@@ -30,41 +26,56 @@ This crate is the networking engine of Lanforge. It manages every aspect of LAN 
 
 ```mermaid
 graph TD
-    lib["lib.rs\nEntry point"] --> CTX["LanforgeContext\nshared state"]
+    CTX["LanforgeContext\nshared state"]
 
-    lib --> IFMON["ifmon.rs\nInterface Monitor"]
-    lib --> DHCP["dhcp/\nDHCPv4 + DHCPv6"]
-    lib --> RA["ra/\nRouter Advertisements"]
-    lib --> NDP["ndp/\nNeighbor Monitor"]
-    lib --> SLAAC["slaac/\nSLAAC Bootstrap"]
-    lib --> MDNS["mdns.rs\nmDNS Prober"]
-    lib --> WOL["wol.rs\nWake-on-LAN"]
-    lib --> ERR["error.rs\nNetworkError"]
+    subgraph "lanforge-host"
+        IFMON["ifmon.rs\nInterface Monitor"]
+    end
 
-    DHCP --> ID["dhcp/identity.rs\nDeviceIdentity"]
-    DHCP --> V4["dhcp/v4/"]
-    DHCP --> V6["dhcp/v6/"]
+    subgraph "lanforge-dhcp"
+        DHCP["dhcp/\nDHCPv4 + DHCPv6"]
+        ID["dhcp/identity.rs\nDeviceIdentity"]
+        V4["dhcp/v4/"]
+        V6["dhcp/v6/"]
+        V4 --> V4CFG["config.rs\nDhcpv4Config"]
+        V4 --> V4POOL["pool.rs\nIpPool\nroaring bitmap"]
+        V4 --> V4RAW["raw.rs\nRawSender\nAF_PACKET"]
+        V4 --> V4SRV["server.rs\nDhcpServer\nDORA state machine"]
+        V4 --> V4SVC["mod.rs\nDhcpv4Service\nSyncService"]
+        V6 --> V6CFG["config.rs\nDhcpv6Config"]
+        V6 --> V6POOL["pool.rs\nIpv6Pool\nmulti-prefix"]
+        V6 --> V6SRV["server.rs\nDhcpv6Server\nSARR state machine"]
+        V6 --> V6SVC["mod.rs\nDhcpv6Service\nSyncService"]
+    end
 
-    V4 --> V4CFG["config.rs\nDhcpv4Config"]
-    V4 --> V4POOL["pool.rs\nIpPool\nroaring bitmap"]
-    V4 --> V4RAW["raw.rs\nRawSender\nAF_PACKET"]
-    V4 --> V4SRV["server.rs\nDhcpServer\nDORA state machine"]
-    V4 --> V4SVC["mod.rs\nDhcpv4Service\nSyncService"]
+    subgraph "lanforge-ra"
+        RA["ra/\nRouter Advertisements"]
+        RA --> RACFG["config.rs\nRaConfig\nPrefixConfig"]
+        RA --> RAPKT["packet.rs\nbuild_ra_packet\nicmpv6_checksum"]
+        RA --> RASVC["mod.rs\nRaService\nAsyncService"]
+    end
 
-    V6 --> V6CFG["config.rs\nDhcpv6Config"]
-    V6 --> V6POOL["pool.rs\nIpv6Pool\nmulti-prefix"]
-    V6 --> V6SRV["server.rs\nDhcpv6Server\nSARR state machine"]
-    V6 --> V6SVC["mod.rs\nDhcpv6Service\nSyncService"]
+    subgraph "lanforge-ndp"
+        NDP["ndp/\nNeighbor Monitor"]
+        NDP --> NDPUTILS["utils.rs\nnetlink helpers"]
+        NDP --> NDPSVC["mod.rs\nNeighborMonitor\nAsyncService"]
+    end
 
-    RA --> RACFG["config.rs\nRaConfig\nPrefixConfig"]
-    RA --> RAPKT["packet.rs\nbuild_ra_packet\nicmpv6_checksum"]
-    RA --> RASVC["mod.rs\nRaService\nAsyncService"]
+    subgraph "lanforge-probe"
+        MDNS["mdns.rs\nmDNS Prober"]
+        LLDP["lldp.rs\nLLDP Monitor"]
+    end
 
-    NDP --> NDPUTILS["utils.rs\nnetlink helpers"]
-    NDP --> NDPSVC["mod.rs\nNeighborMonitor\nAsyncService"]
+    subgraph "lanforge-wol"
+        WOL["wol.rs\nWake-on-LAN"]
+    end
 
-    SLAAC --> SLAACFN["mod.rs\nbootstrap_table"]
-    SLAAC --> NDPUTILS
+    IFMON --> CTX
+    DHCP --> CTX
+    RA --> CTX
+    NDP --> CTX
+    MDNS --> CTX
+    LLDP --> CTX
 ```
 
 ---
@@ -78,7 +89,7 @@ graph TD
 | `Dhcpv4Service` | `SyncService` | Blocking UDP with 200ms timeout — simpler than async raw sockets |
 | `Dhcpv6Service` | `SyncService` | Same reasoning as DHCPv4 |
 | `RaService` | `AsyncService` | Raw ICMPv6 socket via `AsyncFd` for tokio readiness |
-| `InterfaceMonitor` | `AsyncService` | Netlink broadcast + async refresh |
+| `AddressMonitor` | `AsyncService` | Netlink broadcast + async refresh |
 | `NeighborMonitor` | `AsyncService` | Netlink neighbor events + async subnet scans |
 | `MdnsProber` | `AsyncService` | Spawn-blocking UDP listeners (port 5353 `SO_REUSEPORT`) |
 
@@ -87,7 +98,7 @@ graph TD
 ```mermaid
 sequenceDiagram
     participant MGR as Service Manager
-    participant IF as InterfaceMonitor
+    participant IF as AddressMonitor
     participant NDP as NeighborMonitor
     participant RA as RaService
     participant D4 as Dhcpv4Service
@@ -206,7 +217,7 @@ stateDiagram-v2
 [ RA Fixed Fields: HopLimit, M/O/Prf flags, RouterLifetime ]
 [ Option 1: Source Link-Layer Address (MAC) ]
 [ Option 5: MTU (if configured) ]
-[ Option 3: Prefix Information (one per prefix, SLAAC) ]
+[ Option 3: Prefix Information (one per prefix) ]
 [ Option 25: RDNSS (DNS servers) ]
 [ Option 31: DNSSL (search domains) ]
 ```
@@ -278,20 +289,6 @@ Triggered by `NeighborScanRequested` bus event:
 
 ---
 
-## SLAAC Bootstrap
-
-### `bootstrap_table()` — Full Neighbor Dump
-
-| When | Reason |
-| :--- | :--- |
-| Daemon startup | Initial state synchronization |
-| GUA prefix change (RA) | Clients generate new addresses |
-| Periodic fallback | Consistency guarantee against drift |
-
-Groups SLAAC addresses by MAC for bulk `SlaacSynced` updates, applies individual `NdpSeen`, `ArpSeen`, `IpDeleted` updates immediately.
-
----
-
 ## mDNS Prober (RFC 6762)
 
 ### Design
@@ -337,7 +334,7 @@ Uses `socket2` with `SO_BROADCAST` and `SO_BINDTODEVICE` (Linux-specific) for in
 
 ## Device Identity Resolution
 
-### `DeviceIdentity` — WTFAI ("Who am I?")
+### `DeviceIdentity` — WAI ("Who am I?")
 
 Merges packet-level hints (hostname via DHCP Option 12, vendor class via Option 60/77) with persistent device table state:
 
@@ -370,65 +367,3 @@ If the packet provides no hostname but the device table has one (from previous l
 2. `refresh_interface()` — updates state on netlink address events
 3. Event loop — listens to `NewAddress`/`DelAddress` netlink messages
 4. Publishes `DeviceUpdate::InterfaceIpsChanged` on every change
-
----
-
-## Statistics & Test Contract
-
-The crate contains **65 unit tests + 3 doctests** covering:
-
-| Category | Tests |
-| :--- | :--- |
-| **DHCPv4 pool** | Range allocation, sticky leases, requested IP, reserved/declined skip, quarantine cleanup, exhaustion recovery (7 tests) |
-| **DHCPv4 server** | Invalid packet, DORA cycle, different server ignored, contested IP NAK, release, decline, inform, forcerenew (10 tests) |
-| **DHCPv6 pool** | CIDR expansion, dynamic ranged, multi-prefix, opaque random, requested IP, sticky, static reservation, release, reconnect, random fill (12 tests) |
-| **DHCPv6 server** | Pool empty, NotOnLink, NoBinding, decline/blacklist, lifetime capping, information request, IA_PD, reconfigure (9 tests) |
-| **NDP** | `extract_neigh_info` (valid, incomplete, failed, delete, missing), `to_device_update` (GUA→SlaacObserved, link-local→NdpSeen), EUI-64 MAC extraction, prefix matching, IPv4 subnet iteration (14 tests) |
-| **RA config** | Max interval bounds, router lifetime validation (3 tests) |
-| **RA packet** | Checksum, odd-length payload, config validation, prefix masking, DNS wire encoding, packet structure, MTU option, empty DNS omission, multiple prefixes (9 tests) |
-| **RA state** | Rate limiting, startup intervals (2 tests) |
-| **Identity** | Display formatting (4 variants) (1 test) |
-
----
-
-## Public Contracts Summary
-
-| Type | Contract |
-| :--- | :--- |
-| `NetworkError` | 9 variants: `Io`, `Netlink`, `Config`, `Socket`, `RawSocket`, `Generic`, `InterfaceNotFound`, `InvalidMac`, `NoLinkLocal`, `Mdns` |
-| `InterfaceMonitor` | `new(handle, messages, ifindex, ctx)`, `refresh_interface()`, `initial_scan()`. Implements `LanforgeService` + `AsyncService` |
-| `Dhcpv4Service` | `new(cfg, ctx)`. Implements `LanforgeService` + `SyncService` (blocking UDP, 200ms timeout) |
-| `Dhcpv4Config` | 13 fields: iface, server_id, range_start/end, lease_time, router, dns, subnet_mask, domain_name, search_domains, port |
-| `DhcpServer` | `new(cfg, ctx)`, `handle_packet(data, device) → HandleResult`, `last_assignment_for()`, `build_forcerenew(mac, ip)` |
-| `HandleResult` (v4) | `Reply { packet, broadcast, dest_ip, giaddr, hostname }`, `Release { ip }`, `Ignore` |
-| `IpPool` | `new(start, end)`, `allocate(ctx, mac, requested)`, `release(ip)`, `mark_declined(ip)`, `cleanup_quarantine(now)`, `reserve_statics(ips)`, `is_in_range(ip)` |
-| `RawSender` | `new(iface)`, `send_dhcp(payload, src_ip, dst_ip, dst_mac)`. Manual Ethernet + IPv4 + UDP header assembly via `AF_PACKET` |
-| `Dhcpv6Service` | `new(cfg, ctx)`. Implements `LanforgeService` + `SyncService`. Handles `PrefixChanged`, `LeaseRenew`, `LeaseRelease` bus events |
-| `Dhcpv6Config` | 9 fields: enabled, iface, lease_time, ula_prefix, ula_prefix_len, port, pools, dns_servers, search_domains |
-| `Dhcpv6Server` | `new(cfg, pool, server_duid, ndp_poke_sock, ctx)`, `handle_packet(msg, peer_ip, mac, resp_vec) → HandleResult`, `build_reconfigure(duid, msg_type)` |
-| `HandleResult` (v6) | `Reply(bytes, dest_ip, learned_duid, opt_mac, AssignedIAs)`, `Ignore` |
-| `Ipv6Pool` | `new(pools, ula_prefix, ula_prefix_len)`, `set_gua_prefix(prefix)`, `allocate(duid, iaid)`, `allocate_prefix(duid, iaid)`, `reserve_statics(ips)`, `construct_addr(prefix, suffix)`, `lookup(duid, iaid)`, `lookup_prefix(duid, iaid)`, `release(duid, iaid)`, `is_on_link(duid, iaid)` |
-| `PoolRange` | `Fixed { prefix, start_u128, end_u128 }`, `Floating { start_suffix, end_suffix }` |
-| `AssignedIAs` | `na: Vec<u32>` (IA_NA identifiers), `pd: Vec<u32>` (IA_PD identifiers) |
-| `RaService` | `new(cfg, ctx)`. Implements `LanforgeService` + `AsyncService`. Raw ICMPv6 socket via `AsyncFd` |
-| `RaState` | `new()`, `next_interval()`, `can_multicast_now()`, `can_unicast_now()`, `record_multicast()`, `record_unicast()` |
-| `RaConfig` | 13 fields: iface, managed, other_config, hop_limit, priority, max_interval, min_interval, router_lifetime, mtu, prefixes, rdnss, dnssl. `validate()` enforces RFC 4861 bounds |
-| `PrefixConfig` | `ula(prefix)`, `gua_dynamic()`. Fields: source, prefix_len, on_link, autonomous, router_addr, valid_lifetime, preferred_lifetime |
-| `PrefixLifetime` | `Secs(u32)`, `Infinity`. `as_u32()` → raw packet value |
-| `RouterPriority` | `Low`, `Medium`, `High`. `bits()` → RFC 4191 priority bits |
-| `RdnssConfig` | `new(servers)`, `with_lifetime(servers, secs)` |
-| `build_ra_packet(cfg, mac, gua_prefix)` | Returns `Vec<u8>` with full ICMPv6 RA packet + checksum |
-| `icmpv6_checksum(src, dst, payload)` | RFC 4443 §2.3 — IPv6 pseudo-header checksum |
-| `encode_dns_wire(domains)` | RFC 1035 §3.1 DNS wire format for DNSSL |
-| `NeighborMonitor` | `new(handle, messages, ifindex, ctx)`, `spawn_subnet_scan()`. Implements `LanforgeService` + `AsyncService` |
-| `bootstrap_table(ctx, prefix, handle, gua, ula, ifindex)` | Full neighbor dump → `SlaacSynced`, `NdpSeen`, `ArpSeen`, `IpDeleted` |
-| `MdnsProber` | `new(ctx)`, `trigger_scan()`, `probe_ip(ip)`. Implements `LanforgeService` (non-critical) + `AsyncService` |
-| `send_wol_magic_packet(mac, iface, directed_broadcast, unicast_ip)` | Sends 102-byte magic packet to broadcast + unicast targets |
-| `DeviceIdentity` | `new(mac, hostname, vendor)`, `resolve(mac, pkt_hostname, pkt_vendor, device)`. Implements `Display` |
-| `lookup_mac_for_ipv6(handle, ip)` | Query kernel NDP table for MAC address |
-| `get_ipv6_neighbors(handle, prefix, ifindex)` | Dump all IPv6 neighbors, filtered by prefix |
-| `get_ipv4_neighbors(handle, ifindex)` | Dump all IPv4 neighbors (ARP table) |
-| `probe_neighbor(handle, ifindex, ip, mac)` | Trigger NDP/ARP probe |
-| `parse_neighbor_msg(msg)` | Parse netlink neighbor message → `NeighborEvent` |
-| `extract_neigh_info(msg)` | Extract `NeighborEvent` from netlink broadcast |
-| `get_ipv4_subnet_iterable(ip, prefix_len)` | Iterator over all usable IPv4s in a CIDR subnet (zero-allocation) |

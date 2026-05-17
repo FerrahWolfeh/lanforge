@@ -40,7 +40,12 @@ graph TD
     end
 
     subgraph "Services Layer"
-        Net["lanforge-network"]
+        DHCP["lanforge-dhcp"]
+        RA["lanforge-ra"]
+        NDP["lanforge-ndp"]
+        WOL["lanforge-wol"]
+        Probe["lanforge-probe"]
+        Host["lanforge-host"]
         DNS["lanforge-dns"]
         TFTP["lanforge-tftp"]
     end
@@ -49,7 +54,12 @@ graph TD
         DB["lanforge-db"]
     end
 
-    Net --> Core
+    DHCP --> Core
+    RA --> Core
+    NDP --> Core
+    WOL --> Core
+    Probe --> Core
+    Host --> Core
     DNS --> Core
     TFTP --> Core
     DB --> Core
@@ -65,7 +75,12 @@ graph TD
 | `lanforge-types` (L0) | Fundamental domain types (`Device`, `MacAddr`, `Duid`), shared events, and update protocols. |
 | `lanforge-macros` (L0) | Procedural macros for service registration (`#[lanforge_service]`) and CLI boilerplate. |
 | `lanforge-core` (L1) | The "Brain". Manages the `LanforgeContext`, `ManagedTable`, and the broadcast `EventBus`. |
-| `lanforge-network` (L2) | Protocol implementations: DHCPv4/v6, RA, SLAAC, mDNS Prober, LLDP, and Netlink monitor. |
+| `lanforge-dhcp` (L2) | Protocol implementations: DHCPv4 and DHCPv6 servers with stateful pools and L2 injection. |
+| `lanforge-ra` (L2) | ICMPv6 Router Advertisement daemon supporting RDNSS, DNSSL, and dynamic prefixes. |
+| `lanforge-ndp` (L2) | Netlink neighbor tracking, active ARP/NDP probing, and subnet scanning. |
+| `lanforge-wol` (L2) | Wake-on-LAN magic packet injection. |
+| `lanforge-probe` (L2) | Active and passive discovery probers: mDNS scraping and LLDP topology monitoring. |
+| `lanforge-host` (L2) | Netlink interface address monitoring (`IFA_CACHEINFO`, link-local, GUA, ULA). |
 | `lanforge-dns` (L2) | Recursive/Authoritative resolver. Supports DoT, DoQ, Adblocking, and Upstream Health management. |
 | `lanforge-api` (L2) | Shared API definitions and JSON-RPC over Unix Domain Sockets (UDS). |
 | `lanforge-http` (L2) | REST API, Prometheus exporter, and DNS-over-HTTPS (DoH) entry point. |
@@ -95,17 +110,17 @@ A `tokio::sync::broadcast` bus carries events between tasks. To prevent "event s
 
 ---
 
-## 🌐 Networking & Discovery (`lanforge-network`)
+## 🌐 Networking & Discovery (`lanforge-dhcp`, `lanforge-ra`, `lanforge-ndp`, `lanforge-wol`, `lanforge-probe`, `lanforge-host`)
 
-### 1. DHCPv4 & Layer 2 Injection
+### 1. DHCPv4 & Layer 2 Injection (`lanforge-dhcp`)
 Lanforge uses **Raw Sockets (`AF_PACKET`)** to communicate with DHCPv4 clients that don't yet have an IP address, bypassing the kernel's standard IP stack for these packets.
 
-### 2. IPv6 Orchestration
-- **RA (Router Advertisement)**: Dynamically generates RAs based on the upstream WAN prefix.
-- **SLAAC Tracking**: Correlates EUI-64 and randomized IPv6 addresses to physical MAC addresses using NDP and Netlink hints.
-- **DHCPv6**: Supports both address assignment (`IA_NA`) and Prefix Delegation (`IA_PD`) for sub-routers.
+### 2. IPv6 Orchestration (`lanforge-ra`, `lanforge-dhcp`, `lanforge-ndp`, `lanforge-host`)
+- **RA (Router Advertisement)**: Dynamically generates RAs based on the upstream WAN prefix (`lanforge-ra`).
+- **SLAAC & Address Tracking**: Correlates EUI-64 and randomized IPv6 addresses to physical MAC addresses using active NDP probing and Netlink hints (`lanforge-ndp`, `lanforge-host`).
+- **DHCPv6**: Supports both address assignment (`IA_NA`) and Prefix Delegation (`IA_PD`) for sub-routers (`lanforge-dhcp`).
 
-### 3. Topology Awareness (LLDP)
+### 3. Topology Awareness (`lanforge-probe`)
 The LLDP monitor extracts chassis and port information from neighboring switches, allowing Lanforge to map which device is connected to which physical port.
 
 ---
