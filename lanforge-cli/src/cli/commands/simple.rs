@@ -131,16 +131,54 @@ impl Execute for LoginArgs {
         #[cfg(feature = "remote")]
         {
             use directories::ProjectDirs;
+            use inquire::Confirm;
 
             temp_client.ak_validate(&secret).await?;
             if let Some(proj_dirs) = ProjectDirs::from("", "lanforge", "lanforge") {
                 let data_dir = proj_dirs.data_dir();
                 std::fs::create_dir_all(data_dir)?;
                 let login_path = data_dir.join("login.json");
+
+                let mut default_url = None;
+                let mut servers = serde_json::Map::new();
+
+                if let Ok(content) = std::fs::read_to_string(&login_path)
+                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+                {
+                    if let Some(s) = val.get("servers").and_then(|v| v.as_object()) {
+                        s.clone_into(&mut servers);
+                        default_url = val
+                            .get("default")
+                            .and_then(|v| v.as_str())
+                            .map(ToString::to_string);
+                    } else if let Some(old_url) = val.get("url").and_then(|v| v.as_str())
+                        && let Some(old_token) = val.get("token").and_then(|v| v.as_str())
+                    {
+                        default_url = Some(old_url.to_string());
+                        servers.insert(old_url.to_string(), serde_json::json!(old_token));
+                    }
+                }
+
+                let is_first = default_url.is_none();
+                let set_default = if is_first {
+                    true
+                } else {
+                    Confirm::new(&format!("Set {url} as the default remote?"))
+                        .with_default(true)
+                        .prompt()?
+                };
+
+                if set_default {
+                    default_url = Some(url.clone());
+                }
+
+                servers.insert(url.clone(), serde_json::json!(secret));
+
                 let creds = serde_json::json!({
-                    "url": url,
-                    "token": secret
+                    "default": default_url,
+                    "servers": servers
                 });
+
                 std::fs::write(login_path, serde_json::to_string_pretty(&creds)?)?;
                 println!("✓ Login successful. Credentials saved to login.json");
             }

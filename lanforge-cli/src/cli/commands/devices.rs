@@ -12,7 +12,7 @@ use lanforge_types::device::Origin;
 pub struct DevicesArgs {
     #[arg(short, long)]
     pub filter: Option<String>,
-    #[arg(short, long, value_enum, default_value_t = SortMode::LastSeen)]
+    #[arg(short = 'S', long, value_enum, default_value_t = SortMode::LastSeen)]
     pub sort: SortMode,
 }
 

@@ -90,20 +90,55 @@ impl LanforgeClient {
     pub fn from_args(args: &LanforgeArgs) -> Result<Self> {
         #[cfg(feature = "remote")]
         let mut token = args.token.clone();
+        #[cfg(feature = "remote")]
+        let mut remote = args.remote.clone();
 
         #[cfg(feature = "remote")]
-        if args.remote.is_some()
-            && token.is_none()
-            && let Some(proj_dirs) = ProjectDirs::from("", "lanforge", "lanforge")
-        {
+        if let Some(proj_dirs) = ProjectDirs::from("", "lanforge", "lanforge") {
             use std::fs::read_to_string;
 
             let login_path = proj_dirs.data_dir().join("login.json");
             if let Ok(content) = read_to_string(login_path)
                 && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
-                && let Some(t) = val.get("token").and_then(|v| v.as_str())
             {
-                token = Some(t.to_string());
+                let get_token = |u: &str| -> Option<String> {
+                    if let Some(servers) = val.get("servers").and_then(|v| v.as_object())
+                        && let Some(t) = servers.get(u).and_then(|v| v.as_str())
+                    {
+                        return Some(t.to_string());
+                    }
+                    if let Some(old_u) = val.get("url").and_then(|v| v.as_str())
+                        && old_u == u
+                        && let Some(t) = val.get("token").and_then(|v| v.as_str())
+                    {
+                        return Some(t.to_string());
+                    }
+                    None
+                };
+
+                if let Some(r) = &remote {
+                    if token.is_none() {
+                        token = get_token(r);
+                    }
+                } else if std::os::unix::net::UnixStream::connect(&args.socket).is_err() {
+                    let mut default_url = val
+                        .get("default")
+                        .and_then(|v| v.as_str())
+                        .map(ToString::to_string);
+                    if default_url.is_none() {
+                        default_url = val
+                            .get("url")
+                            .and_then(|v| v.as_str())
+                            .map(ToString::to_string);
+                    }
+
+                    if let Some(d_url) = default_url
+                        && let Some(t) = get_token(&d_url)
+                    {
+                        remote = Some(d_url);
+                        token = Some(t);
+                    }
+                }
             }
         }
 
@@ -119,7 +154,7 @@ impl LanforgeClient {
         Ok(Self {
             socket: args.socket.clone(),
             #[cfg(feature = "remote")]
-            remote: args.remote.clone(),
+            remote,
             #[cfg(feature = "remote")]
             token,
             no_compress: args.no_compress,
@@ -160,7 +195,12 @@ impl LanforgeClient {
                 .to_string();
             color_eyre::eyre::bail!("API Error ({status}): {err_msg}");
         }
-        Ok(resp.json().await?)
+        let mut body: serde_json::Value = resp.json().await?;
+        if let Some(data) = body.as_object_mut().and_then(|map| map.remove("data")) {
+            Ok(serde_json::from_value(data)?)
+        } else {
+            Ok(serde_json::from_value(body)?)
+        }
     }
 
     #[cfg(feature = "remote")]
@@ -185,7 +225,12 @@ impl LanforgeClient {
                 .to_string();
             color_eyre::eyre::bail!("API Error ({status}): {err_msg}");
         }
-        Ok(resp.json().await?)
+        let mut body: serde_json::Value = resp.json().await?;
+        if let Some(data) = body.as_object_mut().and_then(|map| map.remove("data")) {
+            Ok(serde_json::from_value(data)?)
+        } else {
+            Ok(serde_json::from_value(body)?)
+        }
     }
 
     #[cfg(feature = "remote")]
@@ -208,7 +253,12 @@ impl LanforgeClient {
                 .to_string();
             bail!("API Error ({status}): {err_msg}");
         }
-        Ok(resp.json().await?)
+        let mut body: serde_json::Value = resp.json().await?;
+        if let Some(data) = body.as_object_mut().and_then(|map| map.remove("data")) {
+            Ok(serde_json::from_value(data)?)
+        } else {
+            Ok(serde_json::from_value(body)?)
+        }
     }
 
     #[cfg(feature = "remote")]
@@ -233,7 +283,12 @@ impl LanforgeClient {
                 .to_string();
             color_eyre::eyre::bail!("API Error ({status}): {err_msg}");
         }
-        Ok(resp.json().await?)
+        let mut body: serde_json::Value = resp.json().await?;
+        if let Some(data) = body.as_object_mut().and_then(|map| map.remove("data")) {
+            Ok(serde_json::from_value(data)?)
+        } else {
+            Ok(serde_json::from_value(body)?)
+        }
     }
 
     // --- System & Status ---
