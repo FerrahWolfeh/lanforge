@@ -567,18 +567,29 @@ pub fn render_dns_upstreams(resp: &DnsUpstreamsResponse, ascii: bool) {
 
 pub fn render_dns_query(resp: &DnsQueryResponse, _ascii: bool) {
     let auth_str = if resp.authoritative {
-        "Authoritative"
+        "Authoritative".green()
     } else {
-        "Non-Authoritative"
+        "Non-Authoritative".yellow()
     };
-    println!(" QUERY RESULT latency: {}ms ({auth_str})", resp.latency_ms);
+    println!(
+        " {}   latency: {}ms  ({auth_str})",
+        "QUERY RESULT".bold(),
+        resp.latency_ms.to_string().yellow()
+    );
     if resp.records.is_empty() {
         println!("{}", "No records found.".red());
     } else {
         for r in &resp.records {
             println!(
-                "{} -> {} TTL: {}s - {}ms",
-                r.name, r.data, r.ttl, resp.latency_ms
+                "{} {} {} {} {} {} {} {}",
+                r.kind.to_string().cyan(),
+                r.name,
+                "->".dimmed(),
+                r.data.green(),
+                "TTL".dimmed(),
+                r.ttl.to_string().yellow(),
+                "-".dimmed(),
+                format!("{}ms", resp.latency_ms).yellow()
             );
         }
     }

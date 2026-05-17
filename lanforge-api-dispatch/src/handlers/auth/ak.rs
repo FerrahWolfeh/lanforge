@@ -9,7 +9,7 @@ impl ClientContext {
     pub async fn handle_ak_generate(&self, name: String) -> Response {
         let mut token_bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut token_bytes);
-        let token = hex::encode(token_bytes);
+        let token = format!("lf_ak_{}", hex::encode(token_bytes));
 
         match self.db.store_api_token(&token, &name).await {
             Ok(id) => Response::AuthToken(AuthTokenResponse { id, token, name }),

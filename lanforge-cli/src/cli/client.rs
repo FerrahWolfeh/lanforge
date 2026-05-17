@@ -112,6 +112,10 @@ impl LanforgeClient {
             .danger_accept_invalid_certs(true)
             .build()?;
 
+        if args.no_color {
+            colored::control::set_override(false);
+        }
+
         Ok(Self {
             socket: args.socket.clone(),
             #[cfg(feature = "remote")]
@@ -420,13 +424,25 @@ impl LanforgeClient {
         let url = format!("{base}/api/v1/auth/validate");
         let resp = self
             .http_client
-            .get(&url)
-            .header("Authorization", format!("Bearer {token}"))
+            .post(&url)
+            .json(&serde_json::json!({ "token": token }))
             .send()
             .await?;
         let status = resp.status();
         if !status.is_success() {
             color_eyre::eyre::bail!("Invalid token ({status})");
+        }
+        let body: serde_json::Value = resp.json().await?;
+        if let Some(valid) = body
+            .get("data")
+            .and_then(|d| d.get("valid"))
+            .and_then(serde_json::Value::as_bool)
+        {
+            if !valid {
+                color_eyre::eyre::bail!("Invalid token");
+            }
+        } else {
+            color_eyre::eyre::bail!("Invalid validation response");
         }
         Ok(SimpleSuccess {
             message: "Authenticated successfully".to_string(),

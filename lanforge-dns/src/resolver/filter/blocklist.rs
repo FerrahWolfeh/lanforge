@@ -55,6 +55,12 @@ impl DiskBlocklist {
         let fst = Set::new(mmap).map_err(|e| DnsError::Generic(format!("FST load failed: {e}")))?;
         let domain_count = fst.len();
 
+        if domain_count > 50_000_000 {
+            return Err(DnsError::Generic(format!(
+                "FST file corrupted or unreasonably large (reported {domain_count} domains)"
+            )));
+        }
+
         // Build Bloom filter from the FST contents
         let mut bloom = Bloom::new_for_fp_rate(domain_count.max(100), 0.005)
             .map_err(|e| DnsError::Generic(format!("Bloom filter creation failed: {e}")))?;

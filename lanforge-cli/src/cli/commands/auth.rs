@@ -50,11 +50,11 @@ impl Execute for AuthArgs {
                     None => prompt_text("Token name/label:", None)?,
                 };
                 let resp = client.ak_generate(final_name).await?;
-                println!("✓ Token generated successfully for: {}", resp.name);
-                println!("  Token: {}", resp.token);
-                println!(
-                    "\nIMPORTANT: This token will only be shown once. Please save it securely."
-                );
+                println!("✓ Token generated successfully for: {}\n", resp.name);
+                println!("┌─ SECRET KEY (shown only once) ─────────────────────────────────────────┐");
+                println!("│ {:<70} │", resp.token);
+                println!("└────────────────────────────────────────────────────────────────────────┘\n");
+                println!("Store this key securely. It cannot be retrieved later.");
             }
             AuthCommand::DeleteToken { id_or_name } => {
                 let final_id = if let Some(id) = id_or_name {
@@ -83,11 +83,11 @@ impl Execute for AuthArgs {
                 };
 
                 let resp = client.ak_renew(final_id).await?;
-                println!("✓ Token renewed successfully for: {}", resp.name);
-                println!("  New Token: {}", resp.token);
-                println!(
-                    "\nIMPORTANT: This token will only be shown once. Please save it securely."
-                );
+                println!("✓ Token renewed successfully for: {}\n", resp.name);
+                println!("┌─ SECRET KEY (shown only once) ─────────────────────────────────────────┐");
+                println!("│ {:<70} │", resp.token);
+                println!("└────────────────────────────────────────────────────────────────────────┘\n");
+                println!("Store this key securely. It cannot be retrieved later.");
             }
         }
         Ok(())

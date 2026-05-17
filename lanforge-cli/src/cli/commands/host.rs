@@ -3,7 +3,7 @@ use crate::cli::{Execute, LanforgeClient};
 use crate::render_output;
 use clap::Subcommand;
 use color_eyre::eyre::{Result, bail};
-use inquire::{Confirm, Select, Text as InquireText};
+use inquire::{Confirm, Text as InquireText};
 use iocraft::prelude::*;
 use lanforge_api::api::HostConfigEntry;
 
@@ -85,23 +85,15 @@ async fn execute_add(
     let mut final_v6 = v6_suffix.clone();
 
     if v4.is_none() && v6_suffix.is_none() {
-        let opts = vec![
-            "[1] Hostname only (dynamic IP from pool)",
-            "[2] Hostname + Fixed IPv4",
-            "[3] Hostname + Fixed IPv4 + ULA suffix",
-        ];
-        let choice = Select::new("Configuration level:", opts).prompt()?;
-        if choice.starts_with("[2]") || choice.starts_with("[3]") {
-            let ans = InquireText::new("Fixed IPv4:").prompt()?;
-            if !ans.trim().is_empty() {
-                final_v4 = Some(ans.trim().to_string());
-            }
+        let ans_v4 = InquireText::new("Fixed IPv4 (Enter to leave empty/dynamic):").prompt()?;
+        if !ans_v4.trim().is_empty() {
+            final_v4 = Some(ans_v4.trim().to_string());
         }
-        if choice.starts_with("[3]") {
-            let ans = InquireText::new("ULA Suffix (ex: ::123):").prompt()?;
-            if !ans.trim().is_empty() {
-                final_v6 = Some(ans.trim().to_string());
-            }
+
+        let ans_v6 =
+            InquireText::new("ULA Suffix (ex: ::123, Enter to leave empty/none):").prompt()?;
+        if !ans_v6.trim().is_empty() {
+            final_v6 = Some(ans_v6.trim().to_string());
         }
 
         let border = if client.ascii {
@@ -132,7 +124,8 @@ async fn execute_add(
             .with_default(true)
             .prompt()?;
         if !confirm {
-            bail!("Cancelled.");
+            println!("Cancelled.");
+            return Ok(());
         }
     }
 
@@ -160,28 +153,61 @@ async fn execute_set(
         let host = fuzzy_select_host(client, "Select host to modify:").await?;
         host.mac
     };
-    let final_field = match field {
-        Some(f) => f,
-        None => prompt_select(
-            "Select field to modify:",
-            vec!["hostname", "v4", "v6_suffix"],
-        )?
-        .to_string(),
-    };
-    let final_value = match value {
-        Some(v) => v,
-        None => prompt_text(&format!("New value for {final_field}:"), None)?,
-    };
 
-    let api_field = if final_field == "v4" {
-        println!("ℹ The device will receive the new IP in the next DHCP cycle");
-        "v4_static".to_string()
-    } else {
-        final_field
-    };
+    if let Some(f) = field {
+        let final_value = match value {
+            Some(v) => v,
+            None => prompt_text(&format!("New value for {f}:"), None)?,
+        };
+        let api_field = if f == "v4" {
+            println!("ℹ The device will receive the new IP in the next DHCP cycle");
+            "v4_static".to_string()
+        } else {
+            f
+        };
+        let resp = client.host_set(final_mac, api_field, final_value).await?;
+        print_success!(resp.message);
+        return Ok(());
+    }
 
-    let resp = client.host_set(final_mac, api_field, final_value).await?;
-    print_success!(resp.message);
+    // Interactive loop mode
+    let mut pending_updates = Vec::new();
+    loop {
+        let opts = vec![
+            "hostname",
+            "v4",
+            "v6_suffix",
+            "Confirm and apply changes",
+            "Cancel",
+        ];
+        let chosen = prompt_select("Select field to modify (or confirm/cancel):", opts)?;
+        if chosen == "Cancel" {
+            println!("Cancelled.");
+            return Ok(());
+        }
+        if chosen == "Confirm and apply changes" {
+            if pending_updates.is_empty() {
+                println!("No changes to apply.");
+                return Ok(());
+            }
+            break;
+        }
+
+        let val = prompt_text(&format!("New value for {chosen}:"), None)?;
+        let api_field = if chosen == "v4" {
+            println!("ℹ The device will receive the new IP in the next DHCP cycle");
+            "v4_static".to_string()
+        } else {
+            chosen.to_string()
+        };
+        pending_updates.push((api_field, val));
+    }
+
+    for (api_field, val) in pending_updates {
+        let resp = client.host_set(final_mac.clone(), api_field, val).await?;
+        print_success!(resp.message);
+    }
+
     Ok(())
 }
 
