@@ -10,13 +10,7 @@ impl Execute for TuiArgs {
             #[cfg(feature = "remote")]
             if let Some(remote_url) = &client.remote {
                 use lanforge_http::RemoteClient;
-                let mut http_client = RemoteClient::new(remote_url.clone(), client.token.clone());
-                if let Some(pwd) = &client.password {
-                    http_client
-                        .login(pwd)
-                        .await
-                        .map_err(|e| color_eyre::eyre::eyre!(e.to_string()))?;
-                }
+                let http_client = RemoteClient::new(remote_url.clone(), client.token.clone());
                 return crate::tui::run_tui(None, Some(http_client)).await;
             }
 

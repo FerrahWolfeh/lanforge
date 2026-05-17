@@ -1,30 +1,19 @@
 pub mod auth;
-pub mod config;
 pub mod db;
 pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod host;
 pub mod lease;
-pub mod log;
-pub mod query;
 pub mod simple;
 pub mod status;
 pub mod topology;
+#[cfg(feature = "tui")]
 pub mod tui;
 pub mod whois;
 pub mod wol;
 
 use chrono::{DateTime, Datelike, Utc};
-use color_eyre::eyre::Result;
-use lanforge_api::rpc::LanforgeRpcClient;
-use tokio::net::UnixStream;
-#[async_trait::async_trait]
-pub trait CliCommand: Send + Sync {
-    /// Execute using the new RPC system.
-    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()>;
-
-}
 
 #[must_use]
 pub fn format_uptime(secs: u64) -> String {

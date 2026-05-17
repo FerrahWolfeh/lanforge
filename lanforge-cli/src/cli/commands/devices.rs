@@ -1,4 +1,4 @@
-use super::{CliCommand, format_relative_iso8601, format_short_relative};
+use super::{format_relative_iso8601, format_short_relative};
 use crate::cli::vendor::resolve_vendor;
 use crate::cli::{Execute, LanforgeClient};
 use clap::ValueEnum;
@@ -28,17 +28,33 @@ pub struct DevicesArgs {
 
 impl Execute for DevicesArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        client
-            .execute_handler(Box::new(DevicesHandler {
-                verbose: self.verbose,
-                filter: self.filter,
-                vendor: self.vendor,
-                method: self.method,
-                format: self.format,
-                sort: self.sort,
-                show_vendor: self.show_vendor,
-            }))
-            .await
+        let resp = client
+            .list_devices(
+                self.filter.clone(),
+                self.vendor.clone(),
+                self.method.clone(),
+                self.format.clone(),
+                None,
+                None,
+            )
+            .await?;
+
+        let mut owned_resp = resp;
+        if let Some(v) = &self.vendor {
+            let v_lower = v.to_lowercase();
+            owned_resp.devices.retain(|d| {
+                resolve_vendor(&d.mac).is_some_and(|name| name.to_lowercase().contains(&v_lower))
+            });
+        }
+        sort_devices(&mut owned_resp.devices, self.sort);
+
+        if client.json {
+            println!("{}", serde_json::to_string_pretty(&owned_resp)?);
+            return Ok(());
+        }
+
+        render_devices(&owned_resp, self.verbose, self.show_vendor, client.ascii);
+        Ok(())
     }
 }
 
@@ -58,46 +74,7 @@ pub enum SortMode {
     Online,
 }
 
-pub struct DevicesHandler {
-    pub verbose: bool,
-    pub filter: Option<String>,
-    pub vendor: Option<String>,
-    pub method: Option<String>,
-    pub format: Option<String>,
-    pub sort: SortMode,
-    pub show_vendor: bool,
-}
-
-use lanforge_api::rpc::LanforgeRpcClient;
-use tokio::net::UnixStream;
-
-#[async_trait::async_trait]
-impl CliCommand for DevicesHandler {
-    #[allow(clippy::too_many_lines)]
-    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
-        let resp = client
-            .list_devices(
-                self.filter.clone(),
-                self.vendor.clone(),
-                self.method.clone(),
-                self.format.clone(),
-            )
-            .await?;
-
-        let mut owned_resp = resp;
-        if let Some(v) = &self.vendor {
-            let v_lower = v.to_lowercase();
-            owned_resp.devices.retain(|d| {
-                resolve_vendor(&d.mac).is_some_and(|name| name.to_lowercase().contains(&v_lower))
-            });
-        }
-        sort_devices(&mut owned_resp.devices, self.sort);
-        render_devices(&owned_resp, self.verbose, self.show_vendor);
-        Ok(())
-    }
-}
-
-pub fn render_devices(resp: &DevicesResponse, verbose: bool, show_vendor: bool) {
+pub fn render_devices(resp: &DevicesResponse, verbose: bool, show_vendor: bool, ascii: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -115,10 +92,11 @@ pub fn render_devices(resp: &DevicesResponse, verbose: bool, show_vendor: bool) 
 
     if verbose {
         for dev in &resp.devices {
-            render_verbose_device(dev);
+            render_verbose_device(dev, ascii);
         }
     } else {
         let separator_len = if show_vendor { 124 } else { 104 };
+        let hline = if ascii { "-" } else { "─" };
         element! {
             View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
                 // Header
@@ -133,19 +111,20 @@ pub fn render_devices(resp: &DevicesResponse, verbose: bool, show_vendor: bool) 
                     }))
                 }
                 // Separator
-                Text(content: "─".repeat(separator_len), color: Color::DarkGrey)
+                Text(content: hline.repeat(separator_len), color: Color::DarkGrey)
 
                 // Rows
                 View(flex_direction: FlexDirection::Column) {
-                    #(resp.devices.iter().cloned().map(|dev| element! { DeviceRow(device: dev, show_vendor: show_vendor) }))
+                    #(resp.devices.iter().cloned().map(|dev| element! { DeviceRow(device: dev, show_vendor: show_vendor, ascii: ascii) }))
                 }
             }
         }.print();
     }
 
+    let star = if ascii { "*" } else { "★" };
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
-            Text(content: "★ TOML static   · CLI managed   – dynamic   ↑ SLAAC active", color: Color::DarkGrey)
+            Text(content: format!("{star} TOML static   · CLI managed   – dynamic   ↑ SLAAC active"), color: Color::DarkGrey)
             View(padding_bottom: 1) { }
         }
     }.print();
@@ -166,10 +145,11 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
         format!("{} {}", dev.hostname, symbol)
     };
     let last_seen_compact = format_short_relative(&dev.last_seen);
+    let bullet = if props.ascii { "*" } else { "●" };
 
     element! {
         View(flex_direction: FlexDirection::Row) {
-            Text(content: "● ", color: status_color)
+            Text(content: format!("{bullet} "), color: status_color)
             Text(content: format!("{:<23}", truncate(&host, 20)))
             Text(content: format!("{:<20}", dev.mac), color: Color::Cyan)
             Text(content: format!("{:<18}", dev.display_v4), color: Color::Green)
@@ -189,9 +169,10 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
 struct DeviceRowProps {
     pub device: DeviceEntry,
     pub show_vendor: bool,
+    pub ascii: bool,
 }
 
-pub fn render_hosts(resp: &HostsResponse) {
+pub fn render_hosts(resp: &HostsResponse, ascii: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -203,6 +184,7 @@ pub fn render_hosts(resp: &HostsResponse) {
     }
     .print();
 
+    let hline = if ascii { "-" } else { "─" };
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
             // Header
@@ -213,7 +195,7 @@ pub fn render_hosts(resp: &HostsResponse) {
                 Text(content: "IPv6 SUFFIX", color: Color::DarkGrey)
             }
             // Separator
-            Text(content: "─".repeat(80), color: Color::DarkGrey)
+            Text(content: hline.repeat(80), color: Color::DarkGrey)
 
             // Rows
             View(flex_direction: FlexDirection::Column) {
@@ -223,9 +205,10 @@ pub fn render_hosts(resp: &HostsResponse) {
     }
     .print();
 
+    let star = if ascii { "*" } else { "★" };
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
-            Text(content: "★ TOML static   · CLI managed", color: Color::DarkGrey)
+            Text(content: format!("{star} TOML static   · CLI managed"), color: Color::DarkGrey)
             View(padding_bottom: 1) { }
         }
     }
@@ -285,7 +268,7 @@ struct HostRowProps {
     pub host: HostConfigEntry,
 }
 
-fn render_verbose_device(dev: &DeviceEntry) {
+fn render_verbose_device(dev: &DeviceEntry, ascii: bool) {
     let mut host = dev.hostname.clone();
     if host.is_empty() {
         host = "?".to_string();
@@ -293,14 +276,12 @@ fn render_verbose_device(dev: &DeviceEntry) {
     let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
     let host_display = format!(" {host} {symbol} ");
 
-    // Ensure host_display doesn't break the layout if too long
     let host_display = if host_display.len() > 60 {
         format!(" {}… ", &host_display[..57])
     } else {
         host_display
     };
 
-    // V4 Section
     let mut v4_lines = Vec::new();
     if let Some(v4) = &dev.v4 {
         v4_lines.push(format!(
@@ -319,7 +300,6 @@ fn render_verbose_device(dev: &DeviceEntry) {
         v4_lines.push("V4          —".to_string());
     }
 
-    // V6 Section
     let mut v6_lines = Vec::new();
     if let Some(v6) = &dev.v6 {
         v6_lines.push(format!(
@@ -346,10 +326,11 @@ fn render_verbose_device(dev: &DeviceEntry) {
     let origin_str = dev.origin.clone();
     let last_seen_str = format_relative_iso8601(&dev.last_seen);
     let vendor = resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string());
+    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
 
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_bottom: 1) {
-            View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+            View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
                 View(flex_direction: FlexDirection::Row, padding_bottom: 1, margin_top: -1) {
                     Text(content: host_display, color: Color::Cyan, weight: Weight::Bold)
                 }

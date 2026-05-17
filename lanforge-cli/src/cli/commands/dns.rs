@@ -1,15 +1,13 @@
-use crate::cli::commands::CliCommand;
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, bail};
 use colored::Colorize;
-use iocraft::prelude::*;
-use lanforge_api::api::{DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
-    DnsAllowlistResponse, DnsCacheResponse, DnsQueryLogResponse, DnsQueryResponse,
+use lanforge_api::api::{
+    DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
+    DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogEntry, DnsQueryResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
 };
-use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_types::network::{QueryLogEntry, QueryResult};
+use lanforge_types::network::dns::adblock::RewriteRule;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DnsArgs {
@@ -19,565 +17,631 @@ pub struct DnsArgs {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DnsAction {
-    /// Show resolver performance and cache statistics
     Stats,
-    /// List upstream DNS servers and their health/latency
+    Analytics {
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     Upstreams,
-    /// Perform a DNS lookup through the Lanforge resolver
     Query {
-        /// Domain name to query
-        name: String,
-        /// Record type (A, AAAA, MX, etc.)
-        #[arg(default_value = "A")]
-        record_type: String,
+        name: Option<String>,
+        record_type: Option<String>,
     },
-    /// Manage the domain-based adblocker
-    Adblock {
-        #[command(subcommand)]
-        action: AdblockAction,
-    },
-    /// Manage local DNS rewrites
-    Rewrite {
-        #[command(subcommand)]
-        action: RewriteAction,
-    },
-    /// Manage the DNS cache
-    Cache {
-        #[command(subcommand)]
-        action: CacheAction,
-    },
-    /// View or follow the DNS query log
+    Cache(DnsCacheArgs),
     Log {
-        /// Follow new queries in real-time
-        #[arg(short, long)]
+        #[arg(long)]
         follow: bool,
-        /// Limit the number of historical entries shown
-        #[arg(short, long, default_value = "50")]
-        limit: usize,
-        /// Filter by client IP or MAC
         #[arg(short, long)]
+        n: Option<usize>,
+        #[arg(long)]
         client: Option<String>,
+        #[arg(long)]
+        offset: Option<usize>,
     },
+    Adblock(DnsAdblockArgs),
+    Rewrites(DnsRewritesArgs),
+    Allowlist,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DnsCacheArgs {
+    #[command(subcommand)]
+    pub action: DnsCacheAction,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum AdblockAction {
-    /// Show current adblocker status and blocklist size
-    Status,
-    /// Enable the adblocker globally
-    Enable,
-    /// Disable the adblocker (optionally for a duration)
-    Disable {
-        /// Duration to stay disabled (ex: 5m, 1h)
-        duration: Option<String>,
+pub enum DnsCacheAction {
+    Dump {
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        offset: Option<usize>,
     },
-    /// Reload blocklists from sources
+    Flush,
+    Stats,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DnsAdblockArgs {
+    #[command(subcommand)]
+    pub action: DnsAdblockAction,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DnsAdblockAction {
+    Status,
+    Enable,
+    Disable {
+        #[arg(long)]
+        duration_secs: Option<u64>,
+    },
     Reload,
-    /// Force-block a specific domain (local blocklist)
-    Block { domain: String },
-    /// Force-allow a specific domain (local allowlist)
-    Allow { domain: String },
-    /// Remove a domain from the local allowlist
-    Unallow { domain: String },
-    /// List all domains in the local allowlist
-    Allowlist,
-    /// Manage blocklist sources (URLs)
+    Block {
+        domain: Option<String>,
+    },
+    Allow {
+        domain: Option<String>,
+    },
+    Unallow {
+        domain: Option<String>,
+    },
     Sources {
         #[command(subcommand)]
-        action: SourceAction,
+        action: DnsAdblockSourcesAction,
     },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum SourceAction {
-    /// Add a new blocklist URL
+pub enum DnsAdblockSourcesAction {
+    List,
     Add {
-        url: String,
-        #[arg(short, long, default_value = "blocklist")]
-        kind: String,
+        url: Option<String>,
+        kind: Option<String>,
     },
-    /// Remove a blocklist URL
-    Remove { url: String },
-    /// List all configured blocklist sources
-    List,
+    Remove {
+        url: Option<String>,
+    },
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DnsRewritesArgs {
+    #[command(subcommand)]
+    pub action: DnsRewritesAction,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum RewriteAction {
-    /// Add a local DNS rewrite (A/AAAA/CNAME)
-    Add { domain: String, answer: String },
-    /// Remove a local DNS rewrite
-    Remove { domain: String },
-    /// List all local DNS rewrites
+pub enum DnsRewritesAction {
     List,
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum CacheAction {
-    /// Clear all entries from the DNS cache
-    Flush,
-    /// Dump all current DNS cache entries
-    Dump,
+    Add {
+        domain: Option<String>,
+        answer: Option<String>,
+    },
+    Remove {
+        domain: Option<String>,
+    },
+    Clear,
+    Import {
+        file: String,
+    },
+    Export {
+        file: String,
+    },
 }
 
 impl Execute for DnsArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        client
-            .execute_handler(Box::new(DnsCommand {
-                action: self.action,
-            }))
-            .await
-    }
-}
-
-pub struct DnsCommand {
-    pub action: DnsAction,
-}
-
-use tokio::net::UnixStream;
-use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
-
-#[async_trait::async_trait]
-impl CliCommand for DnsCommand {
-    #[allow(clippy::too_many_lines)]
-    async fn execute_rpc(
-        &mut self,
-        client: &mut LanforgeRpcClient<UnixStream>,
-    ) -> Result<()> {
-        match &self.action {
-                DnsAction::Stats => {
-                    let res = client.dns_stats().await?;
-                    Self::render_stats(&res);
+        match self.action {
+            DnsAction::Stats => {
+                let resp = client.dns_stats().await?;
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                    return Ok(());
                 }
-                DnsAction::Upstreams => {
-                    let res = client.dns_upstreams().await?;
-                    Self::render_upstreams(&res);
+                render_dns_stats(&resp, client.ascii);
+            }
+            DnsAction::Analytics { limit } => {
+                let resp = client.dns_analytics(limit).await?;
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                    return Ok(());
                 }
-                DnsAction::Query { name, record_type } => {
-                    let res = client.dns_query(name.clone(), Some(record_type.clone())).await?;
-                    Self::render_query(&res);
+                render_dns_analytics(&resp, client.ascii);
+            }
+            DnsAction::Upstreams => {
+                let resp = client.dns_upstreams().await?;
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                    return Ok(());
                 }
-                DnsAction::Adblock { action } => match action {
-                    AdblockAction::Status => {
-                        let res = client.dns_adblock_status().await?;
-                        Self::render_adblock_status(&res);
+                render_dns_upstreams(&resp, client.ascii);
+            }
+            DnsAction::Query { name, record_type } => {
+                let final_name = match name {
+                    Some(n) => n,
+                    None => crate::cli::wizard::prompt_text("Domain name to query:", None)?,
+                };
+                let mut final_rt = record_type;
+                if final_rt.is_none() && final_name.parse::<std::net::IpAddr>().is_ok() {
+                    final_rt = Some("PTR".to_string());
+                }
+                let final_rt = match final_rt {
+                    Some(r) => Some(r),
+                    None => Some(
+                        crate::cli::wizard::prompt_select(
+                            "Record type:",
+                            vec!["A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV"],
+                        )?
+                        .to_string(),
+                    ),
+                };
+
+                let resp = client.dns_query(final_name, final_rt).await?;
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                    return Ok(());
+                }
+                render_dns_query(&resp, client.ascii);
+            }
+            DnsAction::Cache(args) => match args.action {
+                DnsCacheAction::Dump { limit, offset } => {
+                    let resp = client.dns_cache_dump(limit, offset).await?;
+                    if client.json {
+                        println!("{}", serde_json::to_string_pretty(&resp)?);
+                        return Ok(());
                     }
-                    AdblockAction::Enable => {
-                        let res = client.dns_adblock_set(true, None).await?;
-                        println!("{}", res.message);
+                    render_dns_cache(&resp, client.ascii);
+                }
+                DnsCacheAction::Flush => {
+                    if !crate::cli::wizard::confirm_destructive(
+                        client,
+                        "Are you sure you want to flush the DNS cache?",
+                    )? {
+                        return Ok(());
                     }
-                    AdblockAction::Disable { duration } => {
-                        let secs = duration
-                            .as_ref()
-                            .and_then(|d| duration_str::parse_std(d).ok())
-                            .map(|d| d.as_secs());
-                        let res = client.dns_adblock_set(false, secs).await?;
-                        println!("{}", res.message);
+                    let resp = client.dns_cache_flush().await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsCacheAction::Stats => {
+                    let resp = client.dns_cache_stats_ext().await?;
+                    if client.json {
+                        println!("{}", serde_json::to_string_pretty(&resp)?);
+                        return Ok(());
                     }
-                    AdblockAction::Reload => {
-                        let res = client.dns_adblock_reload().await?;
-                        println!("{}", res.message);
+                    render_dns_cache_stats(&resp, client.ascii);
+                }
+            },
+            DnsAction::Log {
+                follow,
+                n,
+                client: client_filter,
+                offset,
+            } => {
+                #[cfg(feature = "remote")]
+                if let Some(base) = &client.remote {
+                    use futures::StreamExt;
+
+                    let mut params = Vec::new();
+                    params.push(format!("follow={follow}"));
+                    if let Some(num) = n {
+                        params.push(format!("n={num}"));
                     }
-                    AdblockAction::Block { domain } => {
-                        let res = client.dns_block(domain.clone()).await?;
-                        println!("{}", res.message);
+                    if let Some(c) = &client_filter {
+                        params.push(format!("client={c}"));
                     }
-                    AdblockAction::Allow { domain } => {
-                        let res = client.dns_allow(domain.clone()).await?;
-                        println!("{}", res.message);
+                    if let Some(o) = offset {
+                        params.push(format!("offset={o}"));
                     }
-                    AdblockAction::Unallow { domain } => {
-                        let res = client.dns_unallow(domain.clone()).await?;
-                        println!("{}", res.message);
+                    let q = format!("?{}", params.join("&"));
+                    let url = format!("{base}/api/v1/dns/logs{q}");
+                    let mut req = client.http_client.get(&url);
+                    if let Some(t) = &client.token {
+                        req = req.header("Authorization", format!("Bearer {t}"));
                     }
-                    AdblockAction::Allowlist => {
-                        let res = client.dns_allowlist().await?;
-                        Self::render_allowlist(&res);
-                    }
-                    AdblockAction::Sources { action } => match action {
-                        SourceAction::Add { url, kind } => {
-                            let res = client.dns_adblock_url_add(url.clone(), kind.clone()).await?;
-                            println!("{}", res.message);
-                        }
-                        SourceAction::Remove { url } => {
-                            let res = client.dns_adblock_url_remove(url.clone()).await?;
-                            println!("{}", res.message);
-                        }
-                        SourceAction::List => {
-                            let res = client.dns_adblock_url_list().await?;
-                            Self::render_adblock_urls(&res);
-                        }
-                    },
-                },
-                DnsAction::Rewrite { action } => match action {
-                    RewriteAction::Add { domain, answer } => {
-                        let rtype = if answer.parse::<std::net::Ipv4Addr>().is_ok() {
-                            lanforge_types::network::DnsRecordType::A
-                        } else if answer.parse::<std::net::Ipv6Addr>().is_ok() {
-                            lanforge_types::network::DnsRecordType::AAAA
-                        } else {
-                            lanforge_types::network::DnsRecordType::CNAME
-                        };
-                        let rule = lanforge_types::network::dns::adblock::RewriteRule {
-                            id: None,
-                            domain: domain.clone(),
-                            rtype,
-                            answer: answer.clone(),
-                        };
-                        let res = client.dns_rewrite_add(rule).await?;
-                        println!("{}", res.message);
-                    }
-                    RewriteAction::Remove { domain } => {
-                        let rewrites = client.dns_rewrites().await?;
-                        if let Some(rule) = rewrites.rewrites.iter().find(|r| r.domain == *domain) {
-                            if let Some(id) = rule.id {
-                                let res = client.dns_rewrite_remove(id).await?;
-                                println!("{}", res.message);
-                            } else {
-                                println!("Error: Rule ID not found.");
-                            }
-                        } else {
-                            println!("Error: Rewrite rule for domain '{domain}' not found.");
-                        }
-                    }
-                    RewriteAction::List => {
-                        let res = client.dns_rewrites().await?;
-                        Self::render_rewrites(&res);
-                    }
-                },
-                DnsAction::Cache { action } => match action {
-                    CacheAction::Flush => {
-                        let res = client.dns_cache_flush().await?;
-                        println!("{}", res.message);
-                    }
-                    CacheAction::Dump => {
-                        let res = client.dns_cache_dump().await?;
-                        Self::render_cache(&res);
-                    }
-                },
-                DnsAction::Log {
-                    limit,
-                    client: filter,
-                    follow,
-                } => {
-                    let log = client.dns_query_log(*follow, Some(*limit), filter.clone()).await?;
-                    Self::render_logs(&log);
-                    if *follow {
-                        loop {
-                            match client.next_response().await {
-                                Ok(RpcResponse::Event(timed_event)) => {
-                                    if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) =
-                                        &timed_event.event
-                                    {
-                                        Self::print_log_line(entry);
-                                    }
-                                }
-                                Ok(RpcResponse::Error(e)) => eprintln!("Error: {e}"),
-                                Ok(_) => {}
-                                Err(lanforge_api::rpc::LanforgeRpcError::Io(e))
-                                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                    let mut resp = req.send().await?.bytes_stream();
+                    println!("Watching for remote DNS logs... (Ctrl+C to stop)");
+                    while let Some(chunk) = resp.next().await {
+                        if let Ok(bytes) = chunk {
+                            let s = String::from_utf8_lossy(&bytes);
+                            for line in s.lines() {
+                                if let Some(json_str) = line.strip_prefix("data: ")
+                                    && let Ok(entry) =
+                                        serde_json::from_str::<DnsQueryLogEntry>(json_str)
                                 {
-                                    break;
+                                    render_dns_log_entry(&entry, client.ascii);
                                 }
-                                Err(e) => return Err(e.into()),
                             }
                         }
                     }
+                    return Ok(());
                 }
+
+                let mut rpc = client.connect_rpc().await?;
+                rpc.dns_query_log(follow, n, client_filter, offset).await?;
+                println!("Watching for DNS logs... (Ctrl+C to stop)");
+                loop {
+                    match rpc.next_response().await {
+                        Ok(lanforge_api::rpc::RpcResponse::DnsQueryLog(resp)) => {
+                            for entry in &resp.entries {
+                                render_dns_log_entry(entry, client.ascii);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            if e.to_string().contains("UnexpectedEof") {
+                                break;
+                            }
+                            bail!("RPC Stream Error: {e}");
+                        }
+                    }
+                }
+                return Ok(());
             }
-            Ok(())
+            DnsAction::Adblock(args) => match args.action {
+                DnsAdblockAction::Status => {
+                    let resp = client.dns_adblock_status().await?;
+                    if client.json {
+                        println!("{}", serde_json::to_string_pretty(&resp)?);
+                        return Ok(());
+                    }
+                    render_adblock_status(&resp, client.ascii);
+                }
+                DnsAdblockAction::Enable => {
+                    let resp = client.dns_adblock_set(true, None).await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsAdblockAction::Disable { duration_secs } => {
+                    let resp = client.dns_adblock_set(false, duration_secs).await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsAdblockAction::Reload => {
+                    let resp = client.dns_adblock_reload().await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsAdblockAction::Block { domain } => {
+                    let final_domain = match domain {
+                        Some(d) => d,
+                        None => crate::cli::wizard::prompt_text("Domain to block:", None)?,
+                    };
+                    let resp = client.dns_block(final_domain).await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsAdblockAction::Allow { domain } => {
+                    let final_domain = match domain {
+                        Some(d) => d,
+                        None => crate::cli::wizard::prompt_text("Domain to allow:", None)?,
+                    };
+                    let resp = client.dns_allow(final_domain).await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsAdblockAction::Unallow { domain } => {
+                    let final_domain = if let Some(d) = domain {
+                        d
+                    } else {
+                        let resp = client.dns_allowlist().await?;
+                        let items = resp
+                            .allowlist
+                            .into_iter()
+                            .map(|e| format!("{} ({})", e.domain, e.id))
+                            .collect::<Vec<_>>();
+                        let choice = crate::cli::wizard::prompt_select(
+                            "Select allowlist entry to remove:",
+                            items.iter().map(std::string::String::as_str).collect(),
+                        )?;
+                        let parts: Vec<&str> = choice.split_whitespace().collect();
+                        parts[0].to_string()
+                    };
+                    let resp = client.dns_unallow(final_domain).await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsAdblockAction::Sources { action } => match action {
+                    DnsAdblockSourcesAction::List => {
+                        let resp = client.dns_adblock_url_list().await?;
+                        if client.json {
+                            println!("{}", serde_json::to_string_pretty(&resp)?);
+                            return Ok(());
+                        }
+                        render_adblock_urls(&resp, client.ascii);
+                    }
+                    DnsAdblockSourcesAction::Add { url, kind } => {
+                        let final_url = match url {
+                            Some(u) => u,
+                            None => crate::cli::wizard::prompt_text("Source URL:", None)?,
+                        };
+                        let final_kind = match kind {
+                            Some(k) => k,
+                            None => crate::cli::wizard::prompt_select(
+                                "List kind:",
+                                vec!["blocklist", "allowlist"],
+                            )?
+                            .to_string(),
+                        };
+                        let resp = client.dns_adblock_url_add(final_url, final_kind).await?;
+                        println!("✓ {}", resp.message);
+                    }
+                    DnsAdblockSourcesAction::Remove { url } => {
+                        let final_url = if let Some(u) = url {
+                            u
+                        } else {
+                            let resp = client.dns_adblock_url_list().await?;
+                            let items = resp.urls;
+                            let choice = crate::cli::wizard::prompt_select(
+                                "Select source to remove:",
+                                items.iter().map(|s| s.url.as_str()).collect(),
+                            )?;
+                            choice.to_string()
+                        };
+                        let resp = client.dns_adblock_url_remove(final_url).await?;
+                        println!("✓ {}", resp.message);
+                    }
+                },
+            },
+            DnsAction::Rewrites(args) => match args.action {
+                DnsRewritesAction::List => {
+                    let resp = client.dns_rewrites().await?;
+                    if client.json {
+                        println!("{}", serde_json::to_string_pretty(&resp)?);
+                        return Ok(());
+                    }
+                    render_rewrites(&resp, client.ascii);
+                }
+                DnsRewritesAction::Add { domain, answer } => {
+                    let final_domain = match domain {
+                        Some(d) => d,
+                        None => crate::cli::wizard::prompt_text("Domain name:", None)?,
+                    };
+                    let final_answer = match answer {
+                        Some(a) => a,
+                        None => crate::cli::wizard::prompt_text("Answer (IP or Target):", None)?,
+                    };
+                    let rtype = if final_answer.parse::<std::net::Ipv4Addr>().is_ok() {
+                        lanforge_types::network::DnsRecordType::A
+                    } else if final_answer.parse::<std::net::Ipv6Addr>().is_ok() {
+                        lanforge_types::network::DnsRecordType::AAAA
+                    } else {
+                        lanforge_types::network::DnsRecordType::CNAME
+                    };
+                    let rule = RewriteRule {
+                        id: None,
+                        domain: final_domain,
+                        rtype,
+                        answer: final_answer,
+                    };
+                    let resp = client.dns_rewrite_add(rule).await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsRewritesAction::Remove { domain } => {
+                    let final_id = if let Some(d) = domain {
+                        let resp = client.dns_rewrites().await?;
+                        let rule = resp.rewrites.into_iter().find(|r| r.domain == d);
+                        match rule {
+                            Some(r) => r.id.unwrap(),
+                            None => bail!("Rewrite rule for domain '{d}' not found."),
+                        }
+                    } else {
+                        let rw = crate::cli::wizard::fuzzy_select_rewrite(
+                            client,
+                            "Select rewrite rule to remove:",
+                        )
+                        .await?;
+                        rw.id.unwrap()
+                    };
+                    let resp = client.dns_rewrite_remove(final_id).await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsRewritesAction::Clear => {
+                    if !crate::cli::wizard::confirm_destructive(
+                        client,
+                        "Are you sure you want to clear all DNS rewrite rules?",
+                    )? {
+                        return Ok(());
+                    }
+                    let resp = client.dns_rewrite_clear().await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsRewritesAction::Import { file } => {
+                    let content = std::fs::read_to_string(&file)?;
+                    let rules: Vec<RewriteRule> = serde_json::from_str(&content)?;
+                    let resp = client.dns_rewrite_import(rules).await?;
+                    println!("✓ {}", resp.message);
+                }
+                DnsRewritesAction::Export { file } => {
+                    let resp = client.dns_rewrites().await?;
+                    let json = serde_json::to_string_pretty(&resp.rewrites)?;
+                    std::fs::write(&file, json)?;
+                    println!(
+                        "✓ Exported {} rewrite rules to {}",
+                        resp.rewrites.len(),
+                        file
+                    );
+                }
+            },
+            DnsAction::Allowlist => {
+                let resp = client.dns_allowlist().await?;
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                    return Ok(());
+                }
+                render_allowlist(&resp, client.ascii);
+            }
+        }
+        Ok(())
     }
 }
 
-impl DnsCommand {
-    fn render_stats(stats: &DnsStatsResponse) {
-        element! {
-            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                    Text(content: " DNS RESOLVER STATS ", color: Color::White, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                    StatLine(label: "Total Requests", value: stats.total_requests.to_string())
-                    StatLine(label: "Cache Hits", value: stats.cache_hits.to_string(), color: Color::Green)
-                    StatLine(label: "Cache Misses", value: stats.cache_misses.to_string(), color: Color::Yellow)
-                    StatLine(label: "Upstream Errors", value: stats.upstream_errors.to_string(), color: Color::Red)
-                    StatLine(label: "Auth Queries", value: stats.auth_queries.to_string())
-                    StatLine(label: "Recursions", value: stats.recursions.to_string())
-                    StatLine(label: "Blocked Queries", value: stats.blocked_queries.to_string(), color: Color::Cyan)
-                    StatLine(label: "Resolved Total", value: stats.resolved_total.to_string(), color: Color::Green)
-                    StatLine(label: "Failed Total", value: stats.failed_total.to_string(), color: Color::Red)
-                }
-            }
-        }.print();
+pub fn render_dns_stats(resp: &DnsStatsResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS RESOLVER STATISTICS \n");
+    println!("  {:<25} {}", "Total Requests:", resp.total_requests);
+    println!("  {:<25} {}", "Cache Hits:", resp.cache_hits);
+    println!("  {:<25} {}", "Cache Misses:", resp.cache_misses);
+    println!("  {:<25} {}", "Upstream Errors:", resp.upstream_errors);
+    println!("  {:<25} {}", "Authoritative Queries:", resp.auth_queries);
+    println!("  {:<25} {}", "Recursive Queries:", resp.recursions);
+    println!("  {:<25} {}", "Blocked Queries:", resp.blocked_queries);
+    println!("  {:<25} {}", "Successfully Resolved:", resp.resolved_total);
+    println!("  {:<25} {}", "Failed Queries:", resp.failed_total);
+    println!(
+        "  {:<25} {} / {}",
+        "Cache Utilization:", resp.cache_entries, resp.cache_capacity
+    );
+    println!("{}", hline.repeat(50));
+}
+
+pub fn render_dns_analytics(resp: &DnsAnalyticsResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS ANALYTICS \n");
+    println!("  Top Domains:");
+    for d in &resp.top_domains {
+        println!("    {:<30} | {}", d.domain, d.count);
     }
-
-    fn render_upstreams(resp: &DnsUpstreamsResponse) {
-        element! {
-            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                    Text(content: " DNS UPSTREAM HEALTH ", color: Color::White, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
-                    View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2, margin_bottom: 1) {
-                        Text(content: format!("{:<25}", "UPSTREAM"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<10}", "PROTO"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<10}", "RTT"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<15}", "SUCCESS RATE"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<10}", "STATUS"), color: Color::DarkGrey, weight: Weight::Bold)
-                    }
-                    #(resp.upstreams.iter().map(|u| {
-                        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-                        let success_rate = if u.total_queries > 0 {
-                            (u.total_successes as f32 / u.total_queries as f32) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let status_color = if u.status == "Healthy" { Color::Green } else { Color::Red };
-                        element! {
-                            View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
-                                Text(content: format!("{:<25}", u.target))
-                                Text(content: format!("{:<10}", u.protocol), color: Color::Cyan)
-                                Text(content: format!("{:<10}", format!("{}ms", u.rtt_ewma_us / 1000)), color: Color::Yellow)
-                                Text(content: format!("{:<15}", format!("{:.1}%", success_rate)))
-                                Text(content: format!("{:<10}", u.status), color: status_color)
-                            }
-                        }
-                    }))
-                }
-            }
-        }.print();
+    println!("{}", hline.repeat(50));
+    println!("  Top Clients:");
+    for c in &resp.top_clients {
+        let host = c.hostname.as_deref().unwrap_or(&c.ip);
+        println!("    {:<30} | {}", host, c.count);
     }
-
-    fn render_query(query: &DnsQueryResponse) {
-        element! {
-            View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: " QUERY RESULT ", color: Color::White, weight: Weight::Bold)
-                    Text(content: format!("  latency: {}ms", query.latency_ms), color: Color::DarkGrey)
-                    #(query.authoritative.then(|| element! {
-                        Text(content: "  (Authoritative)", color: Color::Cyan)
-                    }))
-                }
-                View(margin_top: 1) {
-                    QueryResults(query: query.clone())
-                }
-            }
-        }.print();
+    println!("{}", hline.repeat(50));
+    println!("  Query Types:");
+    for q in &resp.query_types {
+        println!("    {:<10} | {}", q.qtype, q.count);
     }
+}
 
-    fn render_cache(cache: &DnsCacheResponse) {
-        element! {
-            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                    Text(content: " DNS CACHE DUMP ", color: Color::White, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
-                    #(cache.entries.iter().map(|e| element! {
-                        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
-                            Text(content: format!("{:<5}", e.kind), color: Color::Cyan)
-                            Text(content: format!(" {:<30}", e.name))
-                            Text(content: " -> ", color: Color::DarkGrey)
-                            Text(content: e.data.clone())
-                            View(flex_grow: 1.0)
-                            Text(content: format!("{}s", e.expires_in_secs), color: Color::Yellow)
-                        }
-                    }))
-                }
-            }
-        }.print();
-    }
-
-    fn render_logs(log: &DnsQueryLogResponse) {
-        use chrono::{DateTime, Local, Utc};
-        element! {
-            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                    Text(content: " DNS QUERY LOG ", color: Color::White, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
-                    View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2, margin_bottom: 1) {
-                        Text(content: format!("{:<10}", "TIME"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<18}", "CLIENT"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<6}", "TYPE"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<30}", "DOMAIN"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<10}", "RESULT"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<25}", "ANSWER"), color: Color::DarkGrey, weight: Weight::Bold)
-                        Text(content: format!("{:<8}", "LATENCY"), color: Color::DarkGrey, weight: Weight::Bold)
-                    }
-                    #(log.entries.iter().rev().map(|e| {
-                        let dt = DateTime::<Utc>::from_timestamp(e.timestamp.cast_signed(), 0).unwrap_or_default();
-                        let local_dt: DateTime<Local> = DateTime::from(dt);
-                        let time_str = local_dt.format("%H:%M:%S").to_string();
-                        
-                        let result_color = match e.result.as_str() {
-                            "blocked" | "Blocked" => Color::Red,
-                            "local" | "Local" | "rewritten" | "Rewritten" => Color::Green,
-                            "cached" | "Cached" => Color::Cyan,
-                            "nxdomain" | "NxDomain" => Color::Yellow,
-                            _ => Color::White,
-                        };
-
-                        let client_str = e.src_hostname.as_ref().map_or_else(|| format!("{:<18}", e.src_ip), |host| format!("{host:<18}"));
-
-                        let answer_str = e.answer.as_deref().unwrap_or("-");
-
-                        element! {
-                            View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
-                                Text(content: format!("{:<10}", time_str), color: Color::DarkGrey)
-                                Text(content: client_str)
-                                Text(content: format!("{:<6}", e.qtype), color: Color::Cyan)
-                                Text(content: format!("{:<30}", e.domain))
-                                Text(content: format!("{:<10}", e.result), color: result_color)
-                                Text(content: format!("{:<25}", answer_str), color: Color::DarkGrey)
-                                Text(content: format!("{:<8}", format!("{}ms", e.upstream_us / 1000)), color: Color::Yellow)
-                            }
-                        }
-                    }))
-                }
-            }
-        }.print();
-    }
-
-    fn render_adblock_status(status: &DnsAdblockStatusResponse) {
-        element! {
-            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                    Text(content: " DNS ADBLOCK STATUS ", color: Color::White, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                    StatLine(
-                        label: "Status",
-                        value: if status.enabled { "Enabled".to_string() } else { "Disabled".to_string() },
-                        color: if status.enabled { Color::Green } else { Color::Red }
-                    )
-                    #(status.remaining_secs.map(|s| element! {
-                         StatLine(label: "Remaining", value: format!("{}s", s), color: Color::Yellow)
-                    }))
-                    StatLine(label: "Blocklist Size", value: status.blocklist_size.to_string())
-                    StatLine(label: "Allowlist Size", value: status.allowlist_size.to_string())
-                }
-            }
-        }.print();
-    }
-
-    fn render_rewrites(resp: &DnsRewritesResponse) {
-        element! {
-            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                    Text(content: " DNS REWRITE RULES ", color: Color::White, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
-                    #(resp.rewrites.iter().map(|r| element! {
-                        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
-                            Text(content: format!("{:<30}", r.domain), color: Color::Cyan)
-                            Text(content: " -> ", color: Color::DarkGrey)
-                            Text(content: r.answer.clone())
-                        }
-                    }))
-                }
-            }
-        }.print();
-    }
-
-    fn render_allowlist(resp: &DnsAllowlistResponse) {
-        element! {
-            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                    Text(content: " DNS PERMANENT ALLOWLIST ", color: Color::White, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
-                    #(resp.allowlist.iter().map(|entry| element! {
-                        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
-                            Text(content: "● ", color: Color::Green)
-                            Text(content: format!("{:<6} {}", entry.id, entry.domain))
-                        }
-                    }))
-                }
-            }
-        }.print();
-    }
-
-    fn render_adblock_urls(resp: &DnsAdblockUrlsResponse) {
-        element! {
-            View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                    Text(content: " DNS ADBLOCK SOURCES ", color: Color::White, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
-                    #(resp.urls.iter().map(|u| element! {
-                        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 2) {
-                            Text(content: format!("{:<10}", u.kind.to_uppercase()), color: if u.kind == "allowlist" { Color::Green } else { Color::Red })
-                            Text(content: format!(" {:<50}", u.url))
-                        }
-                    }))
-                }
-            }
-        }.print();
-    }
-
-    fn print_log_line(e: &QueryLogEntry) {
-        use chrono::{DateTime, Local, Utc};
-        let dt = DateTime::<Utc>::from_timestamp(e.timestamp.cast_signed(), 0).unwrap_or_default();
-        let local_dt: DateTime<Local> = DateTime::from(dt);
-        let time_str = local_dt.format("%H:%M:%S").to_string();
-
-        let result_str = format!("{:?}", e.result);
-        let result_colored = match e.result {
-            QueryResult::Blocked => result_str.red(),
-            QueryResult::Local => result_str.green(),
-            QueryResult::Cached => result_str.cyan(),
-            _ => result_str.white(),
+pub fn render_dns_upstreams(resp: &DnsUpstreamsResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS UPSTREAMS HEALTH \n");
+    println!("  {:<30} | {:<10} | LATENCY", "UPSTREAM", "STATUS");
+    println!("{}", hline.repeat(60));
+    for u in &resp.upstreams {
+        let status = if u.status.eq_ignore_ascii_case("healthy")
+            || u.status.eq_ignore_ascii_case("online")
+        {
+            "Healthy".green()
+        } else {
+            "Failing".red()
         };
+        let rtt_ms = u.rtt_ewma_us / 1000;
+        println!("  {:<30} | {:<10} | {}ms", u.target, status, rtt_ms);
+    }
+}
 
+pub fn render_dns_query(resp: &DnsQueryResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS QUERY RESULTS \n");
+    println!(
+        "  Latency: {}ms | Authoritative: {}",
+        resp.latency_ms, resp.authoritative
+    );
+    println!("{}", hline.repeat(60));
+    for r in &resp.records {
+        println!("  {:<20} {:<5?} {}", r.name, r.kind, r.data);
+    }
+}
+
+pub fn render_dns_cache(resp: &DnsCacheResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS CACHE DUMP ({} entries) \n", resp.total);
+    println!(
+        "  {:<30} | {:<5} | {:<10} | {}",
+        "NAME", "TYPE", "TTL", "DATA"
+    );
+    println!("{}", hline.repeat(80));
+    for c in &resp.entries {
         println!(
-            "{}  {:<16}  {:<30}  {:<8}  {}ms",
-            time_str.dimmed(),
-            e.src_ip,
-            e.domain,
-            result_colored,
-            (e.upstream_us / 1000).to_string().yellow()
+            "  {:<30} | {:<5?} | {:<10} | {}",
+            c.name, c.kind, c.expires_in_secs, c.data
         );
     }
 }
 
-#[component]
-fn StatLine(props: &StatLineProps) -> impl Into<AnyElement<'_>> {
-    let color = props.color.unwrap_or(Color::White);
-    element! {
-        View(flex_direction: FlexDirection::Row) {
-            Text(content: format!("{:<20}", props.label), color: Color::DarkGrey)
-            Text(content: props.value.clone(), color: color)
-        }
+pub fn render_dns_cache_stats(resp: &DnsCacheStatsExtResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS CACHE EXTENDED STATS \n");
+    println!("  {:<25} {}", "Total Entries:", resp.total_entries);
+    println!(
+        "  {:<25} {} bytes",
+        "Memory Usage:", resp.memory_usage_bytes
+    );
+    println!("  {:<25} {}s", "Average TTL:", resp.average_ttl_secs);
+    println!("{}", hline.repeat(50));
+    println!("  Entries by Type:");
+    for (t, count) in &resp.entries_by_type {
+        println!("    {t:<10?} | {count}");
     }
 }
 
-#[derive(Props, Default)]
-struct StatLineProps {
-    pub label: String,
-    pub value: String,
-    pub color: Option<Color>,
-}
-#[component]
-fn QueryResults(props: &QueryResultsProps) -> impl Into<AnyElement<'_>> {
-    let query = &props.query;
-    if query.records.is_empty() {
-        element! { Text(content: "No records found.", color: Color::Red) }.into_any()
+pub fn render_dns_log_entry(entry: &DnsQueryLogEntry, _ascii: bool) {
+    use chrono::{DateTime, Utc};
+    let dt = DateTime::<Utc>::from_timestamp(entry.timestamp.cast_signed(), 0)
+        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .unwrap_or_default();
+    let client_str = entry.src_hostname.as_deref().unwrap_or(&entry.src_ip);
+    let status_color = if entry.result == "Blocked" {
+        colored::Color::Red
+    } else if entry.cached {
+        colored::Color::Cyan
     } else {
-        element! {
-            View(flex_direction: FlexDirection::Column) {
-                #(query.records.iter().map(|r| element! {
-                    View(flex_direction: FlexDirection::Row) {
-                        Text(content: "● ", color: Color::Green)
-                        Text(content: r.to_string())
-                    }
-                }))
-            }
-        }
-        .into_any()
+        colored::Color::Green
+    };
+    println!(
+        "{} | {:<15} | {:<5?} {:<30} | {} ({})",
+        dt.dimmed(),
+        client_str,
+        entry.qtype,
+        entry.domain,
+        entry.result.color(status_color),
+        entry.upstream_us
+    );
+}
+
+pub fn render_adblock_status(resp: &DnsAdblockStatusResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS ADBLOCK STATUS \n");
+    let status_str = if resp.enabled {
+        "Enabled".green()
+    } else {
+        "Disabled".red()
+    };
+    println!("  {:<20} {}", "Status:", status_str);
+    println!("  {:<20} {}", "Blocklist Rules:", resp.blocklist_size);
+    println!("  {:<20} {}", "Allowlist Rules:", resp.allowlist_size);
+    if let Some(rem) = resp.remaining_secs {
+        println!("  {:<20} {}s", "Disabled For:", rem);
+    }
+    println!("{}", hline.repeat(50));
+}
+
+pub fn render_adblock_urls(resp: &DnsAdblockUrlsResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS ADBLOCK SOURCES \n");
+    println!("  {:<12} | {}", "KIND", "URL");
+    println!("{}", hline.repeat(80));
+    for u in &resp.urls {
+        let kind_color = if u.kind == "blocklist" {
+            colored::Color::Red
+        } else {
+            colored::Color::Green
+        };
+        println!("  {:<12} | {}", u.kind.color(kind_color), u.url);
     }
 }
 
-#[derive(Props, Clone, Default)]
-struct QueryResultsProps {
-    pub query: DnsQueryResponse,
+pub fn render_rewrites(resp: &DnsRewritesResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS REWRITE RULES \n");
+    println!("  {:<30} | {}", "DOMAIN", "ANSWER (TARGET)");
+    println!("{}", hline.repeat(70));
+    for r in &resp.rewrites {
+        println!("  {:<30} | {}", r.domain, r.answer);
+    }
+}
+
+pub fn render_allowlist(resp: &DnsAllowlistResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS ALLOWLIST \n");
+    println!("  {:<6} | {}", "ID", "DOMAIN");
+    println!("{}", hline.repeat(50));
+    for a in &resp.allowlist {
+        println!("  {:<6} | {}", a.id, a.domain);
+    }
 }

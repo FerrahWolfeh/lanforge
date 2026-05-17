@@ -4,7 +4,7 @@ pub mod tui;
 
 /// Trait for formatting events for the CLI.
 pub trait CliFormat {
-    fn format_cli(&self, now: &str, verbose: bool);
+    fn format_cli(&self, now: &str, verbose: bool, ascii: bool);
 }
 
 /// Trait for formatting events for the TUI.

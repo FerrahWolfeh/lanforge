@@ -1,8 +1,6 @@
-use super::CliCommand;
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
-use colored::Colorize;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DbArgs {
@@ -26,44 +24,35 @@ pub enum DbAction {
 
 impl Execute for DbArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        client
-            .execute_handler(Box::new(DbHandler {
-                action: self.action,
-            }))
-            .await
-    }
-}
-
-pub struct DbHandler {
-    pub action: DbAction,
-}
-
-use lanforge_api::rpc::LanforgeRpcClient;
-use tokio::net::UnixStream;
-
-#[async_trait::async_trait]
-impl CliCommand for DbHandler {
-    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
         match self.action {
             DbAction::Vacuum => {
                 let resp = client.db_vacuum().await?;
-                println!("{} {}", "✓".green().bold(), resp.message.bright_green());
+                println!("✓ {}", resp.message);
             }
             DbAction::LogClean => {
                 let resp = client.db_log_clean().await?;
-                println!("{} {}", "✓".green().bold(), resp.message.bright_green());
+                println!("✓ {}", resp.message);
             }
             DbAction::Prune => {
+                if !crate::cli::wizard::confirm_destructive(
+                    client,
+                    "Are you sure you want to prune zombie entries?",
+                )? {
+                    return Ok(());
+                }
                 let resp = client.db_prune().await?;
-                println!("{} {}", "✓".green().bold(), resp.message.bright_green());
+                println!("✓ {}", resp.message);
             }
             DbAction::Snapshot => {
                 let resp = client.context_dump(false, false).await?;
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             }
             DbAction::Reset => {
+                if !crate::cli::wizard::confirm_wipe(client)? {
+                    return Ok(());
+                }
                 let resp = client.db_reset().await?;
-                println!("{} {}", "✓".green().bold(), resp.message.bright_green());
+                println!("✓ {}", resp.message);
             }
         }
         Ok(())

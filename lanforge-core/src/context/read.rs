@@ -28,7 +28,7 @@
 //! ```rust
 //! use lanforge_core::context::LanforgeContext;
 //! use lanforge_core::bus::EventBus;
-//! use lanforge_types::MacAddr;
+//! use lanforge_types::identifiers::MacAddr;
 //! use std::sync::Arc;
 //!
 //! let bus = Arc::new(EventBus::new());

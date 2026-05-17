@@ -1,4 +1,3 @@
-use crate::cli::commands::CliCommand;
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
@@ -19,52 +18,40 @@ pub enum DhcpAction {
 
 impl Execute for DhcpArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        client
-            .execute_handler(Box::new(DhcpHandler {
-                action: self.action,
-            }))
-            .await
-    }
-}
-
-pub struct DhcpHandler {
-    pub action: DhcpAction,
-}
-
-use lanforge_api::rpc::LanforgeRpcClient;
-use tokio::net::UnixStream;
-
-#[async_trait::async_trait]
-impl CliCommand for DhcpHandler {
-    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
-        match &self.action {
+        match self.action {
             DhcpAction::Pool => {
                 let pools = client.dhcp_pools().await?;
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&pools)?);
+                    return Ok(());
+                }
+
+                let ascii = client.ascii;
                 element! {
-                        View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
-                            View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                                Text(content: " DHCP POOL UTILIZATION ", color: Color::White, weight: Weight::Bold)
-                            }
-
-                            #(pools.v4_pools.is_empty().then(|| element! {
-                                 Text(content: "No IPv4 pools configured.", color: Color::DarkGrey)
-                            }))
-
-                            #(pools.v4_pools.iter().map(|p| element! {
-                                PoolSection(title: "IPv4 Subnet".to_string(), pool: p.clone())
-                            }))
-
-                            View(margin_top: 1)
-
-                            #(pools.v6_pools.is_empty().then(|| element! {
-                                 Text(content: "No IPv6 pools configured.", color: Color::DarkGrey)
-                            }))
-
-                            #(pools.v6_pools.iter().map(|p| element! {
-                                PoolSection(title: "IPv6 Prefix".to_string(), pool: p.clone())
-                            }))
+                    View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+                        View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                            Text(content: " DHCP POOL UTILIZATION ", color: Color::White, weight: Weight::Bold)
                         }
-                    }.print();
+
+                        #(pools.v4_pools.is_empty().then(|| element! {
+                             Text(content: "No IPv4 pools configured.", color: Color::DarkGrey)
+                        }))
+
+                        #(pools.v4_pools.iter().map(|p| element! {
+                            PoolSection(title: "IPv4 Subnet".to_string(), pool: p.clone(), ascii: ascii)
+                        }))
+
+                        View(margin_top: 1)
+
+                        #(pools.v6_pools.is_empty().then(|| element! {
+                             Text(content: "No IPv6 pools configured.", color: Color::DarkGrey)
+                        }))
+
+                        #(pools.v6_pools.iter().map(|p| element! {
+                            PoolSection(title: "IPv6 Prefix".to_string(), pool: p.clone(), ascii: ascii)
+                        }))
+                    }
+                }.print();
             }
         }
         Ok(())
@@ -89,7 +76,7 @@ fn PoolSection(props: &PoolSectionProps) -> impl Into<AnyElement<'_>> {
                 Text(content: p.subnet.clone(), weight: Weight::Bold)
             }
             View(flex_direction: FlexDirection::Row, margin_top: 1) {
-                ProgressBar(percent: p.utilization_percent, color: bar_color)
+                ProgressBar(percent: p.utilization_percent, color: bar_color, ascii: props.ascii)
                 Text(content: format!("  {:.1}%", p.utilization_percent), color: bar_color)
             }
             View(flex_direction: FlexDirection::Row, margin_top: 1) {
@@ -105,6 +92,7 @@ fn PoolSection(props: &PoolSectionProps) -> impl Into<AnyElement<'_>> {
 struct PoolSectionProps {
     pub title: String,
     pub pool: DhcpPoolEntry,
+    pub ascii: bool,
 }
 
 #[component]
@@ -120,8 +108,16 @@ fn ProgressBar(props: &ProgressBarProps) -> impl Into<AnyElement<'_>> {
     };
     let empty = width.saturating_sub(filled);
 
-    let filled_str = "█".repeat(filled);
-    let empty_str = "░".repeat(empty);
+    let filled_str = if props.ascii {
+        "#".repeat(filled)
+    } else {
+        "█".repeat(filled)
+    };
+    let empty_str = if props.ascii {
+        "-".repeat(empty)
+    } else {
+        "░".repeat(empty)
+    };
 
     element! {
         View(flex_direction: FlexDirection::Row) {
@@ -135,6 +131,7 @@ fn ProgressBar(props: &ProgressBarProps) -> impl Into<AnyElement<'_>> {
 struct ProgressBarProps {
     pub percent: f32,
     pub color: Color,
+    pub ascii: bool,
 }
 
 impl Default for ProgressBarProps {
@@ -142,6 +139,7 @@ impl Default for ProgressBarProps {
         Self {
             percent: 0.0,
             color: Color::White,
+            ascii: false,
         }
     }
 }

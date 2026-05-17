@@ -1,45 +1,41 @@
-use super::{CliCommand, format_relative_iso8601};
+use super::format_relative_iso8601;
 use crate::cli::vendor::resolve_vendor;
 use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::WhoisResponse;
-use lanforge_types::device::Origin;
-use lanforge_db::engine::LeaseHistoryEntry;
+use lanforge_types::device::{LeaseHistoryEntry, Origin};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct WhoisArgs {
     /// Target MAC, IP, or Hostname
-    pub target: String,
+    pub target: Option<String>,
 }
 
 impl Execute for WhoisArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        client
-            .execute_handler(Box::new(WhoisHandler {
-                target: self.target,
-            }))
-            .await
-    }
-}
+        let target = match self.target {
+            Some(t) => t,
+            None => {
+                let dev =
+                    crate::cli::wizard::fuzzy_select_device(client, "Select device for whois:")
+                        .await?;
+                dev.mac
+            }
+        };
 
-pub struct WhoisHandler {
-    pub target: String,
-}
+        let resp = client.whois(target).await?;
+        if client.json {
+            println!("{}", serde_json::to_string_pretty(&resp)?);
+            return Ok(());
+        }
 
-use lanforge_api::rpc::LanforgeRpcClient;
-use tokio::net::UnixStream;
-
-#[async_trait::async_trait]
-impl CliCommand for WhoisHandler {
-    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
-        let resp = client.whois(self.target.clone()).await?;
-        render_whois(&resp);
+        render_whois(&resp, client.ascii);
         Ok(())
     }
 }
 
-pub fn render_whois(resp: &WhoisResponse) {
+pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
     let dev = &resp.entry;
 
     element! {
@@ -54,13 +50,13 @@ pub fn render_whois(resp: &WhoisResponse) {
     }
     .print();
 
-    // Device Info Card
     let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
     let status_color = if dev.online { Color::Green } else { Color::Red };
     let status_text = if dev.online { "Online" } else { "Offline" };
+    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
 
     element! {
-        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, border_style: BorderStyle::Round, border_color: Color::DarkGrey) {
+        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, border_style: border, border_color: Color::DarkGrey) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Vendor:    ", color: Color::DarkGrey)
                 Text(content: resolve_vendor(&dev.mac).unwrap_or_else(|| "Unknown".to_string()))
@@ -96,14 +92,14 @@ pub fn render_whois(resp: &WhoisResponse) {
         }
     }.print();
 
-    // History Table
     if !resp.history.is_empty() {
+        let hline = if ascii { "-" } else { "─" };
         element! {
             View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
                 View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
                     Text(content: " LEASE HISTORY ", color: Color::Black, weight: Weight::Bold)
                 }
-                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
                     // Header
                     View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
                         Text(content: format!("{:<20}", "TIME"), color: Color::DarkGrey)
@@ -111,7 +107,7 @@ pub fn render_whois(resp: &WhoisResponse) {
                         Text(content: format!("{:<15}", "TYPE"), color: Color::DarkGrey)
                         Text(content: "ACTION", color: Color::DarkGrey)
                     }
-                    Text(content: "─".repeat(70), color: Color::DarkGrey)   
+                    Text(content: hline.repeat(70), color: Color::DarkGrey)   
                     #(resp.history.iter().map(|h| element! {
                         HistoryRow(history: h.clone())
                     }))

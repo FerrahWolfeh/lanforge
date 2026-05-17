@@ -565,6 +565,15 @@ impl Ipv6Pool {
                 return Some(ip);
             }
         }
+
+        // 3. Fallback Linear Scan (Exhaustive guarantee)
+        let max_scan = size.min(1000); // Cap scan to avoid locking up on huge subnets
+        for offset in 0..max_scan {
+            let ip = Ipv6Addr::from((start + offset).to_be_bytes());
+            if self.is_available(ctx, &ip, target_mac) {
+                return Some(ip);
+            }
+        }
         None
     }
 

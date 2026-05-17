@@ -1,4 +1,4 @@
-use super::{CliCommand, format_uptime};
+use super::format_uptime;
 use crate::cli::{Execute, LanforgeClient};
 use bytesize::ByteSize;
 use color_eyre::eyre::Result;
@@ -11,32 +11,26 @@ pub struct StatusArgs {}
 
 impl Execute for StatusArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        client.execute_handler(Box::new(StatusHandler)).await
-    }
-}
-
-pub struct StatusHandler;
-use lanforge_api::rpc::LanforgeRpcClient;
-use tokio::net::UnixStream;
-
-#[async_trait::async_trait]
-impl CliCommand for StatusHandler {
-    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
         let st = client.status().await?;
-        render_status(&st);
+        if client.json {
+            println!("{}", serde_json::to_string_pretty(&st)?);
+            return Ok(());
+        }
+        render_status(&st, client.ascii);
         Ok(())
     }
 }
 
-pub fn render_status(st: &StatusResponse) {
+pub fn render_status(st: &StatusResponse, ascii: bool) {
     render_header(st);
-    render_infrastructure(st);
-    render_services(st);
-    render_insights(st);
+    render_infrastructure(st, ascii);
+    render_services(st, ascii);
+    render_insights(st, ascii);
 
+    let star = if ascii { "*" } else { "★" };
     element! {
         View(padding_left: 2, margin_bottom: 1) {
-            Text(content: "★ TOML static  · CLI managed", color: Color::DarkGrey)
+            Text(content: format!("{star} TOML static  · CLI managed"), color: Color::DarkGrey)
         }
     }
     .print();
@@ -58,7 +52,7 @@ fn render_header(st: &StatusResponse) {
     .print();
 }
 
-fn render_infrastructure(st: &StatusResponse) {
+fn render_infrastructure(st: &StatusResponse, ascii: bool) {
     let gua = st.network.gua.as_deref().unwrap_or("stabilizing...");
     let ula = st.network.ula.as_deref().unwrap_or("unavailable");
     let ipv4 = st
@@ -67,13 +61,14 @@ fn render_infrastructure(st: &StatusResponse) {
         .as_deref()
         .unwrap_or_else(|| st.network.lan_ipv4.as_deref().unwrap_or("—"));
     let rss = ByteSize::b(st.resources.memory_rss_bytes);
+    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
 
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_bottom: 1) {
             View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
                 Text(content: " INFRASTRUCTURE ", color: Color::Yellow, weight: Weight::Bold)
             }
-            View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+            View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "Iface      ", color: Color::DarkGrey)
                     Text(content: st.network.lan_iface.as_str())
@@ -99,7 +94,7 @@ fn render_infrastructure(st: &StatusResponse) {
     }.print();
 }
 
-fn render_services(st: &StatusResponse) {
+fn render_services(st: &StatusResponse, ascii: bool) {
     let ndp_meta = format!(
         "{} tracked · scan {}s ago",
         st.services.ndp_monitor.addrs_tracked, st.services.ndp_monitor.last_scan_secs_ago
@@ -116,65 +111,74 @@ fn render_services(st: &StatusResponse) {
         "upstream {}",
         st.services.dns.upstream.as_deref().unwrap_or("—")
     );
+    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
+    let hline = if ascii { "-" } else { "─" };
 
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_bottom: 1) {
             View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
                 Text(content: " SERVICES ", color: Color::Yellow, weight: Weight::Bold)
             }
-            View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                ServiceLine(name: "DB Worker", state: st.services.db_worker.state.as_str(), online_val: "online", meta: "Persistence & I/O")
-                ServiceLine(name: "mDNS", state: st.services.mdns_prober.state.as_str(), online_val: "active", meta: "Device Discovery Prober")
-                ServiceLine(name: "Iface Mon", state: st.services.iface_monitor.state.as_str(), online_val: "online", meta: "Interface Address Watcher")
+            View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                ServiceLine(name: "DB Worker", state: st.services.db_worker.state.as_str(), online_val: "online", meta: "Persistence & I/O", ascii: ascii)
+                ServiceLine(name: "mDNS", state: st.services.mdns_prober.state.as_str(), online_val: "active", meta: "Device Discovery Prober", ascii: ascii)
+                ServiceLine(name: "Iface Mon", state: st.services.iface_monitor.state.as_str(), online_val: "online", meta: "Interface Address Watcher", ascii: ascii)
                 ServiceLine(
                     name: "NDP Mon",
                     state: st.services.ndp_monitor.state.as_str(),
                     online_val: "online",
-                    meta: ndp_meta.as_str()
+                    meta: ndp_meta.as_str(),
+                    ascii: ascii
                 )
-                ServiceLine(name: "Control", state: st.services.control_api.state.as_str(), online_val: "online", meta: "UDS Management API")
-                HttpServiceLine(info: st.services.http_api.clone())
+                ServiceLine(name: "Control", state: st.services.control_api.state.as_str(), online_val: "online", meta: "UDS Management API", ascii: ascii)
+                HttpServiceLine(info: st.services.http_api.clone(), ascii: ascii)
 
                 View(margin_top: 1, margin_bottom: 1) {
-                    Text(content: "  ────────── Protocols ──────────", color: Color::DarkGrey)
+                    Text(content: format!("  {0}{0}{0}{0}{0}{0}{0}{0}{0}{0} Protocols {0}{0}{0}{0}{0}{0}{0}{0}{0}{0}", hline), color: Color::DarkGrey)
                 }
 
-                ServiceLine(name: "RA", state: st.services.ra.state.as_str(), online_val: "online", meta: "Neighbor Discovery & Prefixes")
+                ServiceLine(name: "RA", state: st.services.ra.state.as_str(), online_val: "online", meta: "Neighbor Discovery & Prefixes", ascii: ascii)
                 ServiceLine(
                     name: "DHCPv4",
                     state: st.services.dhcp_v4.state.as_str(),
                     online_val: "active",
-                    meta: dhcp_v4_meta.as_str()
+                    meta: dhcp_v4_meta.as_str(),
+                    ascii: ascii
                 )
                 ServiceLine(
                     name: "DHCPv6",
                     state: st.services.dhcp_v6.state.as_str(),
                     online_val: "active",
-                    meta: dhcp_v6_meta.as_str()
+                    meta: dhcp_v6_meta.as_str(),
+                    ascii: ascii
                 )
                 ServiceLine(
                     name: "DNS",
                     state: st.services.dns.state.as_str(),
                     online_val: "online",
-                    meta: dns_meta.as_str()
+                    meta: dns_meta.as_str(),
+                    ascii: ascii
                 )
             }
         }
     }.print();
 }
 
-fn render_insights(st: &StatusResponse) {
+fn render_insights(st: &StatusResponse, ascii: bool) {
     let db_size = ByteSize::b(st.db.size_bytes);
+    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
+    let star = if ascii { "*" } else { "★" };
+
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_bottom: 1) {
             View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
                 Text(content: " INSIGHTS ", color: Color::Yellow, weight: Weight::Bold)
             }
-            View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+            View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "Devices    ", color: Color::DarkGrey)
                     Text(content: format!("{} / {} online", st.devices.online, st.devices.total), color: Color::Green)
-                    Text(content: "  ★", color: Color::DarkGrey)
+                    Text(content: format!("  {star}"), color: Color::DarkGrey)
                     Text(content: format!("{}", st.devices.static_toml), color: Color::DarkGrey)
                     Text(content: "  ·", color: Color::DarkGrey)
                     Text(content: format!("{}", st.devices.managed_cli), color: Color::DarkGrey)
@@ -198,10 +202,11 @@ fn render_insights(st: &StatusResponse) {
 fn ServiceLine<'a>(props: &ServiceLineProps<'a>) -> impl Into<AnyElement<'a>> {
     let is_online = props.state == props.online_val;
     let color = if is_online { Color::Green } else { Color::Red };
+    let bullet = if props.ascii { "*" } else { "●" };
 
     element! {
         View(flex_direction: FlexDirection::Row) {
-            Text(content: "● ", color: color)
+            Text(content: format!("{bullet} "), color: color)
             Text(content: format!("{:<10}", props.name))
             Text(content: format!("{:<10}", props.state), color: color)
             Text(content: props.meta, color: Color::DarkGrey)
@@ -215,10 +220,12 @@ struct ServiceLineProps<'a> {
     state: &'a str,
     online_val: &'a str,
     meta: &'a str,
+    ascii: bool,
 }
 
 #[component]
 fn HttpServiceLine(props: &HttpServiceLineProps) -> impl Into<AnyElement<'_>> {
+    let ascii = props.ascii;
     props.info.as_ref().map_or_else(
         || element! { View() }.into_any(),
         |info| {
@@ -227,7 +234,8 @@ fn HttpServiceLine(props: &HttpServiceLineProps) -> impl Into<AnyElement<'_>> {
                     name: "HTTP API",
                     state: info.state.as_str(),
                     online_val: "online",
-                    meta: "REST Interface"
+                    meta: "REST Interface",
+                    ascii: ascii
                 )
             }
             .into_any()
@@ -238,4 +246,5 @@ fn HttpServiceLine(props: &HttpServiceLineProps) -> impl Into<AnyElement<'_>> {
 #[derive(Props, Default, Clone)]
 struct HttpServiceLineProps {
     pub info: Option<ServiceStatusInfo>,
+    pub ascii: bool,
 }

@@ -7,18 +7,18 @@ use lanforge_types::{identifiers::MacAddr, update::LeaseTarget};
 use super::CliFormat;
 
 impl CliFormat for LanforgeEvent {
-    fn format_cli(&self, now: &str, verbose: bool) {
+    fn format_cli(&self, now: &str, verbose: bool, ascii: bool) {
         match self {
-            Self::Device(e) => format_device_event(now, e, verbose),
-            Self::Dns(e) => format_dns_event(now, e, verbose),
-            Self::Network(e) => format_network_event(now, e),
-            Self::Storage(e) => format_storage_event(now, e),
-            Self::System(e) => format_system_event(now, e, verbose),
+            Self::Device(e) => format_device_event(now, e, verbose, ascii),
+            Self::Dns(e) => format_dns_event(now, e, verbose, ascii),
+            Self::Network(e) => format_network_event(now, e, ascii),
+            Self::Storage(e) => format_storage_event(now, e, ascii),
+            Self::System(e) => format_system_event(now, e, verbose, ascii),
         }
     }
 }
 
-fn format_device_event(now: &str, event: &DeviceEvent, verbose: bool) {
+fn format_device_event(now: &str, event: &DeviceEvent, verbose: bool, _ascii: bool) {
     match event {
         DeviceEvent::Discovered { mac, hostname } => {
             let name = hostname
@@ -148,7 +148,7 @@ fn print_device_update(
     }
 }
 
-fn format_dns_event(now: &str, event: &DnsEvent, verbose: bool) {
+fn format_dns_event(now: &str, event: &DnsEvent, verbose: bool, _ascii: bool) {
     match event {
         DnsEvent::AdblockToggle {
             enabled,
@@ -188,7 +188,7 @@ fn format_dns_event(now: &str, event: &DnsEvent, verbose: bool) {
     }
 }
 
-fn format_network_event(now: &str, event: &NetworkEvent) {
+fn format_network_event(now: &str, event: &NetworkEvent, _ascii: bool) {
     match event {
         NetworkEvent::WolTriggered { mac, .. } => {
             println!(
@@ -283,7 +283,7 @@ fn format_network_event(now: &str, event: &NetworkEvent) {
     }
 }
 
-fn format_storage_event(now: &str, event: &StorageEvent) {
+fn format_storage_event(now: &str, event: &StorageEvent, _ascii: bool) {
     match event {
         StorageEvent::DbVacuum => println!(
             "[{now}] {} {}",
@@ -319,7 +319,7 @@ fn format_storage_event(now: &str, event: &StorageEvent) {
     }
 }
 
-fn format_system_event(now: &str, event: &SystemEvent, verbose: bool) {
+fn format_system_event(now: &str, event: &SystemEvent, verbose: bool, _ascii: bool) {
     match event {
         SystemEvent::ReloadConfig => println!(
             "[{now}] {} {}",

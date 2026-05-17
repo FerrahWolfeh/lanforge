@@ -5,6 +5,8 @@ use crossterm::{
 };
 use lanforge_api::api::Response;
 use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
+#[cfg(feature = "remote")]
+use lanforge_http::RemoteClient;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::stdout;
 #[cfg(feature = "remote")]
@@ -26,7 +28,7 @@ use crate::tui::event::AppEvent;
 
 pub async fn run_tui(
     socket_path: Option<String>,
-    #[cfg(feature = "remote")] remote: Option<lanforge_http::RemoteClient>,
+    #[cfg(feature = "remote")] remote: Option<RemoteClient>,
 ) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
@@ -136,7 +138,7 @@ pub async fn run_tui(
 }
 
 #[cfg(feature = "remote")]
-async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sender<AppEvent>) {
+async fn remote_daemon_loop(client: RemoteClient, tx: mpsc::Sender<AppEvent>) {
     let client = Arc::new(client);
 
     // 1. WebSocket Connection (persistent)
@@ -168,10 +170,10 @@ async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sende
                 }
 
                 // State (ContextDump)
-                if let Ok(Response::ContextDump(val)) = fetch_client.get("/system/context").await {
-                    if let Ok(state) = serde_json::from_value(*val) {
-                        let _ = fetch_tx.send(AppEvent::StateUpdate(Box::new(state))).await;
-                    }
+                if let Ok(Response::ContextDump(val)) = fetch_client.get("/system/context").await
+                    && let Ok(state) = serde_json::from_value(*val)
+                {
+                    let _ = fetch_tx.send(AppEvent::StateUpdate(Box::new(state))).await;
                 }
 
                 // DNS Stats
@@ -180,23 +182,35 @@ async fn remote_daemon_loop(client: lanforge_http::RemoteClient, tx: mpsc::Sende
                 }
 
                 // DNS Analytics
-                if let Ok(Response::DnsAnalytics(s)) = fetch_client.get("/dns/analytics?limit=10").await {
-                    let _ = fetch_tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
+                if let Ok(Response::DnsAnalytics(s)) =
+                    fetch_client.get("/dns/analytics?limit=10").await
+                {
+                    let _ = fetch_tx
+                        .send(AppEvent::DnsAnalyticsUpdate(Box::new(s)))
+                        .await;
                 }
 
                 // DNS Upstreams
                 if let Ok(Response::DnsUpstreams(s)) = fetch_client.get("/dns/upstreams").await {
-                    let _ = fetch_tx.send(AppEvent::DnsUpstreamsUpdate(Box::new(s))).await;
+                    let _ = fetch_tx
+                        .send(AppEvent::DnsUpstreamsUpdate(Box::new(s)))
+                        .await;
                 }
 
                 // DNS Query Log
                 if let Ok(Response::DnsQueryLog(s)) = fetch_client.get("/dns/logs?limit=50").await {
-                    let _ = fetch_tx.send(AppEvent::DnsQueryLogUpdate(Box::new(s))).await;
+                    let _ = fetch_tx
+                        .send(AppEvent::DnsQueryLogUpdate(Box::new(s)))
+                        .await;
                 }
 
                 // DNS Adblock Status
-                if let Ok(Response::DnsAdblockStatus(s)) = fetch_client.get("/dns/adblock/status").await {
-                    let _ = fetch_tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
+                if let Ok(Response::DnsAdblockStatus(s)) =
+                    fetch_client.get("/dns/adblock/status").await
+                {
+                    let _ = fetch_tx
+                        .send(AppEvent::DnsAdblockStatusUpdate(Box::new(s)))
+                        .await;
                 }
 
                 last_refresh = Instant::now();
@@ -247,10 +261,10 @@ async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                 }
 
                 // State (ContextDump)
-                if let Ok(val) = client.context_dump(false, false).await {
-                    if let Ok(state) = serde_json::from_value(*val) {
-                        let _ = tx.send(AppEvent::StateUpdate(Box::new(state))).await;
-                    }
+                if let Ok(val) = client.context_dump(false, false).await
+                    && let Ok(state) = serde_json::from_value(*val)
+                {
+                    let _ = tx.send(AppEvent::StateUpdate(Box::new(state))).await;
                 }
 
                 // DNS Stats
@@ -269,7 +283,7 @@ async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                 }
 
                 // DNS Query Log
-                if let Ok(s) = client.dns_query_log(false, Some(50), None).await {
+                if let Ok(s) = client.dns_query_log(false, Some(50), None, None).await {
                     let _ = tx.send(AppEvent::DnsQueryLogUpdate(Box::new(s))).await;
                 }
 

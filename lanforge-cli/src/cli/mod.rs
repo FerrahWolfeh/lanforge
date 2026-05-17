@@ -1,6 +1,7 @@
 pub mod client;
 pub mod commands;
 pub mod vendor;
+pub mod wizard;
 
 use std::future::Future;
 

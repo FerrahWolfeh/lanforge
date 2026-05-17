@@ -1,8 +1,6 @@
-use super::CliCommand;
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
-use color_eyre::Result;
-use color_eyre::eyre::bail;
+use color_eyre::eyre::{Result, bail};
 use inquire::{Confirm, Select, Text as InquireText};
 use iocraft::prelude::*;
 
@@ -25,39 +23,25 @@ pub enum HostAction {
         v6_suffix: Option<String>,
     },
     Set {
-        mac: String,
-        field: String,
-        value: String,
+        mac: Option<String>,
+        field: Option<String>,
+        value: Option<String>,
     },
     List,
     Remove {
-        mac: String,
+        mac: Option<String>,
+    },
+    Export {
+        file: String,
+    },
+    Import {
+        file: String,
     },
 }
 
 impl Execute for HostArgs {
-    #[allow(clippy::too_many_lines)]
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        client
-            .execute_handler(Box::new(HostHandler {
-                action: self.action,
-            }))
-            .await
-    }
-}
-
-pub struct HostHandler {
-    pub action: HostAction,
-}
-
-use lanforge_api::rpc::LanforgeRpcClient;
-use tokio::net::UnixStream;
-
-#[async_trait::async_trait]
-impl CliCommand for HostHandler {
-    #[allow(clippy::too_many_lines)]
-    async fn execute_rpc(&mut self, client: &mut LanforgeRpcClient<UnixStream>) -> Result<()> {
-        match &self.action {
+        match self.action {
             HostAction::Add {
                 mac,
                 hostname,
@@ -65,7 +49,7 @@ impl CliCommand for HostHandler {
                 v6_suffix,
             } => {
                 let final_mac = if let Some(m) = mac {
-                    m.clone()
+                    m
                 } else {
                     let ans = InquireText::new("MAC address:").prompt()?;
                     if ans.trim().is_empty() {
@@ -75,7 +59,7 @@ impl CliCommand for HostHandler {
                 };
 
                 let final_hostname = if let Some(h) = hostname {
-                    h.clone()
+                    h
                 } else {
                     let ans = InquireText::new("Hostname:").prompt()?;
                     if ans.trim().is_empty() {
@@ -101,29 +85,35 @@ impl CliCommand for HostHandler {
                         }
                     }
                     if choice.starts_with("[3]") {
-                        let ans = InquireText::new("ULA Suffix (ex: ::1234):").prompt()?;
+                        let ans = InquireText::new("ULA Suffix (ex: ::123):").prompt()?;
                         if !ans.trim().is_empty() {
                             final_v6 = Some(ans.trim().to_string());
                         }
                     }
 
+                    let border = if client.ascii {
+                        BorderStyle::Classic
+                    } else {
+                        BorderStyle::Round
+                    };
+
                     element! {
-                            View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
-                                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                                    Text(content: " CONFIRM ADDITION ", color: Color::White, weight: Weight::Bold)
-                                }
-                                View(flex_direction: FlexDirection::Column, border_style: BorderStyle::Round, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                                    SummaryLine(label: "MAC".to_string(), value: final_mac.clone(), color: Color::Cyan)
-                                    SummaryLine(label: "Hostname".to_string(), value: final_hostname.clone(), color: Color::Cyan)
-                                    #(final_v4.as_ref().map(|v| element! {
-                                        SummaryLine(label: "Fixed IPv4".to_string(), value: v.clone(), color: Color::Green)
-                                    }))
-                                    #(final_v6.as_ref().map(|v| element! {
-                                        SummaryLine(label: "V6 Suffix".to_string(), value: v.clone(), color: Color::Yellow)
-                                    }))
-                                }
+                        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+                            View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                                Text(content: " CONFIRM ADDITION ", color: Color::White, weight: Weight::Bold)
                             }
-                        }.print();
+                            View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                                SummaryLine(label: "MAC".to_string(), value: final_mac.clone(), color: Color::Cyan)
+                                SummaryLine(label: "Hostname".to_string(), value: final_hostname.clone(), color: Color::Cyan)
+                                #(final_v4.as_ref().map(|v| element! {
+                                    SummaryLine(label: "Fixed IPv4".to_string(), value: v.clone(), color: Color::Green)
+                                }))
+                                #(final_v6.as_ref().map(|v| element! {
+                                    SummaryLine(label: "V6 Suffix".to_string(), value: v.clone(), color: Color::Yellow)
+                                }))
+                            }
+                        }
+                    }.print();
 
                     let confirm = Confirm::new("Save host configuration?")
                         .with_default(true)
@@ -150,9 +140,31 @@ impl CliCommand for HostHandler {
                 .print();
             }
             HostAction::Set { mac, field, value } => {
-                let resp = client
-                    .host_set(mac.clone(), field.clone(), value.clone())
-                    .await?;
+                let final_mac = if let Some(m) = mac {
+                    m
+                } else {
+                    let host =
+                        crate::cli::wizard::fuzzy_select_host(client, "Select host to modify:")
+                            .await?;
+                    host.mac
+                };
+                let final_field = match field {
+                    Some(f) => f,
+                    None => crate::cli::wizard::prompt_select(
+                        "Select field to modify:",
+                        vec!["hostname", "v4_fixed", "v6_suffix"],
+                    )?
+                    .to_string(),
+                };
+                let final_value = match value {
+                    Some(v) => v,
+                    None => crate::cli::wizard::prompt_text(
+                        &format!("New value for {final_field}:"),
+                        None,
+                    )?,
+                };
+
+                let resp = client.host_set(final_mac, final_field, final_value).await?;
                 element! {
                     View(padding_left: 2, margin_top: 1) {
                         Text(content: "✓ ", color: Color::Green)
@@ -162,7 +174,15 @@ impl CliCommand for HostHandler {
                 .print();
             }
             HostAction::Remove { mac } => {
-                let resp = client.host_remove(mac.clone()).await?;
+                let final_mac = if let Some(m) = mac {
+                    m
+                } else {
+                    let host =
+                        crate::cli::wizard::fuzzy_select_host(client, "Select host to remove:")
+                            .await?;
+                    host.mac
+                };
+                let resp = client.host_remove(final_mac).await?;
                 element! {
                     View(padding_left: 2, margin_top: 1) {
                         Text(content: "✓ ", color: Color::Green)
@@ -173,7 +193,24 @@ impl CliCommand for HostHandler {
             }
             HostAction::List => {
                 let resp = client.host_list().await?;
-                super::devices::render_hosts(&resp);
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                    return Ok(());
+                }
+                super::devices::render_hosts(&resp, client.ascii);
+            }
+            HostAction::Export { file } => {
+                let resp = client.host_list().await?;
+                let json = serde_json::to_string_pretty(&resp.hosts)?;
+                std::fs::write(&file, json)?;
+                println!("✓ Exported {} static hosts to {}", resp.hosts.len(), file);
+            }
+            HostAction::Import { file } => {
+                let content = std::fs::read_to_string(&file)?;
+                let hosts: Vec<lanforge_api::api::HostConfigEntry> =
+                    serde_json::from_str(&content)?;
+                let resp = client.host_import(hosts).await?;
+                println!("✓ {}", resp.message);
             }
         }
         Ok(())
