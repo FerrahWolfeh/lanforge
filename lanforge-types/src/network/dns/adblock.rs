@@ -18,11 +18,16 @@ impl RewriteRule {
             |_| {
                 self.answer.parse::<Ipv6Addr>().map_or_else(
                     |_| {
-                        if self.answer.contains('.') {
-                            RewriteAnswer::Cname(self.answer.clone())
-                        } else {
-                            RewriteAnswer::Device(self.answer.clone())
-                        }
+                        self.answer.strip_prefix("dev:").map_or_else(
+                            || {
+                                if self.answer.contains('.') {
+                                    RewriteAnswer::Cname(self.answer.clone())
+                                } else {
+                                    RewriteAnswer::Device(self.answer.clone())
+                                }
+                            },
+                            |dev_name| RewriteAnswer::Device(dev_name.to_string()),
+                        )
                     },
                     RewriteAnswer::Aaaa,
                 )

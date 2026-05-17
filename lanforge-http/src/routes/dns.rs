@@ -111,7 +111,7 @@ pub fn router() -> Router<AppState> {
 
 async fn handle_dns_stats(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_stats().await, DnsStats, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_dns_stats().await, DnsStats)
 }
 
 async fn handle_dns_analytics(
@@ -119,12 +119,12 @@ async fn handle_dns_analytics(
     Query(params): Query<AnalyticsQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_analytics(params.limit).await, DnsAnalytics, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_dns_analytics(params.limit).await, DnsAnalytics)
 }
 
 async fn handle_dns_upstreams(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_upstreams().await, DnsUpstreams, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_dns_upstreams().await, DnsUpstreams)
 }
 
 async fn handle_dns_query(
@@ -132,7 +132,10 @@ async fn handle_dns_query(
     Query(params): Query<DnsQueryRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(Box::pin(ctx.handle_dns_query(params.name, params.record_type)).await, DnsQuery, res => serde_json::json!({ "data": res }))
+    crate::http_response!(
+        Box::pin(ctx.handle_dns_query(params.name, params.record_type)).await,
+        DnsQuery
+    )
 }
 
 async fn handle_dns_cache_dump(
@@ -143,14 +146,11 @@ async fn handle_dns_cache_dump(
     crate::http_response!(
         ctx.handle_dns_cache_dump(params.limit, params.offset).await,
         DnsCache,
-        res => serde_json::json!({
-            "data": res.entries,
-            "meta": {
-                "total": res.total,
-                "limit": params.limit.unwrap_or(50),
-                "offset": params.offset.unwrap_or(0),
-            }
-        })
+        res => res.entries, lanforge_api::api::CacheMeta {
+            total: res.total,
+            limit: params.limit.unwrap_or(50),
+            offset: params.offset.unwrap_or(0),
+        }
     )
 }
 
@@ -161,7 +161,7 @@ async fn handle_dns_cache_flush(State(state): State<AppState>) -> impl IntoRespo
 
 async fn handle_dns_cache_stats(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_cache_stats_ext().await, DnsCacheStatsExt, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_dns_cache_stats_ext().await, DnsCacheStatsExt)
 }
 
 async fn handle_dns_logs(
@@ -174,16 +174,14 @@ async fn handle_dns_logs(
     } else {
         let ctx = create_client_ctx(&state);
         crate::http_response!(
-            ctx.handle_dns_query_log(params.limit, params.client, false, params.offset).await,
+            ctx.handle_dns_query_log(params.limit, params.client, false, params.offset)
+                .await,
             DnsQueryLog,
-            res => serde_json::json!({
-                "data": res.entries,
-                "meta": {
-                    "total": res.total,
-                    "limit": params.limit.unwrap_or(100),
-                    "offset": params.offset.unwrap_or(0),
-                }
-            })
+            res => res.entries, lanforge_api::api::LogMeta {
+                total: res.total,
+                limit: params.limit.unwrap_or(100),
+                offset: params.offset.unwrap_or(0),
+            }
         )
     }
 }
@@ -218,7 +216,7 @@ fn handle_dns_logs_follow(
 
 async fn handle_adblock_status(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_adblock_status().await, DnsAdblockStatus, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_dns_adblock_status().await, DnsAdblockStatus)
 }
 
 async fn handle_adblock_set(
@@ -236,7 +234,7 @@ async fn handle_adblock_reload(State(state): State<AppState>) -> impl IntoRespon
 
 async fn handle_adblock_urls(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_adblock_url_list().await, DnsAdblockUrls, res => serde_json::json!({ "data": res.urls }))
+    crate::http_response!(ctx.handle_dns_adblock_url_list().await, DnsAdblockUrls)
 }
 
 async fn handle_adblock_url_add(
@@ -257,7 +255,7 @@ async fn handle_adblock_url_remove(
 
 async fn handle_rewrites(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_rewrites().await, DnsRewrites, res => serde_json::json!({ "data": res.rewrites }))
+    crate::http_response!(ctx.handle_dns_rewrites().await, DnsRewrites)
 }
 
 async fn handle_rewrite_add(
@@ -292,7 +290,7 @@ async fn handle_rewrite_clear(State(state): State<AppState>) -> impl IntoRespons
 
 async fn handle_rewrite_export(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_rewrite_export().await, DnsRewrites, res => serde_json::json!({ "data": res.rewrites }))
+    crate::http_response!(ctx.handle_dns_rewrite_export().await, DnsRewrites)
 }
 
 async fn handle_rewrite_import(
@@ -305,7 +303,7 @@ async fn handle_rewrite_import(
 
 async fn handle_allowlist(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_allowlist().await, DnsAllowlist, res => serde_json::json!({ "data": res.allowlist }))
+    crate::http_response!(ctx.handle_dns_allowlist().await, DnsAllowlist)
 }
 
 async fn handle_allow(

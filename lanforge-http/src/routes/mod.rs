@@ -52,32 +52,78 @@ macro_rules! http_response {
                 } else {
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR
                 };
-                (status, axum::Json(serde_json::json!({ "error": error }))).into_response()
+                (
+                    status,
+                    axum::Json(lanforge_api::api::HttpErrorResponse { error }),
+                )
+                    .into_response()
             }
             _ => (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({ "error": "Invalid response type" })),
+                axum::Json(lanforge_api::api::HttpErrorResponse {
+                    error: "Invalid response type".into(),
+                }),
             )
                 .into_response(),
         }
     };
-    // 2. Custom mapping expression for any variant (e.g. Status, res => serde_json::json!({ "data": res }))
-    ($expr:expr, $variant:ident, $res:ident => $body:expr) => {
+    // 2. Standard wrapper for any variant (e.g. Status)
+    ($expr:expr, $variant:ident) => {
         match $expr {
-            lanforge_api::api::Response::$variant($res) => {
-                (axum::http::StatusCode::OK, axum::Json($body)).into_response()
-            }
+            lanforge_api::api::Response::$variant(res) => (
+                axum::http::StatusCode::OK,
+                axum::Json(lanforge_api::api::HttpDataResponse { data: res }),
+            )
+                .into_response(),
             lanforge_api::api::Response::Error { error } => {
                 let status = if error.contains("not found") {
                     axum::http::StatusCode::NOT_FOUND
                 } else {
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR
                 };
-                (status, axum::Json(serde_json::json!({ "error": error }))).into_response()
+                (
+                    status,
+                    axum::Json(lanforge_api::api::HttpErrorResponse { error }),
+                )
+                    .into_response()
             }
             _ => (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({ "error": "Invalid response type" })),
+                axum::Json(lanforge_api::api::HttpErrorResponse {
+                    error: "Invalid response type".into(),
+                }),
+            )
+                .into_response(),
+        }
+    };
+    // 3. Paginated wrapper (e.g. Devices, res => res.devices, res.meta)
+    ($expr:expr, $variant:ident, $res:ident => $data:expr, $meta:expr) => {
+        match $expr {
+            lanforge_api::api::Response::$variant($res) => (
+                axum::http::StatusCode::OK,
+                axum::Json(lanforge_api::api::HttpPaginatedResponse {
+                    data: $data,
+                    meta: $meta,
+                }),
+            )
+                .into_response(),
+            lanforge_api::api::Response::Error { error } => {
+                let status = if error.contains("not found") {
+                    axum::http::StatusCode::NOT_FOUND
+                } else {
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                };
+                (
+                    status,
+                    axum::Json(lanforge_api::api::HttpErrorResponse { error }),
+                )
+                    .into_response()
+            }
+            _ => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(lanforge_api::api::HttpErrorResponse {
+                    error: "Invalid response type".into(),
+                }),
             )
                 .into_response(),
         }

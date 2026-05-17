@@ -55,6 +55,41 @@ pub struct SimpleSuccess {
     pub message: String,
 }
 
+/// Standard top-level wrapper for HTTP success responses containing data.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HttpDataResponse<T> {
+    pub data: T,
+}
+
+/// Standard top-level wrapper for HTTP paginated success responses containing data and metadata.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HttpPaginatedResponse<T, M> {
+    pub data: T,
+    pub meta: M,
+}
+
+/// Metadata for DNS cache dump responses.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CacheMeta {
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+/// Metadata for DNS query log responses.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LogMeta {
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+/// Standard top-level wrapper for HTTP error responses.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HttpErrorResponse {
+    pub error: String,
+}
+
 /// Errors that can occur during RPC calls.
 #[derive(Debug, Serialize, Deserialize, thiserror::Error, Clone)]
 pub enum RpcCallError {

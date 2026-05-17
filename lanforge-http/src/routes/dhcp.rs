@@ -30,7 +30,7 @@ pub fn router() -> Router<AppState> {
 
 async fn handle_pools(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dhcp_pools().await, DhcpPools, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_dhcp_pools().await, DhcpPools)
 }
 
 async fn handle_leases(
@@ -38,7 +38,7 @@ async fn handle_leases(
     Query(params): Query<LeasesQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_leases(params.count).await, Leases, res => serde_json::json!({ "data": res.leases }))
+    crate::http_response!(ctx.handle_leases(params.count).await, Leases)
 }
 
 async fn handle_renew(

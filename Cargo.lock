@@ -2472,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2511,7 +2511,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-cli"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "async-trait",
  "bytesize",
@@ -2626,7 +2626,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-http"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "argon2",
  "async-stream",
@@ -2712,7 +2712,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-types"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "lanforge-macros",
  "serde",

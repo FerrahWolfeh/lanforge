@@ -10,7 +10,8 @@ use lanforge_api::api::{
     DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse,
-    LeasesResponse, SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
+    HttpDataResponse, HttpErrorResponse, HttpPaginatedResponse, LeasesResponse, SimpleSuccess,
+    StatusResponse, TopologyResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{network::dns::adblock::RewriteRule, update::LeaseTarget};
@@ -178,6 +179,51 @@ impl LanforgeClient {
     }
 
     #[cfg(feature = "remote")]
+    fn decode_bytes<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+        if let Ok(wrapper) = serde_json::from_slice::<HttpDataResponse<T>>(bytes) {
+            return Ok(wrapper.data);
+        }
+        let type_name = std::any::type_name::<T>();
+        if type_name.ends_with("DevicesResponse") {
+            let paginated: HttpPaginatedResponse<
+                Vec<lanforge_api::api::DeviceEntry>,
+                lanforge_api::api::DevicesMeta,
+            > = serde_json::from_slice(bytes)?;
+            let res = lanforge_api::api::DevicesResponse {
+                devices: paginated.data,
+                meta: paginated.meta,
+            };
+            return Ok(serde_json::from_value(serde_json::to_value(res)?)?);
+        }
+        if type_name.ends_with("DnsCacheResponse") {
+            let paginated: HttpPaginatedResponse<
+                Vec<lanforge_api::api::DnsCacheEntry>,
+                lanforge_api::api::CacheMeta,
+            > = serde_json::from_slice(bytes)?;
+            let res = lanforge_api::api::DnsCacheResponse {
+                entries: paginated.data,
+                total: paginated.meta.total,
+            };
+            return Ok(serde_json::from_value(serde_json::to_value(res)?)?);
+        }
+        if type_name.ends_with("DnsQueryLogResponse") {
+            let paginated: HttpPaginatedResponse<
+                Vec<lanforge_api::api::DnsQueryLogEntry>,
+                lanforge_api::api::LogMeta,
+            > = serde_json::from_slice(bytes)?;
+            let res = lanforge_api::api::DnsQueryLogResponse {
+                entries: paginated.data,
+                total: paginated.meta.total,
+            };
+            return Ok(serde_json::from_value(serde_json::to_value(res)?)?);
+        }
+        if let Ok(val) = serde_json::from_slice::<T>(bytes) {
+            return Ok(val);
+        }
+        color_eyre::eyre::bail!("Failed to decode API response");
+    }
+
+    #[cfg(feature = "remote")]
     async fn http_get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         let base = self.remote.as_ref().unwrap();
         let url = format!("{base}/api/v1{path}");
@@ -188,19 +234,22 @@ impl LanforgeClient {
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let err_body: serde_json::Value = resp.json().await.unwrap_or_default();
-            let err_msg = err_body["error"]
-                .as_str()
-                .unwrap_or("Unknown API error")
-                .to_string();
-            color_eyre::eyre::bail!("API Error ({status}): {err_msg}");
+            let err_body: HttpErrorResponse =
+                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
+                    error: "Unknown API error".into(),
+                });
+            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
-        let mut body: serde_json::Value = resp.json().await?;
-        if let Some(data) = body.as_object_mut().and_then(|map| map.remove("data")) {
-            Ok(serde_json::from_value(data)?)
-        } else {
-            Ok(serde_json::from_value(body)?)
+        if status == reqwest::StatusCode::NO_CONTENT {
+            if let Ok(val) = serde_json::from_str::<T>(r#"{"message":"Success"}"#) {
+                return Ok(val);
+            }
+            if let Ok(val) = serde_json::from_str::<T>("null") {
+                return Ok(val);
+            }
         }
+        let bytes = resp.bytes().await?;
+        Self::decode_bytes(&bytes)
     }
 
     #[cfg(feature = "remote")]
@@ -218,19 +267,22 @@ impl LanforgeClient {
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let err_body: serde_json::Value = resp.json().await.unwrap_or_default();
-            let err_msg = err_body["error"]
-                .as_str()
-                .unwrap_or("Unknown API error")
-                .to_string();
-            color_eyre::eyre::bail!("API Error ({status}): {err_msg}");
+            let err_body: HttpErrorResponse =
+                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
+                    error: "Unknown API error".into(),
+                });
+            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
-        let mut body: serde_json::Value = resp.json().await?;
-        if let Some(data) = body.as_object_mut().and_then(|map| map.remove("data")) {
-            Ok(serde_json::from_value(data)?)
-        } else {
-            Ok(serde_json::from_value(body)?)
+        if status == reqwest::StatusCode::NO_CONTENT {
+            if let Ok(val) = serde_json::from_str::<T>(r#"{"message":"Success"}"#) {
+                return Ok(val);
+            }
+            if let Ok(val) = serde_json::from_str::<T>("null") {
+                return Ok(val);
+            }
         }
+        let bytes = resp.bytes().await?;
+        Self::decode_bytes(&bytes)
     }
 
     #[cfg(feature = "remote")]
@@ -244,21 +296,22 @@ impl LanforgeClient {
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() {
-            use color_eyre::eyre::bail;
-
-            let err_body: serde_json::Value = resp.json().await.unwrap_or_default();
-            let err_msg = err_body["error"]
-                .as_str()
-                .unwrap_or("Unknown API error")
-                .to_string();
-            bail!("API Error ({status}): {err_msg}");
+            let err_body: HttpErrorResponse =
+                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
+                    error: "Unknown API error".into(),
+                });
+            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
-        let mut body: serde_json::Value = resp.json().await?;
-        if let Some(data) = body.as_object_mut().and_then(|map| map.remove("data")) {
-            Ok(serde_json::from_value(data)?)
-        } else {
-            Ok(serde_json::from_value(body)?)
+        if status == reqwest::StatusCode::NO_CONTENT {
+            if let Ok(val) = serde_json::from_str::<T>(r#"{"message":"Success"}"#) {
+                return Ok(val);
+            }
+            if let Ok(val) = serde_json::from_str::<T>("null") {
+                return Ok(val);
+            }
         }
+        let bytes = resp.bytes().await?;
+        Self::decode_bytes(&bytes)
     }
 
     #[cfg(feature = "remote")]
@@ -276,19 +329,22 @@ impl LanforgeClient {
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let err_body: serde_json::Value = resp.json().await.unwrap_or_default();
-            let err_msg = err_body["error"]
-                .as_str()
-                .unwrap_or("Unknown API error")
-                .to_string();
-            color_eyre::eyre::bail!("API Error ({status}): {err_msg}");
+            let err_body: HttpErrorResponse =
+                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
+                    error: "Unknown API error".into(),
+                });
+            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
-        let mut body: serde_json::Value = resp.json().await?;
-        if let Some(data) = body.as_object_mut().and_then(|map| map.remove("data")) {
-            Ok(serde_json::from_value(data)?)
-        } else {
-            Ok(serde_json::from_value(body)?)
+        if status == reqwest::StatusCode::NO_CONTENT {
+            if let Ok(val) = serde_json::from_str::<T>(r#"{"message":"Success"}"#) {
+                return Ok(val);
+            }
+            if let Ok(val) = serde_json::from_str::<T>("null") {
+                return Ok(val);
+            }
         }
+        let bytes = resp.bytes().await?;
+        Self::decode_bytes(&bytes)
     }
 
     // --- System & Status ---

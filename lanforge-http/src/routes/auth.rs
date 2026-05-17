@@ -27,7 +27,7 @@ pub fn router() -> Router<AppState> {
 
 async fn handle_list_tokens(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_ak_list().await, AuthTokens, res => serde_json::json!({ "data": res.tokens }))
+    crate::http_response!(ctx.handle_ak_list().await, AuthTokens)
 }
 
 async fn handle_generate_token() -> impl IntoResponse {

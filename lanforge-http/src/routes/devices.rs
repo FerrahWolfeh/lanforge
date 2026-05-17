@@ -42,7 +42,7 @@ async fn handle_list_devices(
         )
         .await,
         Devices,
-        res => serde_json::json!({ "data": res.devices, "meta": res.meta })
+        res => res.devices, res.meta
     )
 }
 
@@ -59,7 +59,7 @@ async fn handle_whois(
     Path(target): Path<String>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_whois(target.clone()).await, Whois, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_whois(target.clone()).await, Whois)
 }
 
 async fn handle_purge(

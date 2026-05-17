@@ -29,7 +29,7 @@ use crate::routes::create_client_ctx;
 
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_status().await, Status, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_status().await, Status)
 }
 
 async fn handle_scan(State(state): State<AppState>) -> impl IntoResponse {
@@ -49,7 +49,7 @@ async fn handle_shutdown(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn handle_topology(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_topology().await, Topology, res => serde_json::json!({ "data": res }))
+    crate::http_response!(ctx.handle_topology().await, Topology)
 }
 
 async fn handle_context_dump(
@@ -58,8 +58,8 @@ async fn handle_context_dump(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_context_dump(params.only_devices, params.only_orphans).await,
-        ContextDump,
-        res => serde_json::json!({ "data": res })
+        ctx.handle_context_dump(params.only_devices, params.only_orphans)
+            .await,
+        ContextDump
     )
 }
