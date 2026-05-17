@@ -1,8 +1,9 @@
 [package]
 name = "lanforge-cli"
-version = "1.6.2"
+version = "2.0.0"
 license.workspace = true
-edition = "2024"
+edition.workspace = true
+authors.workspace = true
 
 [lib]
 name = "lanforge_cli"
@@ -24,14 +25,8 @@ remote = [
     "dep:http",
 ]
 tui = ["dep:ratatui", "dep:crossterm", "dep:tui-tree-widget"]
-adblock = [
-    "lanforge-core/adblock",
-    "lanforge-db/adblock",
-]
-hotpath = [
-    "lanforge-core/hotpath",
-    "lanforge-db/hotpath",
-]
+adblock = ["lanforge-core/adblock", "lanforge-db/adblock"]
+hotpath = ["lanforge-core/hotpath", "lanforge-db/hotpath"]
 
 [dependencies]
 # Lanforge
@@ -51,7 +46,11 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls", "stream"], optional = true }
+reqwest = { workspace = true, features = [
+    "json",
+    "rustls",
+    "stream",
+], optional = true }
 clap = { workspace = true }
 rustls = { workspace = true }
 
