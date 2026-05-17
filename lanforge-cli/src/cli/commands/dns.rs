@@ -5,6 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use crate::cli::wizard::{confirm_destructive, fuzzy_select_rewrite, prompt_select, prompt_text};
 use crate::cli::{Execute, LanforgeClient};
 use crate::render_output;
+use chrono::Local;
 use clap::Subcommand;
 use color_eyre::eyre::{Result, bail};
 use colored::Colorize;
@@ -13,6 +14,8 @@ use lanforge_api::api::{
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogEntry, DnsQueryResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
 };
+use lanforge_api::rpc::RpcResponse;
+use lanforge_types::events::{DnsEvent, LanforgeEvent};
 use lanforge_types::network::DnsRecordType;
 use lanforge_types::network::dns::adblock::RewriteRule;
 
@@ -215,6 +218,32 @@ impl Execute for DnsCacheArgs {
     }
 }
 
+async fn fetch_device_map(client: &LanforgeClient) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(dev_resp) = client
+        .list_devices(None, None, None, None, Some(10000), None)
+        .await
+    {
+        for dev in dev_resp.devices {
+            if !dev.hostname.is_empty() && dev.hostname != "<unknown>" {
+                if let Some(v4) = dev.v4 {
+                    map.insert(v4.ip, dev.hostname.clone());
+                }
+                for ip in dev.seen_v4 {
+                    map.insert(ip, dev.hostname.clone());
+                }
+                if let Some(v6) = dev.v6 {
+                    map.insert(v6.ip, dev.hostname.clone());
+                }
+                for ip in dev.ipv6_addrs {
+                    map.insert(ip.addr, dev.hostname.clone());
+                }
+            }
+        }
+    }
+    map
+}
+
 async fn execute_log(
     client: &LanforgeClient,
     follow: bool,
@@ -222,20 +251,33 @@ async fn execute_log(
     client_filter: Option<String>,
     offset: Option<usize>,
 ) -> Result<()> {
+    if !follow {
+        let resp = client
+            .dns_query_log(false, n, client_filter, offset)
+            .await?;
+        for entry in &resp.entries {
+            render_dns_log_entry(entry, client.ascii);
+        }
+        return Ok(());
+    }
+
+    let ip_to_host = fetch_device_map(client).await;
+
     #[cfg(feature = "remote")]
     if let Some(base) = &client.remote {
         use futures::StreamExt;
+        use lanforge_types::events::TimedEvent;
 
-        let mut params = Vec::new();
-        params.push(format!("follow={follow}"));
-        if let Some(num) = n {
-            params.push(format!("n={num}"));
+        let resp = client
+            .dns_query_log(false, n, client_filter.clone(), offset)
+            .await?;
+        for entry in &resp.entries {
+            render_dns_log_entry(entry, client.ascii);
         }
+
+        let mut params = vec!["follow=true".to_string()];
         if let Some(c) = &client_filter {
             params.push(format!("client={c}"));
-        }
-        if let Some(o) = offset {
-            params.push(format!("offset={o}"));
         }
         let q = format!("?{}", params.join("&"));
         let url = format!("{base}/api/v1/dns/logs{q}");
@@ -249,9 +291,25 @@ async fn execute_log(
             if let Ok(bytes) = chunk {
                 let s = String::from_utf8_lossy(&bytes);
                 for line in s.lines() {
+                    use lanforge_types::events::{DnsEvent, LanforgeEvent};
+
                     if let Some(json_str) = line.strip_prefix("data: ")
-                        && let Ok(entry) = serde_json::from_str::<DnsQueryLogEntry>(json_str)
+                        && let Ok(timed_event) = serde_json::from_str::<TimedEvent>(json_str)
+                        && let LanforgeEvent::Dns(DnsEvent::QueryResolved(q)) = timed_event.event
                     {
+                        let src_hostname = ip_to_host.get(&q.src_ip.to_string()).cloned();
+                        let entry = DnsQueryLogEntry {
+                            timestamp: q.timestamp,
+                            src_ip: q.src_ip.to_string(),
+                            src_mac: q.src_mac.map(|m| m.to_string()),
+                            src_hostname,
+                            domain: q.domain.to_string(),
+                            qtype: q.qtype,
+                            result: format!("{:?}", q.result),
+                            upstream_us: q.upstream_us,
+                            cached: q.cached,
+                            answer: q.answer,
+                        };
                         render_dns_log_entry(&entry, client.ascii);
                     }
                 }
@@ -261,18 +319,34 @@ async fn execute_log(
     }
 
     let mut rpc = client.connect_rpc().await?;
-    rpc.dns_query_log(follow, n, client_filter, offset).await?;
+    let resp = rpc.dns_query_log(true, n, client_filter, offset).await?;
+    for entry in &resp.entries {
+        render_dns_log_entry(entry, client.ascii);
+    }
     println!("Watching for DNS logs... (Ctrl+C to stop)");
     loop {
         match rpc.next_response().await {
-            Ok(lanforge_api::rpc::RpcResponse::DnsQueryLog(resp)) => {
-                for entry in &resp.entries {
-                    render_dns_log_entry(entry, client.ascii);
+            Ok(RpcResponse::Event(event)) => {
+                if let LanforgeEvent::Dns(DnsEvent::QueryResolved(q)) = event.event {
+                    let src_hostname = ip_to_host.get(&q.src_ip.to_string()).cloned();
+                    let entry = DnsQueryLogEntry {
+                        timestamp: q.timestamp,
+                        src_ip: q.src_ip.to_string(),
+                        src_mac: q.src_mac.map(|m| m.to_string()),
+                        src_hostname,
+                        domain: q.domain.to_string(),
+                        qtype: q.qtype,
+                        result: format!("{:?}", q.result),
+                        upstream_us: q.upstream_us,
+                        cached: q.cached,
+                        answer: q.answer,
+                    };
+                    render_dns_log_entry(&entry, client.ascii);
                 }
             }
             Ok(_) => {}
             Err(e) => {
-                if e.to_string().contains("UnexpectedEof") {
+                if e.to_string().contains("UnexpectedEof") || e.to_string().contains("early eof") {
                     break;
                 }
                 bail!("RPC Stream Error: {e}");
@@ -337,7 +411,7 @@ impl Execute for DnsAdblockArgs {
                         .collect::<Vec<_>>();
                     let choice = prompt_select(
                         "Select allowlist entry to remove:",
-                        items.iter().map(std::string::String::as_str).collect(),
+                        items.iter().map(String::as_str).collect(),
                     )?;
                     let parts: Vec<&str> = choice.split_whitespace().collect();
                     parts[0].to_string()
@@ -624,27 +698,67 @@ pub fn render_dns_cache_stats(resp: &DnsCacheStatsExtResponse, ascii: bool) {
     }
 }
 
-pub fn render_dns_log_entry(entry: &DnsQueryLogEntry, _ascii: bool) {
+pub fn render_dns_log_entry(entry: &DnsQueryLogEntry, ascii: bool) {
     use chrono::{DateTime, Utc};
     let dt = DateTime::<Utc>::from_timestamp(entry.timestamp.cast_signed(), 0)
-        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .map(|utc| DateTime::<Local>::from(utc).format("%H:%M:%S").to_string())
         .unwrap_or_default();
-    let client_str = entry.src_hostname.as_deref().unwrap_or(&entry.src_ip);
-    let status_color = if entry.result == "Blocked" {
-        colored::Color::Red
-    } else if entry.cached {
-        colored::Color::Cyan
+
+    let client_raw = entry.src_hostname.as_deref().unwrap_or(&entry.src_ip);
+    let client_trunc = if client_raw.chars().count() > 20 {
+        format!("{}...", client_raw.chars().take(17).collect::<String>())
     } else {
-        colored::Color::Green
+        client_raw.to_string()
     };
+    let client_padded = format!("{client_trunc:<20}");
+
+    let qtype_str = entry.qtype.to_string();
+    let qtype_padded = format!("{qtype_str:<5}");
+    let qtype_colored = match entry.qtype {
+        DnsRecordType::A => qtype_padded.cyan(),
+        DnsRecordType::AAAA => qtype_padded.green(),
+        DnsRecordType::CNAME => qtype_padded.yellow(),
+        DnsRecordType::HTTPS | DnsRecordType::SVCB => qtype_padded.magenta(),
+        _ => qtype_padded.dimmed(),
+    };
+
+    let domain_trunc = if entry.domain.chars().count() > 35 {
+        format!("{}...", entry.domain.chars().take(32).collect::<String>())
+    } else {
+        entry.domain.clone()
+    };
+    let domain_padded = format!("{domain_trunc:<35}");
+
+    let status_colored = match entry.result.as_str() {
+        "Blocked" => entry.result.red(),
+        "CachedBlock" => entry.result.truecolor(255, 165, 0),
+        "Rewritten" | "Cached" => entry.result.cyan(),
+        "Forwarded" | "Local" => entry.result.green(),
+        "NxDomain" | "Error" => entry.result.yellow(),
+        _ => entry.result.normal(),
+    };
+
+    let latency_ms = f64::from(entry.upstream_us) / 1000.0;
+    let latency_str = if entry.upstream_us == 0 {
+        "(0ms)".dimmed()
+    } else if latency_ms >= 10.0 {
+        format!("({latency_ms:.1}ms)").yellow()
+    } else {
+        format!("({latency_ms:.1}ms)").dimmed()
+    };
+
+    let sep = if ascii { "|".dimmed() } else { "│".dimmed() };
+
     println!(
-        "{} | {:<15} | {:<5?} {:<30} | {} ({})",
+        "{} {} {} {} {} {} {} {}",
         dt.dimmed(),
-        client_str,
-        entry.qtype,
-        entry.domain,
-        entry.result.color(status_color),
-        entry.upstream_us
+        sep,
+        client_padded.bright_blue(),
+        sep,
+        qtype_colored,
+        domain_padded,
+        sep,
+        format_args!("{status_colored} {latency_str}")
     );
 }
 

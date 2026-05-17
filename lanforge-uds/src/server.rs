@@ -1,3 +1,4 @@
+use lanforge_api::api::EventKind;
 use lanforge_api::rpc::{LanforgeRpcDispatcher, RpcRequest, RpcResponse};
 use lanforge_api_dispatch::ClientContext;
 use tokio::sync::Mutex;
@@ -306,7 +307,7 @@ pub async fn handle_log_stream<W, R>(
     n: Option<usize>,
     buf: Arc<Mutex<Vec<u8>>>,
     follow: bool,
-    filter: Option<Vec<lanforge_api::api::EventKind>>,
+    filter: Option<Vec<EventKind>>,
 ) -> Result<(), UdsError>
 where
     W: AsyncWrite + Unpin,
@@ -318,6 +319,7 @@ where
     {
         let mut writer_lock = writer.lock().await;
         let mut buf_lock = buf.lock().await;
+        write_rpc_response(&mut *writer_lock, &RpcResponse::Log(()), &mut buf_lock).await?;
         while let Some(res) = history.next().await {
             let event = res?;
             if let Some(ref filters) = filter
