@@ -19,7 +19,6 @@ pub mod app;
 pub mod event;
 pub mod state;
 pub mod theme;
-pub mod tree;
 pub mod ui;
 pub mod utils;
 
@@ -97,9 +96,6 @@ pub async fn run_tui(
                     app.state.connected = true;
                     app.state.connection_error = None;
                 }
-                AppEvent::StateUpdate(s) => {
-                    app.state.state = Some(*s);
-                }
                 AppEvent::DnsStatsUpdate(s) => {
                     app.state.dns_stats = Some(*s);
                 }
@@ -167,13 +163,6 @@ async fn remote_daemon_loop(client: RemoteClient, tx: mpsc::Sender<AppEvent>) {
                 // Status
                 if let Ok(Response::Status(s)) = fetch_client.get("/system/status").await {
                     let _ = fetch_tx.send(AppEvent::StatusUpdate(s)).await;
-                }
-
-                // State (ContextDump)
-                if let Ok(Response::ContextDump(val)) = fetch_client.get("/system/context").await
-                    && let Ok(state) = serde_json::from_value(*val)
-                {
-                    let _ = fetch_tx.send(AppEvent::StateUpdate(Box::new(state))).await;
                 }
 
                 // DNS Stats
@@ -258,13 +247,6 @@ async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                 // Status
                 if let Ok(s) = client.status().await {
                     let _ = tx.send(AppEvent::StatusUpdate(s)).await;
-                }
-
-                // State (ContextDump)
-                if let Ok(val) = client.context_dump(false, false).await
-                    && let Ok(state) = serde_json::from_value(*val)
-                {
-                    let _ = tx.send(AppEvent::StateUpdate(Box::new(state))).await;
                 }
 
                 // DNS Stats

@@ -2533,8 +2533,6 @@ dependencies = [
  "inquire",
  "iocraft",
  "lanforge-api",
- "lanforge-core",
- "lanforge-db",
  "lanforge-http",
  "lanforge-macros",
  "lanforge-types",

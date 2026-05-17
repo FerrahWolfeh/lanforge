@@ -2,13 +2,11 @@ use lanforge_api::api::{
     DnsAdblockStatusResponse, DnsAnalyticsResponse, DnsQueryLogResponse, DnsStatsResponse,
     DnsUpstreamsResponse, StatusResponse,
 };
-use lanforge_core::bus::TimedEvent;
-use lanforge_core::context::state::State;
+use lanforge_types::events::TimedEvent;
 use std::collections::VecDeque;
 
 pub struct TuiState {
     pub status: Option<StatusResponse>,
-    pub state: Option<State>,
     pub dns_stats: Option<DnsStatsResponse>,
     pub dns_analytics: Option<DnsAnalyticsResponse>,
     pub dns_upstreams: Option<DnsUpstreamsResponse>,
@@ -30,7 +28,6 @@ impl TuiState {
     pub fn new() -> Self {
         Self {
             status: None,
-            state: None,
             dns_stats: None,
             dns_analytics: None,
             dns_upstreams: None,

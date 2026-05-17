@@ -1,5 +1,5 @@
 use colored::Colorize;
-use lanforge_core::bus::{
+use lanforge_types::events::{
     DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
 use lanforge_types::{identifiers::MacAddr, update::LeaseTarget};

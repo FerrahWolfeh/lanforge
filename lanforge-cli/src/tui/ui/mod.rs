@@ -10,7 +10,6 @@ use ratatui::{
 pub mod devices;
 pub mod dns;
 pub mod events;
-pub mod explorer;
 pub mod header;
 pub mod overview;
 pub mod services;

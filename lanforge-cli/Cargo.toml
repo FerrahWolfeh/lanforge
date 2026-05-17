@@ -14,7 +14,7 @@ name = "lanforge"
 path = "src/main.rs"
 
 [features]
-default = ["zstd", "tui", "remote"]
+default = ["zstd", "remote"]
 zstd = ["dep:zstd"]
 remote = [
     "dep:lanforge-http",
@@ -25,14 +25,10 @@ remote = [
     "dep:http",
 ]
 tui = ["dep:ratatui", "dep:crossterm", "dep:tui-tree-widget"]
-adblock = ["lanforge-core/adblock", "lanforge-db/adblock"]
-hotpath = ["lanforge-core/hotpath", "lanforge-db/hotpath"]
 
 [dependencies]
 # Lanforge
 lanforge-types = { path = "../lanforge-types" }
-lanforge-core = { path = "../lanforge-core" }
-lanforge-db = { path = "../lanforge-db" }
 lanforge-macros = { path = "../lanforge-macros" }
 lanforge-api = { path = "../lanforge-api" }
 lanforge-http = { path = "../lanforge-http", features = [

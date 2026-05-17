@@ -1,9 +1,9 @@
 use crate::tui::theme;
-use lanforge_core::bus::{
+use lanforge_types::events::{
     DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
-use lanforge_types::update::LeaseTarget;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::update::LeaseTarget;
 use ratatui::{
     style::{Modifier, Style},
     text::Span,
