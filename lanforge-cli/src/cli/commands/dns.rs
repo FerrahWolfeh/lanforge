@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::fs::read_to_string;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -134,32 +135,53 @@ pub enum DnsRewritesAction {
     },
 }
 
+fn ip_to_arpa(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            format!(
+                "{}.{}.{}.{}.in-addr.arpa",
+                octets[3], octets[2], octets[1], octets[0]
+            )
+        }
+        IpAddr::V6(v6) => {
+            let nibbles: Vec<u8> = v6
+                .octets()
+                .iter()
+                .flat_map(|b| vec![b >> 4, b & 0xf])
+                .collect();
+            let mut arpa = String::new();
+            for n in nibbles.iter().rev() {
+                let _ = write!(arpa, "{n:x}.");
+            }
+            arpa.push_str("ip6.arpa");
+            arpa
+        }
+    }
+}
+
 async fn execute_query(
     client: &LanforgeClient,
     name: Option<String>,
     record_type: Option<String>,
 ) -> Result<()> {
-    let final_name = match name {
+    let mut final_name = match name {
         Some(n) => n,
         None => prompt_text("Domain name to query:", None)?,
     };
     let mut final_rt = record_type;
-    if final_rt.is_none() && final_name.parse::<IpAddr>().is_ok() {
-        final_rt = Some("PTR".to_string());
+    if final_rt.is_none() {
+        if let Ok(ip) = final_name.parse::<IpAddr>() {
+            final_rt = Some("PTR".to_string());
+            final_name = ip_to_arpa(ip);
+        } else {
+            final_rt = Some("A".to_string());
+        }
     }
-    let final_rt = match final_rt {
-        Some(r) => Some(r),
-        None => Some(
-            prompt_select(
-                "Record type:",
-                vec!["A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV"],
-            )?
-            .to_string(),
-        ),
-    };
+    let final_rt = final_rt.unwrap();
     render_output!(
         client,
-        client.dns_query(final_name, final_rt).await?,
+        client.dns_query(final_name, Some(final_rt)).await?,
         render_dns_query
     )
 }
@@ -543,16 +565,22 @@ pub fn render_dns_upstreams(resp: &DnsUpstreamsResponse, ascii: bool) {
     }
 }
 
-pub fn render_dns_query(resp: &DnsQueryResponse, ascii: bool) {
-    let hline = if ascii { "-" } else { "─" };
-    println!(" DNS QUERY RESULTS \n");
-    println!(
-        "  Latency: {}ms | Authoritative: {}",
-        resp.latency_ms, resp.authoritative
-    );
-    println!("{}", hline.repeat(60));
-    for r in &resp.records {
-        println!("  {:<20} {:<5?} {}", r.name, r.kind, r.data);
+pub fn render_dns_query(resp: &DnsQueryResponse, _ascii: bool) {
+    let auth_str = if resp.authoritative {
+        "Authoritative"
+    } else {
+        "Non-Authoritative"
+    };
+    println!(" QUERY RESULT latency: {}ms ({auth_str})", resp.latency_ms);
+    if resp.records.is_empty() {
+        println!("{}", "No records found.".red());
+    } else {
+        for r in &resp.records {
+            println!(
+                "{} -> {} TTL: {}s - {}ms",
+                r.name, r.data, r.ttl, resp.latency_ms
+            );
+        }
     }
 }
 

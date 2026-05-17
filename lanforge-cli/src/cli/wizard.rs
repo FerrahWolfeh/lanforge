@@ -1,39 +1,41 @@
-use color_eyre::eyre::{bail, Result};
+use color_eyre::eyre::{Result, bail};
 use inquire::{Confirm, Select, Text};
 use std::fmt::Display;
 
 use crate::cli::LanforgeClient;
 use lanforge_api::api::{
-    AdblockUrlEntry, AllowlistEntry, AuthTokenEntry, DeviceEntry, HostConfigEntry, LeaseEntry,
+    AdblockUrlEntry, AllowlistEntry, AuthTokenEntry, DeviceEntry, HostConfigEntry,
 };
 use lanforge_types::network::dns::adblock::RewriteRule;
 
-struct DeviceItem(DeviceEntry);
+struct DeviceItem(DeviceEntry, bool);
 impl Display for DeviceItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let host = if self.0.hostname.is_empty() { "—" } else { &self.0.hostname };
-        write!(f, "{:<20} | {:<20} | {}", self.0.mac, host, self.0.display_v4)
+        let bullet = if self.1 {
+            if self.0.online { "[ON]" } else { "[OFF]" }
+        } else if self.0.online {
+            "●"
+        } else {
+            "○"
+        };
+        let host = if self.0.hostname.is_empty() {
+            "—"
+        } else {
+            &self.0.hostname
+        };
+        write!(f, "{bullet} {host} [{}]", self.0.mac)
     }
 }
 
 struct HostItem(HostConfigEntry);
 impl Display for HostItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:<20} | {:<20} | {}",
-            self.0.mac,
-            self.0.hostname,
-            self.0.v4_fixed.as_deref().unwrap_or("—")
-        )
-    }
-}
-
-struct LeaseItem(LeaseEntry);
-impl Display for LeaseItem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let host = if self.0.hostname.is_empty() { "—" } else { &self.0.hostname };
-        write!(f, "{:<20} | {:<20} | {}", self.0.mac, host, self.0.address)
+        let host = if self.0.hostname.is_empty() {
+            "—"
+        } else {
+            &self.0.hostname
+        };
+        write!(f, "{host} [{}]", self.0.mac)
     }
 }
 
@@ -72,7 +74,12 @@ pub async fn fuzzy_select_device(client: &LanforgeClient, prompt: &str) -> Resul
     if resp.devices.is_empty() {
         bail!("No devices found on the network.");
     }
-    let items: Vec<DeviceItem> = resp.devices.into_iter().map(DeviceItem).collect();
+    let ascii = client.ascii;
+    let items: Vec<DeviceItem> = resp
+        .devices
+        .into_iter()
+        .map(|d| DeviceItem(d, ascii))
+        .collect();
     let selected = Select::new(prompt, items).prompt()?;
     Ok(selected.0)
 }
@@ -83,16 +90,6 @@ pub async fn fuzzy_select_host(client: &LanforgeClient, prompt: &str) -> Result<
         bail!("No configured hosts found.");
     }
     let items: Vec<HostItem> = resp.hosts.into_iter().map(HostItem).collect();
-    let selected = Select::new(prompt, items).prompt()?;
-    Ok(selected.0)
-}
-
-pub async fn fuzzy_select_lease(client: &LanforgeClient, prompt: &str) -> Result<LeaseEntry> {
-    let resp = client.leases(false).await?;
-    if resp.leases.is_empty() {
-        bail!("No active DHCP leases found.");
-    }
-    let items: Vec<LeaseItem> = resp.leases.into_iter().map(LeaseItem).collect();
     let selected = Select::new(prompt, items).prompt()?;
     Ok(selected.0)
 }
@@ -117,7 +114,10 @@ pub async fn fuzzy_select_rewrite(client: &LanforgeClient, prompt: &str) -> Resu
     Ok(selected.0)
 }
 
-pub async fn fuzzy_select_allowlist(client: &LanforgeClient, prompt: &str) -> Result<AllowlistEntry> {
+pub async fn fuzzy_select_allowlist(
+    client: &LanforgeClient,
+    prompt: &str,
+) -> Result<AllowlistEntry> {
     let resp = client.dns_allowlist().await?;
     if resp.allowlist.is_empty() {
         bail!("No DNS allowlist entries found.");
@@ -163,12 +163,12 @@ pub fn confirm_wipe(client: &LanforgeClient) -> Result<bool> {
     if client.yes {
         return Ok(true);
     }
-    let first = Confirm::new("Are you absolutely sure you want to reset the database?")
-        .with_default(false)
-        .prompt()?;
+    let first = Confirm::new("Are you sure?").with_default(false).prompt()?;
     if !first {
         return Ok(false);
     }
-    let second = Text::new("Type 'wipe' to confirm reset:").prompt()?;
-    Ok(second == "wipe")
+    let second = Confirm::new("This will DELETE ALL DATA. Are you REALLY sure?")
+        .with_default(false)
+        .prompt()?;
+    Ok(second)
 }

@@ -2,7 +2,8 @@ use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::DhcpPoolEntry;
+use lanforge_api::api::{DhcpPoolEntry, LeaseKind, LeasesResponse};
+use std::collections::HashMap;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DhcpArgs {
@@ -14,6 +15,13 @@ pub struct DhcpArgs {
 pub enum DhcpAction {
     /// Show DHCP pool utilization and availability
     Pool,
+    /// Active lease table
+    Leases {
+        #[arg(long)]
+        v4: bool,
+        #[arg(long)]
+        v6: bool,
+    },
 }
 
 impl Execute for DhcpArgs {
@@ -53,9 +61,122 @@ impl Execute for DhcpArgs {
                     }
                 }.print();
             }
+            DhcpAction::Leases { v4, v6 } => {
+                let resp = client.leases(false).await?;
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                    return Ok(());
+                }
+                render_dhcp_leases(&resp, v4, v6, client.ascii);
+            }
         }
         Ok(())
     }
+}
+
+pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, ascii: bool) {
+    element! {
+        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: " ACTIVE DHCP LEASES ", color: Color::White, weight: Weight::Bold)
+                Text(content: "  ·  ", color: Color::DarkGrey)
+                Text(content: format!("{} total entries", resp.leases.len()))
+            }
+        }
+    }
+    .print();
+
+    let mut merged: HashMap<String, MergedLease> = HashMap::new();
+    for l in &resp.leases {
+        if v4_only && l.kind != LeaseKind::V4 {
+            continue;
+        }
+        if v6_only && l.kind == LeaseKind::V4 {
+            continue;
+        }
+
+        let entry = merged.entry(l.mac.clone()).or_insert_with(|| MergedLease {
+            hostname: if l.hostname.is_empty() {
+                "—".to_string()
+            } else {
+                l.hostname.clone()
+            },
+            mac: l.mac.clone(),
+            v4: None,
+            v6: None,
+            expires: l.expires.clone(),
+        });
+
+        if l.kind == LeaseKind::V4 {
+            entry.v4 = Some(l.address.clone());
+        } else {
+            entry.v6 = Some(l.address.clone());
+        }
+    }
+
+    let mut sorted: Vec<MergedLease> = merged.into_values().collect();
+    sorted.sort_by(|a, b| {
+        a.hostname
+            .to_lowercase()
+            .cmp(&b.hostname.to_lowercase())
+            .then(a.mac.cmp(&b.mac))
+    });
+
+    let hline = if ascii { "-" } else { "─" };
+    element! {
+        View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+            // Header
+            View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
+                Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
+                Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
+                Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
+                Text(content: format!("{:<25}", "IPv6"), color: Color::DarkGrey)
+                Text(content: "EXPIRES", color: Color::DarkGrey)
+            }
+            // Separator
+            Text(content: hline.repeat(100), color: Color::DarkGrey)
+
+            // Rows
+            View(flex_direction: FlexDirection::Column) {
+                #(sorted.into_iter().map(|m| element! { MergedLeaseRow(lease: m) }))
+            }
+            View(padding_bottom: 1) { }
+        }
+    }
+    .print();
+}
+
+#[derive(Default)]
+struct MergedLease {
+    hostname: String,
+    mac: String,
+    v4: Option<String>,
+    v6: Option<String>,
+    expires: String,
+}
+
+#[component]
+fn MergedLeaseRow(props: &MergedLeaseRowProps) -> impl Into<AnyElement<'_>> {
+    let m = &props.lease;
+    let v4_str = m.v4.as_deref().unwrap_or("—");
+    let v6_str = m.v6.as_deref().unwrap_or("—");
+    let expires_str = super::format_relative_iso8601(&m.expires);
+
+    element! {
+        View(flex_direction: FlexDirection::Row) {
+            Text(content: "  ")
+            Text(content: format!("{:<23}", m.hostname))
+            Text(content: format!("{:<20}", m.mac), color: Color::Cyan)
+            Text(content: format!("{:<18}", v4_str), color: Color::Green)
+            Text(content: format!("{:<25}", v6_str), color: Color::Yellow)
+            Text(content: expires_str, color: Color::DarkGrey)
+        }
+    }
+}
+
+#[derive(Props, Default)]
+struct MergedLeaseRowProps {
+    lease: MergedLease,
 }
 
 #[component]

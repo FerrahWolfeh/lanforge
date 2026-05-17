@@ -32,7 +32,7 @@ pub enum HostAction {
     },
     List,
     Remove {
-        mac: Option<String>,
+        target: Option<String>,
     },
     Export {
         file: String,
@@ -164,7 +164,7 @@ async fn execute_set(
         Some(f) => f,
         None => prompt_select(
             "Select field to modify:",
-            vec!["hostname", "v4_fixed", "v6_suffix"],
+            vec!["hostname", "v4", "v6_suffix"],
         )?
         .to_string(),
     };
@@ -173,14 +173,30 @@ async fn execute_set(
         None => prompt_text(&format!("New value for {final_field}:"), None)?,
     };
 
-    let resp = client.host_set(final_mac, final_field, final_value).await?;
+    let api_field = if final_field == "v4" {
+        println!("ℹ The device will receive the new IP in the next DHCP cycle");
+        "v4_static".to_string()
+    } else {
+        final_field
+    };
+
+    let resp = client.host_set(final_mac, api_field, final_value).await?;
     print_success!(resp.message);
     Ok(())
 }
 
-async fn execute_remove(client: &LanforgeClient, mac: Option<String>) -> Result<()> {
-    let final_mac = if let Some(m) = mac {
-        m
+async fn execute_remove(client: &LanforgeClient, target: Option<String>) -> Result<()> {
+    let final_mac = if let Some(t) = target {
+        let resp = client.host_list().await?;
+        if let Some(host) = resp
+            .hosts
+            .into_iter()
+            .find(|h| h.mac.eq_ignore_ascii_case(&t) || h.hostname.eq_ignore_ascii_case(&t))
+        {
+            host.mac
+        } else {
+            bail!("Host '{t}' not found.");
+        }
     } else {
         let host = fuzzy_select_host(client, "Select host to remove:").await?;
         host.mac
@@ -200,7 +216,7 @@ impl Execute for HostArgs {
                 v6_suffix,
             } => execute_add(client, mac, hostname, v4, v6_suffix).await,
             HostAction::Set { mac, field, value } => execute_set(client, mac, field, value).await,
-            HostAction::Remove { mac } => execute_remove(client, mac).await,
+            HostAction::Remove { target } => execute_remove(client, target).await,
             HostAction::List => render_output!(
                 client,
                 client.host_list().await?,

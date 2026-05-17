@@ -66,13 +66,13 @@ pub fn render_topology(resp: &TopologyResponse, ascii: bool) {
             .find(|e| e.mac == root_mac)
             .map_or("Unknown Switch", |e| e.hostname.as_str());
 
-        println!("{root_box} {net_icon} {root_hostname} [{root_mac}]");
+        println!("{root_box} {net_icon}{root_hostname} [{root_mac}]");
         print_children(&root_mac, &parent_to_children, vert, true, ascii);
         println!();
     }
 
     if !orphans.is_empty() {
-        println!("{root_box} {q_icon} Unlinked Devices");
+        println!("{root_box} {q_icon}Unlinked Devices");
         for (i, orphan) in orphans.iter().enumerate() {
             let is_last = i == orphans.len() - 1;
             let prefix = if ascii {
@@ -82,7 +82,7 @@ pub fn render_topology(resp: &TopologyResponse, ascii: bool) {
             } else {
                 "┣━"
             };
-            println!("   {prefix} {dev_icon} {} [{}]", orphan.hostname, orphan.mac);
+            println!("   {prefix} {dev_icon}{} [{}]", orphan.hostname, orphan.mac);
         }
     }
 }
@@ -102,7 +102,7 @@ fn print_children(
             port_a.cmp(port_b).then_with(|| a.mac.cmp(&b.mac))
         });
 
-        let dev_icon = if ascii { "[DEV]" } else { "💻" };
+        let dev_icon = if ascii { "" } else { "💻 " };
 
         for (i, child) in sorted.iter().enumerate() {
             let is_last = i == sorted.len() - 1;
@@ -130,7 +130,7 @@ fn print_children(
             let ago = super::format_relative_iso8601(&child.last_updated);
 
             println!(
-                "{indent}{branch} {dev_icon} {} [{}] {port_str} [seen: {ago}]",
+                "{indent}{branch} {dev_icon}{} [{}] {port_str} [seen: {ago}]",
                 child.hostname, child.mac
             );
 

@@ -69,6 +69,10 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
                 Text(content: format!("{} {}", dev.origin, symbol))
             }
             View(flex_direction: FlexDirection::Row) {
+                Text(content: "DUID:      ", color: Color::DarkGrey)
+                Text(content: dev.duid.as_deref().unwrap_or("—"))
+            }
+            View(flex_direction: FlexDirection::Row) {
                 Text(content: "Status:    ", color: Color::DarkGrey)
                 Text(content: status_text, color: status_color)
             }
@@ -80,13 +84,25 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
             View(margin_top: 1, flex_direction: FlexDirection::Column) {
                 Text(content: "NETWORK", color: Color::Cyan)
                 View(flex_direction: FlexDirection::Row) {
-                    Text(content: "IPv4:      ", color: Color::DarkGrey)
-                    Text(content: &dev.display_v4)
+                    Text(content: "IPv4 (Main):  ", color: Color::DarkGrey)
+                    Text(content: &dev.display_v4, color: Color::Green)
                 }
+                #(dev.seen_v4.iter().map(|ip| element! {
+                    View(flex_direction: FlexDirection::Row) {
+                        Text(content: "IPv4 (Seen):  ", color: Color::DarkGrey)
+                        Text(content: ip.clone(), color: Color::DarkGreen)
+                    }
+                }))
                 View(flex_direction: FlexDirection::Row) {
-                    Text(content: "IPv6:      ", color: Color::DarkGrey)
-                    Text(content: &dev.display_v6)
+                    Text(content: "IPv6 (Main):  ", color: Color::DarkGrey)
+                    Text(content: &dev.display_v6, color: Color::Yellow)
                 }
+                #(dev.ipv6_addrs.iter().map(|entry| element! {
+                    View(flex_direction: FlexDirection::Row) {
+                        Text(content: format!("IPv6 ({:<5}):  ", entry.kind), color: Color::DarkGrey)
+                        Text(content: entry.addr.clone(), color: Color::DarkYellow)
+                    }
+                }))
             }
         }
     }.print();

@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 
-use super::{format_relative_iso8601, format_short_relative};
-use crate::cli::vendor::resolve_vendor;
+use super::format_short_relative;
 use crate::cli::{Execute, LanforgeClient};
 use clap::ValueEnum;
 use color_eyre::eyre::Result;
@@ -12,42 +11,18 @@ use lanforge_types::device::Origin;
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DevicesArgs {
     #[arg(short, long)]
-    pub verbose: bool,
-    #[arg(long)]
     pub filter: Option<String>,
-    #[arg(long)]
-    pub vendor: Option<String>,
-    #[arg(long)]
-    pub method: Option<String>,
-    #[arg(long)]
-    pub format: Option<String>,
     #[arg(short, long, value_enum, default_value_t = SortMode::LastSeen)]
     pub sort: SortMode,
-    /// Resolve and display vendor names (can be slow)
-    #[arg(long)]
-    pub show_vendor: bool,
 }
 
 impl Execute for DevicesArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         let resp = client
-            .list_devices(
-                self.filter.clone(),
-                self.vendor.clone(),
-                self.method.clone(),
-                self.format.clone(),
-                None,
-                None,
-            )
+            .list_devices(self.filter.clone(), None, None, None, None, None)
             .await?;
 
         let mut owned_resp = resp;
-        if let Some(v) = &self.vendor {
-            let v_lower = v.to_lowercase();
-            owned_resp.devices.retain(|d| {
-                resolve_vendor(&d.mac).is_some_and(|name| name.to_lowercase().contains(&v_lower))
-            });
-        }
         sort_devices(&mut owned_resp.devices, self.sort);
 
         if client.json {
@@ -55,7 +30,7 @@ impl Execute for DevicesArgs {
             return Ok(());
         }
 
-        render_devices(&owned_resp, self.verbose, self.show_vendor, client.ascii);
+        render_devices(&owned_resp, client.ascii);
         Ok(())
     }
 }
@@ -76,7 +51,7 @@ pub enum SortMode {
     Online,
 }
 
-pub fn render_devices(resp: &DevicesResponse, verbose: bool, show_vendor: bool, ascii: bool) {
+pub fn render_devices(resp: &DevicesResponse, ascii: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -92,36 +67,26 @@ pub fn render_devices(resp: &DevicesResponse, verbose: bool, show_vendor: bool, 
     }
     .print();
 
-    if verbose {
-        for dev in &resp.devices {
-            render_verbose_device(dev, ascii);
-        }
-    } else {
-        let separator_len = if show_vendor { 124 } else { 104 };
-        let hline = if ascii { "-" } else { "─" };
-        element! {
-            View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
-                // Header
-                View(flex_direction: FlexDirection::Row, border_style: BorderStyle::None, padding_bottom: 0) {
-                    Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
-                    Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
-                    Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
-                    Text(content: format!("{:<31}", "IPv6 / SLAAC"), color: Color::DarkGrey)
-                    Text(content: format!("{:<10}", "SEEN"), color: Color::DarkGrey)
-                    #(show_vendor.then(|| element! {
-                         Text(content: "VENDOR", color: Color::DarkGrey)
-                    }))
-                }
-                // Separator
-                Text(content: hline.repeat(separator_len), color: Color::DarkGrey)
-
-                // Rows
-                View(flex_direction: FlexDirection::Column) {
-                    #(resp.devices.iter().cloned().map(|dev| element! { DeviceRow(device: dev, show_vendor: show_vendor, ascii: ascii) }))
-                }
+    let hline = if ascii { "-" } else { "─" };
+    element! {
+        View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+            // Header
+            View(flex_direction: FlexDirection::Row, border_style: BorderStyle::None, padding_bottom: 0) {
+                Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
+                Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
+                Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
+                Text(content: format!("{:<31}", "IPv6 / SLAAC"), color: Color::DarkGrey)
+                Text(content: format!("{:<10}", "SEEN"), color: Color::DarkGrey)
             }
-        }.print();
-    }
+            // Separator
+            Text(content: hline.repeat(104), color: Color::DarkGrey)
+
+            // Rows
+            View(flex_direction: FlexDirection::Column) {
+                #(resp.devices.iter().cloned().map(|dev| element! { DeviceRow(device: dev, ascii: ascii) }))
+            }
+        }
+    }.print();
 
     let star = if ascii { "*" } else { "★" };
     element! {
@@ -157,12 +122,6 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
             Text(content: format!("{:<18}", dev.display_v4), color: Color::Green)
             Text(content: format!("{:<31}", truncate(&dev.display_v6, 30)), color: Color::Yellow)
             Text(content: format!("{:<10}", last_seen_compact), color: Color::DarkGrey)
-            #(props.show_vendor.then(|| {
-                let vendor = resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string());
-                element! {
-                    Text(content: truncate(&vendor, 25), color: Color::White)
-                }
-            }))
         }
     }
 }
@@ -170,7 +129,6 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
 #[derive(Props, Clone, Default)]
 struct DeviceRowProps {
     pub device: DeviceEntry,
-    pub show_vendor: bool,
     pub ascii: bool,
 }
 
@@ -268,114 +226,4 @@ fn sort_devices(devices: &mut [DeviceEntry], mode: SortMode) {
 #[derive(Props, Clone, Default)]
 struct HostRowProps {
     pub host: HostConfigEntry,
-}
-
-fn render_verbose_device(dev: &DeviceEntry, ascii: bool) {
-    let mut host = dev.hostname.clone();
-    if host.is_empty() {
-        host = "?".to_string();
-    }
-    let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
-    let host_display = format!(" {host} {symbol} ");
-
-    let host_display = if host_display.len() > 60 {
-        format!(" {}… ", &host_display[..57])
-    } else {
-        host_display
-    };
-
-    let mut v4_lines = Vec::new();
-    if let Some(v4) = &dev.v4 {
-        v4_lines.push(format!(
-            "V4 (Lease)  {:<24} ({})",
-            v4.ip,
-            format_relative_iso8601(&v4.expires)
-        ));
-    }
-    for seen in &dev.seen_v4 {
-        let already_in_v4 = dev.v4.as_ref().is_some_and(|v| &v.ip == seen);
-        if !already_in_v4 {
-            v4_lines.push(format!("V4 (Guessed) {seen:<24}"));
-        }
-    }
-    if v4_lines.is_empty() {
-        v4_lines.push("V4          —".to_string());
-    }
-
-    let mut v6_lines = Vec::new();
-    if let Some(v6) = &dev.v6 {
-        v6_lines.push(format!(
-            "V6 (DHCPv6) {} ({})",
-            v6.ip,
-            format_relative_iso8601(&v6.expires)
-        ));
-    }
-    for entry in &dev.ipv6_addrs {
-        v6_lines.push(format!("V6 ({})      {} ↑", entry.kind, entry.addr));
-    }
-    if v6_lines.is_empty() {
-        v6_lines.push("V6 / SLAAC  —".to_string());
-    }
-
-    let duid_str = dev
-        .duid
-        .as_ref()
-        .map_or_else(|| "—".to_string(), std::clone::Clone::clone);
-
-    let v4_join = v4_lines.join("\n");
-    let v6_join = v6_lines.join("\n");
-    let mac_str = dev.mac.clone();
-    let origin_str = dev.origin.clone();
-    let last_seen_str = format_relative_iso8601(&dev.last_seen);
-    let vendor = resolve_vendor(&dev.mac).unwrap_or_else(|| "—".to_string());
-    let border = if ascii {
-        BorderStyle::Classic
-    } else {
-        BorderStyle::Round
-    };
-
-    element! {
-        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_bottom: 1) {
-            View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                View(flex_direction: FlexDirection::Row, padding_bottom: 1, margin_top: -1) {
-                    Text(content: host_display, color: Color::Cyan, weight: Weight::Bold)
-                }
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: "MAC        ", color: Color::DarkGrey)
-                    Text(content: mac_str, color: Color::Cyan)
-                }
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: "DUID       ", color: Color::DarkGrey)
-                    Text(content: duid_str)
-                }
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: "Vendor     ", color: Color::DarkGrey)
-                    Text(content: vendor, color: Color::White)
-                }
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: "Method     ", color: Color::DarkGrey)
-                    Text(content: &dev.learning_method)
-                }
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: "Category   ", color: Color::DarkGrey)
-                    Text(content: &dev.class, color: Color::Magenta)
-                }
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: "last seen  ", color: Color::DarkGrey)
-                    Text(content: last_seen_str)
-                }
-                View(flex_direction: FlexDirection::Row, padding_bottom: 1) {
-                    Text(content: "origin     ", color: Color::DarkGrey)
-                    Text(content: origin_str)
-                }
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: v4_join, color: Color::Green)
-                }
-                View(flex_direction: FlexDirection::Row) {
-                    Text(content: v6_join, color: Color::Yellow)
-                }
-                View(padding_bottom: 1) { }
-            }
-        }
-    }.print();
 }
