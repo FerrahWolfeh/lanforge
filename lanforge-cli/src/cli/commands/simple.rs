@@ -195,10 +195,17 @@ impl Execute for LoginArgs {
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
-pub struct WatchArgs {}
+pub struct WatchArgs {
+    /// Show verbose periodic events (e.g. background neighbor scan summaries)
+    #[arg(short, long)]
+    pub verbose: bool,
+}
 
 impl Execute for WatchArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        let device_map = fetch_device_map(client).await;
+        let verbose = self.verbose;
+
         #[cfg(feature = "remote")]
         if let Some(base) = &client.remote {
             use futures::StreamExt;
@@ -217,7 +224,7 @@ impl Execute for WatchArgs {
                         if let Some(json_str) = line.strip_prefix("data: ")
                             && let Ok(event) = serde_json::from_str::<TimedEvent>(json_str)
                         {
-                            render_watch_event(&event);
+                            render_watch_event(&event, &device_map, verbose);
                         }
                     }
                 }
@@ -231,7 +238,7 @@ impl Execute for WatchArgs {
         loop {
             match rpc.next_response().await {
                 Ok(RpcResponse::Event(event)) => {
-                    render_watch_event(&event);
+                    render_watch_event(&event, &device_map, verbose);
                 }
                 Ok(RpcResponse::Error(e)) => eprintln!("Error: {e}"),
                 Ok(_) => {}
@@ -245,9 +252,297 @@ impl Execute for WatchArgs {
     }
 }
 
-fn render_watch_event(e: &TimedEvent) {
-    use chrono::{DateTime, Utc};
-    let dt: DateTime<Utc> = e.timestamp.into();
-    let time = dt.format("%Y-%m-%d %H:%M:%S").to_string();
-    println!("[{time}] {:?}", e.event);
+async fn fetch_device_map(client: &LanforgeClient) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(dev_resp) = client
+        .list_devices(None, None, None, None, Some(10000), None)
+        .await
+    {
+        for dev in dev_resp.devices {
+            if !dev.hostname.is_empty() && dev.hostname != "<unknown>" {
+                if let Some(v4) = dev.v4 {
+                    map.insert(v4.ip, dev.hostname.clone());
+                }
+                for ip in dev.seen_v4 {
+                    map.insert(ip, dev.hostname.clone());
+                }
+                if let Some(v6) = dev.v6 {
+                    map.insert(v6.ip, dev.hostname.clone());
+                }
+                for ip in dev.ipv6_addrs {
+                    map.insert(ip.addr, dev.hostname.clone());
+                }
+            }
+        }
+    }
+    map
+}
+
+#[allow(clippy::too_many_lines)]
+fn render_watch_event(
+    e: &TimedEvent,
+    device_map: &std::collections::HashMap<String, String>,
+    verbose: bool,
+) {
+    use chrono::{DateTime, Local};
+    use colored::Colorize;
+    use lanforge_types::events::{
+        DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent,
+    };
+
+    let dt: DateTime<Local> = e.timestamp.into();
+    let time_str = dt.format("%Y-%m-%d %H:%M:%S").to_string().dimmed();
+
+    match &e.event {
+        LanforgeEvent::Device(dev_evt) => match dev_evt {
+            DeviceEvent::Discovered { mac, hostname } => {
+                let host = hostname.as_deref().unwrap_or("<unknown>");
+                println!(
+                    " [{time_str}] {} {} ({mac})",
+                    "DEVICE DISCOVERED".bold().green(),
+                    host.cyan()
+                );
+            }
+            DeviceEvent::Updated {
+                mac,
+                hostname,
+                change,
+            } => {
+                let host = hostname.as_deref().unwrap_or("<unknown>");
+                let change_str = match &**change {
+                    DeviceChange::V4Assigned { ip } => {
+                        format!("Assigned IPv4: {}", ip.to_string().yellow())
+                    }
+                    DeviceChange::V6Assigned { ip, iaid } => {
+                        format!("Assigned IPv6: {} (IAID: {iaid})", ip.to_string().yellow())
+                    }
+                    DeviceChange::V6PrefixAssigned { prefix, len, iaid } => format!(
+                        "Assigned IPv6 Prefix: {}/{len} (IAID: {iaid})",
+                        prefix.to_string().yellow()
+                    ),
+                    DeviceChange::LeaseExpired { target } => {
+                        format!("Lease Expired: {target:?}").red().to_string()
+                    }
+                    DeviceChange::HostRemoved => "Host Removed due to inactivity".red().to_string(),
+                    DeviceChange::SlaacObserved { addr } => {
+                        format!("Observed SLAAC: {}", addr.to_string().yellow())
+                    }
+                    DeviceChange::StatusChanged {
+                        online,
+                        hostname: _,
+                    } => {
+                        if *online {
+                            "Status: Online".green().to_string()
+                        } else {
+                            "Status: Offline".red().to_string()
+                        }
+                    }
+                    DeviceChange::HostnameChanged { hostname } => {
+                        format!("Hostname updated to: {}", hostname.cyan())
+                    }
+                    DeviceChange::V4StaticChanged { ip } => {
+                        format!("Static IPv4 updated: {ip:?}")
+                    }
+                    DeviceChange::V6SuffixChanged { suffix } => {
+                        format!("Static IPv6 Suffix updated: {suffix:?}")
+                    }
+                    DeviceChange::DuidAssociated { duid } => format!("DUID associated: {duid}"),
+                    DeviceChange::NdpActivity { ip } => {
+                        let ip_str = ip.to_string();
+                        let mapped = device_map
+                            .get(&ip_str)
+                            .map(|h| format!("({h})"))
+                            .unwrap_or_default();
+                        format!("NDP Activity: {} {}", ip_str.yellow(), mapped.cyan())
+                    }
+                    DeviceChange::ArpActivity { ip } => {
+                        let ip_str = ip.to_string();
+                        let mapped = device_map
+                            .get(&ip_str)
+                            .map(|h| format!("({h})"))
+                            .unwrap_or_default();
+                        format!("ARP Activity: {} {}", ip_str.yellow(), mapped.cyan())
+                    }
+                    DeviceChange::Classified { class } => {
+                        format!("Classified as: {class:?}").magenta().to_string()
+                    }
+                    DeviceChange::TopologyChanged { parent_mac, port } => {
+                        format!("Topology Changed: parent={parent_mac:?}, port={port:?}")
+                    }
+                    DeviceChange::IpDeleted { ip } => format!("IP Deleted: {ip}").red().to_string(),
+                    DeviceChange::IpOffline { ip } => {
+                        format!("IP Offline: {ip}").yellow().to_string()
+                    }
+                    DeviceChange::CliHostUpdated => "CLI Host Updated".blue().to_string(),
+                };
+                println!(
+                    " [{time_str}] {} {} ({mac}) -> {change_str}",
+                    "DEVICE UPDATED".bold().blue(),
+                    host.cyan()
+                );
+            }
+            DeviceEvent::Expired { mac } => {
+                println!(" [{time_str}] {} ({mac})", "DEVICE EXPIRED".bold().red());
+            }
+            DeviceEvent::Purged { mac } => {
+                println!(" [{time_str}] {} ({mac})", "DEVICE PURGED".bold().red());
+            }
+            DeviceEvent::LeaseRelease { mac, target } => {
+                println!(
+                    " [{time_str}] {} ({mac}) target={:?}",
+                    "LEASE RELEASED".bold().yellow(),
+                    target
+                );
+            }
+            DeviceEvent::LeaseRenew { mac, target } => {
+                println!(
+                    " [{time_str}] {} ({mac}) target={:?}",
+                    "LEASE RENEWED".bold().green(),
+                    target
+                );
+            }
+            DeviceEvent::DhcpV4Transaction {
+                mac,
+                msg_type,
+                details,
+            } => {
+                let det = details.as_deref().unwrap_or("");
+                println!(
+                    " [{time_str}] {} ({mac}) {:?} {det}",
+                    "DHCPv4".bold().magenta(),
+                    msg_type
+                );
+            }
+            DeviceEvent::DhcpV6Transaction {
+                mac,
+                msg_type,
+                details,
+            } => {
+                let det = details.as_deref().unwrap_or("");
+                println!(
+                    " [{time_str}] {} ({mac}) {:?} {det}",
+                    "DHCPv6".bold().magenta(),
+                    msg_type
+                );
+            }
+            DeviceEvent::NeighborBatchSummary {
+                total,
+                new,
+                duration_ms,
+            } => {
+                if verbose || *new > 0 {
+                    println!(
+                        " [{time_str}] {} scanned {} neighbors ({} new) in {}ms",
+                        "NEIGHBOR SCAN".bold().cyan(),
+                        total.to_string().yellow(),
+                        new.to_string().green(),
+                        duration_ms.to_string().yellow()
+                    );
+                }
+            }
+        },
+        LanforgeEvent::Network(net_evt) => match net_evt {
+            NetworkEvent::PrefixChanged {
+                gua,
+                ula,
+                preferred,
+                valid,
+            } => {
+                println!(
+                    " [{time_str}] {} GUA={:?} ULA={:?} (pref={}s, valid={}s)",
+                    "PREFIX CHANGED".bold().magenta(),
+                    gua,
+                    ula,
+                    preferred,
+                    valid
+                );
+            }
+            NetworkEvent::InterfaceUpdated { ifindex } => {
+                println!(
+                    " [{time_str}] {} ifindex={ifindex}",
+                    "INTERFACE UPDATED".bold().blue()
+                );
+            }
+            NetworkEvent::ScanRequested => {
+                println!(" [{time_str}] {}", "NETWORK SCAN REQUESTED".bold().cyan());
+            }
+            NetworkEvent::NeighborScanRequested => {
+                println!(" [{time_str}] {}", "NEIGHBOR SCAN REQUESTED".bold().cyan());
+            }
+            NetworkEvent::SubnetScanStarted { subnet } => {
+                println!(
+                    " [{time_str}] {} subnet={subnet}",
+                    "SUBNET SCAN STARTED".bold().cyan()
+                );
+            }
+            NetworkEvent::WolTriggered { mac, ip_hint } => {
+                println!(
+                    " [{time_str}] {} mac={mac} ip_hint={:?}",
+                    "WOL TRIGGERED".bold().yellow(),
+                    ip_hint
+                );
+            }
+            NetworkEvent::RsReceived { mac } => {
+                println!(
+                    " [{time_str}] {} mac={mac}",
+                    "ROUTER SOLICITATION".bold().magenta()
+                );
+            }
+            NetworkEvent::LeaseRenewRequested { mac, target } => {
+                println!(
+                    " [{time_str}] {} mac={mac} target={:?}",
+                    "LEASE RENEW REQUESTED".bold().green(),
+                    target
+                );
+            }
+            NetworkEvent::LeaseReleaseRequested { mac, target } => {
+                println!(
+                    " [{time_str}] {} mac={mac} target={:?}",
+                    "LEASE RELEASE REQUESTED".bold().yellow(),
+                    target
+                );
+            }
+        },
+        LanforgeEvent::System(sys_evt) => {
+            println!(
+                " [{time_str}] {} {:?}",
+                "SYSTEM EVENT".bold().yellow(),
+                sys_evt
+            );
+        }
+        LanforgeEvent::Storage(sto_evt) => {
+            println!(
+                " [{time_str}] {} {:?}",
+                "STORAGE EVENT".bold().blue(),
+                sto_evt
+            );
+        }
+        LanforgeEvent::Dns(dns_evt) => match dns_evt {
+            DnsEvent::QueryResolved(q) => {
+                let ip_str = q.src_ip.to_string();
+                let client_display = if let Some(host) = device_map.get(&ip_str) {
+                    format!("{host} ({ip_str})")
+                } else {
+                    ip_str
+                };
+                let status_color = match format!("{:?}", q.result).as_str() {
+                    "CachedBlock" | "Blocked" => format!("{:?}", q.result).red(),
+                    "Rewritten" | "Cached" => format!("{:?}", q.result).cyan(),
+                    "Forwarded" | "Local" => format!("{:?}", q.result).green(),
+                    other => other.yellow(),
+                };
+                println!(
+                    " [{time_str}] {} {} queried {:<25} {:<5} [{status_color}] {}ms",
+                    "DNS QUERY".bold().cyan(),
+                    client_display.magenta(),
+                    q.domain,
+                    q.qtype.to_string().cyan(),
+                    q.upstream_us / 1000
+                );
+            }
+            other => {
+                println!(" [{time_str}] {} {:?}", "DNS EVENT".bold().cyan(), other);
+            }
+        },
+    }
 }

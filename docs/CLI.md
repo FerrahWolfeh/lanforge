@@ -118,7 +118,7 @@ lanforge
 ├── scan                            # Trigger NDP/ARP scan
 ├── reload                          # Reload daemon config from disk
 ├── shutdown                        # Graceful daemon shutdown
-├── watch [filters] [--initial N]   # Stream EventBus (calls log API)
+├── watch [filters] [--initial N] [--verbose] # Stream EventBus (calls log API)
 ├── login                           # Persist remote credentials
 │
 ├── devices                         # List all devices (default: table view)
@@ -241,15 +241,16 @@ lanforge
 **API:** `shutdown`
 **Display:** `✓ {message}`. The CLI should expect the socket to close immediately after.
 
-### 3.5 — `watch [filters] [--initial N]`
+### 3.5 — `watch [filters] [--initial N] [--verbose]`
 
 **API:** `log` (HybridStream)
 
 **Arguments:**
 - `[filters]`: Optional space-separated list of `EventKind` values to include (e.g., `dhcp dns`). Sent to the server as `filter: Vec<EventKind>` — filtering is performed **server-side**.
 - `--initial <N>`: Replay the last `N` events from the server-side buffer before streaming live. Maps to `n` in the HybridStream pattern.
+- `-v, --verbose`: Show verbose periodic background events (e.g., background neighbor scan summaries when no new neighbors are discovered).
 
-**Behavior:** Calls `log(follow=true, n=N, filter=[...])`. Prints `Watching for events... (Ctrl+C to stop)`, then enters an infinite loop reading `Event` entries from the stream. Exits cleanly on `UnexpectedEof`.
+**Behavior:** Calls `log(follow=true, n=N, filter=[...])`. Prints `Watching for events... (Ctrl+C to stop)`, then enters an infinite loop reading `Event` entries from the stream. Exits cleanly on `UnexpectedEof`. Background periodic events like empty neighbor scan summaries are filtered out by default unless `--verbose` is passed.
 
 **Event rendering:** Each incoming `LanforgeEvent` is matched against all known variants and sub-variants. Every variant produces a specific, human-readable one-line message with a timestamp prefix. Example output:
 ```
