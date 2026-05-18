@@ -44,7 +44,7 @@ impl ClientContext {
             let ula_prefix = status
                 .ula_prefix
                 .as_ref()
-                .and_then(|s| s.parse::<Ipv6Addr>().ok());
+                .map(|s| s.to_addr());
 
             let entry = self.map_device(dev.as_ref(), gua_prefix, ula_prefix);
 
@@ -93,15 +93,9 @@ impl ClientContext {
         })
     }
 
-    pub async fn handle_purge(&self, mac: String) -> Response {
-        let Some(mac_addr) = MacAddr::parse(&mac) else {
-            return Response::Error {
-                error: format!("Invalid MAC address: {mac}"),
-            };
-        };
-
+    pub async fn handle_purge(&self, mac: MacAddr) -> Response {
         // HostRemoved also purges from memory if it's dynamic
-        if !self.ctx.apply(DeviceUpdate::Purge(mac_addr)) {
+        if !self.ctx.apply(DeviceUpdate::Purge(mac)) {
             return Response::Error {
                 error: "Failed to purge device".to_string(),
             };

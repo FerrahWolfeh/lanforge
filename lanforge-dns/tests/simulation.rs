@@ -7,7 +7,6 @@ use lanforge_dns::server::service::DnsService;
 use lanforge_dns::telemetry::DnsStats;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::upstream::UpstreamEntry;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
 };
@@ -147,21 +146,16 @@ async fn dns_simulation_upstream() {
     let mut cfg = DnsConfig {
         enabled: true,
         listen: "127.0.0.1:1054".parse().unwrap(),
-        upstreams: vec![UpstreamEntry {
-            target: "1.1.1.1:53".parse().unwrap(),
-        }],
         ..Default::default()
     };
 
+    let _ = db.add_dns_upstream("1.1.1.1:53", "Udp", None).await;
+
     #[cfg(feature = "dot")]
-    cfg.upstreams.push(UpstreamEntry {
-        target: "tls://1.1.1.1:853".parse().unwrap(),
-    });
+    let _ = db.add_dns_upstream("1.1.1.1:853", "Tls", None).await;
 
     #[cfg(feature = "doq")]
-    cfg.upstreams.push(UpstreamEntry {
-        target: "quic://94.140.14.14:784".parse().unwrap(),
-    });
+    let _ = db.add_dns_upstream("94.140.14.14:784", "Quic", None).await;
 
     // 2. Start DNS Service
     let mut service = DnsService::new(cfg, ctx.clone(), db);
@@ -227,11 +221,9 @@ async fn dns_simulation_cache_case_insensitive() {
     let cfg = DnsConfig {
         enabled: true,
         listen: "127.0.0.1:1056".parse().unwrap(),
-        upstreams: vec![UpstreamEntry {
-            target: "1.1.1.1:53".parse().unwrap(),
-        }],
         ..Default::default()
     };
+    let _ = db.add_dns_upstream("1.1.1.1:53", "Udp", None).await;
 
     let mut service = DnsService::new(cfg, ctx.clone(), db);
     let ctrl = ServiceControl::new("dns-cache", ctx.clone());

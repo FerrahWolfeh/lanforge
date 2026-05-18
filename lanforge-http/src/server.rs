@@ -91,23 +91,27 @@ impl HttpService {
         db: Arc<LeaseDb>,
         log_db: Arc<LogDb>,
     ) -> Self {
-        let service = Self {
-            cfg,
+        ctx.register_status_provider(Arc::new(Self {
+            cfg: cfg.clone(),
             ctx: ctx.clone(),
+            db: db.clone(),
+            log_db: log_db.clone(),
+        }));
+        Self {
+            cfg,
+            ctx,
             db,
             log_db,
-        };
-        ctx.register_status_provider(Arc::new(service.clone()));
-        service
+        }
     }
 }
 
 impl lanforge_core::service::StatusProvider for HttpService {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
-            ("listen", self.cfg.listen.to_string()),
-            ("https_enabled", self.cfg.https_enabled.to_string()),
-            ("doh_enabled", self.cfg.doh_enabled.to_string()),
+            (std::borrow::Cow::Borrowed("listen"), self.cfg.listen.to_string()),
+            (std::borrow::Cow::Borrowed("https_enabled"), self.cfg.https_enabled.to_string()),
+            (std::borrow::Cow::Borrowed("doh_enabled"), self.cfg.doh_enabled.to_string()),
         ];
         ServiceBanner {
             name: "HTTP API".to_string(),
@@ -289,7 +293,7 @@ async fn handle_dns_query(
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use lanforge_dns::pipeline::DnsPipelineRequest;
     use lanforge_dns::server::DnsContext;
-    use lanforge_dns::wire::{WireHeader, WireQuestion};
+    use lanforge_dns_wire::{WireHeader, WireQuestion};
     use lanforge_types::network::dns::TransportProtocol;
 
     let query_data = if method == axum::http::Method::GET {

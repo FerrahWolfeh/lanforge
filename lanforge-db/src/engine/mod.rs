@@ -25,7 +25,7 @@ pub mod postgres;
 pub mod sqlite;
 
 use crate::error::LeaseDbError;
-pub use types::{DeviceRow, LeaseAction, LeaseHistoryEntry, Pool};
+pub use types::{DeviceRow, LeaseAction, LeaseHistoryEntry, LeaseKind, Pool};
 use utils::{system_time_to_unix, unix_to_system_time};
 
 pub struct LeaseDb {
@@ -679,8 +679,8 @@ impl LeaseDb {
         Ok(rows
             .into_iter()
             .map(|(ip, lt, act, ts)| LeaseHistoryEntry {
-                ip,
-                lease_type: lt,
+                ip: ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+                lease_type: lt.parse().unwrap_or(LeaseKind::V4),
                 action: act.parse().unwrap_or(LeaseAction::Assigned),
                 timestamp: unix_to_system_time(ts),
             })

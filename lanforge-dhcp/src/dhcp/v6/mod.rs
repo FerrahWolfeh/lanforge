@@ -65,7 +65,7 @@ use dhcproto::v6::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 ///
@@ -95,20 +95,19 @@ pub struct Dhcpv6Service {
 impl Dhcpv6Service {
     #[must_use]
     pub fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
-        let service = Self {
-            config,
+        ctx.register_status_provider(Arc::new(Self {
+            config: config.clone(),
             ctx: ctx.clone(),
-        };
-        ctx.register_status_provider(std::sync::Arc::new(service.clone()));
-        service
+        }));
+        Self { config, ctx }
     }
 }
 
-impl lanforge_core::service::StatusProvider for Dhcpv6Service {
+impl StatusProvider for Dhcpv6Service {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
-            ("iface", self.config.iface.clone()),
-            ("port", self.config.port.to_string()),
+            (std::borrow::Cow::Borrowed("iface"), self.config.iface.clone()),
+            (std::borrow::Cow::Borrowed("port"), self.config.port.to_string()),
         ];
         ServiceBanner {
             name: "DHCPv6 Server".to_string(),

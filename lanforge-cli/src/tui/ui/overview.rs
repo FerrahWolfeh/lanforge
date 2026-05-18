@@ -135,12 +135,16 @@ fn render_runtime_stats(f: &mut Frame, area: Rect, state: &TuiState) {
 }
 
 fn render_device_inventory(f: &mut Frame, area: Rect, state: &TuiState) {
-    let category_breakdown = state.state.as_ref().map_or_else(
+    let category_breakdown = state.devices.as_ref().map_or_else(
         || Paragraph::new("Calculating inventory..."),
         |cs| {
             let mut counts = std::collections::HashMap::new();
-            for dev in cs.devices.values() {
-                *counts.entry(dev.class).or_insert(0) += 1;
+            for dev in &cs.devices {
+                let class = dev
+                    .class
+                    .parse::<lanforge_types::device::DeviceClass>()
+                    .unwrap_or(lanforge_types::device::DeviceClass::None);
+                *counts.entry(class).or_insert(0) += 1;
             }
 
             let mut lines = Vec::new();

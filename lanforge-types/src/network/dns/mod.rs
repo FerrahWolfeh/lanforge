@@ -130,8 +130,8 @@ impl std::fmt::Display for DnsRecordType {
 /// Serializable snapshot of upstream health metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamHealthSnapshot {
-    pub target: String,
-    pub protocol: String,
+    pub target: std::net::SocketAddr,
+    pub protocol: upstream::UpstreamProtocol,
     pub rtt_ewma_us: u32,
     pub last_rtt_us: u32,
     pub total_queries: u64,
@@ -582,7 +582,7 @@ pub struct DnsAdblockStatusResponse {
 pub struct AdblockUrlEntry {
     pub id: Option<i64>,
     pub url: String,
-    pub kind: String,
+    pub kind: adblock::AdblockUrlKind,
 }
 
 /// In-depth DNS cache statistics.
@@ -601,11 +601,13 @@ pub enum DnsRequest {
     CacheDump { limit: Option<usize>, offset: Option<usize> },
     CacheStatsExt,
     Upstreams,
+    UpstreamAdd { addr: std::net::SocketAddr, protocol: upstream::UpstreamProtocol, domain: Option<String> },
+    UpstreamRemove { addr: std::net::SocketAddr, protocol: upstream::UpstreamProtocol },
     AdblockStatus,
     AdblockSet { enabled: bool, duration_secs: Option<u64> },
     AdblockReload,
     AdblockUrlList,
-    AdblockUrlAdd { url: String, kind: String },
+    AdblockUrlAdd { url: String, kind: adblock::AdblockUrlKind },
     AdblockUrlRemove { url: String },
     Stats,
 }
@@ -617,6 +619,8 @@ pub enum DnsResponse {
     CacheDump(DnsCacheResponse),
     CacheStatsExt(DnsCacheStatsExtResponse),
     Upstreams(Vec<UpstreamHealthSnapshot>),
+    UpstreamAdd(Result<(), String>),
+    UpstreamRemove(Result<(), String>),
     AdblockStatus(DnsAdblockStatusResponse),
     AdblockSet(Result<(), String>),
     AdblockReload(Result<(), String>),

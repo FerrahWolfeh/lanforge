@@ -37,7 +37,7 @@ pub struct HostSetPayload {
 
 async fn handle_set_host(
     State(state): State<AppState>,
-    Path(mac): Path<String>,
+    Path(mac): Path<lanforge_types::identifiers::MacAddr>,
     Json(payload): Json<HostSetPayload>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
@@ -46,7 +46,7 @@ async fn handle_set_host(
 
 async fn handle_remove_host(
     State(state): State<AppState>,
-    Path(mac): Path<String>,
+    Path(mac): Path<lanforge_types::identifiers::MacAddr>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_host_remove(mac).await, Success => NoContent)

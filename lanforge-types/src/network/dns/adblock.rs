@@ -8,42 +8,62 @@ pub struct RewriteRule {
     pub id: Option<i64>,
     pub domain: String,
     pub rtype: DnsRecordType,
-    pub answer: String,
+    pub answer: RewriteAnswer,
 }
 
 impl RewriteRule {
     #[must_use]
     pub fn parse_answer(&self) -> RewriteAnswer {
-        self.answer.parse::<Ipv4Addr>().map_or_else(
-            |_| {
-                self.answer.parse::<Ipv6Addr>().map_or_else(
-                    |_| {
-                        self.answer.strip_prefix("dev:").map_or_else(
-                            || {
-                                if self.answer.contains('.') {
-                                    RewriteAnswer::Cname(self.answer.clone())
-                                } else {
-                                    RewriteAnswer::Device(self.answer.clone())
-                                }
-                            },
-                            |dev_name| RewriteAnswer::Device(dev_name.to_string()),
-                        )
-                    },
-                    RewriteAnswer::Aaaa,
-                )
-            },
-            RewriteAnswer::A,
-        )
+        self.answer.clone()
     }
 }
 
 /// Parsed DNS rewrite answer.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
 pub enum RewriteAnswer {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
     Cname(String),
     Device(String),
+}
+
+impl std::str::FromStr for RewriteAnswer {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<Ipv4Addr>().map_or_else(
+            |_| {
+                s.parse::<Ipv6Addr>().map_or_else(
+                    |_| {
+                        s.strip_prefix("dev:").map_or_else(
+                            || {
+                                if s.contains('.') {
+                                    Ok(Self::Cname(s.to_string()))
+                                } else {
+                                    Ok(Self::Device(s.to_string()))
+                                }
+                            },
+                            |dev_name| Ok(Self::Device(dev_name.to_string())),
+                        )
+                    },
+                    |ip| Ok(Self::Aaaa(ip)),
+                )
+            },
+            |ip| Ok(Self::A(ip)),
+        )
+    }
+}
+
+impl std::fmt::Display for RewriteAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::A(ip) => write!(f, "{ip}"),
+            Self::Aaaa(ip) => write!(f, "{ip}"),
+            Self::Cname(domain) => write!(f, "{domain}"),
+            Self::Device(dev) => write!(f, "dev:{dev}"),
+        }
+    }
 }
 
 /// DNS blocking modes.

@@ -24,7 +24,7 @@ pub enum UpstreamMode {
 pub struct UpstreamStrategy {
     pub mode: UpstreamMode,
     /// Upstreams grouped by protocol tier. Index 0 = tier 0 (TLS/QUIC), etc.
-    tiers: Vec<Vec<Arc<UpstreamManager>>>,
+    tiers: parking_lot::RwLock<Vec<Vec<Arc<UpstreamManager>>>>,
     pub rr_index: AtomicUsize,
 }
 
@@ -44,20 +44,35 @@ impl UpstreamStrategy {
 
         Self {
             mode,
-            tiers,
+            tiers: parking_lot::RwLock::new(tiers),
             rr_index: AtomicUsize::new(0),
         }
     }
 
-    /// Flat iterator over all upstreams.
-    pub fn all_upstreams(&self) -> impl Iterator<Item = &Arc<UpstreamManager>> {
-        self.tiers.iter().flat_map(|t| t.iter())
+    pub fn replace_upstreams(&self, upstreams: Vec<Arc<UpstreamManager>>) {
+        let max_tier = upstreams
+            .iter()
+            .map(|m| m.target.protocol.tier() as usize)
+            .max()
+            .unwrap_or(0);
+
+        let mut tiers = vec![Vec::new(); max_tier + 1];
+        for mgr in upstreams {
+            tiers[mgr.target.protocol.tier() as usize].push(mgr);
+        }
+        *self.tiers.write() = tiers;
+    }
+
+    /// Flat iterator of all upstreams.
+    pub fn all_upstreams(&self) -> impl Iterator<Item = Arc<UpstreamManager>> {
+        let tiers = self.tiers.read().clone();
+        tiers.into_iter().flat_map(|t| t.into_iter())
     }
 
     /// Returns true if no upstreams are configured.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.tiers.iter().all(|t| t.is_empty())
+        self.tiers.read().iter().all(|t| t.is_empty())
     }
 
     pub fn snapshots(&self) -> Vec<UpstreamHealthSnapshot> {
@@ -65,10 +80,7 @@ impl UpstreamStrategy {
             .all_upstreams()
             .map(|m| {
                 #[allow(unused_mut)]
-                let mut snap = m.health.snapshot(
-                    format!("{}", m.target.addr),
-                    format!("{:?}", m.target.protocol),
-                );
+                let mut snap = m.health.snapshot(m.target.addr, m.target.protocol);
 
                 #[cfg(not(feature = "dot"))]
                 if m.target.protocol == UpstreamProtocol::Tls {
@@ -91,13 +103,7 @@ impl UpstreamStrategy {
 
         // Sort by tier, then by status (Healthy first)
         snaps.sort_by(|a, b| {
-            let tier = |p: &str| match p {
-                "Tls" | "Quic" => 0,
-                "Https" => 1,
-                "Udp" => 2,
-                _ => 3,
-            };
-            tier(&a.protocol).cmp(&tier(&b.protocol)).then_with(|| {
+            a.protocol.tier().cmp(&b.protocol.tier()).then_with(|| {
                 // Keep Healthy at top if possible
                 let status_rank = |s: &str| match s {
                     "Healthy" => 0,
@@ -113,7 +119,8 @@ impl UpstreamStrategy {
 
     pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut last_err = DnsError::Refused;
-        for tier in &self.tiers {
+        let tiers = self.tiers.read().clone();
+        for tier in &tiers {
             if tier.is_empty() {
                 continue;
             }

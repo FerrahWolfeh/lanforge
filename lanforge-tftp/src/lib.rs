@@ -38,18 +38,20 @@ pub struct TftpService {
 impl TftpService {
     #[must_use]
     pub fn new(ctx: LanforgeContext, cfg: TftpConfig) -> Self {
-        let service = Self { ctx: ctx.clone(), cfg };
-        ctx.register_status_provider(Arc::new(service.clone()));
-        service
+        ctx.register_status_provider(Arc::new(Self {
+            ctx: ctx.clone(),
+            cfg: cfg.clone(),
+        }));
+        Self { ctx, cfg }
     }
 }
 
 impl StatusProvider for TftpService {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
-            ("listen", self.cfg.listen_addr.clone()),
-            ("root_dir", self.cfg.root_dir.to_string_lossy().to_string()),
-            ("block_size", self.cfg.block_size.to_string()),
+            (std::borrow::Cow::Borrowed("listen"), self.cfg.listen_addr.clone()),
+            (std::borrow::Cow::Borrowed("root_dir"), self.cfg.root_dir.to_string_lossy().to_string()),
+            (std::borrow::Cow::Borrowed("block_size"), self.cfg.block_size.to_string()),
         ];
         ServiceBanner {
             name: "TFTP Server".to_string(),

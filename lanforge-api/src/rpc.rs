@@ -6,7 +6,15 @@ use crate::api::{
     LeasesResponse, RpcCallError, ServiceBannersResponse, SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
-use lanforge_types::{network::dns::adblock::RewriteRule, update::LeaseTarget};
+use lanforge_types::{
+    identifiers::MacAddr,
+    network::dns::{
+        DnsRecordType,
+        adblock::{AdblockUrlKind, RewriteRule},
+        upstream::UpstreamProtocol,
+    },
+    update::LeaseTarget,
+};
 
 #[lanforge_rpc]
 #[async_trait::async_trait]
@@ -36,27 +44,27 @@ pub trait LanforgeRpc {
     -> Result<SimpleSuccess, RpcCallError>;
     async fn host_set(
         &self,
-        mac: String,
+        mac: MacAddr,
         field: String,
         value: String,
     ) -> Result<SimpleSuccess, RpcCallError>;
-    async fn host_remove(&self, mac: String) -> Result<SimpleSuccess, RpcCallError>;
+    async fn host_remove(&self, mac: MacAddr) -> Result<SimpleSuccess, RpcCallError>;
     async fn host_list(&self) -> Result<HostsResponse, RpcCallError>;
     async fn lease_renew(
         &self,
-        mac: String,
+        mac: MacAddr,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess, RpcCallError>;
     async fn lease_release(
         &self,
-        mac: String,
+        mac: MacAddr,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess, RpcCallError>;
     async fn dhcp_pools(&self) -> Result<DhcpPoolsResponse, RpcCallError>;
     async fn db_vacuum(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn db_log_clean(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn db_prune(&self) -> Result<SimpleSuccess, RpcCallError>;
-    async fn purge(&self, mac: String) -> Result<SimpleSuccess, RpcCallError>;
+    async fn purge(&self, mac: MacAddr) -> Result<SimpleSuccess, RpcCallError>;
     async fn wol(&self, target: String) -> Result<SimpleSuccess, RpcCallError>;
     async fn whois(&self, target: String) -> Result<Box<WhoisResponse>, RpcCallError>;
     async fn dns_stats(&self) -> Result<DnsStatsResponse, RpcCallError>;
@@ -65,10 +73,21 @@ pub trait LanforgeRpc {
         limit: Option<usize>,
     ) -> Result<DnsAnalyticsResponse, RpcCallError>;
     async fn dns_upstreams(&self) -> Result<DnsUpstreamsResponse, RpcCallError>;
+    async fn dns_upstream_add(
+        &self,
+        addr: std::net::SocketAddr,
+        protocol: UpstreamProtocol,
+        domain: Option<String>,
+    ) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_upstream_remove(
+        &self,
+        addr: std::net::SocketAddr,
+        protocol: UpstreamProtocol,
+    ) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_query(
         &self,
         name: String,
-        record_type: Option<String>,
+        record_type: Option<DnsRecordType>,
     ) -> Result<DnsQueryResponse, RpcCallError>;
     async fn dns_cache_flush(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_cache_dump(
@@ -107,7 +126,7 @@ pub trait LanforgeRpc {
     async fn dns_adblock_url_add(
         &self,
         url: String,
-        kind: String,
+        kind: AdblockUrlKind,
     ) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_adblock_url_remove(&self, url: String) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_adblock_url_list(&self) -> Result<DnsAdblockUrlsResponse, RpcCallError>;

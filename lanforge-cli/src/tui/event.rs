@@ -11,5 +11,7 @@ pub enum AppEvent {
     DnsUpstreamsUpdate(Box<lanforge_api::api::DnsUpstreamsResponse>),
     DnsQueryLogUpdate(Box<lanforge_api::api::DnsQueryLogResponse>),
     DnsAdblockStatusUpdate(Box<lanforge_api::api::DnsAdblockStatusResponse>),
+    DevicesUpdate(Box<lanforge_api::api::DevicesResponse>),
+    TopologyUpdate(Box<lanforge_api::api::TopologyResponse>),
     Tick,
 }

@@ -58,9 +58,9 @@ dns-doh = ["lanforge-dns/doh-upstream"]
 dns-full = ["dns-dot", "dns-doq"]
 
 # Networking Protocols
-http = ["dep:lanforge-http", "lanforge-http/server"]
-https = ["dep:lanforge-http", "lanforge-http/server"]
-doh-server = ["dep:lanforge-http", "lanforge-http/doh"]
+http = ["lanforge-http/server"]
+https = ["lanforge-http/server"]
+doh-server = ["lanforge-http/doh"]
 
 # Core Features
 adblock = [
@@ -98,7 +98,7 @@ lanforge-probe = { path = "../lanforge-probe" }
 lanforge-host = { path = "../lanforge-host" }
 lanforge-api = { path = "../lanforge-api" }
 lanforge-uds = { path = "../lanforge-uds" }
-lanforge-http = { path = "../lanforge-http", optional = true }
+lanforge-http = { path = "../lanforge-http", default-features = false }
 lanforge-tftp = { path = "../lanforge-tftp" }
 
 

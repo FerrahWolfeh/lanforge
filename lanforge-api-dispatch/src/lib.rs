@@ -133,7 +133,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn host_set(
         &self,
-        mac: String,
+        mac: lanforge_types::identifiers::MacAddr,
         field: String,
         value: String,
     ) -> Result<SimpleSuccess, RpcCallError> {
@@ -144,7 +144,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn host_remove(&self, mac: String) -> Result<SimpleSuccess, RpcCallError> {
+    async fn host_remove(&self, mac: lanforge_types::identifiers::MacAddr) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_host_remove(mac).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -162,7 +162,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn lease_renew(
         &self,
-        mac: String,
+        mac: lanforge_types::identifiers::MacAddr,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_lease_renew(mac, target).await {
@@ -174,7 +174,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn lease_release(
         &self,
-        mac: String,
+        mac: lanforge_types::identifiers::MacAddr,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_lease_release(mac, target).await {
@@ -216,7 +216,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn purge(&self, mac: String) -> Result<SimpleSuccess, RpcCallError> {
+    async fn purge(&self, mac: lanforge_types::identifiers::MacAddr) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_purge(mac).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -267,10 +267,35 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
+    async fn dns_upstream_add(
+        &self,
+        addr: std::net::SocketAddr,
+        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        domain: Option<String>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_upstream_add(addr, protocol, domain).await {
+            Response::Success(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_upstream_remove(
+        &self,
+        addr: std::net::SocketAddr,
+        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_upstream_remove(addr, protocol).await {
+            Response::Success(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
     async fn dns_query(
         &self,
         name: String,
-        record_type: Option<String>,
+        record_type: Option<lanforge_types::network::dns::DnsRecordType>,
     ) -> Result<DnsQueryResponse, RpcCallError> {
         match self.handle_dns_query(name, record_type).await {
             Response::DnsQuery(r) => Ok(r),
@@ -437,7 +462,7 @@ impl LanforgeRpc for ClientContext {
     async fn dns_adblock_url_add(
         &self,
         url: String,
-        kind: String,
+        kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_dns_adblock_url_add(url, kind).await {
             Response::Success(s) => Ok(s),

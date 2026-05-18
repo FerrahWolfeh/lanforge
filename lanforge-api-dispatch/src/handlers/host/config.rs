@@ -73,15 +73,9 @@ impl ClientContext {
         })
     }
 
-    pub async fn handle_host_set(&self, mac: String, field: String, value: String) -> Response {
-        let Some(mac_addr) = MacAddr::parse(&mac) else {
-            return Response::Error {
-                error: format!("Invalid MAC address: {mac}"),
-            };
-        };
-
+    pub async fn handle_host_set(&self, mac: MacAddr, field: String, value: String) -> Response {
         let update = DeviceUpdate::CliHostUpdated {
-            mac: mac_addr,
+            mac,
             update: CliHostUpdate {
                 hostname: if field == "hostname" {
                     FieldUpdate::Set(value.clone())
@@ -141,14 +135,8 @@ impl ClientContext {
         })
     }
 
-    pub async fn handle_host_remove(&self, mac: String) -> Response {
-        let Some(mac_addr) = MacAddr::parse(&mac) else {
-            return Response::Error {
-                error: format!("Invalid MAC address: {mac}"),
-            };
-        };
-
-        if !self.ctx.apply(DeviceUpdate::Remove(mac_addr)) {
+    pub async fn handle_host_remove(&self, mac: MacAddr) -> Response {
+        if !self.ctx.apply(DeviceUpdate::Remove(mac)) {
             return Response::Error {
                 error: "Failed to remove device".to_string(),
             };

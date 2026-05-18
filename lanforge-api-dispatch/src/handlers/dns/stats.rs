@@ -1,18 +1,16 @@
 use crate::ClientContext;
 use lanforge_api::api::{
     DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamsResponse, ProtocolStatEntry,
-    QueryRateEntry, QueryTypeEntry, Response, TopClientEntry, TopDomainEntry,
+    QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
 };
-use lanforge_types::network::dns::DnsRecordType;
+use lanforge_types::network::dns::{DnsRecordType, DnsRequest, DnsResponse};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl ClientContext {
     /// Snapshot of DNS resolver statistics.
     pub async fn handle_dns_stats(&self) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(lanforge_types::network::dns::DnsResponse::Stats(res)) = handle
-                .send_request(lanforge_types::network::dns::DnsRequest::Stats)
-                .await
+            && let Ok(DnsResponse::Stats(res)) = handle.send_request(DnsRequest::Stats).await
         {
             return Response::DnsStats(DnsStatsResponse {
                 total_requests: res.total_requests,
@@ -46,9 +44,8 @@ impl ClientContext {
 
     pub async fn handle_dns_upstreams(&self) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(lanforge_types::network::dns::DnsResponse::Upstreams(res)) = handle
-                .send_request(lanforge_types::network::dns::DnsRequest::Upstreams)
-                .await
+            && let Ok(DnsResponse::Upstreams(res)) =
+                handle.send_request(DnsRequest::Upstreams).await
         {
             return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: res });
         }
@@ -56,6 +53,67 @@ impl ClientContext {
         Response::DnsUpstreams(DnsUpstreamsResponse {
             upstreams: Vec::new(),
         })
+    }
+
+    pub async fn handle_dns_upstream_add(
+        &self,
+        addr: std::net::SocketAddr,
+        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        domain: Option<String>,
+    ) -> Response {
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(DnsResponse::UpstreamAdd(res)) = handle
+                .send_request(DnsRequest::UpstreamAdd {
+                    addr,
+                    protocol,
+                    domain,
+                })
+                .await
+        {
+            match res {
+                Ok(_) => {
+                    return Response::Success(SimpleSuccess {
+                        message: "Upstream added successfully".into(),
+                    });
+                }
+                Err(e) => {
+                    return Response::Error {
+                        error: format!("Failed to add upstream: {e}"),
+                    };
+                }
+            }
+        }
+        Response::Error {
+            error: "DNS service not available".into(),
+        }
+    }
+
+    pub async fn handle_dns_upstream_remove(
+        &self,
+        addr: std::net::SocketAddr,
+        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+    ) -> Response {
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(DnsResponse::UpstreamRemove(res)) = handle
+                .send_request(DnsRequest::UpstreamRemove { addr, protocol })
+                .await
+        {
+            match res {
+                Ok(_) => {
+                    return Response::Success(SimpleSuccess {
+                        message: "Upstream removed successfully".into(),
+                    });
+                }
+                Err(e) => {
+                    return Response::Error {
+                        error: format!("Failed to remove upstream: {e}"),
+                    };
+                }
+            }
+        }
+        Response::Error {
+            error: "DNS service not available".into(),
+        }
     }
 
     pub async fn handle_dns_analytics(&self, limit: Option<usize>) -> Response {

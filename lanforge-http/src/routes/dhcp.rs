@@ -43,7 +43,7 @@ async fn handle_leases(
 
 async fn handle_renew(
     State(state): State<AppState>,
-    Path(mac): Path<String>,
+    Path(mac): Path<lanforge_types::identifiers::MacAddr>,
     Json(payload): Json<LeaseActionRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
@@ -52,7 +52,7 @@ async fn handle_renew(
 
 async fn handle_release(
     State(state): State<AppState>,
-    Path(mac): Path<String>,
+    Path(mac): Path<lanforge_types::identifiers::MacAddr>,
     Json(payload): Json<LeaseActionRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);

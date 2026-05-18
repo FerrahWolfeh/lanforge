@@ -32,7 +32,8 @@ impl ClientContext {
         };
 
         let devices = self.ctx.all_devices();
-        self.populate_service_and_device_stats(&mut status, &devices);
+        let first_upstream = self.db.load_dns_upstreams().await.ok().and_then(|rows| rows.into_iter().next()).map(|r| format!("{}://{}", r.protocol, r.addr));
+        self.populate_service_and_device_stats(&mut status, &devices, first_upstream);
 
         Response::Status(Box::new(status))
     }
@@ -101,7 +102,7 @@ impl ClientContext {
             net.gua.clone_from(&self.current_gua);
         }
         if net.ula.is_none() {
-            net.ula.clone_from(&status.ula_prefix);
+            net.ula = status.ula_prefix.as_ref().map(|p| p.to_string());
         }
         net
     }
@@ -127,6 +128,7 @@ impl ClientContext {
         &self,
         status: &mut StatusResponse,
         devices: &[Arc<Device>],
+        first_upstream: Option<String>,
     ) {
         let sys_status = self.ctx.get_status().unwrap_or_default();
 
@@ -192,14 +194,10 @@ impl ClientContext {
             "inactive"
         }
         .to_string();
-        status.services.dhcp_v6.pool_free = sys_status.dhcp_v6_pool_size.map_or(9999, |total| {
+        status.services.dhcp_v6.pool_free = sys_status.dhcp_v6_pool_size.map_or(9_999, |total| {
             usize::try_from(total.saturating_sub(counts.4 as u64)).unwrap_or_default()
         });
-        status
-            .services
-            .dhcp_v6
-            .ula
-            .clone_from(&sys_status.ula_prefix);
+        status.services.dhcp_v6.ula = sys_status.ula_prefix.as_ref().map(|p| p.to_string());
         status.services.dhcp_v6.gua.clone_from(&self.current_gua);
         status.services.dhcp_v6.uptime_secs = self.uptime_secs;
 
@@ -210,11 +208,7 @@ impl ClientContext {
         }
         .to_string();
         status.services.dns.uptime_secs = self.uptime_secs;
-        status
-            .services
-            .dns
-            .upstream
-            .clone_from(&sys_status.dns_upstream);
+        status.services.dns.upstream = first_upstream;
 
         status.services.db_worker.state = "online".to_string();
         status.services.mdns_prober.state = "active".to_string();

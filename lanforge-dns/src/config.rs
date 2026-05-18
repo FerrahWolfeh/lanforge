@@ -56,6 +56,7 @@ pub struct DnsConfig {
     pub listen: SocketAddr,
     /// Upstream resolver targets.
     /// If empty, non-local queries return `REFUSED`.
+    #[serde(skip)]
     pub upstreams: Vec<UpstreamEntry>,
     /// Strategy for choosing an upstream resolver.
     pub upstream_mode: UpstreamMode,

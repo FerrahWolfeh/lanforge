@@ -7,7 +7,7 @@ impl ClientContext {
     pub async fn handle_dns_rewrite_add(&self, rule: RewriteRule) -> Response {
         match self
             .db
-            .upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer)
+            .upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer.to_string())
             .await
         {
             Ok(()) => {

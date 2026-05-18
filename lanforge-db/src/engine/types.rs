@@ -98,7 +98,7 @@ pub struct DeviceRow {
     pub boot_file: Option<String>,
 }
 
-pub use lanforge_types::device::{LeaseAction, LeaseHistoryEntry};
+pub use lanforge_types::device::{LeaseAction, LeaseHistoryEntry, LeaseKind};
 
 #[derive(sqlx::FromRow)]
 pub struct ApiTokenRow {

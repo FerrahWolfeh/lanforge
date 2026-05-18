@@ -6,6 +6,7 @@ use lanforge_core::context::state::State;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::log_engine::LogDb;
+use lanforge_types::identifiers::MacAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -97,7 +98,7 @@ async fn test_dispatch_hosts_crud() {
 
     // 4. Remove host
     let remove_res = client_ctx
-        .handle_host_remove("00:11:22:33:44:55".to_string())
+        .handle_host_remove(MacAddr::parse("00:11:22:33:44:55").unwrap())
         .await;
     assert!(matches!(remove_res, Response::Success(_)));
 

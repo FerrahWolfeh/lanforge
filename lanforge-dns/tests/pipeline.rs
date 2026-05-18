@@ -93,7 +93,7 @@ async fn pipeline_rewrite_rule() {
     cfg.rewrites.push(RewriteRule {
         id: None,
         domain: "portal.local".to_string(),
-        answer: "10.10.10.10".to_string(),
+        answer: "10.10.10.10".parse().unwrap(),
         rtype: DnsRecordType::A,
     });
 

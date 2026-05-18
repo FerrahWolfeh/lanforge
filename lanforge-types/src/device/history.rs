@@ -23,6 +23,12 @@ impl LeaseAction {
     }
 }
 
+impl std::fmt::Display for LeaseAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl std::str::FromStr for LeaseAction {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -36,10 +42,48 @@ impl std::str::FromStr for LeaseAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseKind {
+    #[default]
+    V4,
+    V6,
+    V6Prefix,
+}
+
+impl LeaseKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::V4 => "v4",
+            Self::V6 => "v6",
+            Self::V6Prefix => "v6_prefix",
+        }
+    }
+}
+
+impl std::fmt::Display for LeaseKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for LeaseKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "v4" | "V4" => Ok(Self::V4),
+            "v6" | "V6" => Ok(Self::V6),
+            "v6_prefix" | "V6Prefix" | "v6prefix" => Ok(Self::V6Prefix),
+            _ => Err(format!("Unknown lease kind: {s}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaseHistoryEntry {
-    pub ip: String,
-    pub lease_type: String,
+    pub ip: std::net::IpAddr,
+    pub lease_type: LeaseKind,
     pub action: LeaseAction,
     pub timestamp: SystemTime,
 }
@@ -47,8 +91,8 @@ pub struct LeaseHistoryEntry {
 impl Default for LeaseHistoryEntry {
     fn default() -> Self {
         Self {
-            ip: String::new(),
-            lease_type: String::new(),
+            ip: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            lease_type: LeaseKind::V4,
             action: LeaseAction::Assigned,
             timestamp: UNIX_EPOCH,
         }

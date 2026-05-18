@@ -447,9 +447,9 @@ where
 
 impl StatusProvider for ControlService {
     fn banner(&self) -> ServiceBanner {
-        let mut stats = vec![("socket_path", self.cfg.socket_path.clone())];
+        let mut stats = vec![(std::borrow::Cow::Borrowed("socket_path"), self.cfg.socket_path.clone())];
         if let Some(p) = self.cfg.tcp_port {
-            stats.push(("tcp_port", p.to_string()));
+            stats.push((std::borrow::Cow::Borrowed("tcp_port"), p.to_string()));
         }
         ServiceBanner {
             name: "Control API".to_string(),

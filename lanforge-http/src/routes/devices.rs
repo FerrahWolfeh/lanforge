@@ -64,7 +64,7 @@ async fn handle_whois(
 
 async fn handle_purge(
     State(state): State<AppState>,
-    Path(target): Path<String>,
+    Path(target): Path<lanforge_types::identifiers::MacAddr>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_purge(target).await, Success => NoContent)

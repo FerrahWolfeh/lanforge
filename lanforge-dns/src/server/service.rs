@@ -19,6 +19,7 @@ use lanforge_types::network::dns::{
     TransportProtocol,
 };
 use lanforge_types::system::{ServiceBanner, ServiceState};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tracing::{error, info};
@@ -32,8 +33,8 @@ use tracing::{error, info};
     max_backoff = 30,
     multi_threaded = true,
     describe = format!(
-        "DNS on {} ({} upstreams)",
-        self.cfg.listen, self.cfg.upstreams.len()
+        "DNS on {}",
+        self.cfg.listen
     )
 )]
 #[derive(Clone)]
@@ -70,13 +71,25 @@ impl DnsService {
             .cache_capacity
             .store(self.cfg.cache_size, Ordering::Relaxed);
         let mut upstreams = Vec::new();
-        for entry in &self.cfg.upstreams {
-            match UpstreamManager::new(&entry.target, Arc::clone(&cache)).await {
-                Ok(mgr) => upstreams.push(mgr),
-                Err(e) => error!(
-                    "❌ DNS: Failed to initialize upstream {}: {}",
-                    entry.target.addr, e
-                ),
+        if let Ok(rows) = self.db.load_dns_upstreams().await {
+            for row in rows {
+                let proto_lower = row.protocol.to_lowercase();
+                let prefix = match row.domain {
+                    Some(ref d) => format!("{}://{}@", proto_lower, d),
+                    None => format!("{}://", proto_lower),
+                };
+                let full_str = format!("{}{}", prefix, row.addr);
+                if let Ok(target) =
+                    lanforge_types::network::dns::upstream::UpstreamTarget::from_str(&full_str)
+                {
+                    match UpstreamManager::new(&target, Arc::clone(&cache)).await {
+                        Ok(mgr) => upstreams.push(mgr),
+                        Err(e) => error!(
+                            "❌ DNS: Failed to initialize upstream {}: {}",
+                            target.addr, e
+                        ),
+                    }
+                }
             }
         }
 
@@ -130,11 +143,6 @@ impl DnsService {
         pipeline.push(AdblockMiddleware::new());
         pipeline.push(UpstreamMiddleware::new());
 
-        // Create a static-lifetime local resolver by leaking (or just ensuring it only ever points to self.ctx)
-        // Actually, DnsContext will hold a LocalResolver with 'static but it's okay because LanforgeContext is Arc-wrapped.
-        // We'll just transmute or find a better way. For now, let's use a simpler approach.
-        // Since DnsContext is Arc-wrapped and stays alive, we can safely hold references.
-
         let dns_ctx = DnsContext {
             cfg: Arc::clone(&self.cfg),
             stats: Arc::clone(&self.stats),
@@ -178,8 +186,10 @@ impl AsyncService for DnsService {
         let socket = Arc::new(
             tokio::net::UdpSocket::bind(self.cfg.listen)
                 .await
-                .map_err(|e| CoreError::ServiceError(format!("Failed to bind UDP socket: {e}")))?,
+                .map_err(CoreError::Io)?,
         );
+
+        ctrl.signal_ready();
 
         for _ in 0..parallelism {
             workers.push(crate::server::worker::udp::spawn_udp_worker(
@@ -206,78 +216,106 @@ impl AsyncService for DnsService {
 
         let cache_worker = crate::server::worker::spawn_cache_handler(Arc::clone(&dns_ctx));
 
-        ctrl.signal_ready();
+        let mut bus_rx = self.ctx.bus().subscribe();
 
-        // Shutdown handling
-        let mut rx = self.ctx.bus().subscribe();
-        loop {
-            tokio::select! {
-                Some((req, resp_tx)) = mpsc_rx.recv() => {
-                    let dns_ctx = Arc::clone(&dns_ctx);
-                    let db = Arc::clone(&self.db);
-                    tokio::spawn(async move {
-                        let resp = handle_dns_request(req, dns_ctx, db).await;
-                        let _ = resp_tx.send(resp);
-                    });
+        let mpsc_worker = {
+            let dns_ctx = Arc::clone(&dns_ctx);
+            let db = Arc::clone(&self.db);
+            tokio::spawn(async move {
+                while let Some((req, resp_tx)) = mpsc_rx.recv().await {
+                    let resp = handle_dns_request(req, Arc::clone(&dns_ctx), Arc::clone(&db)).await;
+                    let _ = resp_tx.send(resp);
                 }
-                Ok(evt) = rx.recv() => {
-                    match evt.event {
-                        lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) => {
-                            break;
-                        }
-                        lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigRewritesChanged) => {
-                            info!("🔄 DNS: Reloading rewrites from DB...");
-                            if let Some(filter) = &dns_ctx.filter {
-                                match self.db.load_dns_rewrites().await {
-                                    Ok(rewrites) => {
-                                        filter.replace_rewrites(rewrites);
-                                        info!("✅ DNS: Rewrites reloaded.");
+            })
+        };
+
+        loop {
+            if !self.ctx.is_running() {
+                break;
+            }
+            tokio::select! {
+                msg = bus_rx.recv() => {
+                    match msg {
+                        Ok(timed_event) => match timed_event.event {
+                            lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) => break,
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged) => {
+                                info!("🔄 DNS: Reloading upstreams from DB...");
+                                let mut upstreams = Vec::new();
+                                if let Ok(rows) = self.db.load_dns_upstreams().await {
+                                    for row in rows {
+                                        let proto_lower = row.protocol.to_lowercase();
+                                        let prefix = match row.domain {
+                                            Some(ref d) => format!("{}://{}@", proto_lower, d),
+                                            None => format!("{}://", proto_lower),
+                                        };
+                                        let full_str = format!("{}{}", prefix, row.addr);
+                                        if let Ok(target) = lanforge_types::network::dns::upstream::UpstreamTarget::from_str(&full_str) {
+                                            match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
+                                                Ok(mgr) => upstreams.push(mgr),
+                                                Err(e) => error!("❌ DNS: Failed to initialize upstream {}: {}", target.addr, e),
+                                            }
+                                        }
                                     }
-                                    Err(e) => error!("❌ DNS: Failed to load rewrites: {}", e),
                                 }
+                                dns_ctx.recursive.replace_upstreams(upstreams);
+                                info!("✅ DNS: Upstreams reloaded.");
                             }
-                        }
-                        lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAllowlistChanged) => {
-                            info!("🔄 DNS: Reloading allowlist from DB...");
-                            if let Some(filter) = &dns_ctx.filter {
-                                match self.db.load_dns_allowlist().await {
-                                    Ok(allow) => {
-                                        filter.replace_allowlist(allow.into_iter().map(|(_, d)| d).collect());
-                                        info!("✅ DNS: Allowlist reloaded.");
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigRewritesChanged) => {
+                                info!("🔄 DNS: Reloading rewrites from DB...");
+                                if let Some(filter) = &dns_ctx.filter {
+                                    match self.db.load_dns_rewrites().await {
+                                        Ok(rewrites) => {
+                                            filter.replace_rewrites(rewrites);
+                                            info!("✅ DNS: Rewrites reloaded.");
+                                        }
+                                        Err(e) => error!("❌ DNS: Failed to load rewrites: {}", e),
                                     }
-                                    Err(e) => error!("❌ DNS: Failed to load allowlist: {}", e),
                                 }
                             }
-                        }
-                        lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAdblockChanged) => {
-                            info!("🔄 DNS: Reloading adblock config from DB...");
-                            if let Some(filter) = &dns_ctx.filter {
-                                match self.db.load_adblock_config().await {
-                                    Ok(cfg) => {
-                                        filter.replace_config(cfg.blocking_mode, cfg.blocking_ip_v4, cfg.blocking_ip_v6);
-                                        filter.set_enabled(self.cfg.adblock_enabled || cfg.enabled);
-                                        info!("✅ DNS: Adblock config reloaded.");
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAllowlistChanged) => {
+                                info!("🔄 DNS: Reloading allowlist from DB...");
+                                if let Some(filter) = &dns_ctx.filter {
+                                    match self.db.load_dns_allowlist().await {
+                                        Ok(allow) => {
+                                            filter.replace_allowlist(allow.into_iter().map(|(_, d)| d).collect());
+                                            info!("✅ DNS: Allowlist reloaded.");
+                                        }
+                                        Err(e) => error!("❌ DNS: Failed to load allowlist: {}", e),
                                     }
-                                    Err(e) => error!("❌ DNS: Failed to load adblock config: {}", e),
                                 }
                             }
-                        }
-                        lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockToggle { enabled, duration_secs }) => {
-                            if let Some(filter) = &dns_ctx.filter {
-                                filter.set_enabled(enabled);
-                                if !enabled && let Some(secs) = duration_secs {
-                                    let until = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs() + secs;
-                                    filter.timer.disabled_until.store(until, std::sync::atomic::Ordering::Relaxed);
-                                    info!("🛡️ DNS: Adblocker disabled for {} seconds", secs);
-                                } else {
-                                    info!("🛡️ DNS: Adblocker {}", if enabled { "enabled" } else { "disabled indefinitely" });
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAdblockChanged) => {
+                                info!("🔄 DNS: Reloading adblock config from DB...");
+                                if let Some(filter) = &dns_ctx.filter {
+                                    match self.db.load_adblock_config().await {
+                                        Ok(cfg) => {
+                                            filter.replace_config(cfg.blocking_mode, cfg.blocking_ip_v4, cfg.blocking_ip_v6);
+                                            filter.set_enabled(self.cfg.adblock_enabled || cfg.enabled);
+                                            info!("✅ DNS: Adblock config reloaded.");
+                                        }
+                                        Err(e) => error!("❌ DNS: Failed to load adblock config: {}", e),
+                                    }
                                 }
                             }
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockToggle { enabled, duration_secs }) => {
+                                if let Some(filter) = &dns_ctx.filter {
+                                    filter.set_enabled(enabled);
+                                    if !enabled && let Some(secs) = duration_secs {
+                                        let until = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs() + secs;
+                                        filter.timer.disabled_until.store(until, std::sync::atomic::Ordering::Relaxed);
+                                        info!("🛡️ DNS: Adblocker disabled for {} seconds", secs);
+                                    } else {
+                                        info!("🛡️ DNS: Adblocker {}", if enabled { "enabled" } else { "disabled indefinitely" });
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(_) => break,
                     }
                 }
                 () = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
@@ -291,6 +329,7 @@ impl AsyncService for DnsService {
         }
         tcp_worker.abort();
         cache_worker.abort();
+        mpsc_worker.abort();
         #[cfg(feature = "adblock")]
         if let Some(w) = adblock_worker {
             w.abort();
@@ -304,11 +343,11 @@ impl lanforge_core::service::StatusProvider for DnsService {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
             (
-                "cache_hits",
+                std::borrow::Cow::Borrowed("cache_hits"),
                 self.stats.cache_hits.load(Ordering::Relaxed).to_string(),
             ),
             (
-                "requests_total",
+                std::borrow::Cow::Borrowed("requests_total"),
                 self.stats
                     .requests_total
                     .load(Ordering::Relaxed)
@@ -358,6 +397,39 @@ async fn handle_dns_request(
             })
         }
         DnsRequest::Upstreams => DnsResponse::Upstreams(dns_ctx.recursive.snapshots()),
+        DnsRequest::UpstreamAdd {
+            addr,
+            protocol,
+            domain,
+        } => {
+            let addr_str = addr.to_string();
+            let proto_str = format!("{:?}", protocol);
+            match db
+                .add_dns_upstream(&addr_str, &proto_str, domain.as_deref())
+                .await
+            {
+                Ok(_) => {
+                    let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
+                        lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged,
+                    ));
+                    DnsResponse::UpstreamAdd(Ok(()))
+                }
+                Err(e) => DnsResponse::UpstreamAdd(Err(e.to_string())),
+            }
+        }
+        DnsRequest::UpstreamRemove { addr, protocol } => {
+            let addr_str = addr.to_string();
+            let proto_str = format!("{:?}", protocol);
+            match db.remove_dns_upstream(&addr_str, &proto_str).await {
+                Ok(_) => {
+                    let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
+                        lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged,
+                    ));
+                    DnsResponse::UpstreamRemove(Ok(()))
+                }
+                Err(e) => DnsResponse::UpstreamRemove(Err(e.to_string())),
+            }
+        }
         DnsRequest::CacheDump { limit, offset } => {
             let mut entries = Vec::new();
             for (name, kind, data, expires_in_secs) in dns_ctx.cache.dump() {
@@ -466,7 +538,7 @@ async fn handle_dns_request(
                                 |(id, url, kind)| lanforge_types::network::dns::AdblockUrlEntry {
                                     id: Some(id),
                                     url,
-                                    kind: kind.to_string(),
+                                    kind,
                                 },
                             )
                             .collect(),
@@ -482,13 +554,7 @@ async fn handle_dns_request(
         DnsRequest::AdblockUrlAdd { url, kind } => {
             #[cfg(feature = "adblock")]
             {
-                use std::str::FromStr;
-                let kind_enum =
-                    lanforge_types::network::dns::adblock::AdblockUrlKind::from_str(&kind)
-                        .unwrap_or(
-                            lanforge_types::network::dns::adblock::AdblockUrlKind::Blocklist,
-                        );
-                match db.add_adblock_url(&url, kind_enum).await {
+                match db.add_adblock_url(&url, kind).await {
                     Ok(()) => {
                         let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
                             lanforge_core::bus::DnsEvent::ConfigAdblockChanged,

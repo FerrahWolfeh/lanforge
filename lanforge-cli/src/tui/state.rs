@@ -1,6 +1,6 @@
 use lanforge_api::api::{
-    DnsAdblockStatusResponse, DnsAnalyticsResponse, DnsQueryLogResponse, DnsStatsResponse,
-    DnsUpstreamsResponse, StatusResponse,
+    DevicesResponse, DnsAdblockStatusResponse, DnsAnalyticsResponse, DnsQueryLogResponse,
+    DnsStatsResponse, DnsUpstreamsResponse, StatusResponse, TopologyResponse,
 };
 use lanforge_types::events::TimedEvent;
 use std::collections::VecDeque;
@@ -12,6 +12,8 @@ pub struct TuiState {
     pub dns_upstreams: Option<DnsUpstreamsResponse>,
     pub dns_query_log: Option<DnsQueryLogResponse>,
     pub dns_adblock_status: Option<DnsAdblockStatusResponse>,
+    pub devices: Option<DevicesResponse>,
+    pub topology: Option<TopologyResponse>,
     pub events: VecDeque<TimedEvent>,
     pub connected: bool,
     pub connection_error: Option<String>,
@@ -33,6 +35,8 @@ impl TuiState {
             dns_upstreams: None,
             dns_query_log: None,
             dns_adblock_status: None,
+            devices: None,
+            topology: None,
             events: VecDeque::with_capacity(500),
             connected: false,
             connection_error: None,

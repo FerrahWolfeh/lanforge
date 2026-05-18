@@ -1,4 +1,6 @@
+use crate::network::{Ipv6Prefix, dns::upstream::UpstreamTarget};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Global system status and runtime configuration snapshot.
 ///
@@ -15,7 +17,7 @@ pub struct SystemStatus {
     /// Name of the primary LAN interface (e.g., "eth0").
     pub lan_iface: String,
     /// Current ULA prefix if active.
-    pub ula_prefix: Option<String>,
+    pub ula_prefix: Option<Ipv6Prefix>,
 
     // Service readiness/enabled flags
     pub ra_enabled: bool,
@@ -24,7 +26,7 @@ pub struct SystemStatus {
     pub dhcp_v6_enabled: bool,
     pub dhcp_v6_pool_size: Option<u64>,
     pub dns_enabled: bool,
-    pub dns_upstream: Option<String>,
+    pub dns_upstream: Option<UpstreamTarget>,
     pub boot_dir: Option<String>,
     pub http_enabled: bool,
 }
@@ -96,12 +98,16 @@ impl std::fmt::Display for ServiceState {
 
 pub mod vec_as_map {
     use serde::{Deserialize, Deserializer, Serializer, ser::SerializeMap};
+    use std::borrow::Cow;
 
     /// Serializes a slice of key-value tuples as a JSON map.
     ///
     /// # Errors
     /// Returns an error if map serialization fails.
-    pub fn serialize<S>(stats: &[(&'static str, String)], serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(
+        stats: &[(Cow<'static, str>, String)],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -116,19 +122,15 @@ pub mod vec_as_map {
     ///
     /// # Errors
     /// Returns an error if map deserialization fails.
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<(&'static str, String)>, D::Error>
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<Vec<(Cow<'static, str>, String)>, D::Error>
     where
         D: Deserializer<'de>,
     {
         let map: std::collections::HashMap<String, String> =
             Deserialize::deserialize(deserializer)?;
-        Ok(map
-            .into_iter()
-            .map(|(k, v)| {
-                let leaked_key: &'static str = Box::leak(k.into_boxed_str());
-                (leaked_key, v)
-            })
-            .collect())
+        Ok(map.into_iter().map(|(k, v)| (Cow::Owned(k), v)).collect())
     }
 }
 
@@ -139,5 +141,5 @@ pub struct ServiceBanner {
     pub state: ServiceState,
     pub uptime_secs: u64,
     #[serde(with = "vec_as_map")]
-    pub stats: Vec<(&'static str, String)>,
+    pub stats: Vec<(Cow<'static, str>, String)>,
 }

@@ -32,7 +32,7 @@ pub enum DnsAction {
         #[arg(long)]
         limit: Option<usize>,
     },
-    Upstreams,
+    Upstreams(DnsUpstreamsArgs),
     Query {
         name: Option<String>,
         record_types: Vec<String>,
@@ -51,6 +51,27 @@ pub enum DnsAction {
     Adblock(DnsAdblockArgs),
     Rewrites(DnsRewritesArgs),
     Allowlist,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DnsUpstreamsArgs {
+    #[command(subcommand)]
+    pub action: Option<DnsUpstreamsAction>,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DnsUpstreamsAction {
+    List,
+    Add {
+        addr: Option<String>,
+        protocol: Option<String>,
+        domain: Option<String>,
+    },
+    Remove {
+        addr: Option<String>,
+        protocol: Option<String>,
+    },
+    Clear,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -184,7 +205,8 @@ async fn execute_query(
     if client.json {
         let mut responses = Vec::new();
         for rt in &rtypes {
-            let resp = client.dns_query(final_name.clone(), Some(rt.clone())).await?;
+            let rt_enum = rt.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
+            let resp = client.dns_query(final_name.clone(), Some(rt_enum)).await?;
             responses.push(resp);
         }
         if responses.len() == 1 {
@@ -200,7 +222,8 @@ async fn execute_query(
         if i > 0 {
             println!();
         }
-        let resp = client.dns_query(final_name.clone(), Some(rt.clone())).await?;
+        let rt_enum = rt.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
+        let resp = client.dns_query(final_name.clone(), Some(rt_enum)).await?;
         render_dns_query(&resp, client.ascii);
     }
     Ok(())
@@ -458,9 +481,9 @@ impl Execute for DnsAdblockSourcesAction {
                     None => prompt_text("Source URL:", None)?,
                 };
                 let final_kind = match kind {
-                    Some(k) => k,
+                    Some(k) => k.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?,
                     None => {
-                        prompt_select("List kind:", vec!["blocklist", "allowlist"])?.to_string()
+                        prompt_select("List kind:", vec!["blocklist", "allowlist"])?.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?
                     }
                 };
                 let resp = client.dns_adblock_url_add(final_url, final_kind).await?;
@@ -513,7 +536,7 @@ impl Execute for DnsRewritesArgs {
                     id: None,
                     domain: final_domain,
                     rtype,
-                    answer: final_answer,
+                    answer: final_answer.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?,
                 };
                 let resp = client.dns_rewrite_add(rule).await?;
                 println!("✓ {}", resp.message);
@@ -568,6 +591,60 @@ impl Execute for DnsRewritesArgs {
     }
 }
 
+impl Execute for DnsUpstreamsArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        let action = self.action.unwrap_or(DnsUpstreamsAction::List);
+        match action {
+            DnsUpstreamsAction::List => {
+                render_output!(client, client.dns_upstreams().await?, render_dns_upstreams)
+            }
+            DnsUpstreamsAction::Add { addr, protocol, domain } => {
+                let final_addr = match addr {
+                    Some(a) => a.parse()?,
+                    None => prompt_text("Upstream Address (IP:Port):", None)?.parse()?,
+                };
+                let final_proto = match protocol {
+                    Some(p) => p.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?,
+                    None => prompt_select("Protocol:", vec!["Udp", "Https", "Tls", "Quic"])?.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?,
+                };
+                let resp = client.dns_upstream_add(final_addr, final_proto, domain).await?;
+                println!("✓ {}", resp.message);
+                Ok(())
+            }
+            DnsUpstreamsAction::Remove { addr, protocol } => {
+                let (final_addr, final_proto) = if let (Some(a), Some(p)) = (addr, protocol) {
+                    (a.parse()?, p.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?)
+                } else {
+                    let resp = client.dns_upstreams().await?;
+                    if resp.upstreams.is_empty() {
+                        bail!("No upstreams configured.");
+                    }
+                    let items = resp.upstreams.iter().map(|u| format!("{} ({})", u.target, u.protocol)).collect::<Vec<_>>();
+                    let choice = prompt_select("Select upstream to remove:", items.iter().map(String::as_str).collect())?;
+                    let parts: Vec<&str> = choice.split_whitespace().collect();
+                    let a = parts[0].parse()?;
+                    let p = parts[1].trim_matches(|c| c == '(' || c == ')').parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
+                    (a, p)
+                };
+                let resp = client.dns_upstream_remove(final_addr, final_proto).await?;
+                println!("✓ {}", resp.message);
+                Ok(())
+            }
+            DnsUpstreamsAction::Clear => {
+                if !confirm_destructive(client, "Are you sure you want to remove all DNS upstreams?")? {
+                    return Ok(());
+                }
+                let resp = client.dns_upstreams().await?;
+                for u in resp.upstreams {
+                    let _ = client.dns_upstream_remove(u.target, u.protocol).await;
+                }
+                println!("✓ Cleared all DNS upstreams");
+                Ok(())
+            }
+        }
+    }
+}
+
 impl Execute for DnsArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         match self.action {
@@ -577,9 +654,7 @@ impl Execute for DnsArgs {
                 client.dns_analytics(limit).await?,
                 render_dns_analytics
             ),
-            DnsAction::Upstreams => {
-                render_output!(client, client.dns_upstreams().await?, render_dns_upstreams)
-            }
+            DnsAction::Upstreams(args) => args.execute(client).await,
             DnsAction::Query { name, record_types } => {
                 execute_query(client, name, record_types).await
             }
@@ -802,12 +877,12 @@ pub fn render_adblock_urls(resp: &DnsAdblockUrlsResponse, ascii: bool) {
     println!("  {:<12} | URL", "KIND");
     println!("{}", hline.repeat(80));
     for u in &resp.urls {
-        let kind_color = if u.kind == "blocklist" {
+        let kind_color = if u.kind == lanforge_types::network::dns::adblock::AdblockUrlKind::Blocklist {
             colored::Color::Red
         } else {
             colored::Color::Green
         };
-        println!("  {:<12} | {}", u.kind.color(kind_color), u.url);
+        println!("  {:<12} | {}", u.kind.to_string().color(kind_color), u.url);
     }
 }
 

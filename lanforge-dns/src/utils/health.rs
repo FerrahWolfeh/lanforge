@@ -98,7 +98,11 @@ impl UpstreamHealth {
         UpstreamStatus::Healthy
     }
 
-    pub fn snapshot(&self, target: String, protocol: String) -> UpstreamHealthSnapshot {
+    pub fn snapshot(
+        &self,
+        target: std::net::SocketAddr,
+        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+    ) -> UpstreamHealthSnapshot {
         UpstreamHealthSnapshot {
             target,
             protocol,

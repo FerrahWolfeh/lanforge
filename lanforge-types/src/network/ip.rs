@@ -208,3 +208,9 @@ impl Ipv6Prefix {
         )
     }
 }
+
+impl fmt::Display for Ipv6Prefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/64", self.to_addr())
+    }
+}

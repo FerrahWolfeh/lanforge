@@ -11,10 +11,7 @@ use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
 use tracing::error;
 
-#[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
-#[cfg(feature = "adblock")]
-use std::str::FromStr;
 
 impl ClientContext {
     #[cfg(feature = "adblock")]
@@ -115,9 +112,8 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_url_add(&self, url: String, kind: String) -> Response {
-        let kind_enum = AdblockUrlKind::from_str(&kind).unwrap_or(AdblockUrlKind::Blocklist);
-        match self.db.add_adblock_url(&url, kind_enum).await {
+    pub async fn handle_dns_adblock_url_add(&self, url: String, kind: AdblockUrlKind) -> Response {
+        match self.db.add_adblock_url(&url, kind).await {
             Ok(()) => {
                 let _ = self
                     .ctx
@@ -134,7 +130,7 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub async fn handle_dns_adblock_url_add(&self, _url: String, _kind: String) -> Response {
+    pub async fn handle_dns_adblock_url_add(&self, _url: String, _kind: AdblockUrlKind) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -176,7 +172,7 @@ impl ClientContext {
                     .map(|(id, url, kind)| AdblockUrlEntry {
                         id: Some(id),
                         url,
-                        kind: kind.to_string(),
+                        kind,
                     })
                     .collect(),
             }),

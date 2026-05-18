@@ -23,7 +23,7 @@ pub struct AnalyticsQuery {
 #[derive(Debug, Deserialize)]
 pub struct DnsQueryRequest {
     pub name: String,
-    pub record_type: Option<String>,
+    pub record_type: Option<DnsRecordType>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,7 +50,7 @@ pub struct AdblockSetRequest {
 #[derive(Debug, Deserialize)]
 pub struct AdblockUrlRequest {
     pub url: String,
-    pub kind: String,
+    pub kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,11 +71,29 @@ pub struct DomainRequest {
     pub domain: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpstreamAddRequest {
+    pub addr: std::net::SocketAddr,
+    pub protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpstreamRemoveRequest {
+    pub addr: std::net::SocketAddr,
+    pub protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/stats", get(handle_dns_stats))
         .route("/analytics", get(handle_dns_analytics))
-        .route("/upstreams", get(handle_dns_upstreams))
+        .route(
+            "/upstreams",
+            get(handle_dns_upstreams)
+                .post(handle_dns_upstream_add)
+                .delete(handle_dns_upstream_remove),
+        )
         .route("/query", get(handle_dns_query))
         .route(
             "/cache",
@@ -125,6 +143,22 @@ async fn handle_dns_analytics(
 async fn handle_dns_upstreams(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_dns_upstreams().await, DnsUpstreams)
+}
+
+async fn handle_dns_upstream_add(
+    State(state): State<AppState>,
+    Query(params): Query<UpstreamAddRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_upstream_add(params.addr, params.protocol, params.domain).await, Success => NoContent)
+}
+
+async fn handle_dns_upstream_remove(
+    State(state): State<AppState>,
+    Query(params): Query<UpstreamRemoveRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_upstream_remove(params.addr, params.protocol).await, Success => NoContent)
 }
 
 async fn handle_dns_query(
@@ -268,7 +302,7 @@ async fn handle_rewrite_add(
             id: None,
             domain: payload.domain,
             rtype: payload.rtype,
-            answer: payload.answer,
+            answer: payload.answer.parse().unwrap(),
         })
         .await,
         Success => NoContent

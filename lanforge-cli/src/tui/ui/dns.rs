@@ -157,7 +157,7 @@ fn render_upstreams_table(f: &mut Frame, area: Rect, state: &TuiState) {
 
                 Row::new(vec![
                     Cell::from(s.target.clone()).style(Style::default().fg(theme::MOCHA_TEXT)),
-                    Cell::from(s.protocol.clone()).style(Style::default().fg(theme::MOCHA_BLUE)),
+                    Cell::from(s.protocol.to_string()).style(Style::default().fg(theme::MOCHA_BLUE)),
                     Cell::from(format!("● {}", s.status)).style(Style::default().fg(status_color)),
                     Cell::from(format!("{}ms", s.last_rtt_us / 1000))
                         .style(Style::default().fg(lat_color)),

@@ -13,18 +13,12 @@ use lanforge_types::{
 use std::time::SystemTime;
 
 impl ClientContext {
-    pub async fn handle_lease_renew(&self, mac: String, target: Option<LeaseTarget>) -> Response {
-        let Some(mac_addr) = MacAddr::parse(&mac) else {
-            return Response::Error {
-                error: format!("Invalid MAC address: {mac}"),
-            };
-        };
-
+    pub async fn handle_lease_renew(&self, mac: MacAddr, target: Option<LeaseTarget>) -> Response {
         let _ = self
             .ctx
             .bus()
             .publish(LanforgeEvent::Network(NetworkEvent::LeaseRenewRequested {
-                mac: mac_addr,
+                mac,
                 target,
             }));
 
@@ -33,16 +27,10 @@ impl ClientContext {
         })
     }
 
-    pub async fn handle_lease_release(&self, mac: String, target: Option<LeaseTarget>) -> Response {
-        let Some(mac_addr) = MacAddr::parse(&mac) else {
-            return Response::Error {
-                error: format!("Invalid MAC address: {mac}"),
-            };
-        };
-
+    pub async fn handle_lease_release(&self, mac: MacAddr, target: Option<LeaseTarget>) -> Response {
         let _ = self.ctx.bus().publish(LanforgeEvent::Network(
             NetworkEvent::LeaseReleaseRequested {
-                mac: mac_addr,
+                mac,
                 target,
             },
         ));

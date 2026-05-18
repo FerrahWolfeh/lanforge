@@ -12,6 +12,7 @@ lanforge-api = { path = "../lanforge-api" }
 lanforge-api-dispatch = { path = "../lanforge-api-dispatch" }
 lanforge-db = { path = "../lanforge-db" }
 lanforge-dns = { path = "../lanforge-dns" }
+lanforge-dns-wire = { path = "../lanforge-dns-wire" }
 lanforge-macros = { path = "../lanforge-macros" }
 lanforge-types = { path = "../lanforge-types" }
 

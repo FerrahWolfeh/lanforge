@@ -1,15 +1,11 @@
 use crate::ClientContext;
 use lanforge_api::api::{DnsQueryLogEntry, DnsQueryLogResponse, DnsQueryResponse, Response};
 use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType};
-use std::str::FromStr;
 use std::time::Instant;
 
 impl ClientContext {
-    pub async fn handle_dns_query(&self, name: String, record_type: Option<String>) -> Response {
-        let qtype = record_type
-            .as_ref()
-            .and_then(|s| DnsRecordType::from_str(s).ok())
-            .unwrap_or(DnsRecordType::A);
+    pub async fn handle_dns_query(&self, name: String, record_type: Option<DnsRecordType>) -> Response {
+        let qtype = record_type.unwrap_or(DnsRecordType::A);
 
         let start = Instant::now();
         match self.resolve_diagnostic(&name, qtype).await {

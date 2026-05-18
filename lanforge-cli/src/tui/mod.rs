@@ -111,6 +111,12 @@ pub async fn run_tui(
                 AppEvent::DnsAdblockStatusUpdate(s) => {
                     app.state.dns_adblock_status = Some(*s);
                 }
+                AppEvent::DevicesUpdate(s) => {
+                    app.state.devices = Some(*s);
+                }
+                AppEvent::TopologyUpdate(s) => {
+                    app.state.topology = Some(*s);
+                }
                 AppEvent::Tick => {}
             }
         }
@@ -202,6 +208,16 @@ async fn remote_daemon_loop(client: RemoteClient, tx: mpsc::Sender<AppEvent>) {
                         .await;
                 }
 
+                // Devices
+                if let Ok(Response::Devices(s)) = fetch_client.get("/devices").await {
+                    let _ = fetch_tx.send(AppEvent::DevicesUpdate(Box::new(s))).await;
+                }
+
+                // Topology
+                if let Ok(Response::Topology(s)) = fetch_client.get("/topology").await {
+                    let _ = fetch_tx.send(AppEvent::TopologyUpdate(Box::new(s))).await;
+                }
+
                 last_refresh = Instant::now();
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -272,6 +288,16 @@ async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                 // DNS Adblock Status
                 if let Ok(s) = client.dns_adblock_status().await {
                     let _ = tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
+                }
+
+                // Devices
+                if let Ok(s) = client.list_devices(None, None, None).await {
+                    let _ = tx.send(AppEvent::DevicesUpdate(Box::new(s))).await;
+                }
+
+                // Topology
+                if let Ok(s) = client.topology().await {
+                    let _ = tx.send(AppEvent::TopologyUpdate(Box::new(s))).await;
                 }
             }
             last_refresh = Instant::now();

@@ -76,21 +76,20 @@ pub struct Dhcpv4Service {
 impl Dhcpv4Service {
     #[must_use]
     pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
-        let service = Self {
-            cfg,
+        ctx.register_status_provider(Arc::new(Self {
+            cfg: cfg.clone(),
             ctx: ctx.clone(),
-        };
-        ctx.register_status_provider(Arc::new(service.clone()));
-        service
+        }));
+        Self { cfg, ctx }
     }
 }
 
 impl StatusProvider for Dhcpv4Service {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
-            ("iface", self.cfg.iface.clone()),
-            ("lease_time", self.cfg.lease_time.to_string()),
-            ("port", self.cfg.port.to_string()),
+            (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
+            (std::borrow::Cow::Borrowed("lease_time"), self.cfg.lease_time.to_string()),
+            (std::borrow::Cow::Borrowed("port"), self.cfg.port.to_string()),
         ];
         ServiceBanner {
             name: "DHCPv4 Server".to_string(),

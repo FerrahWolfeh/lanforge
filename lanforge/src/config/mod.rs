@@ -400,7 +400,7 @@ impl Config {
             ula_prefix: if self.system.target_prefix.starts_with("fe80") {
                 None
             } else {
-                Some(self.system.target_prefix.clone())
+                self.system.target_prefix.parse::<std::net::Ipv6Addr>().ok().map(lanforge_types::network::Ipv6Prefix::from_addr)
             },
             ra_enabled: self.ra_enabled,
             dhcp_v4_enabled: self.dhcpv4_enabled,
@@ -433,7 +433,7 @@ impl Config {
                 .dns_toml
                 .upstreams
                 .first()
-                .map(|u| u.target.addr.to_string()),
+                .map(|u| u.target.clone()),
             boot_dir: Some(self.tftp_toml.root_dir.to_string_lossy().to_string()),
             http_enabled: self.http_toml.enabled,
         }

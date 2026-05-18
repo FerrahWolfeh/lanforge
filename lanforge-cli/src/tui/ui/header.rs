@@ -29,7 +29,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
         },
         |s| {
             let uptime = format!("▲ {}", utils::format_uptime(s.uptime_secs));
-            let device_count = state.state.as_ref().map_or(0, |st| st.devices.len());
+            let device_count = s.devices.total;
 
             (
                 Line::from(vec![

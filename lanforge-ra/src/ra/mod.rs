@@ -186,22 +186,21 @@ pub struct RaService {
 impl RaService {
     #[must_use]
     pub fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
-        let service = Self {
-            cfg,
+        ctx.register_status_provider(Arc::new(Self {
+            cfg: cfg.clone(),
             ctx: ctx.clone(),
-        };
-        ctx.register_status_provider(Arc::new(service.clone()));
-        service
+        }));
+        Self { cfg, ctx }
     }
 }
 
 impl StatusProvider for RaService {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
-            ("iface", self.cfg.iface.clone()),
-            ("max_interval", self.cfg.max_interval.as_secs().to_string()),
-            ("managed", self.cfg.managed.to_string()),
-            ("other_config", self.cfg.other_config.to_string()),
+            (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
+            (std::borrow::Cow::Borrowed("max_interval"), self.cfg.max_interval.as_secs().to_string()),
+            (std::borrow::Cow::Borrowed("managed"), self.cfg.managed.to_string()),
+            (std::borrow::Cow::Borrowed("other_config"), self.cfg.other_config.to_string()),
         ];
         ServiceBanner {
             name: "RA Server".to_string(),

@@ -63,7 +63,7 @@ impl Display for AllowlistItem {
 struct AdblockSourceItem(AdblockUrlEntry);
 impl Display for AdblockSourceItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{:<10}] {}", self.0.kind.to_uppercase(), self.0.url)
+        write!(f, "[{:<10}] {}", self.0.kind.to_string().to_uppercase(), self.0.url)
     }
 }
 

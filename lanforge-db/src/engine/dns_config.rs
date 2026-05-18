@@ -1,7 +1,7 @@
 use crate::error::LeaseDbError;
 use lanforge_types::network::{
     DnsRecordType,
-    dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule},
+    dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteAnswer, RewriteRule},
 };
 #[cfg(feature = "postgres")]
 use sqlx::Postgres;
@@ -20,7 +20,7 @@ pub async fn load_dns_rewrites_sqlite(p: &Pool<Sqlite>) -> Result<Vec<RewriteRul
             id: Some(id),
             domain,
             rtype: rtype.parse().unwrap_or(DnsRecordType::A),
-            answer,
+            answer: answer.parse().unwrap_or(RewriteAnswer::A(std::net::Ipv4Addr::UNSPECIFIED)),
         })
         .collect())
 }
@@ -41,7 +41,7 @@ pub async fn load_dns_rewrites_postgres(
             id: Some(id as i64),
             domain,
             rtype: rtype.parse().unwrap_or(DnsRecordType::A),
-            answer,
+            answer: answer.parse().unwrap_or(RewriteAnswer::A(std::net::Ipv4Addr::UNSPECIFIED)),
         })
         .collect())
 }

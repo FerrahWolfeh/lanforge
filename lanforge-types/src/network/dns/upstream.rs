@@ -16,6 +16,30 @@ pub enum UpstreamProtocol {
     Https,
 }
 
+impl std::str::FromStr for UpstreamProtocol {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "udp" => Ok(Self::Udp),
+            "tls" => Ok(Self::Tls),
+            "quic" => Ok(Self::Quic),
+            "https" => Ok(Self::Https),
+            _ => Err(format!("Invalid upstream protocol: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for UpstreamProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Udp => write!(f, "udp"),
+            Self::Tls => write!(f, "tls"),
+            Self::Quic => write!(f, "quic"),
+            Self::Https => write!(f, "https"),
+        }
+    }
+}
+
 impl UpstreamProtocol {
     /// Returns the implicit security tier (lower = more preferred).
     #[must_use]
