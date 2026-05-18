@@ -412,10 +412,11 @@ pub async fn validate_api_token(
     token: &str,
     now: i64,
 ) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LeaseDbError> {
-    let res: Option<(String, String, Option<i64>)> = sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE token = $1")
-        .bind(token)
-        .fetch_optional(pool)
-        .await?;
+    let res: Option<(String, String, Option<i64>)> =
+        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE token = $1")
+            .bind(token)
+            .fetch_optional(pool)
+            .await?;
 
     if let Some((name, scopes_str, expires_at)) = res {
         if let Some(exp) = expires_at
@@ -476,14 +477,16 @@ pub async fn load_api_tokens(
     Ok(rows
         .into_iter()
         .map(
-            |(id, token, name, created_at, last_used, scopes, expires_at)| crate::engine::types::ApiTokenRow {
-                id: i64::from(id),
-                token,
-                name,
-                created_at,
-                last_used,
-                scopes,
-                expires_at,
+            |(id, token, name, created_at, last_used, scopes, expires_at)| {
+                crate::engine::types::ApiTokenRow {
+                    id: i64::from(id),
+                    token,
+                    name,
+                    created_at,
+                    last_used,
+                    scopes,
+                    expires_at,
+                }
             },
         )
         .collect())
@@ -526,12 +529,14 @@ pub async fn load_dns_upstreams(
 
     Ok(rows
         .into_iter()
-        .map(|(id, addr, protocol, domain)| crate::engine::types::DnsUpstreamRow {
-            id: i64::from(id),
-            addr,
-            protocol,
-            domain,
-        })
+        .map(
+            |(id, addr, protocol, domain)| crate::engine::types::DnsUpstreamRow {
+                id: i64::from(id),
+                addr,
+                protocol,
+                domain,
+            },
+        )
         .collect())
 }
 
@@ -541,12 +546,14 @@ pub async fn add_dns_upstream(
     protocol: &str,
     domain: Option<&str>,
 ) -> Result<i64, LeaseDbError> {
-    let row: (i32,) = sqlx::query_as("INSERT INTO dns_upstreams (addr, protocol, domain) VALUES ($1, $2, $3) RETURNING id")
-        .bind(addr)
-        .bind(protocol)
-        .bind(domain)
-        .fetch_one(pool)
-        .await?;
+    let row: (i32,) = sqlx::query_as(
+        "INSERT INTO dns_upstreams (addr, protocol, domain) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(addr)
+    .bind(protocol)
+    .bind(domain)
+    .fetch_one(pool)
+    .await?;
     Ok(i64::from(row.0))
 }
 

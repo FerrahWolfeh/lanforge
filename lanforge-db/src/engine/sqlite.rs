@@ -14,8 +14,8 @@ pub async fn upsert_device(
 
     upsert_base_device_internal(tx, device, &mac_str).await?;
 
-    // Clear child tables
-    clear_child_tables(tx, &mac_str).await?;
+    // Prune stale child rows
+    prune_stale_child_rows(tx, &mac_str, device).await?;
 
     // Repopulate child tables
     persist_v4_lease(tx, &mac_str, &device.v4).await?;
@@ -125,30 +125,137 @@ async fn upsert_base_device_internal(
     Ok(())
 }
 
-async fn clear_child_tables(
+async fn prune_stale_child_rows(
     tx: &mut Transaction<'_, Sqlite>,
     mac: &str,
+    device: &Device,
 ) -> Result<(), LeaseDbError> {
-    sqlx::query("DELETE FROM v4_leases WHERE mac = ?")
-        .bind(mac)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("DELETE FROM v6_leases WHERE mac = ?")
-        .bind(mac)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("DELETE FROM v6_prefixes WHERE mac = ?")
-        .bind(mac)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("DELETE FROM slaac_addrs WHERE mac = ?")
-        .bind(mac)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("DELETE FROM seen_v4 WHERE mac = ?")
-        .bind(mac)
-        .execute(&mut **tx)
-        .await?;
+    // 1. v4_leases
+    if let IPv4State::Dynamic(lease) = &device.v4 {
+        sqlx::query("DELETE FROM v4_leases WHERE mac = ? AND ip != ?")
+            .bind(mac)
+            .bind(lease.ip.to_string())
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        sqlx::query("DELETE FROM v4_leases WHERE mac = ?")
+            .bind(mac)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    // 2. v6_leases
+    let active_iaids: Vec<i64> = device
+        .v6
+        .iter()
+        .filter_map(|s| {
+            if let IPv6State::Dynamic(lease) = s {
+                Some(i64::from(lease.iaid))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if active_iaids.is_empty() {
+        sqlx::query("DELETE FROM v6_leases WHERE mac = ?")
+            .bind(mac)
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        let params = active_iaids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = format!("DELETE FROM v6_leases WHERE mac = ? AND iaid NOT IN ({params})");
+        let mut q = sqlx::query(&query).bind(mac);
+        for iaid in active_iaids {
+            q = q.bind(iaid);
+        }
+        q.execute(&mut **tx).await?;
+    }
+
+    // 3. v6_prefixes
+    let active_prefix_iaids: Vec<i64> = device
+        .v6_prefixes
+        .iter()
+        .map(|p| i64::from(p.iaid))
+        .collect();
+    if active_prefix_iaids.is_empty() {
+        sqlx::query("DELETE FROM v6_prefixes WHERE mac = ?")
+            .bind(mac)
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        let params = active_prefix_iaids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = format!("DELETE FROM v6_prefixes WHERE mac = ? AND iaid NOT IN ({params})");
+        let mut q = sqlx::query(&query).bind(mac);
+        for iaid in active_prefix_iaids {
+            q = q.bind(iaid);
+        }
+        q.execute(&mut **tx).await?;
+    }
+
+    // 4. slaac_addrs
+    let active_slaac: Vec<String> = device
+        .v6
+        .iter()
+        .filter_map(|s| {
+            if let IPv6State::Slaac(ip, _) = s {
+                Some(ip.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if active_slaac.is_empty() {
+        sqlx::query("DELETE FROM slaac_addrs WHERE mac = ?")
+            .bind(mac)
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        let params = active_slaac
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = format!("DELETE FROM slaac_addrs WHERE mac = ? AND ip NOT IN ({params})");
+        let mut q = sqlx::query(&query).bind(mac);
+        for ip in active_slaac {
+            q = q.bind(ip);
+        }
+        q.execute(&mut **tx).await?;
+    }
+
+    // 5. seen_v4
+    let active_seen: Vec<String> = device
+        .seen_v4
+        .iter()
+        .map(|(ip, _)| ip.to_string())
+        .collect();
+    if active_seen.is_empty() {
+        sqlx::query("DELETE FROM seen_v4 WHERE mac = ?")
+            .bind(mac)
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        let params = active_seen
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = format!("DELETE FROM seen_v4 WHERE mac = ? AND ip NOT IN ({params})");
+        let mut q = sqlx::query(&query).bind(mac);
+        for ip in active_seen {
+            q = q.bind(ip);
+        }
+        q.execute(&mut **tx).await?;
+    }
+
     Ok(())
 }
 
@@ -412,10 +519,11 @@ pub async fn validate_api_token(
     token: &str,
     now: i64,
 ) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LeaseDbError> {
-    let res: Option<(String, String, Option<i64>)> = sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE token = ?")
-        .bind(token)
-        .fetch_optional(pool)
-        .await?;
+    let res: Option<(String, String, Option<i64>)> =
+        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE token = ?")
+            .bind(token)
+            .fetch_optional(pool)
+            .await?;
 
     if let Some((name, scopes_str, expires_at)) = res {
         if let Some(exp) = expires_at

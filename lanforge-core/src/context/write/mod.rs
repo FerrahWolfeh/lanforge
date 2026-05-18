@@ -144,6 +144,35 @@ impl LanforgeContext {
                     Some(DeviceUpdate::NdpSeen { mac, ip, is_active })
                 }
             }
+            DeviceUpdate::SlaacObserved {
+                mac,
+                addr,
+                is_active,
+            } => {
+                let should_skip = {
+                    let state = self.inner.state.read();
+                    state.devices.get(&mac).is_some_and(|dev| {
+                        let recently_seen =
+                            dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
+                        let has_slaac = dev.v6.iter().any(|s| match s {
+                            lanforge_types::device::IPv6State::Slaac(a, _) => *a == addr,
+                            lanforge_types::device::IPv6State::Dynamic(l) => l.ip == addr,
+                            lanforge_types::device::IPv6State::Static(suf, _) => suf.matches(addr),
+                            _ => false,
+                        });
+                        recently_seen && has_slaac
+                    })
+                };
+                if should_skip {
+                    None
+                } else {
+                    Some(DeviceUpdate::SlaacObserved {
+                        mac,
+                        addr,
+                        is_active,
+                    })
+                }
+            }
             DeviceUpdate::NeighborBatch { mut entries } => {
                 let state = self.inner.state.read();
                 entries.retain(|(mac, ip, _)| {
