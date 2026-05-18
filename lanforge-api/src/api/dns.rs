@@ -123,3 +123,11 @@ pub struct DnsAdblockUrlsResponse {
     pub urls: Vec<AdblockUrlEntry>,
 }
 
+/// A configured DNS upstream entry.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct DnsUpstreamConfig {
+    pub addr: std::net::SocketAddr,
+    pub protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+    pub domain: Option<String>,
+}
+

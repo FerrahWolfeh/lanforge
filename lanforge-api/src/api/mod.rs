@@ -73,4 +73,7 @@ pub enum Response {
     DnsCacheStatsExt(DnsCacheStatsExtResponse),
     /// Decoupled service banners.
     ServiceBanners(ServiceBannersResponse),
+    /// Full system configuration export.
+    SystemConfig(Box<SystemConfigExport>),
 }
+

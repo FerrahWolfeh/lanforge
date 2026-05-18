@@ -68,7 +68,7 @@ pub struct LanforgeArgs {
 #[cfg(feature = "tui")]
 use crate::cli::commands::tui::TuiArgs;
 use crate::cli::commands::{
-    auth::AuthArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs, dns::DnsArgs, host::HostArgs,
+    auth::AuthArgs, config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs, dns::DnsArgs, host::HostArgs,
     lease::LeaseArgs, simple::ContextArgs, simple::LoginArgs, simple::PurgeArgs,
     simple::ReloadArgs, simple::ScanArgs, simple::ShutdownArgs, simple::WatchArgs,
     status::ServicesArgs, status::StatusArgs, topology::TopologyArgs, whois::WhoisArgs,
@@ -118,6 +118,8 @@ pub enum Command {
     Auth(AuthArgs),
     /// DNS resolver statistics and diagnostics
     Dns(DnsArgs),
+    /// System configuration import/export
+    Config(ConfigArgs),
     /// Interactive TUI dashboard
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
@@ -145,8 +147,10 @@ impl Execute for Command {
             Self::Dhcp(args) => args.execute(client).await,
             Self::Auth(args) => args.execute(client).await,
             Self::Dns(args) => args.execute(client).await,
+            Self::Config(args) => args.execute(client).await,
             #[cfg(feature = "tui")]
             Self::Tui(args) => args.execute(client).await,
         }
     }
 }
+

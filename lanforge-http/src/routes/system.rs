@@ -1,10 +1,11 @@
 use crate::server::AppState;
 use axum::{
-    Router,
+    Json, Router,
     extract::{Query, State},
     response::IntoResponse,
     routing::{get, post},
 };
+use lanforge_api::api::SystemConfigExport;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/shutdown", post(handle_shutdown))
         .route("/topology", get(handle_topology))
         .route("/context", get(handle_context_dump))
+        .route("/config", get(handle_export_config).post(handle_import_config))
 }
 
 use crate::routes::create_client_ctx;
@@ -68,4 +70,17 @@ async fn handle_context_dump(
             .await,
         ContextDump
     )
+}
+
+async fn handle_export_config(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_system_config_export().await, SystemConfig)
+}
+
+async fn handle_import_config(
+    State(state): State<AppState>,
+    Json(config): Json<SystemConfigExport>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_system_config_import(config).await, Success => NoContent)
 }

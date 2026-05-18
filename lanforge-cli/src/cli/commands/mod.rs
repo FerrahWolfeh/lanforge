@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod config;
 pub mod db;
 pub mod devices;
 pub mod dhcp;
@@ -12,6 +13,7 @@ pub mod topology;
 pub mod tui;
 pub mod whois;
 pub mod wol;
+
 
 use chrono::{DateTime, Datelike, Utc};
 

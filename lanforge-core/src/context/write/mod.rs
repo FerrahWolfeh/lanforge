@@ -4,7 +4,11 @@ pub(crate) mod device;
 pub(crate) mod network;
 pub(crate) mod storage;
 
-use lanforge_types::{device::Device, events::EventVec, update::DeviceUpdate};
+use lanforge_types::{
+    device::{Device, IPv6State},
+    events::EventVec,
+    update::DeviceUpdate,
+};
 use parking_lot::RwLockWriteGuard;
 use std::{net::IpAddr, sync::atomic::Ordering};
 
@@ -155,9 +159,9 @@ impl LanforgeContext {
                         let recently_seen =
                             dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
                         let has_slaac = dev.v6.iter().any(|s| match s {
-                            lanforge_types::device::IPv6State::Slaac(a, _) => *a == addr,
-                            lanforge_types::device::IPv6State::Dynamic(l) => l.ip == addr,
-                            lanforge_types::device::IPv6State::Static(suf, _) => suf.matches(addr),
+                            IPv6State::Slaac(a, _) => *a == addr,
+                            IPv6State::Dynamic(l) => l.ip == addr,
+                            IPv6State::Static(suf, _) => suf.matches(addr),
                             _ => false,
                         });
                         recently_seen && has_slaac

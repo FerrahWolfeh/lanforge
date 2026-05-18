@@ -10,7 +10,7 @@ authors.workspace = true
 lanforge-core = { path = "../lanforge-core" }
 lanforge-api = { path = "../lanforge-api" }
 lanforge-api-dispatch = { path = "../lanforge-api-dispatch" }
-lanforge-db = { path = "../lanforge-db" }
+lanforge-db = { path = "../lanforge-db", optional = true }
 lanforge-dns = { path = "../lanforge-dns" }
 lanforge-dns-wire = { path = "../lanforge-dns-wire" }
 lanforge-macros = { path = "../lanforge-macros" }
@@ -62,6 +62,7 @@ server = [
     "dep:axum-server",
     "dep:futures",
     "dep:rustls",
+    "dep:lanforge-db",
 ]
 client = ["dep:reqwest", "dep:url"]
 remote = ["client"]

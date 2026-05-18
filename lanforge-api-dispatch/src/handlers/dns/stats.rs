@@ -3,6 +3,7 @@ use lanforge_api::api::{
     DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamsResponse, ProtocolStatEntry,
     QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
 };
+use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_types::network::dns::{DnsRecordType, DnsRequest, DnsResponse};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -44,8 +45,7 @@ impl ClientContext {
 
     pub async fn handle_dns_upstreams(&self) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(DnsResponse::Upstreams(res)) =
-                handle.send_request(DnsRequest::Upstreams).await
+            && let Ok(DnsResponse::Upstreams(res)) = handle.send_request(DnsRequest::Upstreams).await
         {
             return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: res });
         }
@@ -66,7 +66,7 @@ impl ClientContext {
                 .send_request(DnsRequest::UpstreamAdd {
                     addr,
                     protocol,
-                    domain,
+                    domain: domain.clone(),
                 })
                 .await
         {
@@ -83,8 +83,20 @@ impl ClientContext {
                 }
             }
         }
-        Response::Error {
-            error: "DNS service not available".into(),
+
+        // Fallback when DNS service is not running
+        let addr_str = addr.to_string();
+        let proto_str = format!("{:?}", protocol);
+        match self.db.add_dns_upstream(&addr_str, &proto_str, domain.as_deref()).await {
+            Ok(_) => {
+                let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+                Response::Success(SimpleSuccess {
+                    message: "Upstream added successfully (fallback)".into(),
+                })
+            }
+            Err(e) => Response::Error {
+                error: format!("Failed to add upstream (fallback): {e}"),
+            },
         }
     }
 
@@ -111,8 +123,20 @@ impl ClientContext {
                 }
             }
         }
-        Response::Error {
-            error: "DNS service not available".into(),
+
+        // Fallback when DNS service is not running
+        let addr_str = addr.to_string();
+        let proto_str = format!("{:?}", protocol);
+        match self.db.remove_dns_upstream(&addr_str, &proto_str).await {
+            Ok(_) => {
+                let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+                Response::Success(SimpleSuccess {
+                    message: "Upstream removed successfully (fallback)".into(),
+                })
+            }
+            Err(e) => Response::Error {
+                error: format!("Failed to remove upstream (fallback): {e}"),
+            },
         }
     }
 

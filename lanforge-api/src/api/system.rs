@@ -192,3 +192,20 @@ pub struct DevicesStats {
     /// Purely dynamic devices (no manual config).
     pub dynamic: usize,
 }
+
+use crate::api::devices::HostConfigEntry;
+use crate::api::dns::{AllowlistEntry, DnsUpstreamConfig};
+use lanforge_types::network::dns::{AdblockUrlEntry, adblock::{AdblockDbConfig, RewriteRule}};
+
+/// Unified system configuration export aggregating all persistent database tables.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SystemConfigExport {
+    pub hosts: Vec<HostConfigEntry>,
+    pub dns_rewrites: Vec<RewriteRule>,
+    pub dns_upstreams: Vec<DnsUpstreamConfig>,
+    pub dns_adblock_config: AdblockDbConfig,
+    pub dns_adblock_urls: Vec<AdblockUrlEntry>,
+    pub dns_allowlist: Vec<AllowlistEntry>,
+}
+

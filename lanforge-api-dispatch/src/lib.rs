@@ -5,7 +5,7 @@ use lanforge_api::api::{
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
     DnsQueryLogResponse, DnsQueryResponse, DnsRewritesResponse, DnsStatsResponse,
     DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse, Response, RpcCallError,
-    SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
+    SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
@@ -471,6 +471,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
+
     async fn dns_adblock_url_remove(&self, url: String) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_dns_adblock_url_remove(url).await {
             Response::Success(s) => Ok(s),
@@ -555,6 +556,22 @@ impl LanforgeRpc for ClientContext {
     async fn ak_list(&self) -> Result<lanforge_api::api::AuthTokensResponse, RpcCallError> {
         match self.handle_ak_list().await {
             Response::AuthTokens(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn system_config_export(&self) -> Result<Box<SystemConfigExport>, RpcCallError> {
+        match self.handle_system_config_export().await {
+            Response::SystemConfig(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn system_config_import(&self, config: SystemConfigExport) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_system_config_import(config).await {
+            Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

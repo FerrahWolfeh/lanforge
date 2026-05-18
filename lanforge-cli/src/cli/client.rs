@@ -12,7 +12,7 @@ use lanforge_api::api::{
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse,
     HttpDataResponse, HttpErrorResponse, HttpPaginatedResponse, LeasesResponse, SimpleSuccess,
-    StatusResponse, TopologyResponse, WhoisResponse,
+    StatusResponse, SystemConfigExport, TopologyResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{network::dns::adblock::RewriteRule, update::LeaseTarget};
@@ -763,5 +763,13 @@ impl LanforgeClient {
         rpc.dns_query_log(follow, n, client, offset)
             .await
             .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+    }
+
+    pub async fn system_config_export(&self) -> Result<Box<SystemConfigExport>> {
+        dispatch!(self, get_box => "/config", system_config_export())
+    }
+
+    pub async fn system_config_import(&self, config: SystemConfigExport) -> Result<SimpleSuccess> {
+        dispatch!(self, post => "/config", config, system_config_import(config))
     }
 }

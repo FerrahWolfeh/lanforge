@@ -1,4 +1,4 @@
-use lanforge_api::api::{HostConfigEntry, Response};
+use lanforge_api::api::{AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport};
 use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
@@ -7,6 +7,10 @@ use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LeaseDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::DnsRecordType;
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, BlockingMode, RewriteAnswer, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -110,3 +114,99 @@ async fn test_dispatch_hosts_crud() {
         panic!("Expected Response::Hosts");
     }
 }
+
+#[tokio::test]
+async fn test_dispatch_system_config_import_export() {
+    let client_ctx = init_test_context().await;
+
+    // 1. Initial export should be empty/default
+    let res = client_ctx.handle_system_config_export().await;
+    if let Response::SystemConfig(cfg) = res {
+        assert!(cfg.hosts.is_empty());
+        assert!(cfg.dns_rewrites.is_empty());
+        assert!(cfg.dns_upstreams.is_empty());
+        assert!(cfg.dns_adblock_urls.is_empty());
+        assert!(cfg.dns_allowlist.is_empty());
+    } else {
+        panic!("Expected Response::SystemConfig");
+    }
+
+    // 2. Create a populated SystemConfigExport
+    let import_cfg = SystemConfigExport {
+        hosts: vec![HostConfigEntry {
+            mac: "11:22:33:44:55:66".to_string(),
+            hostname: "sys-import-host".to_string(),
+            v4_fixed: Some("192.168.10.50".to_string()),
+            v6_suffix: None,
+            origin: "static".to_string(),
+        }],
+        dns_rewrites: vec![RewriteRule {
+            id: None,
+            domain: "import.lan".to_string(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A("192.168.10.1".parse().unwrap()),
+        }],
+        dns_upstreams: vec![DnsUpstreamConfig {
+            addr: "9.9.9.9:53".parse().unwrap(),
+            protocol: UpstreamProtocol::Udp,
+            domain: Some("quad9".to_string()),
+        }],
+        dns_adblock_config: AdblockDbConfig {
+            enabled: true,
+            blocking_mode: BlockingMode::NullIp,
+            blocking_ip_v4: Some("0.0.0.0".parse().unwrap()),
+            blocking_ip_v6: Some("::".parse().unwrap()),
+            refresh_hours: 12,
+            refresh_at_night: true,
+        },
+        dns_adblock_urls: vec![AdblockUrlEntry {
+            id: None,
+            url: "https://example.com/adblock.hosts".to_string(),
+            kind: AdblockUrlKind::Blocklist,
+        }],
+        dns_allowlist: vec![AllowlistEntry {
+            id: 0,
+            domain: "allowed-import.lan".to_string(),
+        }],
+    };
+
+    // 3. Import the configuration
+    let import_res = client_ctx.handle_system_config_import(import_cfg).await;
+    if let Response::Error { error } = &import_res {
+        panic!("Import failed with error: {error}");
+    }
+    assert!(matches!(import_res, Response::Success(_)));
+
+
+    // 4. Export again and verify all fields match what was imported
+    let res_after = client_ctx.handle_system_config_export().await;
+    if let Response::SystemConfig(cfg) = res_after {
+        assert_eq!(cfg.hosts.len(), 1);
+        assert_eq!(cfg.hosts[0].mac, "11:22:33:44:55:66");
+        assert_eq!(cfg.hosts[0].hostname, "sys-import-host");
+
+        assert_eq!(cfg.dns_rewrites.len(), 1);
+        assert_eq!(cfg.dns_rewrites[0].domain, "import.lan");
+        assert_eq!(cfg.dns_rewrites[0].answer, RewriteAnswer::A("192.168.10.1".parse().unwrap()));
+
+        assert_eq!(cfg.dns_upstreams.len(), 1);
+        assert_eq!(cfg.dns_upstreams[0].addr, "9.9.9.9:53".parse().unwrap());
+        assert_eq!(cfg.dns_upstreams[0].protocol, UpstreamProtocol::Udp);
+        assert_eq!(cfg.dns_upstreams[0].domain.as_deref(), Some("quad9"));
+
+        assert_eq!(cfg.dns_adblock_config.enabled, true);
+        assert_eq!(cfg.dns_adblock_config.blocking_mode, BlockingMode::NullIp);
+        assert_eq!(cfg.dns_adblock_config.refresh_hours, 12);
+
+        assert_eq!(cfg.dns_adblock_urls.len(), 1);
+        assert_eq!(cfg.dns_adblock_urls[0].url, "https://example.com/adblock.hosts");
+        assert_eq!(cfg.dns_adblock_urls[0].kind, AdblockUrlKind::Blocklist);
+
+        assert_eq!(cfg.dns_allowlist.len(), 1);
+        assert_eq!(cfg.dns_allowlist[0].domain, "allowed-import.lan");
+    } else {
+        panic!("Expected Response::SystemConfig");
+    }
+}
+
+

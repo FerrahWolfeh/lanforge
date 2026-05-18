@@ -24,12 +24,14 @@ pub enum UpstreamMode {
     RoundRobin,
 }
 
+type InFlightTx = Sender<Result<(Vec<u8>, bool, bool), String>>;
+
 pub struct UpstreamStrategy {
     pub mode: UpstreamMode,
     /// Upstreams grouped by protocol tier. Index 0 = tier 0 (TLS/QUIC), etc.
     tiers: parking_lot::RwLock<Vec<Vec<Arc<UpstreamManager>>>>,
     pub rr_index: AtomicUsize,
-    in_flight: DashMap<CacheKey, Sender<Result<(Vec<u8>, bool, bool), String>>>,
+    in_flight: DashMap<CacheKey, InFlightTx>,
 }
 
 impl UpstreamStrategy {
