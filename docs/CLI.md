@@ -224,7 +224,12 @@ lanforge
    - `SQLite` — `{size}  at {path}` (size in cyan)
    - `Last Sync` — `{N}s ago`
 
-5. **Footer legend:** `★ TOML static  · CLI managed` (dim grey)
+5. **CAPABILITIES** box (yellow bold title):
+   - Lists all capabilities with badges indicating their status:
+   - `[COMPILED]` (green) vs `[ENABLED]` (cyan) vs `[DISABLED]` (dim grey).
+   - E.g., `DNS [COMPILED] [ENABLED]`, `Upstream DoH [COMPILED] [DISABLED]`.
+
+6. **Footer legend:** `★ TOML static  · CLI managed` (dim grey)
 
 ### 3.2 — `scan`
 
@@ -420,10 +425,11 @@ Children sorted by port, then MAC. Recursive rendering for nested topologies. In
 **API:** `dns_stats`
 **Display:** Bordered box with labeled rows: Total Requests, Cache Hits (green), Cache Misses (yellow), Upstream Errors (red), Auth Queries, Recursions, Blocked Queries (cyan), Resolved Total (green), Failed Total (red). Labels dim grey, values colored.
 
-### 3.19 — `dns upstreams`
+### 3.19 — `dns upstreams` subcommands
 
-**API:** `dns_upstreams`
-**Display:** Table: `UPSTREAM | PROTO | RTT | SUCCESS RATE | STATUS`. RTT in ms (yellow), proto (cyan), status green/yellow/red per `healthy`/`degraded`/`unreachable`.
+- **`list`:** Table: `UPSTREAM | PROTO | RTT | SUCCESS RATE | STATUS`. RTT in ms (yellow), proto (cyan), status green/yellow/red per `healthy`/`degraded`/`unreachable`.
+- **`add <addr> [--protocol udp|tcp|tls|https] [--domain <domain>]`:** Adds a new runtime upstream resolver to the database. `✓ {message}`.
+- **`remove <id|addr>`:** Removes a runtime upstream resolver from the database. `✓ {message}`.
 
 ### 3.20 — `dns analytics [--limit N]`
 
@@ -536,8 +542,8 @@ Bar color: Green (<75%), Yellow (75–90%), Red (>90%). In `--ascii` mode: `[===
 
 ### 3.30 — `auth` subcommands
 
-- **`list`:** Table with `NAME | CREATED`. No secret keys displayed.
-- **`gen <NAME>`:** Positional argument. Generates new token. Display in a bordered emphasis box:
+- **`list`:** Table with `ID | NAME | CAPABILITIES | CREATED AT | LAST USED`. No secret keys displayed.
+- **`gen <NAME> [--scopes <list>] [--expires <duration>]`:** Positional argument. Generates new token with optional comma-separated scopes and humantime duration. Display in a bordered emphasis box:
   ```
   ✓ Token generated successfully for: {name}
 

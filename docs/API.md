@@ -20,7 +20,7 @@ Endpoints that follow this pattern are marked **HybridStream**.
 
 | Method | Description | Streaming | Input | Output |
 | :--- | :--- | :--- | :--- | :--- |
-| `status` | Returns daemon uptime, version, and general health. | No | No | Status api type |
+| `status` | Returns daemon uptime, version, ServerCapabilities, and general health. | No | No | Status api type |
 | `reload` | Soft reboot; reloads configuration from disk. | No | No | Empty on success, error on failure |
 | `scan` | Triggers an immediate network scan (ARP/NDP). | No | No | Empty on success, error on failure |
 | `shutdown` | Gracefully shuts down the daemon and exits. | No | No | Empty on success, error on failure |
@@ -67,6 +67,8 @@ Endpoints that follow this pattern are marked **HybridStream**.
 | `dns_query` | Performs a diagnostic DNS resolution via the daemon. Supports automatic PTR reverse lookup formatting when an IP address is provided. | No | Domain name or hostname (PTR), optional record type | DNS query result api type |
 | `dns_query_log` | Retrieves or streams the DNS query history. Follows the **HybridStream** pattern. | Optional | `follow: bool`, `n: Option<usize>`, `client: Option<String>`, `offset: Option<usize>` | HybridStream of DNS query log entry api types |
 | `dns_upstreams` | Returns health and performance statistics for all configured upstream resolvers. | No | No | List of DNS upstream status api types |
+| `dns_upstream_add` | Adds a new runtime upstream resolver to the database. | No | Upstream config payload (`addr`, `protocol`, `domain`) | Empty on success, error on failure |
+| `dns_upstream_remove` | Removes a runtime upstream resolver from the database. | No | Upstream ID or address | Empty on success, error on failure |
 | `dns_rewrite_list` | Returns all DNS rewrite rules. | No | No | List of DNS rewrite rule api types |
 | `dns_rewrite_add` | Adds a new DNS rewrite rule or updates an existing one. A, AAAA, and CNAME rules for the same domain follow individual merging rules (see note). | No | DNS rewrite rule api type | Empty on success, error on failure |
 | `dns_rewrite_remove` | Removes a DNS rewrite rule by ID. | No | Rule ID | Empty on success, error on failure |
@@ -140,7 +142,7 @@ All endpoints in this section are restricted to local UDS connections. API key g
 
 | Method | Description | Input | Output |
 | :--- | :--- | :--- | :--- |
-| `ak_generate` | Generates a new API token. **UDS-only.** | Token name | API token api type (includes secret, shown once) |
+| `ak_generate` | Generates a new API token. **UDS-only.** | Token name, optional scopes, optional expires_at | API token api type (includes secret, shown once) |
 | `ak_delete` | Deletes an existing API token. | API token ID or name | Empty on success, error on failure |
 | `ak_renew` | Regenerates an API token (deletes old, creates new). | API token ID or name | API token api type (new secret, shown once) |
 | `ak_list` | Lists all API tokens (metadata only — no secret keys). | No | List of API token api types |

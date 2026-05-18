@@ -3,33 +3,29 @@ use lanforge_api::api::{
     DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamsResponse, ProtocolStatEntry,
     QueryRateEntry, QueryTypeEntry, Response, TopClientEntry, TopDomainEntry,
 };
-use lanforge_dns::server::DnsContext;
-use lanforge_dns::telemetry::DnsStats;
 use lanforge_types::network::dns::DnsRecordType;
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl ClientContext {
     /// Snapshot of DNS resolver statistics.
     pub async fn handle_dns_stats(&self) -> Response {
-        if let Some(stats_any) = self.ctx.get_dns_stats()
-            && let Some(stats) = stats_any.downcast_ref::<DnsStats>()
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(lanforge_types::network::dns::DnsResponse::Stats(res)) = handle
+                .send_request(lanforge_types::network::dns::DnsRequest::Stats)
+                .await
         {
             return Response::DnsStats(DnsStatsResponse {
-                total_requests: stats.requests_total.load(Ordering::Relaxed),
-                cache_hits: stats.cache_hits.load(Ordering::Relaxed),
-                cache_misses: stats.cache_misses.load(Ordering::Relaxed),
-                upstream_errors: stats.upstream_errors.load(Ordering::Relaxed),
-                auth_queries: stats.auth_queries.load(Ordering::Relaxed),
-                recursions: stats.recursions.load(Ordering::Relaxed),
-                #[cfg(feature = "adblock")]
-                blocked_queries: stats.blocked_queries.load(Ordering::Relaxed),
-                #[cfg(not(feature = "adblock"))]
-                blocked_queries: 0,
-                resolved_total: stats.resolved_total.load(Ordering::Relaxed),
-                failed_total: stats.failed_total.load(Ordering::Relaxed),
-                cache_entries: stats.cache_entries.load(Ordering::Relaxed),
-                cache_capacity: stats.cache_capacity.load(Ordering::Relaxed),
+                total_requests: res.total_requests,
+                cache_hits: res.cache_hits,
+                cache_misses: res.cache_misses,
+                upstream_errors: res.upstream_errors,
+                auth_queries: res.auth_queries,
+                recursions: res.recursions,
+                blocked_queries: res.blocked_queries,
+                resolved_total: res.resolved_total,
+                failed_total: res.failed_total,
+                cache_entries: res.cache_entries,
+                cache_capacity: res.cache_capacity,
             });
         }
 
@@ -49,12 +45,12 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_upstreams(&self) -> Response {
-        if let Some(dns_ctx_any) = self.ctx.get_dns_context()
-            && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(lanforge_types::network::dns::DnsResponse::Upstreams(res)) = handle
+                .send_request(lanforge_types::network::dns::DnsRequest::Upstreams)
+                .await
         {
-            return Response::DnsUpstreams(DnsUpstreamsResponse {
-                upstreams: dns_ctx.recursive.snapshots(),
-            });
+            return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: res });
         }
 
         Response::DnsUpstreams(DnsUpstreamsResponse {

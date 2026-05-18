@@ -118,7 +118,12 @@ pub trait LanforgeRpc {
     async fn db_reset(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn leases(&self, count: bool) -> Result<LeasesResponse, RpcCallError>;
     async fn topology(&self) -> Result<TopologyResponse, RpcCallError>;
-    async fn ak_generate(&self, name: String) -> Result<AuthTokenResponse, RpcCallError>;
+    async fn ak_generate(
+        &self,
+        name: String,
+        scopes: Option<lanforge_types::auth::ApiScopes>,
+        expires_at: Option<i64>,
+    ) -> Result<AuthTokenResponse, RpcCallError>;
     async fn ak_delete(&self, id_or_name: String) -> Result<SimpleSuccess, RpcCallError>;
     async fn ak_renew(&self, id_or_name: String) -> Result<AuthTokenResponse, RpcCallError>;
     async fn ak_list(&self) -> Result<AuthTokensResponse, RpcCallError>;

@@ -488,8 +488,13 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn ak_generate(&self, name: String) -> Result<AuthTokenResponse, RpcCallError> {
-        match self.handle_ak_generate(name).await {
+    async fn ak_generate(
+        &self,
+        name: String,
+        scopes: Option<lanforge_types::auth::ApiScopes>,
+        expires_at: Option<i64>,
+    ) -> Result<AuthTokenResponse, RpcCallError> {
+        match self.handle_ak_generate(name, scopes, expires_at).await {
             Response::AuthToken(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

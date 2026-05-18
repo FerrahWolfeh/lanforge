@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+pub use lanforge_types::system::{Cap, ServerCapabilities, ServiceBanner};
 
 /// Supported response encodings.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,6 +174,7 @@ impl EventKind {
             },
             Self::DnsQuery => matches!(event, LanforgeEvent::Dns(DnsEvent::QueryResolved(_))),
             Self::DnsBlocked => match event {
+                #[cfg(feature = "adblock")]
                 LanforgeEvent::Dns(DnsEvent::QueryBlocked { .. }) => true,
                 #[cfg(feature = "adblock")]
                 LanforgeEvent::Dns(DnsEvent::AdblockBlock(_)) => true,

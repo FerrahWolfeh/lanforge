@@ -1,36 +1,12 @@
-use std::collections::HashMap;
 
+pub use lanforge_types::network::dns::{
+    AdblockUrlEntry, DnsAdblockStatusResponse, DnsCacheEntry, DnsCacheResponse,
+    DnsCacheStatsExtResponse, DnsStatsResponse,
+};
 use lanforge_types::network::{
     DnsRecordEntry, DnsRecordType, UpstreamHealthSnapshot, dns::adblock::RewriteRule,
 };
 use serde::{Deserialize, Serialize};
-
-/// A snapshot of DNS resolver statistics.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DnsStatsResponse {
-    /// Total requests received.
-    pub total_requests: u64,
-    /// Number of cache hits.
-    pub cache_hits: u64,
-    /// Number of cache misses.
-    pub cache_misses: u64,
-    /// Number of upstream errors encountered.
-    pub upstream_errors: u64,
-    /// Number of authoritative queries resolved locally.
-    pub auth_queries: u64,
-    /// Number of recursive queries forwarded.
-    pub recursions: u64,
-    /// Number of queries blocked by the adblocker.
-    pub blocked_queries: u64,
-    /// Number of queries successfully resolved.
-    pub resolved_total: u64,
-    /// Number of queries that failed to resolve.
-    pub failed_total: u64,
-    /// Current number of entries in the DNS cache.
-    pub cache_entries: u64,
-    /// Maximum capacity of the DNS cache.
-    pub cache_capacity: u64,
-}
 
 /// A single entry in the top domains list.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -98,20 +74,6 @@ pub struct DnsQueryResponse {
     pub result: String,
 }
 
-/// DNS cache dump entry.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct DnsCacheResponse {
-    pub entries: Vec<DnsCacheEntry>,
-    pub total: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct DnsCacheEntry {
-    pub name: String,
-    pub kind: DnsRecordType,
-    pub data: String,
-    pub expires_in_secs: u64,
-}
 
 /// A single entry in the detailed DNS query log.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -135,14 +97,6 @@ pub struct DnsQueryLogResponse {
     pub total: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct DnsAdblockStatusResponse {
-    pub enabled: bool,
-    pub disabled_until: Option<u64>,
-    pub remaining_secs: Option<u64>,
-    pub blocklist_size: usize,
-    pub allowlist_size: usize,
-}
 
 /// Response containing all DNS rewrite rules.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -169,19 +123,3 @@ pub struct DnsAdblockUrlsResponse {
     pub urls: Vec<AdblockUrlEntry>,
 }
 
-/// A single adblock source URL entry.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AdblockUrlEntry {
-    pub id: Option<i64>,
-    pub url: String,
-    pub kind: String,
-}
-
-/// In-depth DNS cache statistics.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct DnsCacheStatsExtResponse {
-    pub total_entries: u64,
-    pub entries_by_type: HashMap<DnsRecordType, u64>,
-    pub memory_usage_bytes: u64,
-    pub average_ttl_secs: u64,
-}

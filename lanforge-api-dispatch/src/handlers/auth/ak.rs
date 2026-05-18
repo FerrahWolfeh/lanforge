@@ -6,13 +6,31 @@ use rand::prelude::*;
 use tracing::error;
 
 impl ClientContext {
-    pub async fn handle_ak_generate(&self, name: String) -> Response {
+    pub async fn handle_ak_generate(
+        &self,
+        name: String,
+        scopes: Option<lanforge_types::auth::ApiScopes>,
+        expires_at: Option<i64>,
+    ) -> Response {
         let mut token_bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut token_bytes);
         let token = format!("lf_ak_{}", hex::encode(token_bytes));
+        let scopes = scopes.unwrap_or_else(|| {
+            lanforge_types::auth::ApiScopes::from_slice(&[lanforge_types::auth::ApiScope::Admin])
+        });
 
-        match self.db.store_api_token(&token, &name).await {
-            Ok(id) => Response::AuthToken(AuthTokenResponse { id, token, name }),
+        match self
+            .db
+            .store_api_token(&token, &name, &scopes, expires_at)
+            .await
+        {
+            Ok(id) => Response::AuthToken(AuthTokenResponse {
+                id,
+                token,
+                name,
+                scopes,
+                expires_at,
+            }),
             Err(e) => {
                 error!("Failed to store API token: {e}");
                 Response::Error {
@@ -34,25 +52,22 @@ impl ClientContext {
     }
 
     pub async fn handle_ak_renew(&self, id_or_name: String) -> Response {
-        // Find existing name if ID was given
-        let name = if let Ok(id) = id_or_name.parse::<i64>() {
-            match self.db.get_api_token_name(id).await {
-                Ok(Some(n)) => n,
-                _ => {
-                    return Response::Error {
-                        error: "Token not found".to_string(),
-                    };
-                }
+        // Find existing info
+        let (name, scopes, expires_at) = match self.db.get_api_token_info(&id_or_name).await {
+            Ok(Some(info)) => info,
+            _ => {
+                return Response::Error {
+                    error: format!("Token '{id_or_name}' not found"),
+                };
             }
-        } else {
-            id_or_name.clone()
         };
 
         // Delete old
         let _ = self.db.delete_api_token_by_id_or_name(&id_or_name).await;
 
         // Generate new
-        self.handle_ak_generate(name).await
+        self.handle_ak_generate(name, Some(scopes), expires_at)
+            .await
     }
 
     pub async fn handle_ak_list(&self) -> Response {
@@ -65,6 +80,8 @@ impl ClientContext {
                         name: t.name,
                         created_at: t.created_at,
                         last_used: t.last_used,
+                        scopes: t.scopes.split(',').filter_map(|s| s.parse().ok()).collect(),
+                        expires_at: t.expires_at,
                     })
                     .collect(),
             }),

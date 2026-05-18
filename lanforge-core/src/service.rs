@@ -278,3 +278,11 @@ impl ServiceControl {
         self.id
     }
 }
+
+use lanforge_types::system::ServiceBanner;
+
+/// Trait implemented by decoupled services to provide dynamic status and metrics.
+pub trait StatusProvider: Send + Sync {
+    /// Returns the service's current banner containing health, uptime, and metrics.
+    fn banner(&self) -> ServiceBanner;
+}

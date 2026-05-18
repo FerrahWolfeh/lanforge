@@ -3,6 +3,7 @@ use lanforge_api::api::{
     Capabilities, Compression, DbStatus, DevicesStats, Encoding, NetworkStatus, ResourcesStatus,
     Response, ServiceStatusInfo, ServicesStatus, StatusResponse,
 };
+use lanforge_core::context::CompiledCaps;
 use lanforge_types::device::{Device, IPv6State, Origin};
 use std::fs::metadata;
 use std::sync::Arc;
@@ -21,6 +22,13 @@ impl ClientContext {
             resources: Self::gather_resource_status(),
             devices: DevicesStats::default(),
             capabilities: Self::gather_capabilities(),
+            server_caps: CompiledCaps::detect(),
+            service_banners: self
+                .ctx
+                .status_providers()
+                .iter()
+                .map(|p| p.banner())
+                .collect(),
         };
 
         let devices = self.ctx.all_devices();

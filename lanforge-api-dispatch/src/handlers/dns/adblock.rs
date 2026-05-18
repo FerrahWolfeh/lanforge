@@ -9,10 +9,6 @@ use lanforge_api::api::Response;
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
-use lanforge_dns::server::DnsContext;
-#[cfg(feature = "adblock")]
-use std::sync::atomic::Ordering;
-#[cfg(feature = "adblock")]
 use tracing::error;
 
 #[cfg(feature = "adblock")]
@@ -91,32 +87,23 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_status(&self) -> Response {
-        let Some(dns_ctx_any) = self.ctx.get_dns_context() else {
-            return Response::Error {
-                error: "DNS service not initialized".into(),
-            };
-        };
-        let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
-            return Response::Error {
-                error: "Invalid DNS context".into(),
-            };
-        };
-        let Some(adblocker) = &dns_ctx.filter else {
-            return Response::Error {
-                error: "Adblocker is not enabled in this build".into(),
-            };
-        };
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(lanforge_types::network::dns::DnsResponse::AdblockStatus(res)) = handle
+                .send_request(lanforge_types::network::dns::DnsRequest::AdblockStatus)
+                .await
+        {
+            return Response::DnsAdblockStatus(DnsAdblockStatusResponse {
+                enabled: res.enabled,
+                disabled_until: res.disabled_until,
+                remaining_secs: res.remaining_secs,
+                blocklist_size: res.blocklist_size,
+                allowlist_size: res.allowlist_size,
+            });
+        }
 
-        Response::DnsAdblockStatus(DnsAdblockStatusResponse {
-            enabled: adblocker.is_enabled(),
-            disabled_until: {
-                let until = adblocker.timer.disabled_until.load(Ordering::Relaxed);
-                if until == 0 { None } else { Some(until) }
-            },
-            remaining_secs: adblocker.timer.remaining_secs(),
-            blocklist_size: adblocker.blocklist_size(),
-            allowlist_size: adblocker.allowlist_size(),
-        })
+        Response::Error {
+            error: "DNS service or adblock not available".into(),
+        }
     }
 
     #[cfg(not(feature = "adblock"))]

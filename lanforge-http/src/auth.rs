@@ -24,6 +24,7 @@ pub struct Claims {
 pub struct AuthenticatedUser {
     pub name: String,
     pub method: AuthMethod,
+    pub scopes: lanforge_types::auth::ApiScopes,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -138,10 +139,11 @@ where
 
         // 1. Try validating as API Token from DB
         match db.validate_api_token(token).await {
-            Ok(Some(name)) => {
+            Ok(Some((name, scopes))) => {
                 return Ok(Self {
                     name,
                     method: AuthMethod::ApiToken,
+                    scopes,
                 });
             }
             Ok(None) => {} // Continue to JWT
@@ -156,6 +158,7 @@ where
             Ok(claims) => Ok(Self {
                 name: claims.sub,
                 method: AuthMethod::Jwt,
+                scopes: lanforge_types::auth::ApiScopes::from_slice(&[lanforge_types::auth::ApiScope::Admin]),
             }),
             Err(_) => Err(HttpError::Auth("Invalid or expired token".into())),
         }
@@ -200,9 +203,10 @@ pub async fn middleware(
 
     // Validate
     let user = match db.validate_api_token(token).await {
-        Ok(Some(name)) => AuthenticatedUser {
+        Ok(Some((name, scopes))) => AuthenticatedUser {
             name,
             method: AuthMethod::ApiToken,
+            scopes,
         },
         Ok(None) => {
             // Try JWT
@@ -210,6 +214,7 @@ pub async fn middleware(
                 Ok(claims) => AuthenticatedUser {
                     name: claims.sub,
                     method: AuthMethod::Jwt,
+                    scopes: lanforge_types::auth::ApiScopes::from_slice(&[lanforge_types::auth::ApiScope::Admin]),
                 },
                 Err(_) => return Err(HttpError::Auth("Invalid or expired token".into())),
             }

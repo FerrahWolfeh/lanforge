@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Context, Result};
 #[cfg(feature = "remote")]
 use directories::ProjectDirs;
+use lanforge_types::auth::ApiScopes;
 #[cfg(feature = "remote")]
 use reqwest::Client;
 use tokio::net::UnixStream;
@@ -517,8 +518,24 @@ impl LanforgeClient {
         dispatch!(self, get => "/auth/tokens", ak_list())
     }
 
-    pub async fn ak_generate(&self, name: String) -> Result<AuthTokenResponse> {
-        dispatch!(self, post => "/auth/tokens", serde_json::json!({ "name": &name }), ak_generate(name))
+    pub async fn ak_generate(
+        &self,
+        name: String,
+        scopes: Option<ApiScopes>,
+        expires_at: Option<i64>,
+    ) -> Result<AuthTokenResponse> {
+        let scopes_str = scopes.as_ref().map(|s| {
+            s.iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        });
+        dispatch!(
+            self,
+            post => "/auth/tokens",
+            serde_json::json!({ "name": &name, "scopes": scopes_str, "expires_at": expires_at }),
+            ak_generate(name, scopes, expires_at)
+        )
     }
 
     pub async fn ak_delete(&self, id_or_name: String) -> Result<SimpleSuccess> {

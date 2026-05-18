@@ -183,7 +183,7 @@ All write operations (`ak_generate`, `ak_delete`, `ak_renew`) are **UDS-only** �
 
 | Method | Parameters | Return Type | Notes |
 | :--- | :--- | :--- | :--- |
-| `ak_generate` | `name: String` | `AuthTokenResponse` | **UDS-only.** Generates a new API token. Secret is returned once. |
+| `ak_generate` | `name: String`, `scopes: Option<ApiScopes>`, `expires_at: Option<i64>` | `AuthTokenResponse` | **UDS-only.** Generates a new API token. Secret is returned once. |
 | `ak_list` | None | `AuthTokensResponse` | Lists all active API tokens (metadata only — no secrets). |
 | `ak_delete` | `id_or_name: String` | `SimpleSuccess` | **UDS-only.** Revokes an API token. |
 | `ak_renew` | `id_or_name: String` | `AuthTokenResponse` | **UDS-only.** Regenerates an API token. New secret returned once. |
@@ -311,3 +311,56 @@ Used as the `filter` parameter in the `log` HybridStream endpoint. Represents th
 
 Examples (non-exhaustive — extend as new subsystems are added):
 `DeviceOnline`, `DeviceOffline`, `DeviceUpdated`, `DevicePurged`, `DhcpLeaseGranted`, `DhcpLeaseReleased`, `DnsQuery`, `DnsBlocked`, `DnsRewriteUpdated`, `AdblockToggled`, `ScanCompleted`, `ConfigReloaded`.
+
+### ServerCapabilities & Cap
+Represents the compiled feature flags and runtime enabled capabilities of the daemon.
+
+```json
+{
+  "compiled": ["dns", "upstream_udp_tcp", "upstream_dot", "upstream_doq", "upstream_doh", "doh_downstream", "dhcp_v4", "dhcp_v6", "ra", "ndp_discovery", "mdns_probe", "lldp_probe", "uds", "http", "zstd", "sqlite", "postgresql"],
+  "enabled": ["dns", "upstream_dot", "dhcp_v4", "ra", "uds", "http", "sqlite"]
+}
+```
+
+- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_dot`, `upstream_doq`, `upstream_doh`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `lldp_probe`, `uds`, `http`, `zstd`, `sqlite`, `postgresql`.
+
+### ServiceBanner & StatusProvider
+Model for decoupled system monitoring. Each service implements `StatusProvider` to export its current health and metrics.
+
+```json
+{
+  "name": "dhcp_v4",
+  "state": "active",
+  "uptime_secs": 3600,
+  "stats": {
+    "leases_active": "15",
+    "pool_free": "185"
+  }
+}
+```
+
+### AuthToken
+Representations of API authentication tokens.
+
+```json
+{
+  "token": "ak_1234567890abcdef",
+  "name": "cli-admin",
+  "created_at": 1715000000,
+  "last_used": 1715003600,
+  "scopes": ["admin", "monitoring", "upstream_write"],
+  "expires_at": 1746536000
+}
+```
+
+### UpstreamConfigPayload
+Payload for adding runtime DNS upstreams to the database.
+
+```json
+{
+  "addr": "8.8.8.8:853",
+  "protocol": "tls",
+  "domain": "dns.google"
+}
+```
+

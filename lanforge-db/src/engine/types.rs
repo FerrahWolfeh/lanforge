@@ -107,4 +107,14 @@ pub struct ApiTokenRow {
     pub name: String,
     pub created_at: i64,
     pub last_used: Option<i64>,
+    pub scopes: String,
+    pub expires_at: Option<i64>,
+}
+
+#[derive(sqlx::FromRow)]
+pub struct DnsUpstreamRow {
+    pub id: i64,
+    pub addr: String,
+    pub protocol: String,
+    pub domain: Option<String>,
 }

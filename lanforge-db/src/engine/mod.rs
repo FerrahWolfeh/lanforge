@@ -825,17 +825,30 @@ impl LeaseDb {
 
     // --- API Token methods ---
 
-    pub async fn store_api_token(&self, token: &str, name: &str) -> Result<i64, LeaseDbError> {
+    pub async fn store_api_token(
+        &self,
+        token: &str,
+        name: &str,
+        scopes: &lanforge_types::auth::ApiScopes,
+        expires_at: Option<i64>,
+    ) -> Result<i64, LeaseDbError> {
         let now = utils::system_time_to_unix(SystemTime::now());
         match &self.pool {
             #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::store_api_token(p, token, name, now).await,
+            Pool::Sqlite(p) => {
+                sqlite::store_api_token(p, token, name, scopes, expires_at, now).await
+            }
             #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::store_api_token(p, token, name, now).await,
+            Pool::Postgres(p) => {
+                postgres::store_api_token(p, token, name, scopes, expires_at, now).await
+            }
         }
     }
 
-    pub async fn validate_api_token(&self, token: &str) -> Result<Option<String>, LeaseDbError> {
+    pub async fn validate_api_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LeaseDbError> {
         let now = utils::system_time_to_unix(SystemTime::now());
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -877,12 +890,55 @@ impl LeaseDb {
         }
     }
 
-    pub async fn get_api_token_name(&self, id: i64) -> Result<Option<String>, LeaseDbError> {
+    pub async fn get_api_token_info(
+        &self,
+        id_or_name: &str,
+    ) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LeaseDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::get_api_token_name(p, id).await,
+            Pool::Sqlite(p) => sqlite::get_api_token_info(p, id_or_name).await,
             #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::get_api_token_name(p, id).await,
+            Pool::Postgres(p) => postgres::get_api_token_info(p, id_or_name).await,
+        }
+    }
+
+    // --- DNS Upstreams methods ---
+
+    pub async fn load_dns_upstreams(
+        &self,
+    ) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::load_dns_upstreams(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::load_dns_upstreams(p).await,
+        }
+    }
+
+    pub async fn add_dns_upstream(
+        &self,
+        addr: &str,
+        protocol: &str,
+        domain: Option<&str>,
+    ) -> Result<i64, LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::add_dns_upstream(p, addr, protocol, domain).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::add_dns_upstream(p, addr, protocol, domain).await,
+        }
+    }
+
+    pub async fn remove_dns_upstream(
+        &self,
+        addr: &str,
+        protocol: &str,
+    ) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::remove_dns_upstream(p, addr, protocol).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::remove_dns_upstream(p, addr, protocol).await,
         }
     }
 }

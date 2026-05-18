@@ -72,6 +72,11 @@ pub mod state;
 #[cfg(test)]
 pub mod tests;
 pub mod write;
+pub mod caps;
+pub mod dns_handle;
+
+pub use self::caps::CompiledCaps;
+pub use self::dns_handle::DnsHandle;
 
 use std::sync::atomic::AtomicU64;
 
@@ -187,6 +192,10 @@ struct LanforgeContextInner {
     status: RwLock<Option<SystemStatus>>,
     /// Global counter for active API clients (Control UDS, HTTP, etc.).
     pub active_clients: Arc<AtomicUsize>,
+    /// Decoupled status providers.
+    status_providers: RwLock<Vec<Arc<dyn crate::service::StatusProvider>>>,
+    /// Decoupled DNS handle.
+    dns_handle: RwLock<Option<DnsHandle>>,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -229,6 +238,8 @@ impl LanforgeContext {
             last_scan: RwLock::new(Instant::now()),
             status: RwLock::new(None),
             active_clients: Arc::new(AtomicUsize::new(0)),
+            status_providers: RwLock::new(Vec::new()),
+            dns_handle: RwLock::new(None),
         });
         Self { inner }
     }
@@ -344,6 +355,28 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_status(&self) -> Option<SystemStatus> {
         self.inner.status.read().clone()
+    }
+
+    /// Registers a decoupled status provider.
+    pub fn register_status_provider(&self, provider: Arc<dyn crate::service::StatusProvider>) {
+        self.inner.status_providers.write().push(provider);
+    }
+
+    /// Returns a list of all registered status providers.
+    #[must_use]
+    pub fn status_providers(&self) -> Vec<Arc<dyn crate::service::StatusProvider>> {
+        self.inner.status_providers.read().clone()
+    }
+
+    /// Sets the decoupled DNS handle.
+    pub fn set_dns_handle(&self, handle: DnsHandle) {
+        *self.inner.dns_handle.write() = Some(handle);
+    }
+
+    /// Returns the decoupled DNS handle, if available.
+    #[must_use]
+    pub fn dns_handle(&self) -> Option<DnsHandle> {
+        self.inner.dns_handle.read().clone()
     }
 }
 

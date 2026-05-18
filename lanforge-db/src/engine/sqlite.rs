@@ -387,12 +387,21 @@ pub async fn store_api_token(
     pool: &sqlx::SqlitePool,
     token: &str,
     name: &str,
+    scopes: &lanforge_types::auth::ApiScopes,
+    expires_at: Option<i64>,
     now: i64,
 ) -> Result<i64, LeaseDbError> {
-    let res = sqlx::query("INSERT INTO api_tokens (token, name, created_at) VALUES (?, ?, ?)")
+    let scopes_str = scopes
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let res = sqlx::query("INSERT INTO api_tokens (token, name, created_at, scopes, expires_at) VALUES (?, ?, ?, ?, ?)")
         .bind(token)
         .bind(name)
         .bind(now)
+        .bind(scopes_str)
+        .bind(expires_at)
         .execute(pool)
         .await?;
     Ok(res.last_insert_rowid())
@@ -402,19 +411,28 @@ pub async fn validate_api_token(
     pool: &sqlx::SqlitePool,
     token: &str,
     now: i64,
-) -> Result<Option<String>, LeaseDbError> {
-    let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE token = ?")
+) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LeaseDbError> {
+    let res: Option<(String, String, Option<i64>)> = sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE token = ?")
         .bind(token)
         .fetch_optional(pool)
         .await?;
 
-    if let Some((name,)) = res {
+    if let Some((name, scopes_str, expires_at)) = res {
+        if let Some(exp) = expires_at
+            && now > exp
+        {
+            return Ok(None); // Token expired
+        }
         sqlx::query("UPDATE api_tokens SET last_used = ? WHERE token = ?")
             .bind(now)
             .bind(token)
             .execute(pool)
             .await?;
-        Ok(Some(name))
+        let scopes = scopes_str
+            .split(',')
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        Ok(Some((name, scopes)))
     } else {
         Ok(None)
     }
@@ -450,20 +468,74 @@ pub async fn load_api_tokens(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
     sqlx::query_as::<_, crate::engine::types::ApiTokenRow>(
-        "SELECT id, token, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC",
+        "SELECT id, token, name, created_at, last_used, scopes, expires_at FROM api_tokens ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
     .map_err(Into::into)
 }
 
-pub async fn get_api_token_name(
+pub async fn get_api_token_info(
     pool: &sqlx::SqlitePool,
-    id: i64,
-) -> Result<Option<String>, LeaseDbError> {
-    let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
+    id_or_name: &str,
+) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LeaseDbError> {
+    let res: Option<(String, String, Option<i64>)> = if let Ok(id) = id_or_name.parse::<i64>() {
+        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+    } else {
+        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE name = ?")
+            .bind(id_or_name)
+            .fetch_optional(pool)
+            .await?
+    };
+    if let Some((name, scopes_str, expires_at)) = res {
+        let scopes = scopes_str
+            .split(',')
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        Ok(Some((name, scopes, expires_at)))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn load_dns_upstreams(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LeaseDbError> {
+    sqlx::query_as::<_, crate::engine::types::DnsUpstreamRow>(
+        "SELECT id, addr, protocol, domain FROM dns_upstreams ORDER BY id ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn add_dns_upstream(
+    pool: &sqlx::SqlitePool,
+    addr: &str,
+    protocol: &str,
+    domain: Option<&str>,
+) -> Result<i64, LeaseDbError> {
+    let res = sqlx::query("INSERT INTO dns_upstreams (addr, protocol, domain) VALUES (?, ?, ?)")
+        .bind(addr)
+        .bind(protocol)
+        .bind(domain)
+        .execute(pool)
         .await?;
-    Ok(res.map(|(n,)| n))
+    Ok(res.last_insert_rowid())
+}
+
+pub async fn remove_dns_upstream(
+    pool: &sqlx::SqlitePool,
+    addr: &str,
+    protocol: &str,
+) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM dns_upstreams WHERE addr = ? AND protocol = ?")
+        .bind(addr)
+        .bind(protocol)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

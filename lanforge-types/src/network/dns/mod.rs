@@ -535,6 +535,98 @@ impl std::fmt::Display for DnsRecordEntry {
     }
 }
 
+use std::collections::HashMap;
+
+/// A snapshot of DNS resolver statistics.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsStatsResponse {
+    pub total_requests: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub upstream_errors: u64,
+    pub auth_queries: u64,
+    pub recursions: u64,
+    pub blocked_queries: u64,
+    pub resolved_total: u64,
+    pub failed_total: u64,
+    pub cache_entries: u64,
+    pub cache_capacity: u64,
+}
+
+/// DNS cache dump entry.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsCacheResponse {
+    pub entries: Vec<DnsCacheEntry>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsCacheEntry {
+    pub name: String,
+    pub kind: DnsRecordType,
+    pub data: String,
+    pub expires_in_secs: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsAdblockStatusResponse {
+    pub enabled: bool,
+    pub disabled_until: Option<u64>,
+    pub remaining_secs: Option<u64>,
+    pub blocklist_size: usize,
+    pub allowlist_size: usize,
+}
+
+/// A single adblock source URL entry.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AdblockUrlEntry {
+    pub id: Option<i64>,
+    pub url: String,
+    pub kind: String,
+}
+
+/// In-depth DNS cache statistics.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsCacheStatsExtResponse {
+    pub total_entries: u64,
+    pub entries_by_type: HashMap<DnsRecordType, u64>,
+    pub memory_usage_bytes: u64,
+    pub average_ttl_secs: u64,
+}
+
+/// Request sent over the core DNS handle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DnsRequest {
+    Query { name: String, qtype: DnsRecordType },
+    CacheDump { limit: Option<usize>, offset: Option<usize> },
+    CacheStatsExt,
+    Upstreams,
+    AdblockStatus,
+    AdblockSet { enabled: bool, duration_secs: Option<u64> },
+    AdblockReload,
+    AdblockUrlList,
+    AdblockUrlAdd { url: String, kind: String },
+    AdblockUrlRemove { url: String },
+    Stats,
+}
+
+/// Response returned from the core DNS handle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DnsResponse {
+    Query(Result<(Vec<DnsRecordEntry>, bool, String), String>),
+    CacheDump(DnsCacheResponse),
+    CacheStatsExt(DnsCacheStatsExtResponse),
+    Upstreams(Vec<UpstreamHealthSnapshot>),
+    AdblockStatus(DnsAdblockStatusResponse),
+    AdblockSet(Result<(), String>),
+    AdblockReload(Result<(), String>),
+    AdblockUrlList(Vec<AdblockUrlEntry>),
+    AdblockUrlAdd(Result<(), String>),
+    AdblockUrlRemove(Result<(), String>),
+    Stats(DnsStatsResponse),
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use super::common::Capabilities;
+use super::common::{Capabilities, ServerCapabilities, ServiceBanner};
 
 /// Interface information.
 #[derive(Debug, Serialize, Clone, Deserialize)]
@@ -27,6 +27,10 @@ pub struct StatusResponse {
     pub devices: DevicesStats,
     /// Daemon capabilities.
     pub capabilities: Capabilities,
+    /// Decoupled server capabilities (compiled vs enabled).
+    pub server_caps: ServerCapabilities,
+    /// Decoupled service banners.
+    pub service_banners: Vec<ServiceBanner>,
 }
 
 /// Aggregated status for all major daemon services.

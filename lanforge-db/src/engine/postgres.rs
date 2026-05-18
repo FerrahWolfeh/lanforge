@@ -385,14 +385,23 @@ pub async fn store_api_token(
     pool: &sqlx::PgPool,
     token: &str,
     name: &str,
+    scopes: &lanforge_types::auth::ApiScopes,
+    expires_at: Option<i64>,
     now: i64,
 ) -> Result<i64, LeaseDbError> {
+    let scopes_str = scopes
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let row: (i32,) = sqlx::query_as(
-        "INSERT INTO api_tokens (token, name, created_at) VALUES ($1, $2, $3) RETURNING id",
+        "INSERT INTO api_tokens (token, name, created_at, scopes, expires_at) VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
     .bind(token)
     .bind(name)
     .bind(now)
+    .bind(scopes_str)
+    .bind(expires_at)
     .fetch_one(pool)
     .await?;
     Ok(i64::from(row.0))
@@ -402,19 +411,28 @@ pub async fn validate_api_token(
     pool: &sqlx::PgPool,
     token: &str,
     now: i64,
-) -> Result<Option<String>, LeaseDbError> {
-    let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE token = $1")
+) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LeaseDbError> {
+    let res: Option<(String, String, Option<i64>)> = sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE token = $1")
         .bind(token)
         .fetch_optional(pool)
         .await?;
 
-    if let Some((name,)) = res {
+    if let Some((name, scopes_str, expires_at)) = res {
+        if let Some(exp) = expires_at
+            && now > exp
+        {
+            return Ok(None); // Token expired
+        }
         sqlx::query("UPDATE api_tokens SET last_used = $1 WHERE token = $2")
             .bind(now)
             .bind(token)
             .execute(pool)
             .await?;
-        Ok(Some(name))
+        let scopes = scopes_str
+            .split(',')
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        Ok(Some((name, scopes)))
     } else {
         Ok(None)
     }
@@ -449,8 +467,8 @@ pub async fn delete_api_token_by_id_or_name(
 pub async fn load_api_tokens(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
-    let rows = sqlx::query_as::<_, (i32, String, String, i64, Option<i64>)>(
-        "SELECT id, token, name, created_at, last_used FROM api_tokens ORDER BY created_at DESC",
+    let rows = sqlx::query_as::<_, (i32, String, String, i64, Option<i64>, String, Option<i64>)>(
+        "SELECT id, token, name, created_at, last_used, scopes, expires_at FROM api_tokens ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await?;
@@ -458,24 +476,89 @@ pub async fn load_api_tokens(
     Ok(rows
         .into_iter()
         .map(
-            |(id, token, name, created_at, last_used)| crate::engine::types::ApiTokenRow {
+            |(id, token, name, created_at, last_used, scopes, expires_at)| crate::engine::types::ApiTokenRow {
                 id: i64::from(id),
                 token,
                 name,
                 created_at,
                 last_used,
+                scopes,
+                expires_at,
             },
         )
         .collect())
 }
 
-pub async fn get_api_token_name(
+pub async fn get_api_token_info(
     pool: &sqlx::PgPool,
-    id: i64,
-) -> Result<Option<String>, LeaseDbError> {
-    let res: Option<(String,)> = sqlx::query_as("SELECT name FROM api_tokens WHERE id = $1")
-        .bind(id as i32)
-        .fetch_optional(pool)
+    id_or_name: &str,
+) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LeaseDbError> {
+    let res: Option<(String, String, Option<i64>)> = if let Ok(id) = id_or_name.parse::<i64>() {
+        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE id = $1")
+            .bind(id as i32)
+            .fetch_optional(pool)
+            .await?
+    } else {
+        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE name = $1")
+            .bind(id_or_name)
+            .fetch_optional(pool)
+            .await?
+    };
+    if let Some((name, scopes_str, expires_at)) = res {
+        let scopes = scopes_str
+            .split(',')
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        Ok(Some((name, scopes, expires_at)))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn load_dns_upstreams(
+    pool: &sqlx::PgPool,
+) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LeaseDbError> {
+    let rows = sqlx::query_as::<_, (i32, String, String, Option<String>)>(
+        "SELECT id, addr, protocol, domain FROM dns_upstreams ORDER BY id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(id, addr, protocol, domain)| crate::engine::types::DnsUpstreamRow {
+            id: i64::from(id),
+            addr,
+            protocol,
+            domain,
+        })
+        .collect())
+}
+
+pub async fn add_dns_upstream(
+    pool: &sqlx::PgPool,
+    addr: &str,
+    protocol: &str,
+    domain: Option<&str>,
+) -> Result<i64, LeaseDbError> {
+    let row: (i32,) = sqlx::query_as("INSERT INTO dns_upstreams (addr, protocol, domain) VALUES ($1, $2, $3) RETURNING id")
+        .bind(addr)
+        .bind(protocol)
+        .bind(domain)
+        .fetch_one(pool)
         .await?;
-    Ok(res.map(|(n,)| n))
+    Ok(i64::from(row.0))
+}
+
+pub async fn remove_dns_upstream(
+    pool: &sqlx::PgPool,
+    addr: &str,
+    protocol: &str,
+) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM dns_upstreams WHERE addr = $1 AND protocol = $2")
+        .bind(addr)
+        .bind(protocol)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

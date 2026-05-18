@@ -1,3 +1,4 @@
+use lanforge_types::auth::ApiScopes;
 use serde::{Deserialize, Serialize};
 
 /// Response containing a generated API token.
@@ -8,6 +9,8 @@ pub struct AuthTokenResponse {
     pub token: String,
     /// Human-readable name/label for this token.
     pub name: String,
+    pub scopes: ApiScopes,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -16,6 +19,8 @@ pub struct AuthTokenEntry {
     pub name: String,
     pub created_at: i64,
     pub last_used: Option<i64>,
+    pub scopes: ApiScopes,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

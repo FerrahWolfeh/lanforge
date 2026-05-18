@@ -3,7 +3,6 @@ use lanforge_api::api::{
     DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, Response, SimpleSuccess,
 };
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_dns::server::DnsContext;
 
 impl ClientContext {
     pub async fn handle_dns_cache_flush(&self) -> Response {
@@ -21,26 +20,26 @@ impl ClientContext {
         limit: Option<usize>,
         offset: Option<usize>,
     ) -> Response {
-        if let Some(dns_ctx_any) = self.ctx.get_dns_context()
-            && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(lanforge_types::network::dns::DnsResponse::CacheDump(res)) = handle
+                .send_request(lanforge_types::network::dns::DnsRequest::CacheDump {
+                    limit,
+                    offset,
+                })
+                .await
         {
-            let mut entries = Vec::new();
-            for (name, kind, data, expires_in_secs) in dns_ctx.cache.dump() {
-                entries.push(DnsCacheEntry {
-                    name,
-                    kind,
-                    data,
-                    expires_in_secs,
-                });
-            }
-            let total = entries.len();
-            let start = offset.unwrap_or(0).min(total);
-            let end = (start + limit.unwrap_or(total)).min(total);
-            let paginated = entries[start..end].to_vec();
-
             return Response::DnsCache(DnsCacheResponse {
-                entries: paginated,
-                total,
+                entries: res
+                    .entries
+                    .into_iter()
+                    .map(|e| DnsCacheEntry {
+                        name: e.name,
+                        kind: e.kind,
+                        data: e.data,
+                        expires_in_secs: e.expires_in_secs,
+                    })
+                    .collect(),
+                total: res.total,
             });
         }
 
@@ -50,17 +49,16 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_cache_stats_ext(&self) -> Response {
-        if let Some(dns_ctx_any) = self.ctx.get_dns_context()
-            && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(lanforge_types::network::dns::DnsResponse::CacheStatsExt(res)) = handle
+                .send_request(lanforge_types::network::dns::DnsRequest::CacheStatsExt)
+                .await
         {
-            let (total_entries, entries_by_type, memory_usage_bytes, average_ttl_secs) =
-                dns_ctx.cache.get_stats_ext();
-
             return Response::DnsCacheStatsExt(DnsCacheStatsExtResponse {
-                total_entries,
-                entries_by_type,
-                memory_usage_bytes,
-                average_ttl_secs,
+                total_entries: res.total_entries,
+                entries_by_type: res.entries_by_type,
+                memory_usage_bytes: res.memory_usage_bytes,
+                average_ttl_secs: res.average_ttl_secs,
             });
         }
 
