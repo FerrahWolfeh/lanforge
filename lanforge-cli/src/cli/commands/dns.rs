@@ -35,7 +35,7 @@ pub enum DnsAction {
     Upstreams,
     Query {
         name: Option<String>,
-        record_type: Option<String>,
+        record_types: Vec<String>,
     },
     Cache(DnsCacheArgs),
     Log {
@@ -166,27 +166,44 @@ fn ip_to_arpa(ip: IpAddr) -> String {
 async fn execute_query(
     client: &LanforgeClient,
     name: Option<String>,
-    record_type: Option<String>,
+    record_types: Vec<String>,
 ) -> Result<()> {
     let mut final_name = match name {
         Some(n) => n,
         None => prompt_text("Domain name to query:", None)?,
     };
-    let mut final_rt = record_type;
-    if final_rt.is_none() {
+    let mut rtypes = record_types;
+    if rtypes.is_empty() {
         if let Ok(ip) = final_name.parse::<IpAddr>() {
-            final_rt = Some("PTR".to_string());
+            rtypes.push("PTR".to_string());
             final_name = ip_to_arpa(ip);
         } else {
-            final_rt = Some("A".to_string());
+            rtypes.push("A".to_string());
         }
     }
-    let final_rt = final_rt.unwrap();
-    render_output!(
-        client,
-        client.dns_query(final_name, Some(final_rt)).await?,
-        render_dns_query
-    )
+    if client.json {
+        let mut responses = Vec::new();
+        for rt in &rtypes {
+            let resp = client.dns_query(final_name.clone(), Some(rt.clone())).await?;
+            responses.push(resp);
+        }
+        if responses.len() == 1 {
+            let s = serde_json::to_string_pretty(&responses[0])?;
+            println!("{s}");
+        } else {
+            let s = serde_json::to_string_pretty(&responses)?;
+            println!("{s}");
+        }
+        return Ok(());
+    }
+    for (i, rt) in rtypes.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        let resp = client.dns_query(final_name.clone(), Some(rt.clone())).await?;
+        render_dns_query(&resp, client.ascii);
+    }
+    Ok(())
 }
 
 impl Execute for DnsCacheArgs {
@@ -563,8 +580,8 @@ impl Execute for DnsArgs {
             DnsAction::Upstreams => {
                 render_output!(client, client.dns_upstreams().await?, render_dns_upstreams)
             }
-            DnsAction::Query { name, record_type } => {
-                execute_query(client, name, record_type).await
+            DnsAction::Query { name, record_types } => {
+                execute_query(client, name, record_types).await
             }
             DnsAction::Cache(args) => args.execute(client).await,
             DnsAction::Log {
@@ -641,29 +658,29 @@ pub fn render_dns_upstreams(resp: &DnsUpstreamsResponse, ascii: bool) {
 
 pub fn render_dns_query(resp: &DnsQueryResponse, _ascii: bool) {
     let auth_str = if resp.authoritative {
-        "Authoritative".green()
+        format!("Authoritative - {}", resp.result).green()
     } else {
-        "Non-Authoritative".yellow()
+        format!("Non-Authoritative - {}", resp.result).yellow()
     };
     println!(
         " {}   latency: {}ms  ({auth_str})",
         "QUERY RESULT".bold(),
         resp.latency_ms.to_string().yellow()
     );
-    if resp.records.is_empty() {
+    if resp.result == "Blocked" || resp.result == "CachedBlock" {
+        println!("{}", "Domain blocked by AdBlocker.".red());
+    } else if resp.records.is_empty() {
         println!("{}", "No records found.".red());
     } else {
         for r in &resp.records {
             println!(
-                "{} {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {}",
                 r.kind.to_string().cyan(),
                 r.name,
                 "->".dimmed(),
                 r.data.green(),
                 "TTL".dimmed(),
                 r.ttl.to_string().yellow(),
-                "-".dimmed(),
-                format!("{}ms", resp.latency_ms).yellow()
             );
         }
     }

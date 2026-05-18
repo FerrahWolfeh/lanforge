@@ -884,6 +884,83 @@ impl<'a> WireDecoder<'a> {
                     minimum,
                 })
             }
+            DnsRecordType::TXT => {
+                let mut pos = start;
+                let mut txts = Vec::new();
+                while pos < start + rdlen {
+                    let len = self.data[pos] as usize;
+                    if pos + 1 + len > start + rdlen {
+                        break;
+                    }
+                    if let Ok(s) = std::str::from_utf8(&self.data[pos + 1..pos + 1 + len]) {
+                        txts.push(Arc::from(s));
+                    }
+                    pos += 1 + len;
+                }
+                Some(DnsRData::TXT(txts))
+            }
+            DnsRecordType::MX => {
+                if rdlen < 2 {
+                    return None;
+                }
+                let preference = u16::from_be_bytes([self.data[start], self.data[start + 1]]);
+                self.pos = start + 2;
+                let exchange = self.decode_name()?;
+                Some(DnsRData::MX {
+                    preference,
+                    exchange,
+                })
+            }
+            DnsRecordType::SRV => {
+                if rdlen < 6 {
+                    return None;
+                }
+                let priority = u16::from_be_bytes([self.data[start], self.data[start + 1]]);
+                let weight = u16::from_be_bytes([self.data[start + 2], self.data[start + 3]]);
+                let port = u16::from_be_bytes([self.data[start + 4], self.data[start + 5]]);
+                self.pos = start + 6;
+                let target = self.decode_name()?;
+                Some(DnsRData::SRV {
+                    priority,
+                    weight,
+                    port,
+                    target,
+                })
+            }
+            DnsRecordType::HTTPS | DnsRecordType::SVCB => {
+                if rdlen < 2 {
+                    return None;
+                }
+                let svc_priority = u16::from_be_bytes([self.data[start], self.data[start + 1]]);
+                self.pos = start + 2;
+                let svc_domain = self.decode_name()?;
+                let mut params = Vec::new();
+                while self.pos + 4 <= start + rdlen {
+                    let key = u16::from_be_bytes([self.data[self.pos], self.data[self.pos + 1]]);
+                    let vlen =
+                        u16::from_be_bytes([self.data[self.pos + 2], self.data[self.pos + 3]])
+                            as usize;
+                    self.pos += 4;
+                    if self.pos + vlen > start + rdlen {
+                        break;
+                    }
+                    params.push((key, self.data[self.pos..self.pos + vlen].to_vec()));
+                    self.pos += vlen;
+                }
+                if rtype == DnsRecordType::HTTPS {
+                    Some(DnsRData::HTTPS {
+                        svc_priority,
+                        svc_domain,
+                        params,
+                    })
+                } else {
+                    Some(DnsRData::SVCB {
+                        svc_priority,
+                        svc_domain,
+                        params,
+                    })
+                }
+            }
             _ => Some(DnsRData::Unknown(self.data[start..start + rdlen].to_vec())),
         }
     }
@@ -1018,6 +1095,30 @@ impl WireEncoder {
                 self.buf.extend_from_slice(&expire.to_be_bytes());
                 self.buf.extend_from_slice(&minimum.to_be_bytes());
             }
+            DnsRData::TXT(txts) => {
+                for s in txts {
+                    self.buf.push(u8::try_from(s.len()).unwrap_or(u8::MAX));
+                    self.buf.extend_from_slice(s.as_bytes());
+                }
+            }
+            DnsRData::MX {
+                preference,
+                exchange,
+            } => {
+                self.buf.extend_from_slice(&preference.to_be_bytes());
+                self.encode_name(exchange);
+            }
+            DnsRData::SRV {
+                priority,
+                weight,
+                port,
+                target,
+            } => {
+                self.buf.extend_from_slice(&priority.to_be_bytes());
+                self.buf.extend_from_slice(&weight.to_be_bytes());
+                self.buf.extend_from_slice(&port.to_be_bytes());
+                self.encode_name(target);
+            }
             DnsRData::OPT { options } => {
                 for (code, data) in options {
                     self.buf.extend_from_slice(&code.to_be_bytes());
@@ -1027,8 +1128,27 @@ impl WireEncoder {
                     self.buf.extend_from_slice(data);
                 }
             }
+            DnsRData::HTTPS {
+                svc_priority,
+                svc_domain,
+                params,
+            }
+            | DnsRData::SVCB {
+                svc_priority,
+                svc_domain,
+                params,
+            } => {
+                self.buf.extend_from_slice(&svc_priority.to_be_bytes());
+                self.encode_name(svc_domain);
+                for (key, val) in params {
+                    self.buf.extend_from_slice(&key.to_be_bytes());
+                    self.buf.extend_from_slice(
+                        &(u16::try_from(val.len()).unwrap_or(u16::MAX)).to_be_bytes(),
+                    );
+                    self.buf.extend_from_slice(val);
+                }
+            }
             DnsRData::Unknown(data) => self.buf.extend_from_slice(data),
-            _ => {}
         }
     }
 }

@@ -94,6 +94,8 @@ pub struct DnsQueryResponse {
     pub latency_ms: u64,
     /// Whether the result was authoritative.
     pub authoritative: bool,
+    /// Detailed resolution outcome (e.g., "Rewritten", "Local", "Cached", "Forwarded", "Blocked").
+    pub result: String,
 }
 
 /// DNS cache dump entry.
@@ -160,7 +162,6 @@ pub struct AllowlistEntry {
 pub struct DnsAllowlistResponse {
     pub allowlist: Vec<AllowlistEntry>,
 }
-
 
 /// Response containing adblock source URLs.
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -1,9 +1,10 @@
 use clap::Parser;
 use color_eyre::Result;
-use lanforge_cli::{
-    args::{Cli, Command},
-    cli::{Execute, LanforgeClient},
-};
+use inquire::InquireError;
+use lanforge_cli::args::Cli;
+#[cfg(feature = "tui")]
+use lanforge_cli::args::Command;
+use lanforge_cli::cli::{Execute, LanforgeClient};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,10 +22,10 @@ async fn main() -> Result<()> {
             let client = LanforgeClient::from_args(&args)?;
             if let Some(cmd) = args.command {
                 if let Err(e) = cmd.execute(&client).await {
-                    if let Some(inquire_err) = e.downcast_ref::<inquire::InquireError>() {
+                    if let Some(inquire_err) = e.downcast_ref::<InquireError>() {
                         match inquire_err {
-                            inquire::InquireError::OperationInterrupted => std::process::exit(130),
-                            inquire::InquireError::OperationCanceled => std::process::exit(1),
+                            InquireError::OperationInterrupted => std::process::exit(130),
+                            InquireError::OperationCanceled => std::process::exit(1),
                             _ => return Err(e),
                         }
                     }
@@ -41,10 +42,10 @@ async fn main() -> Result<()> {
             let client = LanforgeClient::from_args(&args)?;
             let cmd = Command::Tui(TuiArgs {});
             if let Err(e) = cmd.execute(&client).await {
-                if let Some(inquire_err) = e.downcast_ref::<inquire::InquireError>() {
+                if let Some(inquire_err) = e.downcast_ref::<InquireError>() {
                     match inquire_err {
-                        inquire::InquireError::OperationInterrupted => std::process::exit(130),
-                        inquire::InquireError::OperationCanceled => std::process::exit(1),
+                        InquireError::OperationInterrupted => std::process::exit(130),
+                        InquireError::OperationCanceled => std::process::exit(1),
                         _ => return Err(e),
                     }
                 }

@@ -2506,6 +2506,7 @@ dependencies = [
  "lanforge-core",
  "lanforge-db",
  "lanforge-dns",
+ "lanforge-dns-wire",
  "lanforge-macros",
  "lanforge-types",
  "rand 0.10.1",

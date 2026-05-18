@@ -400,6 +400,16 @@ pub enum DnsRData {
     OPT {
         options: Vec<(u16, Vec<u8>)>,
     },
+    HTTPS {
+        svc_priority: u16,
+        svc_domain: Arc<str>,
+        params: Vec<(u16, Vec<u8>)>,
+    },
+    SVCB {
+        svc_priority: u16,
+        svc_domain: Arc<str>,
+        params: Vec<(u16, Vec<u8>)>,
+    },
     Unknown(Vec<u8>),
 }
 
@@ -417,6 +427,76 @@ impl std::fmt::Display for DnsRData {
             Self::SOA { mname, .. } => write!(f, "SOA {mname}"),
             Self::SRV { target, port, .. } => write!(f, "{target}:{port}"),
             Self::OPT { .. } => write!(f, "EDNS"),
+            Self::HTTPS {
+                svc_priority,
+                svc_domain,
+                params,
+            }
+            | Self::SVCB {
+                svc_priority,
+                svc_domain,
+                params,
+            } => {
+                let mut parts = vec![format!("{svc_priority} {svc_domain}")];
+                for (key, val) in params {
+                    match *key {
+                        1 => {
+                            // alpn
+                            let mut alpns = Vec::new();
+                            let mut p = 0;
+                            while p < val.len() {
+                                let l = val[p] as usize;
+                                if p + 1 + l > val.len() {
+                                    break;
+                                }
+                                if let Ok(s) = std::str::from_utf8(&val[p + 1..p + 1 + l]) {
+                                    alpns.push(s.to_string());
+                                }
+                                p += 1 + l;
+                            }
+                            if !alpns.is_empty() {
+                                parts.push(format!("alpn=\"{}\"", alpns.join(",")));
+                            }
+                        }
+                        3 => {
+                            // port
+                            if val.len() >= 2 {
+                                let port = u16::from_be_bytes([val[0], val[1]]);
+                                parts.push(format!("port={port}"));
+                            }
+                        }
+                        4 => {
+                            // ipv4hint
+                            let mut ips = Vec::new();
+                            for chunk in val.chunks_exact(4) {
+                                let ip =
+                                    std::net::Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
+                                ips.push(ip.to_string());
+                            }
+                            if !ips.is_empty() {
+                                parts.push(format!("ipv4hint={}", ips.join(",")));
+                            }
+                        }
+                        6 => {
+                            // ipv6hint
+                            let mut ips = Vec::new();
+                            for chunk in val.chunks_exact(16) {
+                                let mut b = [0u8; 16];
+                                b.copy_from_slice(chunk);
+                                let ip = std::net::Ipv6Addr::from(b);
+                                ips.push(ip.to_string());
+                            }
+                            if !ips.is_empty() {
+                                parts.push(format!("ipv6hint={}", ips.join(",")));
+                            }
+                        }
+                        k => {
+                            parts.push(format!("param{k}=..."));
+                        }
+                    }
+                }
+                write!(f, "{}", parts.join(" "))
+            }
             Self::Unknown(_) => write!(f, "Unknown"),
         }
     }
