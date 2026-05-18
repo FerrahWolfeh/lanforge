@@ -33,6 +33,12 @@ pub struct StatusResponse {
     pub service_banners: Vec<ServiceBanner>,
 }
 
+/// Response containing all decoupled service banners.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServiceBannersResponse {
+    pub banners: Vec<ServiceBanner>,
+}
+
 /// Aggregated status for all major daemon services.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServicesStatus {

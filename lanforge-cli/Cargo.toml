@@ -1,6 +1,6 @@
 [package]
 name = "lanforge-cli"
-version = "2.0.2"
+version = "2.0.3"
 license.workspace = true
 edition.workspace = true
 authors.workspace = true

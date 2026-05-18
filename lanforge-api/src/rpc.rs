@@ -3,7 +3,7 @@ use crate::api::{
     DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
-    LeasesResponse, RpcCallError, SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
+    LeasesResponse, RpcCallError, ServiceBannersResponse, SimpleSuccess, StatusResponse, TopologyResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{network::dns::adblock::RewriteRule, update::LeaseTarget};
@@ -12,6 +12,7 @@ use lanforge_types::{network::dns::adblock::RewriteRule, update::LeaseTarget};
 #[async_trait::async_trait]
 pub trait LanforgeRpc {
     async fn status(&self) -> Result<Box<StatusResponse>, RpcCallError>;
+    async fn service_banners(&self) -> Result<ServiceBannersResponse, RpcCallError>;
     async fn list_devices(
         &self,
         filter: Option<String>,

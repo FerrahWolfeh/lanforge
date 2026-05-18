@@ -196,6 +196,8 @@ struct LanforgeContextInner {
     status_providers: RwLock<Vec<Arc<dyn crate::service::StatusProvider>>>,
     /// Decoupled DNS handle.
     dns_handle: RwLock<Option<DnsHandle>>,
+    /// Context creation timestamp for calculating uptime.
+    start_time: Instant,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -240,8 +242,15 @@ impl LanforgeContext {
             active_clients: Arc::new(AtomicUsize::new(0)),
             status_providers: RwLock::new(Vec::new()),
             dns_handle: RwLock::new(None),
+            start_time: Instant::now(),
         });
         Self { inner }
+    }
+
+    /// Returns the uptime of this context in seconds.
+    #[must_use]
+    pub fn uptime_secs(&self) -> u64 {
+        self.inner.start_time.elapsed().as_secs()
     }
 
     /// Returns the target interface index for this context.
@@ -359,7 +368,13 @@ impl LanforgeContext {
 
     /// Registers a decoupled status provider.
     pub fn register_status_provider(&self, provider: Arc<dyn crate::service::StatusProvider>) {
-        self.inner.status_providers.write().push(provider);
+        let mut list = self.inner.status_providers.write();
+        let name = provider.banner().name;
+        if let Some(pos) = list.iter().position(|p| p.banner().name == name) {
+            list[pos] = provider;
+        } else {
+            list.push(provider);
+        }
     }
 
     /// Returns a list of all registered status providers.

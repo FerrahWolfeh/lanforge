@@ -21,6 +21,44 @@ impl Execute for StatusArgs {
     }
 }
 
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct ServicesArgs {}
+
+impl Execute for ServicesArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        let resp = client.service_banners().await?;
+        if client.json {
+            println!("{}", serde_json::to_string_pretty(&resp)?);
+            return Ok(());
+        }
+        render_services_in_depth(&resp, client.ascii);
+        Ok(())
+    }
+}
+
+pub fn render_services_in_depth(resp: &lanforge_api::api::ServiceBannersResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" RUNNING SERVICES (DEEP-DIVE) \n");
+    println!(
+        "  {:<20} | {:<10} | {:<15} | STATS & METRICS",
+        "NAME", "STATE", "UPTIME"
+    );
+    println!("{}", hline.repeat(90));
+    for banner in &resp.banners {
+        let uptime_str = format_uptime(banner.uptime_secs);
+        let stats_str = banner
+            .stats
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "  {:<20} | {:<10} | {:<15} | {}",
+            banner.name, banner.state, uptime_str, stats_str
+        );
+    }
+}
+
 pub fn render_status(st: &StatusResponse, ascii: bool) {
     render_header(st);
     render_infrastructure(st, ascii);
@@ -61,7 +99,11 @@ fn render_infrastructure(st: &StatusResponse, ascii: bool) {
         .as_deref()
         .unwrap_or_else(|| st.network.lan_ipv4.as_deref().unwrap_or("—"));
     let rss = ByteSize::b(st.resources.memory_rss_bytes);
-    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
+    let border = if ascii {
+        BorderStyle::Classic
+    } else {
+        BorderStyle::Round
+    };
 
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_bottom: 1) {
@@ -95,78 +137,114 @@ fn render_infrastructure(st: &StatusResponse, ascii: bool) {
 }
 
 fn render_services(st: &StatusResponse, ascii: bool) {
-    let ndp_meta = format!(
-        "{} tracked · scan {}s ago",
-        st.services.ndp_monitor.addrs_tracked, st.services.ndp_monitor.last_scan_secs_ago
-    );
-    let dhcp_v4_meta = format!(
-        "{} leases · {} free",
-        st.services.dhcp_v4.leases_active, st.services.dhcp_v4.pool_free
-    );
-    let dhcp_v6_meta = format!(
-        "{} leases · prefix delegation",
-        st.services.dhcp_v6.leases_active
-    );
-    let dns_meta = format!(
-        "upstream {}",
-        st.services.dns.upstream.as_deref().unwrap_or("—")
-    );
-    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
+    let border = if ascii {
+        BorderStyle::Classic
+    } else {
+        BorderStyle::Round
+    };
     let hline = if ascii { "-" } else { "─" };
 
-    element! {
-        View(flex_direction: FlexDirection::Column, padding_left: 2, margin_bottom: 1) {
-            View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
-                Text(content: " SERVICES ", color: Color::Yellow, weight: Weight::Bold)
-            }
-            View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                ServiceLine(name: "DB Worker", state: st.services.db_worker.state.as_str(), online_val: "online", meta: "Persistence & I/O", ascii: ascii)
-                ServiceLine(name: "mDNS", state: st.services.mdns_prober.state.as_str(), online_val: "active", meta: "Device Discovery Prober", ascii: ascii)
-                ServiceLine(name: "Iface Mon", state: st.services.iface_monitor.state.as_str(), online_val: "online", meta: "Interface Address Watcher", ascii: ascii)
-                ServiceLine(
-                    name: "NDP Mon",
-                    state: st.services.ndp_monitor.state.as_str(),
-                    online_val: "online",
-                    meta: ndp_meta.as_str(),
-                    ascii: ascii
-                )
-                ServiceLine(name: "Control", state: st.services.control_api.state.as_str(), online_val: "online", meta: "UDS Management API", ascii: ascii)
-                HttpServiceLine(info: st.services.http_api.clone(), ascii: ascii)
+    if st.service_banners.is_empty() {
+        let ndp_meta = format!(
+            "{} tracked · scan {}s ago",
+            st.services.ndp_monitor.addrs_tracked, st.services.ndp_monitor.last_scan_secs_ago
+        );
+        let dhcp_v4_meta = format!(
+            "{} leases · {} free",
+            st.services.dhcp_v4.leases_active, st.services.dhcp_v4.pool_free
+        );
+        let dhcp_v6_meta = format!(
+            "{} leases · prefix delegation",
+            st.services.dhcp_v6.leases_active
+        );
+        let dns_meta = format!(
+            "upstream {}",
+            st.services.dns.upstream.as_deref().unwrap_or("—")
+        );
 
-                View(margin_top: 1, margin_bottom: 1) {
-                    Text(content: format!("  {0}{0}{0}{0}{0}{0}{0}{0}{0}{0} Protocols {0}{0}{0}{0}{0}{0}{0}{0}{0}{0}", hline), color: Color::DarkGrey)
+        element! {
+            View(flex_direction: FlexDirection::Column, padding_left: 2, margin_bottom: 1) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " SERVICES ", color: Color::Yellow, weight: Weight::Bold)
                 }
+                View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                    ServiceLine(name: "DB Worker", state: st.services.db_worker.state.as_str(), online_val: "online", meta: "Persistence & I/O", ascii: ascii)
+                    ServiceLine(name: "mDNS", state: st.services.mdns_prober.state.as_str(), online_val: "active", meta: "Device Discovery Prober", ascii: ascii)
+                    ServiceLine(name: "Iface Mon", state: st.services.iface_monitor.state.as_str(), online_val: "online", meta: "Interface Address Watcher", ascii: ascii)
+                    ServiceLine(
+                        name: "NDP Mon",
+                        state: st.services.ndp_monitor.state.as_str(),
+                        online_val: "online",
+                        meta: ndp_meta.as_str(),
+                        ascii: ascii
+                    )
+                    ServiceLine(name: "Control", state: st.services.control_api.state.as_str(), online_val: "online", meta: "UDS Management API", ascii: ascii)
+                    HttpServiceLine(info: st.services.http_api.clone(), ascii: ascii)
 
-                ServiceLine(name: "RA", state: st.services.ra.state.as_str(), online_val: "online", meta: "Neighbor Discovery & Prefixes", ascii: ascii)
-                ServiceLine(
-                    name: "DHCPv4",
-                    state: st.services.dhcp_v4.state.as_str(),
-                    online_val: "active",
-                    meta: dhcp_v4_meta.as_str(),
-                    ascii: ascii
-                )
-                ServiceLine(
-                    name: "DHCPv6",
-                    state: st.services.dhcp_v6.state.as_str(),
-                    online_val: "active",
-                    meta: dhcp_v6_meta.as_str(),
-                    ascii: ascii
-                )
-                ServiceLine(
-                    name: "DNS",
-                    state: st.services.dns.state.as_str(),
-                    online_val: "online",
-                    meta: dns_meta.as_str(),
-                    ascii: ascii
-                )
+                    View(margin_top: 1, margin_bottom: 1) {
+                        Text(content: format!("  {0}{0}{0}{0}{0}{0}{0}{0}{0}{0} Protocols {0}{0}{0}{0}{0}{0}{0}{0}{0}{0}", hline), color: Color::DarkGrey)
+                    }
+
+                    ServiceLine(name: "RA", state: st.services.ra.state.as_str(), online_val: "online", meta: "Neighbor Discovery & Prefixes", ascii: ascii)
+                    ServiceLine(
+                        name: "DHCPv4",
+                        state: st.services.dhcp_v4.state.as_str(),
+                        online_val: "active",
+                        meta: dhcp_v4_meta.as_str(),
+                        ascii: ascii
+                    )
+                    ServiceLine(
+                        name: "DHCPv6",
+                        state: st.services.dhcp_v6.state.as_str(),
+                        online_val: "active",
+                        meta: dhcp_v6_meta.as_str(),
+                        ascii: ascii
+                    )
+                    ServiceLine(
+                        name: "DNS",
+                        state: st.services.dns.state.as_str(),
+                        online_val: "online",
+                        meta: dns_meta.as_str(),
+                        ascii: ascii
+                    )
+                }
             }
-        }
-    }.print();
+        }.print();
+    } else {
+        let metas: Vec<String> = st
+            .service_banners
+            .iter()
+            .map(|banner| format!("uptime: {}", format_uptime(banner.uptime_secs)))
+            .collect();
+
+        element! {
+            View(flex_direction: FlexDirection::Column, padding_left: 2, margin_bottom: 1) {
+                View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                    Text(content: " SERVICES ", color: Color::Yellow, weight: Weight::Bold)
+                }
+                View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
+                    #(st.service_banners.iter().zip(metas.iter()).map(|(banner, meta)| element! {
+                        ServiceLine(
+                            name: banner.name.as_str(),
+                            state: banner.state.as_str(),
+                            online_val: "online",
+                            meta: meta.as_str(),
+                            ascii: ascii
+                        )
+                    }))
+                }
+            }
+        }.print();
+    }
 }
 
 fn render_insights(st: &StatusResponse, ascii: bool) {
     let db_size = ByteSize::b(st.db.size_bytes);
-    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
+    let border = if ascii {
+        BorderStyle::Classic
+    } else {
+        BorderStyle::Round
+    };
     let star = if ascii { "*" } else { "★" };
 
     element! {
@@ -207,7 +285,7 @@ fn ServiceLine<'a>(props: &ServiceLineProps<'a>) -> impl Into<AnyElement<'a>> {
     element! {
         View(flex_direction: FlexDirection::Row) {
             Text(content: format!("{bullet} "), color: color)
-            Text(content: format!("{:<10}", props.name))
+            Text(content: format!("{:<15}", props.name))
             Text(content: format!("{:<10}", props.state), color: color)
             Text(content: props.meta, color: Color::DarkGrey)
         }

@@ -18,6 +18,7 @@ pub struct ContextDumpQuery {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(handle_status))
+        .route("/service_banners", get(handle_service_banners))
         .route("/scan", post(handle_scan))
         .route("/reload", post(handle_reload))
         .route("/shutdown", post(handle_shutdown))
@@ -30,6 +31,11 @@ use crate::routes::create_client_ctx;
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_status().await, Status)
+}
+
+async fn handle_service_banners(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_service_banners().await, ServiceBanners)
 }
 
 async fn handle_scan(State(state): State<AppState>) -> impl IntoResponse {

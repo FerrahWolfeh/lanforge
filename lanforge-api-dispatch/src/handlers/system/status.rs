@@ -37,6 +37,16 @@ impl ClientContext {
         Response::Status(Box::new(status))
     }
 
+    pub async fn handle_service_banners(&self) -> Response {
+        let banners = self
+            .ctx
+            .status_providers()
+            .iter()
+            .map(|p| p.banner())
+            .collect();
+        Response::ServiceBanners(lanforge_api::api::ServiceBannersResponse { banners })
+    }
+
     #[must_use]
     pub fn gather_db_status(&self) -> DbStatus {
         let status = self.ctx.get_status().unwrap_or_default();

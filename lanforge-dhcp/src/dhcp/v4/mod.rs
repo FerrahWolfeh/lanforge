@@ -38,9 +38,11 @@ use lanforge_core::bus::{
 };
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::system::{ServiceBanner, ServiceState};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tracing::{info, warn};
@@ -51,7 +53,7 @@ use server::{DhcpServer, HandleResult};
 use crate::dhcp::v4::config::Dhcpv4Config;
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 
 #[lanforge_macros::lanforge_service(
     id = "dhcpv4",
@@ -65,6 +67,7 @@ use lanforge_core::service::{AsyncService, ServiceControl};
         self.cfg.iface, self.cfg.get_effective_pools().len(), self.cfg.lease_time
     )
 )]
+#[derive(Clone)]
 pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
     ctx: LanforgeContext,
@@ -72,8 +75,29 @@ pub struct Dhcpv4Service {
 
 impl Dhcpv4Service {
     #[must_use]
-    pub const fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
-        Self { cfg, ctx }
+    pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
+        let service = Self {
+            cfg,
+            ctx: ctx.clone(),
+        };
+        ctx.register_status_provider(Arc::new(service.clone()));
+        service
+    }
+}
+
+impl StatusProvider for Dhcpv4Service {
+    fn banner(&self) -> ServiceBanner {
+        let stats = vec![
+            ("iface", self.cfg.iface.clone()),
+            ("lease_time", self.cfg.lease_time.to_string()),
+            ("port", self.cfg.port.to_string()),
+        ];
+        ServiceBanner {
+            name: "DHCPv4 Server".to_string(),
+            state: ServiceState::Online,
+            uptime_secs: self.ctx.uptime_secs(),
+            stats,
+        }
     }
 }
 

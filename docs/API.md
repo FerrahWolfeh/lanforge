@@ -21,6 +21,7 @@ Endpoints that follow this pattern are marked **HybridStream**.
 | Method | Description | Streaming | Input | Output |
 | :--- | :--- | :--- | :--- | :--- |
 | `status` | Returns daemon uptime, version, ServerCapabilities, and general health. | No | No | Status api type |
+| `service_banners` | Retrieves aggregated status banners and real-time metrics from all registered decoupled services. | No | No | ServiceBanners api type |
 | `reload` | Soft reboot; reloads configuration from disk. | No | No | Empty on success, error on failure |
 | `scan` | Triggers an immediate network scan (ARP/NDP). | No | No | Empty on success, error on failure |
 | `shutdown` | Gracefully shuts down the daemon and exits. | No | No | Empty on success, error on failure |

@@ -1,6 +1,7 @@
 use lanforge_api::api::EventKind;
 use lanforge_api::rpc::{LanforgeRpcDispatcher, RpcRequest, RpcResponse};
 use lanforge_api_dispatch::ClientContext;
+use lanforge_types::system::{ServiceBanner, ServiceState};
 use tokio::sync::Mutex;
 
 use crate::config::ApiConfig;
@@ -21,7 +22,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, s
 use tokio::net::{TcpListener, UnixListener};
 use tracing::{debug, error, info, warn};
 
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 
 #[lanforge_macros::lanforge_service(
     id = "control",
@@ -32,6 +33,7 @@ use lanforge_core::service::{AsyncService, ServiceControl};
     max_backoff = 30,
     describe = format!("Control API at {}", self.cfg.socket_path)
 )]
+#[derive(Clone)]
 pub struct ControlService {
     cfg: Arc<ApiConfig>,
     ctx: LanforgeContext,
@@ -41,18 +43,20 @@ pub struct ControlService {
 
 impl ControlService {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         cfg: Arc<ApiConfig>,
         ctx: LanforgeContext,
         db: Arc<LeaseDb>,
         log_db: Arc<LogDb>,
     ) -> Self {
-        Self {
+        let service = Self {
             cfg,
-            ctx,
+            ctx: ctx.clone(),
             db,
             log_db,
-        }
+        };
+        ctx.register_status_provider(Arc::new(service.clone()));
+        service
     }
 
     fn setup_unix_listener(path: &str) -> Result<UnixListener, CoreError> {
@@ -439,4 +443,19 @@ where
     writer.write_all(buf).await?;
     writer.flush().await?;
     Ok(())
+}
+
+impl StatusProvider for ControlService {
+    fn banner(&self) -> ServiceBanner {
+        let mut stats = vec![("socket_path", self.cfg.socket_path.clone())];
+        if let Some(p) = self.cfg.tcp_port {
+            stats.push(("tcp_port", p.to_string()));
+        }
+        ServiceBanner {
+            name: "Control API".to_string(),
+            state: ServiceState::Online,
+            uptime_secs: self.ctx.uptime_secs(),
+            stats,
+        }
+    }
 }

@@ -50,6 +50,16 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
+    async fn service_banners(
+        &self,
+    ) -> Result<lanforge_api::api::ServiceBannersResponse, RpcCallError> {
+        match self.handle_service_banners().await {
+            Response::ServiceBanners(s) => Ok(s),
+            Response::Error { error } => Err(RpcCallError::Internal(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
     async fn list_devices(
         &self,
         filter: Option<String>,

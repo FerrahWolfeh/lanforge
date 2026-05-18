@@ -48,6 +48,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::utils::mac_from_eui64_link_local;
 use lanforge_types::device::IPv6State;
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::system::{ServiceBanner, ServiceState};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::Arc;
@@ -85,6 +86,7 @@ use lanforge_core::service::{AsyncService, ServiceControl};
         ALL_DHCP_RELAY_AGENTS_AND_SERVERS, self.config.port, self.config.iface
     )
 )]
+#[derive(Clone)]
 pub struct Dhcpv6Service {
     config: Dhcpv6Config,
     ctx: LanforgeContext,
@@ -92,8 +94,32 @@ pub struct Dhcpv6Service {
 
 impl Dhcpv6Service {
     #[must_use]
-    pub const fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
-        Self { config, ctx }
+    pub fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
+        let service = Self {
+            config,
+            ctx: ctx.clone(),
+        };
+        ctx.register_status_provider(std::sync::Arc::new(service.clone()));
+        service
+    }
+}
+
+impl lanforge_core::service::StatusProvider for Dhcpv6Service {
+    fn banner(&self) -> ServiceBanner {
+        let stats = vec![
+            ("iface", self.config.iface.clone()),
+            ("port", self.config.port.to_string()),
+        ];
+        ServiceBanner {
+            name: "DHCPv6 Server".to_string(),
+            state: if self.config.enabled {
+                ServiceState::Online
+            } else {
+                ServiceState::Offline
+            },
+            uptime_secs: self.ctx.uptime_secs(),
+            stats,
+        }
     }
 }
 

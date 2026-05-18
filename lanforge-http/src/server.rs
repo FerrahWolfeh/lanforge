@@ -22,6 +22,7 @@ use lanforge_core::{
 use lanforge_db::{engine::LeaseDb, log_engine::LogDb};
 use lanforge_dns::server::transport::tls as tls_utils;
 use lanforge_macros::lanforge_service;
+use lanforge_types::system::{ServiceBanner, ServiceState};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
@@ -74,6 +75,7 @@ impl axum::extract::FromRef<AppState> for Arc<LeaseDb> {
         self.cfg.listen
     )
 )]
+#[derive(Clone)]
 pub struct HttpService {
     cfg: Arc<HttpConfig>,
     ctx: LanforgeContext,
@@ -83,17 +85,35 @@ pub struct HttpService {
 
 impl HttpService {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         cfg: Arc<HttpConfig>,
         ctx: LanforgeContext,
         db: Arc<LeaseDb>,
         log_db: Arc<LogDb>,
     ) -> Self {
-        Self {
+        let service = Self {
             cfg,
-            ctx,
+            ctx: ctx.clone(),
             db,
             log_db,
+        };
+        ctx.register_status_provider(Arc::new(service.clone()));
+        service
+    }
+}
+
+impl lanforge_core::service::StatusProvider for HttpService {
+    fn banner(&self) -> ServiceBanner {
+        let stats = vec![
+            ("listen", self.cfg.listen.to_string()),
+            ("https_enabled", self.cfg.https_enabled.to_string()),
+            ("doh_enabled", self.cfg.doh_enabled.to_string()),
+        ];
+        ServiceBanner {
+            name: "HTTP API".to_string(),
+            state: ServiceState::Online,
+            uptime_secs: self.ctx.uptime_secs(),
+            stats,
         }
     }
 }

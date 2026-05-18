@@ -364,6 +364,16 @@ fn format_system_event(now: &str, event: &SystemEvent, verbose: bool, _ascii: bo
             "SYS".red().bold(),
             "Daemon is shutting down...".dimmed()
         ),
+        SystemEvent::ServiceStatusBanner(banner) => {
+            if verbose {
+                println!(
+                    "[{now}] {} Service status broadcast: {} is {}",
+                    "SYS".yellow().bold(),
+                    banner.name.white(),
+                    banner.state.as_str().bright_green()
+                );
+            }
+        }
     }
 }
 

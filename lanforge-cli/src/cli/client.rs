@@ -354,6 +354,10 @@ impl LanforgeClient {
         dispatch!(self, get_box => "/status", status())
     }
 
+    pub async fn service_banners(&self) -> Result<lanforge_api::api::ServiceBannersResponse> {
+        dispatch!(self, get => "/service_banners", service_banners())
+    }
+
     pub async fn context_dump(
         &self,
         only_devices: bool,

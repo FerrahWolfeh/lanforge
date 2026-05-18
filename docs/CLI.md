@@ -212,12 +212,9 @@ lanforge
      - `Memory RSS` — Process memory in human units (green)
 
 3. **SERVICES** box (yellow bold title):
-   - Two groups separated by `────────── Protocols ──────────` divider (dim grey).
-   - **Core services:** DB Worker, mDNS, Iface Monitor, NDP Monitor, Control API, HTTP API (if feature-enabled).
-   - **Protocol services:** RA, DHCPv4, DHCPv6, DNS.
-   - Each line: `● {name:<10} {state:<10} {description/metadata}`
-   - `●` is green if the service is in its active/running state, red otherwise.
-   - Metadata examples: `8 leases · 7414 free` for DHCPv4, `upstream udp://9.9.9.9:53` for DNS, `8 tracked · scan 0s ago` for NDP.
+   - Renders dynamic status banners from registered decoupled services (`ServiceStatusInfo`).
+   - Displays real-time uptime and metrics (e.g., `uptime: 1h 30m`, `socket_path=/run/lanforge.sock`).
+   - Falls back to legacy static protocol layout if dynamic banners are empty.
 
 4. **INSIGHTS** box (yellow bold title):
    - `Devices` — `{online} / {total} online  ★{static_count}  ·{dynamic_count}`
@@ -230,6 +227,14 @@ lanforge
    - E.g., `DNS [COMPILED] [ENABLED]`, `Upstream DoH [COMPILED] [DISABLED]`.
 
 6. **Footer legend:** `★ TOML static  · CLI managed` (dim grey)
+
+### 3.1b — `services`
+
+**API:** `service_banners`
+
+**Purpose:** Deep-dive service monitoring. Lists granular runtime status, metrics, and banners for all decoupled services.
+
+**Rendering:** Tabular output showing `NAME`, `STATE`, `UPTIME`, and `STATS & METRICS`.
 
 ### 3.2 — `scan`
 

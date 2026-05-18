@@ -10,4 +10,5 @@ pub enum SystemEvent {
     SystemReady,
     ReloadConfig,
     ConfigUpdate { password_hash: String },
+    ServiceStatusBanner(crate::system::ServiceBanner),
 }

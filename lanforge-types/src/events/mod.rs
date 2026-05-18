@@ -63,6 +63,7 @@ impl TimedEvent {
                     | SystemEvent::ServiceReady { .. }
                     | SystemEvent::SystemReady
                     | SystemEvent::ConfigUpdate { .. }
+                    | SystemEvent::ServiceStatusBanner(..)
             ),
             LanforgeEvent::Storage(e) => matches!(
                 e,

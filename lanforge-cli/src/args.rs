@@ -71,7 +71,8 @@ use crate::cli::commands::{
     auth::AuthArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs, dns::DnsArgs, host::HostArgs,
     lease::LeaseArgs, simple::ContextArgs, simple::LoginArgs, simple::PurgeArgs,
     simple::ReloadArgs, simple::ScanArgs, simple::ShutdownArgs, simple::WatchArgs,
-    status::StatusArgs, topology::TopologyArgs, whois::WhoisArgs, wol::WolArgs,
+    status::ServicesArgs, status::StatusArgs, topology::TopologyArgs, whois::WhoisArgs,
+    wol::WolArgs,
 };
 
 use crate::cli::{Execute, LanforgeClient};
@@ -81,6 +82,8 @@ use color_eyre::eyre::Result;
 pub enum Command {
     /// Service health and general status
     Status(StatusArgs),
+    /// Detailed deep-dive service metrics and status banners
+    Services(ServicesArgs),
     /// List known devices
     Devices(DevicesArgs),
     /// Detailed aggregated information for a device
@@ -124,6 +127,7 @@ impl Execute for Command {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         match self {
             Self::Status(args) => args.execute(client).await,
+            Self::Services(args) => args.execute(client).await,
             Self::Devices(args) => args.execute(client).await,
             Self::Whois(args) => args.execute(client).await,
             Self::Wol(args) => args.execute(client).await,

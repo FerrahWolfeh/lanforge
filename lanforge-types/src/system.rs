@@ -29,8 +29,6 @@ pub struct SystemStatus {
     pub http_enabled: bool,
 }
 
-use std::collections::HashMap;
-
 /// Flat enum representing all sub-systems, protocols, and database backends.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -61,11 +59,85 @@ pub struct ServerCapabilities {
     pub enabled: smallvec::SmallVec<[Cap; 32]>,
 }
 
+/// Represents the operating state of a decoupled service.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceState {
+    #[default]
+    Offline,
+    Starting,
+    Online,
+    Active,
+    Inactive,
+    Degraded,
+    Failed,
+}
+
+impl ServiceState {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Offline => "offline",
+            Self::Starting => "starting",
+            Self::Online => "online",
+            Self::Active => "active",
+            Self::Inactive => "inactive",
+            Self::Degraded => "degraded",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl std::fmt::Display for ServiceState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+pub mod vec_as_map {
+    use serde::{Deserialize, Deserializer, Serializer, ser::SerializeMap};
+
+    /// Serializes a slice of key-value tuples as a JSON map.
+    ///
+    /// # Errors
+    /// Returns an error if map serialization fails.
+    pub fn serialize<S>(stats: &[(&'static str, String)], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(stats.len()))?;
+        for (k, v) in stats {
+            map.serialize_entry(k, v)?;
+        }
+        map.end()
+    }
+
+    /// Deserializes a JSON map into a vector of key-value tuples.
+    ///
+    /// # Errors
+    /// Returns an error if map deserialization fails.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<(&'static str, String)>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let map: std::collections::HashMap<String, String> =
+            Deserialize::deserialize(deserializer)?;
+        Ok(map
+            .into_iter()
+            .map(|(k, v)| {
+                let leaked_key: &'static str = Box::leak(k.into_boxed_str());
+                (leaked_key, v)
+            })
+            .collect())
+    }
+}
+
 /// Banner representing the status and metrics of a decoupled service.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ServiceBanner {
     pub name: String,
-    pub state: String,
+    pub state: ServiceState,
     pub uptime_secs: u64,
-    pub stats: HashMap<String, String>,
+    #[serde(with = "vec_as_map")]
+    pub stats: Vec<(&'static str, String)>,
 }

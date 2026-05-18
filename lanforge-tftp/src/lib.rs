@@ -4,7 +4,8 @@ use crate::config::TftpConfig;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
+use lanforge_types::system::{ServiceBanner, ServiceState};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -28,6 +29,7 @@ pub enum TftpError {
     critical = false,
     describe = format!("TFTP Server on {}", self.cfg.listen_addr)
 )]
+#[derive(Clone)]
 pub struct TftpService {
     ctx: LanforgeContext,
     cfg: TftpConfig,
@@ -35,8 +37,26 @@ pub struct TftpService {
 
 impl TftpService {
     #[must_use]
-    pub const fn new(ctx: LanforgeContext, cfg: TftpConfig) -> Self {
-        Self { ctx, cfg }
+    pub fn new(ctx: LanforgeContext, cfg: TftpConfig) -> Self {
+        let service = Self { ctx: ctx.clone(), cfg };
+        ctx.register_status_provider(Arc::new(service.clone()));
+        service
+    }
+}
+
+impl StatusProvider for TftpService {
+    fn banner(&self) -> ServiceBanner {
+        let stats = vec![
+            ("listen", self.cfg.listen_addr.clone()),
+            ("root_dir", self.cfg.root_dir.to_string_lossy().to_string()),
+            ("block_size", self.cfg.block_size.to_string()),
+        ];
+        ServiceBanner {
+            name: "TFTP Server".to_string(),
+            state: ServiceState::Online,
+            uptime_secs: self.ctx.uptime_secs(),
+            stats,
+        }
     }
 }
 

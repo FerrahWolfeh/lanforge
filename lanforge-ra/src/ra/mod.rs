@@ -48,12 +48,13 @@ pub mod packet;
 
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
+use lanforge_types::system::{ServiceBanner, ServiceState};
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::NetworkError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 use rand::RngExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
@@ -62,6 +63,7 @@ use std::mem::{MaybeUninit, size_of};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
 use std::ptr::{from_mut, from_ref};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::unix::{AsyncFd, AsyncFdReadyGuard};
 use tracing::{debug, info, warn};
@@ -175,6 +177,7 @@ impl RaState {
     base_backoff = 2,
     max_backoff = 30
 )]
+#[derive(Clone)]
 pub struct RaService {
     cfg: RaConfig,
     ctx: LanforgeContext,
@@ -182,8 +185,30 @@ pub struct RaService {
 
 impl RaService {
     #[must_use]
-    pub const fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
-        Self { cfg, ctx }
+    pub fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
+        let service = Self {
+            cfg,
+            ctx: ctx.clone(),
+        };
+        ctx.register_status_provider(Arc::new(service.clone()));
+        service
+    }
+}
+
+impl StatusProvider for RaService {
+    fn banner(&self) -> ServiceBanner {
+        let stats = vec![
+            ("iface", self.cfg.iface.clone()),
+            ("max_interval", self.cfg.max_interval.as_secs().to_string()),
+            ("managed", self.cfg.managed.to_string()),
+            ("other_config", self.cfg.other_config.to_string()),
+        ];
+        ServiceBanner {
+            name: "RA Server".to_string(),
+            state: ServiceState::Online,
+            uptime_secs: self.ctx.uptime_secs(),
+            stats,
+        }
     }
 }
 

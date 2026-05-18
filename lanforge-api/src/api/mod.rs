@@ -71,4 +71,6 @@ pub enum Response {
     AuthTokens(AuthTokensResponse),
     /// In-depth DNS cache stats.
     DnsCacheStatsExt(DnsCacheStatsExtResponse),
+    /// Decoupled service banners.
+    ServiceBanners(ServiceBannersResponse),
 }
