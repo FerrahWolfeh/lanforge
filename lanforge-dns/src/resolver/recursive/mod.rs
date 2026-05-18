@@ -48,22 +48,11 @@ pub struct UpstreamManager {
 }
 
 impl UpstreamManager {
-    /// Bind a dual-stack (IPv6 + IPv4-mapped) UDP socket.
-    /// Falls back to IPv4-only if dual-stack is unavailable on the host.
-    async fn bind_dualstack() -> Result<UdpSocket, std::io::Error> {
-        use socket2::{Domain, Protocol, Socket, Type};
-        let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
-        sock.set_only_v6(false).ok(); // allow IPv4-mapped addresses, ignore error if not supported
-        sock.set_nonblocking(true)?;
-        let addr: SocketAddr = "[::]:0".parse().unwrap();
-        sock.bind(&addr.into())?;
-        UdpSocket::from_std(sock.into())
-    }
-
     pub async fn new(target: &UpstreamTarget, cache: Arc<DnsCache>) -> Result<Arc<Self>, DnsError> {
-        let socket = match Self::bind_dualstack().await {
-            Ok(s) => Arc::new(s),
-            Err(_) => Arc::new(UdpSocket::bind("0.0.0.0:0").await?),
+        let socket = if target.addr.is_ipv4() {
+            Arc::new(UdpSocket::bind("0.0.0.0:0").await?)
+        } else {
+            Arc::new(UdpSocket::bind("[::]:0").await?)
         };
         let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
 
@@ -136,7 +125,7 @@ impl UpstreamManager {
             None
         };
 
-        Ok(Arc::new(Self {
+        let mgr = Arc::new(Self {
             socket,
             pending,
             next_id: AtomicU16::new(1),
@@ -164,7 +153,32 @@ impl UpstreamManager {
             quic_endpoint,
             #[cfg(feature = "doq")]
             quic_conn: tokio::sync::Mutex::new(None),
-        }))
+        });
+
+        let mgr_clone = Arc::clone(&mgr);
+        tokio::spawn(async move {
+            const PROBE_QUERY: &[u8] = &[
+                0x00, 0x01, // ID: 1
+                0x01, 0x00, // Flags: RD=1
+                0x00, 0x01, // QDCOUNT: 1
+                0x00, 0x00, // ANCOUNT: 0
+                0x00, 0x00, // NSCOUNT: 0
+                0x00, 0x00, // ARCOUNT: 0
+                0x00, // QNAME: .
+                0x00, 0x01, // QTYPE: A (1)
+                0x00, 0x01, // QCLASS: IN (1)
+            ];
+            loop {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                if mgr_clone.health.status() == crate::utils::health::UpstreamStatus::Degraded
+                    && mgr_clone.health.is_eligible_for_probing()
+                {
+                    let _ = mgr_clone.forward(PROBE_QUERY).await;
+                }
+            }
+        });
+
+        Ok(mgr)
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -261,7 +275,13 @@ impl UpstreamManager {
 
         self.socket.send_to(&data_to_send, upstream).await?;
 
-        match timeout(Duration::from_secs(3), rx).await {
+        let timeout_dur = if self.health.consecutive_failures.load(Ordering::Relaxed) >= 5 {
+            Duration::from_millis(200)
+        } else {
+            Duration::from_secs(3)
+        };
+
+        match timeout(timeout_dur, rx).await {
             Ok(Ok(resp_bytes)) => {
                 let header = WireHeader::parse(&resp_bytes).ok_or(DnsError::WireParseError)?;
                 if header.tc() {

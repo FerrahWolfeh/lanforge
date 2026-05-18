@@ -1,7 +1,9 @@
 use crate::error::DnsError;
 use crate::resolver::recursive::UpstreamManager;
+use crate::resolver::recursive::cache::CacheKey;
 use crate::utils::health::UpstreamStatus;
-use lanforge_dns_wire::{WireDecoder, WireEncoder};
+use dashmap::DashMap;
+use lanforge_dns_wire::{WireDecoder, WireEncoder, WireQuestion};
 #[cfg(not(feature = "doh-upstream"))]
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
@@ -9,6 +11,7 @@ use lanforge_types::network::dns::{
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::broadcast::Sender;
 use tokio::task::JoinSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -26,6 +29,7 @@ pub struct UpstreamStrategy {
     /// Upstreams grouped by protocol tier. Index 0 = tier 0 (TLS/QUIC), etc.
     tiers: parking_lot::RwLock<Vec<Vec<Arc<UpstreamManager>>>>,
     pub rr_index: AtomicUsize,
+    in_flight: DashMap<CacheKey, Sender<Result<(Vec<u8>, bool, bool), String>>>,
 }
 
 impl UpstreamStrategy {
@@ -46,6 +50,7 @@ impl UpstreamStrategy {
             mode,
             tiers: parking_lot::RwLock::new(tiers),
             rr_index: AtomicUsize::new(0),
+            in_flight: DashMap::new(),
         }
     }
 
@@ -118,6 +123,43 @@ impl UpstreamStrategy {
     }
 
     pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
+        let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
+        let mut qname = question.qname_raw().to_vec();
+        qname.make_ascii_lowercase();
+        let key = CacheKey {
+            qname,
+            qtype: question.qtype(),
+            qclass: question.qclass(),
+        };
+
+        let rx = { self.in_flight.get(&key).map(|tx| tx.subscribe()) };
+
+        if let Some(mut rx) = rx {
+            match rx.recv().await {
+                Ok(Ok(res)) => return Ok(res),
+                Ok(Err(e)) => return Err(DnsError::Generic(e)),
+                Err(_) => {
+                    // Leader task dropped/panicked, fall through to resolve_internal
+                }
+            }
+        }
+
+        let (tx, _) = tokio::sync::broadcast::channel(1);
+        self.in_flight.insert(key.clone(), tx.clone());
+
+        let res = self.resolve_internal(data).await;
+
+        self.in_flight.remove(&key);
+        let _ = tx.send(
+            res.as_ref()
+                .map(|(v, c, b)| (v.clone(), *c, *b))
+                .map_err(|e| e.to_string()),
+        );
+
+        res
+    }
+
+    async fn resolve_internal(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut last_err = DnsError::Refused;
         let tiers = self.tiers.read().clone();
         for tier in &tiers {
@@ -152,10 +194,15 @@ impl UpstreamStrategy {
         data: &[u8],
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut last_err = DnsError::UpstreamTimeout;
-        for mgr in tier {
-            if mgr.health.status() == UpstreamStatus::Degraded {
-                continue;
-            }
+        let mut available: Vec<_> = tier
+            .iter()
+            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
+            .collect();
+        if available.is_empty() {
+            available = tier.iter().collect();
+        }
+
+        for mgr in available {
             match mgr.forward(data).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => last_err = e,
@@ -206,14 +253,18 @@ impl UpstreamStrategy {
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
-        let mut sorted = tier.to_vec();
-        sorted.sort_by_key(|m| m.health.rtt_ewma_us.load(Ordering::Relaxed));
+        let mut available: Vec<_> = tier
+            .iter()
+            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
+            .cloned()
+            .collect();
+        if available.is_empty() {
+            available = tier.to_vec();
+        }
+        available.sort_by_key(|m| m.health.rtt_ewma_us.load(Ordering::Relaxed));
 
         let mut last_err = DnsError::UpstreamTimeout;
-        for mgr in sorted {
-            if mgr.health.status() == UpstreamStatus::Degraded {
-                continue;
-            }
+        for mgr in available {
             match mgr.forward(data).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => last_err = e,
@@ -227,16 +278,21 @@ impl UpstreamStrategy {
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
-        let len = tier.len();
+        let mut available: Vec<_> = tier
+            .iter()
+            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
+            .collect();
+        if available.is_empty() {
+            available = tier.iter().collect();
+        }
+
+        let len = available.len();
         let start = self.rr_index.fetch_add(1, Ordering::Relaxed) % len;
 
         let mut last_err = DnsError::UpstreamTimeout;
         for i in 0..len {
             let idx = (start + i) % len;
-            let mgr = &tier[idx];
-            if mgr.health.status() == UpstreamStatus::Degraded {
-                continue;
-            }
+            let mgr = available[idx];
             match mgr.forward(data).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => last_err = e,

@@ -220,6 +220,52 @@ impl LogDb {
         Ok(())
     }
 
+    /// Records multiple DNS queries in a single transaction.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub async fn record_dns_queries_batch(
+        &self,
+        entries: &[QueryLogEntry],
+    ) -> Result<(), LeaseDbError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let mut last_timestamp = 0;
+
+        for entry in entries {
+            last_timestamp = entry.timestamp as i64;
+            sqlx::query(
+                "INSERT INTO dns_queries (timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer, protocol) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(entry.timestamp as i64)
+            .bind(entry.src_ip.to_string())
+            .bind(entry.src_mac.as_ref().map(|m| m.to_string()))
+            .bind(entry.domain.as_ref())
+            .bind(u16::from(entry.qtype) as i32)
+            .bind(format!("{:?}", entry.result).to_lowercase())
+            .bind(i64::from(entry.upstream_us))
+            .bind(i32::from(entry.cached))
+            .bind(entry.answer.as_ref())
+            .bind(entry.protocol.to_string().to_lowercase())
+            .execute(&mut *tx)
+            .await?;
+
+            #[cfg(feature = "hotpath")]
+            {
+                hotpath::gauge!("log_db_dns_count").inc(1.0);
+            }
+        }
+
+        tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+
+        if last_timestamp > 0 {
+            self.maybe_prune(last_timestamp).await?;
+        }
+        Ok(())
+    }
+
     /// Records a resolved DNS query.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), LeaseDbError> {

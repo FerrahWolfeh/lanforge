@@ -17,6 +17,7 @@ use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::QueryLogEntry;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
@@ -52,6 +53,7 @@ pub struct DbWorker {
     dirty_lease_macs: HashSet<MacAddr>,
     purged_macs: HashSet<MacAddr>,
     log_buffer: Vec<TimedEvent>,
+    dns_log_buffer: Vec<QueryLogEntry>,
     json_buf: String,
 }
 
@@ -73,6 +75,7 @@ impl DbWorker {
             dirty_lease_macs: HashSet::new(),
             purged_macs: HashSet::new(),
             log_buffer: Vec::with_capacity(128),
+            dns_log_buffer: Vec::with_capacity(128),
             json_buf: String::with_capacity(4096),
         }
     }
@@ -89,6 +92,14 @@ impl DbWorker {
                 error!("Failed to flush log batch: {e}");
             } else {
                 self.log_buffer.clear();
+            }
+        }
+
+        if !self.dns_log_buffer.is_empty() {
+            if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer).await {
+                error!("Failed to flush DNS log batch: {e}");
+            } else {
+                self.dns_log_buffer.clear();
             }
         }
 
@@ -298,8 +309,13 @@ impl AsyncService for DbWorker {
                             }
                         }
                         LanforgeEvent::Dns(DnsEvent::QueryResolved(ref entry)) => {
-                            if let Err(e) = log_db.record_dns_query(entry).await {
-                                error!("DNS query log record error: {e}");
+                            self.dns_log_buffer.push(entry.clone());
+                            if self.dns_log_buffer.len() >= 100 {
+                                if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer).await {
+                                    error!("Immediate DNS log flush error: {e}");
+                                } else {
+                                    self.dns_log_buffer.clear();
+                                }
                             }
                         }
                     });

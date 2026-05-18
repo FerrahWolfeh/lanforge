@@ -85,17 +85,22 @@ impl UpstreamHealth {
 
     pub fn status(&self) -> UpstreamStatus {
         if self.consecutive_failures.load(Ordering::Relaxed) >= 5 {
+            return UpstreamStatus::Degraded;
+        }
+        UpstreamStatus::Healthy
+    }
+
+    pub fn is_eligible_for_probing(&self) -> bool {
+        if self.consecutive_failures.load(Ordering::Relaxed) >= 5 {
             let last_fail = self.last_failure_ts.load(Ordering::Relaxed);
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-
-            if now.saturating_sub(last_fail) < 30 {
-                return UpstreamStatus::Degraded;
-            }
+            now.saturating_sub(last_fail) >= 30
+        } else {
+            false
         }
-        UpstreamStatus::Healthy
     }
 
     pub fn snapshot(
