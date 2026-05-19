@@ -20,7 +20,7 @@ pub struct DnsContext {
     pub bus: Arc<lanforge_core::bus::EventBus>,
     pub query_log: Option<Arc<QueryRing>>,
     pub pipeline: Pipeline,
-    pub db: Arc<lanforge_db::engine::LeaseDb>,
+    pub db: Arc<lanforge_db::engine::LanforgeDb>,
 
     // Sub-components
     pub local: LocalResolver,

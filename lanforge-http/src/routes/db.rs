@@ -14,7 +14,19 @@ pub fn router() -> Router<AppState> {
         .route("/vacuum", post(handle_vacuum))
         .route("/prune", post(handle_prune))
         .route("/log-clean", post(handle_log_clean))
+        .route("/stats", axum::routing::get(handle_stats))
         .route("/", delete(handle_reset))
+}
+
+async fn handle_stats(State(state): State<AppState>) -> impl IntoResponse {
+    let metrics = state.ctx.db_metrics();
+    let metrics_json = serde_json::json!({
+        "last_flush_ts": metrics.last_flush_ts.load(std::sync::atomic::Ordering::Relaxed),
+        "flush_count": metrics.flush_count.load(std::sync::atomic::Ordering::Relaxed),
+        "devices_written": metrics.devices_written.load(std::sync::atomic::Ordering::Relaxed),
+        "last_error": metrics.last_error.load(std::sync::atomic::Ordering::Relaxed),
+    });
+    (StatusCode::OK, Json(metrics_json)).into_response()
 }
 
 async fn handle_vacuum(State(state): State<AppState>) -> impl IntoResponse {

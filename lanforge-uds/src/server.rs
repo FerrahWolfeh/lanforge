@@ -10,7 +10,7 @@ use futures::StreamExt;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use std::fs::{self, Permissions};
 use std::io::ErrorKind;
@@ -37,7 +37,7 @@ use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 pub struct ControlService {
     cfg: Arc<ApiConfig>,
     ctx: LanforgeContext,
-    db: Arc<LeaseDb>,
+    db: Arc<LanforgeDb>,
     log_db: Arc<LogDb>,
 }
 
@@ -46,7 +46,7 @@ impl ControlService {
     pub fn new(
         cfg: Arc<ApiConfig>,
         ctx: LanforgeContext,
-        db: Arc<LeaseDb>,
+        db: Arc<LanforgeDb>,
         log_db: Arc<LogDb>,
     ) -> Self {
         let service = Self {

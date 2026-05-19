@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::config::DatabaseConfig;
-use crate::engine::{LeaseAction, LeaseDb};
+use crate::engine::{LeaseAction, LanforgeDb};
 use crate::log_engine::LogDb;
 use crate::worker::DbWorker;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
@@ -26,8 +26,8 @@ fn make_mac(last: u8) -> MacAddr {
     MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, last])
 }
 
-async fn create_test_db() -> LeaseDb {
-    LeaseDb::open(&DatabaseConfig {
+async fn create_test_db() -> LanforgeDb {
+    LanforgeDb::open(&DatabaseConfig {
         url: "sqlite::memory:".to_string(),
         ..Default::default()
     })
@@ -248,7 +248,7 @@ async fn test_db_worker_lifecycle() {
     let ctx = LanforgeContext::new(bus.clone(), table, None);
 
     let db = Arc::new(
-        LeaseDb::open(&DatabaseConfig {
+        LanforgeDb::open(&DatabaseConfig {
             url: db_url.clone(),
             ..Default::default()
         })
@@ -305,7 +305,7 @@ async fn test_db_worker_lifecycle() {
     worker_handle.await.expect("Worker join failed");
 
     // Verify persistence
-    let db = LeaseDb::open(&DatabaseConfig {
+    let db = LanforgeDb::open(&DatabaseConfig {
         url: db_url.clone(),
         ..Default::default()
     })

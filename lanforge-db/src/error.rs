@@ -5,7 +5,7 @@
 use std::{io::Error, num::TryFromIntError, path::PathBuf};
 use thiserror::Error;
 
-/// Errors specific to the Lanforge lease database engine.
+/// Errors specific to the Lanforge database engine.
 ///
 /// This enum covers all possible failures during persistence operations,
 /// from file access to schema migration errors.
@@ -13,19 +13,19 @@ use thiserror::Error;
 /// # Example
 ///
 /// ```ignore
-/// match LeaseDb::open(Path::new("/var/lib/lanforge/leases.db")) {
+/// match LanforgeDb::open(Path::new("/var/lib/lanforge/leases.db")) {
 ///     Ok(db) => { /* ready to use */ }
-///     Err(LeaseDbError::ConnectionOpen(path, source)) => {
+///     Err(LanforgeDbError::ConnectionOpen(path, source)) => {
 ///         eprintln!("Could not open database at {}: {}", path.display(), source);
 ///     }
-///     Err(LeaseDbError::Migration(step, detail)) => {
+///     Err(LanforgeDbError::Migration(step, detail)) => {
 ///         eprintln!("Migration failure ({step}): {detail}");
 ///     }
 ///     Err(e) => eprintln!("Database error: {e}"),
 /// }
 /// ```
 #[derive(Debug, Error)]
-pub enum LeaseDbError {
+pub enum LanforgeDbError {
     /// Failed to access a file or directory path on disk.
     ///
     /// Occurs when the parent directory doesn't exist or lacks read/write permissions.

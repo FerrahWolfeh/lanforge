@@ -1,7 +1,7 @@
 //! `DbWorker` — Background service for database persistence and logging.
 //!
 //! Listens for events on the global `EventBus` and performs batch updates
-//! to the `LeaseDb` (persistent) and `LogDb` (transient).
+//! to the `LanforgeDb` (persistent) and `LogDb` (transient).
 //!
 //! ## Batching
 //!
@@ -19,7 +19,7 @@ use lanforge_core::bus::{
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Interval, interval};
 use tracing::{debug, error, info, warn};
@@ -30,7 +30,7 @@ use lanforge_core::service::{AsyncService, ServiceControl};
 use std::collections::HashSet;
 
 use crate::config::DatabaseConfig;
-use crate::engine::LeaseDb;
+use crate::engine::LanforgeDb;
 use crate::log_engine::LogDb;
 
 /// Background worker for database operations.
@@ -46,7 +46,7 @@ use crate::log_engine::LogDb;
 pub struct DbWorker {
     cfg: DatabaseConfig,
     ctx: LanforgeContext,
-    db: Arc<LeaseDb>,
+    db: Arc<LanforgeDb>,
     log_db: Arc<LogDb>,
     dirty: bool,
     dirty_macs: HashSet<MacAddr>,
@@ -62,7 +62,7 @@ impl DbWorker {
     pub fn new(
         cfg: DatabaseConfig,
         ctx: LanforgeContext,
-        db: Arc<LeaseDb>,
+        db: Arc<LanforgeDb>,
         log_db: Arc<LogDb>,
     ) -> Self {
         Self {
@@ -82,7 +82,15 @@ impl DbWorker {
 
     /// Flushes the current device table to the persistent database.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn flush_batch(&mut self, db: &LeaseDb, log_db: &LogDb) {
+    async fn flush_batch(&mut self, db: &LanforgeDb, log_db: &LogDb) {
+        let metrics = self.ctx.db_metrics();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut had_error = false;
+        let mut written_devices_count = 0;
+
         // 1. Flush Logs
         if !self.log_buffer.is_empty() {
             if let Err(e) = log_db
@@ -90,6 +98,7 @@ impl DbWorker {
                 .await
             {
                 error!("Failed to flush log batch: {e}");
+                had_error = true;
             } else {
                 self.log_buffer.clear();
             }
@@ -98,6 +107,7 @@ impl DbWorker {
         if !self.dns_log_buffer.is_empty() {
             if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer).await {
                 error!("Failed to flush DNS log batch: {e}");
+                had_error = true;
             } else {
                 self.dns_log_buffer.clear();
             }
@@ -105,6 +115,15 @@ impl DbWorker {
 
         // 2. Flush Main DB
         if !self.dirty && self.dirty_macs.is_empty() && self.purged_macs.is_empty() {
+            metrics
+                .last_flush_ts
+                .store(now, std::sync::atomic::Ordering::Relaxed);
+            metrics
+                .flush_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            metrics
+                .last_error
+                .store(had_error, std::sync::atomic::Ordering::Relaxed);
             return;
         }
 
@@ -166,8 +185,10 @@ impl DbWorker {
         match res {
             Err(e) => {
                 error!("Failed to save device table to database: {e}");
+                had_error = true;
             }
             Ok(count) => {
+                written_devices_count = count;
                 self.dirty = false;
                 self.dirty_macs.clear();
                 self.dirty_lease_macs.clear();
@@ -190,6 +211,20 @@ impl DbWorker {
                 self.dirty_macs.clear();
             }
         }
+
+        metrics
+            .last_flush_ts
+            .store(now, std::sync::atomic::Ordering::Relaxed);
+        metrics
+            .flush_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        metrics.devices_written.fetch_add(
+            written_devices_count as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        metrics
+            .last_error
+            .store(had_error, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -200,6 +235,7 @@ impl AsyncService for DbWorker {
 
         let mut bus_rx = self.ctx.bus().subscribe();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
+        let mut last_prune = tokio::time::Instant::now();
 
         info!("Database worker started");
         self.ctx.set_db_ready(true);
@@ -238,18 +274,13 @@ impl AsyncService for DbWorker {
                     let mut break_loop = false;
                     lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::Device(DeviceEvent::Updated { mac, ref change, .. }) => {
-                            if change.is_persistent() {
+                            if change.is_persistent() && !matches!(**change, DeviceChange::CliHostUpdated) {
                                 self.dirty_macs.insert(mac);
                                 if change.is_lease_change() {
                                     self.dirty_lease_macs.insert(mac);
                                 }
                                 // If it was previously purged, it's now alive again
                                 self.purged_macs.remove(&mac);
-
-                                // Flush immediately for CLI updates to avoid write buffer delay
-                                if matches!(**change, DeviceChange::CliHostUpdated) {
-                                    self.flush_batch(&db, &log_db).await;
-                                }
                             }
                         }
                         LanforgeEvent::Device(DeviceEvent::Discovered { mac, .. })
@@ -285,17 +316,16 @@ impl AsyncService for DbWorker {
                             }
                         }
                         LanforgeEvent::Storage(StorageEvent::DbReset) => {
-                            info!("Full database reset requested...");
-                            self.ctx.set_db_ready(false);
-                            if let Err(e) = db.reset().await {
-                                error!("LeaseDb reset error: {e}");
-                            }
-                            if let Err(e) = log_db.clear_logs().await {
-                                error!("LogDb reset error: {e}");
-                            }
+                            warn!("Legacy DbReset event received in worker (ignored as reset is now synchronous)");
+                        }
+                        LanforgeEvent::Storage(StorageEvent::DbResetCompleted) => {
+                            info!("Database reset completed. Clearing internal buffers.");
                             self.dirty = false;
-                            self.ctx.set_db_ready(true);
-                            let _ = self.ctx.bus().publish(LanforgeEvent::Storage(StorageEvent::DbResetCompleted));
+                            self.dirty_macs.clear();
+                            self.dirty_lease_macs.clear();
+                            self.purged_macs.clear();
+                            self.log_buffer.clear();
+                            self.dns_log_buffer.clear();
                         }
                         LanforgeEvent::System(SystemEvent::Shutdown) => {
                             info!("Database worker shutting down...");
@@ -333,9 +363,23 @@ impl AsyncService for DbWorker {
                     }
                 }
 
-                // Periodic flush
+                // Periodic flush & auto-pruning
                 _ = flush_interval.tick() => {
                     self.flush_batch(&db, &log_db).await;
+
+                    if last_prune.elapsed() >= Duration::from_secs(3600) {
+                        let cutoff = (SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64) - (24 * 3600);
+                        if let Err(e) = log_db.prune_logs(cutoff).await {
+                            error!("Background log prune failed: {e}");
+                        }
+                        if let Err(e) = db.prune_zombies().await {
+                            error!("Background db prune failed: {e}");
+                        }
+                        last_prune = tokio::time::Instant::now();
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
 use super::types::DeviceRow;
 use super::utils::system_time_to_unix;
-use crate::error::LeaseDbError;
+use crate::error::LanforgeDbError;
 use lanforge_types::device::{IPv4State, IPv6State, V6PrefixLease};
 use lanforge_types::{device::Device, identifiers::MacAddr};
 use sqlx::{Sqlite, Transaction};
@@ -9,7 +9,7 @@ use std::net::Ipv4Addr;
 pub async fn upsert_device(
     tx: &mut Transaction<'_, Sqlite>,
     device: &Device,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     let mac_str = device.mac.to_string();
 
     upsert_base_device_internal(tx, device, &mac_str).await?;
@@ -30,7 +30,7 @@ pub async fn upsert_device(
 pub async fn upsert_base_device_only(
     tx: &mut Transaction<'_, Sqlite>,
     device: &Device,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     let mac_str = device.mac.to_string();
     upsert_base_device_internal(tx, device, &mac_str).await
 }
@@ -39,7 +39,7 @@ async fn upsert_base_device_internal(
     tx: &mut Transaction<'_, Sqlite>,
     device: &Device,
     mac_str: &str,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     // 1. Core devices table
     sqlx::query(
         "INSERT INTO devices (mac, hostname, hostname_origin, duid, last_seen, origin, managed_at, class)
@@ -129,7 +129,7 @@ async fn prune_stale_child_rows(
     tx: &mut Transaction<'_, Sqlite>,
     mac: &str,
     device: &Device,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     // 1. v4_leases
     if let IPv4State::Dynamic(lease) = &device.v4 {
         sqlx::query("DELETE FROM v4_leases WHERE mac = ? AND ip != ?")
@@ -263,7 +263,7 @@ async fn persist_v4_lease(
     tx: &mut Transaction<'_, Sqlite>,
     mac: &str,
     v4: &IPv4State,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     if let IPv4State::Dynamic(lease) = v4 {
         let expires = system_time_to_unix(lease.expires);
         let ip_str = lease.ip.to_string();
@@ -281,7 +281,7 @@ async fn persist_v6_leases(
     tx: &mut Transaction<'_, Sqlite>,
     mac: &str,
     v6: &[IPv6State],
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     for state in v6 {
         if let IPv6State::Dynamic(lease) = state {
             let expires = system_time_to_unix(lease.expires);
@@ -302,7 +302,7 @@ async fn persist_v6_prefixes(
     tx: &mut Transaction<'_, Sqlite>,
     mac: &str,
     prefixes: &[V6PrefixLease],
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     for prefix in prefixes {
         let expires = system_time_to_unix(prefix.expires);
         let px_str = prefix.prefix.to_string();
@@ -323,15 +323,17 @@ async fn persist_slaac_addrs(
     tx: &mut Transaction<'_, Sqlite>,
     mac: &str,
     v6: &[IPv6State],
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     for state in v6 {
-        if let IPv6State::Slaac(ip, _) = state {
+        if let IPv6State::Slaac(ip, timestamp) = state {
             let ip_str = ip.to_string();
+            let ts = system_time_to_unix(*timestamp);
             sqlx::query(
-                "INSERT INTO slaac_addrs (mac, ip) VALUES (?, ?) ON CONFLICT(mac, ip) DO NOTHING",
+                "INSERT INTO slaac_addrs (mac, ip, last_seen) VALUES (?, ?, ?) ON CONFLICT(mac, ip) DO UPDATE SET last_seen = excluded.last_seen",
             )
             .bind(mac)
             .bind(ip_str)
+            .bind(ts)
             .execute(&mut **tx)
             .await?;
         }
@@ -343,21 +345,25 @@ async fn persist_seen_v4(
     tx: &mut Transaction<'_, Sqlite>,
     mac: &str,
     seen: &[(Ipv4Addr, std::time::SystemTime)],
-) -> Result<(), LeaseDbError> {
-    for (ip, _) in seen {
+) -> Result<(), LanforgeDbError> {
+    for (ip, timestamp) in seen {
         let ip_str = ip.to_string();
-        sqlx::query("INSERT INTO seen_v4 (mac, ip) VALUES (?, ?) ON CONFLICT(mac, ip) DO NOTHING")
-            .bind(mac)
-            .bind(ip_str)
-            .execute(&mut **tx)
-            .await?;
+        let ts = system_time_to_unix(*timestamp);
+        sqlx::query(
+            "INSERT INTO seen_v4 (mac, ip, last_seen) VALUES (?, ?, ?) ON CONFLICT(mac, ip) DO UPDATE SET last_seen = excluded.last_seen",
+        )
+        .bind(mac)
+        .bind(ip_str)
+        .bind(ts)
+        .execute(&mut **tx)
+        .await?;
     }
     Ok(())
 }
 
 // Loading logic
 
-pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>, LeaseDbError> {
+pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>, LanforgeDbError> {
     sqlx::query_as::<_, DeviceRow>(
         "SELECT 
             d.mac, d.hostname, d.hostname_origin, d.duid, d.last_seen, d.origin, d.managed_at, d.class,
@@ -374,7 +380,7 @@ pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>,
 
 pub async fn load_v4_leases(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, String, i64)>, LeaseDbError> {
+) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, expires FROM v4_leases")
         .fetch_all(pool)
         .await?;
@@ -383,7 +389,7 @@ pub async fn load_v4_leases(
 
 pub async fn load_v6_leases(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, i64, String, i64)>, LeaseDbError> {
+) -> Result<Vec<(String, i64, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i64)>(
         "SELECT mac, iaid, ip, expires FROM v6_leases",
     )
@@ -394,7 +400,7 @@ pub async fn load_v6_leases(
 
 pub async fn load_v6_prefixes(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, i64, String, i32, i64)>, LeaseDbError> {
+) -> Result<Vec<(String, i64, String, i32, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i32, i64)>(
         "SELECT mac, iaid, prefix, len, expires FROM v6_prefixes",
     )
@@ -405,15 +411,15 @@ pub async fn load_v6_prefixes(
 
 pub async fn load_slaac_addrs(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, String)>, LeaseDbError> {
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT mac, ip FROM slaac_addrs")
+) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, last_seen FROM slaac_addrs")
         .fetch_all(pool)
         .await?;
     Ok(rows)
 }
 
-pub async fn load_seen_v4(pool: &sqlx::SqlitePool) -> Result<Vec<(String, String)>, LeaseDbError> {
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT mac, ip FROM seen_v4")
+pub async fn load_seen_v4(pool: &sqlx::SqlitePool) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, last_seen FROM seen_v4")
         .fetch_all(pool)
         .await?;
     Ok(rows)
@@ -426,7 +432,7 @@ pub async fn record_lease_event(
     lease_type: &str,
     action_str: &str,
     now: i64,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     sqlx::query(
         "INSERT INTO lease_history (mac, ip, lease_type, action, timestamp) VALUES (?, ?, ?, ?, ?)",
     )
@@ -443,7 +449,7 @@ pub async fn record_lease_event(
 pub async fn get_lease_history(
     pool: &sqlx::SqlitePool,
     mac_str: &str,
-) -> Result<Vec<(String, String, String, i64)>, LeaseDbError> {
+) -> Result<Vec<(String, String, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
         "SELECT ip, lease_type, action, timestamp FROM lease_history WHERE mac = ? ORDER BY timestamp DESC LIMIT 100"
     )
@@ -477,7 +483,7 @@ pub async fn find_mac_by_hostname(
     pool: &sqlx::SqlitePool,
     hostname: &str,
     since_unix: i64,
-) -> Result<Option<MacAddr>, LeaseDbError> {
+) -> Result<Option<MacAddr>, LanforgeDbError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT mac FROM devices WHERE (hostname = ? OR hostname = ?) AND last_seen >= ? LIMIT 1",
     )
@@ -497,7 +503,7 @@ pub async fn store_api_token(
     scopes: &lanforge_types::auth::ApiScopes,
     expires_at: Option<i64>,
     now: i64,
-) -> Result<i64, LeaseDbError> {
+) -> Result<i64, LanforgeDbError> {
     let scopes_str = scopes
         .iter()
         .map(std::string::ToString::to_string)
@@ -518,7 +524,7 @@ pub async fn validate_api_token(
     pool: &sqlx::SqlitePool,
     token: &str,
     now: i64,
-) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LeaseDbError> {
+) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LanforgeDbError> {
     let res: Option<(String, String, Option<i64>)> =
         sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE token = ?")
             .bind(token)
@@ -546,7 +552,7 @@ pub async fn validate_api_token(
     }
 }
 
-pub async fn delete_api_token(pool: &sqlx::SqlitePool, token: &str) -> Result<(), LeaseDbError> {
+pub async fn delete_api_token(pool: &sqlx::SqlitePool, token: &str) -> Result<(), LanforgeDbError> {
     sqlx::query("DELETE FROM api_tokens WHERE token = ?")
         .bind(token)
         .execute(pool)
@@ -557,7 +563,7 @@ pub async fn delete_api_token(pool: &sqlx::SqlitePool, token: &str) -> Result<()
 pub async fn delete_api_token_by_id_or_name(
     pool: &sqlx::SqlitePool,
     id_or_name: &str,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     if let Ok(id) = id_or_name.parse::<i64>() {
         sqlx::query("DELETE FROM api_tokens WHERE id = ?")
             .bind(id)
@@ -574,7 +580,7 @@ pub async fn delete_api_token_by_id_or_name(
 
 pub async fn load_api_tokens(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
+) -> Result<Vec<crate::engine::types::ApiTokenRow>, LanforgeDbError> {
     sqlx::query_as::<_, crate::engine::types::ApiTokenRow>(
         "SELECT id, token, name, created_at, last_used, scopes, expires_at FROM api_tokens ORDER BY created_at DESC",
     )
@@ -586,7 +592,7 @@ pub async fn load_api_tokens(
 pub async fn get_api_token_info(
     pool: &sqlx::SqlitePool,
     id_or_name: &str,
-) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LeaseDbError> {
+) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LanforgeDbError> {
     let res: Option<(String, String, Option<i64>)> = if let Ok(id) = id_or_name.parse::<i64>() {
         sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE id = ?")
             .bind(id)
@@ -611,7 +617,7 @@ pub async fn get_api_token_info(
 
 pub async fn load_dns_upstreams(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LeaseDbError> {
+) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LanforgeDbError> {
     sqlx::query_as::<_, crate::engine::types::DnsUpstreamRow>(
         "SELECT id, addr, protocol, domain FROM dns_upstreams ORDER BY id ASC",
     )
@@ -625,7 +631,7 @@ pub async fn add_dns_upstream(
     addr: &str,
     protocol: &str,
     domain: Option<&str>,
-) -> Result<i64, LeaseDbError> {
+) -> Result<i64, LanforgeDbError> {
     let res = sqlx::query("INSERT INTO dns_upstreams (addr, protocol, domain) VALUES (?, ?, ?) ON CONFLICT(addr, protocol) DO UPDATE SET domain = EXCLUDED.domain")
         .bind(addr)
         .bind(protocol)
@@ -639,7 +645,7 @@ pub async fn remove_dns_upstream(
     pool: &sqlx::SqlitePool,
     addr: &str,
     protocol: &str,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     sqlx::query("DELETE FROM dns_upstreams WHERE addr = ? AND protocol = ?")
         .bind(addr)
         .bind(protocol)
@@ -648,7 +654,7 @@ pub async fn remove_dns_upstream(
     Ok(())
 }
 
-pub async fn clear_dns_upstreams(pool: &sqlx::SqlitePool) -> Result<(), LeaseDbError> {
+pub async fn clear_dns_upstreams(pool: &sqlx::SqlitePool) -> Result<(), LanforgeDbError> {
     sqlx::query("DELETE FROM dns_upstreams").execute(pool).await?;
     Ok(())
 }

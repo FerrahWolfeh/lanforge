@@ -11,7 +11,7 @@ use crate::api::Response;
 use crate::config::ApiConfig;
 use crate::server::ClientContext;
 use lanforge_db::config::DatabaseConfig;
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use std::sync::atomic::AtomicUsize;
 
@@ -19,11 +19,11 @@ fn make_dummy_config() -> ApiConfig {
     ApiConfig::dummy()
 }
 
-async fn init_test_context() -> (LanforgeContext, Arc<LeaseDb>, Arc<LogDb>) {
+async fn init_test_context() -> (LanforgeContext, Arc<LanforgeDb>, Arc<LogDb>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
     let db = Arc::new(
-        LeaseDb::open(&DatabaseConfig {
+        LanforgeDb::open(&DatabaseConfig {
             url: "sqlite::memory:".to_string(),
             ..Default::default()
         })

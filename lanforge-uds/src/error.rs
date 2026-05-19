@@ -1,4 +1,4 @@
-use lanforge_db::error::LeaseDbError;
+use lanforge_db::error::LanforgeDbError;
 use thiserror::Error;
 
 /// Errors that can occur during API operations.
@@ -66,7 +66,7 @@ pub enum UdsError {
 
     /// Error during database operations.
     #[error("Database error: {0}")]
-    Database(#[from] LeaseDbError),
+    Database(#[from] LanforgeDbError),
 }
 
 /// A specialized Result type for API operations.

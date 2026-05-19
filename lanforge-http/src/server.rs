@@ -19,7 +19,7 @@ use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     error::CoreError,
 };
-use lanforge_db::{engine::LeaseDb, log_engine::LogDb};
+use lanforge_db::{engine::LanforgeDb, log_engine::LogDb};
 use lanforge_dns::server::transport::tls as tls_utils;
 use lanforge_macros::lanforge_service;
 use lanforge_types::system::{ServiceBanner, ServiceState};
@@ -39,7 +39,7 @@ use crate::config::HttpConfig;
 pub struct AppState {
     pub cfg: Arc<HttpConfig>,
     pub ctx: LanforgeContext,
-    pub db: Arc<LeaseDb>,
+    pub db: Arc<LanforgeDb>,
     pub log_db: Arc<LogDb>,
     pub auth: Arc<AuthManager>,
     pub start_time: Instant,
@@ -57,7 +57,7 @@ impl axum::extract::FromRef<AppState> for Arc<HttpConfig> {
     }
 }
 
-impl axum::extract::FromRef<AppState> for Arc<LeaseDb> {
+impl axum::extract::FromRef<AppState> for Arc<LanforgeDb> {
     fn from_ref(state: &AppState) -> Self {
         state.db.clone()
     }
@@ -79,7 +79,7 @@ impl axum::extract::FromRef<AppState> for Arc<LeaseDb> {
 pub struct HttpService {
     cfg: Arc<HttpConfig>,
     ctx: LanforgeContext,
-    db: Arc<LeaseDb>,
+    db: Arc<LanforgeDb>,
     log_db: Arc<LogDb>,
 }
 
@@ -88,7 +88,7 @@ impl HttpService {
     pub fn new(
         cfg: Arc<HttpConfig>,
         ctx: LanforgeContext,
-        db: Arc<LeaseDb>,
+        db: Arc<LanforgeDb>,
         log_db: Arc<LogDb>,
     ) -> Self {
         ctx.register_status_provider(Arc::new(Self {

@@ -11,7 +11,7 @@ use lanforge_db::worker::DbWorker;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use lanforge_uds::server::handle_client;
@@ -80,7 +80,7 @@ async fn test_full_db_reset_chain() {
     // 3. Spawn DbWorker
     let ctx_db = ctx.clone();
     let db = Arc::new(
-        LeaseDb::open(&cfg.database)
+        LanforgeDb::open(&cfg.database)
             .await
             .expect("Failed to open DB"),
     );
@@ -147,7 +147,7 @@ async fn test_full_db_reset_chain() {
     let mut rpc_client = lanforge_api::rpc::LanforgeRpcClient::new(client);
     let resp = rpc_client.db_reset().await.expect("RPC db_reset failed");
     assert!(
-        resp.message.contains("Factory reset initiated"),
+        resp.message.contains("Factory reset completed"),
         "Expected reset message, got: {}",
         resp.message
     );

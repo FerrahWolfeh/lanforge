@@ -1,10 +1,12 @@
 use crate::ClientContext;
 use lanforge_api::api::{HostConfigEntry, HostsResponse, Response, SimpleSuccess};
 use lanforge_types::{
-    device::{IPv4State, IPv6State, Origin},
-    identifiers::MacAddr,
+    device::{Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin},
+    identifiers::{Duid, MacAddr},
     update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
 };
+use std::net::Ipv4Addr;
+use std::time::SystemTime;
 
 impl ClientContext {
     /// Generates a `HostsResponse` containing all manually configured host entries.
@@ -48,6 +50,38 @@ impl ClientContext {
             }
         };
 
+        // 1. Prepare device representation
+        let mut dev = match self.ctx.get_device(&mac) {
+            Some(d) => (*d).clone(),
+            None => Device::new(mac),
+        };
+
+        dev.hostname = Hostname {
+            name: entry.hostname.clone(),
+            origin: HostnameOrigin::Static,
+        };
+        if let Some(v4) = &entry.v4_fixed {
+            if let Ok(ip) = v4.parse::<Ipv4Addr>() {
+                dev.v4 = IPv4State::Static(ip);
+            }
+        }
+        if let Some(v6) = &entry.v6_suffix {
+            if let Some(suf) = Ipv6AddrOrSuffix::parse(v6) {
+                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+                dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
+            }
+        }
+        dev.origin = Origin::Static;
+        dev.managed_at = Some(SystemTime::now());
+
+        // 2. Synchronous database write
+        if let Err(e) = self.db.upsert_device(&dev).await {
+            return Response::Error {
+                error: format!("Database write failed: {e}"),
+            };
+        }
+
+        // 3. Apply to memory context
         let update = DeviceUpdate::CliHostUpdated {
             mac,
             update: CliHostUpdate {
@@ -64,7 +98,7 @@ impl ClientContext {
 
         if !self.ctx.apply(update) {
             return Response::Error {
-                error: "Failed to apply device update".to_string(),
+                error: "Failed to apply device update in memory".to_string(),
             };
         }
 
@@ -74,59 +108,91 @@ impl ClientContext {
     }
 
     pub async fn handle_host_set(&self, mac: MacAddr, field: String, value: String) -> Response {
+        let dev_arc = match self.ctx.get_device(&mac) {
+            Some(d) => d,
+            None => {
+                return Response::Error {
+                    error: format!("Device not found: {mac}"),
+                };
+            }
+        };
+
+        let mut dev = (*dev_arc).clone();
+
+        let mut cli_update = CliHostUpdate {
+            hostname: FieldUpdate::NoChange,
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::NoChange,
+            boot_file: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            origin: Origin::Static,
+        };
+
+        if field == "hostname" {
+            dev.hostname = Hostname {
+                name: value.clone(),
+                origin: HostnameOrigin::Static,
+            };
+            cli_update.hostname = FieldUpdate::Set(value.clone());
+        } else if field == "duid" {
+            if let Ok(d) = value.parse::<Duid>() {
+                dev.duid = Some(d.clone());
+                cli_update.duid = FieldUpdate::Set(d);
+            }
+        } else if field == "v4_static" {
+            if let Ok(ip) = value.parse::<Ipv4Addr>() {
+                dev.v4 = IPv4State::Static(ip);
+                cli_update.v4_static = FieldUpdate::Set(ip);
+            }
+        } else if field == "v6_suffix" {
+            if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
+                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+                dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
+                cli_update.v6_suffix = FieldUpdate::Set(suf);
+            }
+        } else if field == "boot_file" {
+            if value.is_empty() {
+                dev.boot_file = None;
+                cli_update.boot_file = FieldUpdate::Clear;
+            } else {
+                dev.boot_file = Some(value.clone());
+                cli_update.boot_file = FieldUpdate::Set(value.clone());
+            }
+        } else if field == "class" {
+            if let Ok(c) = value.parse() {
+                dev.class = c;
+                cli_update.class = FieldUpdate::Set(c);
+            }
+        } else if field == "dns_fallback" {
+            dev.dns_fallback = value.clone();
+            cli_update.dns_fallback = FieldUpdate::Set(value);
+        } else {
+            return Response::Error {
+                error: format!("Unknown field: {field}"),
+            };
+        }
+
+        dev.origin = Origin::Static;
+        dev.managed_at = Some(SystemTime::now());
+
+        // 2. Synchronous database write
+        if let Err(e) = self.db.upsert_device(&dev).await {
+            return Response::Error {
+                error: format!("Database write failed: {e}"),
+            };
+        }
+
+        // 3. Apply to memory context
         let update = DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
-                hostname: if field == "hostname" {
-                    FieldUpdate::Set(value.clone())
-                } else {
-                    FieldUpdate::NoChange
-                },
-                duid: if field == "duid" {
-                    value
-                        .parse()
-                        .map_or(FieldUpdate::NoChange, FieldUpdate::Set)
-                } else {
-                    FieldUpdate::NoChange
-                },
-                v4_static: if field == "v4_static" {
-                    value
-                        .parse()
-                        .map_or(FieldUpdate::NoChange, FieldUpdate::Set)
-                } else {
-                    FieldUpdate::NoChange
-                },
-                v6_suffix: if field == "v6_suffix" {
-                    value
-                        .parse()
-                        .map_or(FieldUpdate::NoChange, FieldUpdate::Set)
-                } else {
-                    FieldUpdate::NoChange
-                },
-                boot_file: if field == "boot_file" {
-                    FieldUpdate::Set(value.clone())
-                } else {
-                    FieldUpdate::NoChange
-                },
-                class: if field == "class" {
-                    value
-                        .parse()
-                        .map_or(FieldUpdate::NoChange, FieldUpdate::Set)
-                } else {
-                    FieldUpdate::NoChange
-                },
-                dns_fallback: if field == "dns_fallback" {
-                    FieldUpdate::Set(value)
-                } else {
-                    FieldUpdate::NoChange
-                },
-                origin: Origin::Static,
-            },
+            update: cli_update,
         };
 
         if !self.ctx.apply(update) {
             return Response::Error {
-                error: "Failed to update device".to_string(),
+                error: "Failed to update device in memory".to_string(),
             };
         }
 
@@ -136,9 +202,17 @@ impl ClientContext {
     }
 
     pub async fn handle_host_remove(&self, mac: MacAddr) -> Response {
+        // 1. Synchronous database delete
+        if let Err(e) = self.db.remove_device(mac).await {
+            return Response::Error {
+                error: format!("Database delete failed: {e}"),
+            };
+        }
+
+        // 2. Apply to memory context
         if !self.ctx.apply(DeviceUpdate::Remove(mac)) {
             return Response::Error {
-                error: "Failed to remove device".to_string(),
+                error: "Failed to remove device from memory".to_string(),
             };
         }
 

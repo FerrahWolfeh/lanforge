@@ -9,7 +9,7 @@ use lanforge_api::api::{
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_types::network::dns::adblock::RewriteRule;
 use lanforge_types::update::LeaseTarget;
@@ -30,7 +30,7 @@ pub struct ClientContext {
     /// Lanforge Context.
     pub ctx: LanforgeContext,
     /// Shared lease database.
-    pub db: Arc<LeaseDb>,
+    pub db: Arc<LanforgeDb>,
     /// Shared log database.
     pub log_db: Arc<LogDb>,
     /// Active client counter.

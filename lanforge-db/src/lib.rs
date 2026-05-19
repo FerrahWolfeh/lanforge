@@ -8,7 +8,7 @@
 //!
 //! This crate implements two independent persistence mechanisms:
 //!
-//! - **`LeaseDb`** — Primary database for devices and leases (survives reboots)
+//! - **`LanforgeDb`** — Primary database for devices and leases (survives reboots)
 //! - **`LogDb`** — Transient event log database (24h retention, optimized for tmpfs/ramdisk)
 //!
 //! ## Execution Model
@@ -32,7 +32,7 @@
 //!
 //! ```text
 //! main.rs
-//!   ├── LeaseDb::open(path)          → opens SQLite, runs migrations
+//!   ├── LanforgeDb::open(path)          → opens SQLite, runs migrations
 //!   ├── db.load_table()              → reconstructs State from disk
 //!   ├── LanforgeContext::new(bus, state)
 //!   ├── applies TOML overrides        → precedence over DB entries
@@ -43,10 +43,10 @@
 //!
 //! | Module | Responsibility |
 //! | :--- | :--- |
-//! | [`engine`] | `LeaseDb` — schema, migrations, save/load, vacuum, prune |
+//! | [`engine`] | `LanforgeDb` — schema, migrations, save/load, vacuum, prune |
 //! | [`log_engine`] | `LogDb` — transient logs with auto-pruning (24h + 50K cap) |
 //! | [`worker`] | `DbWorker` — sync service coordinating persistence |
-//! | [`error`] | `LeaseDbError` — I/O and SQLite error hierarchy |
+//! | [`error`] | `LanforgeDbError` — I/O and SQLite error hierarchy |
 #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
 compile_error!("Either 'sqlite' or 'postgres' feature must be enabled for lanforge-db.");
 

@@ -6,7 +6,7 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_db::config::DatabaseConfig;
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::DnsRecordType;
@@ -22,7 +22,7 @@ async fn init_test_context() -> ClientContext {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
     let db = Arc::new(
-        LeaseDb::open(&DatabaseConfig {
+        LanforgeDb::open(&DatabaseConfig {
             url: "sqlite::memory:".to_string(),
             ..Default::default()
         })

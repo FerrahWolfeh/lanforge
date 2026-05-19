@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::debug;
 
-use crate::error::LeaseDbError;
+use crate::error::LanforgeDbError;
 use futures::StreamExt;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
 use sqlx::{Row, SqlitePool};
@@ -39,7 +39,7 @@ pub struct LogDb {
 
 impl LogDb {
     /// Opens the log database at the specified URL.
-    pub async fn open(url: &str) -> Result<Self, LeaseDbError> {
+    pub async fn open(url: &str) -> Result<Self, LanforgeDbError> {
         // Ensure parent directory exists for local SQLite files
         if url.starts_with("sqlite:") && !url.contains(":memory:") {
             let path_str = url
@@ -131,7 +131,7 @@ impl LogDb {
     }
 
     /// Records a new event in the log history.
-    pub async fn record_log(&self, timed_event: &TimedEvent) -> Result<(), LeaseDbError> {
+    pub async fn record_log(&self, timed_event: &TimedEvent) -> Result<(), LanforgeDbError> {
         let mut buf = String::new();
         self.record_logs_batch(std::slice::from_ref(timed_event), &mut buf)
             .await
@@ -142,7 +142,7 @@ impl LogDb {
         &self,
         events: &[TimedEvent],
         json_buf: &mut String,
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         if events.is_empty() {
             return Ok(());
         }
@@ -155,7 +155,7 @@ impl LogDb {
             // Safety: serde_json always produces valid UTF-8
             unsafe {
                 serde_json::to_writer(json_buf.as_mut_vec(), &timed_event.event).map_err(|e| {
-                    LeaseDbError::Migration("event serialization".into(), e.to_string())
+                    LanforgeDbError::Migration("event serialization".into(), e.to_string())
                 })?;
             }
 
@@ -178,7 +178,7 @@ impl LogDb {
             }
         }
 
-        tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+        tx.commit().await.map_err(LanforgeDbError::TransactionFailed)?;
 
         if last_timestamp > 0 {
             self.maybe_prune(last_timestamp).await?;
@@ -194,7 +194,7 @@ impl LogDb {
         src_ip: IpAddr,
         domain: &str,
         src_mac: Option<String>,
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         let now_secs = timed_event
             .timestamp
             .duration_since(UNIX_EPOCH)
@@ -225,7 +225,7 @@ impl LogDb {
     pub async fn record_dns_queries_batch(
         &self,
         entries: &[QueryLogEntry],
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         if entries.is_empty() {
             return Ok(());
         }
@@ -258,7 +258,7 @@ impl LogDb {
             }
         }
 
-        tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+        tx.commit().await.map_err(LanforgeDbError::TransactionFailed)?;
 
         if last_timestamp > 0 {
             self.maybe_prune(last_timestamp).await?;
@@ -268,7 +268,7 @@ impl LogDb {
 
     /// Records a resolved DNS query.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub async fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), LeaseDbError> {
+    pub async fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), LanforgeDbError> {
         sqlx::query(
             "INSERT INTO dns_queries (timestamp, src_ip, src_mac, domain, qtype, result, upstream_us, cached, answer, protocol) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -296,7 +296,7 @@ impl LogDb {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn maybe_prune(&self, now_secs: i64) -> Result<(), LeaseDbError> {
+    async fn maybe_prune(&self, now_secs: i64) -> Result<(), LanforgeDbError> {
         let mut last_prune = self.last_prune.lock().await;
         if last_prune.elapsed() >= Duration::from_secs(60) {
             let cutoff = now_secs - (24 * 3600);
@@ -365,7 +365,7 @@ impl LogDb {
         &self,
         limit: usize,
         offset: Option<usize>,
-    ) -> Result<(Vec<QueryLogEntry>, usize), LeaseDbError> {
+    ) -> Result<(Vec<QueryLogEntry>, usize), LanforgeDbError> {
         let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM dns_queries")
             .fetch_one(&self.pool)
             .await
@@ -433,7 +433,7 @@ impl LogDb {
     pub async fn get_dns_top_domains(
         &self,
         limit: usize,
-    ) -> Result<Vec<(String, u64)>, LeaseDbError> {
+    ) -> Result<Vec<(String, u64)>, LanforgeDbError> {
         let rows = sqlx::query(
             "SELECT domain, COUNT(*) as count FROM dns_queries GROUP BY domain ORDER BY count DESC LIMIT ?"
         )
@@ -448,7 +448,7 @@ impl LogDb {
     }
 
     /// Retrieves query counts by type.
-    pub async fn get_dns_query_types(&self) -> Result<Vec<(u16, u64)>, LeaseDbError> {
+    pub async fn get_dns_query_types(&self) -> Result<Vec<(u16, u64)>, LanforgeDbError> {
         let rows = sqlx::query(
             "SELECT qtype, COUNT(*) as count FROM dns_queries GROUP BY qtype ORDER BY count DESC",
         )
@@ -470,7 +470,7 @@ impl LogDb {
     pub async fn get_dns_query_rate(
         &self,
         since_secs: u64,
-    ) -> Result<Vec<(u64, u64)>, LeaseDbError> {
+    ) -> Result<Vec<(u64, u64)>, LanforgeDbError> {
         let rows = sqlx::query(
             "SELECT (timestamp / 30) * 30 as bucket, COUNT(*) as count 
              FROM dns_queries 
@@ -497,7 +497,7 @@ impl LogDb {
     pub async fn get_dns_top_clients(
         &self,
         limit: usize,
-    ) -> Result<Vec<(String, u64)>, LeaseDbError> {
+    ) -> Result<Vec<(String, u64)>, LanforgeDbError> {
         let rows = sqlx::query(
             "SELECT src_ip, COUNT(*) as count FROM dns_queries GROUP BY src_ip ORDER BY count DESC LIMIT ?"
         )
@@ -512,7 +512,7 @@ impl LogDb {
     }
 
     /// Retrieves query counts by protocol.
-    pub async fn get_dns_protocol_stats(&self) -> Result<Vec<(String, u64)>, LeaseDbError> {
+    pub async fn get_dns_protocol_stats(&self) -> Result<Vec<(String, u64)>, LanforgeDbError> {
         let rows = sqlx::query(
             "SELECT protocol, COUNT(*) as count FROM dns_queries GROUP BY protocol ORDER BY count DESC",
         )
@@ -530,7 +530,7 @@ impl LogDb {
     pub async fn get_dns_block_history(
         &self,
         limit: usize,
-    ) -> Result<Vec<serde_json::Value>, LeaseDbError> {
+    ) -> Result<Vec<serde_json::Value>, LanforgeDbError> {
         let limit = limit as i64;
         let rows = sqlx::query(
             "SELECT timestamp, src_ip, src_mac, domain FROM dns_blocked_logs ORDER BY id DESC LIMIT ?",
@@ -557,7 +557,7 @@ impl LogDb {
     }
 
     /// Wipes all logged events from the database.
-    pub async fn clear_logs(&self) -> Result<(), LeaseDbError> {
+    pub async fn clear_logs(&self) -> Result<(), LanforgeDbError> {
         sqlx::query("DELETE FROM system_logs")
             .execute(&self.pool)
             .await?;
@@ -567,24 +567,47 @@ impl LogDb {
         Ok(())
     }
 
+    /// Prunes log entries older than the specified cutoff timestamp.
+    pub async fn prune_logs(&self, before: i64) -> Result<(), LanforgeDbError> {
+        sqlx::query("DELETE FROM system_logs WHERE timestamp < ?")
+            .bind(before)
+            .execute(&self.pool)
+            .await?;
+
+        #[cfg(feature = "adblock")]
+        {
+            sqlx::query("DELETE FROM dns_blocked_logs WHERE timestamp < ?")
+                .bind(before)
+                .execute(&self.pool)
+                .await?;
+        }
+
+        sqlx::query("DELETE FROM dns_queries WHERE timestamp < ?")
+            .bind(before)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
     /// Retrieves the most recent log entries.
     /// Streams the most recent system events.
     pub fn stream_history(
         &self,
         limit: usize,
-    ) -> impl futures::Stream<Item = Result<TimedEvent, LeaseDbError>> + '_ {
+    ) -> impl futures::Stream<Item = Result<TimedEvent, LanforgeDbError>> + '_ {
         let limit = limit as i64;
         let query =
             sqlx::query("SELECT timestamp, event_json FROM system_logs ORDER BY id DESC LIMIT ?")
                 .bind(limit);
 
         query.fetch(&self.pool).map(|res| {
-            let row = res.map_err(|e| LeaseDbError::Internal(e.to_string()))?;
+            let row = res.map_err(|e| LanforgeDbError::Internal(e.to_string()))?;
             let timestamp: i64 = row.get("timestamp");
             let event_json: String = row.get("event_json");
 
             let event: LanforgeEvent = serde_json::from_str(&event_json)
-                .map_err(|e| LeaseDbError::Internal(format!("JSON error: {e}")))?;
+                .map_err(|e| LanforgeDbError::Internal(format!("JSON error: {e}")))?;
 
             Ok(TimedEvent {
                 timestamp: UNIX_EPOCH + Duration::from_secs(timestamp as u64),
@@ -594,7 +617,7 @@ impl LogDb {
     }
 
     /// Retrieves the most recent log entries.
-    pub async fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, LeaseDbError> {
+    pub async fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, LanforgeDbError> {
         let mut stream = self.stream_history(limit);
         let mut entries = Vec::new();
         while let Some(res) = stream.next().await {

@@ -24,16 +24,17 @@ pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
-use crate::error::LeaseDbError;
+use crate::config::DatabaseConfig;
+use crate::error::LanforgeDbError;
 pub use types::{DeviceRow, LeaseAction, LeaseHistoryEntry, LeaseKind, Pool};
 use utils::{system_time_to_unix, unix_to_system_time};
 
-pub struct LeaseDb {
+pub struct LanforgeDb {
     pub pool: Pool,
 }
 
-impl LeaseDb {
-    pub async fn open(cfg: &crate::config::DatabaseConfig) -> Result<Self, LeaseDbError> {
+impl LanforgeDb {
+    pub async fn open(cfg: &DatabaseConfig) -> Result<Self, LanforgeDbError> {
         let url = &cfg.url;
         // Ensure parent directory exists for local SQLite files
         if url.starts_with("sqlite:") && !url.contains(":memory:") {
@@ -65,7 +66,7 @@ impl LeaseDb {
 
         let pool = Pool::connect(url, cfg.max_connections, cfg.min_connections)
             .await
-            .map_err(|e| LeaseDbError::ConnectionOpen(Path::new(url).to_path_buf(), e))?;
+            .map_err(|e| LanforgeDbError::ConnectionOpen(Path::new(url).to_path_buf(), e))?;
 
         match &pool {
             #[cfg(feature = "sqlite")]
@@ -74,31 +75,37 @@ impl LeaseDb {
                     .execute(p)
                     .await
                     .map_err(|e| {
-                        LeaseDbError::Migration("setting WAL mode".into(), e.to_string())
+                        LanforgeDbError::Migration("setting WAL mode".into(), e.to_string())
                     })?;
                 sqlx::query("PRAGMA synchronous=NORMAL")
                     .execute(p)
                     .await
                     .map_err(|e| {
-                        LeaseDbError::Migration("setting synchronous=NORMAL".into(), e.to_string())
+                        LanforgeDbError::Migration(
+                            "setting synchronous=NORMAL".into(),
+                            e.to_string(),
+                        )
                     })?;
                 sqlx::query("PRAGMA foreign_keys=OFF")
                     .execute(p)
                     .await
                     .map_err(|e| {
-                        LeaseDbError::Migration("disabling foreign keys".into(), e.to_string())
+                        LanforgeDbError::Migration("disabling foreign keys".into(), e.to_string())
                     })?;
                 sqlx::migrate!("migrations/sqlite")
                     .run(p)
                     .await
                     .map_err(|e| {
-                        LeaseDbError::Migration("applying sqlite migrations".into(), e.to_string())
+                        LanforgeDbError::Migration(
+                            "applying sqlite migrations".into(),
+                            e.to_string(),
+                        )
                     })?;
                 sqlx::query("PRAGMA foreign_keys=ON")
                     .execute(p)
                     .await
                     .map_err(|e| {
-                        LeaseDbError::Migration("enabling foreign keys".into(), e.to_string())
+                        LanforgeDbError::Migration("enabling foreign keys".into(), e.to_string())
                     })?;
             }
             #[cfg(feature = "postgres")]
@@ -107,7 +114,7 @@ impl LeaseDb {
                     .run(p)
                     .await
                     .map_err(|e| {
-                        LeaseDbError::Migration(
+                        LanforgeDbError::Migration(
                             "applying postgres migrations".into(),
                             e.to_string(),
                         )
@@ -120,28 +127,30 @@ impl LeaseDb {
     }
 
     #[cfg(test)]
-    pub async fn open_in_memory() -> Result<Self, LeaseDbError> {
+    pub async fn open_in_memory() -> Result<Self, LanforgeDbError> {
         #[cfg(feature = "sqlite")]
         {
             let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
             sqlx::migrate!("migrations/sqlite")
                 .run(&pool)
                 .await
-                .map_err(|e| LeaseDbError::Migration("memory migrations".into(), e.to_string()))?;
+                .map_err(|e| {
+                    LanforgeDbError::Migration("memory migrations".into(), e.to_string())
+                })?;
             Ok(Self {
                 pool: Pool::Sqlite(pool),
             })
         }
         #[cfg(all(not(feature = "sqlite"), feature = "postgres"))]
         {
-            Err(LeaseDbError::Migration(
+            Err(LanforgeDbError::Migration(
                 "postgres in-memory not implemented".into(),
                 "".into(),
             ))
         }
     }
 
-    pub async fn save_table(&self, table: &State) -> Result<(), LeaseDbError> {
+    pub async fn save_table(&self, table: &State) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => {
@@ -165,7 +174,9 @@ impl LeaseDb {
                             .await?;
                     }
                 }
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
@@ -189,18 +200,26 @@ impl LeaseDb {
                             .await?;
                     }
                 }
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
         }
         debug!("State persisted successfully");
         Ok(())
     }
 
-    pub async fn save_snapshot(&self, snapshot: &PersistenceSnapshot) -> Result<(), LeaseDbError> {
+    pub async fn save_snapshot(
+        &self,
+        snapshot: &PersistenceSnapshot,
+    ) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => {
-                let mut tx = p.begin().await.map_err(LeaseDbError::TransactionFailed)?;
+                let mut tx = p
+                    .begin()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
                 let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac FROM devices")
                     .fetch_all(&mut *tx)
                     .await?;
@@ -221,11 +240,16 @@ impl LeaseDb {
                     }
                 }
 
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
-                let mut tx = p.begin().await.map_err(LeaseDbError::TransactionFailed)?;
+                let mut tx = p
+                    .begin()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
                 let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac::TEXT FROM devices")
                     .fetch_all(&mut *tx)
                     .await?;
@@ -246,50 +270,60 @@ impl LeaseDb {
                     }
                 }
 
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
         }
         debug!("Snapshot persisted successfully");
         Ok(())
     }
 
-    pub async fn upsert_device(&self, device: &Device) -> Result<(), LeaseDbError> {
+    pub async fn upsert_device(&self, device: &Device) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => {
                 let mut tx = p.begin().await?;
                 sqlite::upsert_device(&mut tx, device).await?;
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
                 let mut tx = p.begin().await?;
                 postgres::upsert_device(&mut tx, device).await?;
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
         }
         Ok(())
     }
 
-    pub async fn upsert_base_device_only(&self, device: &Device) -> Result<(), LeaseDbError> {
+    pub async fn upsert_base_device_only(&self, device: &Device) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => {
                 let mut tx = p.begin().await?;
                 sqlite::upsert_base_device_only(&mut tx, device).await?;
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
                 let mut tx = p.begin().await?;
                 postgres::upsert_base_device_only(&mut tx, device).await?;
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
         }
         Ok(())
     }
 
-    pub async fn delete_devices(&self, macs: &[MacAddr]) -> Result<(), LeaseDbError> {
+    pub async fn delete_devices(&self, macs: &[MacAddr]) -> Result<(), LanforgeDbError> {
         if macs.is_empty() {
             return Ok(());
         }
@@ -304,7 +338,9 @@ impl LeaseDb {
                         .execute(&mut *tx)
                         .await?;
                 }
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
@@ -315,13 +351,15 @@ impl LeaseDb {
                         .execute(&mut *tx)
                         .await?;
                 }
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
         }
         Ok(())
     }
 
-    pub async fn upsert_many<'a, I>(&self, devices: I) -> Result<(), LeaseDbError>
+    pub async fn upsert_many<'a, I>(&self, devices: I) -> Result<(), LanforgeDbError>
     where
         I: IntoIterator<Item = &'a Device>,
     {
@@ -333,7 +371,9 @@ impl LeaseDb {
                 for device in devices_vec {
                     sqlite::upsert_device(&mut tx, device).await?;
                 }
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
@@ -341,7 +381,9 @@ impl LeaseDb {
                 for device in devices_vec {
                     postgres::upsert_device(&mut tx, device).await?;
                 }
-                tx.commit().await.map_err(LeaseDbError::TransactionFailed)?;
+                tx.commit()
+                    .await
+                    .map_err(LanforgeDbError::TransactionFailed)?;
             }
         }
         Ok(())
@@ -351,7 +393,7 @@ impl LeaseDb {
         &self,
         hostname: &str,
         last_seen_since: SystemTime,
-    ) -> Result<Option<MacAddr>, LeaseDbError> {
+    ) -> Result<Option<MacAddr>, LanforgeDbError> {
         let since_unix = utils::system_time_to_unix(last_seen_since);
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -361,7 +403,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn load_table(&self) -> Result<State, LeaseDbError> {
+    pub async fn load_table(&self) -> Result<State, LanforgeDbError> {
         let mut table = State::new();
         table.set_indexing_enabled(false);
 
@@ -403,8 +445,8 @@ impl LeaseDb {
         v4_leases: Vec<(String, String, i64)>,
         v6_leases: Vec<(String, i64, String, i64)>,
         v6_prefixes: Vec<(String, i64, String, i32, i64)>,
-        slaac_addrs: Vec<(String, String)>,
-        seen_v4: Vec<(String, String)>,
+        slaac_addrs: Vec<(String, String, i64)>,
+        seen_v4: Vec<(String, String, i64)>,
     ) {
         Self::populate_devices(table, device_rows);
         Self::populate_v4_leases(table, v4_leases);
@@ -545,35 +587,49 @@ impl LeaseDb {
         }
     }
 
-    fn populate_slaac_addrs(table: &mut State, addrs: Vec<(String, String)>) {
-        for (mac_s, ip_s) in addrs {
+    fn populate_slaac_addrs(table: &mut State, addrs: Vec<(String, String, i64)>) {
+        use std::sync::Arc;
+        for (mac_s, ip_s, last_seen) in addrs {
             if let Some(mac) = MacAddr::parse(&mac_s)
                 && let Ok(ip) = ip_s.parse::<Ipv6Addr>()
+                && let Some(dev_arc) = table.devices.get_mut(&mac)
             {
-                table.apply_update(DeviceUpdate::SlaacObserved {
-                    mac,
-                    addr: ip,
-                    is_active: false,
+                let dev = Arc::make_mut(dev_arc);
+                let exists = dev.v6.iter().any(|state| {
+                    if let IPv6State::Slaac(addr, _) = state {
+                        *addr == ip
+                    } else {
+                        false
+                    }
                 });
+                if !exists {
+                    dev.v6
+                        .push(IPv6State::Slaac(ip, unix_to_system_time(last_seen)));
+                }
             }
         }
     }
 
-    fn populate_seen_v4(table: &mut State, seen: Vec<(String, String)>) {
-        for (mac_s, ip_s) in seen {
+    fn populate_seen_v4(table: &mut State, seen: Vec<(String, String, i64)>) {
+        use std::sync::Arc;
+        for (mac_s, ip_s, last_seen) in seen {
             if let Some(mac) = MacAddr::parse(&mac_s)
                 && let Ok(ip) = ip_s.parse::<Ipv4Addr>()
+                && let Some(dev_arc) = table.devices.get_mut(&mac)
             {
-                table.apply_update(DeviceUpdate::ArpSeen {
-                    mac,
-                    ip,
-                    is_active: false,
-                });
+                let dev = Arc::make_mut(dev_arc);
+                let exists = dev.seen_v4.iter().any(|(addr, _)| *addr == ip);
+                if !exists {
+                    if dev.seen_v4.len() >= 4 {
+                        dev.seen_v4.remove(0);
+                    }
+                    dev.seen_v4.push((ip, unix_to_system_time(last_seen)));
+                }
             }
         }
     }
 
-    pub async fn remove_device(&self, mac: MacAddr) -> Result<(), LeaseDbError> {
+    pub async fn remove_device(&self, mac: MacAddr) -> Result<(), LanforgeDbError> {
         let mac_str = mac.to_string();
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -594,22 +650,22 @@ impl LeaseDb {
         Ok(())
     }
 
-    pub async fn vacuum(&self) -> Result<(), LeaseDbError> {
+    pub async fn vacuum(&self) -> Result<(), LanforgeDbError> {
         debug!("Running VACUUM on database...");
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::vacuum(p)
                 .await
-                .map_err(LeaseDbError::VacuumFailed)?,
+                .map_err(LanforgeDbError::VacuumFailed)?,
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => postgres::vacuum(p)
                 .await
-                .map_err(LeaseDbError::VacuumFailed)?,
+                .map_err(LanforgeDbError::VacuumFailed)?,
         }
         Ok(())
     }
 
-    pub async fn prune_zombies(&self) -> Result<usize, LeaseDbError> {
+    pub async fn prune_zombies(&self) -> Result<usize, LanforgeDbError> {
         debug!("[db] Pruning zombie entries...");
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -619,7 +675,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn reset(&self) -> Result<(), LeaseDbError> {
+    pub async fn reset(&self) -> Result<(), LanforgeDbError> {
         info!("Resetting database (clearing all tables)...");
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -646,7 +702,7 @@ impl LeaseDb {
         ip: &str,
         lease_type: &str,
         action: LeaseAction,
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         let now = system_time_to_unix(SystemTime::now());
         let mac_str = mac.to_string();
         let action_str = action.as_str();
@@ -667,7 +723,7 @@ impl LeaseDb {
     pub async fn get_lease_history(
         &self,
         mac: MacAddr,
-    ) -> Result<Vec<LeaseHistoryEntry>, LeaseDbError> {
+    ) -> Result<Vec<LeaseHistoryEntry>, LanforgeDbError> {
         let mac_str = mac.to_string();
         let rows = match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -691,7 +747,7 @@ impl LeaseDb {
 
     // --- DNS Configuration delegation methods ---
 
-    pub async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, LeaseDbError> {
+    pub async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::load_dns_rewrites_sqlite(p).await,
@@ -705,7 +761,7 @@ impl LeaseDb {
         domain: &str,
         rtype: DnsRecordType,
         answer: &str,
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => {
@@ -718,7 +774,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), LeaseDbError> {
+    pub async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::delete_dns_rewrite_by_id_sqlite(p, id).await,
@@ -727,7 +783,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn clear_dns_rewrites(&self) -> Result<(), LeaseDbError> {
+    pub async fn clear_dns_rewrites(&self) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::clear_dns_rewrites_sqlite(p).await,
@@ -736,14 +792,14 @@ impl LeaseDb {
         }
     }
 
-    pub async fn delete_dns_rewrite(&self, _domain: &str) -> Result<(), LeaseDbError> {
+    pub async fn delete_dns_rewrite(&self, _domain: &str) -> Result<(), LanforgeDbError> {
         // Deprecated, use delete_dns_rewrite_by_id
-        Err(LeaseDbError::Generic(
+        Err(LanforgeDbError::Generic(
             "delete_dns_rewrite is deprecated".into(),
         ))
     }
 
-    pub async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, LeaseDbError> {
+    pub async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::load_dns_allowlist_sqlite(p).await,
@@ -752,7 +808,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn add_dns_allowlist(&self, domain: &str) -> Result<(), LeaseDbError> {
+    pub async fn add_dns_allowlist(&self, domain: &str) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::add_dns_allowlist_sqlite(p, domain).await,
@@ -761,7 +817,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), LeaseDbError> {
+    pub async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::remove_dns_allowlist_sqlite(p, domain).await,
@@ -770,7 +826,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn clear_dns_allowlist(&self) -> Result<(), LeaseDbError> {
+    pub async fn clear_dns_allowlist(&self) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::clear_dns_allowlist_sqlite(p).await,
@@ -779,7 +835,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn load_adblock_config(&self) -> Result<AdblockDbConfig, LeaseDbError> {
+    pub async fn load_adblock_config(&self) -> Result<AdblockDbConfig, LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::load_adblock_config_sqlite(p).await,
@@ -792,7 +848,7 @@ impl LeaseDb {
         &self,
         key: &str,
         value: &str,
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::set_adblock_config_value_sqlite(p, key, value).await,
@@ -803,7 +859,7 @@ impl LeaseDb {
 
     pub async fn load_adblock_urls(
         &self,
-    ) -> Result<Vec<(i64, String, AdblockUrlKind)>, LeaseDbError> {
+    ) -> Result<Vec<(i64, String, AdblockUrlKind)>, LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::load_adblock_urls_sqlite(p).await,
@@ -816,7 +872,7 @@ impl LeaseDb {
         &self,
         url: &str,
         kind: AdblockUrlKind,
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::add_adblock_url_sqlite(p, url, kind).await,
@@ -825,7 +881,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn remove_adblock_url(&self, url: &str) -> Result<(), LeaseDbError> {
+    pub async fn remove_adblock_url(&self, url: &str) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::remove_adblock_url_sqlite(p, url).await,
@@ -834,7 +890,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn clear_adblock_urls(&self) -> Result<(), LeaseDbError> {
+    pub async fn clear_adblock_urls(&self) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => dns_config::clear_adblock_urls_sqlite(p).await,
@@ -851,7 +907,7 @@ impl LeaseDb {
         name: &str,
         scopes: &lanforge_types::auth::ApiScopes,
         expires_at: Option<i64>,
-    ) -> Result<i64, LeaseDbError> {
+    ) -> Result<i64, LanforgeDbError> {
         let now = utils::system_time_to_unix(SystemTime::now());
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -868,7 +924,7 @@ impl LeaseDb {
     pub async fn validate_api_token(
         &self,
         token: &str,
-    ) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LeaseDbError> {
+    ) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LanforgeDbError> {
         let now = utils::system_time_to_unix(SystemTime::now());
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -878,7 +934,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn delete_api_token(&self, token: &str) -> Result<(), LeaseDbError> {
+    pub async fn delete_api_token(&self, token: &str) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::delete_api_token(p, token).await,
@@ -890,7 +946,7 @@ impl LeaseDb {
     pub async fn delete_api_token_by_id_or_name(
         &self,
         id_or_name: &str,
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::delete_api_token_by_id_or_name(p, id_or_name).await,
@@ -901,7 +957,7 @@ impl LeaseDb {
 
     pub async fn load_api_tokens(
         &self,
-    ) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
+    ) -> Result<Vec<crate::engine::types::ApiTokenRow>, LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::load_api_tokens(p).await,
@@ -913,7 +969,8 @@ impl LeaseDb {
     pub async fn get_api_token_info(
         &self,
         id_or_name: &str,
-    ) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LeaseDbError> {
+    ) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LanforgeDbError>
+    {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::get_api_token_info(p, id_or_name).await,
@@ -926,7 +983,7 @@ impl LeaseDb {
 
     pub async fn load_dns_upstreams(
         &self,
-    ) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LeaseDbError> {
+    ) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::load_dns_upstreams(p).await,
@@ -940,7 +997,7 @@ impl LeaseDb {
         addr: &str,
         protocol: &str,
         domain: Option<&str>,
-    ) -> Result<i64, LeaseDbError> {
+    ) -> Result<i64, LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::add_dns_upstream(p, addr, protocol, domain).await,
@@ -953,7 +1010,7 @@ impl LeaseDb {
         &self,
         addr: &str,
         protocol: &str,
-    ) -> Result<(), LeaseDbError> {
+    ) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::remove_dns_upstream(p, addr, protocol).await,
@@ -962,7 +1019,7 @@ impl LeaseDb {
         }
     }
 
-    pub async fn clear_dns_upstreams(&self) -> Result<(), LeaseDbError> {
+    pub async fn clear_dns_upstreams(&self) -> Result<(), LanforgeDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
             Pool::Sqlite(p) => sqlite::clear_dns_upstreams(p).await,

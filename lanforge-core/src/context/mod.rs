@@ -198,6 +198,8 @@ struct LanforgeContextInner {
     dns_handle: RwLock<Option<DnsHandle>>,
     /// Context creation timestamp for calculating uptime.
     start_time: Instant,
+    /// Database worker metrics.
+    db_metrics: DbWorkerMetrics,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -243,6 +245,7 @@ impl LanforgeContext {
             status_providers: RwLock::new(Vec::new()),
             dns_handle: RwLock::new(None),
             start_time: Instant::now(),
+            db_metrics: DbWorkerMetrics::default(),
         });
         Self { inner }
     }
@@ -314,6 +317,12 @@ impl LanforgeContext {
     #[must_use]
     pub fn counters(&self) -> &EventCounters {
         &self.inner.event_counters
+    }
+
+    /// Returns the database worker metrics.
+    #[must_use]
+    pub fn db_metrics(&self) -> &DbWorkerMetrics {
+        &self.inner.db_metrics
     }
 
     /// Creates a lightweight service handle for event-driven services.
@@ -481,5 +490,25 @@ impl LanforgeContext {
     #[must_use]
     pub fn is_if_ready(&self) -> bool {
         self.inner.if_ready.load(Ordering::SeqCst)
+    }
+}
+
+/// Thread-safe metrics collected by the database worker.
+#[derive(Debug)]
+pub struct DbWorkerMetrics {
+    pub last_flush_ts: AtomicU64,
+    pub flush_count: AtomicU64,
+    pub devices_written: AtomicU64,
+    pub last_error: AtomicBool,
+}
+
+impl Default for DbWorkerMetrics {
+    fn default() -> Self {
+        Self {
+            last_flush_ts: AtomicU64::new(0),
+            flush_count: AtomicU64::new(0),
+            devices_written: AtomicU64::new(0),
+            last_error: AtomicBool::new(false),
+        }
     }
 }

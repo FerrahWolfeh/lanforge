@@ -4,7 +4,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_host::ifmon::AddressMonitor;
 use lanforge_types::device::Origin;
@@ -39,7 +39,7 @@ pub struct BootstrapResult {
     pub rt_handle: rtnetlink::Handle,
     pub messages: NetlinkMessages,
     pub target_ifindex: u32,
-    pub db: Arc<LeaseDb>,
+    pub db: Arc<LanforgeDb>,
     pub log_db: Arc<LogDb>,
 }
 
@@ -107,8 +107,8 @@ impl Bootstrapper {
         ))
     }
 
-    async fn init_device_table(cfg: &Config) -> Result<(State, LeaseDb, LogDb)> {
-        let db = LeaseDb::open(&cfg.database).await.map_err(|e| {
+    async fn init_device_table(cfg: &Config) -> Result<(State, LanforgeDb, LogDb)> {
+        let db = LanforgeDb::open(&cfg.database).await.map_err(|e| {
             error!("❌ Erro fatal abrindo leases DB: {e}");
             e
         })?;

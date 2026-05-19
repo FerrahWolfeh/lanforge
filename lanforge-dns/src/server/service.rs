@@ -12,7 +12,7 @@ use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse,
@@ -42,12 +42,12 @@ pub struct DnsService {
     cfg: Arc<DnsConfig>,
     stats: Arc<DnsStats>,
     ctx: LanforgeContext,
-    db: Arc<LeaseDb>,
+    db: Arc<LanforgeDb>,
 }
 
 impl DnsService {
     #[must_use]
-    pub fn new(cfg: DnsConfig, ctx: LanforgeContext, db: Arc<LeaseDb>) -> Self {
+    pub fn new(cfg: DnsConfig, ctx: LanforgeContext, db: Arc<LanforgeDb>) -> Self {
         let stats = Arc::new(DnsStats::new());
         ctx.set_dns_stats(Arc::clone(&stats));
         let service = Self {
@@ -374,7 +374,7 @@ impl lanforge_core::service::StatusProvider for DnsService {
 async fn handle_dns_request(
     req: DnsRequest,
     dns_ctx: Arc<DnsContext>,
-    db: Arc<LeaseDb>,
+    db: Arc<LanforgeDb>,
 ) -> DnsResponse {
     match req {
         DnsRequest::Stats => {

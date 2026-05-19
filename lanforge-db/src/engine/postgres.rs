@@ -1,14 +1,15 @@
 use super::types::DeviceRow;
 use super::utils::system_time_to_unix;
-use crate::error::LeaseDbError;
+use crate::error::LanforgeDbError;
 use lanforge_types::device::{Device, IPv4State, IPv6State, V6PrefixLease};
+use lanforge_types::network::HostnameOrigin;
 use sqlx::{Postgres, Transaction};
 use std::net::Ipv4Addr;
 
 pub async fn upsert_device(
     tx: &mut Transaction<'_, Postgres>,
     device: &Device,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     let mac_str = device.mac.to_string();
 
     upsert_base_device_internal(tx, device, &mac_str).await?;
@@ -29,7 +30,7 @@ pub async fn upsert_device(
 pub async fn upsert_base_device_only(
     tx: &mut Transaction<'_, Postgres>,
     device: &Device,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     let mac_str = device.mac.to_string();
     upsert_base_device_internal(tx, device, &mac_str).await
 }
@@ -38,11 +39,17 @@ async fn upsert_base_device_internal(
     tx: &mut Transaction<'_, Postgres>,
     device: &Device,
     mac_str: &str,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
+    let host_orig_str = match device.hostname.origin {
+        HostnameOrigin::None => "dhcp",
+        HostnameOrigin::Mdns => "mdns",
+        HostnameOrigin::Dhcp => "dhcp",
+        HostnameOrigin::Static => "static",
+    };
     // 1. Core devices table
     sqlx::query(
         "INSERT INTO devices (mac, hostname, hostname_origin, duid, last_seen, origin, managed_at, class)
-         VALUES ($1::MACADDR, $2, $3, $4, $5, $6, $7, $8)
+         VALUES ($1::MACADDR, $2, $3::hostname_origin_t, $4, to_timestamp($5::double precision), $6::device_origin, to_timestamp($7::double precision), $8)
          ON CONFLICT(mac) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             hostname_origin = EXCLUDED.hostname_origin,
@@ -54,11 +61,11 @@ async fn upsert_base_device_internal(
     )
     .bind(mac_str)
     .bind(&device.hostname.name)
-    .bind(device.hostname.origin as i32)
+    .bind(host_orig_str)
     .bind(device.duid.as_ref().map(|d| d.bytes.to_vec()))
-    .bind(system_time_to_unix(device.last_seen))
+    .bind(system_time_to_unix(device.last_seen) as f64)
     .bind(device.origin.as_str())
-    .bind(device.managed_at.map(system_time_to_unix))
+    .bind(device.managed_at.map(|t| system_time_to_unix(t) as f64))
     .bind(device.class as i32)
     .execute(&mut **tx).await?;
 
@@ -66,7 +73,7 @@ async fn upsert_base_device_internal(
     if let Some(topo) = &device.topology {
         sqlx::query(
             "INSERT INTO device_topology (mac, parent_mac, parent_port, local_ifindex, topo_updated)
-             VALUES ($1::MACADDR, $2::MACADDR, $3, $4, $5)
+             VALUES ($1::MACADDR, $2::MACADDR, $3, $4, to_timestamp($5::double precision))
              ON CONFLICT(mac) DO UPDATE SET
                 parent_mac = EXCLUDED.parent_mac,
                 parent_port = EXCLUDED.parent_port,
@@ -77,7 +84,7 @@ async fn upsert_base_device_internal(
         .bind(topo.parent_mac.map(|m| m.to_string()))
         .bind(&topo.port)
         .bind(i32::try_from(topo.local_ifindex).unwrap_or(0))
-        .bind(system_time_to_unix(topo.last_updated))
+        .bind(system_time_to_unix(topo.last_updated) as f64)
         .execute(&mut **tx).await?;
     } else {
         sqlx::query("DELETE FROM device_topology WHERE mac = $1::MACADDR")
@@ -127,7 +134,7 @@ async fn upsert_base_device_internal(
 async fn clear_child_tables(
     tx: &mut Transaction<'_, Postgres>,
     mac: &str,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     sqlx::query("DELETE FROM v4_leases WHERE mac = $1::MACADDR")
         .bind(mac)
         .execute(&mut **tx)
@@ -155,11 +162,11 @@ async fn persist_v4_lease(
     tx: &mut Transaction<'_, Postgres>,
     mac: &str,
     v4: &IPv4State,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     if let IPv4State::Dynamic(lease) = v4 {
-        let expires = system_time_to_unix(lease.expires);
+        let expires = system_time_to_unix(lease.expires) as f64;
         let ip_str = lease.ip.to_string();
-        sqlx::query("INSERT INTO v4_leases (mac, ip, expires) VALUES ($1::MACADDR, $2::INET, $3)")
+        sqlx::query("INSERT INTO v4_leases (mac, ip, expires) VALUES ($1::MACADDR, $2::INET, to_timestamp($3::double precision))")
             .bind(mac)
             .bind(ip_str)
             .bind(expires)
@@ -173,13 +180,13 @@ async fn persist_v6_leases(
     tx: &mut Transaction<'_, Postgres>,
     mac: &str,
     v6: &[IPv6State],
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     for state in v6 {
         if let IPv6State::Dynamic(lease) = state {
-            let expires = system_time_to_unix(lease.expires);
+            let expires = system_time_to_unix(lease.expires) as f64;
             let ip_str = lease.ip.to_string();
             let iaid = i64::from(lease.iaid);
-            sqlx::query("INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES ($1::MACADDR, $2, $3::INET, $4) ON CONFLICT(mac, iaid) DO NOTHING")
+            sqlx::query("INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES ($1::MACADDR, $2, $3::INET, to_timestamp($4::double precision)) ON CONFLICT(mac, iaid) DO NOTHING")
                 .bind(mac)
                 .bind(iaid)
                 .bind(ip_str)
@@ -194,13 +201,13 @@ async fn persist_v6_prefixes(
     tx: &mut Transaction<'_, Postgres>,
     mac: &str,
     prefixes: &[V6PrefixLease],
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     for prefix in prefixes {
-        let expires = system_time_to_unix(prefix.expires);
+        let expires = system_time_to_unix(prefix.expires) as f64;
         let px_str = prefix.prefix.to_string();
         let iaid = i64::from(prefix.iaid);
         let len = i32::from(prefix.len);
-        sqlx::query("INSERT INTO v6_prefixes (mac, iaid, cidr, expires) VALUES ($1::MACADDR, $2, ($3 || '/' || $4)::CIDR, $5) ON CONFLICT(mac, iaid) DO NOTHING")
+        sqlx::query("INSERT INTO v6_prefixes (mac, iaid, cidr, expires) VALUES ($1::MACADDR, $2, ($3 || '/' || $4)::CIDR, to_timestamp($5::double precision)) ON CONFLICT(mac, iaid) DO NOTHING")
             .bind(mac)
             .bind(iaid)
             .bind(px_str)
@@ -215,15 +222,17 @@ async fn persist_slaac_addrs(
     tx: &mut Transaction<'_, Postgres>,
     mac: &str,
     v6: &[IPv6State],
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     for state in v6 {
-        if let IPv6State::Slaac(ip, _) = state {
+        if let IPv6State::Slaac(ip, timestamp) = state {
             let ip_str = ip.to_string();
+            let ts = system_time_to_unix(*timestamp) as f64;
             sqlx::query(
-                "INSERT INTO slaac_addrs (mac, ip) VALUES ($1::MACADDR, $2::INET) ON CONFLICT(mac, ip) DO NOTHING",
+                "INSERT INTO slaac_addrs (mac, ip, last_seen) VALUES ($1::MACADDR, $2::INET, to_timestamp($3::double precision)) ON CONFLICT(mac, ip) DO UPDATE SET last_seen = EXCLUDED.last_seen",
             )
             .bind(mac)
             .bind(ip_str)
+            .bind(ts)
             .execute(&mut **tx)
             .await?;
         }
@@ -235,14 +244,16 @@ async fn persist_seen_v4(
     tx: &mut Transaction<'_, Postgres>,
     mac: &str,
     seen: &[(Ipv4Addr, std::time::SystemTime)],
-) -> Result<(), LeaseDbError> {
-    for (ip, _) in seen {
+) -> Result<(), LanforgeDbError> {
+    for (ip, timestamp) in seen {
         let ip_str = ip.to_string();
+        let ts = system_time_to_unix(*timestamp) as f64;
         sqlx::query(
-            "INSERT INTO seen_v4 (mac, ip) VALUES ($1::MACADDR, $2::INET) ON CONFLICT(mac, ip) DO NOTHING",
+            "INSERT INTO seen_v4 (mac, ip, last_seen) VALUES ($1::MACADDR, $2::INET, to_timestamp($3::double precision)) ON CONFLICT(mac, ip) DO UPDATE SET last_seen = EXCLUDED.last_seen",
         )
         .bind(mac)
         .bind(ip_str)
+        .bind(ts)
         .execute(&mut **tx)
         .await?;
     }
@@ -251,11 +262,23 @@ async fn persist_seen_v4(
 
 // Loading logic
 
-pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, LeaseDbError> {
+pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, LanforgeDbError> {
     sqlx::query_as::<_, DeviceRow>(
         "SELECT 
-            d.mac::TEXT, d.hostname, d.hostname_origin::INT8, d.duid, d.last_seen, d.origin, d.managed_at, d.class::INT8,
-            t.parent_mac::TEXT, t.parent_port, t.local_ifindex::INT8, t.topo_updated,
+            d.mac::TEXT, d.hostname, 
+            (CASE d.hostname_origin
+                WHEN 'mdns' THEN 1
+                WHEN 'dhcp' THEN 2
+                WHEN 'static' THEN 3
+                ELSE 0
+             END)::INT8 as hostname_origin,
+            d.duid, 
+            EXTRACT(EPOCH FROM d.last_seen)::INT8 as last_seen, 
+            d.origin::TEXT as origin, 
+            EXTRACT(EPOCH FROM d.managed_at)::INT8 as managed_at, 
+            d.class::INT8,
+            t.parent_mac::TEXT, t.parent_port, t.local_ifindex::INT8, 
+            EXTRACT(EPOCH FROM t.topo_updated)::INT8 as topo_updated,
             s.v4_static::TEXT, s.v6_suffix, s.boot_file
          FROM devices d
          LEFT JOIN device_topology t ON d.mac = t.mac
@@ -268,9 +291,9 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lea
 
 pub async fn load_v4_leases(
     pool: &sqlx::PgPool,
-) -> Result<Vec<(String, String, i64)>, LeaseDbError> {
+) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT mac::TEXT, ip::TEXT, expires FROM v4_leases",
+        "SELECT mac::TEXT, ip::TEXT, EXTRACT(EPOCH FROM expires)::INT8 FROM v4_leases",
     )
     .fetch_all(pool)
     .await?;
@@ -279,9 +302,9 @@ pub async fn load_v4_leases(
 
 pub async fn load_v6_leases(
     pool: &sqlx::PgPool,
-) -> Result<Vec<(String, i64, String, i64)>, LeaseDbError> {
+) -> Result<Vec<(String, i64, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i64)>(
-        "SELECT mac::TEXT, iaid, ip::TEXT, expires FROM v6_leases",
+        "SELECT mac::TEXT, iaid, ip::TEXT, EXTRACT(EPOCH FROM expires)::INT8 FROM v6_leases",
     )
     .fetch_all(pool)
     .await?;
@@ -290,24 +313,24 @@ pub async fn load_v6_leases(
 
 pub async fn load_v6_prefixes(
     pool: &sqlx::PgPool,
-) -> Result<Vec<(String, i64, String, i32, i64)>, LeaseDbError> {
+) -> Result<Vec<(String, i64, String, i32, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i32, i64)>(
-        "SELECT mac::TEXT, iaid, host(cidr) as prefix, masklen(cidr) as len, expires FROM v6_prefixes",
+        "SELECT mac::TEXT, iaid, host(cidr) as prefix, masklen(cidr) as len, EXTRACT(EPOCH FROM expires)::INT8 FROM v6_prefixes",
     )
     .fetch_all(pool)
     .await?;
     Ok(rows)
 }
 
-pub async fn load_slaac_addrs(pool: &sqlx::PgPool) -> Result<Vec<(String, String)>, LeaseDbError> {
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT mac::TEXT, ip::TEXT FROM slaac_addrs")
+pub async fn load_slaac_addrs(pool: &sqlx::PgPool) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac::TEXT, ip::TEXT, EXTRACT(EPOCH FROM last_seen)::INT8 FROM slaac_addrs")
         .fetch_all(pool)
         .await?;
     Ok(rows)
 }
 
-pub async fn load_seen_v4(pool: &sqlx::PgPool) -> Result<Vec<(String, String)>, LeaseDbError> {
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT mac::TEXT, ip::TEXT FROM seen_v4")
+pub async fn load_seen_v4(pool: &sqlx::PgPool) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac::TEXT, ip::TEXT, EXTRACT(EPOCH FROM last_seen)::INT8 FROM seen_v4")
         .fetch_all(pool)
         .await?;
     Ok(rows)
@@ -320,13 +343,13 @@ pub async fn record_lease_event(
     lease_type: &str,
     action_str: &str,
     now: i64,
-) -> Result<(), LeaseDbError> {
-    sqlx::query("INSERT INTO lease_history (mac, ip, lease_type, action, timestamp) VALUES ($1::MACADDR, $2::INET, $3, $4, $5)")
+) -> Result<(), LanforgeDbError> {
+    sqlx::query("INSERT INTO lease_history (mac, ip, lease_type, action, occurred_at) VALUES ($1::MACADDR, $2::INET, $3::lease_type_t, $4::lease_action_t, to_timestamp($5::double precision))")
         .bind(mac_str)
         .bind(ip)
         .bind(lease_type)
         .bind(action_str)
-        .bind(now)
+        .bind(now as f64)
         .execute(pool)
         .await?;
     Ok(())
@@ -335,9 +358,9 @@ pub async fn record_lease_event(
 pub async fn get_lease_history(
     pool: &sqlx::PgPool,
     mac_str: &str,
-) -> Result<Vec<(String, String, String, i64)>, LeaseDbError> {
+) -> Result<Vec<(String, String, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
-        "SELECT ip::TEXT, lease_type, action, timestamp FROM lease_history WHERE mac = $1::MACADDR ORDER BY timestamp DESC LIMIT 100"
+        "SELECT ip::TEXT, lease_type::TEXT, action::TEXT, EXTRACT(EPOCH FROM occurred_at)::INT8 FROM lease_history WHERE mac = $1::MACADDR ORDER BY occurred_at DESC LIMIT 100"
     )
     .bind(mac_str)
     .fetch_all(pool).await?;
@@ -352,7 +375,7 @@ pub async fn vacuum(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
 pub async fn prune_zombies(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
     let result = sqlx::query(
         "DELETE FROM devices
-         WHERE origin = 'dynamic'
+         WHERE origin = 'dynamic'::device_origin
            AND hostname = ''
            AND mac NOT IN (SELECT mac FROM v4_leases)
            AND mac NOT IN (SELECT mac FROM v6_leases)
@@ -369,12 +392,12 @@ pub async fn find_mac_by_hostname(
     pool: &sqlx::PgPool,
     hostname: &str,
     since_unix: i64,
-) -> Result<Option<lanforge_types::identifiers::MacAddr>, LeaseDbError> {
+) -> Result<Option<lanforge_types::identifiers::MacAddr>, LanforgeDbError> {
     let row: Option<(String,)> = sqlx::query_as(
-        "SELECT mac::TEXT FROM devices WHERE (hostname = $1 OR LOWER(hostname) = LOWER($1)) AND last_seen >= $2 LIMIT 1",
+        "SELECT mac::TEXT FROM devices WHERE (hostname = $1 OR LOWER(hostname) = LOWER($1)) AND last_seen >= to_timestamp($2::double precision) LIMIT 1",
     )
     .bind(hostname)
-    .bind(since_unix)
+    .bind(since_unix as f64)
     .fetch_optional(pool)
     .await?;
 
@@ -388,20 +411,20 @@ pub async fn store_api_token(
     scopes: &lanforge_types::auth::ApiScopes,
     expires_at: Option<i64>,
     now: i64,
-) -> Result<i64, LeaseDbError> {
+) -> Result<i64, LanforgeDbError> {
     let scopes_str = scopes
         .iter()
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
     let row: (i32,) = sqlx::query_as(
-        "INSERT INTO api_tokens (token, name, created_at, scopes, expires_at) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        "INSERT INTO api_tokens (token, name, created_at, scopes, expires_at) VALUES ($1, $2, to_timestamp($3::double precision), $4, to_timestamp($5::double precision)) RETURNING id",
     )
     .bind(token)
     .bind(name)
-    .bind(now)
+    .bind(now as f64)
     .bind(scopes_str)
-    .bind(expires_at)
+    .bind(expires_at.map(|e| e as f64))
     .fetch_one(pool)
     .await?;
     Ok(i64::from(row.0))
@@ -411,9 +434,9 @@ pub async fn validate_api_token(
     pool: &sqlx::PgPool,
     token: &str,
     now: i64,
-) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LeaseDbError> {
+) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LanforgeDbError> {
     let res: Option<(String, String, Option<i64>)> =
-        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE token = $1")
+        sqlx::query_as("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 FROM api_tokens WHERE token = $1")
             .bind(token)
             .fetch_optional(pool)
             .await?;
@@ -424,8 +447,8 @@ pub async fn validate_api_token(
         {
             return Ok(None); // Token expired
         }
-        sqlx::query("UPDATE api_tokens SET last_used = $1 WHERE token = $2")
-            .bind(now)
+        sqlx::query("UPDATE api_tokens SET last_used = to_timestamp($1::double precision) WHERE token = $2")
+            .bind(now as f64)
             .bind(token)
             .execute(pool)
             .await?;
@@ -439,7 +462,7 @@ pub async fn validate_api_token(
     }
 }
 
-pub async fn delete_api_token(pool: &sqlx::PgPool, token: &str) -> Result<(), LeaseDbError> {
+pub async fn delete_api_token(pool: &sqlx::PgPool, token: &str) -> Result<(), LanforgeDbError> {
     sqlx::query("DELETE FROM api_tokens WHERE token = $1")
         .bind(token)
         .execute(pool)
@@ -450,7 +473,7 @@ pub async fn delete_api_token(pool: &sqlx::PgPool, token: &str) -> Result<(), Le
 pub async fn delete_api_token_by_id_or_name(
     pool: &sqlx::PgPool,
     id_or_name: &str,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     if let Ok(id) = id_or_name.parse::<i32>() {
         sqlx::query("DELETE FROM api_tokens WHERE id = $1")
             .bind(id)
@@ -467,9 +490,9 @@ pub async fn delete_api_token_by_id_or_name(
 
 pub async fn load_api_tokens(
     pool: &sqlx::PgPool,
-) -> Result<Vec<crate::engine::types::ApiTokenRow>, LeaseDbError> {
+) -> Result<Vec<crate::engine::types::ApiTokenRow>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (i32, String, String, i64, Option<i64>, String, Option<i64>)>(
-        "SELECT id, token, name, created_at, last_used, scopes, expires_at FROM api_tokens ORDER BY created_at DESC",
+        "SELECT id, token, name, EXTRACT(EPOCH FROM created_at)::INT8, EXTRACT(EPOCH FROM last_used)::INT8, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 FROM api_tokens ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await?;
@@ -495,14 +518,14 @@ pub async fn load_api_tokens(
 pub async fn get_api_token_info(
     pool: &sqlx::PgPool,
     id_or_name: &str,
-) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LeaseDbError> {
+) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LanforgeDbError> {
     let res: Option<(String, String, Option<i64>)> = if let Ok(id) = id_or_name.parse::<i64>() {
-        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE id = $1")
+        sqlx::query_as("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 FROM api_tokens WHERE id = $1")
             .bind(id as i32)
             .fetch_optional(pool)
             .await?
     } else {
-        sqlx::query_as("SELECT name, scopes, expires_at FROM api_tokens WHERE name = $1")
+        sqlx::query_as("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 FROM api_tokens WHERE name = $1")
             .bind(id_or_name)
             .fetch_optional(pool)
             .await?
@@ -520,7 +543,7 @@ pub async fn get_api_token_info(
 
 pub async fn load_dns_upstreams(
     pool: &sqlx::PgPool,
-) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LeaseDbError> {
+) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (i32, String, String, Option<String>)>(
         "SELECT id, addr, protocol, domain FROM dns_upstreams ORDER BY id ASC",
     )
@@ -545,7 +568,7 @@ pub async fn add_dns_upstream(
     addr: &str,
     protocol: &str,
     domain: Option<&str>,
-) -> Result<i64, LeaseDbError> {
+) -> Result<i64, LanforgeDbError> {
     let row: (i32,) = sqlx::query_as(
         "INSERT INTO dns_upstreams (addr, protocol, domain) VALUES ($1, $2, $3) ON CONFLICT (addr, protocol) DO UPDATE SET domain = EXCLUDED.domain RETURNING id",
     )
@@ -561,7 +584,7 @@ pub async fn remove_dns_upstream(
     pool: &sqlx::PgPool,
     addr: &str,
     protocol: &str,
-) -> Result<(), LeaseDbError> {
+) -> Result<(), LanforgeDbError> {
     sqlx::query("DELETE FROM dns_upstreams WHERE addr = $1 AND protocol = $2")
         .bind(addr)
         .bind(protocol)
@@ -570,7 +593,7 @@ pub async fn remove_dns_upstream(
     Ok(())
 }
 
-pub async fn clear_dns_upstreams(pool: &sqlx::PgPool) -> Result<(), LeaseDbError> {
+pub async fn clear_dns_upstreams(pool: &sqlx::PgPool) -> Result<(), LanforgeDbError> {
     sqlx::query("DELETE FROM dns_upstreams")
         .execute(pool)
         .await?;

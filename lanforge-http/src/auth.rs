@@ -109,20 +109,20 @@ where
     }
 }
 
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use std::sync::Arc;
 
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
     AuthManager: FromRef<S>,
-    Arc<LeaseDb>: FromRef<S>,
+    Arc<LanforgeDb>: FromRef<S>,
 {
     type Rejection = HttpError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
-        let db = Arc::<LeaseDb>::from_ref(state);
+        let db = Arc::<LanforgeDb>::from_ref(state);
 
         // Extract the token from the Authorization header
         let auth_header = parts
@@ -169,7 +169,7 @@ use crate::config::HttpConfig;
 
 pub async fn middleware(
     State(cfg): State<Arc<HttpConfig>>,
-    State(db): State<Arc<LeaseDb>>,
+    State(db): State<Arc<LanforgeDb>>,
     State(auth_manager): State<AuthManager>,
     mut req: Request<Body>,
     next: Next,

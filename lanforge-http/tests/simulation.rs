@@ -3,17 +3,17 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_db::config::DatabaseConfig;
-use lanforge_db::engine::LeaseDb;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_http::config::HttpConfig;
 use lanforge_http::server::HttpService;
 use std::sync::Arc;
 
-async fn init_test_context() -> (LanforgeContext, Arc<LeaseDb>, Arc<LogDb>) {
+async fn init_test_context() -> (LanforgeContext, Arc<LanforgeDb>, Arc<LogDb>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
     let db = Arc::new(
-        LeaseDb::open(&DatabaseConfig {
+        LanforgeDb::open(&DatabaseConfig {
             url: "sqlite::memory:".to_string(),
             ..Default::default()
         })
