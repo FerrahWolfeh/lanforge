@@ -18,6 +18,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         if let Some(filter) = &ctx.filter {
             let cache_path = Path::new("/var/lib/lanforge/blocklist.fst");
+            let hash_path = Path::new("/var/lib/lanforge/blocklist.hash");
             let mut rx = ctx.bus.subscribe();
             let mut last_blocklist_hash = 0u64;
             let mut cache_loaded = false;
@@ -41,6 +42,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 }
 
                 // 1. Try to load from disk if not yet loaded
+                let mut skip_download_pass = false;
                 if !cache_loaded && cache_path.exists() {
                     if let Ok(metadata) = std::fs::metadata(cache_path)
                         && let Ok(modified) = metadata.modified()
@@ -48,9 +50,28 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         let elapsed = modified.elapsed().unwrap_or_default().as_secs();
                         if elapsed < u64::from(ctx.cfg.adblock_refresh_hours) * 3600 {
                             info!("🛡️ Adblock: loading cached blocklist from disk...");
-                            if let Ok(bl) = DiskBlocklist::load(cache_path, 50000) {
-                                info!("🛡️ Adblock: loaded {} domains from cache", bl.len());
-                                filter.replace_blocklist(bl);
+                            match DiskBlocklist::load(cache_path, 50000) {
+                                Ok(bl) => {
+                                    info!("🛡️ Adblock: loaded {} domains from cache", bl.len());
+                                    filter.replace_blocklist(bl);
+                                    if let Ok(hash_str) = std::fs::read_to_string(hash_path)
+                                        && let Ok(h) = hash_str.trim().parse::<u64>()
+                                    {
+                                        last_blocklist_hash = h;
+                                        skip_download_pass = true;
+                                        info!(
+                                            "🛡️ Adblock: cached blocklist is fresh (hash: {:016x}) — skipping startup download",
+                                            h
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "❌ Adblock: cached FST file corrupted or invalid ({e}). Deleting cache and forcing rebuild..."
+                                    );
+                                    let _ = std::fs::remove_file(cache_path);
+                                    let _ = std::fs::remove_file(hash_path);
+                                }
                             }
                         }
                     }
@@ -79,11 +100,16 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     }
                     Err(e) => {
                         error!("❌ Adblock: failed to load URLs from database: {e}");
-                        warn!("🛡️ Adblock: will retry on next refresh cycle");
-                        let sleep_dur = compute_next_refresh(
-                            ctx.cfg.adblock_refresh_hours,
-                            ctx.cfg.adblock_refresh_at_night,
-                        );
+                        let sleep_dur = if filter.blocklist_size() == 0 {
+                            warn!("🛡️ Adblock: no blocklist loaded in memory, retrying in 60s...");
+                            Duration::from_secs(60)
+                        } else {
+                            warn!("🛡️ Adblock: will retry on next refresh cycle");
+                            compute_next_refresh(
+                                ctx.cfg.adblock_refresh_hours,
+                                ctx.cfg.adblock_refresh_at_night,
+                            )
+                        };
                         tokio::select! {
                             _ = tokio::time::sleep(sleep_dur) => {}
                             Ok(evt) = rx.recv() => {
@@ -96,12 +122,15 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     }
                 };
 
-                if blocklist_urls.is_empty() {
+                if skip_download_pass {
+                    info!("🛡️ Adblock: skipping blocklist download pass (cached FST is fresh)");
+                } else if blocklist_urls.is_empty() {
                     warn!(
                         "🛡️ Adblock: no blocklist URLs configured in database — skipping download"
                     );
                     filter.clear_blocklist();
                     last_blocklist_hash = 0;
+                    let _ = std::fs::remove_file(hash_path);
                 } else {
                     info!(
                         "🛡️ Adblock: downloading {} blocklist sources...",
@@ -127,6 +156,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     Ok(bl) => {
                                         filter.replace_blocklist(bl);
                                         last_blocklist_hash = current_hash;
+                                        let _ = std::fs::write(hash_path, current_hash.to_string());
                                         info!(
                                             "🛡️ Adblock: blocklist built and saved — {} domains in {:.1}s",
                                             count,

@@ -29,9 +29,14 @@ impl DiskBlocklist {
         let mut sorted_domains: Vec<String> = domains.into_iter().collect();
         sorted_domains.sort_unstable();
 
-        let file = File::create(path)?;
-        let writer = BufWriter::new(file);
-        let mut builder = SetBuilder::new(writer)
+        let tmp_file = tempfile::Builder::new()
+            .prefix("lanforge-dns-")
+            .suffix(".fst.tmp")
+            .tempfile()
+            .map_err(|e| DnsError::Generic(format!("Failed to create tempfile: {e}")))?;
+
+        let mut writer = BufWriter::new(tmp_file);
+        let mut builder = SetBuilder::new(&mut writer)
             .map_err(|e| DnsError::Generic(format!("FST builder creation failed: {e}")))?;
 
         for domain in &sorted_domains {
@@ -43,6 +48,17 @@ impl DiskBlocklist {
         builder
             .finish()
             .map_err(|e| DnsError::Generic(format!("FST finalization failed: {e}")))?;
+
+        std::io::Write::flush(&mut writer)
+            .map_err(|e| DnsError::Generic(format!("FST flush failed: {e}")))?;
+
+        let tmp_file = writer
+            .into_inner()
+            .map_err(|e| DnsError::Generic(format!("FST buffer unwrap failed: {e}")))?;
+
+        tmp_file
+            .persist(path)
+            .map_err(|e| DnsError::Generic(format!("FST atomic persist failed: {e}")))?;
 
         Self::load(path, lru_cap)
     }
