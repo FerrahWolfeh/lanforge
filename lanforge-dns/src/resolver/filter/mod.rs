@@ -24,7 +24,7 @@ use std::hash::{Hash, Hasher};
 
 pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
-    pub allowlist: RwLock<Arc<HashSet<String>>>,
+    pub allowlist: RwLock<Arc<HashSet<Box<str>>>>,
     pub timer: Arc<AdblockTimerState>,
     pub rewrites: RwLock<Arc<Vec<RewriteRule>>>,
     pub config: RwLock<Arc<AdblockRuntimeConfig>>,
@@ -124,7 +124,7 @@ impl AdBlocker {
         false
     }
 
-    fn match_allow(set: &HashSet<String>, qname: &str) -> bool {
+    fn match_allow(set: &HashSet<Box<str>>, qname: &str) -> bool {
         if set.contains(qname) {
             return true;
         }
@@ -178,7 +178,8 @@ impl AdBlocker {
 
     pub fn replace_allowlist(&self, new_list: HashSet<String>) {
         let count = new_list.len();
-        *self.allowlist.write() = Arc::new(new_list);
+        let boxed_set: HashSet<Box<str>> = new_list.into_iter().map(Box::from).collect();
+        *self.allowlist.write() = Arc::new(boxed_set);
         info!("AdBlocker: allowlist updated with {} entries", count);
     }
 
@@ -206,7 +207,7 @@ impl AdBlocker {
     pub fn add_allow(&self, domain: &str) {
         let mut list_lock = self.allowlist.write();
         let mut new_set = (**list_lock).clone();
-        new_set.insert(domain.to_lowercase());
+        new_set.insert(Box::from(domain.to_lowercase()));
         *list_lock = Arc::new(new_set);
     }
 

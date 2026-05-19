@@ -56,9 +56,15 @@ impl DiskBlocklist {
             .into_inner()
             .map_err(|e| DnsError::Generic(format!("FST buffer unwrap failed: {e}")))?;
 
-        tmp_file
-            .persist(path)
-            .map_err(|e| DnsError::Generic(format!("FST atomic persist failed: {e}")))?;
+        match tmp_file.persist(path) {
+            Ok(_) => {}
+            Err(e) => {
+                let tmp_file = e.file;
+                std::fs::copy(tmp_file.path(), path).map_err(|err| {
+                    DnsError::Generic(format!("FST cross-device copy failed: {err}"))
+                })?;
+            }
+        }
 
         Self::load(path, lru_cap)
     }
