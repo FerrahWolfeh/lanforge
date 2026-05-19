@@ -13,6 +13,8 @@ ALTER TABLE devices ALTER COLUMN origin DROP DEFAULT;
 ALTER TABLE devices ALTER COLUMN origin TYPE device_origin USING origin::device_origin;
 ALTER TABLE devices ALTER COLUMN origin SET DEFAULT 'dynamic'::device_origin;
 
+ALTER TABLE devices ALTER COLUMN hostname_origin DROP DEFAULT;
+
 ALTER TABLE devices ALTER COLUMN hostname_origin TYPE hostname_origin_t USING (
     CASE hostname_origin
         WHEN 0 THEN 'dhcp'::hostname_origin_t
@@ -26,26 +28,38 @@ ALTER TABLE devices ALTER COLUMN hostname_origin TYPE hostname_origin_t USING (
     END
 );
 
+ALTER TABLE devices ALTER COLUMN hostname_origin SET DEFAULT 'dhcp'::hostname_origin_t;
+
+ALTER TABLE devices ALTER COLUMN last_seen DROP DEFAULT;
 ALTER TABLE devices ALTER COLUMN last_seen TYPE TIMESTAMPTZ USING to_timestamp(last_seen);
+ALTER TABLE devices ALTER COLUMN managed_at DROP DEFAULT;
 ALTER TABLE devices ALTER COLUMN managed_at TYPE TIMESTAMPTZ USING to_timestamp(managed_at);
 
 -- 3. Migrate leases timestamps
+ALTER TABLE v4_leases ALTER COLUMN expires DROP DEFAULT;
 ALTER TABLE v4_leases ALTER COLUMN expires TYPE TIMESTAMPTZ USING to_timestamp(expires);
+ALTER TABLE v6_leases ALTER COLUMN expires DROP DEFAULT;
 ALTER TABLE v6_leases ALTER COLUMN expires TYPE TIMESTAMPTZ USING to_timestamp(expires);
+ALTER TABLE v6_prefixes ALTER COLUMN expires DROP DEFAULT;
 ALTER TABLE v6_prefixes ALTER COLUMN expires TYPE TIMESTAMPTZ USING to_timestamp(expires);
 
 -- 4. Migrate device_topology timestamp
+ALTER TABLE device_topology ALTER COLUMN topo_updated DROP DEFAULT;
 ALTER TABLE device_topology ALTER COLUMN topo_updated TYPE TIMESTAMPTZ USING to_timestamp(topo_updated);
 ALTER TABLE device_topology ALTER COLUMN topo_updated SET DEFAULT to_timestamp(0);
 
 -- 5. Migrate api_tokens timestamps
+ALTER TABLE api_tokens ALTER COLUMN created_at DROP DEFAULT;
 ALTER TABLE api_tokens ALTER COLUMN created_at TYPE TIMESTAMPTZ USING to_timestamp(created_at);
+ALTER TABLE api_tokens ALTER COLUMN last_used DROP DEFAULT;
 ALTER TABLE api_tokens ALTER COLUMN last_used TYPE TIMESTAMPTZ USING to_timestamp(last_used);
+ALTER TABLE api_tokens ALTER COLUMN expires_at DROP DEFAULT;
 ALTER TABLE api_tokens ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING to_timestamp(expires_at);
 
 -- 6. Migrate lease_history
 -- Rename timestamp to occurred_at, and change lease_type / action to enums
 ALTER TABLE lease_history RENAME COLUMN timestamp TO occurred_at;
+ALTER TABLE lease_history ALTER COLUMN occurred_at DROP DEFAULT;
 ALTER TABLE lease_history ALTER COLUMN occurred_at TYPE TIMESTAMPTZ USING to_timestamp(occurred_at);
 
 ALTER TABLE lease_history ALTER COLUMN lease_type TYPE lease_type_t USING (
