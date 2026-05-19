@@ -1,3 +1,6 @@
+#[cfg(feature = "postgres")]
+use std::net::Ipv4Addr;
+
 use crate::error::LeaseDbError;
 use lanforge_types::network::{
     DnsRecordType,
@@ -20,7 +23,9 @@ pub async fn load_dns_rewrites_sqlite(p: &Pool<Sqlite>) -> Result<Vec<RewriteRul
             id: Some(id),
             domain,
             rtype: rtype.parse().unwrap_or(DnsRecordType::A),
-            answer: answer.parse().unwrap_or(RewriteAnswer::A(std::net::Ipv4Addr::UNSPECIFIED)),
+            answer: answer
+                .parse()
+                .unwrap_or(RewriteAnswer::A(Ipv4Addr::UNSPECIFIED)),
         })
         .collect())
 }
@@ -41,7 +46,9 @@ pub async fn load_dns_rewrites_postgres(
             id: Some(id as i64),
             domain,
             rtype: rtype.parse().unwrap_or(DnsRecordType::A),
-            answer: answer.parse().unwrap_or(RewriteAnswer::A(std::net::Ipv4Addr::UNSPECIFIED)),
+            answer: answer
+                .parse()
+                .unwrap_or(RewriteAnswer::A(Ipv4Addr::UNSPECIFIED)),
         })
         .collect())
 }

@@ -8,7 +8,7 @@ authors.workspace = true
 [features]
 default = ["sqlite"]
 sqlite = ["sqlx/sqlite"]
-postgres = ["sqlx/postgres"]
+postgres = ["sqlx/postgres", "sqlx/mac_address", "sqlx/ipnetwork"]
 adblock = ["lanforge-core/adblock"]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
 hotpath-alloc = [

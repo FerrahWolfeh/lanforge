@@ -6,3 +6,4 @@ debug_leases.db-wal
 test.db
 AGENTS.md
 ROADMAP.md
+.env
