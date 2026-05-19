@@ -25,6 +25,9 @@ pub enum ConfigAction {
         /// Positional input file (fallback if -o is not used).
         #[arg(value_name = "FILE")]
         positional_file: Option<String>,
+        /// Force overwrite existing configurations.
+        #[arg(short = 'w', long)]
+        overwrite: bool,
     },
 }
 
@@ -44,6 +47,7 @@ async fn execute_import(
     client: &LanforgeClient,
     file: Option<String>,
     positional_file: Option<String>,
+    overwrite: bool,
 ) -> Result<()> {
     let path = match (file, positional_file) {
         (Some(f), _) => f,
@@ -54,7 +58,8 @@ async fn execute_import(
     };
 
     let content = std::fs::read_to_string(&path)?;
-    let config: SystemConfigExport = serde_json::from_str(&content)?;
+    let mut config: SystemConfigExport = serde_json::from_str(&content)?;
+    config.overwrite = overwrite;
     let resp = client.system_config_import(config).await?;
     println!("✓ {}", resp.message);
     Ok(())
@@ -67,7 +72,8 @@ impl Execute for ConfigArgs {
             ConfigAction::Import {
                 file,
                 positional_file,
-            } => execute_import(client, file, positional_file).await,
+                overwrite,
+            } => execute_import(client, file, positional_file, overwrite).await,
         }
     }
 }

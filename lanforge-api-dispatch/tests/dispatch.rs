@@ -172,6 +172,7 @@ async fn test_dispatch_system_config_import_export() {
             id: 0,
             domain: "allowed-import.lan".to_string(),
         }],
+        overwrite: true,
     };
 
     // 3. Import the configuration

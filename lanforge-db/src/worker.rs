@@ -14,7 +14,7 @@
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
 use lanforge_core::bus::{
-    DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
+    DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
@@ -245,6 +245,11 @@ impl AsyncService for DbWorker {
                                 }
                                 // If it was previously purged, it's now alive again
                                 self.purged_macs.remove(&mac);
+
+                                // Flush immediately for CLI updates to avoid write buffer delay
+                                if matches!(**change, DeviceChange::CliHostUpdated) {
+                                    self.flush_batch(&db, &log_db).await;
+                                }
                             }
                         }
                         LanforgeEvent::Device(DeviceEvent::Discovered { mac, .. })
@@ -257,6 +262,9 @@ impl AsyncService for DbWorker {
                             self.purged_macs.insert(mac);
                             self.dirty_macs.remove(&mac);
                             self.dirty_lease_macs.remove(&mac);
+
+                            // Flush immediately for administrative host removal
+                            self.flush_batch(&db, &log_db).await;
                         }
                         LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                             self.dirty = true;

@@ -71,6 +71,7 @@ impl ClientContext {
             dns_adblock_config,
             dns_adblock_urls,
             dns_allowlist,
+            overwrite: false,
         }))
     }
 
@@ -82,10 +83,39 @@ impl ClientContext {
             dns_adblock_config,
             dns_adblock_urls,
             dns_allowlist,
+            overwrite,
         } = config;
 
         let mut total_success = true;
         let mut messages = Vec::new();
+
+        if overwrite {
+            // Clear existing static hosts
+            let devices = self.ctx.all_devices();
+            for dev in &devices {
+                if dev.origin != lanforge_types::device::Origin::Dynamic {
+                    let _ = self.ctx.apply(lanforge_types::update::DeviceUpdate::Remove(dev.mac));
+                }
+            }
+
+            // Clear DNS rewrites, upstreams, adblock URLs, allowlist
+            if let Err(e) = self.db.clear_dns_rewrites().await {
+                total_success = false;
+                messages.push(format!("Failed to clear DNS rewrites: {e}"));
+            }
+            if let Err(e) = self.db.clear_dns_upstreams().await {
+                total_success = false;
+                messages.push(format!("Failed to clear DNS upstreams: {e}"));
+            }
+            if let Err(e) = self.db.clear_adblock_urls().await {
+                total_success = false;
+                messages.push(format!("Failed to clear Adblock URLs: {e}"));
+            }
+            if let Err(e) = self.db.clear_dns_allowlist().await {
+                total_success = false;
+                messages.push(format!("Failed to clear DNS allowlist: {e}"));
+            }
+        }
 
         // 1. Import hosts
         let res = self.handle_host_import(hosts).await;

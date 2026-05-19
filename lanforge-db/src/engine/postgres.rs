@@ -254,8 +254,8 @@ async fn persist_seen_v4(
 pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, LeaseDbError> {
     sqlx::query_as::<_, DeviceRow>(
         "SELECT 
-            d.mac::TEXT, d.hostname, d.hostname_origin, d.duid, d.last_seen, d.origin, d.managed_at, d.class,
-            t.parent_mac::TEXT, t.parent_port, t.local_ifindex, t.topo_updated,
+            d.mac::TEXT, d.hostname, d.hostname_origin::INT8, d.duid, d.last_seen, d.origin, d.managed_at, d.class::INT8,
+            t.parent_mac::TEXT, t.parent_port, t.local_ifindex::INT8, t.topo_updated,
             s.v4_static::TEXT, s.v6_suffix, s.boot_file
          FROM devices d
          LEFT JOIN device_topology t ON d.mac = t.mac
@@ -547,7 +547,7 @@ pub async fn add_dns_upstream(
     domain: Option<&str>,
 ) -> Result<i64, LeaseDbError> {
     let row: (i32,) = sqlx::query_as(
-        "INSERT INTO dns_upstreams (addr, protocol, domain) VALUES ($1, $2, $3) RETURNING id",
+        "INSERT INTO dns_upstreams (addr, protocol, domain) VALUES ($1, $2, $3) ON CONFLICT (addr, protocol) DO UPDATE SET domain = EXCLUDED.domain RETURNING id",
     )
     .bind(addr)
     .bind(protocol)
@@ -565,6 +565,13 @@ pub async fn remove_dns_upstream(
     sqlx::query("DELETE FROM dns_upstreams WHERE addr = $1 AND protocol = $2")
         .bind(addr)
         .bind(protocol)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn clear_dns_upstreams(pool: &sqlx::PgPool) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM dns_upstreams")
         .execute(pool)
         .await?;
     Ok(())

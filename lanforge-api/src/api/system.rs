@@ -207,5 +207,7 @@ pub struct SystemConfigExport {
     pub dns_adblock_config: AdblockDbConfig,
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
     pub dns_allowlist: Vec<AllowlistEntry>,
+    #[serde(default)]
+    pub overwrite: bool,
 }
 

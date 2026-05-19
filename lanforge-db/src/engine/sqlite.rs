@@ -626,7 +626,7 @@ pub async fn add_dns_upstream(
     protocol: &str,
     domain: Option<&str>,
 ) -> Result<i64, LeaseDbError> {
-    let res = sqlx::query("INSERT INTO dns_upstreams (addr, protocol, domain) VALUES (?, ?, ?)")
+    let res = sqlx::query("INSERT INTO dns_upstreams (addr, protocol, domain) VALUES (?, ?, ?) ON CONFLICT(addr, protocol) DO UPDATE SET domain = EXCLUDED.domain")
         .bind(addr)
         .bind(protocol)
         .bind(domain)
@@ -645,5 +645,10 @@ pub async fn remove_dns_upstream(
         .bind(protocol)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+pub async fn clear_dns_upstreams(pool: &sqlx::SqlitePool) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM dns_upstreams").execute(pool).await?;
     Ok(())
 }

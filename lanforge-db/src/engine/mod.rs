@@ -170,7 +170,7 @@ impl LeaseDb {
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
                 let mut tx = p.begin().await?;
-                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac FROM devices")
+                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac::TEXT FROM devices")
                     .fetch_all(&mut *tx)
                     .await?;
 
@@ -183,7 +183,7 @@ impl LeaseDb {
 
                 for db_mac in db_macs {
                     if !snapshot_macs.contains(&db_mac) {
-                        sqlx::query("DELETE FROM devices WHERE mac = $1")
+                        sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
                             .bind(&db_mac)
                             .execute(&mut *tx)
                             .await?;
@@ -585,7 +585,7 @@ impl LeaseDb {
             }
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
-                sqlx::query("DELETE FROM devices WHERE mac = $1")
+                sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
                     .bind(&mac_str)
                     .execute(p)
                     .await?;
@@ -770,6 +770,15 @@ impl LeaseDb {
         }
     }
 
+    pub async fn clear_dns_allowlist(&self) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::clear_dns_allowlist_sqlite(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::clear_dns_allowlist_postgres(p).await,
+        }
+    }
+
     pub async fn load_adblock_config(&self) -> Result<AdblockDbConfig, LeaseDbError> {
         match &self.pool {
             #[cfg(feature = "sqlite")]
@@ -822,6 +831,15 @@ impl LeaseDb {
             Pool::Sqlite(p) => dns_config::remove_adblock_url_sqlite(p, url).await,
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => dns_config::remove_adblock_url_postgres(p, url).await,
+        }
+    }
+
+    pub async fn clear_adblock_urls(&self) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::clear_adblock_urls_sqlite(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::clear_adblock_urls_postgres(p).await,
         }
     }
 
@@ -941,6 +959,15 @@ impl LeaseDb {
             Pool::Sqlite(p) => sqlite::remove_dns_upstream(p, addr, protocol).await,
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => postgres::remove_dns_upstream(p, addr, protocol).await,
+        }
+    }
+
+    pub async fn clear_dns_upstreams(&self) -> Result<(), LeaseDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => sqlite::clear_dns_upstreams(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => postgres::clear_dns_upstreams(p).await,
         }
     }
 }

@@ -1,4 +1,3 @@
-#[cfg(feature = "postgres")]
 use std::net::Ipv4Addr;
 
 use crate::error::LeaseDbError;
@@ -182,6 +181,17 @@ pub async fn remove_dns_allowlist_postgres(
     Ok(())
 }
 
+pub async fn clear_dns_allowlist_sqlite(p: &Pool<Sqlite>) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM dns_allowlist").execute(p).await?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+pub async fn clear_dns_allowlist_postgres(p: &Pool<Postgres>) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM dns_allowlist").execute(p).await?;
+    Ok(())
+}
+
 pub async fn load_adblock_config_sqlite(p: &Pool<Sqlite>) -> Result<AdblockDbConfig, LeaseDbError> {
     let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM dns_adblock_config")
         .fetch_all(p)
@@ -329,6 +339,21 @@ pub async fn remove_adblock_url_postgres(
 ) -> Result<(), LeaseDbError> {
     sqlx::query("DELETE FROM dns_adblock_urls WHERE url = $1")
         .bind(url)
+        .execute(p)
+        .await?;
+    Ok(())
+}
+
+pub async fn clear_adblock_urls_sqlite(p: &Pool<Sqlite>) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM dns_adblock_urls")
+        .execute(p)
+        .await?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+pub async fn clear_adblock_urls_postgres(p: &Pool<Postgres>) -> Result<(), LeaseDbError> {
+    sqlx::query("DELETE FROM dns_adblock_urls")
         .execute(p)
         .await?;
     Ok(())
