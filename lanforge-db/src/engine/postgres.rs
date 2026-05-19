@@ -66,7 +66,7 @@ async fn upsert_base_device_internal(
     if let Some(topo) = &device.topology {
         sqlx::query(
             "INSERT INTO device_topology (mac, parent_mac, parent_port, local_ifindex, topo_updated)
-             VALUES ($1::MACADDR, $2, $3, $4, $5)
+             VALUES ($1::MACADDR, $2::MACADDR, $3, $4, $5)
              ON CONFLICT(mac) DO UPDATE SET
                 parent_mac = EXCLUDED.parent_mac,
                 parent_port = EXCLUDED.parent_port,
@@ -102,7 +102,7 @@ async fn upsert_base_device_internal(
     if v4_static.is_some() || v6_suffix.is_some() || device.boot_file.is_some() {
         sqlx::query(
             "INSERT INTO static_devices (mac, v4_static, v6_suffix, boot_file)
-             VALUES ($1::MACADDR, $2, $3, $4)
+             VALUES ($1::MACADDR, $2::INET, $3, $4)
              ON CONFLICT(mac) DO UPDATE SET
                 v4_static = EXCLUDED.v4_static,
                 v6_suffix = EXCLUDED.v6_suffix,
@@ -159,7 +159,7 @@ async fn persist_v4_lease(
     if let IPv4State::Dynamic(lease) = v4 {
         let expires = system_time_to_unix(lease.expires);
         let ip_str = lease.ip.to_string();
-        sqlx::query("INSERT INTO v4_leases (mac, ip, expires) VALUES ($1::MACADDR, $2, $3)")
+        sqlx::query("INSERT INTO v4_leases (mac, ip, expires) VALUES ($1::MACADDR, $2::INET, $3)")
             .bind(mac)
             .bind(ip_str)
             .bind(expires)
@@ -179,7 +179,7 @@ async fn persist_v6_leases(
             let expires = system_time_to_unix(lease.expires);
             let ip_str = lease.ip.to_string();
             let iaid = i64::from(lease.iaid);
-            sqlx::query("INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES ($1::MACADDR, $2, $3, $4) ON CONFLICT(mac, iaid) DO NOTHING")
+            sqlx::query("INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES ($1::MACADDR, $2, $3::INET, $4) ON CONFLICT(mac, iaid) DO NOTHING")
                 .bind(mac)
                 .bind(iaid)
                 .bind(ip_str)
@@ -220,7 +220,7 @@ async fn persist_slaac_addrs(
         if let IPv6State::Slaac(ip, _) = state {
             let ip_str = ip.to_string();
             sqlx::query(
-                "INSERT INTO slaac_addrs (mac, ip) VALUES ($1::MACADDR, $2) ON CONFLICT(mac, ip) DO NOTHING",
+                "INSERT INTO slaac_addrs (mac, ip) VALUES ($1::MACADDR, $2::INET) ON CONFLICT(mac, ip) DO NOTHING",
             )
             .bind(mac)
             .bind(ip_str)
@@ -239,7 +239,7 @@ async fn persist_seen_v4(
     for (ip, _) in seen {
         let ip_str = ip.to_string();
         sqlx::query(
-            "INSERT INTO seen_v4 (mac, ip) VALUES ($1::MACADDR, $2) ON CONFLICT(mac, ip) DO NOTHING",
+            "INSERT INTO seen_v4 (mac, ip) VALUES ($1::MACADDR, $2::INET) ON CONFLICT(mac, ip) DO NOTHING",
         )
         .bind(mac)
         .bind(ip_str)
@@ -255,8 +255,8 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lea
     sqlx::query_as::<_, DeviceRow>(
         "SELECT 
             d.mac::TEXT, d.hostname, d.hostname_origin, d.duid, d.last_seen, d.origin, d.managed_at, d.class,
-            t.parent_mac, t.parent_port, t.local_ifindex, t.topo_updated,
-            s.v4_static, s.v6_suffix, s.boot_file
+            t.parent_mac::TEXT, t.parent_port, t.local_ifindex, t.topo_updated,
+            s.v4_static::TEXT, s.v6_suffix, s.boot_file
          FROM devices d
          LEFT JOIN device_topology t ON d.mac = t.mac
          LEFT JOIN static_devices s ON d.mac = s.mac"
@@ -321,7 +321,7 @@ pub async fn record_lease_event(
     action_str: &str,
     now: i64,
 ) -> Result<(), LeaseDbError> {
-    sqlx::query("INSERT INTO lease_history (mac, ip, lease_type, action, timestamp) VALUES ($1::MACADDR, $2, $3, $4, $5)")
+    sqlx::query("INSERT INTO lease_history (mac, ip, lease_type, action, timestamp) VALUES ($1::MACADDR, $2::INET, $3, $4, $5)")
         .bind(mac_str)
         .bind(ip)
         .bind(lease_type)

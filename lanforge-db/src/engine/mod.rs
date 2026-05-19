@@ -226,7 +226,7 @@ impl LeaseDb {
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => {
                 let mut tx = p.begin().await.map_err(LeaseDbError::TransactionFailed)?;
-                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac FROM devices")
+                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac::TEXT FROM devices")
                     .fetch_all(&mut *tx)
                     .await?;
 
@@ -239,7 +239,7 @@ impl LeaseDb {
 
                 for db_mac in db_macs {
                     if !snapshot_macs.contains(&db_mac) {
-                        sqlx::query("DELETE FROM devices WHERE mac = $1")
+                        sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
                             .bind(&db_mac)
                             .execute(&mut *tx)
                             .await?;
@@ -679,7 +679,9 @@ impl LeaseDb {
         Ok(rows
             .into_iter()
             .map(|(ip, lt, act, ts)| LeaseHistoryEntry {
-                ip: ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+                ip: ip
+                    .parse()
+                    .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
                 lease_type: lt.parse().unwrap_or(LeaseKind::V4),
                 action: act.parse().unwrap_or(LeaseAction::Assigned),
                 timestamp: unix_to_system_time(ts),
