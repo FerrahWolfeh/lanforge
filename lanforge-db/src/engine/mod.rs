@@ -392,14 +392,12 @@ impl LanforgeDb {
     pub async fn find_mac_by_hostname(
         &self,
         hostname: &str,
-        last_seen_since: SystemTime,
     ) -> Result<Option<MacAddr>, LanforgeDbError> {
-        let since_unix = utils::system_time_to_unix(last_seen_since);
         match &self.pool {
             #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::find_mac_by_hostname(p, hostname, since_unix).await,
+            Pool::Sqlite(p) => sqlite::find_mac_by_hostname(p, hostname).await,
             #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::find_mac_by_hostname(p, hostname, since_unix).await,
+            Pool::Postgres(p) => postgres::find_mac_by_hostname(p, hostname).await,
         }
     }
 
@@ -463,13 +461,12 @@ impl LanforgeDb {
                 device.hostname = Hostname {
                     name: row.hostname.clone(),
                     origin: match row.hostname_origin {
-                        1 => HostnameOrigin::Mdns,
-                        2 => HostnameOrigin::Dhcp,
-                        3 => HostnameOrigin::Static,
-                        _ => HostnameOrigin::None,
+                        1 | 6 => HostnameOrigin::Static,
+                        3 => HostnameOrigin::Mdns,
+                        _ => HostnameOrigin::Dhcp,
                     },
                 };
-                device.last_seen = unix_to_system_time(row.last_seen);
+                device.last_seen = std::time::SystemTime::UNIX_EPOCH;
                 device.origin = match row.origin.as_str() {
                     "static" => Origin::Static,
                     "system" => Origin::System,

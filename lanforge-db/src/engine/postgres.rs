@@ -41,20 +41,18 @@ async fn upsert_base_device_internal(
     mac_str: &str,
 ) -> Result<(), LanforgeDbError> {
     let host_orig_str = match device.hostname.origin {
-        HostnameOrigin::None => "dhcp",
-        HostnameOrigin::Mdns => "mdns",
         HostnameOrigin::Dhcp => "dhcp",
         HostnameOrigin::Static => "static",
+        HostnameOrigin::Mdns => "mdns",
     };
     // 1. Core devices table
     sqlx::query(
-        "INSERT INTO devices (mac, hostname, hostname_origin, duid, last_seen, origin, managed_at, class)
-         VALUES ($1::MACADDR, $2, $3::hostname_origin_t, $4, to_timestamp($5::double precision), $6::device_origin, to_timestamp($7::double precision), $8)
+        "INSERT INTO devices (mac, hostname, hostname_origin, duid, origin, managed_at, class)
+         VALUES ($1::MACADDR, $2, $3::hostname_origin_t, $4, $5::device_origin, to_timestamp($6::double precision), $7)
          ON CONFLICT(mac) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             hostname_origin = EXCLUDED.hostname_origin,
             duid = EXCLUDED.duid,
-            last_seen = EXCLUDED.last_seen,
             origin = EXCLUDED.origin,
             managed_at = EXCLUDED.managed_at,
             class = EXCLUDED.class"
@@ -63,7 +61,6 @@ async fn upsert_base_device_internal(
     .bind(&device.hostname.name)
     .bind(host_orig_str)
     .bind(device.duid.as_ref().map(|d| d.bytes.to_vec()))
-    .bind(system_time_to_unix(device.last_seen) as f64)
     .bind(device.origin.as_str())
     .bind(device.managed_at.map(|t| system_time_to_unix(t) as f64))
     .bind(device.class as i32)
@@ -267,13 +264,16 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lan
         "SELECT 
             d.mac::TEXT, d.hostname, 
             (CASE d.hostname_origin
-                WHEN 'mdns' THEN 1
-                WHEN 'dhcp' THEN 2
-                WHEN 'static' THEN 3
+                WHEN 'dhcp' THEN 0
+                WHEN 'static' THEN 1
+                WHEN 'dns' THEN 0
+                WHEN 'mdns' THEN 3
+                WHEN 'ndp' THEN 0
+                WHEN 'netbios' THEN 0
+                WHEN 'user' THEN 1
                 ELSE 0
              END)::INT8 as hostname_origin,
             d.duid, 
-            EXTRACT(EPOCH FROM d.last_seen)::INT8 as last_seen, 
             d.origin::TEXT as origin, 
             EXTRACT(EPOCH FROM d.managed_at)::INT8 as managed_at, 
             d.class::INT8,
@@ -391,13 +391,11 @@ pub async fn prune_zombies(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
 pub async fn find_mac_by_hostname(
     pool: &sqlx::PgPool,
     hostname: &str,
-    since_unix: i64,
 ) -> Result<Option<lanforge_types::identifiers::MacAddr>, LanforgeDbError> {
     let row: Option<(String,)> = sqlx::query_as(
-        "SELECT mac::TEXT FROM devices WHERE (hostname = $1 OR LOWER(hostname) = LOWER($1)) AND last_seen >= to_timestamp($2::double precision) LIMIT 1",
+        "SELECT mac::TEXT FROM devices WHERE hostname = $1 OR LOWER(hostname) = LOWER($1) LIMIT 1",
     )
     .bind(hostname)
-    .bind(since_unix as f64)
     .fetch_optional(pool)
     .await?;
 

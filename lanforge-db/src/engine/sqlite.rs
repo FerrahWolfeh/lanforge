@@ -42,13 +42,12 @@ async fn upsert_base_device_internal(
 ) -> Result<(), LanforgeDbError> {
     // 1. Core devices table
     sqlx::query(
-        "INSERT INTO devices (mac, hostname, hostname_origin, duid, last_seen, origin, managed_at, class)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO devices (mac, hostname, hostname_origin, duid, origin, managed_at, class)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(mac) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             hostname_origin = EXCLUDED.hostname_origin,
             duid = EXCLUDED.duid,
-            last_seen = EXCLUDED.last_seen,
             origin = EXCLUDED.origin,
             managed_at = EXCLUDED.managed_at,
             class = EXCLUDED.class"
@@ -57,7 +56,6 @@ async fn upsert_base_device_internal(
     .bind(&device.hostname.name)
     .bind(device.hostname.origin as i64)
     .bind(device.duid.as_ref().map(|d| d.bytes.to_vec()))
-    .bind(system_time_to_unix(device.last_seen))
     .bind(device.origin.as_str())
     .bind(device.managed_at.map(system_time_to_unix))
     .bind(device.class as i64)
@@ -366,7 +364,7 @@ async fn persist_seen_v4(
 pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>, LanforgeDbError> {
     sqlx::query_as::<_, DeviceRow>(
         "SELECT 
-            d.mac, d.hostname, d.hostname_origin, d.duid, d.last_seen, d.origin, d.managed_at, d.class,
+            d.mac, d.hostname, d.hostname_origin, d.duid, d.origin, d.managed_at, d.class,
             t.parent_mac, t.parent_port, t.local_ifindex, t.topo_updated,
             s.v4_static, s.v6_suffix, s.boot_file
          FROM devices d
@@ -482,14 +480,12 @@ pub async fn prune_zombies(pool: &sqlx::SqlitePool) -> Result<usize, sqlx::Error
 pub async fn find_mac_by_hostname(
     pool: &sqlx::SqlitePool,
     hostname: &str,
-    since_unix: i64,
 ) -> Result<Option<MacAddr>, LanforgeDbError> {
     let row: Option<(String,)> = sqlx::query_as(
-        "SELECT mac FROM devices WHERE (hostname = ? OR hostname = ?) AND last_seen >= ? LIMIT 1",
+        "SELECT mac FROM devices WHERE hostname = ? OR hostname = ? LIMIT 1",
     )
     .bind(hostname)
     .bind(hostname.to_ascii_lowercase())
-    .bind(since_unix)
     .fetch_optional(pool)
     .await?;
 

@@ -313,11 +313,19 @@ impl State {
                             hostname: hostname.clone(),
                         }));
                     }
-                    events.push(LanforgeEvent::Device(DeviceEvent::Updated {
-                        mac,
-                        change: Box::new(change),
-                        hostname,
-                    }));
+                    if change.is_persistent() {
+                        events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                            mac,
+                            change: Box::new(change),
+                            hostname,
+                        }));
+                    } else {
+                        events.push(LanforgeEvent::Device(DeviceEvent::Activity {
+                            mac,
+                            change: Box::new(change),
+                            hostname,
+                        }));
+                    }
                 }
             }
 

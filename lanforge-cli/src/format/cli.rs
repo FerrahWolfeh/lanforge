@@ -37,6 +37,11 @@ fn format_device_event(now: &str, event: &DeviceEvent, verbose: bool, _ascii: bo
             mac,
             hostname,
             change,
+        }
+        | DeviceEvent::Activity {
+            mac,
+            hostname,
+            change,
         } => {
             print_device_update(now, *mac, hostname.as_deref(), change, verbose);
         }

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::config::DatabaseConfig;
-use crate::engine::{LeaseAction, LanforgeDb};
+use crate::engine::{LanforgeDb, LeaseAction};
 use crate::log_engine::LogDb;
 use crate::worker::DbWorker;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
@@ -329,10 +329,9 @@ async fn test_invalid_data_resilience() {
     let pool = db.pool.as_sqlite();
 
     // Insert malformed MAC
-    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, last_seen, origin) VALUES (?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, origin) VALUES (?, ?, ?, ?)")
         .bind("not-a-mac")
         .bind("Garbage")
-        .bind(0)
         .bind(0)
         .bind("dynamic")
         .execute(&pool)
@@ -341,10 +340,9 @@ async fn test_invalid_data_resilience() {
 
     // Insert valid device but malformed lease IP
     let mac = make_mac(0x50);
-    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, last_seen, origin) VALUES (?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO devices (mac, hostname, hostname_origin, origin) VALUES (?, ?, ?, ?)")
         .bind(mac.to_string())
         .bind("ValidDevice")
-        .bind(0)
         .bind(0)
         .bind("dynamic")
         .execute(&pool)

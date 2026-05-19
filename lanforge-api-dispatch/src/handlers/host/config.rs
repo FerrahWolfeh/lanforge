@@ -60,16 +60,16 @@ impl ClientContext {
             name: entry.hostname.clone(),
             origin: HostnameOrigin::Static,
         };
-        if let Some(v4) = &entry.v4_fixed {
-            if let Ok(ip) = v4.parse::<Ipv4Addr>() {
-                dev.v4 = IPv4State::Static(ip);
-            }
+        if let Some(v4) = &entry.v4_fixed
+            && let Ok(ip) = v4.parse::<Ipv4Addr>()
+        {
+            dev.v4 = IPv4State::Static(ip);
         }
-        if let Some(v6) = &entry.v6_suffix {
-            if let Some(suf) = Ipv6AddrOrSuffix::parse(v6) {
-                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
-                dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
-            }
+        if let Some(v6) = &entry.v6_suffix
+            && let Some(suf) = Ipv6AddrOrSuffix::parse(v6)
+        {
+            dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+            dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
         }
         dev.origin = Origin::Static;
         dev.managed_at = Some(SystemTime::now());

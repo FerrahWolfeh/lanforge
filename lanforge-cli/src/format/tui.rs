@@ -32,6 +32,11 @@ fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
             mac,
             hostname,
             change,
+        }
+        | DeviceEvent::Activity {
+            mac,
+            hostname,
+            change,
         } => {
             format_device_updated(*mac, hostname.as_deref(), change, spans);
         }

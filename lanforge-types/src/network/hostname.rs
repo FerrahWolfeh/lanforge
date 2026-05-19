@@ -7,10 +7,9 @@ use std::fmt;
 )]
 pub enum HostnameOrigin {
     #[default]
-    None = 0,
-    Mdns = 1,
-    Dhcp = 2,
-    Static = 3,
+    Dhcp = 0,
+    Static = 1,
+    Mdns = 3,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

@@ -307,8 +307,18 @@ fn render_watch_event(
                 mac,
                 hostname,
                 change,
+            }
+            | DeviceEvent::Activity {
+                mac,
+                hostname,
+                change,
             } => {
                 let host = hostname.as_deref().unwrap_or("<unknown>");
+                let tag = if matches!(dev_evt, DeviceEvent::Activity { .. }) {
+                    "DEVICE ACTIVITY".bold().dimmed()
+                } else {
+                    "DEVICE UPDATED".bold().blue()
+                };
                 let change_str = match &**change {
                     DeviceChange::V4Assigned { ip } => {
                         format!("Assigned IPv4: {}", ip.to_string().yellow())
@@ -377,7 +387,7 @@ fn render_watch_event(
                 };
                 println!(
                     " [{time_str}] {} {} ({mac}) -> {change_str}",
-                    "DEVICE UPDATED".bold().blue(),
+                    tag,
                     host.cyan()
                 );
             }

@@ -220,6 +220,11 @@ pub enum DeviceEvent {
         hostname: Option<String>,
         change: Box<DeviceChange>,
     },
+    Activity {
+        mac: MacAddr,
+        hostname: Option<String>,
+        change: Box<DeviceChange>,
+    },
     Expired {
         mac: MacAddr,
     },

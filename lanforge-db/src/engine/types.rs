@@ -36,7 +36,9 @@ impl Pool {
         } else {
             #[cfg(feature = "postgres")]
             {
-                let pool = sqlx::postgres::PgPoolOptions::new()
+                use sqlx::postgres::PgPoolOptions;
+
+                let pool = PgPoolOptions::new()
                     .max_connections(max_conns)
                     .min_connections(min_conns)
                     .connect(url)
@@ -81,7 +83,6 @@ pub struct DeviceRow {
     pub hostname: String,
     pub hostname_origin: i64,
     pub duid: Option<Vec<u8>>,
-    pub last_seen: i64,
     pub origin: String,
     pub managed_at: Option<i64>,
     pub class: i64,

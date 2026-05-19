@@ -45,6 +45,7 @@ impl TimedEvent {
                 | DeviceEvent::DhcpV4Transaction { .. }
                 | DeviceEvent::DhcpV6Transaction { .. }
                 | DeviceEvent::NeighborBatchSummary { .. } => true,
+                DeviceEvent::Activity { .. } => false,
             },
             LanforgeEvent::Network(e) => match e {
                 NetworkEvent::PrefixChanged { .. }
