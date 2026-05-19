@@ -519,7 +519,7 @@ impl AdBlocker {
                     let ips = if qtype == DnsRecordType::AAAA {
                         vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
                     } else {
-                        vec![IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)]
+                        vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)]
                     };
                     resp.extend_from_slice(&rb.success_ips(ips)?);
                 }
@@ -527,9 +527,7 @@ impl AdBlocker {
                     let ips = if qtype == DnsRecordType::AAAA {
                         vec![IpAddr::V6(config.ipv6.unwrap_or(Ipv6Addr::UNSPECIFIED))]
                     } else {
-                        vec![IpAddr::V4(
-                            config.ipv4.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
-                        )]
+                        vec![IpAddr::V4(config.ipv4.unwrap_or(Ipv4Addr::UNSPECIFIED))]
                     };
                     resp.extend_from_slice(&rb.success_ips(ips)?);
                 }

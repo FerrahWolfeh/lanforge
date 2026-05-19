@@ -6,16 +6,18 @@ pub use cache::DnsCache;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 pub use strategy::{UpstreamMode, UpstreamStrategy};
+use tokio::task::yield_now;
 #[cfg(feature = "dot")]
 use tokio_rustls::TlsConnector;
 #[cfg(feature = "dot")]
 use tokio_rustls::client::TlsStream;
 
 use crate::error::DnsError;
-use crate::utils::health::UpstreamHealth;
+use crate::resolver::recursive::cache::CacheKey;
+use crate::utils::health::{UpstreamHealth, UpstreamStatus};
 use lanforge_dns_wire::{WireHeader, WireQuestion, WireResponseScanner};
 use std::collections::HashMap;
-use std::io::Error;
+use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
@@ -79,8 +81,8 @@ impl UpstreamManager {
                             }
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        tokio::task::yield_now().await;
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                        yield_now().await;
                     }
                     Err(_) => {
                         break;
@@ -170,7 +172,7 @@ impl UpstreamManager {
             ];
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
-                if mgr_clone.health.status() == crate::utils::health::UpstreamStatus::Degraded
+                if mgr_clone.health.status() == UpstreamStatus::Degraded
                     && mgr_clone.health.is_eligible_for_probing()
                 {
                     let _ = mgr_clone.forward(PROBE_QUERY).await;
@@ -244,7 +246,7 @@ impl UpstreamManager {
         let scanner = WireResponseScanner::new(&final_bytes);
         let (offsets, min_ttl) = scanner.scan_ttls();
 
-        let key = cache::CacheKey {
+        let key = CacheKey {
             qname: question.qname_raw().to_vec(),
             qtype: question.qtype(),
             qclass: question.qclass(),
