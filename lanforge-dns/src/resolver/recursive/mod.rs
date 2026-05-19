@@ -2,9 +2,8 @@ pub mod cache;
 pub mod strategy;
 
 pub use cache::DnsCache;
-#[cfg(feature = "doq")]
-use lanforge_types::network::dns::upstream::UpstreamProtocol;
-use lanforge_types::network::dns::upstream::UpstreamTarget;
+
+use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 pub use strategy::{UpstreamMode, UpstreamStrategy};
 use tokio::task::yield_now;
 #[cfg(feature = "dot")]

@@ -7,7 +7,11 @@ use hyper::body::Bytes;
 #[cfg(feature = "doh-upstream")]
 use hyper::{Method, Request};
 #[cfg(feature = "doh-upstream")]
+use hyper_rustls::HttpsConnectorBuilder;
+#[cfg(feature = "doh-upstream")]
 use hyper_util::client::legacy::Client;
+#[cfg(feature = "doh-upstream")]
+use hyper_util::client::legacy::connect::HttpConnector;
 #[cfg(feature = "doh-upstream")]
 use hyper_util::rt::TokioExecutor;
 #[cfg(feature = "doh-upstream")]
@@ -17,19 +21,15 @@ use std::time::Duration;
 
 #[cfg(feature = "doh-upstream")]
 pub struct DohClient {
-    client: Client<
-        hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
-        Full<Bytes>,
-    >,
+    client: Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
 }
 
 #[cfg(feature = "doh-upstream")]
 impl DohClient {
     #[must_use]
     pub fn new() -> Self {
-        let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .expect("no native roots found")
+        let https = HttpsConnectorBuilder::new()
+            .with_webpki_roots()
             .https_or_http()
             .enable_http1()
             .enable_http2()

@@ -35,7 +35,7 @@ hotpath = { workspace = true, optional = true }
 # Third party
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
-    "tls-rustls",
+    "tls-rustls-aws-lc-rs",
     "macros",
     "chrono",
     "uuid",

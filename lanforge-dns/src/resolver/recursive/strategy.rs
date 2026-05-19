@@ -4,7 +4,6 @@ use crate::resolver::recursive::cache::CacheKey;
 use crate::utils::health::UpstreamStatus;
 use dashmap::DashMap;
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireQuestion};
-#[cfg(not(feature = "doh-upstream"))]
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, UpstreamHealthSnapshot,

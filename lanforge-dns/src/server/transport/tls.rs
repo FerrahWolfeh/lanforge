@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rustls::ServerConfig;
-use rustls::crypto::ring;
+use rustls::crypto::aws_lc_rs;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
@@ -14,7 +14,7 @@ pub struct TlsAcceptor {
 }
 
 pub fn load_tls_config(cert_input: &str, key_input: &str) -> Result<ServerConfig, DnsError> {
-    let _ = ring::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     let certs = load_certs(cert_input)?;
     let key = load_private_key(key_input)?;

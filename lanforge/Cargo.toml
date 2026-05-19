@@ -13,7 +13,15 @@ name = "lanforged"
 path = "src/main.rs"
 
 [features]
-default = ["sqlite", "postgres", "dns-full", "adblock", "http"]
+default = [
+    "sqlite",
+    "postgres",
+    "dns-dot",
+    "dns-doh",
+    "adblock",
+    "http",
+    "doh-server",
+]
 
 # Profiling & Diagnostics
 hotpath = [
