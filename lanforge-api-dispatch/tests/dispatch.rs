@@ -1,4 +1,6 @@
-use lanforge_api::api::{AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport};
+use lanforge_api::api::{
+    AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport,
+};
 use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
@@ -9,7 +11,9 @@ use lanforge_db::log_engine::LogDb;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::DnsRecordType;
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, BlockingMode, RewriteAnswer, RewriteRule};
+use lanforge_types::network::dns::adblock::{
+    AdblockDbConfig, AdblockUrlKind, BlockingMode, RewriteAnswer, RewriteRule,
+};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -177,7 +181,6 @@ async fn test_dispatch_system_config_import_export() {
     }
     assert!(matches!(import_res, Response::Success(_)));
 
-
     // 4. Export again and verify all fields match what was imported
     let res_after = client_ctx.handle_system_config_export().await;
     if let Response::SystemConfig(cfg) = res_after {
@@ -187,19 +190,25 @@ async fn test_dispatch_system_config_import_export() {
 
         assert_eq!(cfg.dns_rewrites.len(), 1);
         assert_eq!(cfg.dns_rewrites[0].domain, "import.lan");
-        assert_eq!(cfg.dns_rewrites[0].answer, RewriteAnswer::A("192.168.10.1".parse().unwrap()));
+        assert_eq!(
+            cfg.dns_rewrites[0].answer,
+            RewriteAnswer::A("192.168.10.1".parse().unwrap())
+        );
 
         assert_eq!(cfg.dns_upstreams.len(), 1);
         assert_eq!(cfg.dns_upstreams[0].addr, "9.9.9.9:53".parse().unwrap());
         assert_eq!(cfg.dns_upstreams[0].protocol, UpstreamProtocol::Udp);
         assert_eq!(cfg.dns_upstreams[0].domain.as_deref(), Some("quad9"));
 
-        assert_eq!(cfg.dns_adblock_config.enabled, true);
+        assert!(cfg.dns_adblock_config.enabled);
         assert_eq!(cfg.dns_adblock_config.blocking_mode, BlockingMode::NullIp);
         assert_eq!(cfg.dns_adblock_config.refresh_hours, 12);
 
         assert_eq!(cfg.dns_adblock_urls.len(), 1);
-        assert_eq!(cfg.dns_adblock_urls[0].url, "https://example.com/adblock.hosts");
+        assert_eq!(
+            cfg.dns_adblock_urls[0].url,
+            "https://example.com/adblock.hosts"
+        );
         assert_eq!(cfg.dns_adblock_urls[0].kind, AdblockUrlKind::Blocklist);
 
         assert_eq!(cfg.dns_allowlist.len(), 1);
@@ -208,5 +217,3 @@ async fn test_dispatch_system_config_import_export() {
         panic!("Expected Response::SystemConfig");
     }
 }
-
-

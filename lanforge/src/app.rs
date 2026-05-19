@@ -11,8 +11,8 @@ use crate::config::Config;
 use crate::event_loop::{LoopResult, run_event_loop};
 use crate::registry::ServiceRegistry;
 use lanforge_db::worker::DbWorker;
-use lanforge_dhcp::dhcp::v4::Dhcpv4Service;
-use lanforge_dhcp::dhcp::v6::Dhcpv6Service;
+use lanforge_dhcp::v4::Dhcpv4Service;
+use lanforge_dhcp::v6::Dhcpv6Service;
 use lanforge_dns::server::service::DnsService;
 #[cfg(feature = "dns-doq")]
 use lanforge_dns::server::transport::doq::DoqService;

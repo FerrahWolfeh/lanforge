@@ -44,8 +44,8 @@ use tracing::{debug, info, warn};
 
 use super::config::Dhcpv4Config;
 use super::pool::IpPool;
-use crate::dhcp::identity::DeviceIdentity;
-use crate::dhcp::options::parse_typed_option;
+use crate::identity::DeviceIdentity;
+use crate::options::parse_typed_option;
 
 /// Outcome of processing a DHCP message from a client.
 pub enum HandleResult {

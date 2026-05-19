@@ -40,7 +40,7 @@ use lanforge_core::context::LanforgeContext;
 
 use roaring::RoaringBitmap;
 
-use crate::dhcp::v4::config::Dhcpv4PoolConfig;
+use super::config::Dhcpv4PoolConfig;
 
 /// Dynamic IPv4 address pool backed by a roaring bitmap.
 ///
@@ -247,10 +247,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::dhcp::v4::config::Dhcpv4PoolConfig;
     use std::time::{Duration, SystemTime};
 
-    use crate::test_utils::init_test_context;
+    use crate::{test_utils::init_test_context, v4::config::Dhcpv4PoolConfig};
 
     fn pool() -> (IpPool, LanforgeContext) {
         let ctx = init_test_context();

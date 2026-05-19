@@ -33,7 +33,7 @@ use lanforge_types::device::{IPv6State, Ipv6AddrOrSuffix};
 use lanforge_types::identifiers::{Duid, MacAddr};
 use rand::random;
 
-use crate::dhcp::v6::config::Dhcpv6PoolConfig;
+use super::config::Dhcpv6PoolConfig;
 
 /// Range definition for a `DHCPv6` address pool.
 #[derive(Clone, Debug)]

@@ -37,6 +37,7 @@ use lanforge_core::bus::{
     DeviceChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent,
 };
 use lanforge_core::context::LanforgeContext;
+use lanforge_macros::lanforge_service;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::system::{ServiceBanner, ServiceState};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
@@ -50,12 +51,12 @@ use tracing::{info, warn};
 use raw::RawSender;
 use server::{DhcpServer, HandleResult};
 
-use crate::dhcp::v4::config::Dhcpv4Config;
-
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 
-#[lanforge_macros::lanforge_service(
+use crate::v4::config::Dhcpv4Config;
+
+#[lanforge_service(
     id = "dhcpv4",
     name = "DHCPv4 Server",
     critical = true,
@@ -88,8 +89,14 @@ impl StatusProvider for Dhcpv4Service {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
             (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
-            (std::borrow::Cow::Borrowed("lease_time"), self.cfg.lease_time.to_string()),
-            (std::borrow::Cow::Borrowed("port"), self.cfg.port.to_string()),
+            (
+                std::borrow::Cow::Borrowed("lease_time"),
+                self.cfg.lease_time.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("port"),
+                self.cfg.port.to_string(),
+            ),
         ];
         ServiceBanner {
             name: "DHCPv4 Server".to_string(),

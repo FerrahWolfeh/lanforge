@@ -1,5 +1,6 @@
 use lanforge_db::config::DatabaseConfig;
-use lanforge_dhcp::dhcp::{v4::config::Dhcpv4Config, v6::config::Dhcpv6Config};
+use lanforge_dhcp::v4::config::Dhcpv4Config;
+use lanforge_dhcp::v6::config::Dhcpv6Config;
 use lanforge_dns::config::DnsConfig;
 use lanforge_http::config::HttpConfig;
 use lanforge_ndp::ndp::config::MonitorConfig;

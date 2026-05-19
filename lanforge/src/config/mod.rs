@@ -28,8 +28,8 @@ pub mod toml;
 
 pub use args::CliArgs;
 use lanforge_db::config::DatabaseConfig;
-use lanforge_dhcp::dhcp::v4::config::Dhcpv4Config;
-use lanforge_dhcp::dhcp::v6::config::Dhcpv6Config;
+use lanforge_dhcp::v4::config::Dhcpv4Config;
+use lanforge_dhcp::v6::config::Dhcpv6Config;
 use lanforge_dns::config::DnsConfig;
 use lanforge_http::config::HttpConfig;
 use lanforge_ndp::ndp::config::MonitorConfig;
@@ -400,7 +400,11 @@ impl Config {
             ula_prefix: if self.system.target_prefix.starts_with("fe80") {
                 None
             } else {
-                self.system.target_prefix.parse::<std::net::Ipv6Addr>().ok().map(lanforge_types::network::Ipv6Prefix::from_addr)
+                self.system
+                    .target_prefix
+                    .parse::<std::net::Ipv6Addr>()
+                    .ok()
+                    .map(lanforge_types::network::Ipv6Prefix::from_addr)
             },
             ra_enabled: self.ra_enabled,
             dhcp_v4_enabled: self.dhcpv4_enabled,
@@ -429,11 +433,7 @@ impl Config {
                 })
                 .sum(),
             dns_enabled: self.dns_enabled,
-            dns_upstream: self
-                .dns_toml
-                .upstreams
-                .first()
-                .map(|u| u.target.clone()),
+            dns_upstream: self.dns_toml.upstreams.first().map(|u| u.target.clone()),
             boot_dir: Some(self.tftp_toml.root_dir.to_string_lossy().to_string()),
             http_enabled: self.http_toml.enabled,
         }

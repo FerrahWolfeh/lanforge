@@ -1,6 +1,7 @@
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::{Result, bail};
+use lanforge_api::api::SystemConfigExport;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct ConfigArgs {
@@ -53,7 +54,7 @@ async fn execute_import(
     };
 
     let content = std::fs::read_to_string(&path)?;
-    let config: lanforge_api::api::SystemConfigExport = serde_json::from_str(&content)?;
+    let config: SystemConfigExport = serde_json::from_str(&content)?;
     let resp = client.system_config_import(config).await?;
     println!("✓ {}", resp.message);
     Ok(())

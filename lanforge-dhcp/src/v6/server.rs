@@ -53,7 +53,8 @@ use tracing::{debug, info};
 
 use super::config::Dhcpv6Config;
 use super::pool::Ipv6Pool;
-use crate::dhcp::identity::DeviceIdentity;
+use crate::identity::DeviceIdentity;
+use crate::options::parse_typed_option;
 use std::sync::Arc;
 
 /// `IA_NA` and `IA_PD` identifiers assigned in a `DHCPv6` response.
@@ -847,7 +848,7 @@ impl Dhcpv6Server {
 
     fn add_custom_options(&self, reply: &mut Message) {
         for (code, val) in &self.cfg.options {
-            if let Some(data) = crate::dhcp::options::parse_typed_option(val) {
+            if let Some(data) = parse_typed_option(val) {
                 reply
                     .opts_mut()
                     .insert(DhcpOption::Unknown(UnknownOption::new(
@@ -914,10 +915,8 @@ fn encode_msg<'a>(msg: &Message, buf: &'a mut Vec<u8>) -> &'a [u8] {
 
 #[cfg(test)]
 mod tests {
-    use crate::dhcp::v6::config::Dhcpv6PoolConfig;
-
     use super::*;
-    use crate::test_utils::init_test_context;
+    use crate::{test_utils::init_test_context, v6::config::Dhcpv6PoolConfig};
     use dhcproto::{
         Decodable, Decoder,
         v6::{DhcpOptions, IANA, OptionCode},
