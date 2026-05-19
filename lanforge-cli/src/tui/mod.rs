@@ -291,7 +291,10 @@ async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
                 }
 
                 // Devices
-                if let Ok(s) = client.list_devices(None, None, None).await {
+                if let Ok(s) = client
+                    .list_devices(None, None, None, None, None, None)
+                    .await
+                {
                     let _ = tx.send(AppEvent::DevicesUpdate(Box::new(s))).await;
                 }
 

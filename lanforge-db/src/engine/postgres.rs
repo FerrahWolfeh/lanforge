@@ -128,23 +128,23 @@ async fn clear_child_tables(
     tx: &mut Transaction<'_, Postgres>,
     mac: &str,
 ) -> Result<(), LeaseDbError> {
-    sqlx::query("DELETE FROM v4_leases WHERE mac = $1")
+    sqlx::query("DELETE FROM v4_leases WHERE mac = $1::MACADDR")
         .bind(mac)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM v6_leases WHERE mac = $1")
+    sqlx::query("DELETE FROM v6_leases WHERE mac = $1::MACADDR")
         .bind(mac)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM v6_prefixes WHERE mac = $1")
+    sqlx::query("DELETE FROM v6_prefixes WHERE mac = $1::MACADDR")
         .bind(mac)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM slaac_addrs WHERE mac = $1")
+    sqlx::query("DELETE FROM slaac_addrs WHERE mac = $1::MACADDR")
         .bind(mac)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM seen_v4 WHERE mac = $1")
+    sqlx::query("DELETE FROM seen_v4 WHERE mac = $1::MACADDR")
         .bind(mac)
         .execute(&mut **tx)
         .await?;
@@ -159,7 +159,7 @@ async fn persist_v4_lease(
     if let IPv4State::Dynamic(lease) = v4 {
         let expires = system_time_to_unix(lease.expires);
         let ip_str = lease.ip.to_string();
-        sqlx::query("INSERT INTO v4_leases (mac, ip, expires) VALUES ($1, $2, $3)")
+        sqlx::query("INSERT INTO v4_leases (mac, ip, expires) VALUES ($1::MACADDR, $2, $3)")
             .bind(mac)
             .bind(ip_str)
             .bind(expires)
@@ -179,7 +179,7 @@ async fn persist_v6_leases(
             let expires = system_time_to_unix(lease.expires);
             let ip_str = lease.ip.to_string();
             let iaid = i64::from(lease.iaid);
-            sqlx::query("INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES ($1, $2, $3, $4) ON CONFLICT(mac, iaid) DO NOTHING")
+            sqlx::query("INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES ($1::MACADDR, $2, $3, $4) ON CONFLICT(mac, iaid) DO NOTHING")
                 .bind(mac)
                 .bind(iaid)
                 .bind(ip_str)
@@ -200,7 +200,7 @@ async fn persist_v6_prefixes(
         let px_str = prefix.prefix.to_string();
         let iaid = i64::from(prefix.iaid);
         let len = i32::from(prefix.len);
-        sqlx::query("INSERT INTO v6_prefixes (mac, iaid, cidr, expires) VALUES ($1, $2, ($3 || '/' || $4)::CIDR, $5) ON CONFLICT(mac, iaid) DO NOTHING")
+        sqlx::query("INSERT INTO v6_prefixes (mac, iaid, cidr, expires) VALUES ($1::MACADDR, $2, ($3 || '/' || $4)::CIDR, $5) ON CONFLICT(mac, iaid) DO NOTHING")
             .bind(mac)
             .bind(iaid)
             .bind(px_str)
@@ -220,7 +220,7 @@ async fn persist_slaac_addrs(
         if let IPv6State::Slaac(ip, _) = state {
             let ip_str = ip.to_string();
             sqlx::query(
-                "INSERT INTO slaac_addrs (mac, ip) VALUES ($1, $2) ON CONFLICT(mac, ip) DO NOTHING",
+                "INSERT INTO slaac_addrs (mac, ip) VALUES ($1::MACADDR, $2) ON CONFLICT(mac, ip) DO NOTHING",
             )
             .bind(mac)
             .bind(ip_str)
@@ -239,7 +239,7 @@ async fn persist_seen_v4(
     for (ip, _) in seen {
         let ip_str = ip.to_string();
         sqlx::query(
-            "INSERT INTO seen_v4 (mac, ip) VALUES ($1, $2) ON CONFLICT(mac, ip) DO NOTHING",
+            "INSERT INTO seen_v4 (mac, ip) VALUES ($1::MACADDR, $2) ON CONFLICT(mac, ip) DO NOTHING",
         )
         .bind(mac)
         .bind(ip_str)
@@ -321,7 +321,7 @@ pub async fn record_lease_event(
     action_str: &str,
     now: i64,
 ) -> Result<(), LeaseDbError> {
-    sqlx::query("INSERT INTO lease_history (mac, ip, lease_type, action, timestamp) VALUES ($1, $2, $3, $4, $5)")
+    sqlx::query("INSERT INTO lease_history (mac, ip, lease_type, action, timestamp) VALUES ($1::MACADDR, $2, $3, $4, $5)")
         .bind(mac_str)
         .bind(ip)
         .bind(lease_type)
@@ -371,7 +371,7 @@ pub async fn find_mac_by_hostname(
     since_unix: i64,
 ) -> Result<Option<lanforge_types::identifiers::MacAddr>, LeaseDbError> {
     let row: Option<(String,)> = sqlx::query_as(
-        "SELECT mac FROM devices WHERE (hostname = $1 OR LOWER(hostname) = LOWER($1)) AND last_seen >= $2 LIMIT 1",
+        "SELECT mac::TEXT FROM devices WHERE (hostname = $1 OR LOWER(hostname) = LOWER($1)) AND last_seen >= $2 LIMIT 1",
     )
     .bind(hostname)
     .bind(since_unix)

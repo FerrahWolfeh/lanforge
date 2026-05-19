@@ -310,7 +310,7 @@ impl LeaseDb {
             Pool::Postgres(p) => {
                 let mut tx = p.begin().await?;
                 for mac in macs {
-                    sqlx::query("DELETE FROM devices WHERE mac = $1")
+                    sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
                         .bind(mac.to_string())
                         .execute(&mut *tx)
                         .await?;

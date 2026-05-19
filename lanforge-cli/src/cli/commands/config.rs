@@ -32,9 +32,9 @@ async fn execute_export(client: &LanforgeClient, output: Option<String>) -> Resu
     let json = serde_json::to_string_pretty(&config)?;
     if let Some(path) = output {
         std::fs::write(&path, json)?;
-        println!("✓ Exported system configuration to {}", path);
+        println!("✓ Exported system configuration to {path}");
     } else {
-        println!("{}", json);
+        println!("{json}");
     }
     Ok(())
 }
@@ -47,7 +47,9 @@ async fn execute_import(
     let path = match (file, positional_file) {
         (Some(f), _) => f,
         (None, Some(pf)) => pf,
-        (None, None) => bail!("Please specify the file to import using -o <file> or as a positional argument."),
+        (None, None) => {
+            bail!("Please specify the file to import using -o <file> or as a positional argument.")
+        }
     };
 
     let content = std::fs::read_to_string(&path)?;
@@ -61,9 +63,10 @@ impl Execute for ConfigArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         match self.action {
             ConfigAction::Export { output } => execute_export(client, output).await,
-            ConfigAction::Import { file, positional_file } => {
-                execute_import(client, file, positional_file).await
-            }
+            ConfigAction::Import {
+                file,
+                positional_file,
+            } => execute_import(client, file, positional_file).await,
         }
     }
 }
