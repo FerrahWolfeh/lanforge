@@ -290,7 +290,7 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lan
             d.class::INT8,
             t.parent_mac::TEXT, t.parent_port, t.local_ifindex::INT8, 
             EXTRACT(EPOCH FROM t.topo_updated)::INT8 as topo_updated,
-            s.v4_static::TEXT, s.v6_suffix, s.boot_file
+            host(s.v4_static) as v4_static, s.v6_suffix, s.boot_file
          FROM devices d
          LEFT JOIN device_topology t ON d.mac = t.mac
          LEFT JOIN static_devices s ON d.mac = s.mac"
@@ -304,7 +304,7 @@ pub async fn load_v4_leases(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT mac::TEXT, ip::TEXT, EXTRACT(EPOCH FROM expires)::INT8 FROM v4_leases",
+        "SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM expires)::INT8 FROM v4_leases",
     )
     .fetch_all(pool)
     .await?;
@@ -315,7 +315,7 @@ pub async fn load_v6_leases(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, i64, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i64)>(
-        "SELECT mac::TEXT, iaid, ip::TEXT, EXTRACT(EPOCH FROM expires)::INT8 FROM v6_leases",
+        "SELECT mac::TEXT, iaid, host(ip) as ip, EXTRACT(EPOCH FROM expires)::INT8 FROM v6_leases",
     )
     .fetch_all(pool)
     .await?;
@@ -334,14 +334,14 @@ pub async fn load_v6_prefixes(
 }
 
 pub async fn load_slaac_addrs(pool: &sqlx::PgPool) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac::TEXT, ip::TEXT, EXTRACT(EPOCH FROM last_seen)::INT8 FROM slaac_addrs")
+    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 FROM slaac_addrs")
         .fetch_all(pool)
         .await?;
     Ok(rows)
 }
 
 pub async fn load_seen_v4(pool: &sqlx::PgPool) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac::TEXT, ip::TEXT, EXTRACT(EPOCH FROM last_seen)::INT8 FROM seen_v4")
+    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 FROM seen_v4")
         .fetch_all(pool)
         .await?;
     Ok(rows)
@@ -371,7 +371,7 @@ pub async fn get_lease_history(
     mac_str: &str,
 ) -> Result<Vec<(String, String, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
-        "SELECT ip::TEXT, lease_type::TEXT, action::TEXT, EXTRACT(EPOCH FROM occurred_at)::INT8 FROM lease_history WHERE mac = $1::MACADDR ORDER BY occurred_at DESC LIMIT 100"
+        "SELECT host(ip) as ip, lease_type::TEXT, action::TEXT, EXTRACT(EPOCH FROM occurred_at)::INT8 FROM lease_history WHERE mac = $1::MACADDR ORDER BY occurred_at DESC LIMIT 100"
     )
     .bind(mac_str)
     .fetch_all(pool).await?;

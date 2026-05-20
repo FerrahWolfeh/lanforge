@@ -510,15 +510,15 @@ impl UpstreamManager {
 
 impl Drop for UpstreamManager {
     fn drop(&mut self) {
-        if let Ok(mut rx) = self.rx_handle.lock() {
-            if let Some(h) = rx.take() {
-                h.abort();
-            }
+        if let Ok(mut rx) = self.rx_handle.lock()
+            && let Some(h) = rx.take()
+        {
+            h.abort();
         }
-        if let Ok(mut probe) = self.probe_handle.lock() {
-            if let Some(h) = probe.take() {
-                h.abort();
-            }
+        if let Ok(mut probe) = self.probe_handle.lock()
+            && let Some(h) = probe.take()
+        {
+            h.abort();
         }
     }
 }
