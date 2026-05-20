@@ -5,13 +5,14 @@ use tui_tree_widget::TreeState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiTab {
-    Overview,
+    Dashboard,
     Devices,
-    Explorer,
-    Events,
-    Services,
-    Topology,
     Dns,
+    Adblock,
+    Events,
+    Topology,
+    Dhcp,
+    Services,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,25 +27,27 @@ impl TuiTab {
     pub const fn from_index(index: usize) -> Self {
         match index {
             1 => Self::Devices,
-            2 => Self::Explorer,
-            3 => Self::Events,
-            4 => Self::Services,
+            2 => Self::Dns,
+            3 => Self::Adblock,
+            4 => Self::Events,
             5 => Self::Topology,
-            6 => Self::Dns,
-            _ => Self::Overview,
+            6 => Self::Dhcp,
+            7 => Self::Services,
+            _ => Self::Dashboard,
         }
     }
 
     #[must_use]
     pub const fn to_index(self) -> usize {
         match self {
-            Self::Overview => 0,
+            Self::Dashboard => 0,
             Self::Devices => 1,
-            Self::Explorer => 2,
-            Self::Events => 3,
-            Self::Services => 4,
+            Self::Dns => 2,
+            Self::Adblock => 3,
+            Self::Events => 4,
             Self::Topology => 5,
-            Self::Dns => 6,
+            Self::Dhcp => 6,
+            Self::Services => 7,
         }
     }
 }
@@ -54,7 +57,9 @@ pub struct TuiApp {
     pub active_tab: TuiTab,
     pub mode: TuiMode,
     pub device_list_state: TableState,
-    pub tree_state: TreeState<String>,
+    pub dns_query_log_state: TableState,
+    pub adblock_allowlist_state: TableState,
+    pub lease_table_state: TableState,
     pub tree_state_topology: TreeState<String>,
     pub auto_scroll: bool,
     pub filter_text: String,
@@ -72,10 +77,12 @@ impl TuiApp {
     pub fn new() -> Self {
         Self {
             state: TuiState::new(),
-            active_tab: TuiTab::Overview,
+            active_tab: TuiTab::Dashboard,
             mode: TuiMode::Normal,
             device_list_state: TableState::default(),
-            tree_state: TreeState::default(),
+            dns_query_log_state: TableState::default(),
+            adblock_allowlist_state: TableState::default(),
+            lease_table_state: TableState::default(),
             tree_state_topology: TreeState::default(),
             auto_scroll: true,
             filter_text: String::new(),
@@ -106,19 +113,24 @@ impl TuiApp {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.should_quit = true;
             }
-            KeyCode::Char('1') => self.active_tab = TuiTab::Overview,
+            KeyCode::Char('1') => self.active_tab = TuiTab::Dashboard,
             KeyCode::Char('2') => self.active_tab = TuiTab::Devices,
-            KeyCode::Char('3') => self.active_tab = TuiTab::Explorer,
-            KeyCode::Char('4') => self.active_tab = TuiTab::Events,
-            KeyCode::Char('5') => self.active_tab = TuiTab::Services,
+            KeyCode::Char('3') => self.active_tab = TuiTab::Dns,
+            KeyCode::Char('4') => self.active_tab = TuiTab::Adblock,
+            KeyCode::Char('5') => self.active_tab = TuiTab::Events,
             KeyCode::Char('6') => self.active_tab = TuiTab::Topology,
-            KeyCode::Char('7') => self.active_tab = TuiTab::Dns,
+            KeyCode::Char('7') => self.active_tab = TuiTab::Dhcp,
+            KeyCode::Char('8') => self.active_tab = TuiTab::Services,
             KeyCode::Left => self.prev_tab(),
             KeyCode::Right => self.next_tab(),
             KeyCode::Char('/') => {
                 if matches!(
                     self.active_tab,
-                    TuiTab::Devices | TuiTab::Explorer | TuiTab::Topology
+                    TuiTab::Devices
+                        | TuiTab::Topology
+                        | TuiTab::Dhcp
+                        | TuiTab::Dns
+                        | TuiTab::Adblock
                 ) {
                     self.mode = TuiMode::Filtering;
                 }
@@ -132,9 +144,6 @@ impl TuiApp {
             KeyCode::Down => self.move_down(),
             KeyCode::Enter => match self.active_tab {
                 TuiTab::Devices => self.mode = TuiMode::Detail,
-                TuiTab::Explorer => {
-                    self.tree_state.toggle_selected();
-                }
                 TuiTab::Topology => {
                     self.tree_state_topology.toggle_selected();
                 }
@@ -153,12 +162,12 @@ impl TuiApp {
 
     const fn next_tab(&mut self) {
         let i = self.active_tab.to_index();
-        self.active_tab = TuiTab::from_index((i + 1) % 7);
+        self.active_tab = TuiTab::from_index((i + 1) % 8);
     }
 
     const fn prev_tab(&mut self) {
         let i = self.active_tab.to_index();
-        self.active_tab = TuiTab::from_index((i + 6) % 7);
+        self.active_tab = TuiTab::from_index((i + 7) % 8);
     }
 
     fn move_up(&mut self) {
@@ -170,8 +179,26 @@ impl TuiApp {
                     .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
                 self.device_list_state.select(Some(i));
             }
-            TuiTab::Explorer => {
-                self.tree_state.key_up();
+            TuiTab::Dns => {
+                let i = self
+                    .dns_query_log_state
+                    .selected()
+                    .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                self.dns_query_log_state.select(Some(i));
+            }
+            TuiTab::Adblock => {
+                let i = self
+                    .adblock_allowlist_state
+                    .selected()
+                    .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                self.adblock_allowlist_state.select(Some(i));
+            }
+            TuiTab::Dhcp => {
+                let i = self
+                    .lease_table_state
+                    .selected()
+                    .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                self.lease_table_state.select(Some(i));
             }
             TuiTab::Topology => {
                 self.tree_state_topology.key_up();
@@ -186,8 +213,17 @@ impl TuiApp {
                 let i = self.device_list_state.selected().map_or(0, |i| i + 1);
                 self.device_list_state.select(Some(i));
             }
-            TuiTab::Explorer => {
-                self.tree_state.key_down();
+            TuiTab::Dns => {
+                let i = self.dns_query_log_state.selected().map_or(0, |i| i + 1);
+                self.dns_query_log_state.select(Some(i));
+            }
+            TuiTab::Adblock => {
+                let i = self.adblock_allowlist_state.selected().map_or(0, |i| i + 1);
+                self.adblock_allowlist_state.select(Some(i));
+            }
+            TuiTab::Dhcp => {
+                let i = self.lease_table_state.selected().map_or(0, |i| i + 1);
+                self.lease_table_state.select(Some(i));
             }
             TuiTab::Topology => {
                 self.tree_state_topology.key_down();

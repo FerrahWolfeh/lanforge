@@ -5,11 +5,8 @@ use crossterm::{
 };
 use lanforge_api::api::Response;
 use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
-#[cfg(feature = "remote")]
-use lanforge_http::RemoteClient;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::stdout;
-#[cfg(feature = "remote")]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UnixStream;
@@ -22,13 +19,10 @@ pub mod theme;
 pub mod ui;
 pub mod utils;
 
-use crate::tui::app::TuiApp;
 use crate::tui::event::AppEvent;
+use crate::{cli::LanforgeClient, tui::app::TuiApp};
 
-pub async fn run_tui(
-    socket_path: Option<String>,
-    #[cfg(feature = "remote")] remote: Option<RemoteClient>,
-) -> Result<()> {
+pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -66,21 +60,19 @@ pub async fn run_tui(
     let mut background_handles = Vec::new();
     background_handles.push(input_handle);
 
-    // Spawn daemon connection tasks
-    #[cfg(feature = "remote")]
-    if let Some(remote_client) = remote {
-        let tx = event_tx.clone();
-        background_handles.push(tokio::spawn(async move {
-            remote_daemon_loop(remote_client, tx).await;
-        }));
-    }
+    // Spawn event stream background task
+    let tx_event = event_tx.clone();
+    let client_event = client.clone();
+    background_handles.push(tokio::spawn(async move {
+        run_event_stream(client_event, tx_event).await;
+    }));
 
-    if let Some(socket) = socket_path {
-        let tx = event_tx.clone();
-        background_handles.push(tokio::spawn(async move {
-            daemon_loop(socket, tx).await;
-        }));
-    }
+    // Spawn periodic fetch background task
+    let tx_fetch = event_tx.clone();
+    let client_fetch = client.clone();
+    background_handles.push(tokio::spawn(async move {
+        run_periodic_fetch(client_fetch, tx_fetch).await;
+    }));
 
     let mut app = TuiApp::new();
 
@@ -96,6 +88,21 @@ pub async fn run_tui(
                     app.state.connected = true;
                     app.state.connection_error = None;
                 }
+                AppEvent::ServiceBannersUpdate(s) => {
+                    app.state.service_banners = Some(s);
+                }
+                AppEvent::DevicesUpdate(s) => {
+                    app.state.devices = Some(*s);
+                }
+                AppEvent::TopologyUpdate(s) => {
+                    app.state.topology = Some(*s);
+                }
+                AppEvent::LeasesUpdate(s) => {
+                    app.state.leases = Some(s);
+                }
+                AppEvent::DhcpPoolsUpdate(s) => {
+                    app.state.dhcp_pools = Some(s);
+                }
                 AppEvent::DnsStatsUpdate(s) => {
                     app.state.dns_stats = Some(*s);
                 }
@@ -108,14 +115,23 @@ pub async fn run_tui(
                 AppEvent::DnsQueryLogUpdate(s) => {
                     app.state.dns_query_log = Some(*s);
                 }
+                AppEvent::DnsCacheStatsUpdate(s) => {
+                    app.state.dns_cache_stats = Some(s);
+                }
                 AppEvent::DnsAdblockStatusUpdate(s) => {
                     app.state.dns_adblock_status = Some(*s);
                 }
-                AppEvent::DevicesUpdate(s) => {
-                    app.state.devices = Some(*s);
+                AppEvent::DnsRewritesUpdate(s) => {
+                    app.state.dns_rewrites = Some(s);
                 }
-                AppEvent::TopologyUpdate(s) => {
-                    app.state.topology = Some(*s);
+                AppEvent::DnsAdblockUrlsUpdate(s) => {
+                    app.state.dns_adblock_urls = Some(s);
+                }
+                AppEvent::DnsAllowlistUpdate(s) => {
+                    app.state.dns_allowlist = Some(s);
+                }
+                AppEvent::WhoisUpdate(s) => {
+                    app.state.selected_whois = Some(*s);
                 }
                 AppEvent::Tick => {}
             }
@@ -139,110 +155,28 @@ pub async fn run_tui(
     Ok(())
 }
 
-#[cfg(feature = "remote")]
-async fn remote_daemon_loop(client: RemoteClient, tx: mpsc::Sender<AppEvent>) {
-    let client = Arc::new(client);
-
-    // 1. WebSocket Connection (persistent)
-    let ws_tx = tx.clone();
-    let ws_client = client.clone();
-    let ws_task = async move {
-        loop {
+async fn run_event_stream(client: Arc<LanforgeClient>, tx: mpsc::Sender<AppEvent>) {
+    loop {
+        #[cfg(feature = "remote")]
+        if let Some(remote_url) = &client.remote {
+            use lanforge_http::RemoteClient;
+            let ws_client = RemoteClient::new(remote_url.clone(), client.token.clone());
             if let Ok(mut rx) = ws_client.connect_ws() {
                 while let Some(resp) = rx.recv().await {
                     if let Response::Event(event) = resp {
-                        let _ = ws_tx.send(AppEvent::DaemonEvent(event)).await;
+                        let _ = tx.send(AppEvent::DaemonEvent(event)).await;
                     }
                 }
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
         }
-    };
 
-    // 2. Fetch Connection (periodic)
-    let fetch_tx = tx.clone();
-    let fetch_client = client.clone();
-    let fetch_task = async move {
-        let mut last_refresh = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
-        loop {
-            if last_refresh.elapsed() >= Duration::from_secs(5) {
-                // Status
-                if let Ok(Response::Status(s)) = fetch_client.get("/system/status").await {
-                    let _ = fetch_tx.send(AppEvent::StatusUpdate(s)).await;
-                }
-
-                // DNS Stats
-                if let Ok(Response::DnsStats(s)) = fetch_client.get("/dns/stats").await {
-                    let _ = fetch_tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
-                }
-
-                // DNS Analytics
-                if let Ok(Response::DnsAnalytics(s)) =
-                    fetch_client.get("/dns/analytics?limit=10").await
-                {
-                    let _ = fetch_tx
-                        .send(AppEvent::DnsAnalyticsUpdate(Box::new(s)))
-                        .await;
-                }
-
-                // DNS Upstreams
-                if let Ok(Response::DnsUpstreams(s)) = fetch_client.get("/dns/upstreams").await {
-                    let _ = fetch_tx
-                        .send(AppEvent::DnsUpstreamsUpdate(Box::new(s)))
-                        .await;
-                }
-
-                // DNS Query Log
-                if let Ok(Response::DnsQueryLog(s)) = fetch_client.get("/dns/logs?limit=50").await {
-                    let _ = fetch_tx
-                        .send(AppEvent::DnsQueryLogUpdate(Box::new(s)))
-                        .await;
-                }
-
-                // DNS Adblock Status
-                if let Ok(Response::DnsAdblockStatus(s)) =
-                    fetch_client.get("/dns/adblock/status").await
-                {
-                    let _ = fetch_tx
-                        .send(AppEvent::DnsAdblockStatusUpdate(Box::new(s)))
-                        .await;
-                }
-
-                // Devices
-                if let Ok(Response::Devices(s)) = fetch_client.get("/devices").await {
-                    let _ = fetch_tx.send(AppEvent::DevicesUpdate(Box::new(s))).await;
-                }
-
-                // Topology
-                if let Ok(Response::Topology(s)) = fetch_client.get("/topology").await {
-                    let _ = fetch_tx.send(AppEvent::TopologyUpdate(Box::new(s))).await;
-                }
-
-                last_refresh = Instant::now();
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-    };
-
-    tokio::select! {
-        _ = ws_task => {}
-        _ = fetch_task => {}
-    }
-}
-
-async fn daemon_loop(socket_path: String, tx: mpsc::Sender<AppEvent>) {
-    tokio::select! {
-        () = run_daemon_watch(socket_path.clone(), tx.clone()) => {}
-        () = run_daemon_fetch(socket_path, tx) => {}
-    }
-}
-
-async fn run_daemon_watch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
-    loop {
-        if let Ok(stream) = UnixStream::connect(&socket_path).await {
-            let mut client = LanforgeRpcClient::new(stream);
-            if client.log(true, None, None).await.is_ok() {
-                while let Ok(resp) = client.next_response().await {
+        // Unix socket path fallback
+        if let Ok(stream) = UnixStream::connect(&client.socket).await {
+            let mut rpc_client = LanforgeRpcClient::new(stream);
+            if rpc_client.log(true, None, None).await.is_ok() {
+                while let Ok(resp) = rpc_client.next_response().await {
                     if let RpcResponse::Event(event) = resp {
                         let _ = tx.send(AppEvent::DaemonEvent(event)).await;
                     }
@@ -253,56 +187,88 @@ async fn run_daemon_watch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
     }
 }
 
-async fn run_daemon_fetch(socket_path: String, tx: mpsc::Sender<AppEvent>) {
+async fn run_periodic_fetch(client: Arc<LanforgeClient>, tx: mpsc::Sender<AppEvent>) {
     let mut last_refresh = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
     loop {
         if last_refresh.elapsed() >= Duration::from_secs(5) {
-            if let Ok(stream) = UnixStream::connect(&socket_path).await {
-                let mut client = LanforgeRpcClient::new(stream);
-
-                // Status
-                if let Ok(s) = client.status().await {
-                    let _ = tx.send(AppEvent::StatusUpdate(s)).await;
-                }
-
-                // DNS Stats
-                if let Ok(s) = client.dns_stats().await {
-                    let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
-                }
-
-                // DNS Analytics
-                if let Ok(s) = client.dns_analytics(Some(10)).await {
-                    let _ = tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
-                }
-
-                // DNS Upstreams
-                if let Ok(s) = client.dns_upstreams().await {
-                    let _ = tx.send(AppEvent::DnsUpstreamsUpdate(Box::new(s))).await;
-                }
-
-                // DNS Query Log
-                if let Ok(s) = client.dns_query_log(false, Some(50), None, None).await {
-                    let _ = tx.send(AppEvent::DnsQueryLogUpdate(Box::new(s))).await;
-                }
-
-                // DNS Adblock Status
-                if let Ok(s) = client.dns_adblock_status().await {
-                    let _ = tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
-                }
-
-                // Devices
-                if let Ok(s) = client
-                    .list_devices(None, None, None, None, None, None)
-                    .await
-                {
-                    let _ = tx.send(AppEvent::DevicesUpdate(Box::new(s))).await;
-                }
-
-                // Topology
-                if let Ok(s) = client.topology().await {
-                    let _ = tx.send(AppEvent::TopologyUpdate(Box::new(s))).await;
-                }
+            // Fetch Status
+            if let Ok(s) = client.status().await {
+                let _ = tx.send(AppEvent::StatusUpdate(s)).await;
             }
+
+            // Service Banners
+            if let Ok(s) = client.service_banners().await {
+                let _ = tx.send(AppEvent::ServiceBannersUpdate(s)).await;
+            }
+
+            // Devices
+            if let Ok(s) = client
+                .list_devices(None, None, None, None, None, None)
+                .await
+            {
+                let _ = tx.send(AppEvent::DevicesUpdate(Box::new(s))).await;
+            }
+
+            // Topology
+            if let Ok(s) = client.topology().await {
+                let _ = tx.send(AppEvent::TopologyUpdate(Box::new(s))).await;
+            }
+
+            // Leases
+            if let Ok(s) = client.leases(false).await {
+                let _ = tx.send(AppEvent::LeasesUpdate(s)).await;
+            }
+
+            // DHCP Pools
+            if let Ok(s) = client.dhcp_pools().await {
+                let _ = tx.send(AppEvent::DhcpPoolsUpdate(s)).await;
+            }
+
+            // DNS Stats
+            if let Ok(s) = client.dns_stats().await {
+                let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+            }
+
+            // DNS Analytics
+            if let Ok(s) = client.dns_analytics(Some(10)).await {
+                let _ = tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
+            }
+
+            // DNS Upstreams
+            if let Ok(s) = client.dns_upstreams().await {
+                let _ = tx.send(AppEvent::DnsUpstreamsUpdate(Box::new(s))).await;
+            }
+
+            // DNS Query Log
+            if let Ok(s) = client.dns_query_log(false, Some(50), None, None).await {
+                let _ = tx.send(AppEvent::DnsQueryLogUpdate(Box::new(s))).await;
+            }
+
+            // DNS Cache Stats Ext
+            if let Ok(s) = client.dns_cache_stats_ext().await {
+                let _ = tx.send(AppEvent::DnsCacheStatsUpdate(s)).await;
+            }
+
+            // DNS Adblock Status
+            if let Ok(s) = client.dns_adblock_status().await {
+                let _ = tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
+            }
+
+            // DNS Rewrites
+            if let Ok(s) = client.dns_rewrites().await {
+                let _ = tx.send(AppEvent::DnsRewritesUpdate(s)).await;
+            }
+
+            // DNS Adblock URL List
+            if let Ok(s) = client.dns_adblock_url_list().await {
+                let _ = tx.send(AppEvent::DnsAdblockUrlsUpdate(s)).await;
+            }
+
+            // DNS Allowlist
+            if let Ok(s) = client.dns_allowlist().await {
+                let _ = tx.send(AppEvent::DnsAllowlistUpdate(s)).await;
+            }
+
             last_refresh = Instant::now();
         }
         tokio::time::sleep(Duration::from_millis(500)).await;

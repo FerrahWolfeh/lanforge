@@ -4,5 +4,5 @@
 pub mod args;
 pub mod cli;
 pub mod format;
-// #[cfg(feature = "tui")]
-// pub mod tui;
+#[cfg(feature = "tui")]
+pub mod tui;

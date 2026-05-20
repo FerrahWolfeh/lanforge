@@ -14,7 +14,7 @@ name = "lanforge"
 path = "src/main.rs"
 
 [features]
-default = ["zstd", "remote"]
+default = ["zstd", "remote", "tui"]
 zstd = ["dep:zstd"]
 remote = [
     "dep:lanforge-http",

@@ -1,20 +1,30 @@
+use color_eyre::eyre::Result;
+
 use crate::cli::{Execute, LanforgeClient};
+use std::sync::Arc;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct TuiArgs {}
 
 impl Execute for TuiArgs {
-    async fn execute(self, client: &LanforgeClient) -> color_eyre::eyre::Result<()> {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
         #[cfg(feature = "tui")]
         {
-            #[cfg(feature = "remote")]
-            if let Some(remote_url) = &client.remote {
-                use lanforge_http::RemoteClient;
-                let http_client = RemoteClient::new(remote_url.clone(), client.token.clone());
-                return crate::tui::run_tui(None, Some(http_client)).await;
-            }
-
-            crate::tui::run_tui(Some(client.socket.clone()), None).await
+            let arc_client = Arc::new(LanforgeClient {
+                socket: client.socket.clone(),
+                #[cfg(feature = "remote")]
+                remote: client.remote.clone(),
+                #[cfg(feature = "remote")]
+                token: client.token.clone(),
+                no_compress: client.no_compress,
+                json: client.json,
+                no_color: client.no_color,
+                ascii: client.ascii,
+                yes: client.yes,
+                #[cfg(feature = "remote")]
+                http_client: client.http_client.clone(),
+            });
+            crate::tui::run_tui(arc_client).await
         }
         #[cfg(not(feature = "tui"))]
         {

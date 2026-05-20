@@ -1,55 +1,59 @@
-use chrono::{DateTime, Local};
-use lanforge_types::{
-    device::{DeviceClass, IPv6State},
-    update::{InterfaceState, StaticEntry},
-};
-use std::time::SystemTime;
+use chrono::{DateTime, Local, Utc};
 
-/// Returns an emoji icon for a device class.
+/// Returns an emoji icon for a device class string.
 #[must_use]
-pub const fn get_class_icon(class: DeviceClass) -> &'static str {
-    match class {
-        DeviceClass::None => "❓",
-        DeviceClass::Computer => "💻",
-        DeviceClass::Mobile => "📱",
-        DeviceClass::Printer => "🖨️",
-        DeviceClass::Media => "📺",
-        DeviceClass::IoT => "🏠",
-        DeviceClass::Network => "🌐",
+pub fn get_class_icon(class: &str) -> &'static str {
+    match class.to_lowercase().as_str() {
+        "computer" | "pc" | "server" => "💻",
+        "mobile" | "phone" | "tablet" => "📱",
+        "printer" | "scanner" => "🖨️",
+        "media" | "tv" | "audio" | "speaker" => "📺",
+        "iot" | "smarthome" | "sensor" => "🏠",
+        "network" | "switch" | "router" | "ap" => "🌐",
+        _ => "❓",
     }
 }
 
-/// Formats `SystemTime` into a human-readable relative duration string (e.g., "2m ago")
-/// or "now" if very recent.
+/// Parses an ISO 8601 date string and formats it as a relative duration (e.g. "5m ago").
 #[must_use]
-pub fn format_relative_time(st: SystemTime) -> String {
-    if st == SystemTime::UNIX_EPOCH {
+pub fn parse_iso_relative(iso: &str) -> String {
+    if iso == "never" || iso.is_empty() || iso == "—" || iso == "?" {
         return "never".to_string();
     }
-    let now = SystemTime::now();
-    now.duration_since(st).map_or_else(
-        |_| "future".to_string(),
-        |d| {
-            if d.as_secs() < 5 {
+    DateTime::parse_from_rfc3339(iso).map_or_else(
+        |_| iso.to_string(),
+        |dt| {
+            let now = Utc::now();
+            let dt_utc = dt.with_timezone(&Utc);
+            let duration = now.signed_duration_since(dt_utc);
+            let secs = duration.num_seconds();
+            if secs < 0 {
+                "future".to_string()
+            } else if secs < 5 {
                 "now".to_string()
-            } else if d.as_secs() < 60 {
-                format!("{}s ago", d.as_secs())
-            } else if d.as_secs() < 3600 {
-                format!("{}m ago", d.as_secs() / 60)
-            } else if d.as_secs() < 86400 {
-                format!("{}h ago", d.as_secs() / 3600)
+            } else if secs < 60 {
+                format!("{secs}s ago")
+            } else if secs < 3600 {
+                format!("{}m ago", secs / 60)
+            } else if secs < 86400 {
+                format!("{}h ago", secs / 3600)
             } else {
-                format!("{}d ago", d.as_secs() / 86400)
+                format!("{}d ago", secs / 86400)
             }
         },
     )
 }
 
-/// Formats `SystemTime` into an absolute timestamp (HH:MM:SS).
+/// Parses an ISO 8601 date string and formats it as an absolute local timestamp (HH:MM:SS).
 #[must_use]
-pub fn format_absolute_time(st: SystemTime) -> String {
-    let dt: DateTime<Local> = st.into();
-    dt.format("%H:%M:%S").to_string()
+pub fn parse_iso_absolute(iso: &str) -> String {
+    DateTime::parse_from_rfc3339(iso).map_or_else(
+        |_| iso.to_string(),
+        |dt| {
+            let local_dt = dt.with_timezone(&Local);
+            local_dt.format("%H:%M:%S").to_string()
+        },
+    )
 }
 
 /// Formats uptime seconds into a concise string (e.g. "1h 23m").
@@ -66,48 +70,19 @@ pub fn format_uptime(secs: u64) -> String {
     }
 }
 
-/// Formats an `IPv6State` into a clean string.
+/// Formats remaining seconds into a concise duration string (e.g. "23h 15m" or "expired").
 #[must_use]
-pub fn format_v6_state(state: &IPv6State) -> String {
-    match state {
-        IPv6State::Static(s, _) => format!("Static({s})"),
-        IPv6State::Dynamic(lease) => format!("DHCP({})", lease.ip),
-        IPv6State::Slaac(ip, _) => format!("SLAAC({ip})"),
-        IPv6State::LinkLocal(ip, _) => format!("LinkLocal({ip})"),
-        IPv6State::Discovery(ip, _) => format!("Discovered({ip})"),
+pub fn format_remaining_secs(secs: i64) -> String {
+    if secs < 0 {
+        return "expired".to_string();
     }
-}
-
-/// Formats a `StaticEntry` into a clean string.
-#[must_use]
-pub fn format_static_entry(entry: &StaticEntry) -> String {
-    let mut parts = Vec::new();
-    parts.push(format!("host: {}", entry.hostname));
-    if let Some(v4) = entry.v4_static {
-        parts.push(format!("v4: {v4}"));
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else if secs < 86400 {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    } else {
+        format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
     }
-    if let Some(v6) = &entry.v6_suffix {
-        parts.push(format!("v6: {v6}"));
-    }
-    parts.push(format!("origin: {:?}", entry.origin));
-    format!("{{ {} }}", parts.join(", "))
-}
-
-/// Formats `InterfaceState` into a clean string.
-#[must_use]
-pub fn format_interface_state(state: &InterfaceState) -> String {
-    let mut parts = Vec::new();
-    if let Some((ip, mask)) = state.v4 {
-        parts.push(format!("v4: {ip}/{mask}"));
-    }
-    if let Some(ll) = state.link_local {
-        parts.push(format!("ll: {ll}"));
-    }
-    if let Some(gua) = state.gua {
-        parts.push(format!("gua: {gua}"));
-    }
-    if let Some(ula) = state.ula {
-        parts.push(format!("ula: {ula}"));
-    }
-    format!("{{ {} }}", parts.join(", "))
 }
