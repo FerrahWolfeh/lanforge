@@ -2,6 +2,124 @@ use crate::network::DnsRecordType;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use crate::identifiers::DeviceIdentifier;
+
+/// DNS service protocols (tcp, udp) for SRV records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsServiceProtocol {
+    Tcp,
+    Udp,
+}
+
+impl std::str::FromStr for DnsServiceProtocol {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        let cleaned = trimmed.strip_prefix('_').unwrap_or(trimmed);
+        match cleaned.to_ascii_lowercase().as_str() {
+            "tcp" => Ok(Self::Tcp),
+            "udp" => Ok(Self::Udp),
+            _ => Err(format!("Invalid DNS service protocol: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for DnsServiceProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tcp => write!(f, "tcp"),
+            Self::Udp => write!(f, "udp"),
+        }
+    }
+}
+
+impl DnsServiceProtocol {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Tcp => "_tcp",
+            Self::Udp => "_udp",
+        }
+    }
+}
+
+/// Common homelab DNS services for SRV discovery.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsService {
+    Http,
+    Https,
+    Ssh,
+    Ftp,
+    Minecraft,
+    Plex,
+    Jellyfin,
+    Ldap,
+    Custom(String),
+}
+
+impl std::str::FromStr for DnsService {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        let cleaned = trimmed.strip_prefix('_').unwrap_or(trimmed);
+        let lower = cleaned.to_ascii_lowercase();
+        match lower.as_str() {
+            "http" => Ok(Self::Http),
+            "https" => Ok(Self::Https),
+            "ssh" => Ok(Self::Ssh),
+            "ftp" => Ok(Self::Ftp),
+            "minecraft" => Ok(Self::Minecraft),
+            "plex" => Ok(Self::Plex),
+            "jellyfin" => Ok(Self::Jellyfin),
+            "ldap" => Ok(Self::Ldap),
+            _ => {
+                if lower.is_empty() {
+                    Err("Empty DNS service name".to_string())
+                } else if !lower.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                    Err("Invalid DNS service name characters".to_string())
+                } else {
+                    Ok(Self::Custom(lower))
+                }
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for DnsService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http => write!(f, "http"),
+            Self::Https => write!(f, "https"),
+            Self::Ssh => write!(f, "ssh"),
+            Self::Ftp => write!(f, "ftp"),
+            Self::Minecraft => write!(f, "minecraft"),
+            Self::Plex => write!(f, "plex"),
+            Self::Jellyfin => write!(f, "jellyfin"),
+            Self::Ldap => write!(f, "ldap"),
+            Self::Custom(name) => write!(f, "{name}"),
+        }
+    }
+}
+
+impl DnsService {
+    #[must_use]
+    pub fn to_srv_name(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::Http => std::borrow::Cow::Borrowed("_http"),
+            Self::Https => std::borrow::Cow::Borrowed("_https"),
+            Self::Ssh => std::borrow::Cow::Borrowed("_ssh"),
+            Self::Ftp => std::borrow::Cow::Borrowed("_ftp"),
+            Self::Minecraft => std::borrow::Cow::Borrowed("_minecraft"),
+            Self::Plex => std::borrow::Cow::Borrowed("_plex"),
+            Self::Jellyfin => std::borrow::Cow::Borrowed("_jellyfin"),
+            Self::Ldap => std::borrow::Cow::Borrowed("_ldap"),
+            Self::Custom(name) => std::borrow::Cow::Owned(format!("_{name}")),
+        }
+    }
+}
+
 /// Represents a DNS rewrite rule (domain -> IP/Hostname).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct RewriteRule {
@@ -25,13 +143,42 @@ pub enum RewriteAnswer {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
     Cname(String),
-    Device(String),
+    Device {
+        identifier: DeviceIdentifier,
+        fallback: Option<Box<Self>>,
+    },
+    Service {
+        service: DnsService,
+        protocol: DnsServiceProtocol,
+        device: DeviceIdentifier,
+        port: u16,
+    },
 }
 
 impl std::str::FromStr for RewriteAnswer {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if let Some(srv_content) = s.strip_prefix("srv:") {
+            let parts: Vec<&str> = srv_content.split(':').collect();
+            if parts.len() < 4 {
+                return Err("Invalid SRV rewrite answer format, expected srv:<service>:<protocol>:<device>:<port>".to_string());
+            }
+            let service = parts[0].parse::<DnsService>()?;
+            let protocol = parts[1].parse::<DnsServiceProtocol>()?;
+            let port_str = parts.last().ok_or_else(|| "Missing port in SRV rewrite answer".to_string())?;
+            let port = port_str.parse::<u16>().map_err(|e| format!("Invalid port in SRV: {e}"))?;
+            let device_str = parts[2..parts.len() - 1].join(":");
+            let device = device_str.parse::<DeviceIdentifier>()?;
+            return Ok(Self::Service {
+                service,
+                protocol,
+                device,
+                port,
+            });
+        }
+
         s.parse::<Ipv4Addr>().map_or_else(
             |_| {
                 s.parse::<Ipv6Addr>().map_or_else(
@@ -41,10 +188,29 @@ impl std::str::FromStr for RewriteAnswer {
                                 if s.contains('.') {
                                     Ok(Self::Cname(s.to_string()))
                                 } else {
-                                    Ok(Self::Device(s.to_string()))
+                                    let id = s.parse::<DeviceIdentifier>()?;
+                                    Ok(Self::Device {
+                                        identifier: id,
+                                        fallback: None,
+                                    })
                                 }
                             },
-                            |dev_name| Ok(Self::Device(dev_name.to_string())),
+                            |dev_content| {
+                                if let Some((id_str, fallback_str)) = dev_content.split_once('|') {
+                                    let id = id_str.parse::<DeviceIdentifier>()?;
+                                    let fallback = fallback_str.parse::<Self>()?;
+                                    Ok(Self::Device {
+                                        identifier: id,
+                                        fallback: Some(Box::new(fallback)),
+                                    })
+                                } else {
+                                    let id = dev_content.parse::<DeviceIdentifier>()?;
+                                    Ok(Self::Device {
+                                        identifier: id,
+                                        fallback: None,
+                                    })
+                                }
+                            },
                         )
                     },
                     |ip| Ok(Self::Aaaa(ip)),
@@ -61,7 +227,16 @@ impl std::fmt::Display for RewriteAnswer {
             Self::A(ip) => write!(f, "{ip}"),
             Self::Aaaa(ip) => write!(f, "{ip}"),
             Self::Cname(domain) => write!(f, "{domain}"),
-            Self::Device(dev) => write!(f, "dev:{dev}"),
+            Self::Device { identifier, fallback } => {
+                if let Some(fb) = fallback {
+                    write!(f, "dev:{identifier}|{fb}")
+                } else {
+                    write!(f, "dev:{identifier}")
+                }
+            }
+            Self::Service { service, protocol, device, port } => {
+                write!(f, "srv:{service}:{protocol}:{device}:{port}")
+            }
         }
     }
 }
@@ -142,5 +317,93 @@ impl std::fmt::Display for AdblockUrlKind {
             Self::Blocklist => write!(f, "blocklist"),
             Self::Allowlist => write!(f, "allowlist"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_device_identifier_parsing() {
+        // Name
+        let name_id = DeviceIdentifier::from_str("nas-box").unwrap();
+        assert_eq!(name_id, DeviceIdentifier::Name("nas-box".to_string()));
+        assert_eq!(name_id.to_string(), "nas-box");
+
+        // MAC
+        let mac_id = DeviceIdentifier::from_str("e0:d5:5e:e2:d4:89").unwrap();
+        assert!(matches!(mac_id, DeviceIdentifier::Mac(_)));
+        assert_eq!(mac_id.to_string(), "e0:d5:5e:e2:d4:89");
+
+        // Invalid
+        assert!(DeviceIdentifier::from_str("").is_err());
+        assert!(DeviceIdentifier::from_str("a".repeat(64).as_str()).is_err());
+        assert!(DeviceIdentifier::from_str("-invalid").is_err());
+        assert!(DeviceIdentifier::from_str("invalid-").is_err());
+        assert!(DeviceIdentifier::from_str("invalid_name").is_err());
+    }
+
+    #[test]
+    fn test_rewrite_answer_parsing_and_display() {
+        // A / Aaaa
+        let a_ans = RewriteAnswer::from_str("192.168.1.10").unwrap();
+        assert!(matches!(a_ans, RewriteAnswer::A(_)));
+        assert_eq!(a_ans.to_string(), "192.168.1.10");
+
+        // Device Name
+        let dev_name = RewriteAnswer::from_str("dev:nas-box").unwrap();
+        if let RewriteAnswer::Device { identifier, fallback } = &dev_name {
+            assert_eq!(identifier, &DeviceIdentifier::Name("nas-box".to_string()));
+            assert!(fallback.is_none());
+        } else {
+            panic!("Expected Device answer");
+        }
+        assert_eq!(dev_name.to_string(), "dev:nas-box");
+
+        // Device MAC
+        let dev_mac = RewriteAnswer::from_str("dev:e0:d5:5e:e2:d4:89").unwrap();
+        if let RewriteAnswer::Device { identifier, fallback } = &dev_mac {
+            assert!(matches!(identifier, DeviceIdentifier::Mac(_)));
+            assert!(fallback.is_none());
+        } else {
+            panic!("Expected Device answer");
+        }
+        assert_eq!(dev_mac.to_string(), "dev:e0:d5:5e:e2:d4:89");
+
+        // Device with fallback IP
+        let dev_fb = RewriteAnswer::from_str("dev:nas-box|192.168.1.1").unwrap();
+        if let RewriteAnswer::Device { identifier, fallback } = &dev_fb {
+            assert_eq!(identifier, &DeviceIdentifier::Name("nas-box".to_string()));
+            assert!(matches!(fallback.as_deref(), Some(RewriteAnswer::A(_))));
+        } else {
+            panic!("Expected Device answer with fallback");
+        }
+        assert_eq!(dev_fb.to_string(), "dev:nas-box|192.168.1.1");
+
+        // Service Discovery
+        let srv_ans = RewriteAnswer::from_str("srv:http:tcp:nas-box:8096").unwrap();
+        if let RewriteAnswer::Service { service, protocol, device, port } = &srv_ans {
+            assert_eq!(service, &DnsService::Http);
+            assert_eq!(protocol, &DnsServiceProtocol::Tcp);
+            assert_eq!(device, &DeviceIdentifier::Name("nas-box".to_string()));
+            assert_eq!(*port, 8096);
+        } else {
+            panic!("Expected Service answer");
+        }
+        assert_eq!(srv_ans.to_string(), "srv:http:tcp:nas-box:8096");
+
+        // Service with MAC and Custom Service name
+        let srv_mac = RewriteAnswer::from_str("srv:my-app:udp:e0:d5:5e:e2:d4:89:5000").unwrap();
+        if let RewriteAnswer::Service { service, protocol, device, port } = &srv_mac {
+            assert_eq!(service, &DnsService::Custom("my-app".to_string()));
+            assert_eq!(protocol, &DnsServiceProtocol::Udp);
+            assert!(matches!(device, DeviceIdentifier::Mac(_)));
+            assert_eq!(*port, 5000);
+        } else {
+            panic!("Expected Service answer");
+        }
+        assert_eq!(srv_mac.to_string(), "srv:my-app:udp:e0:d5:5e:e2:d4:89:5000");
     }
 }

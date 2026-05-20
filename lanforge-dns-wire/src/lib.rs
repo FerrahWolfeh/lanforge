@@ -10,6 +10,7 @@ use lanforge_types::network::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
     DnsResponseCode,
 };
+use lanforge_types::network::dns::adblock::{DnsService, DnsServiceProtocol};
 
 /// Simple view into the DNS message header.
 pub struct WireHeader<'a> {
@@ -640,6 +641,82 @@ impl WireResponseWriter {
             resp.extend_from_slice(label.as_bytes());
         }
         resp.push(0);
+
+        // 4. EDNS
+        if let Some(opt) = edns {
+            Self::write_opt(resp, opt);
+        }
+    }
+
+    /// Writes an SRV response into the buffer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_srv_response(
+        query_data: &[u8],
+        question: &WireQuestion,
+        _service: DnsService,
+        _proto: DnsServiceProtocol,
+        target: &str,
+        port: u16,
+        ttl: u32,
+        edns: Option<WireOptScanner>,
+        ra: bool,
+        resp: &mut Vec<u8>,
+    ) {
+        resp.clear();
+        let capacity = 12 + question.data.len() + 12 + 6 + target.len() + 2;
+        if resp.capacity() < capacity {
+            resp.reserve(capacity);
+        }
+
+        // 1. Header
+        let mut h = [0u8; 12];
+        h.copy_from_slice(&query_data[0..12]);
+        h[2] |= 0x80; // QR = 1
+        h[2] |= 0x04; // AA = 1
+        if ra {
+            h[3] |= 0x80;
+        }
+        h[3] &= 0xF0;
+        h[6] = 0;
+        h[7] = 1; // ANCOUNT = 1
+        h[11] = u8::from(edns.is_some());
+        resp.extend_from_slice(&h);
+
+        // 2. Question
+        resp.extend_from_slice(&question.data[12..]);
+
+        // 3. Answer (SRV)
+        resp.extend_from_slice(&[0xC0, 0x0C]); // Name pointer to question
+        resp.extend_from_slice(&33u16.to_be_bytes()); // Type SRV (33)
+        resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
+        resp.extend_from_slice(&ttl.to_be_bytes());
+
+        // RDLEN and RDATA
+        let mut target_len = 0u16;
+        for label in target.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            target_len += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
+        }
+        target_len += 1; // Null terminator
+
+        let rdlen = 6 + target_len;
+        resp.extend_from_slice(&rdlen.to_be_bytes());
+
+        // RDATA: Priority (2 bytes), Weight (2 bytes), Port (2 bytes), Target (variable)
+        resp.extend_from_slice(&0u16.to_be_bytes()); // Priority = 0
+        resp.extend_from_slice(&0u16.to_be_bytes()); // Weight = 0
+        resp.extend_from_slice(&port.to_be_bytes());
+
+        for label in target.split('.') {
+            if label.is_empty() {
+                continue;
+            }
+            resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
+            resp.extend_from_slice(label.as_bytes());
+        }
+        resp.push(0); // Null terminator
 
         // 4. EDNS
         if let Some(opt) = edns {

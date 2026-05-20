@@ -38,6 +38,12 @@ impl LocalResolver {
         hostname: &str,
         qtype: DnsRecordType,
     ) -> Option<SmallVec<[IpAddr; 32]>> {
+        if let Some(mac) = lanforge_types::identifiers::MacAddr::parse(hostname)
+            && let Some(device) = self.ctx.get_device(&mac)
+        {
+            return self.collect_device_ips_filtered(&device, qtype);
+        }
+
         if let Some(device) = self.ctx.get_by_hostname(hostname) {
             return self.collect_device_ips_filtered(&device, qtype);
         }
@@ -52,6 +58,26 @@ impl LocalResolver {
         }
 
         None
+    }
+
+    #[must_use]
+    pub fn resolve_device(
+        &self,
+        id: &lanforge_types::identifiers::DeviceIdentifier,
+        qtype: DnsRecordType,
+    ) -> Option<SmallVec<[IpAddr; 32]>> {
+        match id {
+            lanforge_types::identifiers::DeviceIdentifier::Mac(mac) => {
+                if let Some(device) = self.ctx.get_device(mac) {
+                    self.collect_device_ips_filtered(&device, qtype)
+                } else {
+                    None
+                }
+            }
+            lanforge_types::identifiers::DeviceIdentifier::Name(name) => {
+                self.resolve_ip(name, qtype)
+            }
+        }
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]

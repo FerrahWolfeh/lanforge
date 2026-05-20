@@ -88,7 +88,7 @@ impl RewriteStore {
         resp: &mut Vec<u8>,
     ) -> bool {
         if let Some(answer) = self.resolve_rewrite(domain) {
-            return Self::resolve_rewrite_wire(data, header, question, ctx, answer, resp);
+            return Self::resolve_rewrite_wire(data, header, question, ctx, &answer, resp);
         }
         false
     }
@@ -98,7 +98,7 @@ impl RewriteStore {
         header: &WireHeader,
         question: &WireQuestion<'_>,
         ctx: &DnsContext,
-        answer: RewriteAnswer,
+        answer: &RewriteAnswer,
         resp: &mut Vec<u8>,
     ) -> bool {
         let edns = WireOptScanner::scan(data, header, question);
@@ -106,59 +106,96 @@ impl RewriteStore {
         let qtype = DnsRecordType::from(question.qtype());
 
         match answer {
-            RewriteAnswer::A(ip) if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY => {
-                WireResponseWriter::write_ip_response(
-                    data,
-                    question,
-                    &[IpAddr::V4(ip)],
-                    ctx.cfg.ttl,
-                    edns,
-                    ra,
-                    resp,
-                );
-                true
-            }
-            RewriteAnswer::Aaaa(ip)
-                if qtype == DnsRecordType::AAAA || qtype == DnsRecordType::ANY =>
-            {
-                WireResponseWriter::write_ip_response(
-                    data,
-                    question,
-                    &[IpAddr::V6(ip)],
-                    ctx.cfg.ttl,
-                    edns,
-                    ra,
-                    resp,
-                );
-                true
-            }
-            RewriteAnswer::Cname(target) => {
-                WireResponseWriter::write_cname_response(
-                    data,
-                    question,
-                    &target,
-                    ctx.cfg.ttl,
-                    edns,
-                    ra,
-                    resp,
-                );
-                true
-            }
-            RewriteAnswer::Device(hostname) => {
-                ctx.local.resolve_ip(&hostname, qtype).is_some_and(|ips| {
+            RewriteAnswer::A(ip) => {
+                if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY {
                     WireResponseWriter::write_ip_response(
                         data,
                         question,
-                        &ips,
+                        &[IpAddr::V4(*ip)],
                         ctx.cfg.ttl,
                         edns,
                         ra,
                         resp,
                     );
                     true
-                })
+                } else {
+                    false
+                }
             }
-            _ => false,
+            RewriteAnswer::Aaaa(ip) => {
+                if qtype == DnsRecordType::AAAA || qtype == DnsRecordType::ANY {
+                    WireResponseWriter::write_ip_response(
+                        data,
+                        question,
+                        &[IpAddr::V6(*ip)],
+                        ctx.cfg.ttl,
+                        edns,
+                        ra,
+                        resp,
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+            RewriteAnswer::Cname(target) => {
+                WireResponseWriter::write_cname_response(
+                    data,
+                    question,
+                    target,
+                    ctx.cfg.ttl,
+                    edns,
+                    ra,
+                    resp,
+                );
+                true
+            }
+            RewriteAnswer::Device { identifier, fallback } => {
+                if let Some(ips) = ctx.local.resolve_device(identifier, qtype) {
+                    WireResponseWriter::write_ip_response(
+                        data,
+                        question,
+                        &ips,
+                        5, // Short 5s TTL for dynamic resolves
+                        edns,
+                        ra,
+                        resp,
+                    );
+                    true
+                } else if let Some(fb) = fallback {
+                    Self::resolve_rewrite_wire(data, header, question, ctx, fb, resp)
+                } else {
+                    WireResponseWriter::write_error_response(
+                        data,
+                        question,
+                        3, // NXDOMAIN
+                        edns,
+                        ra,
+                        resp,
+                    );
+                    true
+                }
+            }
+            RewriteAnswer::Service { service, protocol, device, port } => {
+                if qtype == DnsRecordType::SRV || qtype == DnsRecordType::ANY {
+                    let target_domain = format!("{}.lan", device);
+                    WireResponseWriter::write_srv_response(
+                        data,
+                        question,
+                        service.clone(),
+                        *protocol,
+                        &target_domain,
+                        *port,
+                        5, // Short 5s TTL
+                        edns,
+                        ra,
+                        resp,
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -179,37 +216,97 @@ impl RewriteStore {
         domain.make_ascii_lowercase();
 
         if let Some(answer) = self.resolve_rewrite(&domain) {
-            match answer {
-                RewriteAnswer::A(ip)
-                    if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY =>
-                {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.success_ips([IpAddr::V4(ip)])?);
-                    return Ok(true);
-                }
-                RewriteAnswer::Aaaa(ip)
-                    if qtype == DnsRecordType::AAAA || qtype == DnsRecordType::ANY =>
-                {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.success_ips([IpAddr::V6(ip)])?);
-                    return Ok(true);
-                }
-                RewriteAnswer::Cname(target) => {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.success_cname(&target)?);
-                    return Ok(true);
-                }
-                RewriteAnswer::Device(hostname) => {
-                    if let Some(ips) = ctx.local.resolve_ip(&hostname, qtype) {
-                        resp.clear();
-                        resp.extend_from_slice(&rb.success_ips(ips)?);
-                        return Ok(true);
-                    }
-                }
-                _ => {}
-            }
+            return Self::resolve_rewrite_fallback_internal(ctx, rb, qtype, &answer, resp);
         }
         Ok(false)
+    }
+
+    fn resolve_rewrite_fallback_internal(
+        ctx: &DnsContext,
+        rb: &ResponseBuilder,
+        qtype: DnsRecordType,
+        answer: &RewriteAnswer,
+        resp: &mut Vec<u8>,
+    ) -> Result<bool, DnsError> {
+        use lanforge_types::network::dns::{DnsClass, DnsRData, DnsRecord};
+
+        match answer {
+            RewriteAnswer::A(ip) => {
+                if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY {
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_ips([IpAddr::V4(*ip)])?);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            RewriteAnswer::Aaaa(ip) => {
+                if qtype == DnsRecordType::AAAA || qtype == DnsRecordType::ANY {
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success_ips([IpAddr::V6(*ip)])?);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            RewriteAnswer::Cname(target) => {
+                resp.clear();
+                resp.extend_from_slice(&rb.success_cname(target)?);
+                Ok(true)
+            }
+            RewriteAnswer::Device { identifier, fallback } => {
+                if let Some(ips) = ctx.local.resolve_device(identifier, qtype) {
+                    resp.clear();
+                    let qname = rb.qname();
+                    let answers: Vec<DnsRecord> = ips
+                        .into_iter()
+                        .map(|ip| {
+                            let (rtype, rdata) = match ip {
+                                IpAddr::V4(v4) => (DnsRecordType::A, DnsRData::A(v4)),
+                                IpAddr::V6(v6) => (DnsRecordType::AAAA, DnsRData::AAAA(v6)),
+                            };
+                            DnsRecord {
+                                name: qname.clone(),
+                                rtype,
+                                rclass: DnsClass::IN,
+                                ttl: 5, // Short 5s TTL
+                                rdata,
+                            }
+                        })
+                        .collect();
+                    resp.extend_from_slice(&rb.success(answers)?);
+                    Ok(true)
+                } else if let Some(fb) = fallback {
+                    Self::resolve_rewrite_fallback_internal(ctx, rb, qtype, fb, resp)
+                } else {
+                    resp.clear();
+                    resp.extend_from_slice(&rb.nxdomain()?);
+                    Ok(true)
+                }
+            }
+            RewriteAnswer::Service { service: _, protocol: _, device, port } => {
+                if qtype == DnsRecordType::SRV || qtype == DnsRecordType::ANY {
+                    let target_domain = format!("{}.lan", device);
+                    let record = DnsRecord {
+                        name: rb.qname(),
+                        rtype: DnsRecordType::SRV,
+                        rclass: DnsClass::IN,
+                        ttl: 5, // Short 5s TTL
+                        rdata: DnsRData::SRV {
+                            priority: 0,
+                            weight: 0,
+                            port: *port,
+                            target: Arc::from(target_domain),
+                        },
+                    };
+                    resp.clear();
+                    resp.extend_from_slice(&rb.success(vec![record])?);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+        }
     }
 }
 
