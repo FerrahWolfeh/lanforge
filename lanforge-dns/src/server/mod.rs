@@ -4,7 +4,9 @@ pub mod worker;
 
 use crate::config::DnsConfig;
 use crate::pipeline::Pipeline;
-use crate::resolver::{LocalResolver, filter::AdBlocker, recursive::UpstreamStrategy};
+use crate::resolver::{LocalResolver, recursive::UpstreamStrategy, RewriteStore};
+#[cfg(feature = "adblock")]
+use crate::resolver::AdBlocker;
 use crate::telemetry::{DnsStats, QueryRing};
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_types::identifiers::MacAddr;
@@ -26,6 +28,8 @@ pub struct DnsContext {
     pub local: LocalResolver,
     pub recursive: Arc<UpstreamStrategy>,
     pub cache: Arc<crate::resolver::recursive::DnsCache>,
+    pub rewrites: Arc<RewriteStore>,
+    #[cfg(feature = "adblock")]
     pub filter: Option<Arc<AdBlocker>>,
 
     // Pre-computed SOA names

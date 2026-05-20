@@ -3,10 +3,10 @@ use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
 use dashmap::DashMap;
 use lanforge_dns_wire::{
-    WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter,
+    WireHeader, WireOptScanner, WireQuestion, WireResponseWriter,
 };
 use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::{BlockingMode, RewriteAnswer, RewriteRule};
+use lanforge_types::network::dns::adblock::BlockingMode;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
@@ -26,7 +26,6 @@ pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
     pub allowlist: RwLock<Arc<HashSet<Box<str>>>>,
     pub timer: Arc<AdblockTimerState>,
-    pub rewrites: RwLock<Arc<Vec<RewriteRule>>>,
     pub config: RwLock<Arc<AdblockRuntimeConfig>>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
 }
@@ -73,7 +72,6 @@ impl AdBlocker {
             blocklist: RwLock::new(None),
             allowlist: RwLock::new(Arc::new(HashSet::new())),
             timer: Arc::new(AdblockTimerState::new(enabled)),
-            rewrites: RwLock::new(Arc::new(Vec::new())),
             config: RwLock::new(Arc::new(AdblockRuntimeConfig::default())),
             per_ip_stats: DashMap::new(),
         }
@@ -183,12 +181,6 @@ impl AdBlocker {
         info!("AdBlocker: allowlist updated with {} entries", count);
     }
 
-    pub fn replace_rewrites(&self, new_rules: Vec<RewriteRule>) {
-        let count = new_rules.len();
-        *self.rewrites.write() = Arc::new(new_rules);
-        info!("AdBlocker: rewrites updated with {} entries", count);
-    }
-
     pub fn replace_config(
         &self,
         mode: BlockingMode,
@@ -219,24 +211,6 @@ impl AdBlocker {
     #[must_use]
     pub fn allowlist_size(&self) -> usize {
         self.allowlist.read().len()
-    }
-
-    pub fn resolve_rewrite(&self, qname: &str) -> Option<RewriteAnswer> {
-        let rewrites = Arc::clone(&*self.rewrites.read());
-        if let Some(rule) = rewrites.iter().find(|r| r.domain == qname) {
-            return Some(rule.parse_answer());
-        }
-        rewrites
-            .iter()
-            .find(|rule| {
-                if rule.domain.starts_with("*.") {
-                    let base = &rule.domain[2..];
-                    qname == base || qname.ends_with(&format!(".{base}"))
-                } else {
-                    false
-                }
-            })
-            .map(RewriteRule::parse_answer)
     }
 
     pub fn load_from_urls(&self, name: &str, urls: &[String]) -> Result<HashSet<String>, DnsError> {
@@ -317,138 +291,7 @@ impl AdBlocker {
         Ok(new_list)
     }
 
-    pub fn try_resolve_rewrite_wire(
-        &self,
-        data: &[u8],
-        header: &WireHeader,
-        question: &WireQuestion,
-        ctx: &DnsContext,
-        domain: &str,
-        resp: &mut Vec<u8>,
-    ) -> bool {
-        if let Some(answer) = self.resolve_rewrite(domain) {
-            return Self::resolve_rewrite_wire(data, header, question, ctx, answer, resp);
-        }
-        false
-    }
 
-    fn resolve_rewrite_wire(
-        data: &[u8],
-        header: &WireHeader,
-        question: &WireQuestion<'_>,
-        ctx: &DnsContext,
-        answer: RewriteAnswer,
-        resp: &mut Vec<u8>,
-    ) -> bool {
-        let edns = WireOptScanner::scan(data, header, question);
-        let ra = !ctx.recursive.is_empty();
-        let qtype = DnsRecordType::from(question.qtype());
-
-        match answer {
-            RewriteAnswer::A(ip) if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY => {
-                WireResponseWriter::write_ip_response(
-                    data,
-                    question,
-                    &[IpAddr::V4(ip)],
-                    ctx.cfg.ttl,
-                    edns,
-                    ra,
-                    resp,
-                );
-                true
-            }
-            RewriteAnswer::Aaaa(ip)
-                if qtype == DnsRecordType::AAAA || qtype == DnsRecordType::ANY =>
-            {
-                WireResponseWriter::write_ip_response(
-                    data,
-                    question,
-                    &[IpAddr::V6(ip)],
-                    ctx.cfg.ttl,
-                    edns,
-                    ra,
-                    resp,
-                );
-                true
-            }
-            RewriteAnswer::Cname(target) => {
-                WireResponseWriter::write_cname_response(
-                    data,
-                    question,
-                    &target,
-                    ctx.cfg.ttl,
-                    edns,
-                    ra,
-                    resp,
-                );
-                true
-            }
-            RewriteAnswer::Device(hostname) => {
-                ctx.local.resolve_ip(&hostname, qtype).is_some_and(|ips| {
-                    WireResponseWriter::write_ip_response(
-                        data,
-                        question,
-                        &ips,
-                        ctx.cfg.ttl,
-                        edns,
-                        ra,
-                        resp,
-                    );
-                    true
-                })
-            }
-            _ => false,
-        }
-    }
-
-    pub fn try_resolve_rewrite_fallback(
-        &self,
-        ctx: &DnsContext,
-        rb: &ResponseBuilder,
-        qname: &str,
-        qtype: DnsRecordType,
-        _src_addr: IpAddr,
-        resp: &mut Vec<u8>,
-    ) -> Result<bool, DnsError> {
-        let mut domain = qname.to_string();
-        if domain.ends_with('.') {
-            domain.pop();
-        }
-        domain.make_ascii_lowercase();
-
-        if let Some(answer) = self.resolve_rewrite(&domain) {
-            match answer {
-                RewriteAnswer::A(ip)
-                    if qtype == DnsRecordType::A || qtype == DnsRecordType::ANY =>
-                {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.success_ips([IpAddr::V4(ip)])?);
-                    return Ok(true);
-                }
-                RewriteAnswer::Aaaa(ip)
-                    if qtype == DnsRecordType::AAAA || qtype == DnsRecordType::ANY =>
-                {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.success_ips([IpAddr::V6(ip)])?);
-                    return Ok(true);
-                }
-                RewriteAnswer::Cname(target) => {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.success_cname(&target)?);
-                    return Ok(true);
-                }
-                RewriteAnswer::Device(hostname) => {
-                    if let Some(ips) = ctx.local.resolve_ip(&hostname, qtype) {
-                        resp.clear();
-                        resp.extend_from_slice(&rb.success_ips(ips)?);
-                        return Ok(true);
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(false)
-    }
 
     pub fn apply_adblock_wire(
         &self,
@@ -545,22 +388,6 @@ impl Default for AdBlocker {
     fn default() -> Self {
         Self::new(false)
     }
-}
-
-#[must_use]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub fn labels_to_domain(labels: WireLabelIter<'_>) -> String {
-    let mut domain = String::with_capacity(64);
-    for label in labels {
-        if !domain.is_empty() {
-            domain.push('.');
-        }
-        if let Ok(s) = std::str::from_utf8(label) {
-            domain.push_str(s);
-        }
-    }
-    domain.make_ascii_lowercase();
-    domain
 }
 
 #[must_use]

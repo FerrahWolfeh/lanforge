@@ -1,19 +1,28 @@
 pub mod tcp;
 pub mod udp;
 
+#[cfg(feature = "adblock")]
 use crate::resolver::filter::{DiskBlocklist, hash_set_unordered};
 use crate::server::DnsContext;
+#[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+#[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
 use std::{
-    path::Path,
     sync::{Arc, atomic::Ordering},
-    time::{Duration, Instant},
+    time::Duration,
+};
+#[cfg(feature = "adblock")]
+use std::{
+    path::Path,
+    time::Instant,
 };
 use tokio::task::JoinHandle;
+#[cfg(feature = "adblock")]
 use tracing::{error, info, warn};
 
 /// Spawns the adblock list refresh manager.
+#[cfg(feature = "adblock")]
 pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         if let Some(filter) = &ctx.filter {
@@ -235,6 +244,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 /// Computes how long to sleep before the next blocklist refresh.
 /// If `prefer_night` is true, targets the next occurrence of 03:00 local time
 /// that is at least `min_hours` in the future.
+#[cfg(feature = "adblock")]
 fn compute_next_refresh(min_hours: u32, prefer_night: bool) -> Duration {
     let base = Duration::from_secs(u64::from(min_hours) * 3600);
     if !prefer_night {

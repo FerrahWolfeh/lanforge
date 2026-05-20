@@ -3,7 +3,7 @@ use lanforge_types::network::dns::{DnsRecordType, QueryResult};
 
 use crate::error::DnsError;
 use crate::pipeline::Middleware;
-use crate::resolver::filter::labels_to_domain;
+use crate::resolver::labels_to_domain;
 use crate::server::{DnsContext, DnsLogEvent};
 use std::future::Future;
 use std::pin::Pin;
@@ -26,16 +26,15 @@ impl Middleware for RewriteMiddleware {
         resp: &'a mut Vec<u8>,
     ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>> {
         Box::pin(async move {
-            if let Some(filter) = &ctx.filter {
-                let domain = labels_to_domain(req.question.labels());
-                if filter.try_resolve_rewrite_wire(
-                    req.data,
-                    req.header,
-                    req.question,
-                    ctx,
-                    &domain,
-                    resp,
-                ) {
+            let domain = labels_to_domain(req.question.labels());
+            if ctx.rewrites.try_resolve_rewrite_wire(
+                req.data,
+                req.header,
+                req.question,
+                ctx,
+                &domain,
+                resp,
+            ) {
                     ctx.stats.inc_auth();
 
                     let src_mac = ctx.local.ctx.get_mac_by_ip(req.src_ip);
@@ -62,8 +61,7 @@ impl Middleware for RewriteMiddleware {
 
                     return Ok(true);
                 }
-            }
-            Ok(false)
-        })
+                Ok(false)
+            })
+        }
     }
-}

@@ -3,7 +3,7 @@ use lanforge_types::network::dns::{DnsRecordType, QueryResult};
 
 use crate::error::DnsError;
 use crate::pipeline::{DnsPipelineRequest, Middleware};
-use crate::resolver::filter::labels_to_domain;
+use crate::resolver::labels_to_domain;
 use crate::server::{DnsContext, DnsLogEvent};
 use std::future::Future;
 use std::pin::Pin;

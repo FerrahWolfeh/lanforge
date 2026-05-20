@@ -14,7 +14,9 @@ use lanforge_dns::config::DnsConfig;
 use lanforge_dns::error::DnsError;
 use lanforge_dns::pipeline::{DnsPipelineRequest, Pipeline, middleware::*};
 use lanforge_dns::resolver::LocalResolver;
-use lanforge_dns::resolver::filter::AdBlocker;
+use lanforge_dns::resolver::RewriteStore;
+#[cfg(feature = "adblock")]
+use lanforge_dns::resolver::AdBlocker;
 use lanforge_dns::resolver::recursive::DnsCache;
 use lanforge_dns::resolver::recursive::UpstreamStrategy;
 use lanforge_dns::server::DnsContext;
@@ -53,11 +55,14 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
     let cache = Arc::new(DnsCache::new(cfg_arc.cache_size, 30));
     let recursive = Arc::new(UpstreamStrategy::new(cfg_arc.upstream_mode, Vec::new()));
 
+    let rewrites = Arc::new(RewriteStore::new());
+    if !cfg_arc.rewrites.is_empty() {
+        rewrites.replace_rules(cfg_arc.rewrites.clone());
+    }
+
+    #[cfg(feature = "adblock")]
     let filter = {
         let adblocker = AdBlocker::new(cfg_arc.adblock_enabled);
-        if !cfg_arc.rewrites.is_empty() {
-            adblocker.replace_rewrites(cfg_arc.rewrites.clone());
-        }
         adblocker.replace_config(
             cfg_arc.blocking_mode,
             cfg_arc.blocking_ip_v4,
@@ -93,6 +98,8 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
         local: LocalResolver::new(cfg_arc, ctx),
         recursive,
         cache,
+        rewrites,
+        #[cfg(feature = "adblock")]
         filter,
         soa_zone,
         soa_master_ns,

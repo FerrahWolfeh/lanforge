@@ -21,10 +21,12 @@ serde = { workspace = true }
 hotpath = { workspace = true, optional = true }
 smallvec = { workspace = true }
 tempfile = { workspace = true }
+globset = { workspace = true }
 
 # Third party
 ureq = { version = "3.3.0", default-features = false, features = [
     "rustls-no-provider",
+    "rustls-webpki-roots",
 ], optional = true }
 dashmap = { version = "6.1.0" }
 parking_lot = "0.12.5"
@@ -46,6 +48,7 @@ hyper-util = { version = "0.1.13", features = [
     "client-legacy",
 ], optional = true, default-features = false }
 hyper-rustls = { version = "0.27.9", features = [
+    "http1",
     "http2",
     "aws-lc-rs",
     "webpki-roots",

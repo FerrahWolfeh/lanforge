@@ -4,9 +4,11 @@ use crate::pipeline::{Pipeline, middleware::*};
 use crate::resolver::recursive::cache::CacheKey;
 use crate::resolver::{
     LocalResolver,
-    filter::AdBlocker,
     recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
+    RewriteStore,
 };
+#[cfg(feature = "adblock")]
+use crate::resolver::AdBlocker;
 use crate::server::DnsContext;
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
@@ -96,28 +98,31 @@ impl DnsService {
         if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {
             tracing::warn!("⚠️ DNS: No upstreams configured. Only local resolution will work.");
         }
+        #[cfg(feature = "adblock")]
         let db_adblock = self.db.load_adblock_config().await.unwrap_or_default();
         let db_rewrites = self.db.load_dns_rewrites().await.unwrap_or_default();
+        #[cfg(feature = "adblock")]
         let db_allowlist = self.db.load_dns_allowlist().await.unwrap_or_default();
 
-        let adblock_enabled = self.cfg.adblock_enabled || db_adblock.enabled;
-        info!(
-            "🛡️ DNS: Adblock feature is initializing (Adblock: {}, Rewrites: {})",
-            adblock_enabled,
-            !db_rewrites.is_empty()
-        );
-        let blocker = AdBlocker::new(adblock_enabled);
+        let rewrites = Arc::new(RewriteStore::new());
+        rewrites.replace_rules(db_rewrites);
 
-        // Populate from DB
-        blocker.replace_rewrites(db_rewrites);
-        blocker.replace_allowlist(db_allowlist.into_iter().map(|(_, d)| d).collect());
-        blocker.replace_config(
-            db_adblock.blocking_mode,
-            db_adblock.blocking_ip_v4,
-            db_adblock.blocking_ip_v6,
-        );
-
-        let filter = Some(Arc::new(blocker));
+        #[cfg(feature = "adblock")]
+        let filter = {
+            let adblock_enabled = self.cfg.adblock_enabled || db_adblock.enabled;
+            info!(
+                "🛡️ DNS: Adblock feature is initializing (Adblock: {})",
+                adblock_enabled,
+            );
+            let blocker = AdBlocker::new(adblock_enabled);
+            blocker.replace_allowlist(db_allowlist.into_iter().map(|(_, d)| d).collect());
+            blocker.replace_config(
+                db_adblock.blocking_mode,
+                db_adblock.blocking_ip_v4,
+                db_adblock.blocking_ip_v6,
+            );
+            Some(Arc::new(blocker))
+        };
 
         let domain_base = self
             .cfg
@@ -140,6 +145,7 @@ impl DnsService {
         pipeline.push(RewriteMiddleware::new());
         pipeline.push(LocalResolverMiddleware::new());
         pipeline.push(CacheMiddleware::new());
+        #[cfg(feature = "adblock")]
         pipeline.push(AdblockMiddleware::new());
         pipeline.push(UpstreamMiddleware::new());
 
@@ -152,6 +158,8 @@ impl DnsService {
             local: LocalResolver::new(Arc::clone(&self.cfg), self.ctx.clone()),
             recursive,
             cache: Arc::clone(&cache),
+            rewrites,
+            #[cfg(feature = "adblock")]
             filter,
             soa_zone,
             soa_master_ns,
@@ -262,16 +270,15 @@ impl AsyncService for DnsService {
                             }
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigRewritesChanged) => {
                                 info!("🔄 DNS: Reloading rewrites from DB...");
-                                if let Some(filter) = &dns_ctx.filter {
-                                    match self.db.load_dns_rewrites().await {
-                                        Ok(rewrites) => {
-                                            filter.replace_rewrites(rewrites);
-                                            info!("✅ DNS: Rewrites reloaded.");
-                                        }
-                                        Err(e) => error!("❌ DNS: Failed to load rewrites: {}", e),
+                                match self.db.load_dns_rewrites().await {
+                                    Ok(rewrites) => {
+                                        dns_ctx.rewrites.replace_rules(rewrites);
+                                        info!("✅ DNS: Rewrites reloaded.");
                                     }
+                                    Err(e) => error!("❌ DNS: Failed to load rewrites: {}", e),
                                 }
                             }
+                            #[cfg(feature = "adblock")]
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAllowlistChanged) => {
                                 info!("🔄 DNS: Reloading allowlist from DB...");
                                 if let Some(filter) = &dns_ctx.filter {
@@ -284,6 +291,7 @@ impl AsyncService for DnsService {
                                     }
                                 }
                             }
+                            #[cfg(feature = "adblock")]
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAdblockChanged) => {
                                 info!("🔄 DNS: Reloading adblock config from DB...");
                                 if let Some(filter) = &dns_ctx.filter {
@@ -297,6 +305,7 @@ impl AsyncService for DnsService {
                                     }
                                 }
                             }
+                            #[cfg(feature = "adblock")]
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockToggle { enabled, duration_secs }) => {
                                 if let Some(filter) = &dns_ctx.filter {
                                     filter.set_enabled(enabled);
@@ -512,6 +521,8 @@ async fn handle_dns_request(
             }
             #[cfg(not(feature = "adblock"))]
             {
+                let _ = enabled;
+                let _ = duration_secs;
                 DnsResponse::AdblockSet(Err("Adblock not enabled".into()))
             }
         }
@@ -566,6 +577,8 @@ async fn handle_dns_request(
             }
             #[cfg(not(feature = "adblock"))]
             {
+                let _ = url;
+                let _ = kind;
                 DnsResponse::AdblockUrlAdd(Err("Adblock not enabled".into()))
             }
         }
@@ -584,6 +597,7 @@ async fn handle_dns_request(
             }
             #[cfg(not(feature = "adblock"))]
             {
+                let _ = url;
                 DnsResponse::AdblockUrlRemove(Err("Adblock not enabled".into()))
             }
         }
@@ -654,13 +668,14 @@ async fn resolve_diagnostic_internal(
         format!("{:?}", last.result)
     } else {
         // Fallback logic matching pipeline order
-        if let Some(filter) = &dns_ctx.filter
-            && filter.should_block(name)
-        {
+        #[cfg(feature = "adblock")]
+        let is_blocked = dns_ctx.filter.as_ref().is_some_and(|f| f.should_block(name));
+        #[cfg(not(feature = "adblock"))]
+        let is_blocked = false;
+
+        if is_blocked {
             "Blocked".to_string()
-        } else if let Some(filter) = &dns_ctx.filter
-            && filter.resolve_rewrite(name).is_some()
-        {
+        } else if dns_ctx.rewrites.resolve_rewrite(name).is_some() {
             "Rewritten".to_string()
         } else {
             let mut qname = name.as_bytes().to_vec();
