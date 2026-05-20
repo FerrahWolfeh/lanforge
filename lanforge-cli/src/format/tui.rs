@@ -1,6 +1,6 @@
 use crate::tui::theme;
 use lanforge_types::events::{
-    DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
+    NetworkChange, AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::update::LeaseTarget;
@@ -28,17 +28,24 @@ fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
         DeviceEvent::Discovered { mac, hostname } => {
             format_device_discovered(*mac, hostname.as_deref(), spans);
         }
-        DeviceEvent::Updated {
+        DeviceEvent::NetworkUpdate {
             mac,
             hostname,
             change,
         }
-        | DeviceEvent::Activity {
+        | DeviceEvent::NetworkActivity {
             mac,
             hostname,
             change,
         } => {
-            format_device_updated(*mac, hostname.as_deref(), change, spans);
+            format_device_updated_net(*mac, hostname.as_deref(), change, spans);
+        }
+        DeviceEvent::AdminUpdate {
+            mac,
+            hostname,
+            change,
+        } => {
+            format_device_updated_admin(*mac, hostname.as_deref(), change, spans);
         }
         DeviceEvent::Expired { mac } | DeviceEvent::Purged { mac } => {
             format_device_lifecycle(event, *mac, spans);
@@ -81,14 +88,14 @@ fn format_device_discovered<'a>(
     spans.push(Span::raw(")"));
 }
 
-fn format_device_updated<'a>(
+fn format_device_updated_net<'a>(
     mac: MacAddr,
     hostname: Option<&'a str>,
-    change: &'a DeviceChange,
+    change: &'a NetworkChange,
     spans: &mut Vec<Span<'a>>,
 ) {
     let (tag, color) = match change {
-        DeviceChange::ArpActivity { .. } | DeviceChange::NdpActivity { .. } => {
+        NetworkChange::ArpActivity { .. } | NetworkChange::NdpActivity { .. } => {
             ("TRC  ", theme::MOCHA_SAPPHIRE)
         }
         _ => ("UPD  ", theme::ACCENT),
@@ -109,7 +116,32 @@ fn format_device_updated<'a>(
         Style::default().fg(theme::MAC),
     ));
     spans.push(Span::raw(") -> "));
-    format_device_change(change, spans);
+    format_device_change_net(change, spans);
+}
+
+fn format_device_updated_admin<'a>(
+    mac: MacAddr,
+    hostname: Option<&'a str>,
+    change: &'a AdminChange,
+    spans: &mut Vec<Span<'a>>,
+) {
+    spans.push(Span::styled(
+        "UPD  ",
+        Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        hostname.unwrap_or("unknown"),
+        Style::default()
+            .fg(theme::HOSTNAME)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" ("));
+    spans.push(Span::styled(
+        mac.to_string(),
+        Style::default().fg(theme::MAC),
+    ));
+    spans.push(Span::raw(") -> "));
+    format_device_change_admin(change, spans);
 }
 
 fn format_device_lifecycle(event: &DeviceEvent, mac: MacAddr, spans: &mut Vec<Span<'_>>) {
@@ -211,30 +243,30 @@ fn format_scan_summary(event: &DeviceEvent, spans: &mut Vec<Span<'_>>) {
     }
 }
 
-fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>) {
+fn format_device_change_net<'a>(change: &'a NetworkChange, spans: &mut Vec<Span<'a>>) {
     match change {
-        DeviceChange::V4Assigned { ip } => {
+        NetworkChange::V4Assigned { ip } => {
             spans.push(Span::raw("IPv4 assigned: "));
             spans.push(Span::styled(
                 ip.to_string(),
                 Style::default().fg(theme::IP).add_modifier(Modifier::BOLD),
             ));
         }
-        DeviceChange::V6Assigned { ip, .. } => {
+        NetworkChange::V6Assigned { ip, .. } => {
             spans.push(Span::raw("IPv6 assigned: "));
             spans.push(Span::styled(
                 ip.to_string(),
                 Style::default().fg(theme::IP).add_modifier(Modifier::BOLD),
             ));
         }
-        DeviceChange::V6PrefixAssigned { prefix, len, .. } => {
+        NetworkChange::V6PrefixAssigned { prefix, len, .. } => {
             spans.push(Span::raw("IA_PD assigned: "));
             spans.push(Span::styled(
                 format!("{prefix}/{len}"),
                 Style::default().fg(theme::IP).add_modifier(Modifier::BOLD),
             ));
         }
-        DeviceChange::SlaacObserved { addr } => {
+        NetworkChange::SlaacObserved { addr } => {
             spans.push(Span::styled(
                 "New SLAAC discovered: ",
                 Style::default().add_modifier(Modifier::BOLD),
@@ -244,7 +276,7 @@ fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>)
                 Style::default().fg(theme::MOCHA_MAUVE),
             ));
         }
-        DeviceChange::StatusChanged { online, .. } => {
+        NetworkChange::StatusChanged { online, .. } => {
             spans.push(Span::raw("is now "));
             if *online {
                 spans.push(Span::styled(
@@ -262,18 +294,18 @@ fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>)
                 ));
             }
         }
-        DeviceChange::ArpActivity { ip } => {
+        NetworkChange::ArpActivity { ip } => {
             spans.push(Span::raw("Neighbor seen at "));
             spans.push(Span::styled(ip.to_string(), Style::default().fg(theme::IP)));
         }
-        DeviceChange::NdpActivity { ip } => {
+        NetworkChange::NdpActivity { ip } => {
             spans.push(Span::raw("IPv6 activity at "));
             spans.push(Span::styled(
                 ip.to_string(),
                 Style::default().fg(theme::MOCHA_MAUVE),
             ));
         }
-        DeviceChange::TopologyChanged { parent_mac, port } => {
+        NetworkChange::TopologyChanged { parent_mac, port } => {
             let parent = parent_mac.map_or_else(|| "Local".to_string(), |m| m.to_string());
             let port = port.as_deref().unwrap_or("?");
             spans.push(Span::raw("topology updated: behind "));
@@ -284,7 +316,7 @@ fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>)
                 Style::default().fg(theme::MOCHA_YELLOW),
             ));
         }
-        DeviceChange::LeaseExpired { target } => {
+        NetworkChange::LeaseExpired { target } => {
             let target_str = match target {
                 LeaseTarget::V4 => "IPv4 lease".to_string(),
                 LeaseTarget::V6 { iaid } => format!("IPv6 lease (IAID: {iaid})"),
@@ -296,6 +328,39 @@ fn format_device_change<'a>(change: &'a DeviceChange, spans: &mut Vec<Span<'a>>)
             ));
         }
         _ => spans.push(Span::raw(format!("{change:?}"))),
+    }
+}
+
+fn format_device_change_admin<'a>(change: &'a AdminChange, spans: &mut Vec<Span<'a>>) {
+    match change {
+        AdminChange::CliHostUpdated => spans.push(Span::raw("Host updated via CLI")),
+        AdminChange::HostnameChanged { hostname } => {
+            spans.push(Span::raw("Static Hostname: "));
+            spans.push(Span::styled(hostname, Style::default().add_modifier(Modifier::BOLD)));
+        }
+        AdminChange::V4StaticChanged { ip } => {
+            spans.push(Span::raw("Static IPv4: "));
+            if let Some(ip) = ip {
+                spans.push(Span::styled(ip.to_string(), Style::default().fg(theme::MOCHA_GREEN)));
+            } else {
+                spans.push(Span::raw("removed"));
+            }
+        }
+        AdminChange::V6SuffixChanged { suffix } => {
+            spans.push(Span::raw("Static IPv6 suffix: "));
+            if let Some(suffix) = suffix {
+                spans.push(Span::styled(suffix.to_string(), Style::default().add_modifier(Modifier::BOLD)));
+            } else {
+                spans.push(Span::raw("removed"));
+            }
+        }
+        AdminChange::Classified { class } => {
+            spans.push(Span::raw("Classified as: "));
+            spans.push(Span::styled(class.as_str(), Style::default().fg(theme::MOCHA_MAUVE)));
+        }
+        AdminChange::HostRemoved => {
+            spans.push(Span::styled("Host removed", Style::default().fg(theme::MOCHA_RED)));
+        }
     }
 }
 

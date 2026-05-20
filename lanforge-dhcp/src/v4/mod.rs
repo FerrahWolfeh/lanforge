@@ -34,7 +34,7 @@ pub mod server;
 use dhcproto::v4::{DhcpOption, Message, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::{
-    DeviceChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent,
+    AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent,
 };
 use lanforge_core::context::LanforgeContext;
 use lanforge_macros::lanforge_service;
@@ -280,8 +280,8 @@ impl Dhcpv4Service {
                     let _ = raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref());
                 }
             }
-            LanforgeEvent::Device(DeviceEvent::Updated { mac, change, .. }) => {
-                if let DeviceChange::V4StaticChanged { ip } = change.as_ref() {
+            LanforgeEvent::Device(DeviceEvent::AdminUpdate { mac, change, .. }) => {
+                if let AdminChange::V4StaticChanged { ip } = change.as_ref() {
                     match ip {
                         Some(v) => {
                             info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");

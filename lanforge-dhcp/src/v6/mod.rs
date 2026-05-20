@@ -42,7 +42,7 @@ pub mod pool;
 pub mod server;
 
 use lanforge_core::bus::{
-    DeviceChange, DeviceEvent, DhcpV6MessageType, LanforgeEvent, NetworkEvent, SystemEvent,
+    AdminChange, DeviceEvent, DhcpV6MessageType, LanforgeEvent, NetworkEvent, SystemEvent,
 };
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::utils::mac_from_eui64_link_local;
@@ -330,8 +330,8 @@ impl Dhcpv6Service {
                     mac, iaid
                 );
             }
-            LanforgeEvent::Device(DeviceEvent::Updated { mac, change, .. }) => {
-                if let DeviceChange::V6SuffixChanged { suffix } = change.as_ref() {
+            LanforgeEvent::Device(DeviceEvent::AdminUpdate { mac, change, .. }) => {
+                if let AdminChange::V6SuffixChanged { suffix } = change.as_ref() {
                     if let Some(s) = suffix {
                         info!("DHCPv6: New static reservation handled globally for {mac} -> {s}");
                     } else {

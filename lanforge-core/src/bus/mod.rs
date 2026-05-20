@@ -10,7 +10,7 @@ pub use lanforge_types::events::{LanforgeEvent, TimedEvent};
 use tokio::sync::broadcast::{self, Receiver};
 
 pub use lanforge_types::events::{
-    DeviceChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, DnsEvent, EventVec,
+    NetworkChange, AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, DnsEvent, EventVec,
     NetworkEvent, StorageEvent, SystemEvent,
 };
 

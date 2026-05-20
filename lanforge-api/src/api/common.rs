@@ -106,7 +106,7 @@ pub enum RpcCallError {
     InvalidResponseType,
 }
 
-use lanforge_types::events::{DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, SystemEvent};
+use lanforge_types::events::{NetworkChange, AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, SystemEvent};
 
 /// Event categories used for filtering event streams.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -131,34 +131,39 @@ impl EventKind {
     pub fn matches(&self, event: &LanforgeEvent) -> bool {
         match self {
             Self::DeviceOnline => match event {
-                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => {
-                    matches!(&**change, DeviceChange::StatusChanged { online: true, .. })
+                LanforgeEvent::Device(DeviceEvent::NetworkUpdate { change, .. }) => {
+                    matches!(&**change, NetworkChange::StatusChanged { online: true, .. })
                 }
                 _ => false,
             },
             Self::DeviceOffline => match event {
-                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => {
+                LanforgeEvent::Device(DeviceEvent::NetworkUpdate { change, .. }) => {
                     matches!(
                         &**change,
-                        DeviceChange::StatusChanged { online: false, .. }
-                            | DeviceChange::HostRemoved
-                            | DeviceChange::IpOffline { .. }
+                        NetworkChange::StatusChanged { online: false, .. }
+                            | NetworkChange::IpOffline { .. }
                     )
+                }
+                LanforgeEvent::Device(DeviceEvent::AdminUpdate { change, .. }) => {
+                    matches!(&**change, AdminChange::HostRemoved)
                 }
                 _ => false,
             },
             Self::DeviceUpdated => {
-                matches!(event, LanforgeEvent::Device(DeviceEvent::Updated { .. }))
+                matches!(
+                    event,
+                    LanforgeEvent::Device(DeviceEvent::NetworkUpdate { .. } | DeviceEvent::AdminUpdate { .. })
+                )
             }
             Self::DevicePurged => {
                 matches!(event, LanforgeEvent::Device(DeviceEvent::Purged { .. }))
             }
             Self::DhcpLeaseGranted => match event {
-                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => matches!(
+                LanforgeEvent::Device(DeviceEvent::NetworkUpdate { change, .. }) => matches!(
                     &**change,
-                    DeviceChange::V4Assigned { .. }
-                        | DeviceChange::V6Assigned { .. }
-                        | DeviceChange::V6PrefixAssigned { .. }
+                    NetworkChange::V4Assigned { .. }
+                        | NetworkChange::V6Assigned { .. }
+                        | NetworkChange::V6PrefixAssigned { .. }
                 ),
                 LanforgeEvent::Device(DeviceEvent::LeaseRenew { .. }) => true,
                 _ => false,
@@ -167,8 +172,8 @@ impl EventKind {
                 LanforgeEvent::Device(
                     DeviceEvent::LeaseRelease { .. } | DeviceEvent::Expired { .. },
                 ) => true,
-                LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) => {
-                    matches!(&**change, DeviceChange::LeaseExpired { .. })
+                LanforgeEvent::Device(DeviceEvent::NetworkUpdate { change, .. }) => {
+                    matches!(&**change, NetworkChange::LeaseExpired { .. })
                 }
                 _ => false,
             },

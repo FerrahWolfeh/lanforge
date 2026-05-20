@@ -287,7 +287,7 @@ fn render_watch_event(
     use chrono::{DateTime, Local};
     use colored::Colorize;
     use lanforge_types::events::{
-        DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent,
+        NetworkChange, AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent,
     };
 
     let dt: DateTime<Local> = e.timestamp.into();
@@ -303,41 +303,40 @@ fn render_watch_event(
                     host.cyan()
                 );
             }
-            DeviceEvent::Updated {
+            DeviceEvent::NetworkUpdate {
                 mac,
                 hostname,
                 change,
             }
-            | DeviceEvent::Activity {
+            | DeviceEvent::NetworkActivity {
                 mac,
                 hostname,
                 change,
             } => {
                 let host = hostname.as_deref().unwrap_or("<unknown>");
-                let tag = if matches!(dev_evt, DeviceEvent::Activity { .. }) {
+                let tag = if matches!(dev_evt, DeviceEvent::NetworkActivity { .. }) {
                     "DEVICE ACTIVITY".bold().dimmed()
                 } else {
                     "DEVICE UPDATED".bold().blue()
                 };
                 let change_str = match &**change {
-                    DeviceChange::V4Assigned { ip } => {
+                    NetworkChange::V4Assigned { ip } => {
                         format!("Assigned IPv4: {}", ip.to_string().yellow())
                     }
-                    DeviceChange::V6Assigned { ip, iaid } => {
+                    NetworkChange::V6Assigned { ip, iaid } => {
                         format!("Assigned IPv6: {} (IAID: {iaid})", ip.to_string().yellow())
                     }
-                    DeviceChange::V6PrefixAssigned { prefix, len, iaid } => format!(
+                    NetworkChange::V6PrefixAssigned { prefix, len, iaid } => format!(
                         "Assigned IPv6 Prefix: {}/{len} (IAID: {iaid})",
                         prefix.to_string().yellow()
                     ),
-                    DeviceChange::LeaseExpired { target } => {
+                    NetworkChange::LeaseExpired { target } => {
                         format!("Lease Expired: {target:?}").red().to_string()
                     }
-                    DeviceChange::HostRemoved => "Host Removed due to inactivity".red().to_string(),
-                    DeviceChange::SlaacObserved { addr } => {
+                    NetworkChange::SlaacObserved { addr } => {
                         format!("Observed SLAAC: {}", addr.to_string().yellow())
                     }
-                    DeviceChange::StatusChanged {
+                    NetworkChange::StatusChanged {
                         online,
                         hostname: _,
                     } => {
@@ -347,17 +346,11 @@ fn render_watch_event(
                             "Status: Offline".red().to_string()
                         }
                     }
-                    DeviceChange::HostnameChanged { hostname } => {
+                    NetworkChange::HostnameHint { hostname } => {
                         format!("Hostname updated to: {}", hostname.cyan())
                     }
-                    DeviceChange::V4StaticChanged { ip } => {
-                        format!("Static IPv4 updated: {ip:?}")
-                    }
-                    DeviceChange::V6SuffixChanged { suffix } => {
-                        format!("Static IPv6 Suffix updated: {suffix:?}")
-                    }
-                    DeviceChange::DuidAssociated { duid } => format!("DUID associated: {duid}"),
-                    DeviceChange::NdpActivity { ip } => {
+                    NetworkChange::DuidAssociated { duid } => format!("DUID associated: {duid}"),
+                    NetworkChange::NdpActivity { ip } => {
                         let ip_str = ip.to_string();
                         let mapped = device_map
                             .get(&ip_str)
@@ -365,7 +358,7 @@ fn render_watch_event(
                             .unwrap_or_default();
                         format!("NDP Activity: {} {}", ip_str.yellow(), mapped.cyan())
                     }
-                    DeviceChange::ArpActivity { ip } => {
+                    NetworkChange::ArpActivity { ip } => {
                         let ip_str = ip.to_string();
                         let mapped = device_map
                             .get(&ip_str)
@@ -373,17 +366,42 @@ fn render_watch_event(
                             .unwrap_or_default();
                         format!("ARP Activity: {} {}", ip_str.yellow(), mapped.cyan())
                     }
-                    DeviceChange::Classified { class } => {
-                        format!("Classified as: {class:?}").magenta().to_string()
-                    }
-                    DeviceChange::TopologyChanged { parent_mac, port } => {
+                    NetworkChange::TopologyChanged { parent_mac, port } => {
                         format!("Topology Changed: parent={parent_mac:?}, port={port:?}")
                     }
-                    DeviceChange::IpDeleted { ip } => format!("IP Deleted: {ip}").red().to_string(),
-                    DeviceChange::IpOffline { ip } => {
+                    NetworkChange::IpDeleted { ip } => format!("IP Deleted: {ip}").red().to_string(),
+                    NetworkChange::IpOffline { ip } => {
                         format!("IP Offline: {ip}").yellow().to_string()
                     }
-                    DeviceChange::CliHostUpdated => "CLI Host Updated".blue().to_string(),
+                };
+                println!(
+                    " [{time_str}] {} {} ({mac}) -> {change_str}",
+                    tag,
+                    host.cyan()
+                );
+            }
+            DeviceEvent::AdminUpdate {
+                mac,
+                hostname,
+                change,
+            } => {
+                let host = hostname.as_deref().unwrap_or("<unknown>");
+                let tag = "DEVICE ADMIN UPDATED".bold().cyan();
+                let change_str = match &**change {
+                    AdminChange::CliHostUpdated => "CLI Host Updated".blue().to_string(),
+                    AdminChange::HostnameChanged { hostname } => {
+                        format!("Static hostname updated to: {}", hostname.cyan())
+                    }
+                    AdminChange::V4StaticChanged { ip } => {
+                        format!("Static IPv4 updated: {ip:?}")
+                    }
+                    AdminChange::V6SuffixChanged { suffix } => {
+                        format!("Static IPv6 Suffix updated: {suffix:?}")
+                    }
+                    AdminChange::Classified { class } => {
+                        format!("Classified as: {class:?}").magenta().to_string()
+                    }
+                    AdminChange::HostRemoved => "Host Removed".red().to_string(),
                 };
                 println!(
                     " [{time_str}] {} {} ({mac}) -> {change_str}",

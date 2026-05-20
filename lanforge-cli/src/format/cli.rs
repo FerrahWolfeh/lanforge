@@ -1,6 +1,6 @@
 use colored::Colorize;
 use lanforge_types::events::{
-    DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
+    NetworkChange, AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
 };
 use lanforge_types::{identifiers::MacAddr, update::LeaseTarget};
 
@@ -33,17 +33,24 @@ fn format_device_event(now: &str, event: &DeviceEvent, verbose: bool, _ascii: bo
                 mac.to_string().dimmed()
             );
         }
-        DeviceEvent::Updated {
+        DeviceEvent::NetworkUpdate {
             mac,
             hostname,
             change,
         }
-        | DeviceEvent::Activity {
+        | DeviceEvent::NetworkActivity {
             mac,
             hostname,
             change,
         } => {
-            print_device_update(now, *mac, hostname.as_deref(), change, verbose);
+            print_device_update_net(now, *mac, hostname.as_deref(), change, verbose);
+        }
+        DeviceEvent::AdminUpdate {
+            mac,
+            hostname,
+            change,
+        } => {
+            print_device_update_admin(now, *mac, hostname.as_deref(), change, verbose);
         }
         DeviceEvent::Expired { mac } => {
             println!(
@@ -107,31 +114,18 @@ fn format_device_event(now: &str, event: &DeviceEvent, verbose: bool, _ascii: bo
     }
 }
 
-fn print_device_update(
+fn print_device_update_net(
     now: &str,
     mac: MacAddr,
     hostname: Option<&str>,
-    change: &DeviceChange,
+    change: &NetworkChange,
     verbose: bool,
 ) {
     let name = hostname.filter(|s| !s.is_empty()).unwrap_or("unknown");
     match change {
-        DeviceChange::StatusChanged { online, .. } => {
-            let status = if *online {
-                "ONLINE".bright_green().bold()
-            } else {
-                "OFFLINE".red().bold()
-            };
-            println!(
-                "[{now}] {} Device {} ({}) is now {status}",
-                "UPD".blue().bold(),
-                name.bright_yellow(),
-                mac.to_string().dimmed()
-            );
-        }
-        DeviceChange::ArpActivity { .. } | DeviceChange::NdpActivity { .. } => {
+        NetworkChange::ArpActivity { .. } | NetworkChange::NdpActivity { .. } => {
             if verbose {
-                let change_str = format_change(change);
+                let change_str = format_change_net(change);
                 println!(
                     "[{now}] {} {} ({}) -> {}",
                     "TRC".dimmed(),
@@ -142,7 +136,7 @@ fn print_device_update(
             }
         }
         _ => {
-            let change_str = format_change(change);
+            let change_str = format_change_net(change);
             println!(
                 "[{now}] {} {} ({}) -> {change_str}",
                 "UPD".blue().bold(),
@@ -151,6 +145,23 @@ fn print_device_update(
             );
         }
     }
+}
+
+fn print_device_update_admin(
+    now: &str,
+    mac: MacAddr,
+    hostname: Option<&str>,
+    change: &AdminChange,
+    _verbose: bool,
+) {
+    let name = hostname.filter(|s| !s.is_empty()).unwrap_or("unknown");
+    let change_str = format_change_admin(change);
+    println!(
+        "[{now}] {} {} ({}) -> {change_str}",
+        "UPD".blue().bold(),
+        name.bright_yellow(),
+        mac.to_string().dimmed()
+    );
 }
 
 fn format_dns_event(now: &str, event: &DnsEvent, verbose: bool, _ascii: bool) {
@@ -382,12 +393,12 @@ fn format_system_event(now: &str, event: &SystemEvent, verbose: bool, _ascii: bo
     }
 }
 
-fn format_change(change: &DeviceChange) -> String {
+fn format_change_net(change: &NetworkChange) -> String {
     match change {
-        DeviceChange::V4Assigned { ip } => {
+        NetworkChange::V4Assigned { ip } => {
             format!("IPv4 assigned: {}", ip.to_string().bright_cyan())
         }
-        DeviceChange::LeaseExpired { target } => {
+        NetworkChange::LeaseExpired { target } => {
             let target_str = match target {
                 LeaseTarget::V4 => "IPv4 lease".to_string(),
                 LeaseTarget::V6 { iaid } => {
@@ -399,56 +410,40 @@ fn format_change(change: &DeviceChange) -> String {
             };
             format!("{target_str} expired").dimmed().to_string()
         }
-        DeviceChange::SlaacObserved { addr } => {
+        NetworkChange::SlaacObserved { addr } => {
             format!(
                 "{} {}",
                 "New SLAAC discovered:".bold(),
                 addr.to_string().bright_magenta()
             )
         }
-        DeviceChange::HostnameChanged { hostname } => format!("Hostname: {}", hostname.bold()),
-        DeviceChange::V4StaticChanged { ip } => ip.as_ref().map_or_else(
-            || "Static IPv4 removed".dimmed().to_string(),
-            |v| format!("Static IPv4 set: {}", v.to_string().bright_green()),
-        ),
-        DeviceChange::V6SuffixChanged { suffix } => suffix.as_ref().map_or_else(
-            || "Static IPv6 suffix removed".dimmed().to_string(),
-            |s| format!("Static IPv6 suffix set: {}", s.to_string().bold()),
-        ),
-        DeviceChange::DuidAssociated { duid } => {
+        NetworkChange::DuidAssociated { duid } => {
             format!("DUID associated: {}", duid.to_string().cyan())
         }
-        DeviceChange::V6Assigned { ip, .. } => {
+        NetworkChange::V6Assigned { ip, .. } => {
             format!("IPv6 assigned: {}", ip.to_string().bright_cyan())
         }
-        DeviceChange::V6PrefixAssigned { prefix, len, .. } => {
+        NetworkChange::V6PrefixAssigned { prefix, len, .. } => {
             format!(
                 "IA_PD assigned: {}/{}",
                 prefix.to_string().bright_cyan(),
                 len
             )
         }
-        DeviceChange::HostRemoved => "Host removed".red().to_string(),
-        DeviceChange::NdpActivity { ip } => {
+        NetworkChange::NdpActivity { ip } => {
             format!("IPv6 activity at {}", ip.to_string().bright_magenta())
         }
-        DeviceChange::ArpActivity { ip } => {
+        NetworkChange::ArpActivity { ip } => {
             format!("Neighbor seen at {}", ip.to_string().bright_cyan())
         }
-        DeviceChange::StatusChanged { online, .. } => {
+        NetworkChange::StatusChanged { online, .. } => {
             if *online {
                 format!("is now {}", "Online".bright_green().bold())
             } else {
                 format!("has gone {}", "Offline".red().bold())
             }
         }
-        DeviceChange::Classified { class } => {
-            format!(
-                "classified as {}",
-                class.as_str().to_string().bright_magenta().bold()
-            )
-        }
-        DeviceChange::TopologyChanged { parent_mac, port } => {
+        NetworkChange::TopologyChanged { parent_mac, port } => {
             let parent = parent_mac.map_or_else(|| "Local".to_string(), |m| m.to_string());
             let port = port.as_deref().unwrap_or("?");
             format!(
@@ -457,12 +452,36 @@ fn format_change(change: &DeviceChange) -> String {
                 port.bright_yellow()
             )
         }
-        DeviceChange::IpDeleted { ip } => {
+        NetworkChange::IpDeleted { ip } => {
             format!("IP deleted: {}", ip.to_string().red())
         }
-        DeviceChange::IpOffline { ip } => {
+        NetworkChange::IpOffline { ip } => {
             format!("IP offline: {}", ip.to_string().yellow())
         }
-        DeviceChange::CliHostUpdated => "Host updated via CLI".bright_blue().to_string(),
+        NetworkChange::HostnameHint { hostname } => {
+            format!("Hostname hint: {}", hostname.cyan())
+        }
+    }
+}
+
+fn format_change_admin(change: &AdminChange) -> String {
+    match change {
+        AdminChange::CliHostUpdated => "Host updated via CLI".bright_blue().to_string(),
+        AdminChange::HostnameChanged { hostname } => format!("Static Hostname: {}", hostname.bold()),
+        AdminChange::V4StaticChanged { ip } => ip.as_ref().map_or_else(
+            || "Static IPv4 removed".dimmed().to_string(),
+            |v| format!("Static IPv4 set: {}", v.to_string().bright_green()),
+        ),
+        AdminChange::V6SuffixChanged { suffix } => suffix.as_ref().map_or_else(
+            || "Static IPv6 suffix removed".dimmed().to_string(),
+            |s| format!("Static IPv6 suffix set: {}", s.to_string().bold()),
+        ),
+        AdminChange::Classified { class } => {
+            format!(
+                "classified as {}",
+                class.as_str().to_string().bright_magenta().bold()
+            )
+        }
+        AdminChange::HostRemoved => "Host removed".red().to_string(),
     }
 }

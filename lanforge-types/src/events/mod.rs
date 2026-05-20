@@ -8,7 +8,7 @@ pub mod network;
 pub mod storage;
 pub mod system;
 
-pub use self::device::{DeviceChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType};
+pub use self::device::{NetworkChange, AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType};
 pub use self::dns::DnsEvent;
 pub use self::network::NetworkEvent;
 pub use self::storage::StorageEvent;
@@ -37,7 +37,8 @@ impl TimedEvent {
         match &self.event {
             LanforgeEvent::Device(e) => match e {
                 DeviceEvent::Discovered { .. }
-                | DeviceEvent::Updated { .. }
+                | DeviceEvent::NetworkUpdate { .. }
+                | DeviceEvent::AdminUpdate { .. }
                 | DeviceEvent::Expired { .. }
                 | DeviceEvent::Purged { .. }
                 | DeviceEvent::LeaseRelease { .. }
@@ -45,7 +46,7 @@ impl TimedEvent {
                 | DeviceEvent::DhcpV4Transaction { .. }
                 | DeviceEvent::DhcpV6Transaction { .. }
                 | DeviceEvent::NeighborBatchSummary { .. } => true,
-                DeviceEvent::Activity { .. } => false,
+                DeviceEvent::NetworkActivity { .. } => false,
             },
             LanforgeEvent::Network(e) => match e {
                 NetworkEvent::PrefixChanged { .. }

@@ -9,7 +9,7 @@ pub mod network;
 #[cfg(test)]
 pub mod tests;
 
-use crate::bus::{DeviceChange, DeviceEvent, LanforgeEvent};
+use crate::bus::{NetworkChange, AdminChange, DeviceEvent, LanforgeEvent};
 use lanforge_types::device::{Device, DeviceClass, Ipv6AddrOrSuffix, Origin};
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
@@ -287,7 +287,7 @@ impl State {
     pub(crate) fn mutate_device(
         &mut self,
         mac: MacAddr,
-        f: impl FnOnce(&mut Device) -> Option<DeviceChange>,
+        f: impl FnOnce(&mut Device) -> Option<NetworkChange>,
     ) -> EventVec {
         let was_in_table = self.devices.contains_key(&mac);
         let mut dev_arc = self
@@ -314,13 +314,13 @@ impl State {
                         }));
                     }
                     if change.is_persistent() {
-                        events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                        events.push(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
                             mac,
                             change: Box::new(change),
                             hostname,
                         }));
                     } else {
-                        events.push(LanforgeEvent::Device(DeviceEvent::Activity {
+                        events.push(LanforgeEvent::Device(DeviceEvent::NetworkActivity {
                             mac,
                             change: Box::new(change),
                             hostname,
@@ -339,9 +339,75 @@ impl State {
             let now_online = dev_arc.is_online();
             if was_online != now_online {
                 let hostname = dev_arc.hostname.name.clone();
-                events.push(LanforgeEvent::Device(DeviceEvent::Updated {
+                events.push(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
                     mac,
-                    change: Box::new(DeviceChange::StatusChanged {
+                    change: Box::new(NetworkChange::StatusChanged {
+                        online: now_online,
+                        hostname: Some(hostname.clone()),
+                    }),
+                    hostname: Some(hostname),
+                }));
+            }
+            self.devices.insert(mac, dev_arc);
+        } else if was_worthy {
+            // Device was worthy but now isn't. Signal removal from active state and drop it.
+            events.push(LanforgeEvent::Device(DeviceEvent::Purged { mac }));
+        }
+
+        events
+    }
+
+    /// Centralized device mutation helper for administrative changes.
+    pub(crate) fn mutate_device_admin(
+        &mut self,
+        mac: MacAddr,
+        f: impl FnOnce(&mut Device) -> Option<AdminChange>,
+    ) -> EventVec {
+        let was_in_table = self.devices.contains_key(&mac);
+        let mut dev_arc = self
+            .devices
+            .remove(&mac)
+            .unwrap_or_else(|| Arc::new(Device::new(mac)));
+
+        let was_worthy = was_in_table && dev_arc.is_worthy();
+        let was_online = dev_arc.is_online();
+        let mut events = EventVec::new();
+
+        {
+            let dev = Arc::make_mut(&mut dev_arc);
+            self.unindex_device(dev);
+
+            if let Some(change) = f(dev) {
+                let is_worthy = dev.is_worthy();
+                if is_worthy || was_worthy {
+                    let hostname = Some(dev.hostname.name.clone());
+                    if !was_worthy && is_worthy {
+                        events.push(LanforgeEvent::Device(DeviceEvent::Discovered {
+                            mac,
+                            hostname: hostname.clone(),
+                        }));
+                    }
+                    events.push(LanforgeEvent::Device(DeviceEvent::AdminUpdate {
+                        mac,
+                        change: Box::new(change),
+                        hostname,
+                    }));
+                }
+            }
+
+            if dev.is_worthy() {
+                self.index_device(mac, dev);
+            }
+        }
+
+        let is_worthy = dev_arc.is_worthy();
+        if is_worthy {
+            let now_online = dev_arc.is_online();
+            if was_online != now_online {
+                let hostname = dev_arc.hostname.name.clone();
+                events.push(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
+                    mac,
+                    change: Box::new(NetworkChange::StatusChanged {
                         online: now_online,
                         hostname: Some(hostname.clone()),
                     }),

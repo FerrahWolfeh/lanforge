@@ -5,7 +5,7 @@ use crate::context::LanforgeContext;
 use crate::context::state::State;
 use lanforge_types::device::Device;
 use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
-use lanforge_types::events::{DeviceChange, DeviceEvent, LanforgeEvent};
+use lanforge_types::events::{NetworkChange, DeviceEvent, LanforgeEvent};
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -984,8 +984,8 @@ fn test_expire_stale_status_transition() {
     // 4. Verify that we got a StatusChanged event
     let mut found = false;
     while let Ok(timed_event) = rx.try_recv() {
-        if let LanforgeEvent::Device(DeviceEvent::Updated { change, .. }) = timed_event.event
-            && matches!(*change, DeviceChange::StatusChanged { online: false, .. })
+        if let LanforgeEvent::Device(DeviceEvent::NetworkUpdate { change, .. }) = timed_event.event
+            && matches!(*change, NetworkChange::StatusChanged { online: false, .. })
         {
             found = true;
             break;

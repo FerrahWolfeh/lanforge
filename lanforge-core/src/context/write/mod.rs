@@ -113,6 +113,7 @@ impl LanforgeContext {
 
     /// Internal helper to perform fast-path debounce checks.
     /// Returns `None` if the update was skipped, or `Some(update)` (possibly filtered) to proceed.
+    #[allow(clippy::too_many_lines)]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn debounce_update(&self, update: DeviceUpdate) -> Option<DeviceUpdate> {
         match update {

@@ -5,9 +5,9 @@ use crate::update::LeaseTarget;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// Detailed changes applied to a specific `Device`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeviceChange {
+/// Detailed network-observed changes applied to a specific `Device`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NetworkChange {
     /// An IPv4 address was assigned or renewed via `DHCPv4`.
     V4Assigned { ip: Ipv4Addr },
 
@@ -16,9 +16,6 @@ pub enum DeviceChange {
 
     /// An IPv6 address was assigned or renewed via `DHCPv6`.
     V6Assigned { ip: Ipv6Addr, iaid: u32 },
-
-    /// The device was entirely removed from the active table due to inactivity.
-    HostRemoved,
 
     /// An IPv6 prefix was delegated to the device via `DHCPv6 Prefix Delegation` (`IA_PD`).
     V6PrefixAssigned {
@@ -36,15 +33,6 @@ pub enum DeviceChange {
         hostname: Option<String>,
     },
 
-    /// The device's hostname was updated (e.g., via DHCP hint or CLI).
-    HostnameChanged { hostname: String },
-
-    /// A static IPv4 reservation was modified or removed via CLI.
-    V4StaticChanged { ip: Option<Ipv4Addr> },
-
-    /// A static IPv6 Interface ID (suffix) was modified or removed via CLI.
-    V6SuffixChanged { suffix: Option<Ipv6AddrOrSuffix> },
-
     /// A DUID was successfully associated with this device's MAC.
     DuidAssociated { duid: Duid },
 
@@ -54,22 +42,23 @@ pub enum DeviceChange {
     /// An IPv4 neighbor event (ARP) was observed.
     ArpActivity { ip: Ipv4Addr },
 
-    /// The device has been classified into a high-level category (e.g., Printer).
-    Classified { class: DeviceClass },
     /// The device's physical or logical topology has changed.
     TopologyChanged {
         parent_mac: Option<MacAddr>,
         port: Option<String>,
     },
+
     /// A specific IP address associated with the device was deleted.
     IpDeleted { ip: IpAddr },
+
     /// A specific IP address associated with the device went offline.
     IpOffline { ip: IpAddr },
-    /// The device was updated via CLI or administrative action.
-    CliHostUpdated,
+
+    /// A hostname hint was learned via DHCP.
+    HostnameHint { hostname: String },
 }
 
-impl DeviceChange {
+impl NetworkChange {
     /// Returns true if this change represents a significant state modification
     /// that should be persisted to the main database immediately.
     #[must_use]
@@ -79,12 +68,7 @@ impl DeviceChange {
             | Self::V6Assigned { .. }
             | Self::V6PrefixAssigned { .. }
             | Self::LeaseExpired { .. }
-            | Self::HostnameChanged { .. }
-            | Self::V4StaticChanged { .. }
-            | Self::V6SuffixChanged { .. }
             | Self::DuidAssociated { .. }
-            | Self::Classified { .. }
-            | Self::CliHostUpdated
             | Self::IpDeleted { .. }
             | Self::SlaacObserved { .. }
             | Self::TopologyChanged { .. } => true,
@@ -93,7 +77,7 @@ impl DeviceChange {
             | Self::NdpActivity { .. }
             | Self::StatusChanged { .. }
             | Self::IpOffline { .. }
-            | Self::HostRemoved => false,
+            | Self::HostnameHint { .. } => false,
         }
     }
 
@@ -107,10 +91,30 @@ impl DeviceChange {
                 | Self::V6PrefixAssigned { .. }
                 | Self::LeaseExpired { .. }
                 | Self::SlaacObserved { .. }
-                | Self::V4StaticChanged { .. }
-                | Self::V6SuffixChanged { .. }
         )
     }
+}
+
+/// Detailed administrative/user configuration changes applied to a specific `Device`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AdminChange {
+    /// The device was updated via CLI or administrative action.
+    CliHostUpdated,
+
+    /// The device's hostname was updated by the user.
+    HostnameChanged { hostname: String },
+
+    /// A static IPv4 reservation was modified or removed via CLI.
+    V4StaticChanged { ip: Option<Ipv4Addr> },
+
+    /// A static IPv6 Interface ID (suffix) was modified or removed via CLI.
+    V6SuffixChanged { suffix: Option<Ipv6AddrOrSuffix> },
+
+    /// The device has been classified into a high-level category (e.g., Printer).
+    Classified { class: DeviceClass },
+
+    /// The device was entirely removed from the active table due to user/admin action.
+    HostRemoved,
 }
 
 /// Lightweight representation of `DHCPv4` message types for diagnostics.
@@ -215,15 +219,20 @@ pub enum DeviceEvent {
         mac: MacAddr,
         hostname: Option<String>,
     },
-    Updated {
+    NetworkUpdate {
         mac: MacAddr,
         hostname: Option<String>,
-        change: Box<DeviceChange>,
+        change: Box<NetworkChange>,
     },
-    Activity {
+    NetworkActivity {
         mac: MacAddr,
         hostname: Option<String>,
-        change: Box<DeviceChange>,
+        change: Box<NetworkChange>,
+    },
+    AdminUpdate {
+        mac: MacAddr,
+        hostname: Option<String>,
+        change: Box<AdminChange>,
     },
     Expired {
         mac: MacAddr,

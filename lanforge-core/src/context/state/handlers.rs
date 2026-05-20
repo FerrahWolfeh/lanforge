@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
-use crate::bus::{DeviceChange, DeviceEvent, EventVec, LanforgeEvent, NetworkEvent};
+use crate::bus::{NetworkChange, AdminChange, DeviceEvent, EventVec, LanforgeEvent, NetworkEvent};
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
@@ -236,22 +236,34 @@ impl State {
         mac: MacAddr,
         update: CliHostUpdate,
     ) -> EventVec {
-        let events = self.mutate_device(mac, |dev| {
+        let events = self.mutate_device_admin(mac, |dev| {
+            #[allow(clippy::useless_let_if_seq)]
+            let mut result = AdminChange::CliHostUpdated;
+
             if let FieldUpdate::Set(h) = update.hostname {
                 dev.hostname = Hostname {
-                    name: h,
+                    name: h.clone(),
                     origin: HostnameOrigin::Static,
                 };
+                result = AdminChange::HostnameChanged { hostname: h };
             }
             if let FieldUpdate::Set(d) = update.duid {
                 dev.duid = Some(d);
             }
             if let FieldUpdate::Set(v4) = update.v4_static {
                 dev.v4 = IPv4State::Static(v4);
+                result = AdminChange::V4StaticChanged { ip: Some(v4) };
+            } else if update.v4_static == FieldUpdate::Clear {
+                dev.v4 = IPv4State::None;
+                result = AdminChange::V4StaticChanged { ip: None };
             }
             if let FieldUpdate::Set(v6) = update.v6_suffix {
                 dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
                 dev.v6.push(IPv6State::Static(v6, SystemTime::now()));
+                result = AdminChange::V6SuffixChanged { suffix: Some(v6) };
+            } else if update.v6_suffix == FieldUpdate::Clear {
+                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+                result = AdminChange::V6SuffixChanged { suffix: None };
             }
             if let FieldUpdate::Set(bf) = update.boot_file {
                 dev.boot_file = Some(bf);
@@ -263,10 +275,11 @@ impl State {
             }
             if let FieldUpdate::Set(c) = update.class {
                 dev.class = c;
+                result = AdminChange::Classified { class: c };
             }
             dev.origin = update.origin;
             dev.managed_at = Some(SystemTime::now());
-            Some(DeviceChange::CliHostUpdated)
+            Some(result)
         });
 
         // Update static entries table
@@ -328,7 +341,7 @@ impl State {
             };
 
             if changed {
-                Some(DeviceChange::LeaseExpired { target })
+                Some(NetworkChange::LeaseExpired { target })
             } else {
                 None
             }
@@ -340,7 +353,7 @@ impl State {
         if let Some(mac) = mac {
             let events = self.mutate_device(mac, |dev| {
                 if dev.delete_ip(ip) {
-                    Some(DeviceChange::IpDeleted { ip })
+                    Some(NetworkChange::IpDeleted { ip })
                 } else {
                     None
                 }
@@ -362,7 +375,7 @@ impl State {
         mac.map_or_else(EventVec::new, |mac| {
             self.mutate_device(mac, |dev| {
                 if dev.mark_ip_offline(ip) {
-                    Some(DeviceChange::IpOffline { ip })
+                    Some(NetworkChange::IpOffline { ip })
                 } else {
                     None
                 }
@@ -424,7 +437,7 @@ impl State {
                 }
 
                 if changed {
-                    Some(DeviceChange::StatusChanged {
+                    Some(NetworkChange::StatusChanged {
                         online: true,
                         hostname: None,
                     })
@@ -479,12 +492,12 @@ impl State {
     }
 
     pub(crate) fn handle_class_hint(&mut self, mac: MacAddr, class: DeviceClass) -> EventVec {
-        self.mutate_device(mac, |dev| {
+        self.mutate_device_admin(mac, |dev| {
             if dev.class == class {
                 None
             } else {
                 dev.class = class;
-                Some(DeviceChange::Classified { class })
+                Some(AdminChange::Classified { class })
             }
         })
     }
@@ -515,7 +528,7 @@ impl State {
             }
 
             dev.topology = Some(new_topo);
-            Some(DeviceChange::TopologyChanged { parent_mac, port })
+            Some(NetworkChange::TopologyChanged { parent_mac, port })
         })
     }
 

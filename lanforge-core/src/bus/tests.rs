@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::bus::{DeviceChange, DeviceEvent, EventBus, LanforgeEvent};
+use crate::bus::{AdminChange, DeviceEvent, EventBus, LanforgeEvent};
 use crate::context::LanforgeContext;
 use crate::context::state::State;
 use lanforge_types::device::Origin;
@@ -42,7 +42,7 @@ async fn new_device_publishes_discovered_and_updated() {
     assert!(
         events.iter().any(|e: &crate::bus::TimedEvent| matches!(
             e.event,
-            LanforgeEvent::Device(DeviceEvent::Updated { .. })
+            LanforgeEvent::Device(DeviceEvent::NetworkUpdate { .. })
         )),
         "Deve publicar DeviceUpdated"
     );
@@ -138,12 +138,12 @@ async fn cli_host_update_publishes_events() {
     assert!(
         events.iter().any(|e| matches!(
             &e.event,
-            LanforgeEvent::Device(DeviceEvent::Updated {
+            LanforgeEvent::Device(DeviceEvent::AdminUpdate {
                 change,
                 ..
-            }) if matches!(**change, DeviceChange::CliHostUpdated)
+            }) if matches!(**change, AdminChange::HostnameChanged { ref hostname } if hostname == "cli-host")
         )),
-        "Deve publicar CliHostUpdated"
+        "Deve publicar HostnameChanged"
     );
 
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
@@ -168,11 +168,11 @@ async fn cli_host_update_publishes_events() {
     assert!(
         events.iter().any(|e| matches!(
             &e.event,
-            LanforgeEvent::Device(DeviceEvent::Updated {
+            LanforgeEvent::Device(DeviceEvent::AdminUpdate {
                 change,
                 ..
-            }) if matches!(**change, DeviceChange::CliHostUpdated)
+            }) if matches!(**change, AdminChange::V4StaticChanged { ip: Some(ref ip) } if *ip == "1.2.3.4".parse::<Ipv4Addr>().unwrap())
         )),
-        "Deve publicar CliHostUpdated"
+        "Deve publicar V4StaticChanged"
     );
 }

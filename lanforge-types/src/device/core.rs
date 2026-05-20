@@ -8,7 +8,7 @@ use crate::device::state::{
     IPv4State, IPv6State, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease,
 };
 use crate::device::topology::TopologyInfo;
-use crate::events::DeviceChange;
+use crate::events::NetworkChange;
 use crate::identifiers::{Duid, MacAddr};
 use crate::network::{Hostname, HostnameOrigin, IpClassification, classify_ipv6};
 use crate::utils::serde::{
@@ -159,9 +159,9 @@ impl Device {
         }
     }
 
-    pub fn associate_duid(&mut self, duid: Duid, _iaid: u32) -> Option<DeviceChange> {
+    pub fn associate_duid(&mut self, duid: Duid, _iaid: u32) -> Option<NetworkChange> {
         if self.duid.as_ref() != Some(&duid) {
-            let change = DeviceChange::DuidAssociated { duid: duid.clone() };
+            let change = NetworkChange::DuidAssociated { duid: duid.clone() };
             self.duid = Some(duid);
             self.last_seen = SystemTime::now();
             return Some(change);
@@ -169,7 +169,7 @@ impl Device {
         None
     }
 
-    pub fn apply_v4_lease(&mut self, ip: Ipv4Addr, expires: SystemTime) -> Option<DeviceChange> {
+    pub fn apply_v4_lease(&mut self, ip: Ipv4Addr, expires: SystemTime) -> Option<NetworkChange> {
         if matches!(self.v4, IPv4State::Static(_)) {
             return None;
         }
@@ -197,7 +197,7 @@ impl Device {
         }
 
         if changed {
-            Some(DeviceChange::V4Assigned { ip })
+            Some(NetworkChange::V4Assigned { ip })
         } else {
             None
         }
@@ -209,7 +209,7 @@ impl Device {
         iaid: u32,
         ip: Ipv6Addr,
         expires: SystemTime,
-    ) -> Option<DeviceChange> {
+    ) -> Option<NetworkChange> {
         let mut changed = if self.duid.as_ref() == Some(duid) {
             false
         } else {
@@ -245,7 +245,7 @@ impl Device {
 
         if changed {
             self.last_seen = SystemTime::now();
-            return Some(DeviceChange::V6Assigned { ip, iaid });
+            return Some(NetworkChange::V6Assigned { ip, iaid });
         }
         None
     }
@@ -257,7 +257,7 @@ impl Device {
         prefix: Ipv6Addr,
         len: u8,
         expires: SystemTime,
-    ) -> Option<DeviceChange> {
+    ) -> Option<NetworkChange> {
         let mut changed = if self.duid.as_ref() == Some(duid) {
             false
         } else {
@@ -289,7 +289,7 @@ impl Device {
 
         if changed {
             self.last_seen = SystemTime::now();
-            return Some(DeviceChange::V6PrefixAssigned { prefix, len, iaid });
+            return Some(NetworkChange::V6PrefixAssigned { prefix, len, iaid });
         }
         None
     }
@@ -299,7 +299,7 @@ impl Device {
         addr: Ipv6Addr,
         is_active: bool,
         origin: V6ObservationOrigin,
-    ) -> Option<DeviceChange> {
+    ) -> Option<NetworkChange> {
         let mut changed = false;
         let now = SystemTime::now();
         let timestamp = if is_active {
@@ -360,19 +360,19 @@ impl Device {
             self.last_seen = self.calculate_last_seen();
 
             return match target_state {
-                IPv6State::Slaac(..) => Some(DeviceChange::SlaacObserved { addr }),
-                _ => Some(DeviceChange::NdpActivity { ip: addr }),
+                IPv6State::Slaac(..) => Some(NetworkChange::SlaacObserved { addr }),
+                _ => Some(NetworkChange::NdpActivity { ip: addr }),
             };
         }
 
         if changed {
             self.last_seen = self.calculate_last_seen();
-            return Some(DeviceChange::NdpActivity { ip: addr });
+            return Some(NetworkChange::NdpActivity { ip: addr });
         }
         None
     }
 
-    pub fn apply_arp_observation(&mut self, ip: Ipv4Addr, is_active: bool) -> Option<DeviceChange> {
+    pub fn apply_arp_observation(&mut self, ip: Ipv4Addr, is_active: bool) -> Option<NetworkChange> {
         let now = SystemTime::now();
         let mut changed = false;
 
@@ -402,7 +402,7 @@ impl Device {
 
         if changed {
             self.last_seen = self.calculate_last_seen();
-            return Some(DeviceChange::ArpActivity { ip });
+            return Some(NetworkChange::ArpActivity { ip });
         }
         None
     }
@@ -411,13 +411,13 @@ impl Device {
         &mut self,
         hostname: String,
         origin: HostnameOrigin,
-    ) -> Option<DeviceChange> {
+    ) -> Option<NetworkChange> {
         if origin >= self.hostname.origin && self.hostname.name != hostname {
             self.hostname = Hostname {
                 name: hostname,
                 origin,
             };
-            return Some(DeviceChange::HostnameChanged {
+            return Some(NetworkChange::HostnameHint {
                 hostname: self.hostname.name.clone(),
             });
         }
@@ -492,7 +492,7 @@ impl Device {
         &mut self,
         now: SystemTime,
         ip_expiry_threshold: Duration,
-    ) -> Vec<DeviceChange> {
+    ) -> Vec<NetworkChange> {
         use crate::update::LeaseTarget;
         let mut events = Vec::new();
 
@@ -500,7 +500,7 @@ impl Device {
         if let IPv4State::Dynamic(lease) = &self.v4
             && lease.expires < now
         {
-            events.push(DeviceChange::LeaseExpired {
+            events.push(NetworkChange::LeaseExpired {
                 target: LeaseTarget::V4,
             });
             self.v4 = IPv4State::None;
@@ -519,7 +519,7 @@ impl Device {
             _ => true,
         });
         for iaid in v6_expired_iaids {
-            events.push(DeviceChange::LeaseExpired {
+            events.push(NetworkChange::LeaseExpired {
                 target: LeaseTarget::V6 { iaid },
             });
         }
@@ -535,7 +535,7 @@ impl Device {
             }
         });
         for iaid in prefix_expired_iaids {
-            events.push(DeviceChange::LeaseExpired {
+            events.push(NetworkChange::LeaseExpired {
                 target: LeaseTarget::V6Prefix { iaid },
             });
         }
