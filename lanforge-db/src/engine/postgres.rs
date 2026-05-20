@@ -2,6 +2,7 @@ use super::types::DeviceRow;
 use super::utils::system_time_to_unix;
 use crate::error::LanforgeDbError;
 use lanforge_types::device::{Device, IPv4State, IPv6State, V6PrefixLease};
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::HostnameOrigin;
 use sqlx::{Postgres, Transaction};
 use std::net::Ipv4Addr;
@@ -117,7 +118,7 @@ async fn persist_static_device(
     if v4_static.is_some() || v6_suffix.is_some() || device.boot_file.is_some() {
         sqlx::query(
             "INSERT INTO static_devices (mac, v4_static, v6_suffix, boot_file)
-             VALUES ($1::MACADDR, $2::INET, $3, $4)
+             VALUES ($1::MACADDR, $2::INET, $3::INET, $4)
              ON CONFLICT(mac) DO UPDATE SET
                 v4_static = EXCLUDED.v4_static,
                 v6_suffix = EXCLUDED.v6_suffix,
@@ -290,10 +291,10 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lan
             d.class::INT8,
             t.parent_mac::TEXT, t.parent_port, t.local_ifindex::INT8, 
             EXTRACT(EPOCH FROM t.topo_updated)::INT8 as topo_updated,
-            host(s.v4_static) as v4_static, s.v6_suffix, s.boot_file
+            host(s.v4_static) as v4_static, host(s.v6_suffix) as v6_suffix, s.boot_file
          FROM devices d
          LEFT JOIN device_topology t ON d.mac = t.mac
-         LEFT JOIN static_devices s ON d.mac = s.mac"
+         LEFT JOIN static_devices s ON d.mac = s.mac",
     )
     .fetch_all(pool)
     .await
@@ -333,17 +334,25 @@ pub async fn load_v6_prefixes(
     Ok(rows)
 }
 
-pub async fn load_slaac_addrs(pool: &sqlx::PgPool) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 FROM slaac_addrs")
-        .fetch_all(pool)
-        .await?;
+pub async fn load_slaac_addrs(
+    pool: &sqlx::PgPool,
+) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+    let rows = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 FROM slaac_addrs",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 
-pub async fn load_seen_v4(pool: &sqlx::PgPool) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 FROM seen_v4")
-        .fetch_all(pool)
-        .await?;
+pub async fn load_seen_v4(
+    pool: &sqlx::PgPool,
+) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+    let rows = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 FROM seen_v4",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 
@@ -402,7 +411,7 @@ pub async fn prune_zombies(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
 pub async fn find_mac_by_hostname(
     pool: &sqlx::PgPool,
     hostname: &str,
-) -> Result<Option<lanforge_types::identifiers::MacAddr>, LanforgeDbError> {
+) -> Result<Option<MacAddr>, LanforgeDbError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT mac::TEXT FROM devices WHERE hostname = $1 OR LOWER(hostname) = LOWER($1) LIMIT 1",
     )
@@ -410,7 +419,7 @@ pub async fn find_mac_by_hostname(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.and_then(|(mac,)| lanforge_types::identifiers::MacAddr::parse(&mac)))
+    Ok(row.and_then(|(mac,)| MacAddr::parse(&mac)))
 }
 
 pub async fn store_api_token(
@@ -456,11 +465,13 @@ pub async fn validate_api_token(
         {
             return Ok(None); // Token expired
         }
-        sqlx::query("UPDATE api_tokens SET last_used = to_timestamp($1::double precision) WHERE token = $2")
-            .bind(now as f64)
-            .bind(token)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "UPDATE api_tokens SET last_used = to_timestamp($1::double precision) WHERE token = $2",
+        )
+        .bind(now as f64)
+        .bind(token)
+        .execute(pool)
+        .await?;
         let scopes = scopes_str
             .split(',')
             .filter_map(|s| s.parse().ok())
