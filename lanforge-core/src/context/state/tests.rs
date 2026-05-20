@@ -1021,3 +1021,99 @@ fn test_handle_arp_seen_deduplicates() {
         "Should only have 1 entry for the same IP"
     );
 }
+
+#[test]
+fn test_hostname_origin_priority() {
+    use lanforge_types::network::HostnameOrigin;
+
+    // Static priority must be highest, followed by Mdns, followed by Dhcp.
+    assert!(HostnameOrigin::Static > HostnameOrigin::Mdns);
+    assert!(HostnameOrigin::Static > HostnameOrigin::Dhcp);
+    assert!(HostnameOrigin::Mdns > HostnameOrigin::Dhcp);
+
+    let ctx = setup();
+    let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+
+    // 1. DHCP hint updates empty hostname
+    let changed = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "dhcp-host".to_string(),
+    });
+    assert!(changed);
+    assert_eq!(ctx.get_device(&mac).unwrap().hostname.origin, HostnameOrigin::Dhcp);
+
+    // 2. MDNS hint overrides DHCP hint (Mdns > Dhcp)
+    let changed = ctx.apply(DeviceUpdate::MdnsHostnameHint {
+        mac,
+        hostname: "mdns-host".to_string(),
+    });
+    assert!(changed);
+    assert_eq!(ctx.get_device(&mac).unwrap().hostname.name, "mdns-host");
+    assert_eq!(ctx.get_device(&mac).unwrap().hostname.origin, HostnameOrigin::Mdns);
+
+    // 3. CLI update overrides MDNS hint (Static > Mdns)
+    let changed = ctx.apply(DeviceUpdate::CliHostUpdated {
+        mac,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::Set("static-host".to_string()),
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::NoChange,
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Static,
+            boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
+        },
+    });
+    assert!(changed);
+    assert_eq!(ctx.get_device(&mac).unwrap().hostname.name, "static-host");
+    assert_eq!(ctx.get_device(&mac).unwrap().hostname.origin, HostnameOrigin::Static);
+
+    // 4. DHCP hint cannot override Static hostname
+    let changed = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "dhcp-try".to_string(),
+    });
+    assert!(!changed);
+    assert_eq!(ctx.get_device(&mac).unwrap().hostname.name, "static-host");
+}
+
+#[test]
+fn test_apply_v4_lease_ignores_static() {
+    let ctx = setup();
+    let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
+    let static_ip = "192.168.1.100".parse::<Ipv4Addr>().unwrap();
+
+    // Set static IPv4 configuration
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+        mac,
+        update: CliHostUpdate {
+            hostname: FieldUpdate::NoChange,
+            duid: FieldUpdate::NoChange,
+            v4_static: FieldUpdate::Set(static_ip),
+            v6_suffix: FieldUpdate::NoChange,
+            origin: Origin::Static,
+            boot_file: FieldUpdate::NoChange,
+            dns_fallback: FieldUpdate::NoChange,
+            class: FieldUpdate::NoChange,
+        },
+    });
+
+    let dev = ctx.get_device(&mac).unwrap();
+    assert!(matches!(dev.v4, IPv4State::Static(ip) if ip == static_ip));
+
+    // Try to apply a dynamic DHCPv4 lease
+    let dynamic_ip = "192.168.1.50".parse::<Ipv4Addr>().unwrap();
+    let expires = SystemTime::now() + Duration::from_hours(1);
+    let changed = ctx.apply(DeviceUpdate::V4LeaseGranted {
+        mac,
+        ip: dynamic_ip,
+        expires,
+    });
+
+    // Should NOT be changed, and the IP must remain static
+    assert!(!changed);
+    let dev = ctx.get_device(&mac).unwrap();
+    assert!(matches!(dev.v4, IPv4State::Static(ip) if ip == static_ip));
+}
+

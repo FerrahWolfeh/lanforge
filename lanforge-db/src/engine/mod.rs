@@ -220,7 +220,7 @@ impl LanforgeDb {
                     .begin()
                     .await
                     .map_err(LanforgeDbError::TransactionFailed)?;
-                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac FROM devices")
+                let db_devices: Vec<(String, String)> = sqlx::query_as("SELECT mac, origin FROM devices")
                     .fetch_all(&mut *tx)
                     .await?;
 
@@ -231,8 +231,8 @@ impl LanforgeDb {
                     sqlite::upsert_device(&mut tx, device).await?;
                 }
 
-                for db_mac in db_macs {
-                    if !snapshot_macs.contains(&db_mac) {
+                for (db_mac, origin) in db_devices {
+                    if !snapshot_macs.contains(&db_mac) && origin == "dynamic" {
                         sqlx::query("DELETE FROM devices WHERE mac = ?")
                             .bind(&db_mac)
                             .execute(&mut *tx)
@@ -250,7 +250,7 @@ impl LanforgeDb {
                     .begin()
                     .await
                     .map_err(LanforgeDbError::TransactionFailed)?;
-                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac::TEXT FROM devices")
+                let db_devices: Vec<(String, String)> = sqlx::query_as("SELECT mac::TEXT, origin::TEXT FROM devices")
                     .fetch_all(&mut *tx)
                     .await?;
 
@@ -261,8 +261,8 @@ impl LanforgeDb {
                     postgres::upsert_device(&mut tx, device).await?;
                 }
 
-                for db_mac in db_macs {
-                    if !snapshot_macs.contains(&db_mac) {
+                for (db_mac, origin) in db_devices {
+                    if !snapshot_macs.contains(&db_mac) && origin == "dynamic" {
                         sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
                             .bind(&db_mac)
                             .execute(&mut *tx)

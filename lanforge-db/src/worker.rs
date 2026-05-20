@@ -14,7 +14,7 @@
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
 use lanforge_core::bus::{
-    DeviceChange, DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
+    DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
@@ -274,7 +274,7 @@ impl AsyncService for DbWorker {
                     let mut break_loop = false;
                     lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::Device(DeviceEvent::Updated { mac, ref change, .. }) => {
-                            if change.is_persistent() && !matches!(**change, DeviceChange::CliHostUpdated) {
+                            if change.is_persistent() {
                                 self.dirty_macs.insert(mac);
                                 if change.is_lease_change() {
                                     self.dirty_lease_macs.insert(mac);

@@ -24,6 +24,9 @@ pub async fn upsert_device(
     persist_slaac_addrs(tx, &mac_str, &device.v6).await?;
     persist_seen_v4(tx, &mac_str, &device.seen_v4).await?;
 
+    // Persist static device config (not done in incremental flush)
+    persist_static_device(tx, &mac_str, device).await?;
+
     Ok(())
 }
 
@@ -85,6 +88,14 @@ async fn upsert_base_device_internal(
             .await?;
     }
 
+    Ok(())
+}
+
+async fn persist_static_device(
+    tx: &mut Transaction<'_, Sqlite>,
+    mac_str: &str,
+    device: &Device,
+) -> Result<(), LanforgeDbError> {
     // 3. Static devices table
     let v4_static = match &device.v4 {
         IPv4State::Static(ip) => Some(ip.to_string()),

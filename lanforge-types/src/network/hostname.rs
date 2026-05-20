@@ -3,13 +3,35 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, EnumRepr,
 )]
 pub enum HostnameOrigin {
     #[default]
     Dhcp = 0,
-    Static = 1,
     Mdns = 3,
+    Static = 1,
+}
+
+impl HostnameOrigin {
+    const fn priority(self) -> u8 {
+        match self {
+            Self::Dhcp => 0,
+            Self::Mdns => 1,
+            Self::Static => 2,
+        }
+    }
+}
+
+impl PartialOrd for HostnameOrigin {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HostnameOrigin {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.priority().cmp(&other.priority())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

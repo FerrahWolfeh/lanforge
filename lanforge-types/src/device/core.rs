@@ -170,6 +170,9 @@ impl Device {
     }
 
     pub fn apply_v4_lease(&mut self, ip: Ipv4Addr, expires: SystemTime) -> Option<DeviceChange> {
+        if matches!(self.v4, IPv4State::Static(_)) {
+            return None;
+        }
         let now = SystemTime::now();
         let mut changed = false;
 
