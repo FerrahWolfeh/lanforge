@@ -292,7 +292,17 @@ impl Config {
         // DNS Servers
         if cfg.dns_servers.is_empty() {
             cfg.dns_servers = self.dns_toml.upstreams.first().map_or_else(
-                || cfg.ula_prefix.map(|ip| vec![ip]).unwrap_or_default(),
+                || {
+                    cfg.ula_prefix
+                        .map(|ip| {
+                            let mut octets = ip.octets();
+                            if octets[8..16].iter().all(|&b| b == 0) {
+                                octets[15] = 1;
+                            }
+                            vec![std::net::Ipv6Addr::from(octets)]
+                        })
+                        .unwrap_or_default()
+                },
                 |u| match u.target.addr {
                     SocketAddr::V6(v6) => vec![*v6.ip()],
                     SocketAddr::V4(_) => vec![],

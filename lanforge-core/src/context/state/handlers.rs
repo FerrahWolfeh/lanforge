@@ -388,11 +388,26 @@ impl State {
         ifindex: u32,
         state: &InterfaceState,
     ) -> EventVec {
+        let old_state = self.interfaces.interface_ips.get(&ifindex);
+        let prefix_changed = old_state.map_or_else(
+            || state.gua.is_some() || state.ula.is_some(),
+            |old| old.gua != state.gua || old.ula != state.ula,
+        );
+
         self.interfaces.interface_ips.insert(ifindex, state.clone());
         let mut events: EventVec = vec![LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
             ifindex,
         })]
         .into();
+
+        if prefix_changed {
+            events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged {
+                gua: state.gua,
+                ula: state.ula,
+                preferred: state.gua_preferred,
+                valid: state.gua_valid,
+            }));
+        }
 
         // Update the System device (the host itself) if it exists
         if let Some((mac, _)) = self

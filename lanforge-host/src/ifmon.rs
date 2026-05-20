@@ -29,7 +29,7 @@ use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::packet_route::address::AddressAttribute;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
@@ -115,13 +115,9 @@ impl AddressMonitor {
                         if o[0] == 0xFE && (o[1] & 0xC0) == 0x80 {
                             state.link_local = Some(*v6);
                         } else if (0x20..=0x3F).contains(&o[0]) {
-                            let mut masked = o;
-                            masked[8..].fill(0);
-                            state.gua = Some(Ipv6Addr::from(masked));
+                            state.gua = Some(*v6);
                         } else if o[0] == 0xFD {
-                            let mut masked = o;
-                            masked[8..].fill(0);
-                            state.ula = Some(Ipv6Addr::from(masked));
+                            state.ula = Some(*v6);
                         }
                     }
                     AddressAttribute::CacheInfo(info) => {
