@@ -41,8 +41,33 @@ impl LanforgeContext {
         hostname: &str,
         last_seen_threshold: Option<Duration>,
     ) -> Option<MacAddr> {
-        self.write()
-            .find_mac_by_hostname_jit(hostname, last_seen_threshold)
+        let found_mac = {
+            let state = self.read();
+            let now = std::time::SystemTime::now();
+            state.devices.iter().find_map(|(mac, dev)| {
+                if let (Some(threshold), Ok(elapsed)) =
+                    (last_seen_threshold, now.duration_since(dev.last_seen))
+                    && elapsed > threshold
+                {
+                    return None;
+                }
+
+                if dev.hostname.name.eq_ignore_ascii_case(hostname)
+                    || dev.dns_fallback.eq_ignore_ascii_case(hostname)
+                {
+                    Some(*mac)
+                } else {
+                    None
+                }
+            })
+        };
+
+        if found_mac.is_some() {
+            self.write()
+                .find_mac_by_hostname_jit(hostname, last_seen_threshold)
+        } else {
+            None
+        }
     }
 
     /// Adds a static device to the registry (test-only helper).

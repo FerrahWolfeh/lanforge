@@ -114,3 +114,12 @@ fn test_jit_lookup_case_insensitive() {
     let found_mac = ctx.find_mac_by_hostname_jit("MIXED-CASE-HOST", None);
     assert_eq!(found_mac, Some(mac));
 }
+
+#[test]
+fn test_jit_lookup_not_found() {
+    let ctx = setup();
+    ctx.set_indexing_enabled(false);
+
+    let found_mac = ctx.find_mac_by_hostname_jit("non-existent-host", None);
+    assert_eq!(found_mac, None);
+}

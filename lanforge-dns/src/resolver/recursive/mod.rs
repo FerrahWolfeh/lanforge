@@ -5,7 +5,7 @@ pub use cache::DnsCache;
 
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 pub use strategy::{UpstreamMode, UpstreamStrategy};
-use tokio::task::yield_now;
+use tokio::task::{yield_now, JoinHandle};
 #[cfg(feature = "dot")]
 use tokio_rustls::TlsConnector;
 #[cfg(feature = "dot")]
@@ -46,6 +46,8 @@ pub struct UpstreamManager {
     pub(crate) quic_endpoint: Option<quinn::Endpoint>,
     #[cfg(feature = "doq")]
     pub(crate) quic_conn: tokio::sync::Mutex<Option<quinn::Connection>>,
+    pub(crate) rx_handle: Mutex<Option<JoinHandle<()>>>,
+    pub(crate) probe_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl UpstreamManager {
@@ -56,39 +58,6 @@ impl UpstreamManager {
             Arc::new(UdpSocket::bind("[::]:0").await?)
         };
         let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
-
-        let s = Arc::clone(&socket);
-        let p = Arc::clone(&pending);
-        let upstream_addr = target.addr;
-
-        tokio::spawn(async move {
-            let mut buf = vec![0u8; 4096];
-            loop {
-                match s.recv_from(&mut buf).await {
-                    Ok((len, src)) => {
-                        if src != upstream_addr {
-                            continue;
-                        }
-                        if len >= 2 {
-                            let id = u16::from_be_bytes([buf[0], buf[1]]);
-                            let tx = {
-                                let mut map = p.lock().unwrap();
-                                map.remove(&id)
-                            };
-                            if let Some(tx) = tx {
-                                let _ = tx.send(buf[..len].to_vec());
-                            }
-                        }
-                    }
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                        yield_now().await;
-                    }
-                    Err(_) => {
-                        break;
-                    }
-                }
-            }
-        });
 
         #[cfg(any(feature = "dot", feature = "doq"))]
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -108,19 +77,19 @@ impl UpstreamManager {
             transport_config.max_idle_timeout(Some(Duration::from_secs(30).try_into().unwrap()));
             transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
 
-            let client_config = quinn::ClientConfig::new(Arc::new(
+            let mut config = quinn::ClientConfig::new(Arc::new(
                 quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
                     .map_err(|e| DnsError::Tls(format!("QUIC config error: {e}")))?,
             ));
+            config.transport_config(Arc::new(transport_config));
 
-            let client_addr: SocketAddr = if target.addr.is_ipv6() {
-                "[::]:0".parse().unwrap()
-            } else {
+            let bind_addr = if target.addr.is_ipv4() {
                 "0.0.0.0:0".parse().unwrap()
+            } else {
+                "[::]:0".parse().unwrap()
             };
-
-            let mut endpoint = quinn::Endpoint::client(client_addr).map_err(DnsError::Io)?;
-            endpoint.set_default_client_config(client_config);
+            let mut endpoint = quinn::Endpoint::client(bind_addr).map_err(DnsError::Io)?;
+            endpoint.set_default_client_config(config);
             Some(endpoint)
         } else {
             None
@@ -154,10 +123,58 @@ impl UpstreamManager {
             quic_endpoint,
             #[cfg(feature = "doq")]
             quic_conn: tokio::sync::Mutex::new(None),
+            rx_handle: Mutex::new(None),
+            probe_handle: Mutex::new(None),
         });
 
-        let mgr_clone = Arc::clone(&mgr);
-        tokio::spawn(async move {
+        let s = Arc::clone(&mgr.socket);
+        let p = Arc::clone(&mgr.pending);
+        let upstream_addr = mgr.target.addr;
+
+        let rx_task = tokio::spawn(async move {
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match s.recv_from(&mut buf).await {
+                    Ok((len, src)) => {
+                        if src != upstream_addr {
+                            continue;
+                        }
+                        if len >= 2 {
+                            let id = u16::from_be_bytes([buf[0], buf[1]]);
+                            let tx = {
+                                let mut map = p.lock().unwrap();
+                                map.remove(&id)
+                            };
+                            if let Some(tx) = tx {
+                                let _ = tx.send(buf[..len].to_vec());
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                        yield_now().await;
+                    }
+                    Err(e) => {
+                        match e.kind() {
+                            ErrorKind::Interrupted
+                            | ErrorKind::ConnectionRefused
+                            | ErrorKind::ConnectionReset
+                            | ErrorKind::NetworkUnreachable
+                            | ErrorKind::HostUnreachable => {
+                                // Ignore transient UDP network errors
+                            }
+                            _ => {
+                                tracing::warn!("Fatal DNS UDP upstream receiver error for {}: {}", upstream_addr, e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        *mgr.rx_handle.lock().unwrap() = Some(rx_task);
+
+        let weak_mgr = Arc::downgrade(&mgr);
+        let probe_task = tokio::spawn(async move {
             const PROBE_QUERY: &[u8] = &[
                 0x00, 0x01, // ID: 1
                 0x01, 0x00, // Flags: RD=1
@@ -171,13 +188,18 @@ impl UpstreamManager {
             ];
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
-                if mgr_clone.health.status() == UpstreamStatus::Degraded
-                    && mgr_clone.health.is_eligible_for_probing()
-                {
-                    let _ = mgr_clone.forward(PROBE_QUERY).await;
+                if let Some(mgr_clone) = weak_mgr.upgrade() {
+                    if mgr_clone.health.status() == UpstreamStatus::Degraded
+                        && mgr_clone.health.is_eligible_for_probing()
+                    {
+                        let _ = mgr_clone.forward(PROBE_QUERY).await;
+                    }
+                } else {
+                    break;
                 }
             }
         });
+        *mgr.probe_handle.lock().unwrap() = Some(probe_task);
 
         Ok(mgr)
     }
@@ -483,5 +505,20 @@ impl UpstreamManager {
         .await
         .map_err(|_| DnsError::UpstreamTimeout)?
         .map_err(DnsError::Io)
+    }
+}
+
+impl Drop for UpstreamManager {
+    fn drop(&mut self) {
+        if let Ok(mut rx) = self.rx_handle.lock() {
+            if let Some(h) = rx.take() {
+                h.abort();
+            }
+        }
+        if let Ok(mut probe) = self.probe_handle.lock() {
+            if let Some(h) = probe.take() {
+                h.abort();
+            }
+        }
     }
 }
