@@ -1,8 +1,8 @@
 use lanforge_api::api::{
     DevicesResponse, DhcpPoolsResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
-    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, LeasesResponse,
-    ServiceBannersResponse, StatusResponse, TopologyResponse, WhoisResponse,
+    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheStatsExtResponse, DnsQueryLogEntry,
+    DnsQueryLogResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
+    LeasesResponse, ServiceBannersResponse, StatusResponse, TopologyResponse, WhoisResponse,
 };
 use lanforge_types::events::TimedEvent;
 use std::collections::VecDeque;
@@ -24,6 +24,7 @@ pub struct TuiState {
     pub leases: Option<LeasesResponse>,
     pub dhcp_pools: Option<DhcpPoolsResponse>,
     pub events: VecDeque<TimedEvent>,
+    pub dns_live_queries: VecDeque<DnsQueryLogEntry>,
     pub selected_whois: Option<WhoisResponse>,
     pub connected: bool,
     pub connection_error: Option<String>,
@@ -55,6 +56,7 @@ impl TuiState {
             leases: None,
             dhcp_pools: None,
             events: VecDeque::with_capacity(500),
+            dns_live_queries: VecDeque::with_capacity(200),
             selected_whois: None,
             connected: false,
             connection_error: None,
@@ -66,5 +68,12 @@ impl TuiState {
             self.events.pop_front();
         }
         self.events.push_back(event);
+    }
+
+    pub fn apply_dns_query(&mut self, entry: DnsQueryLogEntry) {
+        if self.dns_live_queries.len() >= 200 {
+            self.dns_live_queries.pop_front();
+        }
+        self.dns_live_queries.push_back(entry);
     }
 }

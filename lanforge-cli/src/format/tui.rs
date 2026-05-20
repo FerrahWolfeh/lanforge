@@ -1,8 +1,10 @@
 use crate::tui::theme;
 use lanforge_types::events::{
-    NetworkChange, AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
+    AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, NetworkEvent, StorageEvent,
+    SystemEvent,
 };
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::QueryResult;
 use lanforge_types::update::LeaseTarget;
 use ratatui::{
     style::{Modifier, Style},
@@ -127,7 +129,9 @@ fn format_device_updated_admin<'a>(
 ) {
     spans.push(Span::styled(
         "UPD  ",
-        Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme::ACCENT)
+            .add_modifier(Modifier::BOLD),
     ));
     spans.push(Span::styled(
         hostname.unwrap_or("unknown"),
@@ -336,12 +340,18 @@ fn format_device_change_admin<'a>(change: &'a AdminChange, spans: &mut Vec<Span<
         AdminChange::CliHostUpdated => spans.push(Span::raw("Host updated via CLI")),
         AdminChange::HostnameChanged { hostname } => {
             spans.push(Span::raw("Static Hostname: "));
-            spans.push(Span::styled(hostname, Style::default().add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                hostname,
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
         }
         AdminChange::V4StaticChanged { ip } => {
             spans.push(Span::raw("Static IPv4: "));
             if let Some(ip) = ip {
-                spans.push(Span::styled(ip.to_string(), Style::default().fg(theme::MOCHA_GREEN)));
+                spans.push(Span::styled(
+                    ip.to_string(),
+                    Style::default().fg(theme::MOCHA_GREEN),
+                ));
             } else {
                 spans.push(Span::raw("removed"));
             }
@@ -349,17 +359,26 @@ fn format_device_change_admin<'a>(change: &'a AdminChange, spans: &mut Vec<Span<
         AdminChange::V6SuffixChanged { suffix } => {
             spans.push(Span::raw("Static IPv6 suffix: "));
             if let Some(suffix) = suffix {
-                spans.push(Span::styled(suffix.to_string(), Style::default().add_modifier(Modifier::BOLD)));
+                spans.push(Span::styled(
+                    suffix.to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
             } else {
                 spans.push(Span::raw("removed"));
             }
         }
         AdminChange::Classified { class } => {
             spans.push(Span::raw("Classified as: "));
-            spans.push(Span::styled(class.as_str(), Style::default().fg(theme::MOCHA_MAUVE)));
+            spans.push(Span::styled(
+                class.as_str(),
+                Style::default().fg(theme::MOCHA_MAUVE),
+            ));
         }
         AdminChange::HostRemoved => {
-            spans.push(Span::styled("Host removed", Style::default().fg(theme::MOCHA_RED)));
+            spans.push(Span::styled(
+                "Host removed",
+                Style::default().fg(theme::MOCHA_RED),
+            ));
         }
     }
 }
@@ -482,7 +501,54 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
             ));
             spans.push(Span::raw("Upstream configuration updated."));
         }
-        DnsEvent::QueryResolved(_) | DnsEvent::CacheFlush => {}
+        DnsEvent::CacheFlush => {
+            spans.push(Span::styled(
+                "DNS  ",
+                Style::default()
+                    .fg(theme::MOCHA_TEAL)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("Cache flushed."));
+        }
+        DnsEvent::QueryResolved(q) => {
+            spans.push(Span::styled(
+                "DNS  ",
+                Style::default()
+                    .fg(theme::MOCHA_TEAL)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                q.src_ip.to_string(),
+                Style::default().fg(theme::IP),
+            ));
+            spans.push(Span::raw(" queried "));
+            spans.push(Span::styled(
+                q.domain.to_string(),
+                Style::default()
+                    .fg(theme::MOCHA_BLUE)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(format!(" (type: {}) -> ", q.qtype)));
+
+            let result_color = match q.result {
+                QueryResult::Cached | QueryResult::Rewritten => theme::MOCHA_TEAL,
+                QueryResult::Local | QueryResult::Forwarded => theme::MOCHA_GREEN,
+                QueryResult::NxDomain => theme::MOCHA_YELLOW,
+                QueryResult::Blocked | QueryResult::CachedBlock | QueryResult::Error => {
+                    theme::MOCHA_RED
+                }
+            };
+            spans.push(Span::styled(
+                format!("{:?}", q.result),
+                Style::default()
+                    .fg(result_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+
+            if q.upstream_us > 0 {
+                spans.push(Span::raw(format!(" ({}ms)", q.upstream_us / 1000)));
+            }
+        }
     }
 }
 

@@ -1,15 +1,16 @@
 use crossterm::event::KeyEvent;
 use lanforge_api::api::{
     DevicesResponse, DhcpPoolsResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
-    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, LeasesResponse,
-    ServiceBannersResponse, StatusResponse, TopologyResponse, WhoisResponse,
+    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheStatsExtResponse, DnsQueryLogEntry,
+    DnsQueryLogResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
+    LeasesResponse, ServiceBannersResponse, StatusResponse, TopologyResponse, WhoisResponse,
 };
 use lanforge_types::events::TimedEvent;
 
 pub enum AppEvent {
     Key(KeyEvent),
     DaemonEvent(TimedEvent),
+    DnsLiveQuery(DnsQueryLogEntry),
     StatusUpdate(Box<StatusResponse>),
     ServiceBannersUpdate(ServiceBannersResponse),
     DevicesUpdate(Box<DevicesResponse>),

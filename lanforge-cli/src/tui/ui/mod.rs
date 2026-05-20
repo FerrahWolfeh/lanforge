@@ -7,6 +7,13 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
+pub mod adblock;
+pub mod dashboard;
+pub mod devices;
+pub mod dns;
+pub mod events;
+pub mod header;
+
 pub fn render(f: &mut Frame, app: &mut TuiApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -19,19 +26,7 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         .split(f.area());
 
     // 1. Header
-    let header_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER))
-        .title(" LANFORGE TUI ");
-    let header_text = format!(
-        " Daemon: {} | Connected: {}",
-        app.state
-            .status
-            .as_ref()
-            .map_or("Unknown", |s| s.version.as_str()),
-        app.state.connected
-    );
-    f.render_widget(Paragraph::new(header_text).block(header_block), chunks[0]);
+    header::render(f, chunks[0], &app.state);
 
     // 2. Tabs
     let titles = vec![
@@ -59,35 +54,52 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         );
     f.render_widget(tabs, chunks[1]);
 
-    // 3. Content - render a simple stub for each tab
-    let content_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER))
-        .title(format!(" {:?} Tab ", app.active_tab));
-
-    let content_text = match app.active_tab {
-        TuiTab::Dashboard => "Dashboard content (stub). Press 1-8 to switch tabs.".to_string(),
-        TuiTab::Devices => format!(
-            "Devices tab (stub). Devices count: {}",
-            app.state.devices.as_ref().map_or(0, |d| d.devices.len())
-        ),
-        TuiTab::Dns => "DNS Statistics & Analytics (stub).".to_string(),
-        TuiTab::Adblock => "DNS Adblocker (stub).".to_string(),
-        TuiTab::Events => format!(
-            "Live Daemon Events (stub). Captured count: {}",
-            app.state.events.len()
-        ),
-        TuiTab::Topology => format!(
-            "Network Topology (stub). Entries: {}",
-            app.state.topology.as_ref().map_or(0, |t| t.entries.len())
-        ),
-        TuiTab::Dhcp => format!(
-            "DHCP Leases & Pools (stub). Leases count: {}",
-            app.state.leases.as_ref().map_or(0, |l| l.leases.len())
-        ),
-        TuiTab::Services => "Background System Services (stub).".to_string(),
-    };
-    f.render_widget(Paragraph::new(content_text).block(content_block), chunks[2]);
+    // 3. Content
+    match app.active_tab {
+        TuiTab::Dashboard => dashboard::render(f, chunks[2], &app.state),
+        TuiTab::Devices => devices::render(f, chunks[2], app),
+        TuiTab::Dns => dns::render(f, chunks[2], app),
+        TuiTab::Adblock => adblock::render(f, chunks[2], app),
+        TuiTab::Events => events::render(f, chunks[2], &app.state, app.auto_scroll),
+        TuiTab::Topology => {
+            let content_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER))
+                .title(" Topology Tab ");
+            f.render_widget(
+                Paragraph::new(format!(
+                    "Network Topology (stub). Entries: {}",
+                    app.state.topology.as_ref().map_or(0, |t| t.entries.len())
+                ))
+                .block(content_block),
+                chunks[2],
+            );
+        }
+        TuiTab::Dhcp => {
+            let content_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER))
+                .title(" DHCP Tab ");
+            f.render_widget(
+                Paragraph::new(format!(
+                    "DHCP Leases & Pools (stub). Leases count: {}",
+                    app.state.leases.as_ref().map_or(0, |l| l.leases.len())
+                ))
+                .block(content_block),
+                chunks[2],
+            );
+        }
+        TuiTab::Services => {
+            let content_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER))
+                .title(" Services Tab ");
+            f.render_widget(
+                Paragraph::new("Background System Services (stub).").block(content_block),
+                chunks[2],
+            );
+        }
+    }
 
     // 4. Footer
     let help_text = if app.mode == TuiMode::Filtering {

@@ -1,6 +1,5 @@
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
-use lanforge_types::device::IPv6State;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -9,10 +8,12 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
 };
 
-// (Render function below)
-
 pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
-    let header_cells = ["MAC", "HOSTNAME", "IPv4", "IPv6", "SEEN"].iter().map(|h| {
+    let header_cells = [
+        "STATUS", "MAC", "HOSTNAME", "IPv4", "IPv6", "ORIGIN", "SEEN",
+    ]
+    .iter()
+    .map(|h| {
         Cell::from(*h).style(
             Style::default()
                 .fg(theme::ACCENT)
@@ -25,56 +26,72 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
 
     let mut rows = Vec::new();
     let mut matching_count = 0;
-    if let Some(state) = &app.state.state {
-        let mut keys: Vec<_> = state.devices.keys().collect();
-        keys.sort();
 
-        for mac in keys {
-            let dev = &state.devices[mac];
+    if let Some(devices_resp) = &app.state.devices {
+        let mut devices = devices_resp.devices.clone();
+        devices.sort_by(|a, b| a.mac.cmp(&b.mac));
 
-            // Simple filtering
+        for dev in devices {
+            // Apply filtering case-insensitively
             if !app.filter_text.is_empty() {
                 let search = app.filter_text.to_lowercase();
-                let mac_s = mac.to_string().to_lowercase();
-                let host_s = dev.hostname.name.to_lowercase();
-                if !mac_s.contains(&search) && !host_s.contains(&search) {
+                if !dev.mac.to_lowercase().contains(&search)
+                    && !dev.hostname.to_lowercase().contains(&search)
+                    && !dev.display_v4.to_lowercase().contains(&search)
+                    && !dev.display_v6.to_lowercase().contains(&search)
+                {
                     continue;
                 }
             }
 
             matching_count += 1;
-            let mac_str = mac.to_string();
-            let host = if dev.hostname.name.is_empty() {
-                "?"
+
+            let status_span = if dev.online {
+                Span::styled("● online", Style::default().fg(theme::ONLINE))
             } else {
-                &dev.hostname.name
+                Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
             };
-            let v4 = dev
-                .v4
-                .ip()
-                .map_or_else(|| "—".to_string(), |ip| ip.to_string());
 
-            // Show first non-link-local IPv6 if possible
-            let v6 = dev
-                .v6
-                .iter()
-                .find(|s| s.ip().is_some_and(|ip| !ip.is_loopback()))
-                .and_then(IPv6State::ip)
-                .map_or_else(|| "—".to_string(), |ip| ip.to_string());
-
-            let host_display = format!("{} {}", utils::get_class_icon(dev.class), host);
+            let host_display = format!("{} {}", utils::get_class_icon(&dev.class), dev.hostname);
 
             rows.push(Row::new(vec![
-                Cell::from(Span::styled(mac_str, Style::default().fg(theme::MAC))),
+                Cell::from(status_span),
+                Cell::from(Span::styled(
+                    dev.mac.clone(),
+                    Style::default().fg(theme::MAC),
+                )),
                 Cell::from(Span::styled(
                     host_display,
                     Style::default().fg(theme::HOSTNAME),
                 )),
-                Cell::from(Span::styled(v4, Style::default().fg(theme::IP))),
-                Cell::from(Span::styled(v6, Style::default().fg(theme::IP))),
-                Cell::from(utils::format_relative_time(dev.last_seen)),
+                Cell::from(Span::styled(
+                    dev.display_v4.clone(),
+                    Style::default().fg(theme::IP),
+                )),
+                Cell::from(Span::styled(
+                    dev.display_v6.clone(),
+                    Style::default().fg(theme::IP),
+                )),
+                Cell::from(Span::styled(
+                    dev.origin.clone(),
+                    Style::default().fg(theme::TEXT_DIM),
+                )),
+                Cell::from(Span::raw(utils::parse_iso_relative(&dev.last_seen))),
             ]));
         }
+    }
+
+    // Clamp selected index to matching_count
+    if matching_count > 0 {
+        if let Some(selected) = app.device_list_state.selected() {
+            if selected >= matching_count {
+                app.device_list_state.select(Some(matching_count - 1));
+            }
+        } else {
+            app.device_list_state.select(Some(0));
+        }
+    } else {
+        app.device_list_state.select(None);
     }
 
     let title = if app.filter_text.is_empty() {
@@ -89,11 +106,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     let t = Table::new(
         rows,
         [
-            Constraint::Length(18),
-            Constraint::Min(20),
-            Constraint::Length(16),
-            Constraint::Length(25),
-            Constraint::Length(8),
+            Constraint::Length(10), // Status
+            Constraint::Length(18), // MAC
+            Constraint::Min(20),    // Hostname
+            Constraint::Length(16), // IPv4
+            Constraint::Length(25), // IPv6
+            Constraint::Length(8),  // Origin
+            Constraint::Length(10), // Seen
         ],
     )
     .header(header)
@@ -117,61 +136,77 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT));
 
-    let text = app.state.state.as_ref().map_or_else(|| "State not loaded.".to_string(), |state| app.device_list_state.selected().map_or_else(|| "No device selected.".to_string(), |selected_idx| {
-            // This is a bit inefficient to find the device again, but okay for detail view
-            let mut keys: Vec<_> = state.devices.keys().collect();
-            keys.sort();
-            keys.get(selected_idx).map_or_else(|| "No device selected.".to_string(), |mac| {
-                let dev = &state.devices[*mac];
+    let text = app.state.selected_whois.as_ref().map_or_else(|| "Loading device detail via Whois...".to_string(), |whois| {
+        let dev = &whois.entry;
 
-                let v6_addrs = if dev.v6.is_empty() {
-                    "—".to_string()
-                } else {
-                    dev.v6
-                        .iter()
-                        .filter_map(|s| s.ip().map(|ip| ip.to_string()))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
+        let v6_addrs = if dev.ipv6_addrs.is_empty() {
+            "—".to_string()
+        } else {
+            dev.ipv6_addrs
+                .iter()
+                .map(|ip| format!("{} ({})", ip.addr, ip.kind))
+                .collect::<Vec<_>>()
+                .join("\n             ")
+        };
 
-                let prefixes = if dev.v6_prefixes.is_empty() {
-                    "—".to_string()
-                } else {
-                    dev.v6_prefixes
-                        .iter()
-                        .map(|p| format!("{}/{}", p.prefix, p.len))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
+        let active_v4 = dev.v4.as_ref().map_or("None".to_string(), |v4| {
+            format!(
+                "{} (expires: {}, reserved: {})",
+                v4.ip, v4.expires, v4.reserved
+            )
+        });
 
-                let vendor = crate::cli::vendor::resolve_vendor(&dev.mac.to_string())
-                    .unwrap_or_else(|| "Unknown".to_string());
+        let active_v6 = dev.v6.as_ref().map_or("None".to_string(), |v6| {
+            format!(
+                "{} (expires: {}, reserved: {})",
+                v6.ip, v6.expires, v6.reserved
+            )
+        });
 
-                let topo = dev.topology.as_ref().map_or_else(|| "—".to_string(), |t| {
-                    let parent = t
-                        .parent_mac.map_or_else(|| "Local".to_string(), |m| m.to_string());
-                    let port = t.port.as_deref().unwrap_or("?");
-                    format!("{} @ {} (ifindex {})", parent, port, t.local_ifindex)
-                });
+        let history = if whois.history.is_empty() {
+            "No lease history found.".to_string()
+        } else {
+            whois
+                .history
+                .iter()
+                .map(|h| {
+                    let ts = utils::parse_iso_relative(
+                        &h.timestamp.duration_since(std::time::UNIX_EPOCH).map_or(
+                            "never".to_string(),
+                            |d| {
+                                chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH + d)
+                                    .to_rfc3339()
+                            },
+                        ),
+                    );
+                    format!(
+                        "- {} type {} action {} at {}",
+                        h.ip, h.lease_type, h.action, ts
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
 
-                format!(
-                    "MAC:       {}\nVendor:    {}\nHostname:  {} ({:?})\nOrigin:    {:?}\nClass:     {} {:?}\nLast Seen: {}\n\nIPv4:      {}\nIPv6:      {}\nPrefixes:  {}\nTopology:  {}",
-                    dev.mac,
-                    vendor,
-                    dev.hostname.name,
-                    dev.hostname.origin,
-                    dev.origin,
-                    utils::get_class_icon(dev.class),
-                    dev.class,
-                    utils::format_absolute_time(dev.last_seen),
-                    dev.v4
-                        .ip().map_or_else(|| "—".to_string(), |ip| ip.to_string()),
-                    v6_addrs,
-                    prefixes,
-                    topo
-                )
-            })
-        }));
+        let vendor =
+            crate::cli::vendor::resolve_vendor(&dev.mac).unwrap_or_else(|| "Unknown".to_string());
+
+        format!(
+            "MAC:         {}\nVendor:      {}\nHostname:    {}\nOrigin:      {}\nClass:       {} {}\nLast Seen:   {}\nOnline:      {}\n\nActive DHCPv4 Lease: {}\nActive DHCPv6 Lease: {}\n\nAll Tracked IPv6 Addrs:\n             {}\n\nLease History:\n{}",
+            dev.mac,
+            vendor,
+            dev.hostname,
+            dev.origin,
+            utils::get_class_icon(&dev.class),
+            dev.class,
+            utils::parse_iso_absolute(&dev.last_seen),
+            dev.online,
+            active_v4,
+            active_v6,
+            v6_addrs,
+            history
+        )
+    });
 
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, detail_area);

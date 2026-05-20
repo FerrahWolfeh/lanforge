@@ -63,6 +63,7 @@ pub struct TuiApp {
     pub tree_state_topology: TreeState<String>,
     pub auto_scroll: bool,
     pub filter_text: String,
+    pub dns_show_rewrites: bool,
     pub should_quit: bool,
 }
 
@@ -86,6 +87,7 @@ impl TuiApp {
             tree_state_topology: TreeState::default(),
             auto_scroll: true,
             filter_text: String::new(),
+            dns_show_rewrites: false,
             should_quit: false,
         }
     }
@@ -149,6 +151,9 @@ impl TuiApp {
                 }
                 _ => {}
             },
+            KeyCode::Char('r') if self.active_tab == TuiTab::Dns => {
+                self.dns_show_rewrites = !self.dns_show_rewrites;
+            }
             KeyCode::Esc => {
                 if self.mode == TuiMode::Detail {
                     self.mode = TuiMode::Normal;
