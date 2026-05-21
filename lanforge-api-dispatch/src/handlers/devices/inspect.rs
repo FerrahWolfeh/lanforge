@@ -3,7 +3,7 @@ use lanforge_api::api::{Response, SimpleSuccess, WhoisResponse};
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_db::engine::LeaseHistoryEntry;
 use lanforge_types::{identifiers::MacAddr, update::DeviceUpdate};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 
 impl ClientContext {
     /// Gathers detailed information and history for a device.
@@ -36,15 +36,9 @@ impl ClientContext {
                 self.db.get_lease_history(mac).await.unwrap_or_default();
 
             // Build DeviceEntry
-            let gua_prefix = self
-                .current_gua
-                .as_ref()
-                .and_then(|s| s.parse::<Ipv6Addr>().ok());
+            let gua_prefix = self.current_gua;
             let status = self.ctx.get_status().unwrap_or_default();
-            let ula_prefix = status
-                .ula_prefix
-                .as_ref()
-                .map(|s| s.to_addr());
+            let ula_prefix = status.ula_prefix.as_ref().map(|s| s.to_addr());
 
             let entry = self.map_device(dev.as_ref(), gua_prefix, ula_prefix);
 

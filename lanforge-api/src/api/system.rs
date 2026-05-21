@@ -1,5 +1,8 @@
-use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use super::common::{Capabilities, ServerCapabilities, ServiceBanner};
+use serde::{Deserialize, Serialize};
 
 /// Interface information.
 #[derive(Debug, Serialize, Clone, Deserialize)]
@@ -71,20 +74,20 @@ pub struct ServicesStatus {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServiceRa {
     /// Current state (e.g., "online", "offline").
-    pub state: String,
+    pub state: ServiceState,
     /// Seconds since the RA service started.
     pub uptime_secs: u64,
     /// Current Global Unicast Address (GUA) prefix being announced.
-    pub gua: Option<String>,
+    pub gua: Option<Ipv6Addr>,
     /// Unique Local Address (ULA) prefix being announced, if any.
-    pub ula: Option<String>,
+    pub ula: Option<Ipv6Addr>,
 }
 
 /// Status of the `DHCPv4` service.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServiceDhcpV4 {
     /// Current state (e.g., "online", "offline").
-    pub state: String,
+    pub state: ServiceState,
     /// Seconds since the `DHCPv4` service started.
     pub uptime_secs: u64,
     /// Number of active leases currently assigned.
@@ -97,7 +100,7 @@ pub struct ServiceDhcpV4 {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServiceDhcpV6 {
     /// Current state (e.g., "online", "offline").
-    pub state: String,
+    pub state: ServiceState,
     /// Seconds since the `DHCPv6` service started.
     pub uptime_secs: u64,
     /// Number of active leases currently assigned.
@@ -105,34 +108,68 @@ pub struct ServiceDhcpV6 {
     /// Number of available addresses in the pool.
     pub pool_free: usize,
     /// Current Global Unicast Address (GUA) prefix being managed.
-    pub gua: Option<String>,
+    pub gua: Option<Ipv6Addr>,
     /// Unique Local Address (ULA) prefix being managed, if any.
-    pub ula: Option<String>,
+    pub ula: Option<Ipv6Addr>,
 }
 
 /// Status of the DNS service.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServiceDns {
     /// Current state (e.g., "online", "offline").
-    pub state: String,
+    pub state: ServiceState,
     /// Seconds since the DNS service started.
     pub uptime_secs: u64,
     /// Configured upstream resolver.
     pub upstream: Option<String>,
+    /// Configured port.
+    pub port: u16,
+    /// DoT service status.
+    pub dot: Option<ServiceDot>,
+    /// DoH service status.
+    pub doh: Option<ServiceDoh>,
+    /// Cache size in bytes.
+    pub cache_size: u64,
+    /// Number of cached entries.
+    pub cache_entries: u16,
+}
+
+/// Status of the DNS DoT subservice
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct ServiceDot {
+    /// Current state (e.g., "online", "offline").
+    pub state: ServiceState,
+    /// Seconds since the DNS service started.
+    pub uptime_secs: u64,
+    /// Configured upstream resolver.
+    pub upstream: Option<String>,
+    /// Configured port.
+    pub port: u16,
+}
+
+/// Status of the DNS DoH subservice
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct ServiceDoh {
+    /// Current state (e.g., "online", "offline").
+    pub state: ServiceState,
+    /// Seconds since the DNS service started.
+    pub uptime_secs: u64,
+    /// Configured port.
+    pub port: u16,
 }
 
 /// Generic status information for auxiliary services.
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ServiceStatusInfo {
     /// Current state (e.g., "online", "ativo").
-    pub state: String,
+    pub state: ServiceState,
 }
 
 /// Status of the NDP Monitor service.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServiceNdp {
     /// Current state (e.g., "online", "offline").
-    pub state: String,
+    pub state: ServiceState,
     /// Seconds since the scanner service started.
     pub uptime_secs: u64,
     /// Total number of unique IPv6 addresses being tracked via neighbor discovery.
@@ -167,15 +204,15 @@ pub struct NetworkStatus {
     /// Primary LAN interface being managed (e.g., "eth0").
     pub lan_iface: String,
     /// Primary IPv4 address of the LAN interface.
-    pub lan_ipv4: Option<String>,
+    pub lan_ipv4: Option<Ipv4Addr>,
     /// Primary IPv4 address with CIDR (e.g., "192.168.1.1/24").
-    pub lan_ipv4_cidr: Option<String>,
+    pub lan_ipv4_cidr: Option<u8>,
     /// Primary IPv6 address of the LAN interface.
-    pub lan_ipv6: Option<String>,
+    pub lan_ipv6: Option<Ipv6Addr>,
     /// Primary GUA prefix.
-    pub gua: Option<String>,
+    pub gua: Option<Ipv6Addr>,
     /// Primary ULA prefix.
-    pub ula: Option<String>,
+    pub ula: Option<Ipv6Addr>,
 }
 
 /// Device classification statistics.
@@ -195,7 +232,10 @@ pub struct DevicesStats {
 
 use crate::api::devices::HostConfigEntry;
 use crate::api::dns::{AllowlistEntry, DnsUpstreamConfig};
-use lanforge_types::network::dns::{AdblockUrlEntry, adblock::{AdblockDbConfig, RewriteRule}};
+use lanforge_types::network::dns::{
+    AdblockUrlEntry,
+    adblock::{AdblockDbConfig, RewriteRule},
+};
 
 /// Unified system configuration export aggregating all persistent database tables.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -211,3 +251,42 @@ pub struct SystemConfigExport {
     pub overwrite: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServiceState {
+    #[default]
+    #[serde(rename = "unknown")]
+    Unknown,
+    #[serde(rename = "online")]
+    Online,
+    #[serde(rename = "offline")]
+    Offline,
+    #[serde(rename = "degraded")]
+    Degraded,
+    #[serde(rename = "error")]
+    Error,
+}
+
+impl Display for ServiceState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ServiceState::Unknown => "unknown",
+            ServiceState::Online => "online",
+            ServiceState::Offline => "offline",
+            ServiceState::Degraded => "degraded",
+            ServiceState::Error => "error",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl AsRef<str> for ServiceState {
+    fn as_ref(&self) -> &str {
+        match self {
+            ServiceState::Unknown => "unknown",
+            ServiceState::Online => "online",
+            ServiceState::Offline => "offline",
+            ServiceState::Degraded => "degraded",
+            ServiceState::Error => "error",
+        }
+    }
+}

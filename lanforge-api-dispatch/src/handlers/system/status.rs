@@ -1,7 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{
     Capabilities, Compression, DbStatus, DevicesStats, Encoding, NetworkStatus, ResourcesStatus,
-    Response, ServiceStatusInfo, ServicesStatus, StatusResponse,
+    Response, ServiceState, ServiceStatusInfo, ServicesStatus, StatusResponse,
 };
 use lanforge_core::context::CompiledCaps;
 use lanforge_types::device::{Device, IPv6State, Origin};
@@ -32,7 +32,13 @@ impl ClientContext {
         };
 
         let devices = self.ctx.all_devices();
-        let first_upstream = self.db.load_dns_upstreams().await.ok().and_then(|rows| rows.into_iter().next()).map(|r| format!("{}://{}", r.protocol, r.addr));
+        let first_upstream = self
+            .db
+            .load_dns_upstreams()
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().next())
+            .map(|r| format!("{}://{}", r.protocol, r.addr));
         self.populate_service_and_device_stats(&mut status, &devices, first_upstream);
 
         Response::Status(Box::new(status))
@@ -90,19 +96,19 @@ impl ClientContext {
             let state = self.ctx.read();
             if let Some(if_ips) = state.interfaces.interface_ips.get(&ifindex) {
                 if let Some((ip, prefix)) = if_ips.v4 {
-                    net.lan_ipv4 = Some(ip.to_string());
-                    net.lan_ipv4_cidr = Some(format!("{ip}/{prefix}"));
+                    net.lan_ipv4 = Some(ip);
+                    net.lan_ipv4_cidr = Some(prefix);
                 }
-                net.gua = if_ips.gua.map(|ip| ip.to_string());
-                net.ula = if_ips.ula.map(|ip| ip.to_string());
-                net.lan_ipv6 = if_ips.link_local.map(|ip| ip.to_string());
+                net.gua = if_ips.gua;
+                net.ula = if_ips.ula;
+                net.lan_ipv6 = if_ips.link_local;
             }
         }
         if net.gua.is_none() {
-            net.gua.clone_from(&self.current_gua);
+            net.gua = self.current_gua;
         }
         if net.ula.is_none() {
-            net.ula = status.ula_prefix.as_ref().map(|p| p.to_string());
+            net.ula = status.ula_prefix.map(|prefix| prefix.to_addr());
         }
         net
     }
@@ -134,9 +140,9 @@ impl ClientContext {
 
         // Services -> RA
         status.services.ra.state = if sys_status.ra_enabled {
-            "online".to_string()
+            ServiceState::Online
         } else {
-            "offline".to_string()
+            ServiceState::Offline
         };
         status.services.ra.uptime_secs = self.uptime_secs;
         status.services.ra.gua.clone_from(&self.current_gua);
@@ -175,11 +181,10 @@ impl ClientContext {
 
         status.services.dhcp_v4.leases_active = counts.3;
         status.services.dhcp_v4.state = if sys_status.dhcp_v4_enabled {
-            "active"
+            ServiceState::Online
         } else {
-            "inactive"
-        }
-        .to_string();
+            ServiceState::Offline
+        };
         status.services.dhcp_v4.pool_free = usize::try_from(
             sys_status
                 .dhcp_v4_range_size
@@ -189,35 +194,33 @@ impl ClientContext {
 
         status.services.dhcp_v6.leases_active = counts.4;
         status.services.dhcp_v6.state = if sys_status.dhcp_v6_enabled {
-            "active"
+            ServiceState::Online
         } else {
-            "inactive"
-        }
-        .to_string();
+            ServiceState::Offline
+        };
         status.services.dhcp_v6.pool_free = sys_status.dhcp_v6_pool_size.map_or(9_999, |total| {
             usize::try_from(total.saturating_sub(counts.4 as u64)).unwrap_or_default()
         });
-        status.services.dhcp_v6.ula = sys_status.ula_prefix.as_ref().map(|p| p.to_string());
+        status.services.dhcp_v6.ula = sys_status.ula_prefix.as_ref().map(|p| p.to_addr());
         status.services.dhcp_v6.gua.clone_from(&self.current_gua);
         status.services.dhcp_v6.uptime_secs = self.uptime_secs;
 
         status.services.dns.state = if sys_status.dns_enabled {
-            "online"
+            ServiceState::Online
         } else {
-            "offline"
-        }
-        .to_string();
+            ServiceState::Offline
+        };
         status.services.dns.uptime_secs = self.uptime_secs;
         status.services.dns.upstream = first_upstream;
 
-        status.services.db_worker.state = "online".to_string();
-        status.services.mdns_prober.state = "active".to_string();
-        status.services.iface_monitor.state = "online".to_string();
-        status.services.control_api.state = "online".to_string();
+        status.services.db_worker.state = ServiceState::Online;
+        status.services.mdns_prober.state = ServiceState::Online;
+        status.services.iface_monitor.state = ServiceState::Online;
+        status.services.control_api.state = ServiceState::Online;
 
         if sys_status.http_enabled {
             status.services.http_api = Some(ServiceStatusInfo {
-                state: "online".to_string(),
+                state: ServiceState::Online,
             });
         }
 
@@ -227,7 +230,7 @@ impl ClientContext {
         status.devices.managed_cli = counts.6;
         status.devices.dynamic = counts.2;
         status.services.ndp_monitor.addrs_tracked = counts.5;
-        status.services.ndp_monitor.state = "online".to_string();
+        status.services.ndp_monitor.state = ServiceState::Online;
         status.services.ndp_monitor.uptime_secs = self.uptime_secs;
     }
 }

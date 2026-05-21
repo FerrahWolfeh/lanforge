@@ -13,6 +13,7 @@ use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_types::network::dns::adblock::RewriteRule;
 use lanforge_types::update::LeaseTarget;
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -22,7 +23,7 @@ use std::sync::atomic::AtomicUsize;
 #[derive(Clone)]
 pub struct ClientContext {
     /// Currently known Global Unicast Address prefix.
-    pub current_gua: Option<String>,
+    pub current_gua: Option<Ipv6Addr>,
     /// Uptime of the daemon in seconds.
     pub uptime_secs: u64,
     /// Seconds since the last network scan.
@@ -144,7 +145,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn host_remove(&self, mac: lanforge_types::identifiers::MacAddr) -> Result<SimpleSuccess, RpcCallError> {
+    async fn host_remove(
+        &self,
+        mac: lanforge_types::identifiers::MacAddr,
+    ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_host_remove(mac).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -216,7 +220,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn purge(&self, mac: lanforge_types::identifiers::MacAddr) -> Result<SimpleSuccess, RpcCallError> {
+    async fn purge(
+        &self,
+        mac: lanforge_types::identifiers::MacAddr,
+    ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_purge(mac).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -471,7 +478,6 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-
     async fn dns_adblock_url_remove(&self, url: String) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_dns_adblock_url_remove(url).await {
             Response::Success(s) => Ok(s),
@@ -569,7 +575,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn system_config_import(&self, config: SystemConfigExport) -> Result<SimpleSuccess, RpcCallError> {
+    async fn system_config_import(
+        &self,
+        config: SystemConfigExport,
+    ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_system_config_import(config).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),

@@ -91,13 +91,23 @@ fn render_header(st: &StatusResponse) {
 }
 
 fn render_infrastructure(st: &StatusResponse, ascii: bool) {
-    let gua = st.network.gua.as_deref().unwrap_or("stabilizing...");
-    let ula = st.network.ula.as_deref().unwrap_or("unavailable");
-    let ipv4 = st
+    // Here we convert both to string representations wether they are some or not
+    let gua = st
         .network
-        .lan_ipv4_cidr
-        .as_deref()
-        .unwrap_or_else(|| st.network.lan_ipv4.as_deref().unwrap_or("—"));
+        .gua
+        .map_or_else(|| "stabilizing...".to_string(), |ip| ip.to_string());
+    let ula = st
+        .network
+        .ula
+        .map_or_else(|| "unavailable".to_string(), |ip| ip.to_string());
+    let ipv4 = st.network.lan_ipv4_cidr.map_or_else(
+        || {
+            st.network
+                .lan_ipv4
+                .map_or_else(|| "-".to_string(), |ip| ip.to_string())
+        },
+        |ip| ip.to_string(),
+    );
     let rss = ByteSize::b(st.resources.memory_rss_bytes);
     let border = if ascii {
         BorderStyle::Classic
@@ -168,41 +178,41 @@ fn render_services(st: &StatusResponse, ascii: bool) {
                     Text(content: " SERVICES ", color: Color::Yellow, weight: Weight::Bold)
                 }
                 View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
-                    ServiceLine(name: "DB Worker", state: st.services.db_worker.state.as_str(), online_val: "online", meta: "Persistence & I/O", ascii: ascii)
-                    ServiceLine(name: "mDNS", state: st.services.mdns_prober.state.as_str(), online_val: "active", meta: "Device Discovery Prober", ascii: ascii)
-                    ServiceLine(name: "Iface Mon", state: st.services.iface_monitor.state.as_str(), online_val: "online", meta: "Interface Address Watcher", ascii: ascii)
+                    ServiceLine(name: "DB Worker", state: st.services.db_worker.state.as_ref(), online_val: "online", meta: "Persistence & I/O", ascii: ascii)
+                    ServiceLine(name: "mDNS", state: st.services.mdns_prober.state.as_ref(), online_val: "active", meta: "Device Discovery Prober", ascii: ascii)
+                    ServiceLine(name: "Iface Mon", state: st.services.iface_monitor.state.as_ref(), online_val: "online", meta: "Interface Address Watcher", ascii: ascii)
                     ServiceLine(
                         name: "NDP Mon",
-                        state: st.services.ndp_monitor.state.as_str(),
+                        state: st.services.ndp_monitor.state.as_ref(),
                         online_val: "online",
                         meta: ndp_meta.as_str(),
                         ascii: ascii
                     )
-                    ServiceLine(name: "Control", state: st.services.control_api.state.as_str(), online_val: "online", meta: "UDS Management API", ascii: ascii)
+                    ServiceLine(name: "Control", state: st.services.control_api.state.as_ref(), online_val: "online", meta: "UDS Management API", ascii: ascii)
                     HttpServiceLine(info: st.services.http_api.clone(), ascii: ascii)
 
                     View(margin_top: 1, margin_bottom: 1) {
                         Text(content: format!("  {0}{0}{0}{0}{0}{0}{0}{0}{0}{0} Protocols {0}{0}{0}{0}{0}{0}{0}{0}{0}{0}", hline), color: Color::DarkGrey)
                     }
 
-                    ServiceLine(name: "RA", state: st.services.ra.state.as_str(), online_val: "online", meta: "Neighbor Discovery & Prefixes", ascii: ascii)
+                    ServiceLine(name: "RA", state: st.services.ra.state.as_ref(), online_val: "online", meta: "Neighbor Discovery & Prefixes", ascii: ascii)
                     ServiceLine(
                         name: "DHCPv4",
-                        state: st.services.dhcp_v4.state.as_str(),
+                        state: st.services.dhcp_v4.state.as_ref(),
                         online_val: "active",
                         meta: dhcp_v4_meta.as_str(),
                         ascii: ascii
                     )
                     ServiceLine(
                         name: "DHCPv6",
-                        state: st.services.dhcp_v6.state.as_str(),
+                        state: st.services.dhcp_v6.state.as_ref(),
                         online_val: "active",
                         meta: dhcp_v6_meta.as_str(),
                         ascii: ascii
                     )
                     ServiceLine(
                         name: "DNS",
-                        state: st.services.dns.state.as_str(),
+                        state: st.services.dns.state.as_ref(),
                         online_val: "online",
                         meta: dns_meta.as_str(),
                         ascii: ascii
@@ -310,7 +320,7 @@ fn HttpServiceLine(props: &HttpServiceLineProps) -> impl Into<AnyElement<'_>> {
             element! {
                 ServiceLine(
                     name: "HTTP API",
-                    state: info.state.as_str(),
+                    state: info.state.as_ref(),
                     online_val: "online",
                     meta: "REST Interface",
                     ascii: ascii

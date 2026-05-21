@@ -1,5 +1,8 @@
+use std::time::UNIX_EPOCH;
+
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
+use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -149,14 +152,14 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                 .join("\n             ")
         };
 
-        let active_v4 = dev.v4.as_ref().map_or("None".to_string(), |v4| {
+        let active_v4 = dev.v4.as_ref().map_or_else(|| "None".to_string(), |v4| {
             format!(
                 "{} (expires: {}, reserved: {})",
                 v4.ip, v4.expires, v4.reserved
             )
         });
 
-        let active_v6 = dev.v6.as_ref().map_or("None".to_string(), |v6| {
+        let active_v6 = dev.v6.as_ref().map_or_else(|| "None".to_string(), |v6| {
             format!(
                 "{} (expires: {}, reserved: {})",
                 v6.ip, v6.expires, v6.reserved
@@ -171,10 +174,10 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                 .iter()
                 .map(|h| {
                     let ts = utils::parse_iso_relative(
-                        &h.timestamp.duration_since(std::time::UNIX_EPOCH).map_or(
-                            "never".to_string(),
+                        &h.timestamp.duration_since(UNIX_EPOCH).map_or_else(
+                            |_| "never".to_string(),
                             |d| {
-                                chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH + d)
+                                DateTime::<Utc>::from(UNIX_EPOCH + d)
                                     .to_rfc3339()
                             },
                         ),

@@ -14,6 +14,7 @@ use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use std::fs::{self, Permissions};
 use std::io::ErrorKind;
+use std::net::Ipv6Addr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -92,8 +93,12 @@ impl ControlService {
         }
     }
 
-    fn spawn_client_handler<S>(&self, stream: S, current_gua: Option<String>, startup_time: Instant)
-    where
+    fn spawn_client_handler<S>(
+        &self,
+        stream: S,
+        current_gua: Option<Ipv6Addr>,
+        startup_time: Instant,
+    ) where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let ctx = ClientContext {
@@ -120,7 +125,7 @@ impl AsyncService for ControlService {
         ctrl.signal_ready();
 
         let mut bus_rx = self.ctx.bus().subscribe();
-        let mut current_gua: Option<String> = None;
+        let mut current_gua: Option<Ipv6Addr> = None;
         let startup_time = Instant::now();
 
         let tcp_listener = self.setup_tcp_listener(cfg.tcp_port).await;
@@ -135,7 +140,7 @@ impl AsyncService for ControlService {
                         Ok(timed_event) => {
                             lanforge_core::match_event!(timed_event, {
                                 LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, .. }) => {
-                                    current_gua = gua.map(|ip| ip.to_string());
+                                    current_gua = gua;
                                 }
                                 LanforgeEvent::System(SystemEvent::Shutdown) => break,
                                 _ => {}
@@ -149,14 +154,14 @@ impl AsyncService for ControlService {
                 }
                 connection = listener.accept() => {
                     if let Ok((stream, _)) = connection {
-                        self.spawn_client_handler(stream, current_gua.clone(), startup_time);
+                        self.spawn_client_handler(stream, current_gua, startup_time);
                     }
                 }
                 tcp_res = async {
                     if let Some(ref l) = tcp_listener { l.accept().await.ok() } else { std::future::pending().await }
                 } => {
                     if let Some((stream, _)) = tcp_res {
-                        self.spawn_client_handler(stream, current_gua.clone(), startup_time);
+                        self.spawn_client_handler(stream, current_gua, startup_time);
                     }
                 }
             }
@@ -447,7 +452,10 @@ where
 
 impl StatusProvider for ControlService {
     fn banner(&self) -> ServiceBanner {
-        let mut stats = vec![(std::borrow::Cow::Borrowed("socket_path"), self.cfg.socket_path.clone())];
+        let mut stats = vec![(
+            std::borrow::Cow::Borrowed("socket_path"),
+            self.cfg.socket_path.clone(),
+        )];
         if let Some(p) = self.cfg.tcp_port {
             stats.push((std::borrow::Cow::Borrowed("tcp_port"), p.to_string()));
         }

@@ -3,7 +3,11 @@ use clap::Subcommand;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{DhcpPoolEntry, LeaseKind, LeasesResponse};
-use std::collections::HashMap;
+use lanforge_types::identifiers::MacAddr;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DhcpArgs {
@@ -86,7 +90,7 @@ pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, a
     }
     .print();
 
-    let mut merged: HashMap<String, MergedLease> = HashMap::new();
+    let mut merged: HashMap<MacAddr, MergedLease> = HashMap::new();
     for l in &resp.leases {
         if v4_only && l.kind != LeaseKind::V4 {
             continue;
@@ -95,22 +99,21 @@ pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, a
             continue;
         }
 
-        let entry = merged.entry(l.mac.clone()).or_insert_with(|| MergedLease {
+        let entry = merged.entry(l.mac).or_insert_with(|| MergedLease {
             hostname: if l.hostname.is_empty() {
                 "—".to_string()
             } else {
                 l.hostname.clone()
             },
-            mac: l.mac.clone(),
+            mac: l.mac,
             v4: None,
             v6: None,
-            expires: l.expires.clone(),
+            expires: l.expires,
         });
 
-        if l.kind == LeaseKind::V4 {
-            entry.v4 = Some(l.address.clone());
-        } else {
-            entry.v6 = Some(l.address.clone());
+        match l.address {
+            IpAddr::V4(ip) => entry.v4 = Some(ip),
+            IpAddr::V6(ip) => entry.v6 = Some(ip),
         }
     }
 
@@ -149,18 +152,18 @@ pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, a
 #[derive(Default)]
 struct MergedLease {
     hostname: String,
-    mac: String,
-    v4: Option<String>,
-    v6: Option<String>,
-    expires: String,
+    mac: MacAddr,
+    v4: Option<Ipv4Addr>,
+    v6: Option<Ipv6Addr>,
+    expires: u64,
 }
 
 #[component]
 fn MergedLeaseRow(props: &MergedLeaseRowProps) -> impl Into<AnyElement<'_>> {
     let m = &props.lease;
-    let v4_str = m.v4.as_deref().unwrap_or("—");
-    let v6_str = m.v6.as_deref().unwrap_or("—");
-    let expires_str = super::format_relative_iso8601(&m.expires);
+    let v4_str = m.v4.map_or_else(|| "-".to_string(), |ip| ip.to_string());
+    let v6_str = m.v6.map_or_else(|| "-".to_string(), |ip| ip.to_string());
+    let expires_str = &m.expires;
 
     element! {
         View(flex_direction: FlexDirection::Row) {
@@ -169,7 +172,7 @@ fn MergedLeaseRow(props: &MergedLeaseRowProps) -> impl Into<AnyElement<'_>> {
             Text(content: format!("{:<20}", m.mac), color: Color::Cyan)
             Text(content: format!("{:<18}", v4_str), color: Color::Green)
             Text(content: format!("{:<25}", v6_str), color: Color::Yellow)
-            Text(content: expires_str, color: Color::DarkGrey)
+            Text(content: expires_str.to_string(), color: Color::DarkGrey)
         }
     }
 }

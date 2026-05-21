@@ -43,9 +43,15 @@ fn render_network_status(f: &mut Frame, area: Rect, state: &TuiState) {
             format!(
                 "Interface:  {}\nIPv4:       {}\nIPv6 ULA:   {}\nIPv6 GUA:   {}",
                 s.network.lan_iface,
-                s.network.lan_ipv4.as_deref().unwrap_or("—"),
-                s.network.ula.as_deref().unwrap_or("—"),
-                s.network.gua.as_deref().unwrap_or("—"),
+                s.network
+                    .lan_ipv4
+                    .map_or_else(|| "—".to_string(), |e| e.to_string()),
+                s.network
+                    .ula
+                    .map_or_else(|| "—".to_string(), |e| e.to_string()),
+                s.network
+                    .gua
+                    .map_or_else(|| "—".to_string(), |e| e.to_string()),
             )
         },
     );
@@ -76,10 +82,10 @@ fn render_core_services(f: &mut Frame, area: Rect, state: &TuiState) {
             };
 
             let lines = vec![
-                render_service("DHCPv4:", &s.services.dhcp_v4.state),
-                render_service("DHCPv6:", &s.services.dhcp_v6.state),
-                render_service("DNS:", &s.services.dns.state),
-                render_service("RA:", "online"),
+                render_service("DHCPv4:", s.services.dhcp_v4.state.as_ref()),
+                render_service("DHCPv6:", s.services.dhcp_v6.state.as_ref()),
+                render_service("DNS:", s.services.dns.state.as_ref()),
+                render_service("RA:", s.services.ra.state.as_ref()),
             ];
             Paragraph::new(lines)
         },

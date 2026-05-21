@@ -1,4 +1,3 @@
-use super::super::format_iso8601;
 use crate::ClientContext;
 use lanforge_api::api::{
     DhcpPoolEntry, DhcpPoolsResponse, LeaseEntry, LeaseKind, LeasesResponse, Response,
@@ -10,7 +9,10 @@ use lanforge_types::{
     identifiers::MacAddr,
     update::LeaseTarget,
 };
-use std::time::SystemTime;
+use std::{
+    net::IpAddr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 impl ClientContext {
     pub async fn handle_lease_renew(&self, mac: MacAddr, target: Option<LeaseTarget>) -> Response {
@@ -27,12 +29,13 @@ impl ClientContext {
         })
     }
 
-    pub async fn handle_lease_release(&self, mac: MacAddr, target: Option<LeaseTarget>) -> Response {
+    pub async fn handle_lease_release(
+        &self,
+        mac: MacAddr,
+        target: Option<LeaseTarget>,
+    ) -> Response {
         let _ = self.ctx.bus().publish(LanforgeEvent::Network(
-            NetworkEvent::LeaseReleaseRequested {
-                mac,
-                target,
-            },
+            NetworkEvent::LeaseReleaseRequested { mac, target },
         ));
 
         Response::Success(SimpleSuccess {
@@ -76,29 +79,35 @@ impl ClientContext {
         for dev in &devices {
             if let IPv4State::Dynamic(lease) = &dev.v4 {
                 leases.push(LeaseEntry {
-                    mac: dev.mac.to_string(),
+                    mac: dev.mac,
                     hostname: dev.display_hostname().to_string(),
-                    address: lease.ip.to_string(),
+                    address: IpAddr::V4(lease.ip),
                     kind: LeaseKind::V4,
-                    expires: format_iso8601(lease.expires),
+                    expires: lease
+                        .expires
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs()),
                     remaining_secs: lease
                         .expires
                         .duration_since(SystemTime::now())
-                        .map_or(0, |d| d.as_secs() as i64),
+                        .map_or(0, |d| d.as_secs()),
                 });
             }
             for v6_state in &dev.v6 {
                 if let IPv6State::Dynamic(lease) = v6_state {
                     leases.push(LeaseEntry {
-                        mac: dev.mac.to_string(),
+                        mac: dev.mac,
                         hostname: dev.display_hostname().to_string(),
-                        address: lease.ip.to_string(),
+                        address: IpAddr::V6(lease.ip),
                         kind: LeaseKind::V6,
-                        expires: format_iso8601(lease.expires),
+                        expires: lease
+                            .expires
+                            .duration_since(UNIX_EPOCH)
+                            .map_or(0, |d| d.as_secs()),
                         remaining_secs: lease
                             .expires
                             .duration_since(SystemTime::now())
-                            .map_or(0, |d| d.as_secs() as i64),
+                            .map_or(0, |d| d.as_secs()),
                     });
                 }
             }

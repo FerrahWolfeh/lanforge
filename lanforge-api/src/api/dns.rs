@@ -1,10 +1,12 @@
+use std::net::SocketAddr;
 
 pub use lanforge_types::network::dns::{
     AdblockUrlEntry, DnsAdblockStatusResponse, DnsCacheEntry, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsStatsResponse,
 };
 use lanforge_types::network::{
-    DnsRecordEntry, DnsRecordType, UpstreamHealthSnapshot, dns::adblock::RewriteRule,
+    DnsRecordEntry, DnsRecordType, UpstreamHealthSnapshot,
+    dns::{adblock::RewriteRule, upstream::UpstreamProtocol},
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,7 +76,6 @@ pub struct DnsQueryResponse {
     pub result: String,
 }
 
-
 /// A single entry in the detailed DNS query log.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsQueryLogEntry {
@@ -96,7 +97,6 @@ pub struct DnsQueryLogResponse {
     pub entries: Vec<DnsQueryLogEntry>,
     pub total: usize,
 }
-
 
 /// Response containing all DNS rewrite rules.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -126,8 +126,7 @@ pub struct DnsAdblockUrlsResponse {
 /// A configured DNS upstream entry.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct DnsUpstreamConfig {
-    pub addr: std::net::SocketAddr,
-    pub protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+    pub addr: SocketAddr,
+    pub protocol: UpstreamProtocol,
     pub domain: Option<String>,
 }
-

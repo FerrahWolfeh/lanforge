@@ -70,7 +70,7 @@ fn render_resolver_stats(f: &mut Frame, area: Rect, state: &TuiState) {
             servfail_log_count += 1;
         }
         if entry.upstream_us > 0 {
-            log_latencies.push(entry.upstream_us as f64 / 1000.0);
+            log_latencies.push(f64::from(entry.upstream_us) / 1000.0);
         }
     }
     log_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -275,12 +275,21 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
     let dns_service_state = state
         .status
         .as_ref()
-        .map_or("offline", |s| s.services.dns.state.as_str());
+        .map_or("offline", |s| s.services.dns.state.as_ref());
     let (dns_icon, dns_color) = if dns_service_state == "offline" {
         ("● offline", theme::MOCHA_RED)
     } else {
         ("● running", theme::ONLINE)
     };
+
+    let dot_port = state
+        .status
+        .as_ref()
+        .map_or(53, |s| s.services.dns.dot.as_ref().map_or(853, |d| d.port));
+    let doh_port = state
+        .status
+        .as_ref()
+        .map_or(53, |s| s.services.dns.doh.as_ref().map_or(853, |d| d.port));
 
     let subservices_text = vec![
         Line::from(vec![

@@ -175,6 +175,18 @@ pub struct Ipv6Prefix {
     pub group: IpClassification,
 }
 
+impl From<Ipv6Addr> for Ipv6Prefix {
+    fn from(addr: Ipv6Addr) -> Self {
+        Self::from_addr(addr)
+    }
+}
+
+impl From<Ipv6Prefix> for Ipv6Addr {
+    fn from(prefix: Ipv6Prefix) -> Self {
+        prefix.to_addr()
+    }
+}
+
 impl Ipv6Prefix {
     #[must_use]
     pub const fn from_addr(addr: Ipv6Addr) -> Self {

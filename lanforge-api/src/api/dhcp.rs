@@ -1,3 +1,6 @@
+use std::net::IpAddr;
+
+use lanforge_types::identifiers::MacAddr;
 use serde::{Deserialize, Serialize};
 
 /// A response containing active DHCP leases.
@@ -11,17 +14,17 @@ pub struct LeasesResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LeaseEntry {
     /// MAC address of the leased device.
-    pub mac: String,
+    pub mac: MacAddr,
     /// Hostname of the device.
     pub hostname: String,
     /// Assigned IP address or prefix.
-    pub address: String,
+    pub address: IpAddr,
     /// Type of lease (v4, v6, prefix).
     pub kind: LeaseKind,
-    /// Expiration timestamp in ISO 8601.
-    pub expires: String,
+    /// Expiration timestamp in seconds since epoch.
+    pub expires: u64,
     /// Remaining lifetime in seconds.
-    pub remaining_secs: i64,
+    pub remaining_secs: u64,
 }
 
 /// Supported DHCP lease types.

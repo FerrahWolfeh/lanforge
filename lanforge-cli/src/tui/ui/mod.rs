@@ -45,7 +45,7 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
                 .borders(Borders::BOTTOM)
                 .border_style(Style::default().fg(theme::BORDER)),
         )
-        .select(app.active_tab.to_index())
+        .select(app.active_tab.to_index() as usize)
         .style(Style::default().fg(theme::TEXT_DIM))
         .highlight_style(
             Style::default()

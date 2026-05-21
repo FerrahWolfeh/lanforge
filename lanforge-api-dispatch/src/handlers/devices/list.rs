@@ -24,15 +24,9 @@ impl ClientContext {
         let mut api_devices = Vec::new();
         let mut online = 0;
 
-        let gua_prefix = self
-            .current_gua
-            .as_ref()
-            .and_then(|s| s.parse::<Ipv6Addr>().ok());
+        let gua_prefix = self.current_gua;
         let status = self.ctx.get_status().unwrap_or_default();
-        let ula_prefix = status
-            .ula_prefix
-            .as_ref()
-            .map(|s| s.to_addr());
+        let ula_prefix = status.ula_prefix.as_ref().map(|s| s.to_addr());
 
         for dev in &devices {
             if !Self::device_matches_filter(dev, filter.as_ref(), method.as_ref()) {

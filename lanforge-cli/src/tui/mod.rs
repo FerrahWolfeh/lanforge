@@ -43,7 +43,7 @@ pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::channel(100);
 
     // Shared active tab index for background tasks
-    let active_tab = Arc::new(AtomicU8::new(TuiTab::Dashboard.to_index() as u8));
+    let active_tab = Arc::new(AtomicU8::new(TuiTab::Dashboard.to_index()));
 
     // Spawn input & tick handler
     let tx = event_tx.clone();
@@ -99,7 +99,7 @@ pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
                     app.handle_key_event(key);
 
                     // Update shared active tab for background tasks
-                    active_tab.store(app.active_tab.to_index() as u8, Ordering::Relaxed);
+                    active_tab.store(app.active_tab.to_index(), Ordering::Relaxed);
 
                     if app.mode == TuiMode::Detail
                         && old_mode != TuiMode::Detail
@@ -356,8 +356,7 @@ async fn run_periodic_fetch(
 
     loop {
         let tab_idx = active_tab.load(Ordering::Relaxed);
-        let on_dns =
-            tab_idx == TuiTab::Dns.to_index() as u8 || tab_idx == TuiTab::Adblock.to_index() as u8;
+        let on_dns = tab_idx == TuiTab::Dns.to_index() || tab_idx == TuiTab::Adblock.to_index();
 
         // Common endpoints: status, banners, devices, topology, leases, pools (every 5s)
         if last_common.elapsed() >= Duration::from_secs(5) {

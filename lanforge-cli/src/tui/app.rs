@@ -24,7 +24,7 @@ pub enum TuiMode {
 
 impl TuiTab {
     #[must_use]
-    pub const fn from_index(index: usize) -> Self {
+    pub const fn from_index(index: u8) -> Self {
         match index {
             1 => Self::Devices,
             2 => Self::Dns,
@@ -38,7 +38,7 @@ impl TuiTab {
     }
 
     #[must_use]
-    pub const fn to_index(self) -> usize {
+    pub const fn to_index(self) -> u8 {
         match self {
             Self::Dashboard => 0,
             Self::Devices => 1,
