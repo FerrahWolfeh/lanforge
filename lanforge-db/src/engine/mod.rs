@@ -14,6 +14,8 @@ use lanforge_types::device::{
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 
 pub mod types;
 pub mod utils;
@@ -220,9 +222,10 @@ impl LanforgeDb {
                     .begin()
                     .await
                     .map_err(LanforgeDbError::TransactionFailed)?;
-                let db_devices: Vec<(String, String)> = sqlx::query_as("SELECT mac, origin FROM devices")
-                    .fetch_all(&mut *tx)
-                    .await?;
+                let db_devices: Vec<(String, String)> =
+                    sqlx::query_as("SELECT mac, origin FROM devices")
+                        .fetch_all(&mut *tx)
+                        .await?;
 
                 let snapshot_macs: HashSet<String> =
                     snapshot.devices.keys().map(|m| m.to_string()).collect();
@@ -250,9 +253,10 @@ impl LanforgeDb {
                     .begin()
                     .await
                     .map_err(LanforgeDbError::TransactionFailed)?;
-                let db_devices: Vec<(String, String)> = sqlx::query_as("SELECT mac::TEXT, origin::TEXT FROM devices")
-                    .fetch_all(&mut *tx)
-                    .await?;
+                let db_devices: Vec<(String, String)> =
+                    sqlx::query_as("SELECT mac::TEXT, origin::TEXT FROM devices")
+                        .fetch_all(&mut *tx)
+                        .await?;
 
                 let snapshot_macs: HashSet<String> =
                     snapshot.devices.keys().map(|m| m.to_string()).collect();
@@ -1022,6 +1026,46 @@ impl LanforgeDb {
             Pool::Sqlite(p) => sqlite::clear_dns_upstreams(p).await,
             #[cfg(feature = "postgres")]
             Pool::Postgres(p) => postgres::clear_dns_upstreams(p).await,
+        }
+    }
+
+    pub async fn load_dns_reverse_resolvers(
+        &self,
+    ) -> Result<Vec<DnsReverseResolver>, LanforgeDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::load_dns_reverse_resolvers_sqlite(p).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::load_dns_reverse_resolvers_postgres(p).await,
+        }
+    }
+
+    pub async fn add_dns_reverse_resolver(
+        &self,
+        subnet: &IpSubnet,
+        resolver: &UpstreamTarget,
+    ) -> Result<(), LanforgeDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => {
+                dns_config::add_dns_reverse_resolver_sqlite(p, subnet, resolver).await
+            }
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => {
+                dns_config::add_dns_reverse_resolver_postgres(p, subnet, resolver).await
+            }
+        }
+    }
+
+    pub async fn remove_dns_reverse_resolver(
+        &self,
+        subnet: &IpSubnet,
+    ) -> Result<(), LanforgeDbError> {
+        match &self.pool {
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(p) => dns_config::remove_dns_reverse_resolver_sqlite(p, subnet).await,
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(p) => dns_config::remove_dns_reverse_resolver_postgres(p, subnet).await,
         }
     }
 }

@@ -5,7 +5,10 @@ use crate::cli::{Execute, LanforgeClient};
 use clap::ValueEnum;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
+use lanforge_api::api::{
+    DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse, TransientHostEntry,
+    TransientHostsResponse,
+};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DevicesArgs {
@@ -13,10 +16,25 @@ pub struct DevicesArgs {
     pub filter: Option<String>,
     #[arg(short = 'S', long, value_enum, default_value_t = SortMode::LastSeen)]
     pub sort: SortMode,
+    #[arg(long)]
+    pub transient: bool,
 }
 
 impl Execute for DevicesArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        if self.transient {
+            let mut resp = client.transient_host_list().await?;
+            resp.hosts.sort_by_key(|a| a.ip);
+
+            if client.json {
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+                return Ok(());
+            }
+
+            render_transient_devices(&resp, client.ascii);
+            return Ok(());
+        }
+
         let resp = client
             .list_devices(self.filter.clone(), None, None, None, None, None)
             .await?;
@@ -231,4 +249,63 @@ fn sort_devices(devices: &mut [DeviceEntry], mode: SortMode) {
 #[derive(Props, Clone, Default)]
 struct HostRowProps {
     pub host: HostConfigEntry,
+}
+
+pub fn render_transient_devices(resp: &TransientHostsResponse, ascii: bool) {
+    element! {
+        View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: " TRANSIENT DEVICES ", color: Color::White, weight: Weight::Bold)
+                Text(content: "  ·  ", color: Color::DarkGrey)
+                Text(content: format!("{} total cached", resp.hosts.len()))
+            }
+        }
+    }
+    .print();
+
+    let hline = if ascii { "-" } else { "─" };
+    element! {
+        View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
+            // Header
+            View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
+                Text(content: format!("  {:<18}", "IP ADDRESS"), color: Color::DarkGrey)
+                Text(content: format!("{:<25}", "HOST"), color: Color::DarkGrey)
+                Text(content: format!("{:<15}", "ORIGIN"), color: Color::DarkGrey)
+                Text(content: format!("{:<12}", "RESOLVED"), color: Color::DarkGrey)
+                Text(content: format!("{:<10}", "SEEN"), color: Color::DarkGrey)
+            }
+            // Separator
+            Text(content: hline.repeat(80), color: Color::DarkGrey)
+
+            // Rows
+            View(flex_direction: FlexDirection::Column) {
+                #(resp.hosts.iter().cloned().map(|host| element! { TransientRow(host: host) }))
+            }
+        }
+    }
+    .print();
+}
+
+#[component]
+fn TransientRow(props: &TransientRowProps) -> impl Into<AnyElement<'_>> {
+    let host = &props.host;
+    let origin_str = format!("{:?}", host.origin);
+    let resolved_at_compact = format_short_relative(host.resolved_at);
+    let last_seen_compact = format_short_relative(host.last_seen);
+
+    element! {
+        View(flex_direction: FlexDirection::Row) {
+            Text(content: "  ")
+            Text(content: format!("{:<18}", host.ip.to_string()), color: Color::Green)
+            Text(content: format!("{:<25}", truncate(&host.hostname, 24)))
+            Text(content: format!("{:<15}", origin_str), color: Color::Cyan)
+            Text(content: format!("{:<12}", resolved_at_compact), color: Color::DarkGrey)
+            Text(content: format!("{:<10}", last_seen_compact), color: Color::DarkGrey)
+        }
+    }
+}
+
+#[derive(Props, Clone, Default)]
+struct TransientRowProps {
+    pub host: TransientHostEntry,
 }

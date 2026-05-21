@@ -2,8 +2,9 @@ use std::net::Ipv4Addr;
 
 use crate::error::LanforgeDbError;
 use lanforge_types::network::{
-    DnsRecordType,
+    DnsRecordType, DnsReverseResolver, IpSubnet,
     dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteAnswer, RewriteRule},
+    dns::upstream::UpstreamTarget,
 };
 #[cfg(feature = "postgres")]
 use sqlx::Postgres;
@@ -361,6 +362,97 @@ pub async fn clear_adblock_urls_sqlite(p: &Pool<Sqlite>) -> Result<(), LanforgeD
 #[cfg(feature = "postgres")]
 pub async fn clear_adblock_urls_postgres(p: &Pool<Postgres>) -> Result<(), LanforgeDbError> {
     sqlx::query("DELETE FROM dns_adblock_urls")
+        .execute(p)
+        .await?;
+    Ok(())
+}
+
+pub async fn load_dns_reverse_resolvers_sqlite(
+    p: &Pool<Sqlite>,
+) -> Result<Vec<DnsReverseResolver>, LanforgeDbError> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT subnet, resolver_target FROM dns_reverse_resolvers",
+    )
+    .fetch_all(p)
+    .await?;
+
+    let mut resolvers = Vec::new();
+    for (subnet_str, target_str) in rows {
+        if let Ok(subnet) = subnet_str.parse::<IpSubnet>()
+            && let Ok(resolver) = target_str.parse::<UpstreamTarget>()
+        {
+            resolvers.push(DnsReverseResolver { subnet, resolver });
+        }
+    }
+    Ok(resolvers)
+}
+
+#[cfg(feature = "postgres")]
+pub async fn load_dns_reverse_resolvers_postgres(
+    p: &Pool<Postgres>,
+) -> Result<Vec<DnsReverseResolver>, LanforgeDbError> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT subnet::TEXT, resolver_target FROM dns_reverse_resolvers",
+    )
+    .fetch_all(p)
+    .await?;
+
+    let mut resolvers = Vec::new();
+    for (subnet_str, target_str) in rows {
+        if let Ok(subnet) = subnet_str.parse::<IpSubnet>()
+            && let Ok(resolver) = target_str.parse::<UpstreamTarget>()
+        {
+            resolvers.push(DnsReverseResolver { subnet, resolver });
+        }
+    }
+    Ok(resolvers)
+}
+
+pub async fn add_dns_reverse_resolver_sqlite(
+    p: &Pool<Sqlite>,
+    subnet: &IpSubnet,
+    resolver: &UpstreamTarget,
+) -> Result<(), LanforgeDbError> {
+    sqlx::query("INSERT INTO dns_reverse_resolvers (subnet, resolver_target) VALUES (?, ?) ON CONFLICT(subnet) DO UPDATE SET resolver_target = EXCLUDED.resolver_target")
+        .bind(subnet.to_string())
+        .bind(String::from(resolver.clone()))
+        .execute(p)
+        .await?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+pub async fn add_dns_reverse_resolver_postgres(
+    p: &Pool<Postgres>,
+    subnet: &IpSubnet,
+    resolver: &UpstreamTarget,
+) -> Result<(), LanforgeDbError> {
+    sqlx::query("INSERT INTO dns_reverse_resolvers (subnet, resolver_target) VALUES ($1::CIDR, $2) ON CONFLICT(subnet) DO UPDATE SET resolver_target = EXCLUDED.resolver_target")
+        .bind(subnet.to_string())
+        .bind(String::from(resolver.clone()))
+        .execute(p)
+        .await?;
+    Ok(())
+}
+
+pub async fn remove_dns_reverse_resolver_sqlite(
+    p: &Pool<Sqlite>,
+    subnet: &IpSubnet,
+) -> Result<(), LanforgeDbError> {
+    sqlx::query("DELETE FROM dns_reverse_resolvers WHERE subnet = ?")
+        .bind(subnet.to_string())
+        .execute(p)
+        .await?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+pub async fn remove_dns_reverse_resolver_postgres(
+    p: &Pool<Postgres>,
+    subnet: &IpSubnet,
+) -> Result<(), LanforgeDbError> {
+    sqlx::query("DELETE FROM dns_reverse_resolvers WHERE subnet = $1::CIDR")
+        .bind(subnet.to_string())
         .execute(p)
         .await?;
     Ok(())

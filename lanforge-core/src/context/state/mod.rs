@@ -9,10 +9,11 @@ pub mod network;
 #[cfg(test)]
 pub mod tests;
 
-use crate::bus::{NetworkChange, AdminChange, DeviceEvent, LanforgeEvent};
-use lanforge_types::device::{Device, DeviceClass, Ipv6AddrOrSuffix, Origin};
+use crate::bus::{AdminChange, DeviceEvent, LanforgeEvent, NetworkChange};
+use lanforge_types::device::{Device, DeviceClass, Ipv6AddrOrSuffix, Origin, TransientHost};
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::update::{
     CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget, StaticEntry,
 };
@@ -94,6 +95,20 @@ impl State {
             } => self.handle_topology_updated(mac, parent_mac, port, ifindex),
             DeviceUpdate::Reset => self.handle_reset(),
             DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries),
+            DeviceUpdate::TransientHostResolved {
+                ip,
+                hostname,
+                origin,
+            } => self.handle_transient_host_resolved(ip, hostname, origin),
+            DeviceUpdate::AddReverseResolver { resolver } => {
+                self.handle_add_reverse_resolver(resolver)
+            }
+            DeviceUpdate::RemoveReverseResolver { subnet } => {
+                self.handle_remove_reverse_resolver(subnet)
+            }
+            DeviceUpdate::SetReverseResolvers { resolvers } => {
+                self.handle_set_reverse_resolvers(resolvers)
+            }
         }
     }
 }
@@ -112,6 +127,11 @@ pub struct State {
 
     #[serde(skip)]
     pub indexing_enabled: bool,
+
+    #[serde(skip)]
+    pub transient_hosts: HashMap<IpAddr, TransientHost>,
+    #[serde(skip)]
+    pub reverse_resolvers: Vec<DnsReverseResolver>,
 }
 
 impl State {

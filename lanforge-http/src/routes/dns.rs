@@ -11,9 +11,15 @@ use axum::{
 };
 use futures::stream::Stream;
 use lanforge_core::bus::LanforgeEvent;
-use lanforge_types::network::{DnsRecordType, dns::adblock::RewriteRule};
+use lanforge_types::network::{
+    DnsRecordType,
+    dns::{
+        adblock::{AdblockUrlKind, RewriteRule},
+        upstream::UpstreamProtocol,
+    },
+};
 use serde::Deserialize;
-use std::convert::Infallible;
+use std::{convert::Infallible, net::SocketAddr};
 
 #[derive(Debug, Deserialize)]
 pub struct AnalyticsQuery {
@@ -50,7 +56,7 @@ pub struct AdblockSetRequest {
 #[derive(Debug, Deserialize)]
 pub struct AdblockUrlRequest {
     pub url: String,
-    pub kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
+    pub kind: AdblockUrlKind,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,15 +79,26 @@ pub struct DomainRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpstreamAddRequest {
-    pub addr: std::net::SocketAddr,
-    pub protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+    pub addr: SocketAddr,
+    pub protocol: UpstreamProtocol,
     pub domain: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpstreamRemoveRequest {
-    pub addr: std::net::SocketAddr,
-    pub protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+    pub addr: SocketAddr,
+    pub protocol: UpstreamProtocol,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReverseResolverAddRequest {
+    pub subnet: String,
+    pub resolver_uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReverseResolverRemoveRequest {
+    pub subnet: String,
 }
 
 pub fn router() -> Router<AppState> {
@@ -125,6 +142,12 @@ pub fn router() -> Router<AppState> {
         .route("/adblock/allow", post(handle_allow))
         .route("/adblock/allow/{target}", delete(handle_unallow))
         .route("/adblock/block", post(handle_block))
+        .route(
+            "/reverse-resolvers",
+            get(handle_reverse_resolver_list)
+                .post(handle_reverse_resolver_add)
+                .delete(handle_reverse_resolver_remove),
+        )
 }
 
 async fn handle_dns_stats(State(state): State<AppState>) -> impl IntoResponse {
@@ -362,4 +385,28 @@ async fn handle_block(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_dns_block(payload.domain).await, Success => NoContent)
+}
+
+async fn handle_reverse_resolver_list(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_reverse_resolver_list().await,
+        DnsReverseResolvers
+    )
+}
+
+async fn handle_reverse_resolver_add(
+    State(state): State<AppState>,
+    Query(params): Query<ReverseResolverAddRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_reverse_resolver_add(params.subnet, params.resolver_uri).await, Success => NoContent)
+}
+
+async fn handle_reverse_resolver_remove(
+    State(state): State<AppState>,
+    Query(params): Query<ReverseResolverRemoveRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_reverse_resolver_remove(params.subnet).await, Success => NoContent)
 }

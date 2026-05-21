@@ -20,6 +20,7 @@ use lanforge_types::network::dns::{
     DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
 };
 use lanforge_types::system::{ServiceBanner, ServiceState};
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -168,6 +169,8 @@ impl DnsService {
             soa_master_ns,
             soa_mailbox,
             db: Arc::clone(&self.db),
+            reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
         };
 
         let dns_ctx = Arc::new(dns_ctx);

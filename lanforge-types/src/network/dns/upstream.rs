@@ -3,7 +3,7 @@ use std::{net::SocketAddr, str::FromStr};
 use serde::{Deserialize, Serialize};
 
 /// Supported protocols for upstream DNS forwarding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum UpstreamProtocol {
     /// Standard DNS over UDP (with TCP fallback).
@@ -53,7 +53,7 @@ impl UpstreamProtocol {
 }
 
 /// An upstream resolver target with protocol and optional hostname for verification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(try_from = "String", into = "String")]
 pub struct UpstreamTarget {
     /// The IP address and port of the upstream resolver.
@@ -166,6 +166,35 @@ impl FromStr for UpstreamTarget {
                 protocol: UpstreamProtocol::Udp,
                 hostname: None,
             })
+        }
+    }
+}
+
+impl std::fmt::Display for UpstreamTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.protocol {
+            UpstreamProtocol::Tls => {
+                if let Some(ref hn) = self.hostname {
+                    write!(f, "tls://{}@{}", hn, self.addr)
+                } else {
+                    write!(f, "tls://{}", self.addr)
+                }
+            }
+            UpstreamProtocol::Quic => {
+                if let Some(ref hn) = self.hostname {
+                    write!(f, "quic://{}@{}", hn, self.addr)
+                } else {
+                    write!(f, "quic://{}", self.addr)
+                }
+            }
+            UpstreamProtocol::Https => {
+                if let Some(ref hn) = self.hostname {
+                    write!(f, "https://{}@{}", hn, self.addr)
+                } else {
+                    write!(f, "https://{}", self.addr)
+                }
+            }
+            UpstreamProtocol::Udp => write!(f, "udp://{}", self.addr),
         }
     }
 }

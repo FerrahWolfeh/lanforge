@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
-use crate::device::{DeviceClass, Origin};
+use crate::device::{DeviceClass, Origin, TransientOrigin};
 use crate::identifiers::{Duid, MacAddr};
-use crate::network::Ipv6AddrOrSuffix;
+use crate::network::{DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FieldUpdate<T> {
@@ -169,5 +169,19 @@ pub enum DeviceUpdate {
     Reset,
     NeighborBatch {
         entries: Vec<(MacAddr, IpAddr, bool)>,
+    },
+    TransientHostResolved {
+        ip: IpAddr,
+        hostname: Hostname,
+        origin: TransientOrigin,
+    },
+    AddReverseResolver {
+        resolver: DnsReverseResolver,
+    },
+    RemoveReverseResolver {
+        subnet: IpSubnet,
+    },
+    SetReverseResolvers {
+        resolvers: Vec<DnsReverseResolver>,
     },
 }

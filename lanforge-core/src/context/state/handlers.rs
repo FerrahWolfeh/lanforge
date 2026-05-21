@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
-use crate::bus::{NetworkChange, AdminChange, DeviceEvent, EventVec, LanforgeEvent, NetworkEvent};
+use crate::bus::{AdminChange, DeviceEvent, EventVec, LanforgeEvent, NetworkChange, NetworkEvent};
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
 use lanforge_types::device::{
     Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Origin, TopologyInfo,
-    V6ObservationOrigin, classify_ipv6,
+    TransientHost, TransientOrigin, V6ObservationOrigin, classify_ipv6,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::network::Ipv6AddrOrSuffix;
+use lanforge_types::network::{DnsReverseResolver, IpSubnet, Ipv6AddrOrSuffix};
 
 impl State {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -488,6 +488,13 @@ impl State {
             .orphaned_v6
             .retain(|_, (_, _, time)| now.duration_since(*time).is_ok_and(|d| d < cache_max_age));
 
+        // Prune transient hosts older than 4 hours
+        let transient_max_age = Duration::from_hours(4);
+        self.transient_hosts.retain(|_, host| {
+            now.duration_since(host.last_seen)
+                .is_ok_and(|d| d < transient_max_age)
+        });
+
         if !removed.is_empty() {
             self.rebuild_indices();
             return removed
@@ -553,6 +560,8 @@ impl State {
         self.indices.clear();
         self.discovery.clear();
         self.interfaces.clear();
+        self.transient_hosts.clear();
+        self.reverse_resolvers.clear();
         EventVec::new()
     }
 
@@ -649,5 +658,49 @@ impl State {
             events.append(&mut dev_events);
         }
         events
+    }
+
+    pub(crate) fn handle_transient_host_resolved(
+        &mut self,
+        ip: IpAddr,
+        hostname: Hostname,
+        origin: TransientOrigin,
+    ) -> EventVec {
+        let host = TransientHost::new(hostname, origin);
+        if self.transient_hosts.len() >= 1000 && !self.transient_hosts.contains_key(&ip) {
+            let mut oldest_ip = None;
+            let mut oldest_time = SystemTime::now();
+            for (curr_ip, curr_host) in &self.transient_hosts {
+                if curr_host.last_seen < oldest_time {
+                    oldest_time = curr_host.last_seen;
+                    oldest_ip = Some(*curr_ip);
+                }
+            }
+            if let Some(to_remove) = oldest_ip {
+                self.transient_hosts.remove(&to_remove);
+            }
+        }
+        self.transient_hosts.insert(ip, host);
+        EventVec::new()
+    }
+
+    pub(crate) fn handle_add_reverse_resolver(&mut self, resolver: DnsReverseResolver) -> EventVec {
+        self.reverse_resolvers
+            .retain(|r| r.subnet != resolver.subnet);
+        self.reverse_resolvers.push(resolver);
+        EventVec::new()
+    }
+
+    pub(crate) fn handle_remove_reverse_resolver(&mut self, subnet: IpSubnet) -> EventVec {
+        self.reverse_resolvers.retain(|r| r.subnet != subnet);
+        EventVec::new()
+    }
+
+    pub(crate) fn handle_set_reverse_resolvers(
+        &mut self,
+        resolvers: Vec<DnsReverseResolver>,
+    ) -> EventVec {
+        self.reverse_resolvers = resolvers;
+        EventVec::new()
     }
 }

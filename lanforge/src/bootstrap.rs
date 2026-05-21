@@ -123,6 +123,19 @@ impl Bootstrapper {
             State::new()
         });
 
+        match db.load_dns_reverse_resolvers().await {
+            Ok(resolvers) => {
+                info!(
+                    "Loaded {} DNS reverse resolvers from database",
+                    resolvers.len()
+                );
+                table.reverse_resolvers = resolvers;
+            }
+            Err(e) => {
+                warn!("Failed to load reverse resolvers from database: {e}");
+            }
+        }
+
         info!(
             "📦 Databases initialized (Main: {}, Logs: {})",
             cfg.database.url, cfg.database.log_url

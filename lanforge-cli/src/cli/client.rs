@@ -10,9 +10,10 @@ use lanforge_api::api::{
     AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpPoolsResponse,
     DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse,
-    HttpDataResponse, HttpErrorResponse, HttpPaginatedResponse, LeasesResponse, SimpleSuccess,
-    StatusResponse, SystemConfigExport, TopologyResponse, WhoisResponse,
+    DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
+    HostConfigEntry, HostsResponse, HttpDataResponse, HttpErrorResponse, HttpPaginatedResponse,
+    LeasesResponse, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse,
+    TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{
@@ -774,5 +775,25 @@ impl LanforgeClient {
 
     pub async fn system_config_import(&self, config: SystemConfigExport) -> Result<SimpleSuccess> {
         dispatch!(self, post => "/config", config, system_config_import(config))
+    }
+
+    pub async fn dns_reverse_resolver_add(
+        &self,
+        subnet: String,
+        resolver_uri: String,
+    ) -> Result<SimpleSuccess> {
+        dispatch!(self, post => format!("/dns/reverse-resolvers?subnet={subnet}&resolver_uri={resolver_uri}"), serde_json::json!({}), dns_reverse_resolver_add(subnet, resolver_uri))
+    }
+
+    pub async fn dns_reverse_resolver_remove(&self, subnet: String) -> Result<SimpleSuccess> {
+        dispatch!(self, delete => format!("/dns/reverse-resolvers?subnet={subnet}"), dns_reverse_resolver_remove(subnet))
+    }
+
+    pub async fn dns_reverse_resolver_list(&self) -> Result<DnsReverseResolversResponse> {
+        dispatch!(self, get => "/dns/reverse-resolvers", dns_reverse_resolver_list())
+    }
+
+    pub async fn transient_host_list(&self) -> Result<TransientHostsResponse> {
+        dispatch!(self, get => "/devices/transient", transient_host_list())
     }
 }

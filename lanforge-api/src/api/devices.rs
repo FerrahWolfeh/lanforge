@@ -1,7 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use lanforge_types::{
-    device::{DeviceClass, IpClassification, LearningMethod, LeaseHistoryEntry, Origin},
+    device::{
+        DeviceClass, IpClassification, LearningMethod, LeaseHistoryEntry, Origin, TransientOrigin,
+    },
     identifiers::{Duid, MacAddr},
 };
 use serde::{Deserialize, Serialize};
@@ -132,4 +134,38 @@ pub struct TopologyEntry {
     pub local_ifindex: u32,
     /// Last seen timestamp of this topology link from unix epoch in seconds.
     pub last_updated: u64,
+}
+
+/// A single entry in the transient hosts list.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TransientHostEntry {
+    /// Resolved IP address of the transient host.
+    pub ip: IpAddr,
+    /// Resolved hostname.
+    pub hostname: String,
+    /// Origin of this transient host.
+    pub origin: TransientOrigin,
+    /// When the host was resolved (secs since epoch).
+    pub resolved_at: u64,
+    /// When the host was last seen (secs since epoch).
+    pub last_seen: u64,
+}
+
+impl Default for TransientHostEntry {
+    fn default() -> Self {
+        Self {
+            ip: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+            hostname: String::new(),
+            origin: TransientOrigin::default(),
+            resolved_at: 0,
+            last_seen: 0,
+        }
+    }
+}
+
+/// A response containing the list of transient hosts.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TransientHostsResponse {
+    /// The list of transient hosts.
+    pub hosts: Vec<TransientHostEntry>,
 }

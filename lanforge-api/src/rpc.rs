@@ -2,9 +2,10 @@ use crate::api::{
     AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpPoolsResponse,
     DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry,
-    HostsResponse, LeasesResponse, RpcCallError, ServiceBannersResponse, SimpleSuccess,
-    StatusResponse, SystemConfigExport, TopologyResponse, WhoisResponse,
+    DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
+    EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
+    ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse,
+    TransientHostsResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
@@ -153,4 +154,15 @@ pub trait LanforgeRpc {
         &self,
         config: SystemConfigExport,
     ) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_reverse_resolver_add(
+        &self,
+        subnet: String,
+        resolver_uri: String,
+    ) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_reverse_resolver_remove(
+        &self,
+        subnet: String,
+    ) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_reverse_resolver_list(&self) -> Result<DnsReverseResolversResponse, RpcCallError>;
+    async fn transient_host_list(&self) -> Result<TransientHostsResponse, RpcCallError>;
 }

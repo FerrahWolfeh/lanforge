@@ -5,6 +5,8 @@ use lanforge_db::engine::LanforgeDb;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::TransportProtocol;
 use lanforge_types::update::DeviceUpdate;
+use parking_lot::{Mutex, RwLock};
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -104,6 +106,8 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
         soa_zone,
         soa_master_ns,
         soa_mailbox,
+        reverse_managers: Arc::new(RwLock::new(HashMap::new())),
+        resolving_ips: Arc::new(Mutex::new(HashSet::new())),
     }
 }
 

@@ -5,7 +5,7 @@ pub use lanforge_types::network::dns::{
     DnsCacheStatsExtResponse, DnsStatsResponse,
 };
 use lanforge_types::network::{
-    DnsRecordEntry, DnsRecordType, UpstreamHealthSnapshot,
+    DnsRecordEntry, DnsRecordType, DnsReverseResolver, UpstreamHealthSnapshot,
     dns::{adblock::RewriteRule, upstream::UpstreamProtocol},
 };
 use serde::{Deserialize, Serialize};
@@ -129,4 +129,10 @@ pub struct DnsUpstreamConfig {
     pub addr: SocketAddr,
     pub protocol: UpstreamProtocol,
     pub domain: Option<String>,
+}
+
+/// Response containing all DNS reverse resolvers.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsReverseResolversResponse {
+    pub resolvers: Vec<DnsReverseResolver>,
 }

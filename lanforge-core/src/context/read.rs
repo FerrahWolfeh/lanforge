@@ -46,8 +46,10 @@ use std::{
 };
 
 use lanforge_types::{
-    device::Device,
+    device::{Device, TransientHost},
     identifiers::{Duid, MacAddr},
+    network::DnsReverseResolver,
+    network::dns::upstream::UpstreamTarget,
     update::InterfaceState,
 };
 use parking_lot::RwLockReadGuard;
@@ -159,5 +161,40 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_dns_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
         self.inner.dns_context.read().clone()
+    }
+
+    /// Retrieves a cached transient host by its IP.
+    #[must_use]
+    pub fn get_transient_host(&self, ip: &IpAddr) -> Option<TransientHost> {
+        self.read().transient_hosts.get(ip).cloned()
+    }
+
+    /// Returns all cached transient hosts.
+    #[must_use]
+    pub fn all_transient_hosts(&self) -> Vec<(IpAddr, TransientHost)> {
+        self.read()
+            .transient_hosts
+            .iter()
+            .map(|(ip, host)| (*ip, host.clone()))
+            .collect()
+    }
+
+    /// Finds a configured reverse DNS resolver target that contains the target IP.
+    #[must_use]
+    pub fn find_reverse_resolver(&self, ip: IpAddr) -> Option<UpstreamTarget> {
+        let state = self.read();
+        for resolver in &state.reverse_resolvers {
+            if resolver.subnet.contains(ip) {
+                return Some(resolver.resolver.clone());
+            }
+        }
+        drop(state);
+        None
+    }
+
+    /// Returns all configured reverse DNS resolvers.
+    #[must_use]
+    pub fn all_reverse_resolvers(&self) -> Vec<DnsReverseResolver> {
+        self.read().reverse_resolvers.clone()
     }
 }

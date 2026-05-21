@@ -75,4 +75,8 @@ pub enum Response {
     ServiceBanners(ServiceBannersResponse),
     /// Full system configuration export.
     SystemConfig(Box<SystemConfigExport>),
+    /// List of DNS reverse resolvers.
+    DnsReverseResolvers(DnsReverseResolversResponse),
+    /// List of transient hosts.
+    TransientHosts(TransientHostsResponse),
 }

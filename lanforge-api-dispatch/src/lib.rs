@@ -3,9 +3,10 @@ pub mod handlers;
 use lanforge_api::api::{
     AuthTokenResponse, DevicesResponse, DhcpPoolsResponse, DnsAdblockUrlsResponse,
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
-    DnsQueryLogResponse, DnsQueryResponse, DnsRewritesResponse, DnsStatsResponse,
-    DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse, Response, RpcCallError,
-    SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse, WhoisResponse,
+    DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
+    DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse,
+    Response, RpcCallError, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse,
+    TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
@@ -581,6 +582,48 @@ impl LanforgeRpc for ClientContext {
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_system_config_import(config).await {
             Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_reverse_resolver_add(
+        &self,
+        subnet: String,
+        resolver_uri: String,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self
+            .handle_dns_reverse_resolver_add(subnet, resolver_uri)
+            .await
+        {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_reverse_resolver_remove(
+        &self,
+        subnet: String,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_reverse_resolver_remove(subnet).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_reverse_resolver_list(&self) -> Result<DnsReverseResolversResponse, RpcCallError> {
+        match self.handle_dns_reverse_resolver_list().await {
+            Response::DnsReverseResolvers(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn transient_host_list(&self) -> Result<TransientHostsResponse, RpcCallError> {
+        match self.handle_transient_host_list().await {
+            Response::TransientHosts(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

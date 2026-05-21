@@ -12,7 +12,7 @@ use colored::Colorize;
 use lanforge_api::api::{
     DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogEntry, DnsQueryResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
+    DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
 };
 use lanforge_api::rpc::RpcResponse;
 use lanforge_types::events::{DnsEvent, LanforgeEvent};
@@ -51,6 +51,7 @@ pub enum DnsAction {
     Adblock(DnsAdblockArgs),
     Rewrites(DnsRewritesArgs),
     Allowlist,
+    ReverseResolver(DnsReverseResolverArgs),
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -705,6 +706,7 @@ impl Execute for DnsArgs {
             DnsAction::Allowlist => {
                 render_output!(client, client.dns_allowlist().await?, render_allowlist)
             }
+            DnsAction::ReverseResolver(args) => args.execute(client).await,
         }
     }
 }
@@ -939,5 +941,89 @@ pub fn render_allowlist(resp: &DnsAllowlistResponse, ascii: bool) {
     println!("{}", hline.repeat(50));
     for a in &resp.allowlist {
         println!("  {:<6} | {}", a.id, a.domain);
+    }
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct DnsReverseResolverArgs {
+    #[command(subcommand)]
+    pub action: DnsReverseResolverAction,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DnsReverseResolverAction {
+    List,
+    Add {
+        subnet: Option<String>,
+        resolver_uri: Option<String>,
+    },
+    Remove {
+        subnet: Option<String>,
+    },
+}
+
+impl Execute for DnsReverseResolverArgs {
+    async fn execute(self, client: &LanforgeClient) -> Result<()> {
+        match self.action {
+            DnsReverseResolverAction::List => {
+                render_output!(
+                    client,
+                    client.dns_reverse_resolver_list().await?,
+                    render_dns_reverse_resolvers
+                )
+            }
+            DnsReverseResolverAction::Add {
+                subnet,
+                resolver_uri,
+            } => {
+                let final_subnet = match subnet {
+                    Some(s) => s,
+                    None => prompt_text("Subnet CIDR (e.g. 100.64.0.0/10):", None)?,
+                };
+                let final_resolver = match resolver_uri {
+                    Some(r) => r,
+                    None => prompt_text("Resolver URI (e.g. udp://100.100.100.100:53):", None)?,
+                };
+                let resp = client
+                    .dns_reverse_resolver_add(final_subnet, final_resolver)
+                    .await?;
+                println!("✓ {}", resp.message);
+                Ok(())
+            }
+            DnsReverseResolverAction::Remove { subnet } => {
+                let final_subnet = if let Some(s) = subnet {
+                    s
+                } else {
+                    let resp = client.dns_reverse_resolver_list().await?;
+                    if resp.resolvers.is_empty() {
+                        bail!("No reverse resolvers configured.");
+                    }
+                    let items = resp
+                        .resolvers
+                        .iter()
+                        .map(|r| format!("{} ({})", r.subnet, r.resolver))
+                        .collect::<Vec<_>>();
+                    let choice = prompt_select(
+                        "Select reverse resolver to remove:",
+                        items.iter().map(String::as_str).collect(),
+                    )?;
+                    let parts: Vec<&str> = choice.split_whitespace().collect();
+                    parts[0].to_string()
+                };
+                let resp = client.dns_reverse_resolver_remove(final_subnet).await?;
+                println!("✓ {}", resp.message);
+                Ok(())
+            }
+        }
+    }
+}
+
+pub fn render_dns_reverse_resolvers(resp: &DnsReverseResolversResponse, ascii: bool) {
+    let hline = if ascii { "-" } else { "─" };
+    println!(" DNS REVERSE RESOLVERS \n");
+    println!("  {:<30} | RESOLVER TARGET", "SUBNET");
+    println!("{}", hline.repeat(60));
+    for r in &resp.resolvers {
+        println!("  {:<30} | {}", r.subnet, r.resolver);
     }
 }

@@ -210,3 +210,26 @@ pub fn fast_lowercase(s: &str) -> Cow<'_, str> {
         Cow::Borrowed(s)
     }
 }
+
+/// Formats an IpAddr to its reverse ARPA DNS name (e.g. "2.1.64.100.in-addr.arpa.").
+#[must_use]
+pub fn ip_to_arpa(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            let octets = ipv4.octets();
+            format!(
+                "{}.{}.{}.{}.in-addr.arpa.",
+                octets[3], octets[2], octets[1], octets[0]
+            )
+        }
+        IpAddr::V6(ipv6) => {
+            let mut s = String::with_capacity(74);
+            for &octet in ipv6.octets().iter().rev() {
+                use std::fmt::Write;
+                write!(&mut s, "{:x}.{:x}.", octet & 0xf, octet >> 4).unwrap();
+            }
+            s.push_str("ip6.arpa.");
+            s
+        }
+    }
+}

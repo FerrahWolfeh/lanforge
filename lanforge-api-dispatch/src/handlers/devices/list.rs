@@ -1,6 +1,7 @@
 use crate::{ClientContext, handlers::duration_since_epoch_u64};
 use lanforge_api::api::{
-    DeviceEntry, DevicesMeta, DevicesResponse, Ipv6Entry, LeaseInfo, Response,
+    DeviceEntry, DevicesMeta, DevicesResponse, Ipv6Entry, LeaseInfo, Response, TransientHostEntry,
+    TransientHostsResponse,
 };
 use lanforge_types::device::{Device, IPv4State, IPv6State, classify_ipv6};
 use std::net::{IpAddr, Ipv6Addr};
@@ -142,5 +143,20 @@ impl ClientContext {
                     .collect()
             },
         }
+    }
+
+    pub async fn handle_transient_host_list(&self) -> Response {
+        let hosts = self.ctx.all_transient_hosts();
+        let api_hosts = hosts
+            .into_iter()
+            .map(|(ip, host)| TransientHostEntry {
+                ip,
+                hostname: host.hostname.to_string(),
+                origin: host.origin,
+                resolved_at: duration_since_epoch_u64(host.resolved_at),
+                last_seen: duration_since_epoch_u64(host.last_seen),
+            })
+            .collect();
+        Response::TransientHosts(TransientHostsResponse { hosts: api_hosts })
     }
 }

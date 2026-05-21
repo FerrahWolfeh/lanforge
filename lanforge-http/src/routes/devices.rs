@@ -22,6 +22,7 @@ pub struct DeviceListQuery {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handle_list_devices))
+        .route("/transient", get(handle_transient_devices))
         .route("/{target}", get(handle_whois).delete(handle_purge))
         .route("/{target}/wol", post(handle_wake))
 }
@@ -68,4 +69,9 @@ async fn handle_purge(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_purge(target).await, Success => NoContent)
+}
+
+async fn handle_transient_devices(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_transient_host_list().await, TransientHosts)
 }

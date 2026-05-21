@@ -4,13 +4,16 @@ pub mod worker;
 
 use crate::config::DnsConfig;
 use crate::pipeline::Pipeline;
-use crate::resolver::{LocalResolver, recursive::UpstreamStrategy, RewriteStore};
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
+use crate::resolver::recursive::UpstreamManager;
+use crate::resolver::{LocalResolver, RewriteStore, recursive::UpstreamStrategy};
 use crate::telemetry::{DnsStats, QueryRing};
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol};
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,6 +39,10 @@ pub struct DnsContext {
     pub soa_zone: Arc<str>,
     pub soa_master_ns: Arc<str>,
     pub soa_mailbox: Arc<str>,
+
+    // Reverse DNS resolution managers and lock-free tracking
+    pub reverse_managers: Arc<parking_lot::RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
+    pub resolving_ips: Arc<parking_lot::Mutex<HashSet<IpAddr>>>,
 }
 
 pub struct DnsLogEvent {
