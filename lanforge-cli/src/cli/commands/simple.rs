@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::ErrorKind, net::IpAddr};
+use std::{collections::HashMap, io::ErrorKind};
 
 use crate::cli::{
     Execute, LanforgeClient,
