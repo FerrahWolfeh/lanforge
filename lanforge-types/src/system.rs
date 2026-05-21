@@ -1,5 +1,6 @@
 use crate::network::{Ipv6Prefix, dns::upstream::UpstreamTarget};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::borrow::Cow;
 
 /// Global system status and runtime configuration snapshot.
@@ -57,8 +58,8 @@ pub enum Cap {
 /// Server capabilities representing compiled feature flags and runtime enabled features.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ServerCapabilities {
-    pub compiled: smallvec::SmallVec<[Cap; 32]>,
-    pub enabled: smallvec::SmallVec<[Cap; 32]>,
+    pub compiled: SmallVec<[Cap; 32]>,
+    pub enabled: SmallVec<[Cap; 32]>,
 }
 
 /// Represents the operating state of a decoupled service.

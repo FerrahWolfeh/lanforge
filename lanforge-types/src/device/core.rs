@@ -1,7 +1,7 @@
 use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
 use crate::device::state::{
@@ -10,7 +10,9 @@ use crate::device::state::{
 use crate::device::topology::TopologyInfo;
 use crate::events::NetworkChange;
 use crate::identifiers::{Duid, MacAddr};
-use crate::network::{Hostname, HostnameOrigin, IpClassification, classify_ipv6};
+use crate::network::{
+    Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, classify_ipv6, is_ula,
+};
 use crate::utils::serde::{
     deserialize_seen_v4, deserialize_time, deserialize_time_opt, serialize_seen_v4, serialize_time,
     serialize_time_opt,
@@ -614,7 +616,6 @@ impl Device {
         gua_prefix: Option<Ipv6Addr>,
         ula_prefix: Option<Ipv6Addr>,
     ) -> Option<Ipv6Addr> {
-        use crate::network::is_ula;
         let mut best: Option<(u8, Ipv6Addr)> = None;
         let mut update_best = |prio: u8, addr: Ipv6Addr| {
             if best.as_ref().is_none_or(|(b_prio, _)| prio < *b_prio) {
@@ -650,41 +651,41 @@ impl Device {
         &self,
         gua_prefix: Option<Ipv6Addr>,
         ula_prefix: Option<Ipv6Addr>,
-    ) -> SmallVec<[std::net::IpAddr; 32]> {
+    ) -> SmallVec<[IpAddr; 32]> {
         use crate::network::{Ipv6AddrOrSuffix, classify_ip};
-        let mut addrs: SmallVec<[std::net::IpAddr; 32]> = SmallVec::new();
-        let mut push_unique = |ip: std::net::IpAddr| {
+        let mut addrs: SmallVec<[IpAddr; 32]> = SmallVec::new();
+        let mut push_unique = |ip: IpAddr| {
             if !addrs.contains(&ip) {
                 addrs.push(ip);
             }
         };
 
         if let Some(ip) = self.v4.ip() {
-            push_unique(std::net::IpAddr::V4(ip));
+            push_unique(IpAddr::V4(ip));
         }
         for (ip, _) in &self.seen_v4 {
-            push_unique(std::net::IpAddr::V4(*ip));
+            push_unique(IpAddr::V4(*ip));
         }
 
         for state in &self.v6 {
             if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(_), _) = state {
                 for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
                     if let Some(ip) = state.ip_with_prefix(Some(prefix)) {
-                        push_unique(std::net::IpAddr::V6(ip));
+                        push_unique(IpAddr::V6(ip));
                     }
                 }
             } else if let Some(ip) = state.ip() {
-                push_unique(std::net::IpAddr::V6(ip));
+                push_unique(IpAddr::V6(ip));
             }
         }
         addrs.sort_by_key(|ip| classify_ip(ip).score());
         addrs
     }
 
-    pub fn delete_ip(&mut self, ip: std::net::IpAddr) -> bool {
+    pub fn delete_ip(&mut self, ip: IpAddr) -> bool {
         let mut changed = false;
         match ip {
-            std::net::IpAddr::V4(ip4) => {
+            IpAddr::V4(ip4) => {
                 if let IPv4State::Static(s) = &self.v4
                     && *s == ip4
                 {
@@ -702,7 +703,7 @@ impl Device {
                     changed = true;
                 }
             }
-            std::net::IpAddr::V6(ip6) => {
+            IpAddr::V6(ip6) => {
                 let initial_v6_len = self.v6.len();
                 self.v6.retain(|s| s.ip() != Some(ip6));
 
@@ -720,10 +721,10 @@ impl Device {
         changed
     }
 
-    pub fn mark_ip_offline(&mut self, ip: std::net::IpAddr) -> bool {
+    pub fn mark_ip_offline(&mut self, ip: IpAddr) -> bool {
         let mut changed = false;
         match ip {
-            std::net::IpAddr::V4(ip4) => {
+            IpAddr::V4(ip4) => {
                 if let IPv4State::Dynamic(lease) = &mut self.v4
                     && lease.ip == ip4
                 {
@@ -735,7 +736,7 @@ impl Device {
                     changed = true;
                 }
             }
-            std::net::IpAddr::V6(ip6) => {
+            IpAddr::V6(ip6) => {
                 let initial_len = self.v6.len();
                 self.v6.retain(|s| match s {
                     IPv6State::Slaac(addr, _)
@@ -747,9 +748,7 @@ impl Device {
                 if self.v6.len() == initial_len {
                     for state in &mut self.v6 {
                         match state {
-                            IPv6State::Static(crate::network::Ipv6AddrOrSuffix::Full(addr), ts)
-                                if *addr == ip6 =>
-                            {
+                            IPv6State::Static(Ipv6AddrOrSuffix::Full(addr), ts) if *addr == ip6 => {
                                 *ts = SystemTime::UNIX_EPOCH;
                                 changed = true;
                                 break;

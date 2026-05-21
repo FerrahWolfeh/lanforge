@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -82,7 +85,7 @@ impl std::str::FromStr for LeaseKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaseHistoryEntry {
-    pub ip: std::net::IpAddr,
+    pub ip: IpAddr,
     pub lease_type: LeaseKind,
     pub action: LeaseAction,
     pub timestamp: SystemTime,
@@ -91,7 +94,7 @@ pub struct LeaseHistoryEntry {
 impl Default for LeaseHistoryEntry {
     fn default() -> Self {
         Self {
-            ip: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             lease_type: LeaseKind::V4,
             action: LeaseAction::Assigned,
             timestamp: UNIX_EPOCH,

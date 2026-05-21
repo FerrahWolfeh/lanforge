@@ -9,7 +9,9 @@ use lanforge_types::network::{
 use sqlx::Postgres;
 use sqlx::{Pool, Sqlite};
 
-pub async fn load_dns_rewrites_sqlite(p: &Pool<Sqlite>) -> Result<Vec<RewriteRule>, LanforgeDbError> {
+pub async fn load_dns_rewrites_sqlite(
+    p: &Pool<Sqlite>,
+) -> Result<Vec<RewriteRule>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (i64, String, String, String)>(
         "SELECT id, domain, rtype, answer FROM dns_rewrites ORDER BY domain",
     )
@@ -138,7 +140,10 @@ pub async fn load_dns_allowlist_postgres(
     Ok(rows.into_iter().map(|(id, d)| (id as i64, d)).collect())
 }
 
-pub async fn add_dns_allowlist_sqlite(p: &Pool<Sqlite>, domain: &str) -> Result<(), LanforgeDbError> {
+pub async fn add_dns_allowlist_sqlite(
+    p: &Pool<Sqlite>,
+    domain: &str,
+) -> Result<(), LanforgeDbError> {
     sqlx::query("INSERT INTO dns_allowlist (domain) VALUES (?) ON CONFLICT(domain) DO NOTHING")
         .bind(domain)
         .execute(p)
@@ -192,7 +197,9 @@ pub async fn clear_dns_allowlist_postgres(p: &Pool<Postgres>) -> Result<(), Lanf
     Ok(())
 }
 
-pub async fn load_adblock_config_sqlite(p: &Pool<Sqlite>) -> Result<AdblockDbConfig, LanforgeDbError> {
+pub async fn load_adblock_config_sqlite(
+    p: &Pool<Sqlite>,
+) -> Result<AdblockDbConfig, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM dns_adblock_config")
         .fetch_all(p)
         .await?;

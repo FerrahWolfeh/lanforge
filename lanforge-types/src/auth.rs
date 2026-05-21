@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 /// Granular capability / security scope for API authentication tokens.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,4 +44,4 @@ impl std::str::FromStr for ApiScope {
 }
 
 /// A lean, stack-allocated vector of API scopes.
-pub type ApiScopes = smallvec::SmallVec<[ApiScope; 8]>;
+pub type ApiScopes = SmallVec<[ApiScope; 8]>;

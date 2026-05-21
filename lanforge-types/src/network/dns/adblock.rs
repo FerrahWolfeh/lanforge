@@ -1,6 +1,11 @@
 use crate::network::DnsRecordType;
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::{
+    borrow::Cow,
+    fmt::Display,
+    net::{Ipv4Addr, Ipv6Addr},
+    str::FromStr,
+};
 
 use crate::identifiers::DeviceIdentifier;
 
@@ -12,7 +17,7 @@ pub enum DnsServiceProtocol {
     Udp,
 }
 
-impl std::str::FromStr for DnsServiceProtocol {
+impl FromStr for DnsServiceProtocol {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim();
@@ -25,7 +30,7 @@ impl std::str::FromStr for DnsServiceProtocol {
     }
 }
 
-impl std::fmt::Display for DnsServiceProtocol {
+impl Display for DnsServiceProtocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Tcp => write!(f, "tcp"),
@@ -59,7 +64,7 @@ pub enum DnsService {
     Custom(String),
 }
 
-impl std::str::FromStr for DnsService {
+impl FromStr for DnsService {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim();
@@ -87,7 +92,7 @@ impl std::str::FromStr for DnsService {
     }
 }
 
-impl std::fmt::Display for DnsService {
+impl Display for DnsService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Http => write!(f, "http"),
@@ -105,17 +110,17 @@ impl std::fmt::Display for DnsService {
 
 impl DnsService {
     #[must_use]
-    pub fn to_srv_name(&self) -> std::borrow::Cow<'_, str> {
+    pub fn to_srv_name(&self) -> Cow<'_, str> {
         match self {
-            Self::Http => std::borrow::Cow::Borrowed("_http"),
-            Self::Https => std::borrow::Cow::Borrowed("_https"),
-            Self::Ssh => std::borrow::Cow::Borrowed("_ssh"),
-            Self::Ftp => std::borrow::Cow::Borrowed("_ftp"),
-            Self::Minecraft => std::borrow::Cow::Borrowed("_minecraft"),
-            Self::Plex => std::borrow::Cow::Borrowed("_plex"),
-            Self::Jellyfin => std::borrow::Cow::Borrowed("_jellyfin"),
-            Self::Ldap => std::borrow::Cow::Borrowed("_ldap"),
-            Self::Custom(name) => std::borrow::Cow::Owned(format!("_{name}")),
+            Self::Http => Cow::Borrowed("_http"),
+            Self::Https => Cow::Borrowed("_https"),
+            Self::Ssh => Cow::Borrowed("_ssh"),
+            Self::Ftp => Cow::Borrowed("_ftp"),
+            Self::Minecraft => Cow::Borrowed("_minecraft"),
+            Self::Plex => Cow::Borrowed("_plex"),
+            Self::Jellyfin => Cow::Borrowed("_jellyfin"),
+            Self::Ldap => Cow::Borrowed("_ldap"),
+            Self::Custom(name) => Cow::Owned(format!("_{name}")),
         }
     }
 }
@@ -155,7 +160,7 @@ pub enum RewriteAnswer {
     },
 }
 
-impl std::str::FromStr for RewriteAnswer {
+impl FromStr for RewriteAnswer {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -167,8 +172,12 @@ impl std::str::FromStr for RewriteAnswer {
             }
             let service = parts[0].parse::<DnsService>()?;
             let protocol = parts[1].parse::<DnsServiceProtocol>()?;
-            let port_str = parts.last().ok_or_else(|| "Missing port in SRV rewrite answer".to_string())?;
-            let port = port_str.parse::<u16>().map_err(|e| format!("Invalid port in SRV: {e}"))?;
+            let port_str = parts
+                .last()
+                .ok_or_else(|| "Missing port in SRV rewrite answer".to_string())?;
+            let port = port_str
+                .parse::<u16>()
+                .map_err(|e| format!("Invalid port in SRV: {e}"))?;
             let device_str = parts[2..parts.len() - 1].join(":");
             let device = device_str.parse::<DeviceIdentifier>()?;
             return Ok(Self::Service {
@@ -221,20 +230,28 @@ impl std::str::FromStr for RewriteAnswer {
     }
 }
 
-impl std::fmt::Display for RewriteAnswer {
+impl Display for RewriteAnswer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::A(ip) => write!(f, "{ip}"),
             Self::Aaaa(ip) => write!(f, "{ip}"),
             Self::Cname(domain) => write!(f, "{domain}"),
-            Self::Device { identifier, fallback } => {
+            Self::Device {
+                identifier,
+                fallback,
+            } => {
                 if let Some(fb) = fallback {
                     write!(f, "dev:{identifier}|{fb}")
                 } else {
                     write!(f, "dev:{identifier}")
                 }
             }
-            Self::Service { service, protocol, device, port } => {
+            Self::Service {
+                service,
+                protocol,
+                device,
+                port,
+            } => {
                 write!(f, "srv:{service}:{protocol}:{device}:{port}")
             }
         }
@@ -256,7 +273,7 @@ pub enum BlockingMode {
     Refused,
 }
 
-impl std::str::FromStr for BlockingMode {
+impl FromStr for BlockingMode {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -269,7 +286,7 @@ impl std::str::FromStr for BlockingMode {
     }
 }
 
-impl std::fmt::Display for BlockingMode {
+impl Display for BlockingMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NxDomain => write!(f, "nxdomain"),
@@ -300,7 +317,7 @@ pub enum AdblockUrlKind {
     Allowlist,
 }
 
-impl std::str::FromStr for AdblockUrlKind {
+impl FromStr for AdblockUrlKind {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -311,7 +328,7 @@ impl std::str::FromStr for AdblockUrlKind {
     }
 }
 
-impl std::fmt::Display for AdblockUrlKind {
+impl Display for AdblockUrlKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Blocklist => write!(f, "blocklist"),
@@ -354,7 +371,11 @@ mod tests {
 
         // Device Name
         let dev_name = RewriteAnswer::from_str("dev:nas-box").unwrap();
-        if let RewriteAnswer::Device { identifier, fallback } = &dev_name {
+        if let RewriteAnswer::Device {
+            identifier,
+            fallback,
+        } = &dev_name
+        {
             assert_eq!(identifier, &DeviceIdentifier::Name("nas-box".to_string()));
             assert!(fallback.is_none());
         } else {
@@ -364,7 +385,11 @@ mod tests {
 
         // Device MAC
         let dev_mac = RewriteAnswer::from_str("dev:e0:d5:5e:e2:d4:89").unwrap();
-        if let RewriteAnswer::Device { identifier, fallback } = &dev_mac {
+        if let RewriteAnswer::Device {
+            identifier,
+            fallback,
+        } = &dev_mac
+        {
             assert!(matches!(identifier, DeviceIdentifier::Mac(_)));
             assert!(fallback.is_none());
         } else {
@@ -374,7 +399,11 @@ mod tests {
 
         // Device with fallback IP
         let dev_fb = RewriteAnswer::from_str("dev:nas-box|192.168.1.1").unwrap();
-        if let RewriteAnswer::Device { identifier, fallback } = &dev_fb {
+        if let RewriteAnswer::Device {
+            identifier,
+            fallback,
+        } = &dev_fb
+        {
             assert_eq!(identifier, &DeviceIdentifier::Name("nas-box".to_string()));
             assert!(matches!(fallback.as_deref(), Some(RewriteAnswer::A(_))));
         } else {
@@ -384,7 +413,13 @@ mod tests {
 
         // Service Discovery
         let srv_ans = RewriteAnswer::from_str("srv:http:tcp:nas-box:8096").unwrap();
-        if let RewriteAnswer::Service { service, protocol, device, port } = &srv_ans {
+        if let RewriteAnswer::Service {
+            service,
+            protocol,
+            device,
+            port,
+        } = &srv_ans
+        {
             assert_eq!(service, &DnsService::Http);
             assert_eq!(protocol, &DnsServiceProtocol::Tcp);
             assert_eq!(device, &DeviceIdentifier::Name("nas-box".to_string()));
@@ -396,7 +431,13 @@ mod tests {
 
         // Service with MAC and Custom Service name
         let srv_mac = RewriteAnswer::from_str("srv:my-app:udp:e0:d5:5e:e2:d4:89:5000").unwrap();
-        if let RewriteAnswer::Service { service, protocol, device, port } = &srv_mac {
+        if let RewriteAnswer::Service {
+            service,
+            protocol,
+            device,
+            port,
+        } = &srv_mac
+        {
             assert_eq!(service, &DnsService::Custom("my-app".to_string()));
             assert_eq!(protocol, &DnsServiceProtocol::Udp);
             assert!(matches!(device, DeviceIdentifier::Mac(_)));

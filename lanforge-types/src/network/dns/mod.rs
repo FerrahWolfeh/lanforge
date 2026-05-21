@@ -1,7 +1,11 @@
-use crate::identifiers::MacAddr;
+use crate::{
+    identifiers::MacAddr,
+    network::dns::{adblock::AdblockUrlKind, upstream::UpstreamProtocol},
+};
 use serde::{Deserialize, Serialize};
 use std::{
-    net::{Ipv4Addr, Ipv6Addr},
+    fmt::Display,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
 };
 
@@ -105,7 +109,7 @@ impl std::str::FromStr for DnsRecordType {
     }
 }
 
-impl std::fmt::Display for DnsRecordType {
+impl Display for DnsRecordType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::A => write!(f, "A"),
@@ -130,8 +134,8 @@ impl std::fmt::Display for DnsRecordType {
 /// Serializable snapshot of upstream health metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamHealthSnapshot {
-    pub target: std::net::SocketAddr,
-    pub protocol: upstream::UpstreamProtocol,
+    pub target: SocketAddr,
+    pub protocol: UpstreamProtocol,
     pub rtt_ewma_us: u32,
     pub last_rtt_us: u32,
     pub total_queries: u64,
@@ -175,7 +179,7 @@ pub enum TransportProtocol {
     Https,
 }
 
-impl std::fmt::Display for TransportProtocol {
+impl Display for TransportProtocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Udp => write!(f, "UDP"),
@@ -413,7 +417,7 @@ pub enum DnsRData {
     Unknown(Vec<u8>),
 }
 
-impl std::fmt::Display for DnsRData {
+impl Display for DnsRData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::A(addr) => write!(f, "{addr}"),
@@ -469,8 +473,7 @@ impl std::fmt::Display for DnsRData {
                             // ipv4hint
                             let mut ips = Vec::new();
                             for chunk in val.chunks_exact(4) {
-                                let ip =
-                                    std::net::Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
+                                let ip = Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
                                 ips.push(ip.to_string());
                             }
                             if !ips.is_empty() {
@@ -483,7 +486,7 @@ impl std::fmt::Display for DnsRData {
                             for chunk in val.chunks_exact(16) {
                                 let mut b = [0u8; 16];
                                 b.copy_from_slice(chunk);
-                                let ip = std::net::Ipv6Addr::from(b);
+                                let ip = Ipv6Addr::from(b);
                                 ips.push(ip.to_string());
                             }
                             if !ips.is_empty() {
@@ -529,7 +532,7 @@ impl DnsMessage {
     }
 }
 
-impl std::fmt::Display for DnsRecordEntry {
+impl Display for DnsRecordEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:<5} {:<20} -> {}", self.kind, self.name, self.data)
     }
@@ -582,7 +585,7 @@ pub struct DnsAdblockStatusResponse {
 pub struct AdblockUrlEntry {
     pub id: Option<i64>,
     pub url: String,
-    pub kind: adblock::AdblockUrlKind,
+    pub kind: AdblockUrlKind,
 }
 
 /// In-depth DNS cache statistics.
@@ -597,18 +600,39 @@ pub struct DnsCacheStatsExtResponse {
 /// Request sent over the core DNS handle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DnsRequest {
-    Query { name: String, qtype: DnsRecordType },
-    CacheDump { limit: Option<usize>, offset: Option<usize> },
+    Query {
+        name: String,
+        qtype: DnsRecordType,
+    },
+    CacheDump {
+        limit: Option<usize>,
+        offset: Option<usize>,
+    },
     CacheStatsExt,
     Upstreams,
-    UpstreamAdd { addr: std::net::SocketAddr, protocol: upstream::UpstreamProtocol, domain: Option<String> },
-    UpstreamRemove { addr: std::net::SocketAddr, protocol: upstream::UpstreamProtocol },
+    UpstreamAdd {
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
+        domain: Option<String>,
+    },
+    UpstreamRemove {
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
+    },
     AdblockStatus,
-    AdblockSet { enabled: bool, duration_secs: Option<u64> },
+    AdblockSet {
+        enabled: bool,
+        duration_secs: Option<u64>,
+    },
     AdblockReload,
     AdblockUrlList,
-    AdblockUrlAdd { url: String, kind: adblock::AdblockUrlKind },
-    AdblockUrlRemove { url: String },
+    AdblockUrlAdd {
+        url: String,
+        kind: AdblockUrlKind,
+    },
+    AdblockUrlRemove {
+        url: String,
+    },
     Stats,
 }
 
@@ -629,7 +653,6 @@ pub enum DnsResponse {
     AdblockUrlRemove(Result<(), String>),
     Stats(DnsStatsResponse),
 }
-
 
 #[cfg(test)]
 mod tests {

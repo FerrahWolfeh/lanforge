@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::network::QueryLogEntry;
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum DnsEvent {
     #[cfg(feature = "adblock")]
@@ -19,7 +21,7 @@ pub enum DnsEvent {
         domain: String,
     },
     /// A DNS query was resolved.
-    QueryResolved(crate::network::QueryLogEntry),
+    QueryResolved(QueryLogEntry),
     /// Flush the DNS cache.
     #[default]
     CacheFlush,

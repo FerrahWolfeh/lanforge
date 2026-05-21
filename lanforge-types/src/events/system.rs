@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::system::ServiceBanner;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SystemEvent {
     Shutdown,
@@ -10,5 +12,5 @@ pub enum SystemEvent {
     SystemReady,
     ReloadConfig,
     ConfigUpdate { password_hash: String },
-    ServiceStatusBanner(crate::system::ServiceBanner),
+    ServiceStatusBanner(ServiceBanner),
 }

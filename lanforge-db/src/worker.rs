@@ -19,6 +19,7 @@ use lanforge_core::bus::{
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Interval, interval};
@@ -115,15 +116,9 @@ impl DbWorker {
 
         // 2. Flush Main DB
         if !self.dirty && self.dirty_macs.is_empty() && self.purged_macs.is_empty() {
-            metrics
-                .last_flush_ts
-                .store(now, std::sync::atomic::Ordering::Relaxed);
-            metrics
-                .flush_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            metrics
-                .last_error
-                .store(had_error, std::sync::atomic::Ordering::Relaxed);
+            metrics.last_flush_ts.store(now, Ordering::Relaxed);
+            metrics.flush_count.fetch_add(1, Ordering::Relaxed);
+            metrics.last_error.store(had_error, Ordering::Relaxed);
             return;
         }
 
@@ -212,19 +207,12 @@ impl DbWorker {
             }
         }
 
+        metrics.last_flush_ts.store(now, Ordering::Relaxed);
+        metrics.flush_count.fetch_add(1, Ordering::Relaxed);
         metrics
-            .last_flush_ts
-            .store(now, std::sync::atomic::Ordering::Relaxed);
-        metrics
-            .flush_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        metrics.devices_written.fetch_add(
-            written_devices_count as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        metrics
-            .last_error
-            .store(had_error, std::sync::atomic::Ordering::Relaxed);
+            .devices_written
+            .fetch_add(written_devices_count as u64, Ordering::Relaxed);
+        metrics.last_error.store(had_error, Ordering::Relaxed);
     }
 }
 

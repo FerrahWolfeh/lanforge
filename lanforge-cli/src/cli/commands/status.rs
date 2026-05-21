@@ -5,6 +5,7 @@ use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::ServiceStatusInfo;
 use lanforge_api::api::StatusResponse;
+use lanforge_types::network::Ipv6Prefix;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct StatusArgs {}
@@ -38,7 +39,7 @@ impl Execute for ServicesArgs {
 
 pub fn render_services_in_depth(resp: &lanforge_api::api::ServiceBannersResponse, ascii: bool) {
     let hline = if ascii { "-" } else { "─" };
-    println!(" RUNNING SERVICES (DEEP-DIVE) \n");
+    println!(" RUNNING SERVICES \n");
     println!(
         "  {:<20} | {:<10} | {:<15} | STATS & METRICS",
         "NAME", "STATE", "UPTIME"
@@ -92,22 +93,18 @@ fn render_header(st: &StatusResponse) {
 
 fn render_infrastructure(st: &StatusResponse, ascii: bool) {
     // Here we convert both to string representations wether they are some or not
-    let gua = st
-        .network
-        .gua
-        .map_or_else(|| "stabilizing...".to_string(), |ip| ip.to_string());
-    let ula = st
-        .network
-        .ula
-        .map_or_else(|| "unavailable".to_string(), |ip| ip.to_string());
-    let ipv4 = st.network.lan_ipv4_cidr.map_or_else(
-        || {
-            st.network
-                .lan_ipv4
-                .map_or_else(|| "-".to_string(), |ip| ip.to_string())
-        },
-        |ip| ip.to_string(),
+    let gua = st.network.gua.map_or_else(
+        || "stabilizing...".to_string(),
+        |ip| Ipv6Prefix::from_addr(ip).to_string(),
     );
+    let ula = st.network.ula.map_or_else(
+        || "unavailable".to_string(),
+        |ip| Ipv6Prefix::from_addr(ip).to_string(),
+    );
+    let ipv4 = st
+        .network
+        .lan_ipv4
+        .map_or_else(|| "-".to_string(), |ip| ip.to_string());
     let rss = ByteSize::b(st.resources.memory_rss_bytes);
     let border = if ascii {
         BorderStyle::Classic

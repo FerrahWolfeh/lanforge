@@ -1,7 +1,7 @@
-use std::str::FromStr;
-use std::fmt;
-use serde::{Serialize, Deserialize};
 use crate::identifiers::MacAddr;
+use serde::{Deserialize, Serialize};
+use std::fmt::{self, Display};
+use std::{borrow::Cow, str::FromStr};
 
 /// Represents a device target identifier, which can be either a hardware MAC address
 /// or a lowercase alphanumeric/hyphenated device name.
@@ -15,10 +15,10 @@ pub enum DeviceIdentifier {
 impl DeviceIdentifier {
     /// Returns the string representation of the identifier.
     #[must_use]
-    pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
+    pub fn as_str(&self) -> Cow<'_, str> {
         match self {
-            Self::Mac(mac) => std::borrow::Cow::Owned(mac.to_string()),
-            Self::Name(name) => std::borrow::Cow::Borrowed(name.as_str()),
+            Self::Mac(mac) => Cow::Owned(mac.to_string()),
+            Self::Name(name) => Cow::Borrowed(name.as_str()),
         }
     }
 }
@@ -49,7 +49,7 @@ impl FromStr for DeviceIdentifier {
     }
 }
 
-impl fmt::Display for DeviceIdentifier {
+impl Display for DeviceIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Mac(mac) => write!(f, "{mac}"),
