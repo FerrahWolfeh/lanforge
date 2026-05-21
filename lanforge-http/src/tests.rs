@@ -42,7 +42,7 @@ async fn test_auth_token_expiration() {
     assert!(claims.exp <= now + 86400);
 }
 
-#[cfg(feature = "remote")]
+#[cfg(feature = "client")]
 #[tokio::test]
 async fn test_remote_client_init() {
     use crate::remote::RemoteClient;

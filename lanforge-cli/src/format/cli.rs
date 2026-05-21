@@ -1,6 +1,7 @@
 use colored::Colorize;
 use lanforge_types::events::{
-    NetworkChange, AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
+    AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, NetworkEvent, StorageEvent,
+    SystemEvent,
 };
 use lanforge_types::{identifiers::MacAddr, update::LeaseTarget};
 
@@ -467,7 +468,9 @@ fn format_change_net(change: &NetworkChange) -> String {
 fn format_change_admin(change: &AdminChange) -> String {
     match change {
         AdminChange::CliHostUpdated => "Host updated via CLI".bright_blue().to_string(),
-        AdminChange::HostnameChanged { hostname } => format!("Static Hostname: {}", hostname.bold()),
+        AdminChange::HostnameChanged { hostname } => {
+            format!("Static Hostname: {}", hostname.bold())
+        }
         AdminChange::V4StaticChanged { ip } => ip.as_ref().map_or_else(
             || "Static IPv4 removed".dimmed().to_string(),
             |v| format!("Static IPv4 set: {}", v.to_string().bright_green()),

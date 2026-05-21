@@ -1,3 +1,6 @@
+#[cfg(feature = "adblock")]
+use std::net::IpAddr;
+
 use serde::{Deserialize, Serialize};
 
 use crate::network::QueryLogEntry;
@@ -16,10 +19,7 @@ pub enum DnsEvent {
     #[cfg(feature = "adblock")]
     AdblockAllow(String),
     #[cfg(feature = "adblock")]
-    QueryBlocked {
-        src_addr: std::net::IpAddr,
-        domain: String,
-    },
+    QueryBlocked { src_addr: IpAddr, domain: String },
     /// A DNS query was resolved.
     QueryResolved(QueryLogEntry),
     /// Flush the DNS cache.

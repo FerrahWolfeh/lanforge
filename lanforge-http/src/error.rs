@@ -12,6 +12,7 @@ pub enum HttpError {
     Json(#[from] serde_json::Error),
 
     /// Core logic error from `lanforge-core`.
+    #[cfg(feature = "server")]
     #[error("Core error: {0}")]
     Core(#[from] lanforge_core::error::CoreError),
 
@@ -21,12 +22,12 @@ pub enum HttpError {
     Jwt(#[from] jsonwebtoken::errors::Error),
 
     /// HTTP client error (remote-side).
-    #[cfg(feature = "remote")]
+    #[cfg(feature = "client")]
     #[error("HTTP client error: {0}")]
     Http(#[from] reqwest::Error),
 
     /// URL parse error (remote-side).
-    #[cfg(feature = "remote")]
+    #[cfg(feature = "client")]
     #[error("URL error: {0}")]
     Url(#[from] url::ParseError),
 
