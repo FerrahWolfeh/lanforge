@@ -546,6 +546,7 @@ pub struct DnsStatsResponse {
     pub total_requests: u64,
     pub cache_hits: u64,
     pub cache_misses: u64,
+    pub cache_evictions: u64,
     pub upstream_errors: u64,
     pub auth_queries: u64,
     pub recursions: u64,
@@ -595,6 +596,9 @@ pub struct DnsCacheStatsExtResponse {
     pub entries_by_type: HashMap<DnsRecordType, u64>,
     pub memory_usage_bytes: u64,
     pub average_ttl_secs: u64,
+    pub evictions: u64,
+    pub min_ttl: u32,
+    pub capacity: u64,
 }
 
 /// Request sent over the core DNS handle.

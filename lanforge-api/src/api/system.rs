@@ -1,7 +1,7 @@
-use std::fmt::Display;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use super::common::{Capabilities, ServerCapabilities, ServiceBanner};
+use lanforge_types::system::ServiceState;
 use serde::{Deserialize, Serialize};
 
 /// Interface information.
@@ -128,6 +128,8 @@ pub struct ServiceDns {
     pub dot: Option<ServiceDot>,
     /// DoH service status.
     pub doh: Option<ServiceDoh>,
+    /// DoQ service status.
+    pub doq: Option<ServiceDoq>,
     /// Cache size in bytes.
     pub cache_size: u64,
     /// Number of cached entries.
@@ -150,6 +152,17 @@ pub struct ServiceDot {
 /// Status of the DNS DoH subservice
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ServiceDoh {
+    /// Current state (e.g., "online", "offline").
+    pub state: ServiceState,
+    /// Seconds since the DNS service started.
+    pub uptime_secs: u64,
+    /// Configured port.
+    pub port: u16,
+}
+
+/// Status of the DNS DoQ subservice
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct ServiceDoq {
     /// Current state (e.g., "online", "offline").
     pub state: ServiceState,
     /// Seconds since the DNS service started.
@@ -249,44 +262,4 @@ pub struct SystemConfigExport {
     pub dns_allowlist: Vec<AllowlistEntry>,
     #[serde(default)]
     pub overwrite: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ServiceState {
-    #[default]
-    #[serde(rename = "unknown")]
-    Unknown,
-    #[serde(rename = "online")]
-    Online,
-    #[serde(rename = "offline")]
-    Offline,
-    #[serde(rename = "degraded")]
-    Degraded,
-    #[serde(rename = "error")]
-    Error,
-}
-
-impl Display for ServiceState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            ServiceState::Unknown => "unknown",
-            ServiceState::Online => "online",
-            ServiceState::Offline => "offline",
-            ServiceState::Degraded => "degraded",
-            ServiceState::Error => "error",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-impl AsRef<str> for ServiceState {
-    fn as_ref(&self) -> &str {
-        match self {
-            ServiceState::Unknown => "unknown",
-            ServiceState::Online => "online",
-            ServiceState::Offline => "offline",
-            ServiceState::Degraded => "degraded",
-            ServiceState::Error => "error",
-        }
-    }
 }

@@ -444,6 +444,7 @@ impl Config {
                 .sum(),
             dns_enabled: self.dns_enabled,
             dns_upstream: self.dns_toml.upstreams.first().map(|u| u.target.clone()),
+            dns_port: self.dns_toml.listen.port(),
             boot_dir: Some(self.tftp_toml.root_dir.to_string_lossy().to_string()),
             http_enabled: self.http_toml.enabled,
         }

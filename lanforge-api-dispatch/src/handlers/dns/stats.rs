@@ -25,6 +25,7 @@ impl ClientContext {
                 failed_total: res.failed_total,
                 cache_entries: res.cache_entries,
                 cache_capacity: res.cache_capacity,
+                cache_evictions: res.cache_evictions,
             });
         }
 
@@ -40,12 +41,14 @@ impl ClientContext {
             failed_total: 0,
             cache_entries: 0,
             cache_capacity: 0,
+            cache_evictions: 0,
         })
     }
 
     pub async fn handle_dns_upstreams(&self) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(DnsResponse::Upstreams(res)) = handle.send_request(DnsRequest::Upstreams).await
+            && let Ok(DnsResponse::Upstreams(res)) =
+                handle.send_request(DnsRequest::Upstreams).await
         {
             return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: res });
         }
@@ -87,9 +90,16 @@ impl ClientContext {
         // Fallback when DNS service is not running
         let addr_str = addr.to_string();
         let proto_str = format!("{:?}", protocol);
-        match self.db.add_dns_upstream(&addr_str, &proto_str, domain.as_deref()).await {
+        match self
+            .db
+            .add_dns_upstream(&addr_str, &proto_str, domain.as_deref())
+            .await
+        {
             Ok(_) => {
-                let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
                 Response::Success(SimpleSuccess {
                     message: "Upstream added successfully (fallback)".into(),
                 })
@@ -129,7 +139,10 @@ impl ClientContext {
         let proto_str = format!("{:?}", protocol);
         match self.db.remove_dns_upstream(&addr_str, &proto_str).await {
             Ok(_) => {
-                let _ = self.ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
                 Response::Success(SimpleSuccess {
                     message: "Upstream removed successfully (fallback)".into(),
                 })

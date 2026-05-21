@@ -1,14 +1,13 @@
 use crate::config::DnsConfig;
 use crate::pipeline::DnsPipelineRequest;
 use crate::pipeline::{Pipeline, middleware::*};
-use crate::resolver::recursive::cache::CacheKey;
-use crate::resolver::{
-    LocalResolver,
-    recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
-    RewriteStore,
-};
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
+use crate::resolver::recursive::cache::CacheKey;
+use crate::resolver::{
+    LocalResolver, RewriteStore,
+    recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
+};
 use crate::server::DnsContext;
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
@@ -17,8 +16,8 @@ use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_db::engine::LanforgeDb;
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse,
-    TransportProtocol,
+    DnsCacheStatsExtResponse, DnsClass, DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType,
+    DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
 };
 use lanforge_types::system::{ServiceBanner, ServiceState};
 use std::str::FromStr;
@@ -68,7 +67,11 @@ impl DnsService {
     }
 
     pub async fn init_dns_context(&self) -> Result<Arc<DnsContext>, CoreError> {
-        let cache = Arc::new(DnsCache::new(self.cfg.cache_size, self.cfg.cache_min_ttl));
+        let cache = Arc::new(DnsCache::new(
+            self.cfg.cache_size,
+            self.cfg.cache_min_ttl,
+            Some(Arc::clone(&self.stats)),
+        ));
         self.stats
             .cache_capacity
             .store(self.cfg.cache_size, Ordering::Relaxed);
@@ -388,7 +391,7 @@ async fn handle_dns_request(
     match req {
         DnsRequest::Stats => {
             let stats = &dns_ctx.stats;
-            DnsResponse::Stats(lanforge_types::network::dns::DnsStatsResponse {
+            DnsResponse::Stats(DnsStatsResponse {
                 total_requests: stats.requests_total.load(Ordering::Relaxed),
                 cache_hits: stats.cache_hits.load(Ordering::Relaxed),
                 cache_misses: stats.cache_misses.load(Ordering::Relaxed),
@@ -403,6 +406,7 @@ async fn handle_dns_request(
                 failed_total: stats.failed_total.load(Ordering::Relaxed),
                 cache_entries: stats.cache_entries.load(Ordering::Relaxed),
                 cache_capacity: stats.cache_capacity.load(Ordering::Relaxed),
+                cache_evictions: stats.cache_evictions.load(Ordering::Relaxed),
             })
         }
         DnsRequest::Upstreams => DnsResponse::Upstreams(dns_ctx.recursive.snapshots()),
@@ -462,11 +466,14 @@ async fn handle_dns_request(
         DnsRequest::CacheStatsExt => {
             let (total_entries, entries_by_type, memory_usage_bytes, average_ttl_secs) =
                 dns_ctx.cache.get_stats_ext();
-            DnsResponse::CacheStatsExt(lanforge_types::network::dns::DnsCacheStatsExtResponse {
+            DnsResponse::CacheStatsExt(DnsCacheStatsExtResponse {
                 total_entries,
                 entries_by_type,
                 memory_usage_bytes,
                 average_ttl_secs,
+                min_ttl: dns_ctx.cache.min_ttl(),
+                evictions: dns_ctx.stats.cache_evictions.load(Ordering::Relaxed),
+                capacity: dns_ctx.cache.capacity(),
             })
         }
         DnsRequest::AdblockStatus => {
@@ -669,7 +676,10 @@ async fn resolve_diagnostic_internal(
     } else {
         // Fallback logic matching pipeline order
         #[cfg(feature = "adblock")]
-        let is_blocked = dns_ctx.filter.as_ref().is_some_and(|f| f.should_block(name));
+        let is_blocked = dns_ctx
+            .filter
+            .as_ref()
+            .is_some_and(|f| f.should_block(name));
         #[cfg(not(feature = "adblock"))]
         let is_blocked = false;
 

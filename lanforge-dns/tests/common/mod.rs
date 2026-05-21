@@ -13,10 +13,10 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::error::DnsError;
 use lanforge_dns::pipeline::{DnsPipelineRequest, Pipeline, middleware::*};
-use lanforge_dns::resolver::LocalResolver;
-use lanforge_dns::resolver::RewriteStore;
 #[cfg(feature = "adblock")]
 use lanforge_dns::resolver::AdBlocker;
+use lanforge_dns::resolver::LocalResolver;
+use lanforge_dns::resolver::RewriteStore;
 use lanforge_dns::resolver::recursive::DnsCache;
 use lanforge_dns::resolver::recursive::UpstreamStrategy;
 use lanforge_dns::server::DnsContext;
@@ -52,7 +52,7 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
     let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
 
     let cfg_arc = Arc::new(cfg);
-    let cache = Arc::new(DnsCache::new(cfg_arc.cache_size, 30));
+    let cache = Arc::new(DnsCache::new(cfg_arc.cache_size, 30, None));
     let recursive = Arc::new(UpstreamStrategy::new(cfg_arc.upstream_mode, Vec::new()));
 
     let rewrites = Arc::new(RewriteStore::new());

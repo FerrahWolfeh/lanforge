@@ -1,17 +1,19 @@
 mod common;
 use common::*;
 use lanforge_dns::resolver::recursive::cache::{CacheKey, DnsCache};
+use lanforge_dns::telemetry::DnsStats;
 use lanforge_dns_wire::{WireEncoder, WireQuestion};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol,
 };
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 #[test]
 fn cache_hit_and_ttl_scrubbing() {
-    let cache = DnsCache::new(100, 30);
+    let cache = DnsCache::new(100, 30, None);
 
     // 1. Create a query
     let mut query = DnsMessage::new();
@@ -129,7 +131,7 @@ async fn query_logging_ring_buffer() {
 
 #[test]
 fn cache_expiration() {
-    let cache = DnsCache::new(10, 30);
+    let cache = DnsCache::new(10, 30, None);
     let key = CacheKey {
         qname: b"\x04test\x00".to_vec(),
         qtype: 1,
@@ -154,5 +156,28 @@ fn cache_expiration() {
     assert!(
         cache.get_wire(&data, &question).is_none(),
         "Should be a cache miss due to expiration"
+    );
+}
+
+#[test]
+fn cache_eviction_tracking() {
+    let stats = Arc::new(DnsStats::new());
+    let cache = DnsCache::new(2, 30, Some(stats.clone()));
+
+    // Insert 3 unique entries. Since capacity is 2, inserting the 3rd one should trigger an eviction.
+    for i in 1..=3 {
+        let key = CacheKey {
+            qname: format!("\x05test{i}\x00").into_bytes(),
+            qtype: 1,
+            qclass: 1,
+        };
+        cache.insert(key, vec![0; 64], vec![], 30, false);
+    }
+
+    let evictions = stats.cache_evictions.load(Ordering::Relaxed);
+    assert!(
+        evictions > 0,
+        "Should have tracked at least one eviction, got {}",
+        evictions
     );
 }

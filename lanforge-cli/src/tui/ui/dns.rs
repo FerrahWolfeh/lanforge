@@ -4,10 +4,14 @@
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
+use std::{cmp::Ordering, collections::HashMap};
+
 use crate::tui::app::TuiApp;
 use crate::tui::state::TuiState;
 use crate::tui::theme;
-use lanforge_api::api::system::ServiceState;
+use crate::tui::utils::resolve_client_name;
+use chrono::{DateTime, Local};
+use lanforge_types::system::ServiceState;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -16,6 +20,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Axis, Block, Borders, Cell, Chart, Dataset, GraphType, Paragraph, Row, Table},
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     let main_chunks = Layout::default()
@@ -79,7 +84,7 @@ fn calculate_resolver_stats(state: &TuiState) -> ResolverStatsCalc {
             log_latencies.push(f64::from(entry.upstream_us) / 1000.0);
         }
     }
-    log_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    log_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
     let p50 = if log_latencies.is_empty() {
         8.0
@@ -223,7 +228,7 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),    // Upstreams Table
-            Constraint::Length(5), // Subservices
+            Constraint::Length(6), // Subservices
         ])
         .split(area);
 
@@ -312,6 +317,8 @@ fn render_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
         ("● running", theme::ONLINE)
     };
 
+    let dns_port = state.status.as_ref().map_or(53, |s| s.services.dns.port);
+
     let tls_port = state
         .status
         .as_ref()
@@ -320,6 +327,10 @@ fn render_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
         .status
         .as_ref()
         .map_or(443, |s| s.services.dns.doh.as_ref().map_or(443, |d| d.port));
+    let quic_port = state
+        .status
+        .as_ref()
+        .map_or(853, |s| s.services.dns.doq.as_ref().map_or(853, |d| d.port));
 
     let tls_active = state
         .status
@@ -353,6 +364,22 @@ fn render_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
         theme::MOCHA_RED
     };
 
+    let quic_active = state
+        .status
+        .as_ref()
+        .and_then(|s| s.services.dns.doq.as_ref())
+        .is_some_and(|d| d.state == ServiceState::Online);
+    let quic_icon = if quic_active {
+        "● running"
+    } else {
+        "● offline"
+    };
+    let quic_color = if quic_active {
+        theme::ONLINE
+    } else {
+        theme::MOCHA_RED
+    };
+
     let subservices_text = vec![
         Line::from(vec![
             Span::styled("DoT Listener   ", Style::default().fg(theme::TEXT_DIM)),
@@ -365,8 +392,13 @@ fn render_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
             Span::styled(https_icon, Style::default().fg(https_color)),
         ]),
         Line::from(vec![
+            Span::styled("DoQ Listener   ", Style::default().fg(theme::TEXT_DIM)),
+            Span::raw(format!(":{:<13}", format!("{quic_port}/quic"))),
+            Span::styled(quic_icon, Style::default().fg(quic_color)),
+        ]),
+        Line::from(vec![
             Span::styled("DNS Resolver   ", Style::default().fg(theme::TEXT_DIM)),
-            Span::raw(":5335         "),
+            Span::raw(format!(":{:<13}", format!("{dns_port}/udp"))),
             Span::styled(dns_icon, Style::default().fg(dns_color)),
         ]),
     ];
@@ -402,10 +434,17 @@ fn render_cache_stats_ext(f: &mut Frame, area: Rect, state: &TuiState) {
     };
 
     let avg_ttl = cache_ext.map_or(245, |c| c.average_ttl_secs);
-    let memory_mb = cache_ext.map_or(4.2, |c| c.memory_usage_bytes as f64 / 1_048_576.0);
-    let evictions = 0.8; // mock or calculated, let's use a nice dynamic-looking float
+    let memory_bytes = cache_ext.map_or(0, |c| c.memory_usage_bytes);
+    let memory_str = if memory_bytes < 1024 {
+        format!("{memory_bytes} B")
+    } else if memory_bytes < 1_048_576 {
+        format!("{:.1} KB", memory_bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", memory_bytes as f64 / 1_048_576.0)
+    };
+    let evictions = cache_ext.map_or(0, |c| c.evictions);
     let misses = dns_stats.map_or(0, |s| s.cache_misses);
-    let negative_ttl = 60;
+    let min_ttl = cache_ext.map_or(0, |c| c.min_ttl);
 
     let format_val = |val: u64| {
         if val >= 1000 {
@@ -452,15 +491,12 @@ fn render_cache_stats_ext(f: &mut Frame, area: Rect, state: &TuiState) {
         ]),
         Line::from(vec![
             Span::styled("Memory         ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(
-                format!("{memory_mb:.1} MB"),
-                Style::default().fg(theme::MOCHA_GREEN),
-            ),
+            Span::styled(memory_str, Style::default().fg(theme::MOCHA_GREEN)),
         ]),
         Line::from(vec![
-            Span::styled("Evictions/s    ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("Evictions    ", Style::default().fg(theme::TEXT_DIM)),
             Span::styled(
-                format!("{evictions:.1}"),
+                format!("{evictions}"),
                 Style::default().fg(theme::MOCHA_YELLOW),
             ),
         ]),
@@ -469,9 +505,9 @@ fn render_cache_stats_ext(f: &mut Frame, area: Rect, state: &TuiState) {
             Span::styled(format_val(misses), Style::default().fg(theme::MOCHA_TEXT)),
         ]),
         Line::from(vec![
-            Span::styled("Negative TTL   ", Style::default().fg(theme::TEXT_DIM)),
+            Span::styled("Min TTL   ", Style::default().fg(theme::TEXT_DIM)),
             Span::styled(
-                format!("{negative_ttl}s"),
+                format!("{min_ttl}s"),
                 Style::default().fg(theme::MOCHA_TEXT),
             ),
         ]),
@@ -490,13 +526,55 @@ fn render_cache_stats_ext(f: &mut Frame, area: Rect, state: &TuiState) {
 
 fn render_query_rate(f: &mut Frame, area: Rect, state: &TuiState) {
     let analytics = state.dns_analytics.as_ref();
-    let data: Vec<(f64, f64)> = analytics.map_or(Vec::new(), |a| {
+
+    // Build a lookup map from the sparse analytics data
+    let rate_map: HashMap<u64, f64> = analytics.map_or_else(HashMap::new, |a| {
         a.query_rate
             .iter()
-            .enumerate()
-            .map(|(i, r)| (i as f64, r.count as f64))
+            .map(|r| (r.timestamp, r.count as f64))
             .collect()
     });
+
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let now_bucket = (now_secs / 30) * 30;
+
+    // Anchor bounds to daemon uptime for stable positioning
+    let uptime_secs = state.status.as_ref().map_or(600, |s| s.uptime_secs);
+    let daemon_start_secs = now_secs.saturating_sub(uptime_secs);
+    let daemon_start_bucket = (daemon_start_secs / 30) * 30;
+
+    let (min_x, max_x) = if uptime_secs < 600 {
+        // Daemon is young: anchor to start, show full 10-minute window
+        (
+            daemon_start_bucket as f64,
+            daemon_start_bucket as f64 + 600.0,
+        )
+    } else {
+        // Daemon is mature: slide the window
+        (now_bucket as f64 - 600.0, now_bucket as f64)
+    };
+
+    // Build continuous data points, filling gaps with 0.0
+    let mut continuous_data: Vec<(f64, f64)> = Vec::with_capacity(21);
+    let mut bucket = min_x as u64;
+    while bucket <= now_bucket {
+        let count = rate_map.get(&bucket).copied().unwrap_or(0.0);
+        continuous_data.push((bucket as f64, count));
+        bucket += 30;
+    }
+
+    let format_time = |ts: f64| {
+        DateTime::from_timestamp(ts as i64, 0)
+            .map(|dt| dt.with_timezone(&Local).format("%H:%M:%S").to_string())
+            .unwrap_or_default()
+    };
+
+    let label_min = format_time(min_x);
+    let label_middle = format_time(min_x + 300.0);
+    let label_max = format_time(max_x);
 
     let dataset = vec![
         Dataset::default()
@@ -504,10 +582,10 @@ fn render_query_rate(f: &mut Frame, area: Rect, state: &TuiState) {
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
             .style(Style::default().fg(theme::MOCHA_BLUE))
-            .data(&data),
+            .data(&continuous_data),
     ];
 
-    let max_y = data.iter().map(|(_, y)| *y).fold(15.0, f64::max) * 1.2;
+    let max_y = continuous_data.iter().map(|(_, y)| *y).fold(15.0, f64::max) * 1.2;
 
     let chart = Chart::new(dataset)
         .block(
@@ -519,8 +597,12 @@ fn render_query_rate(f: &mut Frame, area: Rect, state: &TuiState) {
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(theme::TEXT_DIM))
-                .bounds([0.0, 20.0])
-                .labels(vec![Span::raw("0m"), Span::raw("5m"), Span::raw("10m")]),
+                .bounds([min_x, max_x])
+                .labels(vec![
+                    Span::raw(label_min),
+                    Span::raw(label_middle),
+                    Span::raw(label_max),
+                ]),
         )
         .y_axis(
             Axis::default()
@@ -708,7 +790,7 @@ fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
                 })
                 .unwrap_or_default();
 
-            let client = e.src_hostname.as_deref().unwrap_or(&e.src_ip);
+            let client = resolve_client_name(state.devices.as_ref(), &e.src_ip, &e.src_mac);
             let lat = if e.upstream_us > 0 {
                 format!("{}ms", e.upstream_us / 1000)
             } else {
@@ -717,7 +799,7 @@ fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
 
             Row::new(vec![
                 Cell::from(time).style(Style::default().fg(theme::TEXT_DIM)),
-                Cell::from(client.to_string()).style(Style::default().fg(theme::MOCHA_TEXT)),
+                Cell::from(client).style(Style::default().fg(theme::MOCHA_TEXT)),
                 Cell::from(e.domain.clone()).style(Style::default().fg(theme::MOCHA_BLUE)),
                 Cell::from(e.qtype.to_string()).style(Style::default().fg(theme::MOCHA_GREEN)),
                 Cell::from(e.result.clone()).style(result_style),

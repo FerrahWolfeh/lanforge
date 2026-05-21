@@ -28,6 +28,7 @@ pub struct SystemStatus {
     pub dhcp_v6_pool_size: Option<u64>,
     pub dns_enabled: bool,
     pub dns_upstream: Option<UpstreamTarget>,
+    pub dns_port: u16,
     pub boot_dir: Option<String>,
     pub http_enabled: bool,
 }
@@ -67,13 +68,20 @@ pub struct ServerCapabilities {
 #[serde(rename_all = "snake_case")]
 pub enum ServiceState {
     #[default]
+    #[serde(rename = "offline")]
     Offline,
+    #[serde(rename = "starting")]
     Starting,
+    #[serde(rename = "online")]
     Online,
+    #[serde(rename = "active")]
     Active,
+    #[serde(rename = "inactive")]
     Inactive,
+    #[serde(rename = "degraded")]
     Degraded,
-    Failed,
+    #[serde(rename = "error")]
+    Error,
 }
 
 impl ServiceState {
@@ -86,7 +94,21 @@ impl ServiceState {
             Self::Active => "active",
             Self::Inactive => "inactive",
             Self::Degraded => "degraded",
-            Self::Failed => "failed",
+            Self::Error => "failed",
+        }
+    }
+}
+
+impl AsRef<str> for ServiceState {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Offline => "offline",
+            Self::Starting => "starting",
+            Self::Online => "online",
+            Self::Active => "active",
+            Self::Inactive => "inactive",
+            Self::Degraded => "degraded",
+            Self::Error => "failed",
         }
     }
 }

@@ -1,4 +1,5 @@
 use lanforge_types::network::dns::TransportProtocol;
+use lanforge_types::system::{ServiceBanner, ServiceState};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,7 +10,7 @@ use tracing::{debug, error, info};
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 
 use crate::config::DnsConfig;
 use crate::pipeline::DnsPipelineRequest;
@@ -23,6 +24,7 @@ use lanforge_dns_wire::{WireHeader, WireQuestion};
     critical = false,
     describe = format!("DoT on {}", self.cfg.dot_listen.map_or_else(|| "853".to_string(), |a| a.to_string()))
 )]
+#[derive(Clone)]
 pub struct DotService {
     cfg: Arc<DnsConfig>,
     ctx: LanforgeContext,
@@ -30,8 +32,25 @@ pub struct DotService {
 
 impl DotService {
     #[must_use]
-    pub const fn new(cfg: Arc<DnsConfig>, ctx: LanforgeContext) -> Self {
-        Self { cfg, ctx }
+    pub fn new(cfg: Arc<DnsConfig>, ctx: LanforgeContext) -> Self {
+        let service = Self {
+            cfg: cfg.clone(),
+            ctx: ctx.clone(),
+        };
+        ctx.register_status_provider(Arc::new(service.clone()));
+        service
+    }
+}
+
+impl StatusProvider for DotService {
+    fn banner(&self) -> ServiceBanner {
+        let port = self.cfg.dot_listen.map_or(853, |a| a.port());
+        ServiceBanner {
+            name: "DNS over TLS".to_string(),
+            state: ServiceState::Online,
+            uptime_secs: self.ctx.uptime_secs(),
+            stats: vec![(std::borrow::Cow::Borrowed("port"), port.to_string())],
+        }
     }
 }
 

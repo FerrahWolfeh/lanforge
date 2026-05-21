@@ -1,10 +1,12 @@
 use crate::ClientContext;
 use lanforge_api::api::{
     Capabilities, Compression, DbStatus, DevicesStats, Encoding, NetworkStatus, ResourcesStatus,
-    Response, ServiceState, ServiceStatusInfo, ServicesStatus, StatusResponse,
+    Response, ServiceBannersResponse, ServiceDoh, ServiceDoq, ServiceDot, ServiceStatusInfo,
+    ServicesStatus, StatusResponse,
 };
 use lanforge_core::context::CompiledCaps;
 use lanforge_types::device::{Device, IPv6State, Origin};
+use lanforge_types::system::ServiceState;
 use std::fs::metadata;
 use std::sync::Arc;
 
@@ -51,7 +53,7 @@ impl ClientContext {
             .iter()
             .map(|p| p.banner())
             .collect();
-        Response::ServiceBanners(lanforge_api::api::ServiceBannersResponse { banners })
+        Response::ServiceBanners(ServiceBannersResponse { banners })
     }
 
     #[must_use]
@@ -212,6 +214,62 @@ impl ClientContext {
         };
         status.services.dns.uptime_secs = self.uptime_secs;
         status.services.dns.upstream = first_upstream;
+        status.services.dns.port = sys_status.dns_port;
+
+        // Populate DoT/DoQ/DoH subservice statuses from service banners
+        for provider in self.ctx.status_providers().iter() {
+            let banner = provider.banner();
+            match banner.name.as_str() {
+                "DNS over TLS" => {
+                    let port = banner
+                        .stats
+                        .iter()
+                        .find(|(k, _)| k.as_ref() == "port")
+                        .and_then(|(_, v)| v.parse().ok())
+                        .unwrap_or(853);
+                    status.services.dns.dot = Some(ServiceDot {
+                        state: banner.state,
+                        uptime_secs: banner.uptime_secs,
+                        upstream: None,
+                        port,
+                    });
+                }
+                "DNS over QUIC" => {
+                    let port = banner
+                        .stats
+                        .iter()
+                        .find(|(k, _)| k.as_ref() == "port")
+                        .and_then(|(_, v)| v.parse().ok())
+                        .unwrap_or(853);
+                    status.services.dns.doq = Some(ServiceDoq {
+                        state: banner.state,
+                        uptime_secs: banner.uptime_secs,
+                        port,
+                    });
+                }
+                "HTTP API" => {
+                    let doh_enabled = banner
+                        .stats
+                        .iter()
+                        .find(|(k, _)| k.as_ref() == "doh_enabled")
+                        .is_some_and(|(_, v)| v == "true");
+                    if doh_enabled {
+                        let port = banner
+                            .stats
+                            .iter()
+                            .find(|(k, _)| k.as_ref() == "listen")
+                            .and_then(|(_, v)| v.parse::<std::net::SocketAddr>().ok())
+                            .map_or(443, |a| a.port());
+                        status.services.dns.doh = Some(ServiceDoh {
+                            state: banner.state,
+                            uptime_secs: banner.uptime_secs,
+                            port,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
 
         status.services.db_worker.state = ServiceState::Online;
         status.services.mdns_prober.state = ServiceState::Online;

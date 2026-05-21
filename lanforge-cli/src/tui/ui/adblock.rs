@@ -7,6 +7,7 @@
 use crate::tui::app::TuiApp;
 use crate::tui::state::TuiState;
 use crate::tui::theme;
+use crate::tui::utils::resolve_client_name;
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
 use ratatui::{
     Frame,
@@ -268,11 +269,11 @@ fn render_recent_blocks(f: &mut Frame, area: Rect, state: &TuiState) {
                 })
                 .unwrap_or_default();
 
-            let client = e.src_hostname.as_deref().unwrap_or(&e.src_ip);
+            let client = resolve_client_name(state.devices.as_ref(), &e.src_ip, &e.src_mac);
 
             Row::new(vec![
                 Cell::from(time).style(Style::default().fg(theme::TEXT_DIM)),
-                Cell::from(client.to_string()).style(Style::default().fg(theme::MOCHA_TEXT)),
+                Cell::from(client).style(Style::default().fg(theme::MOCHA_TEXT)),
                 Cell::from(e.domain.clone()).style(Style::default().fg(theme::MOCHA_RED)),
                 Cell::from(e.qtype.to_string()).style(Style::default().fg(theme::MOCHA_PEACH)),
             ])

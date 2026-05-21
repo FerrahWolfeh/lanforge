@@ -2,11 +2,14 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use std::{
     collections::HashMap,
+    sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
 
 use lanforge_dns_wire::{WireDecoder, WireQuestion};
 use lanforge_types::network::dns::DnsRecordType;
+
+use crate::telemetry::DnsStats;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct CacheKey {
@@ -26,15 +29,17 @@ pub struct CachedResponse {
 
 pub struct DnsCache {
     pub cache: DashMap<CacheKey, CachedResponse>,
+    stats: Option<Arc<DnsStats>>,
     capacity: u64,
     min_ttl: u32,
 }
 
 impl DnsCache {
     #[must_use]
-    pub fn new(capacity: u64, min_ttl: u32) -> Self {
+    pub fn new(capacity: u64, min_ttl: u32, stats: Option<Arc<DnsStats>>) -> Self {
         Self {
             cache: DashMap::with_capacity(capacity as usize),
+            stats,
             capacity,
             min_ttl,
         }
@@ -105,23 +110,36 @@ impl DnsCache {
         key.qname.make_ascii_lowercase();
         // Enforce capacity (batch random eviction if full)
         if self.cache.len() as u64 >= self.capacity && self.capacity > 0 {
-            let mut evicted = 0;
+            let mut evicted: u64 = 0;
             let batch_size = 10;
             let now = Instant::now();
 
             // First try to find expired ones
+            let before_retain = self.cache.len() as u64;
             self.cache.retain(|_, v| v.expires_at > now);
+            evicted += before_retain.saturating_sub(self.cache.len() as u64);
 
             // If still over capacity, remove random ones
-            while self.cache.len() as u64 >= self.capacity && evicted < batch_size {
-                if let Some(entry) = self.cache.iter().next() {
-                    let k = entry.key().clone();
-                    drop(entry);
-                    self.cache.remove(&k);
-                    evicted += 1;
-                } else {
+            let keys_to_remove: Vec<CacheKey> = self
+                .cache
+                .iter()
+                .take(batch_size)
+                .map(|entry| entry.key().clone())
+                .collect();
+
+            for k in keys_to_remove {
+                if (self.cache.len() as u64) < self.capacity {
                     break;
                 }
+                if self.cache.remove(&k).is_some() {
+                    evicted += 1;
+                }
+            }
+
+            if evicted > 0
+                && let Some(stats) = &self.stats
+            {
+                stats.cache_evictions.fetch_add(evicted, Ordering::Relaxed);
             }
         }
 
@@ -211,5 +229,15 @@ impl DnsCache {
 
         let avg_ttl = total_ttl.checked_div(count).unwrap_or(0);
         (count, stats, total_mem, avg_ttl)
+    }
+
+    #[must_use]
+    pub fn min_ttl(&self) -> u32 {
+        self.min_ttl
+    }
+
+    #[must_use]
+    pub fn capacity(&self) -> u64 {
+        self.capacity
     }
 }
