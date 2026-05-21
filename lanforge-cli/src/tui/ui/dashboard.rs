@@ -146,8 +146,7 @@ fn render_device_inventory(f: &mut Frame, area: Rect, state: &TuiState) {
         |cs| {
             let mut counts = std::collections::HashMap::new();
             for dev in &cs.devices {
-                let class = dev.class.clone();
-                *counts.entry(class).or_insert(0) += 1;
+                *counts.entry(dev.class).or_insert(0) += 1;
             }
 
             let mut lines = Vec::new();

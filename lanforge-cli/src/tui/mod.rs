@@ -1,6 +1,7 @@
 use color_eyre::Result;
 use crossterm::{
-    event as ct_event, execute,
+    event::{self as ct_event, KeyEvent},
+    execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use lanforge_api::api::DnsQueryLogEntry;
@@ -93,106 +94,7 @@ pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
         terminal.draw(|f| ui::render(f, &mut app))?;
 
         if let Some(event) = event_rx.recv().await {
-            match event {
-                AppEvent::Key(key) => {
-                    let old_mode = app.mode;
-                    app.handle_key_event(key);
-
-                    // Update shared active tab for background tasks
-                    active_tab.store(app.active_tab.to_index(), Ordering::Relaxed);
-
-                    if app.mode == TuiMode::Detail
-                        && old_mode != TuiMode::Detail
-                        && let Some(selected_idx) = app.device_list_state.selected()
-                        && let Some(devices_resp) = &app.state.devices
-                    {
-                        let mut devices = devices_resp.devices.clone();
-                        devices.sort_by(|a, b| a.mac.cmp(&b.mac));
-
-                        let mut filtered_devices = Vec::new();
-                        for dev in devices {
-                            if !app.filter_text.is_empty() {
-                                let search = app.filter_text.to_lowercase();
-                                if !dev.mac.contains_str(&search)
-                                    && !dev.hostname.to_lowercase().contains(&search)
-                                    && !dev.display_v4.to_lowercase().contains(&search)
-                                    && !dev.display_v6.to_lowercase().contains(&search)
-                                {
-                                    continue;
-                                }
-                            }
-                            filtered_devices.push(dev);
-                        }
-
-                        if let Some(target_dev) = filtered_devices.get(selected_idx) {
-                            let target_mac = target_dev.mac;
-                            app.state.selected_whois = None; // Reset to show loading screen
-                            let client_clone = client.clone();
-                            let tx_clone = event_tx.clone();
-                            tokio::spawn(async move {
-                                if let Ok(whois_resp) =
-                                    client_clone.whois(target_mac.to_string()).await
-                                {
-                                    let _ = tx_clone.send(AppEvent::WhoisUpdate(whois_resp)).await;
-                                }
-                            });
-                        }
-                    }
-                }
-                AppEvent::DaemonEvent(e) => app.state.apply_event(e),
-                AppEvent::DnsLiveQuery(entry) => app.state.apply_dns_query(entry),
-                AppEvent::StatusUpdate(s) => {
-                    app.state.status = Some(*s);
-                    app.state.connected = true;
-                    app.state.connection_error = None;
-                }
-                AppEvent::ServiceBannersUpdate(s) => {
-                    app.state.service_banners = Some(s);
-                }
-                AppEvent::DevicesUpdate(s) => {
-                    app.state.devices = Some(*s);
-                }
-                AppEvent::TopologyUpdate(s) => {
-                    app.state.topology = Some(*s);
-                }
-                AppEvent::LeasesUpdate(s) => {
-                    app.state.leases = Some(s);
-                }
-                AppEvent::DhcpPoolsUpdate(s) => {
-                    app.state.dhcp_pools = Some(s);
-                }
-                AppEvent::DnsStatsUpdate(s) => {
-                    app.state.dns_stats = Some(*s);
-                }
-                AppEvent::DnsAnalyticsUpdate(s) => {
-                    app.state.dns_analytics = Some(*s);
-                }
-                AppEvent::DnsUpstreamsUpdate(s) => {
-                    app.state.dns_upstreams = Some(*s);
-                }
-                AppEvent::DnsQueryLogUpdate(s) => {
-                    app.state.dns_query_log = Some(*s);
-                }
-                AppEvent::DnsCacheStatsUpdate(s) => {
-                    app.state.dns_cache_stats = Some(s);
-                }
-                AppEvent::DnsAdblockStatusUpdate(s) => {
-                    app.state.dns_adblock_status = Some(*s);
-                }
-                AppEvent::DnsRewritesUpdate(s) => {
-                    app.state.dns_rewrites = Some(s);
-                }
-                AppEvent::DnsAdblockUrlsUpdate(s) => {
-                    app.state.dns_adblock_urls = Some(s);
-                }
-                AppEvent::DnsAllowlistUpdate(s) => {
-                    app.state.dns_allowlist = Some(s);
-                }
-                AppEvent::WhoisUpdate(s) => {
-                    app.state.selected_whois = Some(*s);
-                }
-                AppEvent::Tick => {}
-            }
+            handle_app_event(&mut app, event, &client, &event_tx, &active_tab);
         }
 
         if app.should_quit {
@@ -211,6 +113,123 @@ pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+fn handle_tui_key_event(
+    app: &mut TuiApp,
+    key: KeyEvent,
+    client: &Arc<LanforgeClient>,
+    event_tx: &mpsc::Sender<AppEvent>,
+    active_tab: &Arc<AtomicU8>,
+) {
+    let old_mode = app.mode;
+    app.handle_key_event(key);
+
+    // Update shared active tab for background tasks
+    active_tab.store(app.active_tab.to_index(), Ordering::Relaxed);
+
+    if app.mode == TuiMode::Detail
+        && old_mode != TuiMode::Detail
+        && let Some(selected_idx) = app.device_list_state.selected()
+        && let Some(devices_resp) = &app.state.devices
+    {
+        let mut devices = devices_resp.devices.clone();
+        devices.sort_by_key(|a| a.mac);
+
+        let mut filtered_devices = Vec::new();
+        for dev in devices {
+            if !app.filter_text.is_empty() {
+                let search = app.filter_text.to_lowercase();
+                if !dev.mac.contains_str(&search)
+                    && !dev.hostname.to_lowercase().contains(&search)
+                    && !dev.display_v4.to_lowercase().contains(&search)
+                    && !dev.display_v6.to_lowercase().contains(&search)
+                {
+                    continue;
+                }
+            }
+            filtered_devices.push(dev);
+        }
+
+        if let Some(target_dev) = filtered_devices.get(selected_idx) {
+            let target_mac = target_dev.mac;
+            app.state.selected_whois = None; // Reset to show loading screen
+            let client_clone = client.clone();
+            let tx_clone = event_tx.clone();
+            tokio::spawn(async move {
+                if let Ok(whois_resp) = client_clone.whois(target_mac.to_string()).await {
+                    let _ = tx_clone.send(AppEvent::WhoisUpdate(whois_resp)).await;
+                }
+            });
+        }
+    }
+}
+
+fn handle_app_event(
+    app: &mut TuiApp,
+    event: AppEvent,
+    client: &Arc<LanforgeClient>,
+    event_tx: &mpsc::Sender<AppEvent>,
+    active_tab: &Arc<AtomicU8>,
+) {
+    match event {
+        AppEvent::Key(key) => {
+            handle_tui_key_event(app, key, client, event_tx, active_tab);
+        }
+        AppEvent::DaemonEvent(e) => app.state.apply_event(e),
+        AppEvent::DnsLiveQuery(entry) => app.state.apply_dns_query(entry),
+        AppEvent::StatusUpdate(s) => {
+            app.state.status = Some(*s);
+            app.state.connected = true;
+            app.state.connection_error = None;
+        }
+        AppEvent::ServiceBannersUpdate(s) => {
+            app.state.service_banners = Some(s);
+        }
+        AppEvent::DevicesUpdate(s) => {
+            app.state.devices = Some(*s);
+        }
+        AppEvent::TopologyUpdate(s) => {
+            app.state.topology = Some(*s);
+        }
+        AppEvent::LeasesUpdate(s) => {
+            app.state.leases = Some(s);
+        }
+        AppEvent::DhcpPoolsUpdate(s) => {
+            app.state.dhcp_pools = Some(s);
+        }
+        AppEvent::DnsStatsUpdate(s) => {
+            app.state.dns_stats = Some(*s);
+        }
+        AppEvent::DnsAnalyticsUpdate(s) => {
+            app.state.dns_analytics = Some(*s);
+        }
+        AppEvent::DnsUpstreamsUpdate(s) => {
+            app.state.dns_upstreams = Some(*s);
+        }
+        AppEvent::DnsQueryLogUpdate(s) => {
+            app.state.dns_query_log = Some(*s);
+        }
+        AppEvent::DnsCacheStatsUpdate(s) => {
+            app.state.dns_cache_stats = Some(s);
+        }
+        AppEvent::DnsAdblockStatusUpdate(s) => {
+            app.state.dns_adblock_status = Some(*s);
+        }
+        AppEvent::DnsRewritesUpdate(s) => {
+            app.state.dns_rewrites = Some(s);
+        }
+        AppEvent::DnsAdblockUrlsUpdate(s) => {
+            app.state.dns_adblock_urls = Some(s);
+        }
+        AppEvent::DnsAllowlistUpdate(s) => {
+            app.state.dns_allowlist = Some(s);
+        }
+        AppEvent::WhoisUpdate(s) => {
+            app.state.selected_whois = Some(*s);
+        }
+        AppEvent::Tick => {}
+    }
 }
 
 async fn run_event_stream(client: Arc<LanforgeClient>, tx: mpsc::Sender<AppEvent>) {
@@ -348,6 +367,141 @@ async fn run_dns_log_stream(client: Arc<LanforgeClient>, tx: mpsc::Sender<AppEve
     }
 }
 
+fn fetch_common_data(client: &Arc<LanforgeClient>, tx: &mpsc::Sender<AppEvent>) {
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.status().await {
+                let _ = tx.send(AppEvent::StatusUpdate(s)).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.service_banners().await {
+                let _ = tx.send(AppEvent::ServiceBannersUpdate(s)).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client
+                .list_devices(None, None, None, None, None, None)
+                .await
+            {
+                let _ = tx.send(AppEvent::DevicesUpdate(Box::new(s))).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.topology().await {
+                let _ = tx.send(AppEvent::TopologyUpdate(Box::new(s))).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.leases(false).await {
+                let _ = tx.send(AppEvent::LeasesUpdate(s)).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dhcp_pools().await {
+                let _ = tx.send(AppEvent::DhcpPoolsUpdate(s)).await;
+            }
+        });
+    }
+}
+
+fn fetch_dns_data(client: &Arc<LanforgeClient>, tx: &mpsc::Sender<AppEvent>) {
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dns_stats().await {
+                let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dns_analytics(Some(10)).await {
+                let _ = tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dns_upstreams().await {
+                let _ = tx.send(AppEvent::DnsUpstreamsUpdate(Box::new(s))).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dns_cache_stats_ext().await {
+                let _ = tx.send(AppEvent::DnsCacheStatsUpdate(s)).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dns_adblock_status().await {
+                let _ = tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dns_rewrites().await {
+                let _ = tx.send(AppEvent::DnsRewritesUpdate(s)).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dns_adblock_url_list().await {
+                let _ = tx.send(AppEvent::DnsAdblockUrlsUpdate(s)).await;
+            }
+        });
+    }
+    {
+        let client = client.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(s) = client.dns_allowlist().await {
+                let _ = tx.send(AppEvent::DnsAllowlistUpdate(s)).await;
+            }
+        });
+    }
+}
+
 async fn run_periodic_fetch(
     client: Arc<LanforgeClient>,
     tx: mpsc::Sender<AppEvent>,
@@ -362,64 +516,7 @@ async fn run_periodic_fetch(
 
         // Common endpoints: status, banners, devices, topology, leases, pools (every 5s)
         if last_common.elapsed() >= Duration::from_secs(5) {
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.status().await {
-                        let _ = tx.send(AppEvent::StatusUpdate(s)).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.service_banners().await {
-                        let _ = tx.send(AppEvent::ServiceBannersUpdate(s)).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client
-                        .list_devices(None, None, None, None, None, None)
-                        .await
-                    {
-                        let _ = tx.send(AppEvent::DevicesUpdate(Box::new(s))).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.topology().await {
-                        let _ = tx.send(AppEvent::TopologyUpdate(Box::new(s))).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.leases(false).await {
-                        let _ = tx.send(AppEvent::LeasesUpdate(s)).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dhcp_pools().await {
-                        let _ = tx.send(AppEvent::DhcpPoolsUpdate(s)).await;
-                    }
-                });
-            }
-
+            fetch_common_data(&client, &tx);
             last_common = Instant::now();
         }
 
@@ -431,79 +528,7 @@ async fn run_periodic_fetch(
         };
 
         if last_dns.elapsed() >= dns_interval {
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dns_stats().await {
-                        let _ = tx.send(AppEvent::DnsStatsUpdate(Box::new(s))).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dns_analytics(Some(10)).await {
-                        let _ = tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dns_upstreams().await {
-                        let _ = tx.send(AppEvent::DnsUpstreamsUpdate(Box::new(s))).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dns_cache_stats_ext().await {
-                        let _ = tx.send(AppEvent::DnsCacheStatsUpdate(s)).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dns_adblock_status().await {
-                        let _ = tx.send(AppEvent::DnsAdblockStatusUpdate(Box::new(s))).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dns_rewrites().await {
-                        let _ = tx.send(AppEvent::DnsRewritesUpdate(s)).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dns_adblock_url_list().await {
-                        let _ = tx.send(AppEvent::DnsAdblockUrlsUpdate(s)).await;
-                    }
-                });
-            }
-            {
-                let client = client.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(s) = client.dns_allowlist().await {
-                        let _ = tx.send(AppEvent::DnsAllowlistUpdate(s)).await;
-                    }
-                });
-            }
-
+            fetch_dns_data(&client, &tx);
             last_dns = Instant::now();
         }
 

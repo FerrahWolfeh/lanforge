@@ -2,7 +2,7 @@ use super::format_relative_iso8601;
 use crate::cli::vendor::resolve_vendor;
 use crate::cli::wizard::fuzzy_select_device;
 use crate::cli::{Execute, LanforgeClient};
-use chrono::{DateTime, Utc};
+
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::WhoisResponse;
@@ -70,7 +70,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "DUID:      ", color: Color::DarkGrey)
-                Text(content: dev.duid.as_ref().map(|d| d.to_string()).unwrap_or_else(|| "—".to_string()))
+                Text(content: dev.duid.as_ref().map_or_else(|| "—".to_string(), std::string::ToString::to_string))
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Status:    ", color: Color::DarkGrey)
@@ -135,8 +135,8 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
 #[component]
 fn HistoryRow(props: &HistoryRowProps) -> impl Into<AnyElement<'_>> {
     let h = &props.history;
-    let dt: DateTime<Utc> = h.timestamp.into();
-    let time = format_relative_iso8601(dt.timestamp() as u64);
+    let secs = lanforge_types::utils::system_time_to_secs(h.timestamp);
+    let time = format_relative_iso8601(secs);
 
     element! {
         View(flex_direction: FlexDirection::Row) {

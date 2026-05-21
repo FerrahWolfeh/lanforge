@@ -180,12 +180,10 @@ fn HostRow(props: &HostRowProps) -> impl Into<AnyElement<'_>> {
     let symbol = host.origin.symbol();
     let v4_str = host
         .v4_fixed
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "—".to_string());
+        .map_or_else(|| "—".to_string(), |ip| ip.to_string());
     let v6_str = host
         .v6_suffix
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "—".to_string());
+        .map_or_else(|| "—".to_string(), |ip| ip.to_string());
 
     element! {
         View(flex_direction: FlexDirection::Row) {

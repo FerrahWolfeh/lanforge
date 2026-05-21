@@ -37,7 +37,7 @@ pub fn format_short_relative(secs: u64) -> String {
     if secs == 0 {
         return "never".to_string();
     }
-    if let Some(dt) = DateTime::<Utc>::from_timestamp(secs as i64, 0) {
+    if let Some(dt) = DateTime::<Utc>::from_timestamp(secs.cast_signed(), 0) {
         let now = Utc::now();
         let diff = dt.signed_duration_since(now);
 
@@ -75,7 +75,7 @@ pub fn format_relative_iso8601(secs: u64) -> String {
     if secs == 0 {
         return "never".to_string();
     }
-    if let Some(dt) = DateTime::<Utc>::from_timestamp(secs as i64, 0) {
+    if let Some(dt) = DateTime::<Utc>::from_timestamp(secs.cast_signed(), 0) {
         let now = Utc::now();
         let diff = dt.signed_duration_since(now);
 

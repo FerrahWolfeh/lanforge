@@ -1,7 +1,6 @@
-use std::time::UNIX_EPOCH;
-
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
+use lanforge_types::utils::system_time_to_secs;
 use ratatui::layout::{Direction, Layout};
 use ratatui::{
     Frame,
@@ -28,61 +27,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
         .height(1);
 
     let mut rows = Vec::new();
-    let mut matching_count = 0;
-
-    if let Some(devices_resp) = &app.state.devices {
-        let mut devices = devices_resp.devices.clone();
-        devices.sort_by(|a, b| a.mac.cmp(&b.mac));
-
-        for dev in devices {
-            // Apply filtering case-insensitively
-            if !app.filter_text.is_empty() {
-                let search = app.filter_text.to_lowercase();
-                if !dev.mac.contains_str(&search)
-                    && !dev.hostname.to_lowercase().contains(&search)
-                    && !dev.display_v4.to_lowercase().contains(&search)
-                    && !dev.display_v6.to_lowercase().contains(&search)
-                {
-                    continue;
-                }
-            }
-
-            matching_count += 1;
-
-            let status_span = if dev.online {
-                Span::styled("● online", Style::default().fg(theme::ONLINE))
-            } else {
-                Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
-            };
-
-            let host_display = format!("{} {}", utils::get_class_icon(dev.class), dev.hostname);
-
-            rows.push(Row::new(vec![
-                Cell::from(status_span),
-                Cell::from(Span::styled(
-                    dev.mac.to_string(),
-                    Style::default().fg(theme::MAC),
-                )),
-                Cell::from(Span::styled(
-                    host_display,
-                    Style::default().fg(theme::HOSTNAME),
-                )),
-                Cell::from(Span::styled(
-                    dev.display_v4.clone(),
-                    Style::default().fg(theme::IP),
-                )),
-                Cell::from(Span::styled(
-                    dev.display_v6.clone(),
-                    Style::default().fg(theme::IP),
-                )),
-                Cell::from(Span::styled(
-                    dev.origin.to_string(),
-                    Style::default().fg(theme::TEXT_DIM),
-                )),
-                Cell::from(Span::raw(utils::parse_iso_relative(dev.last_seen))),
-            ]));
-        }
-    }
+    let matching_count = build_device_rows(app, &mut rows);
 
     // Clamp selected index to matching_count
     if matching_count > 0 {
@@ -173,9 +118,7 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                 .history
                 .iter()
                 .map(|h| {
-                    let secs = h.timestamp.duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
+                    let secs = system_time_to_secs(h.timestamp);
                     let ts = utils::parse_iso_relative(secs);
                     format!(
                         "- {} type {} action {} at {}",
@@ -228,4 +171,63 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn build_device_rows(app: &TuiApp, rows: &mut Vec<Row<'static>>) -> usize {
+    let mut matching_count = 0;
+
+    if let Some(devices_resp) = &app.state.devices {
+        let mut devices = devices_resp.devices.clone();
+        devices.sort_by_key(|a| a.mac);
+
+        for dev in devices {
+            // Apply filtering case-insensitively
+            if !app.filter_text.is_empty() {
+                let search = app.filter_text.to_lowercase();
+                if !dev.mac.contains_str(&search)
+                    && !dev.hostname.to_lowercase().contains(&search)
+                    && !dev.display_v4.to_lowercase().contains(&search)
+                    && !dev.display_v6.to_lowercase().contains(&search)
+                {
+                    continue;
+                }
+            }
+
+            matching_count += 1;
+
+            let status_span = if dev.online {
+                Span::styled("● online", Style::default().fg(theme::ONLINE))
+            } else {
+                Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
+            };
+
+            let host_display = format!("{} {}", utils::get_class_icon(dev.class), dev.hostname);
+
+            rows.push(Row::new(vec![
+                Cell::from(status_span),
+                Cell::from(Span::styled(
+                    dev.mac.to_string(),
+                    Style::default().fg(theme::MAC),
+                )),
+                Cell::from(Span::styled(
+                    host_display,
+                    Style::default().fg(theme::HOSTNAME),
+                )),
+                Cell::from(Span::styled(
+                    dev.display_v4.clone(),
+                    Style::default().fg(theme::IP),
+                )),
+                Cell::from(Span::styled(
+                    dev.display_v6.clone(),
+                    Style::default().fg(theme::IP),
+                )),
+                Cell::from(Span::styled(
+                    dev.origin.to_string(),
+                    Style::default().fg(theme::TEXT_DIM),
+                )),
+                Cell::from(Span::raw(utils::parse_iso_relative(dev.last_seen))),
+            ]));
+        }
+    }
+    matching_count
 }

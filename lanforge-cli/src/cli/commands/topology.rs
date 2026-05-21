@@ -41,7 +41,7 @@ pub fn render_topology(resp: &TopologyResponse, ascii: bool) {
                 .iter()
                 .any(|e| e.mac == **k && e.parent_mac.is_some())
         })
-        .cloned()
+        .copied()
         .collect();
 
     roots.sort();
@@ -65,7 +65,7 @@ pub fn render_topology(resp: &TopologyResponse, ascii: bool) {
             .map_or("Unknown Switch", |e| e.hostname.as_str());
 
         println!("{root_box} {net_icon}{root_hostname} [{root_mac}]");
-        print_children(&root_mac, &parent_to_children, vert, true, ascii);
+        print_children(root_mac, &parent_to_children, vert, true, ascii);
         println!();
     }
 
@@ -86,13 +86,13 @@ pub fn render_topology(resp: &TopologyResponse, ascii: bool) {
 }
 
 fn print_children(
-    parent_mac: &MacAddr,
+    parent_mac: MacAddr,
     map: &HashMap<MacAddr, Vec<&TopologyEntry>>,
     indent: &str,
     _is_root: bool,
     ascii: bool,
 ) {
-    if let Some(children) = map.get(parent_mac) {
+    if let Some(children) = map.get(&parent_mac) {
         let mut sorted = children.clone();
         sorted.sort_by(|a, b| {
             let port_a = a.port.as_deref().unwrap_or("");
@@ -133,7 +133,7 @@ fn print_children(
             );
 
             let next_indent = format!("{indent}{sub_indent}");
-            print_children(&child.mac, map, &next_indent, false, ascii);
+            print_children(child.mac, map, &next_indent, false, ascii);
         }
     }
 }

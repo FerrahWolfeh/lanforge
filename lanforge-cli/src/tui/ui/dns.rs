@@ -54,10 +54,15 @@ fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
     render_cache_stats_ext(f, chunks[2], state);
 }
 
-fn render_resolver_stats(f: &mut Frame, area: Rect, state: &TuiState) {
-    let dns_stats = state.dns_stats.as_ref();
+struct ResolverStatsCalc {
+    p50: f64,
+    p95: f64,
+    p99: f64,
+    nxdomain_log_count: usize,
+    servfail_log_count: usize,
+}
 
-    // Parse live queries to compute dynamic statistics (Latency percentiles and NXDOMAIN/SERVFAIL counts)
+fn calculate_resolver_stats(state: &TuiState) -> ResolverStatsCalc {
     let mut log_latencies = Vec::new();
     let mut nxdomain_log_count = 0;
     let mut servfail_log_count = 0;
@@ -92,6 +97,28 @@ fn render_resolver_stats(f: &mut Frame, area: Rect, state: &TuiState) {
         log_latencies[(log_latencies.len() as f64 * 0.99) as usize]
     };
 
+    ResolverStatsCalc {
+        p50,
+        p95,
+        p99,
+        nxdomain_log_count,
+        servfail_log_count,
+    }
+}
+
+fn render_resolver_stats(f: &mut Frame, area: Rect, state: &TuiState) {
+    let calc = calculate_resolver_stats(state);
+    let stats_text = build_stats_lines(state, &calc);
+
+    let stats_block = Block::default()
+        .title("── RESOLVER STATS ──")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER));
+    f.render_widget(Paragraph::new(stats_text).block(stats_block), area);
+}
+
+fn build_stats_lines(state: &TuiState, calc: &ResolverStatsCalc) -> Vec<Line<'static>> {
+    let dns_stats = state.dns_stats.as_ref();
     let total = dns_stats.map_or(0, |s| s.total_requests);
     let cache_hits = dns_stats.map_or(0, |s| s.cache_hits);
     let cache_misses = dns_stats.map_or(0, |s| s.cache_misses);
@@ -117,7 +144,7 @@ fn render_resolver_stats(f: &mut Frame, area: Rect, state: &TuiState) {
         }
     };
 
-    let stats_text = vec![
+    vec![
         Line::from(vec![
             Span::styled("Requests       ", Style::default().fg(theme::TEXT_DIM)),
             Span::styled(
@@ -152,14 +179,14 @@ fn render_resolver_stats(f: &mut Frame, area: Rect, state: &TuiState) {
         Line::from(vec![
             Span::styled("NXDOMAIN       ", Style::default().fg(theme::TEXT_DIM)),
             Span::styled(
-                nxdomain_log_count.to_string(),
+                calc.nxdomain_log_count.to_string(),
                 Style::default().fg(theme::MOCHA_YELLOW),
             ),
         ]),
         Line::from(vec![
             Span::styled("SERVFAIL       ", Style::default().fg(theme::TEXT_DIM)),
             Span::styled(
-                servfail_log_count.to_string(),
+                calc.servfail_log_count.to_string(),
                 Style::default().fg(theme::MOCHA_RED),
             ),
         ]),
@@ -170,28 +197,25 @@ fn render_resolver_stats(f: &mut Frame, area: Rect, state: &TuiState) {
         Line::from(vec![
             Span::styled("Latency p50    ", Style::default().fg(theme::TEXT_DIM)),
             Span::styled(
-                format!("{p50:.0}ms"),
+                format!("{:.0}ms", calc.p50),
                 Style::default().fg(theme::MOCHA_GREEN),
             ),
         ]),
         Line::from(vec![
             Span::styled("Latency p95    ", Style::default().fg(theme::TEXT_DIM)),
             Span::styled(
-                format!("{p95:.0}ms"),
+                format!("{:.0}ms", calc.p95),
                 Style::default().fg(theme::MOCHA_YELLOW),
             ),
         ]),
         Line::from(vec![
             Span::styled("Latency p99    ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(format!("{p99:.0}ms"), Style::default().fg(theme::MOCHA_RED)),
+            Span::styled(
+                format!("{:.0}ms", calc.p99),
+                Style::default().fg(theme::MOCHA_RED),
+            ),
         ]),
-    ];
-
-    let stats_block = Block::default()
-        .title("── RESOLVER STATS ──")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
-    f.render_widget(Paragraph::new(stats_text).block(stats_block), area);
+    ]
 }
 
 fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
@@ -203,7 +227,11 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
         ])
         .split(area);
 
-    // 1. Upstreams Table
+    render_upstreams_table(f, chunks[0], state);
+    render_subservices(f, chunks[1], state);
+}
+
+fn render_upstreams_table(f: &mut Frame, area: Rect, state: &TuiState) {
     let upstreams = state.dns_upstreams.as_ref();
     let header = Row::new(vec!["HOST", "PROTO", "STATUS", "p50", "p95", "OK%"])
         .style(Style::default().fg(theme::TEXT_DIM))
@@ -270,9 +298,10 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(upstreams_table, chunks[0]);
+    f.render_widget(upstreams_table, area);
+}
 
-    // 2. Subservices Block
+fn render_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
     let dns_service_state = state
         .status
         .as_ref()
@@ -283,42 +312,42 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
         ("● running", theme::ONLINE)
     };
 
-    let dot_port = state
+    let tls_port = state
         .status
         .as_ref()
         .map_or(853, |s| s.services.dns.dot.as_ref().map_or(853, |d| d.port));
-    let doh_port = state
+    let https_port = state
         .status
         .as_ref()
         .map_or(443, |s| s.services.dns.doh.as_ref().map_or(443, |d| d.port));
 
-    let dot_active = state
+    let tls_active = state
         .status
         .as_ref()
         .and_then(|s| s.services.dns.dot.as_ref())
         .is_some_and(|d| d.state == ServiceState::Online);
-    let dot_icon = if dot_active {
+    let tls_icon = if tls_active {
         "● running"
     } else {
         "● offline"
     };
-    let dot_color = if dot_active {
+    let tls_color = if tls_active {
         theme::ONLINE
     } else {
         theme::MOCHA_RED
     };
 
-    let doh_active = state
+    let https_active = state
         .status
         .as_ref()
         .and_then(|s| s.services.dns.doh.as_ref())
         .is_some_and(|d| d.state == ServiceState::Online);
-    let doh_icon = if doh_active {
+    let https_icon = if https_active {
         "● running"
     } else {
         "● offline"
     };
-    let doh_color = if doh_active {
+    let https_color = if https_active {
         theme::ONLINE
     } else {
         theme::MOCHA_RED
@@ -327,13 +356,13 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
     let subservices_text = vec![
         Line::from(vec![
             Span::styled("DoT Listener   ", Style::default().fg(theme::TEXT_DIM)),
-            Span::raw(format!(":{:<13}", format!("{dot_port}/tcp"))),
-            Span::styled(dot_icon, Style::default().fg(dot_color)),
+            Span::raw(format!(":{:<13}", format!("{tls_port}/tcp"))),
+            Span::styled(tls_icon, Style::default().fg(tls_color)),
         ]),
         Line::from(vec![
             Span::styled("DoH Listener   ", Style::default().fg(theme::TEXT_DIM)),
-            Span::raw(format!(":{:<13}", format!("{doh_port}/https"))),
-            Span::styled(doh_icon, Style::default().fg(doh_color)),
+            Span::raw(format!(":{:<13}", format!("{https_port}/https"))),
+            Span::styled(https_icon, Style::default().fg(https_color)),
         ]),
         Line::from(vec![
             Span::styled("DNS Resolver   ", Style::default().fg(theme::TEXT_DIM)),
@@ -348,7 +377,7 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
         .border_style(Style::default().fg(theme::BORDER));
     f.render_widget(
         Paragraph::new(subservices_text).block(subservices_block),
-        chunks[1],
+        area,
     );
 }
 
@@ -517,9 +546,13 @@ fn render_analytics_row(f: &mut Frame, area: Rect, state: &TuiState) {
         ])
         .split(area);
 
-    let analytics = state.dns_analytics.as_ref();
+    render_top_domains(f, chunks[0], state);
+    render_query_types(f, chunks[1], state);
+    render_protocols(f, chunks[2], state);
+}
 
-    // 1. Top Domains
+fn render_top_domains(f: &mut Frame, area: Rect, state: &TuiState) {
+    let analytics = state.dns_analytics.as_ref();
     let top_domains = analytics.map_or(Vec::new(), |a| a.top_domains.clone());
     let max_domain_count = top_domains.iter().map(|d| d.count).max().unwrap_or(1);
     let total_domains_count: u64 = top_domains.iter().map(|d| d.count).sum();
@@ -556,9 +589,11 @@ fn render_analytics_row(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(top_domains_table, chunks[0]);
+    f.render_widget(top_domains_table, area);
+}
 
-    // 2. Query Types & Errors
+fn render_query_types(f: &mut Frame, area: Rect, state: &TuiState) {
+    let analytics = state.dns_analytics.as_ref();
     let query_types = analytics.map_or(Vec::new(), |a| a.query_types.clone());
     let total_qt: u64 = query_types.iter().map(|q| q.count).sum();
     let max_qt = query_types.iter().map(|q| q.count).max().unwrap_or(1);
@@ -594,9 +629,11 @@ fn render_analytics_row(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(query_types_table, chunks[1]);
+    f.render_widget(query_types_table, area);
+}
 
-    // 3. Protocols & DNSSEC
+fn render_protocols(f: &mut Frame, area: Rect, state: &TuiState) {
+    let analytics = state.dns_analytics.as_ref();
     let protocol_stats = analytics.map_or(Vec::new(), |a| a.protocol_stats.clone());
     let total_queries: u64 = protocol_stats.iter().map(|s| s.count).sum();
     let max_ps = protocol_stats.iter().map(|s| s.count).max().unwrap_or(1);
@@ -642,7 +679,7 @@ fn render_analytics_row(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    f.render_widget(proto_table, chunks[2]);
+    f.render_widget(proto_table, area);
 }
 
 fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {

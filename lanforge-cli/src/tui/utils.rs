@@ -3,7 +3,7 @@ use lanforge_types::device::DeviceClass;
 
 /// Returns an emoji icon for a device class string.
 #[must_use]
-pub fn get_class_icon(class: DeviceClass) -> &'static str {
+pub const fn get_class_icon(class: DeviceClass) -> &'static str {
     match class {
         DeviceClass::Computer => "💻",
         DeviceClass::Mobile => "📱",
@@ -11,7 +11,7 @@ pub fn get_class_icon(class: DeviceClass) -> &'static str {
         DeviceClass::Media => "📺",
         DeviceClass::IoT => "🏠",
         DeviceClass::Network => "🌐",
-        _ => "❓",
+        DeviceClass::None => "❓",
     }
 }
 
@@ -21,26 +21,27 @@ pub fn parse_iso_relative(secs: u64) -> String {
     if secs == 0 {
         return "never".to_string();
     }
-    if let Some(dt) = DateTime::<Utc>::from_timestamp(secs as i64, 0) {
-        let now = Utc::now();
-        let duration = now.signed_duration_since(dt);
-        let diff_secs = duration.num_seconds();
-        if diff_secs < 0 {
-            "future".to_string()
-        } else if diff_secs < 5 {
-            "now".to_string()
-        } else if diff_secs < 60 {
-            format!("{diff_secs}s ago")
-        } else if diff_secs < 3600 {
-            format!("{}m ago", diff_secs / 60)
-        } else if diff_secs < 86400 {
-            format!("{}h ago", diff_secs / 3600)
-        } else {
-            format!("{}d ago", diff_secs / 86400)
-        }
-    } else {
-        "never".to_string()
-    }
+    DateTime::<Utc>::from_timestamp(secs.cast_signed(), 0).map_or_else(
+        || "never".to_string(),
+        |dt| {
+            let now = Utc::now();
+            let duration = now.signed_duration_since(dt);
+            let diff_secs = duration.num_seconds();
+            if diff_secs < 0 {
+                "future".to_string()
+            } else if diff_secs < 5 {
+                "now".to_string()
+            } else if diff_secs < 60 {
+                format!("{diff_secs}s ago")
+            } else if diff_secs < 3600 {
+                format!("{}m ago", diff_secs / 60)
+            } else if diff_secs < 86400 {
+                format!("{}h ago", diff_secs / 3600)
+            } else {
+                format!("{}d ago", diff_secs / 86400)
+            }
+        },
+    )
 }
 
 /// Formats a Unix timestamp (seconds since epoch) as an absolute local timestamp (HH:MM:SS).
@@ -49,12 +50,13 @@ pub fn parse_iso_absolute(secs: u64) -> String {
     if secs == 0 {
         return "never".to_string();
     }
-    if let Some(dt) = DateTime::<Utc>::from_timestamp(secs as i64, 0) {
-        let local_dt = dt.with_timezone(&Local);
-        local_dt.format("%H:%M:%S").to_string()
-    } else {
-        "never".to_string()
-    }
+    DateTime::<Utc>::from_timestamp(secs.cast_signed(), 0).map_or_else(
+        || "never".to_string(),
+        |dt| {
+            let local_dt = dt.with_timezone(&Local);
+            local_dt.format("%H:%M:%S").to_string()
+        },
+    )
 }
 
 /// Formats uptime seconds into a concise string (e.g. "1h 23m").
