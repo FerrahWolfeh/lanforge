@@ -1,20 +1,20 @@
 use lanforge_types::events::TimedEvent;
-use serde_json::Value;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+pub mod auth;
 pub mod common;
 pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod system;
-pub mod auth;
 
+pub use auth::*;
 pub use common::*;
 pub use devices::*;
 pub use dhcp::*;
 pub use dns::*;
 pub use system::*;
-pub use auth::*;
 
 /// Represents a response sent from the daemon to a client.
 #[derive(Debug, Serialize, Deserialize)]
@@ -76,4 +76,3 @@ pub enum Response {
     /// Full system configuration export.
     SystemConfig(Box<SystemConfigExport>),
 }
-

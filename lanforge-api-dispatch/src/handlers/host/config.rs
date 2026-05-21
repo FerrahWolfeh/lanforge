@@ -20,20 +20,17 @@ impl ClientContext {
             }
 
             hosts.push(HostConfigEntry {
-                mac: dev.mac.to_string(),
+                mac: dev.mac,
                 hostname: dev.hostname.name.clone(),
                 v4_fixed: match &dev.v4 {
-                    IPv4State::Static(ip) => Some(ip.to_string()),
+                    IPv4State::Static(ip) => Some(*ip),
                     _ => None,
                 },
-                v6_suffix: dev.v6.iter().find_map(|s| {
-                    if let IPv6State::Static(suffix, _) = s {
-                        Some(suffix.to_string())
-                    } else {
-                        None
-                    }
+                v6_suffix: dev.v6.iter().find_map(|s| match s {
+                    IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) => Some(*ip),
+                    _ => None,
                 }),
-                origin: dev.origin.as_str().to_string(),
+                origin: dev.origin,
             });
         }
 
@@ -41,14 +38,7 @@ impl ClientContext {
     }
 
     pub async fn handle_host_add(&self, entry: HostConfigEntry) -> Response {
-        let mac = match MacAddr::parse(&entry.mac) {
-            Some(m) => m,
-            None => {
-                return Response::Error {
-                    error: format!("Invalid MAC: {}", entry.mac),
-                };
-            }
-        };
+        let mac = entry.mac;
 
         // 1. Prepare device representation
         let mut dev = match self.ctx.get_device(&mac) {
@@ -60,16 +50,15 @@ impl ClientContext {
             name: entry.hostname.clone(),
             origin: HostnameOrigin::Static,
         };
-        if let Some(v4) = &entry.v4_fixed
-            && let Ok(ip) = v4.parse::<Ipv4Addr>()
-        {
+        if let Some(ip) = entry.v4_fixed {
             dev.v4 = IPv4State::Static(ip);
         }
-        if let Some(v6) = &entry.v6_suffix
-            && let Some(suf) = Ipv6AddrOrSuffix::parse(v6)
-        {
+        if let Some(ip) = entry.v6_suffix {
             dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
-            dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
+            dev.v6.push(IPv6State::Static(
+                Ipv6AddrOrSuffix::Full(ip),
+                SystemTime::now(),
+            ));
         }
         dev.origin = Origin::Static;
         dev.managed_at = Some(SystemTime::now());
@@ -87,8 +76,8 @@ impl ClientContext {
             update: CliHostUpdate {
                 hostname: entry.hostname.into(),
                 duid: FieldUpdate::NoChange,
-                v4_static: entry.v4_fixed.and_then(|v| v.parse().ok()).into(),
-                v6_suffix: entry.v6_suffix.and_then(|v| v.parse().ok()).into(),
+                v4_static: entry.v4_fixed.into(),
+                v6_suffix: entry.v6_suffix.map(Ipv6AddrOrSuffix::Full).into(),
                 boot_file: FieldUpdate::NoChange,
                 origin: Origin::Static,
                 dns_fallback: FieldUpdate::NoChange,

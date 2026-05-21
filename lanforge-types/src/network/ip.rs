@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv6Addr};
 use std::str::FromStr;
 
@@ -132,6 +132,19 @@ impl IpClassification {
     #[must_use]
     pub const fn score(&self) -> u8 {
         *self as u8
+    }
+}
+
+impl Display for IpClassification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ula => write!(f, "ULA"),
+            Self::Ipv4 => write!(f, "IPv4"),
+            Self::Gua => write!(f, "GUA"),
+            Self::LinkLocal => write!(f, "Link-local"),
+            Self::Loopback => write!(f, "Loopback"),
+            Self::Other => write!(f, "Other"),
+        }
     }
 }
 

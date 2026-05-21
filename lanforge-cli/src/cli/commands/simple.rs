@@ -1,4 +1,4 @@
-use std::io::ErrorKind;
+use std::{collections::HashMap, io::ErrorKind, net::IpAddr};
 
 use crate::cli::{
     Execute, LanforgeClient,
@@ -7,6 +7,7 @@ use crate::cli::{
 use color_eyre::eyre::Result;
 use lanforge_api::rpc::{LanforgeRpcError, RpcResponse};
 use lanforge_types::events::TimedEvent;
+use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "remote")]
 use reqwest::Client;
 
@@ -51,7 +52,8 @@ pub struct PurgeArgs {
 impl Execute for PurgeArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         let mac = if let Some(m) = self.mac {
-            m
+            m.parse::<MacAddr>()
+                .map_err(|e| color_eyre::eyre::eyre!("{e}"))?
         } else {
             let dev = fuzzy_select_device(client, "Select device to purge:").await?;
             dev.mac
@@ -64,7 +66,7 @@ impl Execute for PurgeArgs {
             return Ok(());
         }
 
-        let resp = client.purge(mac.clone()).await?;
+        let resp = client.purge(mac).await?;
         println!("✓ {}", resp.message);
         Ok(())
     }
@@ -252,8 +254,8 @@ impl Execute for WatchArgs {
     }
 }
 
-async fn fetch_device_map(client: &LanforgeClient) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
+async fn fetch_device_map(client: &LanforgeClient) -> HashMap<String, String> {
+    let mut map = HashMap::new();
     if let Ok(dev_resp) = client
         .list_devices(None, None, None, None, Some(10000), None)
         .await
@@ -261,16 +263,16 @@ async fn fetch_device_map(client: &LanforgeClient) -> std::collections::HashMap<
         for dev in dev_resp.devices {
             if !dev.hostname.is_empty() && dev.hostname != "<unknown>" {
                 if let Some(v4) = dev.v4 {
-                    map.insert(v4.ip, dev.hostname.clone());
+                    map.insert(v4.ip.to_string(), dev.hostname.clone());
                 }
                 for ip in dev.seen_v4 {
-                    map.insert(ip, dev.hostname.clone());
+                    map.insert(ip.to_string(), dev.hostname.clone());
                 }
                 if let Some(v6) = dev.v6 {
-                    map.insert(v6.ip, dev.hostname.clone());
+                    map.insert(v6.ip.to_string(), dev.hostname.clone());
                 }
                 for ip in dev.ipv6_addrs {
-                    map.insert(ip.addr, dev.hostname.clone());
+                    map.insert(ip.addr.to_string(), dev.hostname.clone());
                 }
             }
         }
@@ -279,15 +281,11 @@ async fn fetch_device_map(client: &LanforgeClient) -> std::collections::HashMap<
 }
 
 #[allow(clippy::too_many_lines)]
-fn render_watch_event(
-    e: &TimedEvent,
-    device_map: &std::collections::HashMap<String, String>,
-    verbose: bool,
-) {
+fn render_watch_event(e: &TimedEvent, device_map: &HashMap<String, String>, verbose: bool) {
     use chrono::{DateTime, Local};
     use colored::Colorize;
     use lanforge_types::events::{
-        NetworkChange, AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkEvent,
+        AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, NetworkEvent,
     };
 
     let dt: DateTime<Local> = e.timestamp.into();
@@ -369,7 +367,9 @@ fn render_watch_event(
                     NetworkChange::TopologyChanged { parent_mac, port } => {
                         format!("Topology Changed: parent={parent_mac:?}, port={port:?}")
                     }
-                    NetworkChange::IpDeleted { ip } => format!("IP Deleted: {ip}").red().to_string(),
+                    NetworkChange::IpDeleted { ip } => {
+                        format!("IP Deleted: {ip}").red().to_string()
+                    }
                     NetworkChange::IpOffline { ip } => {
                         format!("IP Offline: {ip}").yellow().to_string()
                     }

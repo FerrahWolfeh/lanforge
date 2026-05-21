@@ -6,7 +6,6 @@ use clap::ValueEnum;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse};
-use lanforge_types::device::Origin;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DevicesArgs {
@@ -100,7 +99,7 @@ pub fn render_devices(resp: &DevicesResponse, ascii: bool) {
 #[component]
 fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
     let dev = &props.device;
-    let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
+    let symbol = dev.origin.symbol();
     let status_color = if dev.online {
         Color::Green
     } else {
@@ -111,7 +110,7 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
     } else {
         format!("{} {}", dev.hostname, symbol)
     };
-    let last_seen_compact = format_short_relative(&dev.last_seen);
+    let last_seen_compact = format_short_relative(dev.last_seen);
     let bullet = if props.ascii { "*" } else { "●" };
 
     element! {
@@ -178,15 +177,23 @@ pub fn render_hosts(resp: &HostsResponse, ascii: bool) {
 #[component]
 fn HostRow(props: &HostRowProps) -> impl Into<AnyElement<'_>> {
     let host = &props.host;
-    let symbol = host.origin.parse::<Origin>().unwrap_or_default().symbol();
+    let symbol = host.origin.symbol();
+    let v4_str = host
+        .v4_fixed
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "—".to_string());
+    let v6_str = host
+        .v6_suffix
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "—".to_string());
 
     element! {
         View(flex_direction: FlexDirection::Row) {
             Text(content: "  ")
             Text(content: format!("{:<23}", truncate(&format!("{} {}", host.hostname, symbol), 23)))
             Text(content: format!("{:<20}", host.mac), color: Color::Cyan)
-            Text(content: format!("{:<18}", host.v4_fixed.as_deref().unwrap_or("—")), color: Color::Green)
-            Text(content: truncate(host.v6_suffix.as_deref().unwrap_or("—"), 20), color: Color::Yellow)
+            Text(content: format!("{:<18}", v4_str), color: Color::Green)
+            Text(content: truncate(&v6_str, 20), color: Color::Yellow)
         }
     }
 }

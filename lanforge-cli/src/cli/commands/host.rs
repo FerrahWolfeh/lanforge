@@ -1,11 +1,15 @@
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use crate::cli::wizard::{fuzzy_select_host, prompt_select, prompt_text};
 use crate::cli::{Execute, LanforgeClient};
 use crate::render_output;
 use clap::Subcommand;
-use color_eyre::eyre::{Result, bail};
+use color_eyre::eyre::{Result, bail, eyre};
 use inquire::{Confirm, Text as InquireText};
 use iocraft::prelude::*;
 use lanforge_api::api::HostConfigEntry;
+use lanforge_types::device::Origin;
+use lanforge_types::identifiers::MacAddr;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct HostArgs {
@@ -130,11 +134,11 @@ async fn execute_add(
     }
 
     let entry = HostConfigEntry {
-        mac: final_mac,
+        mac: final_mac.parse::<MacAddr>().map_err(|e| eyre!("{e}"))?,
         hostname: final_hostname,
-        v4_fixed: final_v4,
-        v6_suffix: final_v6,
-        origin: "Cli".to_string(),
+        v4_fixed: final_v4.map(|s| s.parse::<Ipv4Addr>()).transpose()?,
+        v6_suffix: final_v6.map(|s| s.parse::<Ipv6Addr>()).transpose()?,
+        origin: Origin::Static,
     };
     let resp = client.host_add(entry).await?;
     print_success!(resp.message);
@@ -148,7 +152,7 @@ async fn execute_set(
     value: Option<String>,
 ) -> Result<()> {
     let final_mac = if let Some(m) = mac {
-        m
+        m.parse::<MacAddr>().map_err(|e| eyre!("{e}"))?
     } else {
         let host = fuzzy_select_host(client, "Select host to modify:").await?;
         host.mac
@@ -204,7 +208,7 @@ async fn execute_set(
     }
 
     for (api_field, val) in pending_updates {
-        let resp = client.host_set(final_mac.clone(), api_field, val).await?;
+        let resp = client.host_set(final_mac, api_field, val).await?;
         print_success!(resp.message);
     }
 
@@ -217,7 +221,7 @@ async fn execute_remove(client: &LanforgeClient, target: Option<String>) -> Resu
         if let Some(host) = resp
             .hosts
             .into_iter()
-            .find(|h| h.mac.eq_ignore_ascii_case(&t) || h.hostname.eq_ignore_ascii_case(&t))
+            .find(|h| h.mac.eq_str(&t) || h.hostname.eq_ignore_ascii_case(&t))
         {
             host.mac
         } else {

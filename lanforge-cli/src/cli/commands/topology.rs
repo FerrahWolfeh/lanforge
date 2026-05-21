@@ -1,6 +1,7 @@
 use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
 use lanforge_api::api::{TopologyEntry, TopologyResponse};
+use lanforge_types::identifiers::MacAddr;
 use std::collections::HashMap;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -21,27 +22,24 @@ impl Execute for TopologyArgs {
 pub fn render_topology(resp: &TopologyResponse, ascii: bool) {
     println!("Network Topology Hierarchy\n");
 
-    let mut parent_to_children: HashMap<String, Vec<&TopologyEntry>> = HashMap::new();
+    let mut parent_to_children: HashMap<MacAddr, Vec<&TopologyEntry>> = HashMap::new();
     let mut orphans: Vec<&TopologyEntry> = Vec::new();
 
     for entry in &resp.entries {
         if let Some(parent) = &entry.parent_mac {
-            parent_to_children
-                .entry(parent.clone())
-                .or_default()
-                .push(entry);
+            parent_to_children.entry(*parent).or_default().push(entry);
         } else {
             orphans.push(entry);
         }
     }
 
-    let mut roots: Vec<String> = parent_to_children
+    let mut roots: Vec<MacAddr> = parent_to_children
         .keys()
         .filter(|k| {
             !resp
                 .entries
                 .iter()
-                .any(|e| &&e.mac == k && e.parent_mac.is_some())
+                .any(|e| e.mac == **k && e.parent_mac.is_some())
         })
         .cloned()
         .collect();
@@ -88,8 +86,8 @@ pub fn render_topology(resp: &TopologyResponse, ascii: bool) {
 }
 
 fn print_children(
-    parent_mac: &str,
-    map: &HashMap<String, Vec<&TopologyEntry>>,
+    parent_mac: &MacAddr,
+    map: &HashMap<MacAddr, Vec<&TopologyEntry>>,
     indent: &str,
     _is_root: bool,
     ascii: bool,
@@ -127,7 +125,7 @@ fn print_children(
                 .map(|p| format!(" (Port: {p})"))
                 .unwrap_or_default();
 
-            let ago = super::format_relative_iso8601(&child.last_updated);
+            let ago = super::format_relative_iso8601(child.last_updated);
 
             println!(
                 "{indent}{branch} {dev_icon}{} [{}] {port_str} [seen: {ago}]",

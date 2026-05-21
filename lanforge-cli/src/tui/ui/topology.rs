@@ -44,7 +44,7 @@ fn get_topology_data<'a>(
         // Apply filter
         if !filter.is_empty() {
             let matches = dev.hostname.name.to_lowercase().contains(&filter)
-                || dev.mac.to_string().to_lowercase().contains(&filter);
+                || dev.mac.contains_str(&filter);
             if !matches {
                 continue;
             }

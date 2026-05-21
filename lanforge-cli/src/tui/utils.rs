@@ -1,59 +1,60 @@
 use chrono::{DateTime, Local, Utc};
+use lanforge_types::device::DeviceClass;
 
 /// Returns an emoji icon for a device class string.
 #[must_use]
-pub fn get_class_icon(class: &str) -> &'static str {
-    match class.to_lowercase().as_str() {
-        "computer" | "pc" | "server" => "💻",
-        "mobile" | "phone" | "tablet" => "📱",
-        "printer" | "scanner" => "🖨️",
-        "media" | "tv" | "audio" | "speaker" => "📺",
-        "iot" | "smarthome" | "sensor" => "🏠",
-        "network" | "switch" | "router" | "ap" => "🌐",
+pub fn get_class_icon(class: DeviceClass) -> &'static str {
+    match class {
+        DeviceClass::Computer => "💻",
+        DeviceClass::Mobile => "📱",
+        DeviceClass::Printer => "🖨️",
+        DeviceClass::Media => "📺",
+        DeviceClass::IoT => "🏠",
+        DeviceClass::Network => "🌐",
         _ => "❓",
     }
 }
 
-/// Parses an ISO 8601 date string and formats it as a relative duration (e.g. "5m ago").
+/// Formats a Unix timestamp (seconds since epoch) as a relative duration (e.g. "5m ago").
 #[must_use]
-pub fn parse_iso_relative(iso: &str) -> String {
-    if iso == "never" || iso.is_empty() || iso == "—" || iso == "?" {
+pub fn parse_iso_relative(secs: u64) -> String {
+    if secs == 0 {
         return "never".to_string();
     }
-    DateTime::parse_from_rfc3339(iso).map_or_else(
-        |_| iso.to_string(),
-        |dt| {
-            let now = Utc::now();
-            let dt_utc = dt.with_timezone(&Utc);
-            let duration = now.signed_duration_since(dt_utc);
-            let secs = duration.num_seconds();
-            if secs < 0 {
-                "future".to_string()
-            } else if secs < 5 {
-                "now".to_string()
-            } else if secs < 60 {
-                format!("{secs}s ago")
-            } else if secs < 3600 {
-                format!("{}m ago", secs / 60)
-            } else if secs < 86400 {
-                format!("{}h ago", secs / 3600)
-            } else {
-                format!("{}d ago", secs / 86400)
-            }
-        },
-    )
+    if let Some(dt) = DateTime::<Utc>::from_timestamp(secs as i64, 0) {
+        let now = Utc::now();
+        let duration = now.signed_duration_since(dt);
+        let diff_secs = duration.num_seconds();
+        if diff_secs < 0 {
+            "future".to_string()
+        } else if diff_secs < 5 {
+            "now".to_string()
+        } else if diff_secs < 60 {
+            format!("{diff_secs}s ago")
+        } else if diff_secs < 3600 {
+            format!("{}m ago", diff_secs / 60)
+        } else if diff_secs < 86400 {
+            format!("{}h ago", diff_secs / 3600)
+        } else {
+            format!("{}d ago", diff_secs / 86400)
+        }
+    } else {
+        "never".to_string()
+    }
 }
 
-/// Parses an ISO 8601 date string and formats it as an absolute local timestamp (HH:MM:SS).
+/// Formats a Unix timestamp (seconds since epoch) as an absolute local timestamp (HH:MM:SS).
 #[must_use]
-pub fn parse_iso_absolute(iso: &str) -> String {
-    DateTime::parse_from_rfc3339(iso).map_or_else(
-        |_| iso.to_string(),
-        |dt| {
-            let local_dt = dt.with_timezone(&Local);
-            local_dt.format("%H:%M:%S").to_string()
-        },
-    )
+pub fn parse_iso_absolute(secs: u64) -> String {
+    if secs == 0 {
+        return "never".to_string();
+    }
+    if let Some(dt) = DateTime::<Utc>::from_timestamp(secs as i64, 0) {
+        let local_dt = dt.with_timezone(&Local);
+        local_dt.format("%H:%M:%S").to_string()
+    } else {
+        "never".to_string()
+    }
 }
 
 /// Formats uptime seconds into a concise string (e.g. "1h 23m").

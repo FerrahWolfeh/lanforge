@@ -1,4 +1,9 @@
-use lanforge_types::device::LeaseHistoryEntry;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use lanforge_types::{
+    device::{DeviceClass, IpClassification, LearningMethod, LeaseHistoryEntry, Origin},
+    identifiers::{Duid, MacAddr},
+};
 use serde::{Deserialize, Serialize};
 
 /// A response containing a list of devices and metadata.
@@ -21,32 +26,32 @@ pub struct HostsResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct HostConfigEntry {
     /// MAC address identifying the device.
-    pub mac: String,
+    pub mac: MacAddr,
     /// Manually configured hostname.
     pub hostname: String,
     /// Fixed IPv4 address, if set.
-    pub v4_fixed: Option<String>,
+    pub v4_fixed: Option<Ipv4Addr>,
     /// IPv6 Interface ID (suffix) or Full address.
-    pub v6_suffix: Option<String>,
+    pub v6_suffix: Option<Ipv6Addr>,
     /// Source of the configuration (e.g., "Toml", "Cli").
-    pub origin: String,
+    pub origin: Origin,
 }
 
 /// A single device discovered on the network.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DeviceEntry {
     /// Device MAC address.
-    pub mac: String,
+    pub mac: MacAddr,
     /// Hostname, either broadcast by the device or manually set.
     pub hostname: String,
     /// Source of identification (e.g., "Dynamic", "Toml", "Cli").
-    pub origin: String,
+    pub origin: Origin,
     /// Current online/offline status.
     pub online: bool,
-    /// Last seen timestamp in ISO 8601.
-    pub last_seen: String,
+    /// Last seen timestamp.
+    pub last_seen: u64,
     /// Hex-encoded DUID for `DHCPv6`, if available.
-    pub duid: Option<String>,
+    pub duid: Option<Duid>,
     /// Human-readable primary `IPv4` display.
     pub display_v4: String,
     /// Human-readable primary `IPv6` display.
@@ -54,32 +59,33 @@ pub struct DeviceEntry {
     /// Active `DHCPv4` lease information.
     pub v4: Option<LeaseInfo>,
     /// List of all `IPv4` addresses seen for this device.
-    pub seen_v4: Vec<String>,
+    pub seen_v4: Vec<Ipv4Addr>,
     /// Active `DHCPv6` lease information.
     pub v6: Option<LeaseInfo>,
     /// List of IPv6 addresses (SLAAC, GUA, etc.) tracked for this device.
     pub ipv6_addrs: Vec<Ipv6Entry>,
-    pub learning_method: String,
+    /// Method by which the device was discovered.
+    pub learning_method: LearningMethod,
     /// Discovered category (e.g., "printer", "media").
-    pub class: String,
+    pub class: DeviceClass,
 }
 
 /// A single IPv6 address entry with its type category.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Ipv6Entry {
     /// Full IPv6 address.
-    pub addr: String,
+    pub addr: Ipv6Addr,
     /// Category of the address (e.g., "SLAAC", "ULA", "GUA", "Link-Local").
-    pub kind: String,
+    pub kind: IpClassification,
 }
 
 /// Details about a DHCP lease.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LeaseInfo {
     /// Assigned IP address.
-    pub ip: String,
-    /// Expiration timestamp in ISO 8601, or "Static".
-    pub expires: String,
+    pub ip: IpAddr,
+    /// Expiration timestamp - 0 means it will not expire (static).
+    pub expires: u64,
     /// Whether this is a static reservation.
     pub reserved: bool,
 }
@@ -115,15 +121,15 @@ pub struct TopologyResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TopologyEntry {
     /// MAC address of the device.
-    pub mac: String,
+    pub mac: MacAddr,
     /// Hostname of the device.
     pub hostname: String,
     /// Parent MAC address, if known.
-    pub parent_mac: Option<String>,
+    pub parent_mac: Option<MacAddr>,
     /// Port on the parent device, if known.
     pub port: Option<String>,
     /// Local interface index connecting to this topology tree.
     pub local_ifindex: u32,
-    /// Last seen timestamp of this topology link.
-    pub last_updated: String,
+    /// Last seen timestamp of this topology link from unix epoch in seconds.
+    pub last_updated: u64,
 }

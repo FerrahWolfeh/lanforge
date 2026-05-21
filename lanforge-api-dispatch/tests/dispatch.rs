@@ -8,6 +8,7 @@ use lanforge_core::context::state::State;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
+use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::DnsRecordType;
 use lanforge_types::network::dns::AdblockUrlEntry;
@@ -85,11 +86,11 @@ async fn test_dispatch_hosts_crud() {
 
     // 2. Add a host
     let entry = HostConfigEntry {
-        mac: "00:11:22:33:44:55".to_string(),
+        mac: MacAddr::parse("00:11:22:33:44:55").unwrap(),
         hostname: "test-host".to_string(),
-        v4_fixed: Some("192.168.1.100".to_string()),
+        v4_fixed: Some("192.168.1.100".parse().unwrap()),
         v6_suffix: None,
-        origin: "static".to_string(),
+        origin: Origin::Static,
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));
@@ -98,7 +99,7 @@ async fn test_dispatch_hosts_crud() {
     let res2 = client_ctx.handle_hosts().await;
     if let Response::Hosts(h) = res2 {
         assert_eq!(h.hosts.len(), 1);
-        assert_eq!(h.hosts[0].mac, "00:11:22:33:44:55");
+        assert_eq!(h.hosts[0].mac, MacAddr::parse("00:11:22:33:44:55").unwrap());
         assert_eq!(h.hosts[0].hostname, "test-host");
     } else {
         panic!("Expected Response::Hosts");
@@ -138,11 +139,11 @@ async fn test_dispatch_system_config_import_export() {
     // 2. Create a populated SystemConfigExport
     let import_cfg = SystemConfigExport {
         hosts: vec![HostConfigEntry {
-            mac: "11:22:33:44:55:66".to_string(),
+            mac: MacAddr::parse("11:22:33:44:55:66").unwrap(),
             hostname: "sys-import-host".to_string(),
-            v4_fixed: Some("192.168.10.50".to_string()),
+            v4_fixed: Some("192.168.10.50".parse().unwrap()),
             v6_suffix: None,
-            origin: "static".to_string(),
+            origin: Origin::Static,
         }],
         dns_rewrites: vec![RewriteRule {
             id: None,
@@ -186,7 +187,10 @@ async fn test_dispatch_system_config_import_export() {
     let res_after = client_ctx.handle_system_config_export().await;
     if let Response::SystemConfig(cfg) = res_after {
         assert_eq!(cfg.hosts.len(), 1);
-        assert_eq!(cfg.hosts[0].mac, "11:22:33:44:55:66");
+        assert_eq!(
+            cfg.hosts[0].mac,
+            MacAddr::parse("11:22:33:44:55:66").unwrap()
+        );
         assert_eq!(cfg.hosts[0].hostname, "sys-import-host");
 
         assert_eq!(cfg.dns_rewrites.len(), 1);

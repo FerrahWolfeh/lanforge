@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
 use crate::identifiers::MacAddr;
 use crate::utils::serde::{deserialize_time, serialize_time};
+use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TopologyInfo {

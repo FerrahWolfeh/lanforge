@@ -3,7 +3,7 @@ use crate::cli::{
     Execute, LanforgeClient,
     wizard::{confirm_destructive, fuzzy_select_token, prompt_text},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use clap::{Args, Subcommand};
 use color_eyre::eyre::Result;
 use lanforge_api::api::AuthTokensResponse;
@@ -153,15 +153,16 @@ pub fn render_tokens(resp: &AuthTokensResponse, ascii: bool) {
             .collect::<Vec<_>>()
             .join(", ");
         let created = DateTime::<Utc>::from_timestamp(token.created_at, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .map(|dt| {
+                DateTime::<Local>::from(dt)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
             .unwrap_or_default();
-        let used = token
-            .last_used
-            .and_then(|ts| DateTime::<Utc>::from_timestamp(ts, 0))
-            .map_or_else(
-                || "Never".to_string(),
-                |dt| format_relative_iso8601(&dt.to_rfc3339()),
-            );
+        let used = token.last_used.map_or_else(
+            || "Never".to_string(),
+            |ts| format_relative_iso8601(ts.cast_unsigned()),
+        );
         println!(
             "  {:<6} | {:<20} | {:<25} | {:<20} | {}",
             token.id, token.name, caps, created, used
@@ -185,6 +186,8 @@ fn parse_duration(s: &str) -> Result<std::time::Duration, color_eyre::eyre::Repo
         "h" => Ok(std::time::Duration::from_secs(num * 3600)),
         "d" => Ok(std::time::Duration::from_secs(num * 86400)),
         "w" => Ok(std::time::Duration::from_secs(num * 86400 * 7)),
-        _ => Err(color_eyre::eyre::eyre!("Unknown duration unit '{unit_part}'")),
+        _ => Err(color_eyre::eyre::eyre!(
+            "Unknown duration unit '{unit_part}'"
+        )),
     }
 }

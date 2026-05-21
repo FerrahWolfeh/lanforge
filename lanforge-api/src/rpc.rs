@@ -2,8 +2,9 @@ use crate::api::{
     AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpPoolsResponse,
     DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
-    LeasesResponse, RpcCallError, ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse, WhoisResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry,
+    HostsResponse, LeasesResponse, RpcCallError, ServiceBannersResponse, SimpleSuccess,
+    StatusResponse, SystemConfigExport, TopologyResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
@@ -148,7 +149,8 @@ pub trait LanforgeRpc {
     async fn ak_renew(&self, id_or_name: String) -> Result<AuthTokenResponse, RpcCallError>;
     async fn ak_list(&self) -> Result<AuthTokensResponse, RpcCallError>;
     async fn system_config_export(&self) -> Result<Box<SystemConfigExport>, RpcCallError>;
-    async fn system_config_import(&self, config: SystemConfigExport) -> Result<SimpleSuccess, RpcCallError>;
+    async fn system_config_import(
+        &self,
+        config: SystemConfigExport,
+    ) -> Result<SimpleSuccess, RpcCallError>;
 }
-
-

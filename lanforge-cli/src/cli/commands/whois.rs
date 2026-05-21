@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::WhoisResponse;
-use lanforge_types::device::{LeaseHistoryEntry, Origin};
+use lanforge_types::device::{LeaseHistoryEntry};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct WhoisArgs {
@@ -20,7 +20,7 @@ impl Execute for WhoisArgs {
             let dev =
                 fuzzy_select_device(client, "Select device for whois:")
                     .await?;
-            dev.mac
+            dev.mac.to_string()
         };
 
         let resp = client.whois(target).await?;
@@ -49,7 +49,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
     }
     .print();
 
-    let symbol = dev.origin.parse::<Origin>().unwrap_or_default().symbol();
+    let symbol = dev.origin.symbol();
     let status_color = if dev.online { Color::Green } else { Color::Red };
     let status_text = if dev.online { "Online" } else { "Offline" };
     let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
@@ -62,7 +62,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Method:    ", color: Color::DarkGrey)
-                Text(content: &dev.learning_method)
+                Text(content: dev.learning_method.to_string())
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Origin:    ", color: Color::DarkGrey)
@@ -70,7 +70,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "DUID:      ", color: Color::DarkGrey)
-                Text(content: dev.duid.as_deref().unwrap_or("—"))
+                Text(content: dev.duid.as_ref().map(|d| d.to_string()).unwrap_or_else(|| "—".to_string()))
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Status:    ", color: Color::DarkGrey)
@@ -78,7 +78,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Last Seen: ", color: Color::DarkGrey)
-                Text(content: format_relative_iso8601(&dev.last_seen))
+                Text(content: format_relative_iso8601(dev.last_seen))
             }
 
             View(margin_top: 1, flex_direction: FlexDirection::Column) {
@@ -90,7 +90,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
                 #(dev.seen_v4.iter().map(|ip| element! {
                     View(flex_direction: FlexDirection::Row) {
                         Text(content: "IPv4 (Seen):  ", color: Color::DarkGrey)
-                        Text(content: ip.clone(), color: Color::DarkGreen)
+                        Text(content: ip.to_string(), color: Color::DarkGreen)
                     }
                 }))
                 View(flex_direction: FlexDirection::Row) {
@@ -100,7 +100,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
                 #(dev.ipv6_addrs.iter().map(|entry| element! {
                     View(flex_direction: FlexDirection::Row) {
                         Text(content: format!("IPv6 ({:<5}):  ", entry.kind), color: Color::DarkGrey)
-                        Text(content: entry.addr.clone(), color: Color::DarkYellow)
+                        Text(content: entry.addr.to_string(), color: Color::DarkYellow)
                     }
                 }))
             }
@@ -136,7 +136,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
 fn HistoryRow(props: &HistoryRowProps) -> impl Into<AnyElement<'_>> {
     let h = &props.history;
     let dt: DateTime<Utc> = h.timestamp.into();
-    let time = format_relative_iso8601(&dt.to_rfc3339());
+    let time = format_relative_iso8601(dt.timestamp() as u64);
 
     element! {
         View(flex_direction: FlexDirection::Row) {

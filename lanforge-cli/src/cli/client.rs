@@ -15,7 +15,9 @@ use lanforge_api::api::{
     StatusResponse, SystemConfigExport, TopologyResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
-use lanforge_types::{network::dns::adblock::RewriteRule, update::LeaseTarget};
+use lanforge_types::{
+    identifiers::MacAddr, network::dns::adblock::RewriteRule, update::LeaseTarget,
+};
 
 use crate::args::LanforgeArgs;
 
@@ -435,9 +437,8 @@ impl LanforgeClient {
         dispatch!(self, post => format!("/devices/{target}/wol"), serde_json::json!({}), wol(target))
     }
 
-    pub async fn purge(&self, mac: String) -> Result<SimpleSuccess> {
-        let mac_addr: lanforge_types::identifiers::MacAddr = mac.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
-        dispatch!(self, delete => format!("/devices/{mac}"), purge(mac_addr))
+    pub async fn purge(&self, mac: MacAddr) -> Result<SimpleSuccess> {
+        dispatch!(self, delete => format!("/devices/{mac}"), purge(mac))
     }
 
     pub async fn topology(&self) -> Result<TopologyResponse> {
@@ -452,22 +453,20 @@ impl LanforgeClient {
 
     pub async fn lease_renew(
         &self,
-        mac: String,
+        mac: MacAddr,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess> {
-        let mac_addr: lanforge_types::identifiers::MacAddr = mac.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
         let t_str = target.as_ref().map(std::string::ToString::to_string);
-        dispatch!(self, post => format!("/leases/{mac}/renew"), serde_json::json!({ "target": t_str }), lease_renew(mac_addr, target))
+        dispatch!(self, post => format!("/leases/{mac}/renew"), serde_json::json!({ "target": t_str }), lease_renew(mac, target))
     }
 
     pub async fn lease_release(
         &self,
-        mac: String,
+        mac: MacAddr,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess> {
-        let mac_addr: lanforge_types::identifiers::MacAddr = mac.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
         let t_str = target.as_ref().map(std::string::ToString::to_string);
-        dispatch!(self, post => format!("/leases/{mac}/release"), serde_json::json!({ "target": t_str }), lease_release(mac_addr, target))
+        dispatch!(self, post => format!("/leases/{mac}/release"), serde_json::json!({ "target": t_str }), lease_release(mac, target))
     }
 
     pub async fn dhcp_pools(&self) -> Result<DhcpPoolsResponse> {
@@ -488,19 +487,17 @@ impl LanforgeClient {
         dispatch!(self, post => "/hosts", hosts, host_import(hosts))
     }
 
-    pub async fn host_remove(&self, mac: String) -> Result<SimpleSuccess> {
-        let mac_addr: lanforge_types::identifiers::MacAddr = mac.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
-        dispatch!(self, delete => format!("/hosts/{mac}"), host_remove(mac_addr))
+    pub async fn host_remove(&self, mac: MacAddr) -> Result<SimpleSuccess> {
+        dispatch!(self, delete => format!("/hosts/{mac}"), host_remove(mac))
     }
 
     pub async fn host_set(
         &self,
-        mac: String,
+        mac: MacAddr,
         field: String,
         value: String,
     ) -> Result<SimpleSuccess> {
-        let mac_addr: lanforge_types::identifiers::MacAddr = mac.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
-        dispatch!(self, patch => format!("/hosts/{mac}"), serde_json::json!({ "field": &field, "value": &value }), host_set(mac_addr, field, value))
+        dispatch!(self, patch => format!("/hosts/{mac}"), serde_json::json!({ "field": &field, "value": &value }), host_set(mac, field, value))
     }
 
     // --- Database Maintenance ---
@@ -607,7 +604,9 @@ impl LanforgeClient {
         protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
         domain: Option<String>,
     ) -> Result<SimpleSuccess> {
-        let q = domain.clone().map_or_else(String::new, |d| format!("&domain={d}"));
+        let q = domain
+            .clone()
+            .map_or_else(String::new, |d| format!("&domain={d}"));
         let proto_str = format!("{protocol:?}").to_lowercase();
         dispatch!(self, post => format!("/dns/upstreams?addr={addr}&protocol={proto_str}{q}"), serde_json::json!({}), dns_upstream_add(addr, protocol, domain))
     }
@@ -703,7 +702,11 @@ impl LanforgeClient {
         dispatch!(self, get => "/dns/adblock/sources", dns_adblock_url_list())
     }
 
-    pub async fn dns_adblock_url_add(&self, url: String, kind: lanforge_types::network::dns::adblock::AdblockUrlKind) -> Result<SimpleSuccess> {
+    pub async fn dns_adblock_url_add(
+        &self,
+        url: String,
+        kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
+    ) -> Result<SimpleSuccess> {
         let kind_str = format!("{kind:?}").to_lowercase();
         dispatch!(self, post => format!("/dns/adblock/sources?url={url}&kind={kind_str}"), serde_json::json!({}), dns_adblock_url_add(url, kind))
     }

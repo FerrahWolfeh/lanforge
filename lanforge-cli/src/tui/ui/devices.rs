@@ -2,7 +2,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
-use chrono::{DateTime, Utc};
+use ratatui::layout::{Direction, Layout};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -38,7 +38,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
             // Apply filtering case-insensitively
             if !app.filter_text.is_empty() {
                 let search = app.filter_text.to_lowercase();
-                if !dev.mac.to_lowercase().contains(&search)
+                if !dev.mac.contains_str(&search)
                     && !dev.hostname.to_lowercase().contains(&search)
                     && !dev.display_v4.to_lowercase().contains(&search)
                     && !dev.display_v6.to_lowercase().contains(&search)
@@ -55,12 +55,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
                 Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
             };
 
-            let host_display = format!("{} {}", utils::get_class_icon(&dev.class), dev.hostname);
+            let host_display = format!("{} {}", utils::get_class_icon(dev.class), dev.hostname);
 
             rows.push(Row::new(vec![
                 Cell::from(status_span),
                 Cell::from(Span::styled(
-                    dev.mac.clone(),
+                    dev.mac.to_string(),
                     Style::default().fg(theme::MAC),
                 )),
                 Cell::from(Span::styled(
@@ -76,10 +76,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
                     Style::default().fg(theme::IP),
                 )),
                 Cell::from(Span::styled(
-                    dev.origin.clone(),
+                    dev.origin.to_string(),
                     Style::default().fg(theme::TEXT_DIM),
                 )),
-                Cell::from(Span::raw(utils::parse_iso_relative(&dev.last_seen))),
+                Cell::from(Span::raw(utils::parse_iso_relative(dev.last_seen))),
             ]));
         }
     }
@@ -173,15 +173,10 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
                 .history
                 .iter()
                 .map(|h| {
-                    let ts = utils::parse_iso_relative(
-                        &h.timestamp.duration_since(UNIX_EPOCH).map_or_else(
-                            |_| "never".to_string(),
-                            |d| {
-                                DateTime::<Utc>::from(UNIX_EPOCH + d)
-                                    .to_rfc3339()
-                            },
-                        ),
-                    );
+                    let secs = h.timestamp.duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let ts = utils::parse_iso_relative(secs);
                     format!(
                         "- {} type {} action {} at {}",
                         h.ip, h.lease_type, h.action, ts
@@ -200,9 +195,9 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
             vendor,
             dev.hostname,
             dev.origin,
-            utils::get_class_icon(&dev.class),
+            utils::get_class_icon(dev.class),
             dev.class,
-            utils::parse_iso_absolute(&dev.last_seen),
+            utils::parse_iso_absolute(dev.last_seen),
             dev.online,
             active_v4,
             active_v6,
@@ -216,8 +211,8 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = ratatui::layout::Layout::default()
-        .direction(ratatui::layout::Direction::Vertical)
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
         .constraints([
             Constraint::Percentage((100 - percent_y) / 2),
             Constraint::Percentage(percent_y),
@@ -225,8 +220,8 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         ])
         .split(r);
 
-    ratatui::layout::Layout::default()
-        .direction(ratatui::layout::Direction::Horizontal)
+    Layout::default()
+        .direction(Direction::Horizontal)
         .constraints([
             Constraint::Percentage((100 - percent_x) / 2),
             Constraint::Percentage(percent_x),

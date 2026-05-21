@@ -1,3 +1,4 @@
+use lanforge_types::identifiers::MacAddr;
 use mac_oui::Oui;
 use std::sync::OnceLock;
 
@@ -8,9 +9,9 @@ static OUI_DB: OnceLock<Oui> = OnceLock::new();
 /// This database is large (~70MB) and is only loaded into memory when
 /// this function is first called. Since the CLI is short-lived, this
 /// one-time memory spike is acceptable.
-pub fn resolve_vendor(mac: &str) -> Option<String> {
+pub fn resolve_vendor(mac: &MacAddr) -> Option<String> {
     let db = OUI_DB.get_or_init(|| Oui::default().expect("Failed to load OUI database"));
-    db.lookup_by_mac(mac)
+    db.lookup_by_mac(&mac.to_string())
         .ok()
         .flatten()
         .map(|entry| entry.company_name.clone())

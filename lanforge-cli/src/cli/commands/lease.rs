@@ -37,9 +37,11 @@ impl Execute for LeaseArgs {
                     let resp = client
                         .list_devices(None, None, None, None, None, None)
                         .await?;
-                    if let Some(dev) = resp.devices.into_iter().find(|d| {
-                        d.mac.eq_ignore_ascii_case(&t) || d.hostname.eq_ignore_ascii_case(&t)
-                    }) {
+                    if let Some(dev) = resp
+                        .devices
+                        .into_iter()
+                        .find(|d| d.mac.eq_str(&t) || d.hostname.eq_ignore_ascii_case(&t))
+                    {
                         dev.mac
                     } else {
                         color_eyre::eyre::bail!("Device '{t}' not found.");
@@ -62,9 +64,11 @@ impl Execute for LeaseArgs {
                     let resp = client
                         .list_devices(None, None, None, None, None, None)
                         .await?;
-                    if let Some(dev) = resp.devices.into_iter().find(|d| {
-                        d.mac.eq_ignore_ascii_case(&t) || d.hostname.eq_ignore_ascii_case(&t)
-                    }) {
+                    if let Some(dev) = resp
+                        .devices
+                        .into_iter()
+                        .find(|d| d.mac.eq_str(&t) || d.hostname.eq_ignore_ascii_case(&t))
+                    {
                         dev.mac
                     } else {
                         color_eyre::eyre::bail!("Device '{t}' not found.");

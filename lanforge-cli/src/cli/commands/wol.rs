@@ -13,7 +13,7 @@ impl Execute for WolArgs {
             t
         } else {
             let dev = fuzzy_select_device(client, "Select device to wake up:").await?;
-            dev.mac
+            dev.mac.to_string()
         };
 
         println!("Triggering Wake-on-LAN for {target}...");

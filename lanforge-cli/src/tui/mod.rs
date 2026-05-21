@@ -113,7 +113,7 @@ pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
                         for dev in devices {
                             if !app.filter_text.is_empty() {
                                 let search = app.filter_text.to_lowercase();
-                                if !dev.mac.to_lowercase().contains(&search)
+                                if !dev.mac.contains_str(&search)
                                     && !dev.hostname.to_lowercase().contains(&search)
                                     && !dev.display_v4.to_lowercase().contains(&search)
                                     && !dev.display_v6.to_lowercase().contains(&search)
@@ -125,12 +125,14 @@ pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
                         }
 
                         if let Some(target_dev) = filtered_devices.get(selected_idx) {
-                            let target_mac = target_dev.mac.clone();
+                            let target_mac = target_dev.mac;
                             app.state.selected_whois = None; // Reset to show loading screen
                             let client_clone = client.clone();
                             let tx_clone = event_tx.clone();
                             tokio::spawn(async move {
-                                if let Ok(whois_resp) = client_clone.whois(target_mac).await {
+                                if let Ok(whois_resp) =
+                                    client_clone.whois(target_mac.to_string()).await
+                                {
                                     let _ = tx_clone.send(AppEvent::WhoisUpdate(whois_resp)).await;
                                 }
                             });

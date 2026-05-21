@@ -372,7 +372,11 @@ impl Device {
         None
     }
 
-    pub fn apply_arp_observation(&mut self, ip: Ipv4Addr, is_active: bool) -> Option<NetworkChange> {
+    pub fn apply_arp_observation(
+        &mut self,
+        ip: Ipv4Addr,
+        is_active: bool,
+    ) -> Option<NetworkChange> {
         let now = SystemTime::now();
         let mut changed = false;
 
@@ -809,7 +813,7 @@ impl Device {
 }
 
 /// The protocol or method by which a device was discovered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LearningMethod {
     Static,
     Managed,
@@ -817,6 +821,7 @@ pub enum LearningMethod {
     DhcpV6,
     Slaac,
     NdpArp,
+    #[default]
     Unknown,
 }
 

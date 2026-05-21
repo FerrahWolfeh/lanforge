@@ -21,6 +21,7 @@ use std::str::FromStr;
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Identifier, PartialOrd, Ord, Default)]
 pub struct MacAddr(pub [u8; 6]);
+const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
 
 impl MacAddr {
     /// All-zeros MAC address (00:00:00:00:00:00).
@@ -88,6 +89,92 @@ impl MacAddr {
     pub const fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    /// Checks if a lowercase, normalized query is a substring of this MAC address.
+    ///
+    /// The query can be matched against the standard colon-separated format
+    /// (e.g. "00:11:22") or the stripped format (e.g. "001122").
+    #[must_use]
+    pub fn contains_str(&self, query: &str) -> bool {
+        let q_bytes = query.as_bytes();
+        if q_bytes.is_empty() {
+            return true;
+        }
+
+        // 1. Try matching with colons (17 characters format: "xx:xx:xx:xx:xx:xx")
+        if q_bytes.len() <= 17 {
+            'outer: for start in 0..=(17 - q_bytes.len()) {
+                for (i, &q_char) in q_bytes.iter().enumerate() {
+                    let idx = start + i;
+                    let m_char = if idx % 3 == 2 {
+                        b':'
+                    } else {
+                        let byte = self.0[idx / 3];
+                        if idx % 3 == 0 {
+                            HEX_CHARS[(byte >> 4) as usize]
+                        } else {
+                            HEX_CHARS[(byte & 0xf) as usize]
+                        }
+                    };
+                    if m_char != q_char {
+                        continue 'outer;
+                    }
+                }
+                return true;
+            }
+        }
+
+        // 2. Try matching without colons (12 characters format: "xxxxxxxxxxxx")
+        if q_bytes.len() <= 12 {
+            // If the query contains a colon, it can't match the stripped format
+            if !q_bytes.contains(&b':') {
+                'outer: for start in 0..=(12 - q_bytes.len()) {
+                    for (i, &q_char) in q_bytes.iter().enumerate() {
+                        let idx = start + i;
+                        let byte = self.0[idx / 2];
+                        let m_char = if idx % 2 == 0 {
+                            HEX_CHARS[(byte >> 4) as usize]
+                        } else {
+                            HEX_CHARS[(byte & 0xf) as usize]
+                        };
+                        if m_char != q_char {
+                            continue 'outer;
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Checks if this MAC address equals the given string case-insensitively,
+    /// with or without colons.
+    #[must_use]
+    pub fn eq_str(&self, s: &str) -> bool {
+        let s = s.trim();
+        // Try parsing directly (covers standard colon format)
+        if let Some(parsed) = Self::parse(s) {
+            return self == &parsed;
+        }
+
+        // Try parsing a 12-character hex string without colons
+        let clean = s.replace(':', "");
+        if clean.len() == 12 {
+            let mut bytes = [0u8; 6];
+            for i in 0..6 {
+                if let Ok(b) = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16) {
+                    bytes[i] = b;
+                } else {
+                    return false;
+                }
+            }
+            return self.0 == bytes;
+        }
+
+        false
+    }
 }
 
 impl From<[u8; 6]> for MacAddr {
@@ -139,5 +226,41 @@ mod tests {
         let mac = MacAddr::from(arr);
         assert_eq!(mac.as_ref(), &arr);
         assert_eq!(mac.to_string(), "aa:bb:cc:dd:ee:ff");
+    }
+
+    #[test]
+    fn test_mac_contains_str() {
+        let mac = MacAddr::parse("00:de:ad:be:ef:11").unwrap();
+        // Matching with colons
+        assert!(mac.contains_str(""));
+        assert!(mac.contains_str("00:de:ad"));
+        assert!(mac.contains_str("de:ad"));
+        assert!(mac.contains_str("ef:11"));
+        assert!(!mac.contains_str("00:ad"));
+        assert!(!mac.contains_str("00:de:ad:be:ef:11:22"));
+
+        // Matching without colons
+        assert!(mac.contains_str("00de"));
+        assert!(mac.contains_str("deadbeef"));
+        assert!(mac.contains_str("ef11"));
+        assert!(!mac.contains_str("00ad"));
+        assert!(!mac.contains_str("deadbeef1122"));
+    }
+
+    #[test]
+    fn test_mac_eq_str() {
+        let mac = MacAddr::parse("00:de:ad:be:ef:11").unwrap();
+        // With colons
+        assert!(mac.eq_str("00:de:ad:be:ef:11"));
+        assert!(mac.eq_str("00:DE:AD:BE:EF:11"));
+        assert!(mac.eq_str("  00:de:ad:be:ef:11  "));
+        assert!(!mac.eq_str("00:de:ad:be:ef"));
+        assert!(!mac.eq_str("00:de:ad:be:ef:11:22"));
+
+        // Without colons
+        assert!(mac.eq_str("00deadbeef11"));
+        assert!(mac.eq_str("00DEADBEEF11"));
+        assert!(mac.eq_str("  00deadbeef11  "));
+        assert!(!mac.eq_str("00deadbeef"));
     }
 }

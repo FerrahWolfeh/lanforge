@@ -7,6 +7,7 @@
 use crate::tui::app::TuiApp;
 use crate::tui::state::TuiState;
 use crate::tui::theme;
+use lanforge_api::api::system::ServiceState;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -285,22 +286,54 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
     let dot_port = state
         .status
         .as_ref()
-        .map_or(53, |s| s.services.dns.dot.as_ref().map_or(853, |d| d.port));
+        .map_or(853, |s| s.services.dns.dot.as_ref().map_or(853, |d| d.port));
     let doh_port = state
         .status
         .as_ref()
-        .map_or(53, |s| s.services.dns.doh.as_ref().map_or(853, |d| d.port));
+        .map_or(443, |s| s.services.dns.doh.as_ref().map_or(443, |d| d.port));
+
+    let dot_active = state
+        .status
+        .as_ref()
+        .and_then(|s| s.services.dns.dot.as_ref())
+        .is_some_and(|d| d.state == ServiceState::Online);
+    let dot_icon = if dot_active {
+        "● running"
+    } else {
+        "● offline"
+    };
+    let dot_color = if dot_active {
+        theme::ONLINE
+    } else {
+        theme::MOCHA_RED
+    };
+
+    let doh_active = state
+        .status
+        .as_ref()
+        .and_then(|s| s.services.dns.doh.as_ref())
+        .is_some_and(|d| d.state == ServiceState::Online);
+    let doh_icon = if doh_active {
+        "● running"
+    } else {
+        "● offline"
+    };
+    let doh_color = if doh_active {
+        theme::ONLINE
+    } else {
+        theme::MOCHA_RED
+    };
 
     let subservices_text = vec![
         Line::from(vec![
             Span::styled("DoT Listener   ", Style::default().fg(theme::TEXT_DIM)),
-            Span::raw(":853/tcp      "),
-            Span::styled("● running", Style::default().fg(theme::ONLINE)),
+            Span::raw(format!(":{:<13}", format!("{dot_port}/tcp"))),
+            Span::styled(dot_icon, Style::default().fg(dot_color)),
         ]),
         Line::from(vec![
-            Span::styled("DoQ Listener   ", Style::default().fg(theme::TEXT_DIM)),
-            Span::raw(":853/udp      "),
-            Span::styled("● running", Style::default().fg(theme::ONLINE)),
+            Span::styled("DoH Listener   ", Style::default().fg(theme::TEXT_DIM)),
+            Span::raw(format!(":{:<13}", format!("{doh_port}/https"))),
+            Span::styled(doh_icon, Style::default().fg(doh_color)),
         ]),
         Line::from(vec![
             Span::styled("DNS Resolver   ", Style::default().fg(theme::TEXT_DIM)),
