@@ -1,17 +1,18 @@
 use crate::ClientContext;
+#[cfg(not(feature = "adblock"))]
+use lanforge_api::api::Response;
 #[cfg(feature = "adblock")]
 use lanforge_api::api::{
     AdblockUrlEntry, DnsAdblockStatusResponse, DnsAdblockUrlsResponse, Response, SimpleSuccess,
 };
-#[cfg(not(feature = "adblock"))]
-use lanforge_api::api::Response;
 
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
 use tracing::error;
 
-use lanforge_types::network::dns::adblock::AdblockUrlKind;
+use lanforge_types::network::dns::adblock::{AdblockUrlKind, BlockingMode};
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 impl ClientContext {
     #[cfg(feature = "adblock")]
@@ -95,6 +96,9 @@ impl ClientContext {
                 remaining_secs: res.remaining_secs,
                 blocklist_size: res.blocklist_size,
                 allowlist_size: res.allowlist_size,
+                blocking_mode: res.blocking_mode,
+                blocking_ip_v4: res.blocking_ip_v4,
+                blocking_ip_v6: res.blocking_ip_v6,
             });
         }
 
@@ -130,7 +134,11 @@ impl ClientContext {
     }
 
     #[cfg(not(feature = "adblock"))]
-    pub async fn handle_dns_adblock_url_add(&self, _url: String, _kind: AdblockUrlKind) -> Response {
+    pub async fn handle_dns_adblock_url_add(
+        &self,
+        _url: String,
+        _kind: AdblockUrlKind,
+    ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),
@@ -184,6 +192,76 @@ impl ClientContext {
 
     #[cfg(not(feature = "adblock"))]
     pub async fn handle_dns_adblock_url_list(&self) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(feature = "adblock")]
+    pub async fn handle_dns_adblock_config_set(
+        &self,
+        blocking_mode: Option<BlockingMode>,
+        blocking_ip_v4: Option<Ipv4Addr>,
+        blocking_ip_v6: Option<Ipv6Addr>,
+    ) -> Response {
+        let mut updated = false;
+        if let Some(mode) = blocking_mode {
+            if let Err(e) = self
+                .db
+                .set_adblock_config_value("blocking_mode", &mode.to_string())
+                .await
+            {
+                return Response::Error {
+                    error: format!("Failed to update blocking_mode: {e}"),
+                };
+            }
+            updated = true;
+        }
+        if let Some(ip) = blocking_ip_v4 {
+            if let Err(e) = self
+                .db
+                .set_adblock_config_value("blocking_ip_v4", &ip.to_string())
+                .await
+            {
+                return Response::Error {
+                    error: format!("Failed to update blocking_ip_v4: {e}"),
+                };
+            }
+            updated = true;
+        }
+        if let Some(ip) = blocking_ip_v6 {
+            if let Err(e) = self
+                .db
+                .set_adblock_config_value("blocking_ip_v6", &ip.to_string())
+                .await
+            {
+                return Response::Error {
+                    error: format!("Failed to update blocking_ip_v6: {e}"),
+                };
+            }
+            updated = true;
+        }
+
+        if updated {
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+        }
+
+        Response::Success(SimpleSuccess {
+            message: "DNS Adblock configuration updated".to_string(),
+        })
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub async fn handle_dns_adblock_config_set(
+        &self,
+        _blocking_mode: Option<BlockingMode>,
+        _blocking_ip_v4: Option<Ipv4Addr>,
+        _blocking_ip_v6: Option<Ipv6Addr>,
+    ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),

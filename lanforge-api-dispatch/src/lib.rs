@@ -12,9 +12,9 @@ use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
-use lanforge_types::network::dns::adblock::RewriteRule;
+use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
 use lanforge_types::update::LeaseTarget;
-use std::net::Ipv6Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -346,6 +346,19 @@ impl LanforgeRpc for ClientContext {
         duration_secs: Option<u64>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_dns_adblock_set(enabled, duration_secs).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_adblock_config_set(
+        &self,
+        blocking_mode: Option<BlockingMode>,
+        blocking_ip_v4: Option<Ipv4Addr>,
+        blocking_ip_v6: Option<Ipv6Addr>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_adblock_config_set(blocking_mode, blocking_ip_v4, blocking_ip_v6).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

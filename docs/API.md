@@ -99,6 +99,7 @@ Endpoints that follow this pattern are marked **HybridStream**.
 | :--- | :--- | :--- | :--- |
 | `dns_adblock_status` | Current filter status (enabled, size, active timer if any). | No | DNS adblock status api type |
 | `dns_adblock_set` | Toggles the adblocker on or off, optionally for a duration (see note). | `enabled: bool`, `duration_secs: Option<u64>` | Empty on success, error on failure |
+| `dns_adblock_config_set` | Updates adblock configuration (blocking mode and target IPs). | `blocking_mode: Option<BlockingMode>`, `blocking_ip_v4: Option<Ipv4Addr>`, `blocking_ip_v6: Option<Ipv6Addr>` | Empty on success, error on failure |
 | `dns_adblock_reload` | Triggers a reload of all blocklists and allowlists from their source URLs. | No | Empty on success, error on failure |
 | `dns_adblock_urls` | Lists configured source URLs for blocklists and allowlists. | No | List of DNS adblock URL api types |
 | `dns_adblock_url_add` | Adds a new source URL for blocklists or allowlists. | DNS adblock URL api type | Empty on success, error on failure |

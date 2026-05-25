@@ -1,6 +1,6 @@
 use crate::{
     identifiers::MacAddr,
-    network::dns::{adblock::AdblockUrlKind, upstream::UpstreamProtocol},
+    network::dns::{adblock::{AdblockUrlKind, BlockingMode}, upstream::UpstreamProtocol},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -579,6 +579,9 @@ pub struct DnsAdblockStatusResponse {
     pub remaining_secs: Option<u64>,
     pub blocklist_size: usize,
     pub allowlist_size: usize,
+    pub blocking_mode: BlockingMode,
+    pub blocking_ip_v4: Option<Ipv4Addr>,
+    pub blocking_ip_v6: Option<Ipv6Addr>,
 }
 
 /// A single adblock source URL entry.
@@ -637,6 +640,11 @@ pub enum DnsRequest {
     AdblockUrlRemove {
         url: String,
     },
+    AdblockConfigSet {
+        blocking_mode: Option<BlockingMode>,
+        blocking_ip_v4: Option<Ipv4Addr>,
+        blocking_ip_v6: Option<Ipv6Addr>,
+    },
     Stats,
 }
 
@@ -655,6 +663,7 @@ pub enum DnsResponse {
     AdblockUrlList(Vec<AdblockUrlEntry>),
     AdblockUrlAdd(Result<(), String>),
     AdblockUrlRemove(Result<(), String>),
+    AdblockConfigSet(Result<(), String>),
     Stats(DnsStatsResponse),
 }
 

@@ -483,6 +483,7 @@ async fn handle_dns_request(
             #[cfg(feature = "adblock")]
             {
                 if let Some(adblocker) = &dns_ctx.filter {
+                    let runtime_cfg = adblocker.config.read();
                     DnsResponse::AdblockStatus(
                         lanforge_types::network::dns::DnsAdblockStatusResponse {
                             enabled: adblocker.is_enabled(),
@@ -493,6 +494,9 @@ async fn handle_dns_request(
                             remaining_secs: adblocker.timer.remaining_secs(),
                             blocklist_size: adblocker.blocklist_size(),
                             allowlist_size: adblocker.allowlist_size(),
+                            blocking_mode: runtime_cfg.mode,
+                            blocking_ip_v4: runtime_cfg.ipv4,
+                            blocking_ip_v6: runtime_cfg.ipv6,
                         },
                     )
                 } else {
@@ -534,6 +538,35 @@ async fn handle_dns_request(
                 let _ = enabled;
                 let _ = duration_secs;
                 DnsResponse::AdblockSet(Err("Adblock not enabled".into()))
+            }
+        }
+        DnsRequest::AdblockConfigSet {
+            blocking_mode,
+            blocking_ip_v4,
+            blocking_ip_v6,
+        } => {
+            #[cfg(feature = "adblock")]
+            {
+                if let Some(mode) = blocking_mode {
+                    let _ = db.set_adblock_config_value("blocking_mode", &mode.to_string()).await;
+                }
+                if let Some(ip) = blocking_ip_v4 {
+                    let _ = db.set_adblock_config_value("blocking_ip_v4", &ip.to_string()).await;
+                }
+                if let Some(ip) = blocking_ip_v6 {
+                    let _ = db.set_adblock_config_value("blocking_ip_v6", &ip.to_string()).await;
+                }
+                let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
+                    lanforge_core::bus::DnsEvent::ConfigAdblockChanged,
+                ));
+                DnsResponse::AdblockConfigSet(Ok(()))
+            }
+            #[cfg(not(feature = "adblock"))]
+            {
+                let _ = blocking_mode;
+                let _ = blocking_ip_v4;
+                let _ = blocking_ip_v6;
+                DnsResponse::AdblockConfigSet(Err("Adblock not enabled".into()))
             }
         }
         DnsRequest::AdblockReload => {

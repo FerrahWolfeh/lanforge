@@ -148,6 +148,7 @@ classDiagram
 | `dns_cache_stats_ext` | None | `DnsCacheStatsResponse` | In-depth cache statistics and memory usage. |
 | `dns_adblock_status` | None | `DnsAdblockStatusResponse` | Current adblocker state, list sizes, and active timer if any. |
 | `dns_adblock_set` | `enabled: bool`, `duration_secs: Option<u64>` | `SimpleSuccess` | Enables or disables adblocking. See timer semantics below. |
+| `dns_adblock_config_set` | `blocking_mode: Option<BlockingMode>`, `blocking_ip_v4: Option<Ipv4Addr>`, `blocking_ip_v6: Option<Ipv6Addr>` | `SimpleSuccess` | Updates the adblock config. |
 | `dns_adblock_reload` | None | `SimpleSuccess` | Re-downloads and reloads all blocklist/allowlist sources. |
 | `dns_adblock_urls` | None | `Vec<DnsAdblockUrlEntry>` | Lists all configured source URLs. |
 | `dns_adblock_url_add` | `entry: DnsAdblockUrlEntry` | `SimpleSuccess` | Adds a blocklist or allowlist source URL. |

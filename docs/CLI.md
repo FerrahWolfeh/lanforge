@@ -486,6 +486,7 @@ If no records: `No records found.` (red).
 - **`enable`:** `✓ {message}`. API: `dns_adblock_set(enabled=true, duration_secs=None)`. Cancels any active disable timer.
 - **`disable [duration]`:** Accepts any `humantime`-compatible string (`5m`, `1h`, `1h30m`, `90s`, `2d`). Converts to seconds. API: `dns_adblock_set(enabled=false, duration_secs=Some(n))`. Always resets to a fresh countdown, overwriting any previous timer. No duration arg = permanent disable (`duration_secs=None`).
 - **`reload`:** `✓ {message}`.
+- **`config [--mode <nxdomain|null_ip|custom_ip|refused>] [--ip-v4 <ip>] [--ip-v6 <ip>]`:** Updates the adblock configuration in the database and notifies the daemon. If called without any arguments, displays the current configuration.
 - **`block <domain>`:** `✓ {message}`. Creates a rewrite to `0.0.0.0`.
 - **`allow <domain>`:** `✓ {message}`.
 - **`unallow <domain>`:** `✓ {message}`. Accepts domain name or allowlist entry ID.

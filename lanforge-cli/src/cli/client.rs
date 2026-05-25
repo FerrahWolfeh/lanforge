@@ -17,8 +17,9 @@ use lanforge_api::api::{
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{
-    identifiers::MacAddr, network::dns::adblock::RewriteRule, update::LeaseTarget,
+    identifiers::MacAddr, network::dns::adblock::{RewriteRule, BlockingMode}, update::LeaseTarget,
 };
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::args::LanforgeArgs;
 
@@ -681,6 +682,20 @@ impl LanforgeClient {
 
     pub async fn dns_adblock_reload(&self) -> Result<SimpleSuccess> {
         dispatch!(self, post => "/dns/adblock/reload", serde_json::json!({}), dns_adblock_reload())
+    }
+
+    pub async fn dns_adblock_config_set(
+        &self,
+        blocking_mode: Option<BlockingMode>,
+        blocking_ip_v4: Option<Ipv4Addr>,
+        blocking_ip_v6: Option<Ipv6Addr>,
+    ) -> Result<SimpleSuccess> {
+        let body = serde_json::json!({
+            "blocking_mode": blocking_mode,
+            "blocking_ip_v4": blocking_ip_v4,
+            "blocking_ip_v6": blocking_ip_v6,
+        });
+        dispatch!(self, post => "/dns/adblock/config", body, dns_adblock_config_set(blocking_mode, blocking_ip_v4, blocking_ip_v6))
     }
 
     pub async fn dns_block(&self, domain: String) -> Result<SimpleSuccess> {

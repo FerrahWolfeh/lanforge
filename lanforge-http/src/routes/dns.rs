@@ -14,12 +14,12 @@ use lanforge_core::bus::LanforgeEvent;
 use lanforge_types::network::{
     DnsRecordType,
     dns::{
-        adblock::{AdblockUrlKind, RewriteRule},
+        adblock::{AdblockUrlKind, RewriteRule, BlockingMode},
         upstream::UpstreamProtocol,
     },
 };
 use serde::Deserialize;
-use std::{convert::Infallible, net::SocketAddr};
+use std::{convert::Infallible, net::{Ipv4Addr, Ipv6Addr, SocketAddr}};
 
 #[derive(Debug, Deserialize)]
 pub struct AnalyticsQuery {
@@ -57,6 +57,13 @@ pub struct AdblockSetRequest {
 pub struct AdblockUrlRequest {
     pub url: String,
     pub kind: AdblockUrlKind,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdblockConfigSetRequest {
+    pub blocking_mode: Option<BlockingMode>,
+    pub blocking_ip_v4: Option<Ipv4Addr>,
+    pub blocking_ip_v6: Option<Ipv6Addr>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,6 +129,7 @@ pub fn router() -> Router<AppState> {
             "/adblock",
             get(handle_adblock_status).put(handle_adblock_set),
         )
+        .route("/adblock/config", post(handle_adblock_config_set))
         .route("/adblock/reload", post(handle_adblock_reload))
         .route(
             "/adblock/sources",
@@ -282,6 +290,14 @@ async fn handle_adblock_set(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_dns_adblock_set(payload.enabled, payload.duration_secs).await, Success => NoContent)
+}
+
+async fn handle_adblock_config_set(
+    State(state): State<AppState>,
+    Json(payload): Json<AdblockConfigSetRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_adblock_config_set(payload.blocking_mode, payload.blocking_ip_v4, payload.blocking_ip_v6).await, Success => NoContent)
 }
 
 async fn handle_adblock_reload(State(state): State<AppState>) -> impl IntoResponse {

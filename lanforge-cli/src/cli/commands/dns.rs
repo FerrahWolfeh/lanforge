@@ -17,7 +17,7 @@ use lanforge_api::api::{
 use lanforge_api::rpc::RpcResponse;
 use lanforge_types::events::{DnsEvent, LanforgeEvent};
 use lanforge_types::network::DnsRecordType;
-use lanforge_types::network::dns::adblock::RewriteRule;
+use lanforge_types::network::dns::adblock::{RewriteRule, BlockingMode};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DnsArgs {
@@ -116,6 +116,14 @@ pub enum DnsAdblockAction {
     },
     Unallow {
         domain: Option<String>,
+    },
+    Config {
+        #[arg(long)]
+        mode: Option<String>,
+        #[arg(long = "ip-v4")]
+        ip_v4: Option<String>,
+        #[arg(long = "ip-v6")]
+        ip_v6: Option<String>,
     },
     Sources {
         #[command(subcommand)]
@@ -401,6 +409,59 @@ async fn execute_log(
     Ok(())
 }
 
+async fn execute_adblock_config(
+    client: &LanforgeClient,
+    mode: Option<String>,
+    ip_v4: Option<String>,
+    ip_v6: Option<String>,
+) -> Result<()> {
+    if mode.is_none() && ip_v4.is_none() && ip_v6.is_none() {
+        let status = client.dns_adblock_status().await?;
+        if client.json {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "blocking_mode": status.blocking_mode,
+                "blocking_ip_v4": status.blocking_ip_v4,
+                "blocking_ip_v6": status.blocking_ip_v6,
+            }))?);
+        } else {
+            println!(" DNS ADBLOCK CONFIGURATION \n");
+            println!("  {:<20} {}", "Blocking Mode:", status.blocking_mode);
+            if let Some(ip) = status.blocking_ip_v4 {
+                println!("  {:<20} {}", "IPv4 Target:", ip);
+            }
+            if let Some(ip) = status.blocking_ip_v6 {
+                println!("  {:<20} {}", "IPv6 Target:", ip);
+            }
+        }
+        return Ok(());
+    }
+
+    let final_mode = if let Some(m) = mode {
+        let parsed: BlockingMode = m.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
+        Some(parsed)
+    } else {
+        None
+    };
+
+    let final_ipv4 = if let Some(ip) = ip_v4 {
+        let parsed: Ipv4Addr = ip.parse().map_err(|e| color_eyre::eyre::eyre!("Invalid IPv4: {e}"))?;
+        Some(parsed)
+    } else {
+        None
+    };
+
+    let final_ipv6 = if let Some(ip) = ip_v6 {
+        let parsed: Ipv6Addr = ip.parse().map_err(|e| color_eyre::eyre::eyre!("Invalid IPv6: {e}"))?;
+        Some(parsed)
+    } else {
+        None
+    };
+
+    let resp = client.dns_adblock_config_set(final_mode, final_ipv4, final_ipv6).await?;
+    println!("✓ {}", resp.message);
+    Ok(())
+}
+
 impl Execute for DnsAdblockArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         match self.action {
@@ -464,6 +525,9 @@ impl Execute for DnsAdblockArgs {
                 let resp = client.dns_unallow(final_domain).await?;
                 println!("✓ {}", resp.message);
                 Ok(())
+            }
+            DnsAdblockAction::Config { mode, ip_v4, ip_v6 } => {
+                execute_adblock_config(client, mode, ip_v4, ip_v6).await
             }
             DnsAdblockAction::Sources { action } => action.execute(client).await,
         }
@@ -900,6 +964,13 @@ pub fn render_adblock_status(resp: &DnsAdblockStatusResponse, ascii: bool) {
         "Disabled".red()
     };
     println!("  {:<20} {}", "Status:", status_str);
+    println!("  {:<20} {}", "Blocking Mode:", resp.blocking_mode);
+    if let Some(ip) = resp.blocking_ip_v4 {
+        println!("  {:<20} {}", "IPv4 Target:", ip);
+    }
+    if let Some(ip) = resp.blocking_ip_v6 {
+        println!("  {:<20} {}", "IPv6 Target:", ip);
+    }
     println!("  {:<20} {}", "Blocklist Rules:", resp.blocklist_size);
     println!("  {:<20} {}", "Allowlist Rules:", resp.allowlist_size);
     if let Some(rem) = resp.remaining_secs {

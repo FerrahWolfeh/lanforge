@@ -12,11 +12,12 @@ use lanforge_types::{
     identifiers::MacAddr,
     network::dns::{
         DnsRecordType,
-        adblock::{AdblockUrlKind, RewriteRule},
+        adblock::{AdblockUrlKind, RewriteRule, BlockingMode},
         upstream::UpstreamProtocol,
     },
     update::LeaseTarget,
 };
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[lanforge_rpc]
 #[async_trait::async_trait]
@@ -102,6 +103,12 @@ pub trait LanforgeRpc {
         &self,
         enabled: bool,
         duration_secs: Option<u64>,
+    ) -> Result<SimpleSuccess, RpcCallError>;
+    async fn dns_adblock_config_set(
+        &self,
+        blocking_mode: Option<BlockingMode>,
+        blocking_ip_v4: Option<Ipv4Addr>,
+        blocking_ip_v6: Option<Ipv6Addr>,
     ) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_adblock_reload(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn dns_query_log(

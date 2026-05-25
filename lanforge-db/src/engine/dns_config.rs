@@ -1,5 +1,7 @@
 use std::net::Ipv4Addr;
 
+use serde_json::Value;
+
 use crate::error::LanforgeDbError;
 use lanforge_types::network::{
     DnsRecordType, DnsReverseResolver, IpSubnet,
@@ -201,46 +203,40 @@ pub async fn clear_dns_allowlist_postgres(p: &Pool<Postgres>) -> Result<(), Lanf
 pub async fn load_adblock_config_sqlite(
     p: &Pool<Sqlite>,
 ) -> Result<AdblockDbConfig, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM dns_adblock_config")
-        .fetch_all(p)
-        .await?;
+    let row = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>, i64, i64)>(
+        "SELECT enabled, blocking_mode, blocking_ip_v4, blocking_ip_v6, refresh_hours, refresh_at_night FROM dns_adblock_config LIMIT 1"
+    )
+    .fetch_one(p)
+    .await?;
 
-    let mut config = AdblockDbConfig::default();
-    for (key, value) in rows {
-        match key.as_str() {
-            "enabled" => config.enabled = value == "true",
-            "blocking_mode" => config.blocking_mode = value.parse().unwrap_or_default(),
-            "blocking_ip_v4" => config.blocking_ip_v4 = value.parse().ok(),
-            "blocking_ip_v6" => config.blocking_ip_v6 = value.parse().ok(),
-            "refresh_hours" => config.refresh_hours = value.parse().unwrap_or(12),
-            "refresh_at_night" => config.refresh_at_night = value == "true",
-            _ => {}
-        }
-    }
-    Ok(config)
+    Ok(AdblockDbConfig {
+        enabled: row.0 != 0,
+        blocking_mode: row.1.parse().unwrap_or_default(),
+        blocking_ip_v4: row.2.and_then(|ip| ip.parse().ok()),
+        blocking_ip_v6: row.3.and_then(|ip| ip.parse().ok()),
+        refresh_hours: u32::try_from(row.4).unwrap_or(12),
+        refresh_at_night: row.5 != 0,
+    })
 }
 
 #[cfg(feature = "postgres")]
 pub async fn load_adblock_config_postgres(
     p: &Pool<Postgres>,
 ) -> Result<AdblockDbConfig, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM dns_adblock_config")
-        .fetch_all(p)
-        .await?;
+    let row = sqlx::query_as::<_, (bool, String, Option<String>, Option<String>, i16, bool)>(
+        "SELECT enabled, blocking_mode::TEXT, blocking_ip_v4::TEXT, blocking_ip_v6::TEXT, refresh_hours, refresh_at_night FROM dns_adblock_config LIMIT 1"
+    )
+    .fetch_one(p)
+    .await?;
 
-    let mut config = AdblockDbConfig::default();
-    for (key, value) in rows {
-        match key.as_str() {
-            "enabled" => config.enabled = value == "true",
-            "blocking_mode" => config.blocking_mode = value.parse().unwrap_or_default(),
-            "blocking_ip_v4" => config.blocking_ip_v4 = value.parse().ok(),
-            "blocking_ip_v6" => config.blocking_ip_v6 = value.parse().ok(),
-            "refresh_hours" => config.refresh_hours = value.parse().unwrap_or(12),
-            "refresh_at_night" => config.refresh_at_night = value == "true",
-            _ => {}
-        }
-    }
-    Ok(config)
+    Ok(AdblockDbConfig {
+        enabled: row.0,
+        blocking_mode: row.1.parse().unwrap_or_default(),
+        blocking_ip_v4: row.2.and_then(|ip| ip.parse().ok()),
+        blocking_ip_v6: row.3.and_then(|ip| ip.parse().ok()),
+        refresh_hours: u32::try_from(row.4).unwrap_or(12),
+        refresh_at_night: row.5,
+    })
 }
 
 pub async fn set_adblock_config_value_sqlite(
@@ -248,11 +244,74 @@ pub async fn set_adblock_config_value_sqlite(
     key: &str,
     value: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_adblock_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value")
-        .bind(key)
-        .bind(value)
-        .execute(p)
-        .await?;
+    match key {
+        "enabled" => {
+            let val = if value == "true" { 1 } else { 0 };
+            sqlx::query("UPDATE dns_adblock_config SET enabled = ?")
+                .bind(val)
+                .execute(p)
+                .await?;
+        }
+        "blocking_mode" => {
+            sqlx::query("UPDATE dns_adblock_config SET blocking_mode = ?")
+                .bind(value)
+                .execute(p)
+                .await?;
+        }
+        "blocking_ip_v4" => {
+            let ip_val = if value.is_empty() || value == "none" || value == "null" {
+                None
+            } else {
+                Some(value.to_string())
+            };
+            sqlx::query("UPDATE dns_adblock_config SET blocking_ip_v4 = ?")
+                .bind(ip_val)
+                .execute(p)
+                .await?;
+        }
+        "blocking_ip_v6" => {
+            let ip_val = if value.is_empty() || value == "none" || value == "null" {
+                None
+            } else {
+                Some(value.to_string())
+            };
+            sqlx::query("UPDATE dns_adblock_config SET blocking_ip_v6 = ?")
+                .bind(ip_val)
+                .execute(p)
+                .await?;
+        }
+        "refresh_hours" => {
+            let val = value.parse::<i64>().unwrap_or(12);
+            sqlx::query("UPDATE dns_adblock_config SET refresh_hours = ?")
+                .bind(val)
+                .execute(p)
+                .await?;
+        }
+        "refresh_at_night" => {
+            let val = if value == "true" { 1 } else { 0 };
+            sqlx::query("UPDATE dns_adblock_config SET refresh_at_night = ?")
+                .bind(val)
+                .execute(p)
+                .await?;
+        }
+        _ => {
+            let extras_str: String =
+                sqlx::query_scalar("SELECT extras FROM dns_adblock_config LIMIT 1")
+                    .fetch_one(p)
+                    .await?;
+            let mut extras_json: Value =
+                serde_json::from_str(&extras_str).unwrap_or_else(|_| serde_json::json!({}));
+            if let Ok(val_json) = serde_json::from_str::<Value>(value) {
+                extras_json[key] = val_json;
+            } else {
+                extras_json[key] = Value::String(value.to_string());
+            }
+            sqlx::query("UPDATE dns_adblock_config SET extras = ?")
+                .bind(extras_json.to_string())
+                .execute(p)
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -262,11 +321,74 @@ pub async fn set_adblock_config_value_postgres(
     key: &str,
     value: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_adblock_config (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value")
-        .bind(key)
-        .bind(value)
-        .execute(p)
-        .await?;
+    match key {
+        "enabled" => {
+            let val = value == "true";
+            sqlx::query("UPDATE dns_adblock_config SET enabled = $1")
+                .bind(val)
+                .execute(p)
+                .await?;
+        }
+        "blocking_mode" => {
+            sqlx::query("UPDATE dns_adblock_config SET blocking_mode = $1::dns_blocking_mode")
+                .bind(value)
+                .execute(p)
+                .await?;
+        }
+        "blocking_ip_v4" => {
+            let ip_val = if value.is_empty() || value == "none" || value == "null" {
+                None
+            } else {
+                Some(value.to_string())
+            };
+            sqlx::query("UPDATE dns_adblock_config SET blocking_ip_v4 = $1::inet")
+                .bind(ip_val)
+                .execute(p)
+                .await?;
+        }
+        "blocking_ip_v6" => {
+            let ip_val = if value.is_empty() || value == "none" || value == "null" {
+                None
+            } else {
+                Some(value.to_string())
+            };
+            sqlx::query("UPDATE dns_adblock_config SET blocking_ip_v6 = $1::inet")
+                .bind(ip_val)
+                .execute(p)
+                .await?;
+        }
+        "refresh_hours" => {
+            let val = value.parse::<i16>().unwrap_or(12);
+            sqlx::query("UPDATE dns_adblock_config SET refresh_hours = $1")
+                .bind(val)
+                .execute(p)
+                .await?;
+        }
+        "refresh_at_night" => {
+            let val = value == "true";
+            sqlx::query("UPDATE dns_adblock_config SET refresh_at_night = $1")
+                .bind(val)
+                .execute(p)
+                .await?;
+        }
+        _ => {
+            let extras_str: String =
+                sqlx::query_scalar("SELECT extras::TEXT FROM dns_adblock_config LIMIT 1")
+                    .fetch_one(p)
+                    .await?;
+            let mut extras_json: Value =
+                serde_json::from_str(&extras_str).unwrap_or_else(|_| serde_json::json!({}));
+            if let Ok(val_json) = serde_json::from_str::<Value>(value) {
+                extras_json[key] = val_json;
+            } else {
+                extras_json[key] = Value::String(value.to_string());
+            }
+            sqlx::query("UPDATE dns_adblock_config SET extras = $1::jsonb")
+                .bind(extras_json.to_string())
+                .execute(p)
+                .await?;
+        }
+    }
     Ok(())
 }
 
