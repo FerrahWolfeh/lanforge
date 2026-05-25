@@ -298,7 +298,7 @@ impl Display for BlockingMode {
 }
 
 /// Adblock configuration as stored in DB.
-#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct AdblockDbConfig {
     pub enabled: bool,
     pub blocking_mode: BlockingMode,
@@ -306,6 +306,19 @@ pub struct AdblockDbConfig {
     pub blocking_ip_v6: Option<Ipv6Addr>,
     pub refresh_hours: u32,
     pub refresh_at_night: bool,
+}
+
+impl Default for AdblockDbConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            blocking_mode: BlockingMode::default(),
+            blocking_ip_v4: None,
+            blocking_ip_v6: None,
+            refresh_hours: 12,
+            refresh_at_night: false,
+        }
+    }
 }
 
 /// Adblock source URL kind.

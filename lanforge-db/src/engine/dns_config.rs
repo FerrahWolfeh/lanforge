@@ -214,7 +214,10 @@ pub async fn load_adblock_config_sqlite(
         blocking_mode: row.1.parse().unwrap_or_default(),
         blocking_ip_v4: row.2.and_then(|ip| ip.parse().ok()),
         blocking_ip_v6: row.3.and_then(|ip| ip.parse().ok()),
-        refresh_hours: u32::try_from(row.4).unwrap_or(12),
+        refresh_hours: {
+            let h = u32::try_from(row.4).unwrap_or(12);
+            if h == 0 { 12 } else { h }
+        },
         refresh_at_night: row.5 != 0,
     })
 }
@@ -234,7 +237,10 @@ pub async fn load_adblock_config_postgres(
         blocking_mode: row.1.parse().unwrap_or_default(),
         blocking_ip_v4: row.2.and_then(|ip| ip.parse().ok()),
         blocking_ip_v6: row.3.and_then(|ip| ip.parse().ok()),
-        refresh_hours: u32::try_from(row.4).unwrap_or(12),
+        refresh_hours: {
+            let h = u32::try_from(row.4).unwrap_or(12);
+            if h == 0 { 12 } else { h }
+        },
         refresh_at_night: row.5,
     })
 }

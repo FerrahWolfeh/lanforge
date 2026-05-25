@@ -248,6 +248,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 /// that is at least `min_hours` in the future.
 #[cfg(feature = "adblock")]
 fn compute_next_refresh(min_hours: u32, prefer_night: bool) -> Duration {
+    let min_hours = if min_hours == 0 { 12 } else { min_hours };
     let base = Duration::from_secs(u64::from(min_hours) * 3600);
     if !prefer_night {
         return base;
