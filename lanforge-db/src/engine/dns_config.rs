@@ -16,7 +16,7 @@ pub async fn load_dns_rewrites_sqlite(
     p: &Pool<Sqlite>,
 ) -> Result<Vec<RewriteRule>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (i64, String, String, String)>(
-        "SELECT id, domain, rtype, answer FROM dns_rewrites ORDER BY domain",
+        "SELECT id, domain, rtype, answer FROM rewrites ORDER BY domain",
     )
     .fetch_all(p)
     .await?;
@@ -39,7 +39,7 @@ pub async fn load_dns_rewrites_postgres(
     p: &Pool<Postgres>,
 ) -> Result<Vec<RewriteRule>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (i32, String, String, String)>(
-        "SELECT id, domain, rtype, answer FROM dns_rewrites ORDER BY domain",
+        "SELECT id, domain, rtype, answer FROM rewrites ORDER BY domain",
     )
     .fetch_all(p)
     .await?;
@@ -63,7 +63,7 @@ pub async fn upsert_dns_rewrite_sqlite(
     rtype: DnsRecordType,
     answer: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_rewrites (domain, rtype, answer) VALUES (?, ?, ?) ON CONFLICT(domain, rtype) DO UPDATE SET answer = EXCLUDED.answer")
+    sqlx::query("INSERT INTO rewrites (domain, rtype, answer) VALUES (?, ?, ?) ON CONFLICT(domain, rtype) DO UPDATE SET answer = EXCLUDED.answer")
         .bind(domain)
         .bind(rtype.to_string())
         .bind(answer)
@@ -79,7 +79,7 @@ pub async fn upsert_dns_rewrite_postgres(
     rtype: DnsRecordType,
     answer: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_rewrites (domain, rtype, answer) VALUES ($1, $2, $3) ON CONFLICT(domain, rtype) DO UPDATE SET answer = EXCLUDED.answer")
+    sqlx::query("INSERT INTO rewrites (domain, rtype, answer) VALUES ($1, $2, $3) ON CONFLICT(domain, rtype) DO UPDATE SET answer = EXCLUDED.answer")
         .bind(domain)
         .bind(rtype.to_string())
         .bind(answer)
@@ -92,7 +92,7 @@ pub async fn delete_dns_rewrite_by_id_sqlite(
     p: &Pool<Sqlite>,
     id: i64,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_rewrites WHERE id = ?")
+    sqlx::query("DELETE FROM rewrites WHERE id = ?")
         .bind(id)
         .execute(p)
         .await?;
@@ -104,7 +104,7 @@ pub async fn delete_dns_rewrite_by_id_postgres(
     p: &Pool<Postgres>,
     id: i64,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_rewrites WHERE id = $1")
+    sqlx::query("DELETE FROM rewrites WHERE id = $1")
         .bind(id as i32)
         .execute(p)
         .await?;
@@ -112,13 +112,13 @@ pub async fn delete_dns_rewrite_by_id_postgres(
 }
 
 pub async fn clear_dns_rewrites_sqlite(p: &Pool<Sqlite>) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_rewrites").execute(p).await?;
+    sqlx::query("DELETE FROM rewrites").execute(p).await?;
     Ok(())
 }
 
 #[cfg(feature = "postgres")]
 pub async fn clear_dns_rewrites_postgres(p: &Pool<Postgres>) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_rewrites").execute(p).await?;
+    sqlx::query("DELETE FROM rewrites").execute(p).await?;
     Ok(())
 }
 
@@ -126,7 +126,7 @@ pub async fn load_dns_allowlist_sqlite(
     p: &Pool<Sqlite>,
 ) -> Result<Vec<(i64, String)>, LanforgeDbError> {
     let rows =
-        sqlx::query_as::<_, (i64, String)>("SELECT id, domain FROM dns_allowlist ORDER BY domain")
+        sqlx::query_as::<_, (i64, String)>("SELECT id, domain FROM allowlist ORDER BY domain")
             .fetch_all(p)
             .await?;
     Ok(rows)
@@ -137,7 +137,7 @@ pub async fn load_dns_allowlist_postgres(
     p: &Pool<Postgres>,
 ) -> Result<Vec<(i64, String)>, LanforgeDbError> {
     let rows =
-        sqlx::query_as::<_, (i32, String)>("SELECT id, domain FROM dns_allowlist ORDER BY domain")
+        sqlx::query_as::<_, (i32, String)>("SELECT id, domain FROM allowlist ORDER BY domain")
             .fetch_all(p)
             .await?;
     Ok(rows.into_iter().map(|(id, d)| (id as i64, d)).collect())
@@ -147,7 +147,7 @@ pub async fn add_dns_allowlist_sqlite(
     p: &Pool<Sqlite>,
     domain: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_allowlist (domain) VALUES (?) ON CONFLICT(domain) DO NOTHING")
+    sqlx::query("INSERT INTO allowlist (domain) VALUES (?) ON CONFLICT(domain) DO NOTHING")
         .bind(domain)
         .execute(p)
         .await?;
@@ -159,7 +159,7 @@ pub async fn add_dns_allowlist_postgres(
     p: &Pool<Postgres>,
     domain: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_allowlist (domain) VALUES ($1) ON CONFLICT(domain) DO NOTHING")
+    sqlx::query("INSERT INTO allowlist (domain) VALUES ($1) ON CONFLICT(domain) DO NOTHING")
         .bind(domain)
         .execute(p)
         .await?;
@@ -170,7 +170,7 @@ pub async fn remove_dns_allowlist_sqlite(
     p: &Pool<Sqlite>,
     domain: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_allowlist WHERE domain = ?")
+    sqlx::query("DELETE FROM allowlist WHERE domain = ?")
         .bind(domain)
         .execute(p)
         .await?;
@@ -182,7 +182,7 @@ pub async fn remove_dns_allowlist_postgres(
     p: &Pool<Postgres>,
     domain: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_allowlist WHERE domain = $1")
+    sqlx::query("DELETE FROM allowlist WHERE domain = $1")
         .bind(domain)
         .execute(p)
         .await?;
@@ -190,13 +190,13 @@ pub async fn remove_dns_allowlist_postgres(
 }
 
 pub async fn clear_dns_allowlist_sqlite(p: &Pool<Sqlite>) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_allowlist").execute(p).await?;
+    sqlx::query("DELETE FROM allowlist").execute(p).await?;
     Ok(())
 }
 
 #[cfg(feature = "postgres")]
 pub async fn clear_dns_allowlist_postgres(p: &Pool<Postgres>) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_allowlist").execute(p).await?;
+    sqlx::query("DELETE FROM allowlist").execute(p).await?;
     Ok(())
 }
 
@@ -204,7 +204,7 @@ pub async fn load_adblock_config_sqlite(
     p: &Pool<Sqlite>,
 ) -> Result<AdblockDbConfig, LanforgeDbError> {
     let row = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>, i64, i64)>(
-        "SELECT enabled, blocking_mode, blocking_ip_v4, blocking_ip_v6, refresh_hours, refresh_at_night FROM dns_adblock_config LIMIT 1"
+        "SELECT enabled, blocking_mode, blocking_ip_v4, blocking_ip_v6, refresh_hours, refresh_at_night FROM adblock_config LIMIT 1"
     )
     .fetch_one(p)
     .await?;
@@ -224,7 +224,7 @@ pub async fn load_adblock_config_postgres(
     p: &Pool<Postgres>,
 ) -> Result<AdblockDbConfig, LanforgeDbError> {
     let row = sqlx::query_as::<_, (bool, String, Option<String>, Option<String>, i16, bool)>(
-        "SELECT enabled, blocking_mode::TEXT, blocking_ip_v4::TEXT, blocking_ip_v6::TEXT, refresh_hours, refresh_at_night FROM dns_adblock_config LIMIT 1"
+        "SELECT enabled, blocking_mode::TEXT, blocking_ip_v4::TEXT, blocking_ip_v6::TEXT, refresh_hours, refresh_at_night FROM adblock_config LIMIT 1"
     )
     .fetch_one(p)
     .await?;
@@ -247,13 +247,13 @@ pub async fn set_adblock_config_value_sqlite(
     match key {
         "enabled" => {
             let val = if value == "true" { 1 } else { 0 };
-            sqlx::query("UPDATE dns_adblock_config SET enabled = ?")
+            sqlx::query("UPDATE adblock_config SET enabled = ?")
                 .bind(val)
                 .execute(p)
                 .await?;
         }
         "blocking_mode" => {
-            sqlx::query("UPDATE dns_adblock_config SET blocking_mode = ?")
+            sqlx::query("UPDATE adblock_config SET blocking_mode = ?")
                 .bind(value)
                 .execute(p)
                 .await?;
@@ -264,7 +264,7 @@ pub async fn set_adblock_config_value_sqlite(
             } else {
                 Some(value.to_string())
             };
-            sqlx::query("UPDATE dns_adblock_config SET blocking_ip_v4 = ?")
+            sqlx::query("UPDATE adblock_config SET blocking_ip_v4 = ?")
                 .bind(ip_val)
                 .execute(p)
                 .await?;
@@ -275,28 +275,28 @@ pub async fn set_adblock_config_value_sqlite(
             } else {
                 Some(value.to_string())
             };
-            sqlx::query("UPDATE dns_adblock_config SET blocking_ip_v6 = ?")
+            sqlx::query("UPDATE adblock_config SET blocking_ip_v6 = ?")
                 .bind(ip_val)
                 .execute(p)
                 .await?;
         }
         "refresh_hours" => {
             let val = value.parse::<i64>().unwrap_or(12);
-            sqlx::query("UPDATE dns_adblock_config SET refresh_hours = ?")
+            sqlx::query("UPDATE adblock_config SET refresh_hours = ?")
                 .bind(val)
                 .execute(p)
                 .await?;
         }
         "refresh_at_night" => {
             let val = if value == "true" { 1 } else { 0 };
-            sqlx::query("UPDATE dns_adblock_config SET refresh_at_night = ?")
+            sqlx::query("UPDATE adblock_config SET refresh_at_night = ?")
                 .bind(val)
                 .execute(p)
                 .await?;
         }
         _ => {
             let extras_str: String =
-                sqlx::query_scalar("SELECT extras FROM dns_adblock_config LIMIT 1")
+                sqlx::query_scalar("SELECT extras FROM adblock_config LIMIT 1")
                     .fetch_one(p)
                     .await?;
             let mut extras_json: Value =
@@ -306,7 +306,7 @@ pub async fn set_adblock_config_value_sqlite(
             } else {
                 extras_json[key] = Value::String(value.to_string());
             }
-            sqlx::query("UPDATE dns_adblock_config SET extras = ?")
+            sqlx::query("UPDATE adblock_config SET extras = ?")
                 .bind(extras_json.to_string())
                 .execute(p)
                 .await?;
@@ -324,13 +324,13 @@ pub async fn set_adblock_config_value_postgres(
     match key {
         "enabled" => {
             let val = value == "true";
-            sqlx::query("UPDATE dns_adblock_config SET enabled = $1")
+            sqlx::query("UPDATE adblock_config SET enabled = $1")
                 .bind(val)
                 .execute(p)
                 .await?;
         }
         "blocking_mode" => {
-            sqlx::query("UPDATE dns_adblock_config SET blocking_mode = $1::dns_blocking_mode")
+            sqlx::query("UPDATE adblock_config SET blocking_mode = $1::blocking_mode")
                 .bind(value)
                 .execute(p)
                 .await?;
@@ -341,7 +341,7 @@ pub async fn set_adblock_config_value_postgres(
             } else {
                 Some(value.to_string())
             };
-            sqlx::query("UPDATE dns_adblock_config SET blocking_ip_v4 = $1::inet")
+            sqlx::query("UPDATE adblock_config SET blocking_ip_v4 = $1::inet")
                 .bind(ip_val)
                 .execute(p)
                 .await?;
@@ -352,28 +352,28 @@ pub async fn set_adblock_config_value_postgres(
             } else {
                 Some(value.to_string())
             };
-            sqlx::query("UPDATE dns_adblock_config SET blocking_ip_v6 = $1::inet")
+            sqlx::query("UPDATE adblock_config SET blocking_ip_v6 = $1::inet")
                 .bind(ip_val)
                 .execute(p)
                 .await?;
         }
         "refresh_hours" => {
             let val = value.parse::<i16>().unwrap_or(12);
-            sqlx::query("UPDATE dns_adblock_config SET refresh_hours = $1")
+            sqlx::query("UPDATE adblock_config SET refresh_hours = $1")
                 .bind(val)
                 .execute(p)
                 .await?;
         }
         "refresh_at_night" => {
             let val = value == "true";
-            sqlx::query("UPDATE dns_adblock_config SET refresh_at_night = $1")
+            sqlx::query("UPDATE adblock_config SET refresh_at_night = $1")
                 .bind(val)
                 .execute(p)
                 .await?;
         }
         _ => {
             let extras_str: String =
-                sqlx::query_scalar("SELECT extras::TEXT FROM dns_adblock_config LIMIT 1")
+                sqlx::query_scalar("SELECT extras::TEXT FROM adblock_config LIMIT 1")
                     .fetch_one(p)
                     .await?;
             let mut extras_json: Value =
@@ -383,7 +383,7 @@ pub async fn set_adblock_config_value_postgres(
             } else {
                 extras_json[key] = Value::String(value.to_string());
             }
-            sqlx::query("UPDATE dns_adblock_config SET extras = $1::jsonb")
+            sqlx::query("UPDATE adblock_config SET extras = $1::jsonb")
                 .bind(extras_json.to_string())
                 .execute(p)
                 .await?;
@@ -395,10 +395,9 @@ pub async fn set_adblock_config_value_postgres(
 pub async fn load_adblock_urls_sqlite(
     p: &Pool<Sqlite>,
 ) -> Result<Vec<(i64, String, AdblockUrlKind)>, LanforgeDbError> {
-    let rows =
-        sqlx::query_as::<_, (i64, String, String)>("SELECT id, url, kind FROM dns_adblock_urls")
-            .fetch_all(p)
-            .await?;
+    let rows = sqlx::query_as::<_, (i64, String, String)>("SELECT id, url, kind FROM adblock_urls")
+        .fetch_all(p)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -413,10 +412,9 @@ pub async fn load_adblock_urls_sqlite(
 pub async fn load_adblock_urls_postgres(
     p: &Pool<Postgres>,
 ) -> Result<Vec<(i64, String, AdblockUrlKind)>, LanforgeDbError> {
-    let rows =
-        sqlx::query_as::<_, (i32, String, String)>("SELECT id, url, kind FROM dns_adblock_urls")
-            .fetch_all(p)
-            .await?;
+    let rows = sqlx::query_as::<_, (i32, String, String)>("SELECT id, url, kind FROM adblock_urls")
+        .fetch_all(p)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -432,7 +430,7 @@ pub async fn add_adblock_url_sqlite(
     url: &str,
     kind: AdblockUrlKind,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_adblock_urls (url, kind) VALUES (?, ?) ON CONFLICT(url) DO UPDATE SET kind = EXCLUDED.kind")
+    sqlx::query("INSERT INTO adblock_urls (url, kind) VALUES (?, ?) ON CONFLICT(url) DO UPDATE SET kind = EXCLUDED.kind")
         .bind(url)
         .bind(kind.to_string())
         .execute(p)
@@ -446,7 +444,7 @@ pub async fn add_adblock_url_postgres(
     url: &str,
     kind: AdblockUrlKind,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_adblock_urls (url, kind) VALUES ($1, $2) ON CONFLICT(url) DO UPDATE SET kind = EXCLUDED.kind")
+    sqlx::query("INSERT INTO adblock_urls (url, kind) VALUES ($1, $2) ON CONFLICT(url) DO UPDATE SET kind = EXCLUDED.kind")
         .bind(url)
         .bind(kind.to_string())
         .execute(p)
@@ -455,7 +453,7 @@ pub async fn add_adblock_url_postgres(
 }
 
 pub async fn remove_adblock_url_sqlite(p: &Pool<Sqlite>, url: &str) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_adblock_urls WHERE url = ?")
+    sqlx::query("DELETE FROM adblock_urls WHERE url = ?")
         .bind(url)
         .execute(p)
         .await?;
@@ -467,7 +465,7 @@ pub async fn remove_adblock_url_postgres(
     p: &Pool<Postgres>,
     url: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_adblock_urls WHERE url = $1")
+    sqlx::query("DELETE FROM adblock_urls WHERE url = $1")
         .bind(url)
         .execute(p)
         .await?;
@@ -475,17 +473,13 @@ pub async fn remove_adblock_url_postgres(
 }
 
 pub async fn clear_adblock_urls_sqlite(p: &Pool<Sqlite>) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_adblock_urls")
-        .execute(p)
-        .await?;
+    sqlx::query("DELETE FROM adblock_urls").execute(p).await?;
     Ok(())
 }
 
 #[cfg(feature = "postgres")]
 pub async fn clear_adblock_urls_postgres(p: &Pool<Postgres>) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_adblock_urls")
-        .execute(p)
-        .await?;
+    sqlx::query("DELETE FROM adblock_urls").execute(p).await?;
     Ok(())
 }
 
@@ -493,7 +487,7 @@ pub async fn load_dns_reverse_resolvers_sqlite(
     p: &Pool<Sqlite>,
 ) -> Result<Vec<DnsReverseResolver>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT subnet, resolver_target FROM dns_reverse_resolvers",
+        "SELECT subnet, resolver_target FROM reverse_resolvers",
     )
     .fetch_all(p)
     .await?;
@@ -514,7 +508,7 @@ pub async fn load_dns_reverse_resolvers_postgres(
     p: &Pool<Postgres>,
 ) -> Result<Vec<DnsReverseResolver>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT subnet::TEXT, resolver_target FROM dns_reverse_resolvers",
+        "SELECT subnet::TEXT, resolver_target FROM reverse_resolvers",
     )
     .fetch_all(p)
     .await?;
@@ -535,7 +529,7 @@ pub async fn add_dns_reverse_resolver_sqlite(
     subnet: &IpSubnet,
     resolver: &UpstreamTarget,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_reverse_resolvers (subnet, resolver_target) VALUES (?, ?) ON CONFLICT(subnet) DO UPDATE SET resolver_target = EXCLUDED.resolver_target")
+    sqlx::query("INSERT INTO reverse_resolvers (subnet, resolver_target) VALUES (?, ?) ON CONFLICT(subnet) DO UPDATE SET resolver_target = EXCLUDED.resolver_target")
         .bind(subnet.to_string())
         .bind(String::from(resolver.clone()))
         .execute(p)
@@ -549,7 +543,7 @@ pub async fn add_dns_reverse_resolver_postgres(
     subnet: &IpSubnet,
     resolver: &UpstreamTarget,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO dns_reverse_resolvers (subnet, resolver_target) VALUES ($1::CIDR, $2) ON CONFLICT(subnet) DO UPDATE SET resolver_target = EXCLUDED.resolver_target")
+    sqlx::query("INSERT INTO reverse_resolvers (subnet, resolver_target) VALUES ($1::CIDR, $2) ON CONFLICT(subnet) DO UPDATE SET resolver_target = EXCLUDED.resolver_target")
         .bind(subnet.to_string())
         .bind(String::from(resolver.clone()))
         .execute(p)
@@ -561,7 +555,7 @@ pub async fn remove_dns_reverse_resolver_sqlite(
     p: &Pool<Sqlite>,
     subnet: &IpSubnet,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_reverse_resolvers WHERE subnet = ?")
+    sqlx::query("DELETE FROM reverse_resolvers WHERE subnet = ?")
         .bind(subnet.to_string())
         .execute(p)
         .await?;
@@ -573,7 +567,7 @@ pub async fn remove_dns_reverse_resolver_postgres(
     p: &Pool<Postgres>,
     subnet: &IpSubnet,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_reverse_resolvers WHERE subnet = $1::CIDR")
+    sqlx::query("DELETE FROM reverse_resolvers WHERE subnet = $1::CIDR")
         .bind(subnet.to_string())
         .execute(p)
         .await?;

@@ -113,7 +113,7 @@ impl DnsService {
 
         #[cfg(feature = "adblock")]
         let filter = {
-            let adblock_enabled = self.cfg.adblock_enabled || db_adblock.enabled;
+            let adblock_enabled = db_adblock.enabled;
             info!(
                 "🛡️ DNS: Adblock feature is initializing (Adblock: {})",
                 adblock_enabled,
@@ -304,7 +304,7 @@ impl AsyncService for DnsService {
                                     match self.db.load_adblock_config().await {
                                         Ok(cfg) => {
                                             filter.replace_config(cfg.blocking_mode, cfg.blocking_ip_v4, cfg.blocking_ip_v6);
-                                            filter.set_enabled(self.cfg.adblock_enabled || cfg.enabled);
+                                            filter.set_enabled(cfg.enabled);
                                             info!("✅ DNS: Adblock config reloaded.");
                                         }
                                         Err(e) => error!("❌ DNS: Failed to load adblock config: {}", e),

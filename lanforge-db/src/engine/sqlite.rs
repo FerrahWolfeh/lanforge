@@ -626,7 +626,7 @@ pub async fn load_dns_upstreams(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LanforgeDbError> {
     sqlx::query_as::<_, crate::engine::types::DnsUpstreamRow>(
-        "SELECT id, addr, protocol, domain FROM dns_upstreams ORDER BY id ASC",
+        "SELECT id, addr, protocol, domain FROM upstreams ORDER BY id ASC",
     )
     .fetch_all(pool)
     .await
@@ -639,7 +639,7 @@ pub async fn add_dns_upstream(
     protocol: &str,
     domain: Option<&str>,
 ) -> Result<i64, LanforgeDbError> {
-    let res = sqlx::query("INSERT INTO dns_upstreams (addr, protocol, domain) VALUES (?, ?, ?) ON CONFLICT(addr, protocol) DO UPDATE SET domain = EXCLUDED.domain")
+    let res = sqlx::query("INSERT INTO upstreams (addr, protocol, domain) VALUES (?, ?, ?) ON CONFLICT(addr, protocol) DO UPDATE SET domain = EXCLUDED.domain")
         .bind(addr)
         .bind(protocol)
         .bind(domain)
@@ -653,7 +653,7 @@ pub async fn remove_dns_upstream(
     addr: &str,
     protocol: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_upstreams WHERE addr = ? AND protocol = ?")
+    sqlx::query("DELETE FROM upstreams WHERE addr = ? AND protocol = ?")
         .bind(addr)
         .bind(protocol)
         .execute(pool)
@@ -662,6 +662,6 @@ pub async fn remove_dns_upstream(
 }
 
 pub async fn clear_dns_upstreams(pool: &sqlx::SqlitePool) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM dns_upstreams").execute(pool).await?;
+    sqlx::query("DELETE FROM upstreams").execute(pool).await?;
     Ok(())
 }

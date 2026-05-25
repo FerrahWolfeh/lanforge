@@ -33,6 +33,8 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
             let mut cache_loaded = false;
 
             loop {
+                let db_cfg = ctx.db.load_adblock_config().await.unwrap_or_default();
+
                 // Wait if disabled
                 if !filter.is_enabled() {
                     info!("🛡️ Adblock: currently disabled, waiting for toggle or reload...");
@@ -57,7 +59,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         && let Ok(modified) = metadata.modified()
                     {
                         let elapsed = modified.elapsed().unwrap_or_default().as_secs();
-                        if elapsed < u64::from(ctx.cfg.adblock_refresh_hours) * 3600 {
+                        if elapsed < u64::from(db_cfg.refresh_hours) * 3600 {
                             info!("🛡️ Adblock: loading cached blocklist from disk...");
                             match DiskBlocklist::load(cache_path, 50000) {
                                 Ok(bl) => {
@@ -115,8 +117,8 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         } else {
                             warn!("🛡️ Adblock: will retry on next refresh cycle");
                             compute_next_refresh(
-                                ctx.cfg.adblock_refresh_hours,
-                                ctx.cfg.adblock_refresh_at_night,
+                                db_cfg.refresh_hours,
+                                db_cfg.refresh_at_night,
                             )
                         };
                         tokio::select! {
@@ -196,7 +198,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 }
 
                 // Ensure enabled after first successful load (if it was intended to be enabled)
-                if !filter.is_enabled() && filter.blocklist_size() > 0 && ctx.cfg.adblock_enabled {
+                if !filter.is_enabled() && filter.blocklist_size() > 0 && db_cfg.enabled {
                     filter.set_enabled(true);
                     info!(
                         "🛡️ Adblock: enabled with {} blocked domains",
@@ -206,8 +208,8 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 
                 // Refresh scheduling
                 let sleep_dur = compute_next_refresh(
-                    ctx.cfg.adblock_refresh_hours,
-                    ctx.cfg.adblock_refresh_at_night,
+                    db_cfg.refresh_hours,
+                    db_cfg.refresh_at_night,
                 );
                 info!(
                     "🛡️ Adblock: next refresh in {:.1}h",

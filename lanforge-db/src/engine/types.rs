@@ -41,6 +41,14 @@ impl Pool {
                 let pool = PgPoolOptions::new()
                     .max_connections(max_conns)
                     .min_connections(min_conns)
+                    .after_connect(|conn, _meta| {
+                        Box::pin(async move {
+                            sqlx::query("SET search_path TO dns, dhcp, net, auth, public")
+                                .execute(conn)
+                                .await?;
+                            Ok(())
+                        })
+                    })
                     .connect(url)
                     .await?;
                 Ok(Self::Postgres(pool))
