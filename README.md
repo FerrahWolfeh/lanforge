@@ -99,16 +99,21 @@ A minimal `lanforge.toml` example:
 ```toml
 [system]
 iface = "eth0"
-domain = "home.lan"
+search_domains = ["lan", "home.arpa"]
 
 [dhcp.v4]
 enabled = true
-range = "192.168.1.100 - 192.168.1.250"
+router = "192.168.1.1"
+subnet_mask = "255.255.255.0"
+dns = ["192.168.1.1"]
+
+[[dhcp.v4.pools]]
+range_start = "192.168.1.100"
+range_end = "192.168.1.250"
 
 [dns]
 enabled = true
-upstreams = ["8.8.8.8", "1.1.1.1"]
-adblock_enabled = true
+listen = "0.0.0.0:53"
 ```
 
 ---

@@ -156,19 +156,10 @@ dot_listen = "0.0.0.0:853"
 doq_enabled = false
 doq_listen = "0.0.0.0:853"
 
-# DNS Micro-Adblocker (if enabled at compile time)
-adblock_enabled = true
-adblock_urls = [
-    "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-]
-
-# Prioritized upstreams for recursion.
-[[dns.upstreams]]
-target = "tls://1.1.1.1:853"
-priority = 10
-[[dns.upstreams]]
-target = "udp://8.8.8.8:53"
-priority = 20
+# Note: Operational configurations like Upstream Resolvers, DNS Rewrites,
+# and Adblock settings (enable toggle, blocklist URLs, blocking mode, allowlist, etc.)
+# have been migrated to the database. Configure them dynamically at runtime
+# using the CLI (`lanforge dns ...`) or the HTTP/UDS API.
 
 [mdns]
 # Actively probe for hostnames and device classes via mDNS.
