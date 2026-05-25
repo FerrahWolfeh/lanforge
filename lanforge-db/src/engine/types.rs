@@ -43,7 +43,7 @@ impl Pool {
                     .min_connections(min_conns)
                     .after_connect(|conn, _meta| {
                         Box::pin(async move {
-                            sqlx::query("SET search_path TO dns, dhcp, net, auth, public")
+                            sqlx::query("SET search_path TO public, dns, dhcp, net, auth")
                                 .execute(conn)
                                 .await?;
                             Ok(())
