@@ -1,15 +1,58 @@
 use crate::identifiers::MacAddr;
-use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
 use std::{borrow::Cow, str::FromStr};
 
 /// Represents a device target identifier, which can be either a hardware MAC address
 /// or a lowercase alphanumeric/hyphenated device name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DeviceIdentifier {
     Mac(MacAddr),
     Name(String),
+}
+
+impl serde::Serialize for DeviceIdentifier {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&self.to_string())
+        } else {
+            #[derive(serde::Serialize)]
+            enum RawDeviceIdentifier {
+                Mac(MacAddr),
+                Name(String),
+            }
+            let raw = match self {
+                Self::Mac(mac) => RawDeviceIdentifier::Mac(*mac),
+                Self::Name(name) => RawDeviceIdentifier::Name(name.clone()),
+            };
+            raw.serialize(serializer)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DeviceIdentifier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let s = String::deserialize(deserializer)?;
+            Self::from_str(&s).map_err(serde::de::Error::custom)
+        } else {
+            #[derive(serde::Deserialize)]
+            enum RawDeviceIdentifier {
+                Mac(MacAddr),
+                Name(String),
+            }
+            let raw = RawDeviceIdentifier::deserialize(deserializer)?;
+            match raw {
+                RawDeviceIdentifier::Mac(mac) => Ok(Self::Mac(mac)),
+                RawDeviceIdentifier::Name(name) => Ok(Self::Name(name)),
+            }
+        }
+    }
 }
 
 impl DeviceIdentifier {

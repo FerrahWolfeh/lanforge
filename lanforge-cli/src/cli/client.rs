@@ -17,7 +17,9 @@ use lanforge_api::api::{
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{
-    identifiers::MacAddr, network::dns::adblock::{RewriteRule, BlockingMode}, update::LeaseTarget,
+    identifiers::MacAddr,
+    network::dns::adblock::{BlockingMode, RewriteRule},
+    update::LeaseTarget,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -736,7 +738,27 @@ impl LanforgeClient {
     }
 
     pub async fn dns_rewrite_add(&self, rule: RewriteRule) -> Result<SimpleSuccess> {
-        dispatch!(self, post => "/dns/rewrites", rule, dns_rewrite_add(rule))
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            use lanforge_types::network::DnsRecordType;
+
+            #[derive(serde::Serialize)]
+            struct RewriteRequest {
+                domain: String,
+                rtype: DnsRecordType,
+                answer: String,
+            }
+            let req = RewriteRequest {
+                domain: rule.domain.clone(),
+                rtype: rule.rtype,
+                answer: rule.answer.to_string(),
+            };
+            return self.http_post("/dns/rewrites", &req).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_rewrite_add(rule)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
     }
 
     pub async fn dns_rewrite_remove(&self, id: i64) -> Result<SimpleSuccess> {

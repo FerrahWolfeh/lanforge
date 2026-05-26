@@ -164,7 +164,7 @@ async fn execute_set(
             None => prompt_text(&format!("New value for {f}:"), None)?,
         };
         let api_field = if f == "v4" {
-            println!("ℹ The device will receive the new IP in the next DHCP cycle");
+            println!("i The device will receive the new IP in the next DHCP cycle");
             "v4_static".to_string()
         } else {
             f
