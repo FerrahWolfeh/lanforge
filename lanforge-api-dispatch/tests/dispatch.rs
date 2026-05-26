@@ -222,3 +222,32 @@ async fn test_dispatch_system_config_import_export() {
         panic!("Expected Response::SystemConfig");
     }
 }
+
+#[tokio::test]
+async fn test_dns_rewrite_add_dynamic() {
+    use std::str::FromStr;
+
+    let client_ctx = init_test_context().await;
+    let rule = RewriteRule {
+        id: None,
+        domain: "*.eonteam.xyz".to_string(),
+        rtype: DnsRecordType::CNAME,
+        answer: RewriteAnswer::from_str("dev:raspie").unwrap(),
+    };
+    let res = client_ctx.handle_dns_rewrite_add(rule).await;
+    assert!(matches!(res, Response::Success(_)));
+
+    // Try loading rewrites back
+    let load_res = client_ctx.handle_dns_rewrites().await;
+    if let Response::DnsRewrites(r) = load_res {
+        assert_eq!(r.rewrites.len(), 1);
+        assert_eq!(r.rewrites[0].domain, "*.eonteam.xyz");
+        assert_eq!(r.rewrites[0].rtype, DnsRecordType::CNAME);
+        assert_eq!(
+            r.rewrites[0].answer,
+            RewriteAnswer::from_str("dev:raspie").unwrap()
+        );
+    } else {
+        panic!("Expected DnsRewrites response");
+    }
+}
