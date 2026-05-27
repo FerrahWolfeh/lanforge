@@ -408,7 +408,7 @@ impl LanforgeClient {
     }
 
     pub async fn whois(&self, target: String) -> Result<Box<WhoisResponse>> {
-        dispatch!(self, get_box => format!("/devices/{target}/whois"), whois(target))
+        dispatch!(self, get_box => format!("/devices/{target}"), whois(target))
     }
 
     pub async fn wol(&self, target: String) -> Result<SimpleSuccess> {
