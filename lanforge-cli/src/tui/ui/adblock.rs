@@ -28,13 +28,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
         ])
         .split(area);
 
-    render_top_row(f, main_chunks[0], &app.state);
+    render_top_row(f, main_chunks[0], app);
     render_block_rate(f, main_chunks[1], &app.state);
     render_analytics_row(f, main_chunks[2], &app.state);
     render_recent_blocks(f, main_chunks[3], &app.state);
 }
 
-fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
+fn render_top_row(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -44,9 +44,9 @@ fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
         ])
         .split(area);
 
-    render_stats(f, chunks[0], state);
-    render_sources(f, chunks[1], state);
-    render_allowlist(f, chunks[2], state);
+    render_stats(f, chunks[0], &app.state);
+    render_sources(f, chunks[1], &app.state);
+    render_allowlist(f, chunks[2], app);
 }
 
 fn render_stats(f: &mut Frame, area: Rect, state: &TuiState) {
@@ -240,8 +240,9 @@ fn render_sources(f: &mut Frame, area: Rect, state: &TuiState) {
     f.render_widget(table, area);
 }
 
-fn render_allowlist(f: &mut Frame, area: Rect, state: &TuiState) {
-    let entries = state
+fn render_allowlist(f: &mut Frame, area: Rect, app: &mut TuiApp) {
+    let entries = app
+        .state
         .dns_allowlist
         .as_ref()
         .map_or(Vec::new(), |resp| resp.allowlist.clone());
@@ -250,19 +251,61 @@ fn render_allowlist(f: &mut Frame, area: Rect, state: &TuiState) {
     let tip_height = 2;
     let list_height = (area.height as usize).saturating_sub(2 + tip_height); // borders + tips
 
+    let selected_idx = app.adblock_allowlist_state.selected();
+    let is_focused = app.adblock_allowlist_focused;
+
+    // Clamp selected index to entries count
+    let entries_count = entries.len();
+    if entries_count > 0 {
+        if let Some(selected) = selected_idx {
+            if selected >= entries_count {
+                app.adblock_allowlist_state.select(Some(entries_count - 1));
+            }
+        } else if is_focused {
+            app.adblock_allowlist_state.select(Some(0));
+        }
+    } else {
+        app.adblock_allowlist_state.select(None);
+    }
+    let selected_idx = app.adblock_allowlist_state.selected();
+
     let mut lines: Vec<Line> = entries
         .iter()
+        .enumerate()
         .take(list_height)
-        .map(|e| {
-            Line::from(vec![
-                Span::styled(
-                    " ✓ ",
-                    Style::default()
-                        .fg(theme::MOCHA_GREEN)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(e.domain.clone(), Style::default().fg(theme::MOCHA_TEXT)),
-            ])
+        .map(|(idx, e)| {
+            let is_selected = Some(idx) == selected_idx;
+            if is_selected && is_focused {
+                Line::from(vec![
+                    Span::styled(
+                        ">> ",
+                        Style::default()
+                            .fg(theme::ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        e.domain.clone(),
+                        Style::default()
+                            .fg(theme::ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])
+            } else if is_selected {
+                Line::from(vec![
+                    Span::styled(" > ", Style::default().fg(theme::TEXT_DIM)),
+                    Span::styled(e.domain.clone(), Style::default().fg(theme::MOCHA_TEXT)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(
+                        " ✓ ",
+                        Style::default()
+                            .fg(theme::MOCHA_GREEN)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(e.domain.clone(), Style::default().fg(theme::MOCHA_TEXT)),
+                ])
+            }
         })
         .collect();
 
@@ -284,14 +327,24 @@ fn render_allowlist(f: &mut Frame, area: Rect, state: &TuiState) {
         Style::default().fg(theme::TEXT_DIM),
     )));
     lines.push(Line::from(Span::styled(
-        "d: Remove entry",
+        if is_focused {
+            "d: Remove entry  Tab: Unfocus"
+        } else {
+            "Tab: Focus list to edit"
+        },
         Style::default().fg(theme::TEXT_DIM),
     )));
+
+    let border_color = if is_focused {
+        theme::ACCENT
+    } else {
+        theme::BORDER
+    };
 
     let block = Block::default()
         .title(format!("── ALLOWLIST ({}) ──", entries.len()))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER));
+        .border_style(Style::default().fg(border_color));
 
     f.render_widget(Paragraph::new(lines).block(block), area);
 }

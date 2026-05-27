@@ -10,7 +10,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
     let help_text = match app.mode {
         TuiMode::Confirming | TuiMode::Input => String::new(),
         TuiMode::Filtering => "TYPE TO FILTER...  Enter/Esc: Confirm".to_string(),
-        TuiMode::Detail => "Esc: Back  q: Quit  1-8: Tabs".to_string(),
+        TuiMode::Detail => "Esc:Back  w:Wake  d:Purge  q:Quit  1-8:Tabs".to_string(),
         TuiMode::Normal => {
             let mut hints = vec!["q:Quit", "1-8:Tabs"];
             match app.active_tab {
@@ -35,13 +35,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
                     ]);
                 }
                 TuiTab::Adblock => {
-                    hints.extend(&[
-                        "t:Toggle",
-                        "r:Reload Lists",
-                        "a:Allow",
-                        "b:Block",
-                        "/:Search",
-                    ]);
+                    hints.extend(&["t:Toggle", "r:Reload Lists", "a:Allow", "b:Block"]);
+                    if app.adblock_allowlist_focused {
+                        hints.extend(&["d:Remove", "Tab:Unfocus"]);
+                    } else {
+                        hints.push("Tab:Focus list");
+                    }
+                    hints.push("/:Search");
                 }
                 TuiTab::Events => {
                     hints.extend(&["Space:Toggle Auto-Scroll"]);
@@ -50,7 +50,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
                     hints.extend(&["↑↓:Navigate", "Enter:Toggle Node", "/:Search"]);
                 }
                 TuiTab::Dhcp => {
-                    hints.extend(&["↑↓:Navigate", "/:Search"]);
+                    hints.extend(&["↑↓:Navigate", "r:Renew", "R:Release", "/:Search"]);
                 }
                 TuiTab::Services => {}
             }

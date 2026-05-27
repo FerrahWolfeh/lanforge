@@ -2,6 +2,7 @@ use crate::tui::action::PendingAction;
 use crate::tui::state::TuiState;
 use crate::tui::ui::widgets::toast::Toast;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use lanforge_types::identifiers::MacAddr;
 use ratatui::widgets::TableState;
 use std::collections::VecDeque;
 use tui_input::Input;
@@ -72,6 +73,7 @@ impl TuiTab {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct TuiApp {
     pub state: TuiState,
     pub active_tab: TuiTab,
@@ -95,6 +97,9 @@ pub struct TuiApp {
     // Text input
     pub input: Input,
     pub input_context: Option<InputContext>,
+
+    // Adblock view focus
+    pub adblock_allowlist_focused: bool,
 }
 
 impl Default for TuiApp {
@@ -123,6 +128,7 @@ impl TuiApp {
             pending_action: None,
             input: Input::default(),
             input_context: None,
+            adblock_allowlist_focused: false,
         }
     }
 
@@ -198,6 +204,9 @@ impl TuiApp {
                     self.filter_text.clear();
                 }
             }
+            KeyCode::Tab | KeyCode::BackTab if self.active_tab == TuiTab::Adblock => {
+                self.adblock_allowlist_focused = !self.adblock_allowlist_focused;
+            }
             _ => {}
         }
     }
@@ -228,7 +237,7 @@ impl TuiApp {
                     .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
                 self.dns_query_log_state.select(Some(i));
             }
-            TuiTab::Adblock => {
+            TuiTab::Adblock if self.adblock_allowlist_focused => {
                 let i = self
                     .adblock_allowlist_state
                     .selected()
@@ -259,7 +268,7 @@ impl TuiApp {
                 let i = self.dns_query_log_state.selected().map_or(0, |i| i + 1);
                 self.dns_query_log_state.select(Some(i));
             }
-            TuiTab::Adblock => {
+            TuiTab::Adblock if self.adblock_allowlist_focused => {
                 let i = self.adblock_allowlist_state.selected().map_or(0, |i| i + 1);
                 self.adblock_allowlist_state.select(Some(i));
             }
@@ -272,5 +281,60 @@ impl TuiApp {
             }
             _ => {}
         }
+    }
+
+    /// Returns `Some((mac, hostname))` of the currently selected device in the filtered list.
+    #[must_use]
+    pub fn selected_device(&self) -> Option<(MacAddr, String)> {
+        let selected_idx = self.device_list_state.selected()?;
+        let devices_resp = self.state.devices.as_ref()?;
+        let mut devices = devices_resp.devices.clone();
+        devices.sort_by_key(|a| a.mac);
+
+        let mut filtered_devices = Vec::new();
+        for dev in devices {
+            if !self.filter_text.is_empty() {
+                let search = self.filter_text.to_lowercase();
+                if !dev.mac.contains_str(&search)
+                    && !dev.hostname.to_lowercase().contains(&search)
+                    && !dev.display_v4.to_lowercase().contains(&search)
+                    && !dev.display_v6.to_lowercase().contains(&search)
+                {
+                    continue;
+                }
+            }
+            filtered_devices.push(dev);
+        }
+
+        filtered_devices
+            .get(selected_idx)
+            .map(|dev| (dev.mac, dev.hostname.clone()))
+    }
+
+    /// Returns `Some((mac, hostname))` of the currently selected lease in the filtered list.
+    #[must_use]
+    pub fn selected_lease(&self) -> Option<(MacAddr, String)> {
+        let selected_idx = self.lease_table_state.selected()?;
+        let leases_resp = self.state.leases.as_ref()?;
+        let mut leases = leases_resp.leases.clone();
+        leases.sort_by_key(|a| a.address);
+
+        let mut filtered_leases = Vec::new();
+        let filter = self.filter_text.to_lowercase();
+        for lease in leases {
+            if !filter.is_empty() {
+                let match_found = lease.hostname.to_lowercase().contains(&filter)
+                    || lease.mac.to_string().to_lowercase().contains(&filter)
+                    || lease.address.to_string().to_lowercase().contains(&filter);
+                if !match_found {
+                    continue;
+                }
+            }
+            filtered_leases.push(lease);
+        }
+
+        filtered_leases
+            .get(selected_idx)
+            .map(|lease| (lease.mac, lease.hostname.clone()))
     }
 }

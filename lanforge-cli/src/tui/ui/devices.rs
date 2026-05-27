@@ -84,7 +84,7 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT));
 
-    let text = app.state.selected_whois.as_ref().map_or_else(|| "Loading device detail via Whois...".to_string(), |whois| {
+    let text = app.state.selected_whois.as_ref().map_or_else(|| "Loading device detail via Whois...\n\n[Esc] Close".to_string(), |whois| {
         let dev = &whois.entry;
 
         let v6_addrs = if dev.ipv6_addrs.is_empty() {
@@ -133,7 +133,7 @@ fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
             crate::cli::vendor::resolve_vendor(&dev.mac).unwrap_or_else(|| "Unknown".to_string());
 
         format!(
-            "MAC:         {}\nVendor:      {}\nHostname:    {}\nOrigin:      {}\nClass:       {} {}\nLast Seen:   {}\nOnline:      {}\n\nActive DHCPv4 Lease: {}\nActive DHCPv6 Lease: {}\n\nAll Tracked IPv6 Addrs:\n             {}\n\nLease History:\n{}",
+            "MAC:         {}\nVendor:      {}\nHostname:    {}\nOrigin:      {}\nClass:       {} {}\nLast Seen:   {}\nOnline:      {}\n\nActive DHCPv4 Lease: {}\nActive DHCPv6 Lease: {}\n\nAll Tracked IPv6 Addrs:\n             {}\n\nLease History:\n{}\n\n[w] Wake  [d] Purge  [Esc] Close",
             dev.mac,
             vendor,
             dev.hostname,

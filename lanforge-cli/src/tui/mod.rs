@@ -216,37 +216,179 @@ fn handle_tui_key_event(
 
     if app.mode == TuiMode::Detail
         && old_mode != TuiMode::Detail
-        && let Some(selected_idx) = app.device_list_state.selected()
-        && let Some(devices_resp) = &app.state.devices
+        && let Some((mac, _)) = app.selected_device()
     {
-        let mut devices = devices_resp.devices.clone();
-        devices.sort_by_key(|a| a.mac);
+        app.state.selected_whois = None; // Reset to show loading screen
+        let client_clone = client.clone();
+        let tx_clone = event_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(whois_resp) = client_clone.whois(mac.to_string()).await {
+                let _ = tx_clone.send(AppEvent::WhoisUpdate(whois_resp)).await;
+            }
+        });
+    }
 
-        let mut filtered_devices = Vec::new();
-        for dev in devices {
-            if !app.filter_text.is_empty() {
-                let search = app.filter_text.to_lowercase();
-                if !dev.mac.contains_str(&search)
-                    && !dev.hostname.to_lowercase().contains(&search)
-                    && !dev.display_v4.to_lowercase().contains(&search)
-                    && !dev.display_v6.to_lowercase().contains(&search)
-                {
-                    continue;
+    if app.mode == TuiMode::Normal {
+        match app.active_tab {
+            TuiTab::Dashboard => match key.code {
+                KeyCode::Char('s') => {
+                    let client = client.clone();
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        let result =
+                            crate::tui::dispatch::execute_action(&client, PendingAction::Scan)
+                                .await;
+                        let _ = tx.send(AppEvent::ActionResult(result)).await;
+                    });
+                }
+                KeyCode::Char('r') => {
+                    app.pending_action = Some(PendingAction::Reload);
+                    app.mode = TuiMode::Confirming;
+                }
+                KeyCode::Char('F') => {
+                    let client = client.clone();
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        let result = crate::tui::dispatch::execute_action(
+                            &client,
+                            PendingAction::DnsCacheFlush,
+                        )
+                        .await;
+                        let _ = tx.send(AppEvent::ActionResult(result)).await;
+                    });
+                }
+                _ => {}
+            },
+            TuiTab::Adblock => match key.code {
+                KeyCode::Char('t') => {
+                    let current = app
+                        .state
+                        .dns_adblock_status
+                        .as_ref()
+                        .is_some_and(|s| s.enabled);
+                    let client = client.clone();
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        let action = PendingAction::AdblockToggle { enable: !current };
+                        let result = crate::tui::dispatch::execute_action(&client, action).await;
+                        let _ = tx.send(AppEvent::ActionResult(result)).await;
+                    });
+                }
+                KeyCode::Char('T') => {
+                    app.input_context = Some(crate::tui::app::InputContext {
+                        prompt: "Disable Adblock for (seconds):".to_string(),
+                        purpose: InputPurpose::AdblockTimedDisable,
+                    });
+                    app.mode = TuiMode::Input;
+                }
+                KeyCode::Char('r') => {
+                    let client = client.clone();
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        let result = crate::tui::dispatch::execute_action(
+                            &client,
+                            PendingAction::AdblockReload,
+                        )
+                        .await;
+                        let _ = tx.send(AppEvent::ActionResult(result)).await;
+                    });
+                }
+                KeyCode::Char('a') => {
+                    app.input_context = Some(crate::tui::app::InputContext {
+                        prompt: "Allow domain:".to_string(),
+                        purpose: InputPurpose::AdblockAllow,
+                    });
+                    app.mode = TuiMode::Input;
+                }
+                KeyCode::Char('b') => {
+                    app.input_context = Some(crate::tui::app::InputContext {
+                        prompt: "Block domain:".to_string(),
+                        purpose: InputPurpose::AdblockBlock,
+                    });
+                    app.mode = TuiMode::Input;
+                }
+                KeyCode::Char('d') if app.adblock_allowlist_focused => {
+                    if let Some(selected_idx) = app.adblock_allowlist_state.selected()
+                        && let Some(allowlist_resp) = &app.state.dns_allowlist
+                        && let Some(entry) = allowlist_resp.allowlist.get(selected_idx)
+                    {
+                        let domain = entry.domain.clone();
+                        let client = client.clone();
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let action = PendingAction::AdblockUnallow { domain };
+                            let result =
+                                crate::tui::dispatch::execute_action(&client, action).await;
+                            let _ = tx.send(AppEvent::ActionResult(result)).await;
+                        });
+                    }
+                }
+                _ => {}
+            },
+            TuiTab::Devices => match key.code {
+                KeyCode::Char('w') => {
+                    if let Some((mac, hostname)) = app.selected_device() {
+                        let client = client.clone();
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let action = PendingAction::Wol { mac, hostname };
+                            let result =
+                                crate::tui::dispatch::execute_action(&client, action).await;
+                            let _ = tx.send(AppEvent::ActionResult(result)).await;
+                        });
+                    }
+                }
+                KeyCode::Char('d') => {
+                    if let Some((mac, hostname)) = app.selected_device() {
+                        app.pending_action = Some(PendingAction::Purge { mac, hostname });
+                        app.mode = TuiMode::Confirming;
+                    }
+                }
+                _ => {}
+            },
+            TuiTab::Dhcp => match key.code {
+                KeyCode::Char('r') => {
+                    if let Some((mac, hostname)) = app.selected_lease() {
+                        let client = client.clone();
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let action = PendingAction::LeaseRenew { mac, hostname };
+                            let result =
+                                crate::tui::dispatch::execute_action(&client, action).await;
+                            let _ = tx.send(AppEvent::ActionResult(result)).await;
+                        });
+                    }
+                }
+                KeyCode::Char('R') => {
+                    if let Some((mac, hostname)) = app.selected_lease() {
+                        app.pending_action = Some(PendingAction::LeaseRelease { mac, hostname });
+                        app.mode = TuiMode::Confirming;
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    } else if old_mode == TuiMode::Detail && app.active_tab == TuiTab::Devices {
+        match key.code {
+            KeyCode::Char('w') => {
+                if let Some((mac, hostname)) = app.selected_device() {
+                    let client = client.clone();
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        let action = PendingAction::Wol { mac, hostname };
+                        let result = crate::tui::dispatch::execute_action(&client, action).await;
+                        let _ = tx.send(AppEvent::ActionResult(result)).await;
+                    });
                 }
             }
-            filtered_devices.push(dev);
-        }
-
-        if let Some(target_dev) = filtered_devices.get(selected_idx) {
-            let target_mac = target_dev.mac;
-            app.state.selected_whois = None; // Reset to show loading screen
-            let client_clone = client.clone();
-            let tx_clone = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(whois_resp) = client_clone.whois(target_mac.to_string()).await {
-                    let _ = tx_clone.send(AppEvent::WhoisUpdate(whois_resp)).await;
+            KeyCode::Char('d') => {
+                if let Some((mac, hostname)) = app.selected_device() {
+                    app.pending_action = Some(PendingAction::Purge { mac, hostname });
+                    app.mode = TuiMode::Confirming;
                 }
-            });
+            }
+            _ => {}
         }
     }
 }
