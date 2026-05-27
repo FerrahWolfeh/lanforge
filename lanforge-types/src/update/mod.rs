@@ -184,4 +184,22 @@ pub enum DeviceUpdate {
     SetReverseResolvers {
         resolvers: Vec<DnsReverseResolver>,
     },
+    DhcpV4PoolUpdated {
+        range_start: Ipv4Addr,
+        range_end: Ipv4Addr,
+        subnet_mask: Ipv4Addr,
+        total: u32,
+        used: u32,
+        available: u32,
+        utilization_percent: f32,
+    },
+    DhcpV6PoolUpdated {
+        pool_id: u32,
+        prefix: Ipv6Addr,
+        prefix_len: u8,
+        total: u32,
+        used: u32,
+        available: u32,
+        utilization_percent: f32,
+    },
 }

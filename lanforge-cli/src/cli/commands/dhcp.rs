@@ -2,7 +2,7 @@ use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
-use lanforge_api::api::{DhcpPoolEntry, LeaseKind, LeasesResponse};
+use lanforge_api::api::{DhcpPoolEntry, DhcpPoolType, LeaseKind, LeasesResponse};
 use lanforge_types::identifiers::MacAddr;
 use std::{
     collections::HashMap,
@@ -193,11 +193,30 @@ fn PoolSection(props: &PoolSectionProps) -> impl Into<AnyElement<'_>> {
         Color::Green
     };
 
+    let name = match p.pool_type {
+        DhcpPoolType::V4 => {
+            let start = p
+                .range_start
+                .map_or_else(|| "-".to_string(), |ip| ip.to_string());
+            let end = p
+                .range_end
+                .map_or_else(|| "-".to_string(), |ip| ip.to_string());
+            format!("{start} - {end}")
+        }
+        DhcpPoolType::V6 => {
+            let prefix = p
+                .prefix
+                .map_or_else(|| "-".to_string(), |ip| ip.to_string());
+            let len = p.prefix_len.map_or(64, |l| l);
+            format!("{prefix}/{len}")
+        }
+    };
+
     element! {
         View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: format!("{}: ", props.title), color: Color::DarkGrey)
-                Text(content: p.subnet.clone(), weight: Weight::Bold)
+                Text(content: name, weight: Weight::Bold)
             }
             View(flex_direction: FlexDirection::Row, margin_top: 1) {
                 ProgressBar(percent: p.utilization_percent, color: bar_color, ascii: props.ascii)

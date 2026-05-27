@@ -100,6 +100,29 @@ impl IpPool {
         }
     }
 
+    /// Returns the live pool utilization statistics.
+    /// Returns: (total, used, available, `utilization_percent`)
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn stats(&self) -> (u32, u32, u32, f32) {
+        let total = self.total_pool_size();
+        let available = u32::try_from(self.available.len()).unwrap_or(0);
+        let used = total.saturating_sub(available);
+        let utilization_percent = if total > 0 {
+            (used as f32 / total as f32) * 100.0
+        } else {
+            0.0
+        };
+        (total, used, available, utilization_percent)
+    }
+
+    fn total_pool_size(&self) -> u32 {
+        self.pools
+            .iter()
+            .map(|p| u32::from(p.range_end).saturating_sub(u32::from(p.range_start)) + 1)
+            .sum()
+    }
+
     /// Allocates an IP for a MAC address.
     pub fn allocate(
         &mut self,
@@ -386,5 +409,30 @@ mod tests {
         assert_eq!(p.available.len(), 1);
         assert_eq!(Ipv4Addr::from(p.available.select(0).unwrap()), ip);
         assert!(p.declined.is_empty());
+    }
+
+    #[test]
+    fn test_pool_stats() {
+        let (mut p, ctx) = pool(); // Range of 6 IPs (.100 to .105)
+        let (total, used, available, util) = p.stats();
+        assert_eq!(total, 6);
+        assert_eq!(used, 0);
+        assert_eq!(available, 6);
+        assert_eq!(util, 0.0);
+
+        // Allocate one
+        let ip = p.allocate(&ctx, mac(1), None).unwrap();
+        // Register it in context so it's not picked again
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac: mac(1),
+            ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        let (total, used, available, util) = p.stats();
+        assert_eq!(total, 6);
+        assert_eq!(used, 1);
+        assert_eq!(available, 5);
+        assert_eq!(util, (1.0 / 6.0) * 100.0);
     }
 }

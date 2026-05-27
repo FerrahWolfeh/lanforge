@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
 use crate::bus::{AdminChange, DeviceEvent, EventVec, LanforgeEvent, NetworkChange, NetworkEvent};
+use crate::context::state::network::DhcpPoolStats;
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
@@ -701,6 +702,56 @@ impl State {
         resolvers: Vec<DnsReverseResolver>,
     ) -> EventVec {
         self.reverse_resolvers = resolvers;
+        EventVec::new()
+    }
+
+    pub(crate) fn handle_dhcp_v4_pool_updated(
+        &mut self,
+        range_start: Ipv4Addr,
+        range_end: Ipv4Addr,
+        subnet_mask: Ipv4Addr,
+        total: u32,
+        used: u32,
+        available: u32,
+        utilization_percent: f32,
+    ) -> EventVec {
+        let _ = subnet_mask; // Keep compiler quiet if unused, but we might want it or not.
+        self.interfaces.v4_pool = Some(DhcpPoolStats {
+            range_start: Some(IpAddr::V4(range_start)),
+            range_end: Some(IpAddr::V4(range_end)),
+            prefix: None,
+            prefix_len: None,
+            total,
+            used,
+            available,
+            utilization_percent,
+        });
+        EventVec::new()
+    }
+
+    pub(crate) fn handle_dhcp_v6_pool_updated(
+        &mut self,
+        pool_id: u32,
+        prefix: Ipv6Addr,
+        prefix_len: u8,
+        total: u32,
+        used: u32,
+        available: u32,
+        utilization_percent: f32,
+    ) -> EventVec {
+        self.interfaces.v6_pools.insert(
+            pool_id,
+            DhcpPoolStats {
+                range_start: None,
+                range_end: None,
+                prefix: Some(IpAddr::V6(prefix)),
+                prefix_len: Some(prefix_len),
+                total,
+                used,
+                available,
+                utilization_percent,
+            },
+        );
         EventVec::new()
     }
 }

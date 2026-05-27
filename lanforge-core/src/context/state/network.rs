@@ -4,13 +4,17 @@ use std::{
     collections::HashMap,
     fmt::Display,
     hash::{BuildHasher, Hash},
+    net::IpAddr,
     str::FromStr,
 };
 
 /// Simplified DHCP pool metrics for state tracking.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct DhcpPoolStats {
-    pub subnet: String,
+    pub range_start: Option<IpAddr>,
+    pub range_end: Option<IpAddr>,
+    pub prefix: Option<IpAddr>,
+    pub prefix_len: Option<u8>,
     pub total: u32,
     pub used: u32,
     pub available: u32,

@@ -283,11 +283,28 @@ async fn test_communication_dhcp_and_leases() {
         is_active: true,
     });
 
+    // Publish a mock pool update
+    let _ = ctx.apply(DeviceUpdate::DhcpV4PoolUpdated {
+        range_start: "192.168.1.100".parse().unwrap(),
+        range_end: "192.168.1.200".parse().unwrap(),
+        subnet_mask: "255.255.255.0".parse().unwrap(),
+        total: 101,
+        used: 10,
+        available: 91,
+        utilization_percent: 9.9,
+    });
+
     // 1. DHCP Pools
     let pools_cmd = DhcpArgs {
         action: DhcpAction::Pool,
     };
     assert!(pools_cmd.execute(&client).await.is_ok());
+
+    let pools_res = client.dhcp_pools().await.unwrap();
+    assert_eq!(pools_res.v4_pools.len(), 1);
+    assert_eq!(pools_res.v4_pools[0].total, 101);
+    assert_eq!(pools_res.v4_pools[0].used, 10);
+    assert_eq!(pools_res.v4_pools[0].available, 91);
 
     // 2. Leases List
     let leases_cmd = DhcpArgs {

@@ -33,11 +33,10 @@ pub mod server;
 
 use dhcproto::v4::{DhcpOption, Message, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{
-    AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent,
-};
+use lanforge_core::bus::{AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_macros::lanforge_service;
+use lanforge_types::device::IPv4State;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::system::{ServiceBanner, ServiceState};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
@@ -87,6 +86,24 @@ impl Dhcpv4Service {
 
 impl StatusProvider for Dhcpv4Service {
     fn banner(&self) -> ServiceBanner {
+        let (active_leases, pool_total, pool_available) = {
+            let state = self.ctx.read();
+            let leases = u32::try_from(
+                state
+                    .devices
+                    .values()
+                    .filter(|dev| matches!(dev.v4, IPv4State::Dynamic(_)))
+                    .count(),
+            )
+            .unwrap_or(0);
+            let (total, avail) = state
+                .interfaces
+                .v4_pool
+                .as_ref()
+                .map_or((0, 0), |p| (p.total, p.available));
+            drop(state);
+            (leases, total, avail)
+        };
         let stats = vec![
             (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
             (
@@ -96,6 +113,18 @@ impl StatusProvider for Dhcpv4Service {
             (
                 std::borrow::Cow::Borrowed("port"),
                 self.cfg.port.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("leases_active"),
+                active_leases.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("pool_total"),
+                pool_total.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("pool_available"),
+                pool_available.to_string(),
             ),
         ];
         ServiceBanner {
@@ -157,6 +186,18 @@ impl AsyncService for Dhcpv4Service {
                 }
                 _ = cleanup_timer.tick() => {
                     server.pool.cleanup_quarantine(std::time::Instant::now());
+                    let (total, used, available, util_pct) = server.pool.stats();
+                    let range_start = self.cfg.range_start.or_else(|| self.cfg.pools.first().map(|p| p.range_start)).unwrap_or(Ipv4Addr::UNSPECIFIED);
+                    let range_end = self.cfg.range_end.or_else(|| self.cfg.pools.first().map(|p| p.range_end)).unwrap_or(Ipv4Addr::UNSPECIFIED);
+                    let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated {
+                        range_start,
+                        range_end,
+                        subnet_mask: self.cfg.subnet_mask,
+                        total,
+                        used,
+                        available,
+                        utilization_percent: util_pct,
+                    });
                 }
             }
         }

@@ -50,6 +50,7 @@ use lanforge_types::device::IPv6State;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::system::{ServiceBanner, ServiceState};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
+use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -105,9 +106,31 @@ impl Dhcpv6Service {
 
 impl StatusProvider for Dhcpv6Service {
     fn banner(&self) -> ServiceBanner {
+        let (active_leases, pool_total, pool_available) = {
+            let state = self.ctx.read();
+            let leases = u32::try_from(
+                state
+                    .devices
+                    .values()
+                    .filter(|dev| dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))))
+                    .count(),
+            )
+            .unwrap_or(0);
+            let mut total = 0;
+            let mut avail = 0;
+            for pool in state.interfaces.v6_pools.values() {
+                total += pool.total;
+                avail += pool.available;
+            }
+            drop(state);
+            (leases, total, avail)
+        };
         let stats = vec![
-            (std::borrow::Cow::Borrowed("iface"), self.config.iface.clone()),
-            (std::borrow::Cow::Borrowed("port"), self.config.port.to_string()),
+            (Cow::Borrowed("iface"), self.config.iface.clone()),
+            (Cow::Borrowed("port"), self.config.port.to_string()),
+            (Cow::Borrowed("leases_active"), active_leases.to_string()),
+            (Cow::Borrowed("pool_total"), pool_total.to_string()),
+            (Cow::Borrowed("pool_available"), pool_available.to_string()),
         ];
         ServiceBanner {
             name: "DHCPv6 Server".to_string(),
@@ -213,6 +236,7 @@ impl AsyncService for Dhcpv6Service {
 
         let mut buf = [0u8; 2048];
         let mut handle = self.ctx.service_handle();
+        let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
 
         info!("DHCPv6 state machine started");
         ctrl.signal_ready();
@@ -236,6 +260,9 @@ impl AsyncService for Dhcpv6Service {
                         warn!("DHCPv6: Bus event error: {e}");
                     }
                 }
+                _ = stats_timer.tick() => {
+                    self.publish_pool_stats(&server);
+                }
             }
         }
         Ok(())
@@ -243,6 +270,23 @@ impl AsyncService for Dhcpv6Service {
 }
 
 impl Dhcpv6Service {
+    fn publish_pool_stats(&self, server: &Dhcpv6Server) {
+        let stats = server.pool.stats_per_prefix(&self.ctx);
+        for (i, (prefix, prefix_len, total, used, available, utilization_percent)) in
+            stats.into_iter().enumerate()
+        {
+            let _ = self.ctx.apply(DeviceUpdate::DhcpV6PoolUpdated {
+                pool_id: u32::try_from(i).unwrap_or(0),
+                prefix,
+                prefix_len,
+                total,
+                used,
+                available,
+                utilization_percent,
+            });
+        }
+    }
+
     fn handle_incoming_packet(
         &self,
         payload: &[u8],

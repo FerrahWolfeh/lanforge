@@ -1,6 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{
-    DhcpPoolEntry, DhcpPoolsResponse, LeaseEntry, LeaseKind, LeasesResponse, Response,
+    DhcpPoolEntry, DhcpPoolsResponse, DhcpPoolType, LeaseEntry, LeaseKind, LeasesResponse, Response,
     SimpleSuccess,
 };
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
@@ -50,7 +50,11 @@ impl ClientContext {
 
         if let Some(pool) = &state.interfaces.v4_pool {
             v4_pools.push(DhcpPoolEntry {
-                subnet: pool.subnet.clone(),
+                pool_type: DhcpPoolType::V4,
+                range_start: pool.range_start,
+                range_end: pool.range_end,
+                prefix: pool.prefix,
+                prefix_len: pool.prefix_len,
                 total: pool.total,
                 used: pool.used,
                 available: pool.available,
@@ -60,7 +64,11 @@ impl ClientContext {
 
         for pool in state.interfaces.v6_pools.values() {
             v6_pools.push(DhcpPoolEntry {
-                subnet: pool.subnet.clone(),
+                pool_type: DhcpPoolType::V6,
+                range_start: pool.range_start,
+                range_end: pool.range_end,
+                prefix: pool.prefix,
+                prefix_len: pool.prefix_len,
                 total: pool.total,
                 used: pool.used,
                 available: pool.available,

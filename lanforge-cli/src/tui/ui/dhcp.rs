@@ -140,9 +140,18 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &mut TuiApp) {
                     .fg(theme::ACCENT),
             )]));
             for pool in &pools.v4_pools {
+                let subnet_str = {
+                    let start = pool
+                        .range_start
+                        .map_or_else(|| "-".to_string(), |ip| ip.to_string());
+                    let end = pool
+                        .range_end
+                        .map_or_else(|| "-".to_string(), |ip| ip.to_string());
+                    format!("{start} - {end}")
+                };
                 pool_lines.push(Line::from(vec![
                     Span::raw("  Subnet: "),
-                    Span::styled(pool.subnet.clone(), Style::default().fg(theme::IP)),
+                    Span::styled(subnet_str, Style::default().fg(theme::IP)),
                     Span::raw(format!(
                         "  (Used: {} / Total: {}, Available: {})",
                         pool.used, pool.total, pool.available
@@ -165,9 +174,16 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &mut TuiApp) {
                     .fg(theme::ACCENT),
             )]));
             for pool in &pools.v6_pools {
+                let subnet_str = {
+                    let prefix = pool
+                        .prefix
+                        .map_or_else(|| "-".to_string(), |ip| ip.to_string());
+                    let len = pool.prefix_len.map_or(64, |l| l);
+                    format!("{prefix}/{len}")
+                };
                 pool_lines.push(Line::from(vec![
                     Span::raw("  Subnet: "),
-                    Span::styled(pool.subnet.clone(), Style::default().fg(theme::IP)),
+                    Span::styled(subnet_str, Style::default().fg(theme::IP)),
                     Span::raw(format!(
                         "  (Used: {} / Total: {}, Available: {})",
                         pool.used, pool.total, pool.available

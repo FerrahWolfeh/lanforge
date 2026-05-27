@@ -47,9 +47,21 @@ pub struct DhcpPoolsResponse {
     pub v6_pools: Vec<DhcpPoolEntry>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DhcpPoolType {
+    #[default]
+    V4,
+    V6,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DhcpPoolEntry {
-    pub subnet: String,
+    pub pool_type: DhcpPoolType,
+    pub range_start: Option<IpAddr>,
+    pub range_end: Option<IpAddr>,
+    pub prefix: Option<IpAddr>,
+    pub prefix_len: Option<u8>,
     pub total: u32,
     pub used: u32,
     pub available: u32,

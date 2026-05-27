@@ -210,6 +210,95 @@ impl Ipv6Pool {
         }
     }
 
+    /// Computes live utilization statistics per active prefix (ULA, GUA).
+    /// Returns a list of: (prefix, `prefix_len`, total, used, available `utilization_percent`)
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn stats_per_prefix(
+        &self,
+        ctx: &LanforgeContext,
+    ) -> Vec<(Ipv6Addr, u8, u32, u32, u32, f32)> {
+        let mut prefixes = Vec::new();
+        if let Some(ula) = self.ula_prefix {
+            prefixes.push((ula, self.ula_prefix_len));
+        }
+        if let Some(gua) = self.gua_prefix {
+            prefixes.push((gua, 64));
+        }
+
+        let mut results = Vec::new();
+
+        for (prefix, prefix_len) in prefixes {
+            let mut total_size = 0u32;
+            for pool in &self.pools {
+                match pool {
+                    PoolRange::Fixed {
+                        prefix: fixed_p,
+                        start_u128,
+                        end_u128,
+                    } => {
+                        let fixed_prefix = Ipv6Addr::new(
+                            fixed_p[0], fixed_p[1], fixed_p[2], fixed_p[3], 0, 0, 0, 0,
+                        );
+                        if fixed_prefix == prefix {
+                            let size = end_u128.saturating_sub(*start_u128) + 1;
+                            total_size =
+                                total_size.saturating_add(u32::try_from(size).unwrap_or(u32::MAX));
+                        }
+                    }
+                    PoolRange::Floating {
+                        start_suffix,
+                        end_suffix,
+                    } => {
+                        let start = u64::from_be_bytes(*start_suffix);
+                        let end = u64::from_be_bytes(*end_suffix);
+                        let size = end.saturating_sub(start) + 1;
+                        total_size =
+                            total_size.saturating_add(u32::try_from(size).unwrap_or(u32::MAX));
+                    }
+                }
+            }
+
+            let mut used_count = 0u32;
+            for dev in ctx.all_devices() {
+                for state in &dev.v6 {
+                    if let IPv6State::Dynamic(lease) = state
+                        && Self::prefix_matches(prefix, lease.ip)
+                    {
+                        used_count = used_count.saturating_add(1);
+                    }
+                }
+            }
+
+            let available = total_size.saturating_sub(used_count);
+            let utilization_percent = if total_size > 0 {
+                (used_count as f32 / total_size as f32) * 100.0
+            } else {
+                0.0
+            };
+
+            results.push((
+                prefix,
+                prefix_len,
+                total_size,
+                used_count,
+                available,
+                utilization_percent,
+            ));
+        }
+
+        results
+    }
+
+    const fn prefix_matches(prefix: Ipv6Addr, ip: Ipv6Addr) -> bool {
+        let p_segs = prefix.segments();
+        let ip_segs = ip.segments();
+        p_segs[0] == ip_segs[0]
+            && p_segs[1] == ip_segs[1]
+            && p_segs[2] == ip_segs[2]
+            && p_segs[3] == ip_segs[3]
+    }
+
     /// Constructs an IPv6 address given a device's configured suffix and a prefix.
     #[must_use]
     pub fn construct_addr(&self, prefix: Ipv6Addr, suffix: &Ipv6AddrOrSuffix) -> Ipv6Addr {
@@ -1153,5 +1242,50 @@ mod tests {
         assert_eq!(ips.len(), 2);
         assert!(ips.contains(&"fd00::cafe".parse().unwrap()));
         assert!(ips.contains(&"2001:db8::cafe".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_stats_per_prefix() {
+        let ctx = init_test_context();
+        let ula = "fd00::".parse().unwrap();
+        let gua = "2001:db8::".parse().unwrap();
+        let pools = vec![Dhcpv6PoolConfig {
+            range_start: Some(Ipv6AddrOrSuffix::parse("::1").unwrap()),
+            range_end: Some(Ipv6AddrOrSuffix::parse("::10").unwrap()), // size = 16
+            address: None,
+        }];
+        let mut pool = Ipv6Pool::new(&pools, Some(ula), 64);
+        pool.set_gua_prefix(gua);
+
+        // Initially no leases
+        let stats = pool.stats_per_prefix(&ctx);
+        assert_eq!(stats.len(), 2);
+        // ULA stats
+        assert_eq!(stats[0].0, ula);
+        assert_eq!(stats[0].2, 16); // total
+        assert_eq!(stats[0].3, 0); // used
+        assert_eq!(stats[0].4, 16); // available
+
+        // GUA stats
+        assert_eq!(stats[1].0, gua);
+        assert_eq!(stats[1].2, 16); // total
+        assert_eq!(stats[1].3, 0); // used
+        assert_eq!(stats[1].4, 16); // available
+
+        // Allocate a ULA lease for client 1
+        let ips1 = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
+        let ula_ip = ips1.iter().find(|ip| ip.segments()[0] == 0xfd00).unwrap();
+        commit_lease(&ctx, Some(mac(1)), &duid(1), 1, *ula_ip);
+
+        // Allocate a GUA lease for client 2
+        let ips2 = pool.allocate(&ctx, &Duid::new(duid(2)), 2, Some(mac(2)), None);
+        let gua_ip = ips2.iter().find(|ip| ip.segments()[0] == 0x2001).unwrap();
+        commit_lease(&ctx, Some(mac(2)), &duid(2), 2, *gua_ip);
+
+        let stats = pool.stats_per_prefix(&ctx);
+        assert_eq!(stats[0].3, 1); // used ULA
+        assert_eq!(stats[0].4, 15); // available ULA
+        assert_eq!(stats[1].3, 1); // used GUA
+        assert_eq!(stats[1].4, 15); // available GUA
     }
 }
