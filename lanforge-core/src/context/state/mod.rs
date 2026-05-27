@@ -32,6 +32,7 @@ pub use self::network::NetworkState;
 // ---------------------------------------------------------------------------
 
 impl State {
+    #[allow(clippy::too_many_lines)]
     pub fn apply_update(&mut self, update: DeviceUpdate) -> EventVec {
         match update {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
@@ -109,40 +110,8 @@ impl State {
             DeviceUpdate::SetReverseResolvers { resolvers } => {
                 self.handle_set_reverse_resolvers(resolvers)
             }
-            DeviceUpdate::DhcpV4PoolUpdated {
-                range_start,
-                range_end,
-                subnet_mask,
-                total,
-                used,
-                available,
-                utilization_percent,
-            } => self.handle_dhcp_v4_pool_updated(
-                range_start,
-                range_end,
-                subnet_mask,
-                total,
-                used,
-                available,
-                utilization_percent,
-            ),
-            DeviceUpdate::DhcpV6PoolUpdated {
-                pool_id,
-                prefix,
-                prefix_len,
-                total,
-                used,
-                available,
-                utilization_percent,
-            } => self.handle_dhcp_v6_pool_updated(
-                pool_id,
-                prefix,
-                prefix_len,
-                total,
-                used,
-                available,
-                utilization_percent,
-            ),
+            DeviceUpdate::DhcpV4PoolUpdated { .. } => self.handle_dhcp_v4_pool_updated(&update),
+            DeviceUpdate::DhcpV6PoolUpdated { .. } => self.handle_dhcp_v6_pool_updated(&update),
         }
     }
 }

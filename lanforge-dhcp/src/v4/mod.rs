@@ -53,6 +53,7 @@ use server::{DhcpServer, HandleResult};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 
+use crate::traits::DhcpPool;
 use crate::v4::config::Dhcpv4Config;
 
 #[lanforge_service(
@@ -104,6 +105,7 @@ impl StatusProvider for Dhcpv4Service {
             drop(state);
             (leases, total, avail)
         };
+        let v4_stats = self.ctx.dhcpv4_stats().snapshot();
         let stats = vec![
             (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
             (
@@ -126,6 +128,38 @@ impl StatusProvider for Dhcpv4Service {
                 std::borrow::Cow::Borrowed("pool_available"),
                 pool_available.to_string(),
             ),
+            (
+                std::borrow::Cow::Borrowed("discovers"),
+                v4_stats.discovers.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("offers"),
+                v4_stats.offers.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("requests"),
+                v4_stats.requests.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("acks"),
+                v4_stats.acks.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("naks"),
+                v4_stats.naks.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("releases"),
+                v4_stats.releases.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("declines"),
+                v4_stats.declines.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("informs"),
+                v4_stats.informs.to_string(),
+            ),
         ];
         ServiceBanner {
             name: "DHCPv4 Server".to_string(),
@@ -143,11 +177,25 @@ impl AsyncService for Dhcpv4Service {
         self.ctx.wait_for_db().await?;
         self.ctx.wait_for_interfaces().await?;
 
-        let mut server = DhcpServer::new(self.cfg.clone(), self.ctx.clone());
+        let mut server =
+            DhcpServer::new(self.cfg.clone(), self.ctx.clone(), self.ctx.dhcpv4_stats());
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
         let registry = self.ctx.get_static_registry();
         server.pool.reserve_statics(registry.v4_ips());
+
+        // Seed with active dynamic leases from context
+        let active_dynamic_ips: Vec<Ipv4Addr> = self
+            .ctx
+            .read()
+            .devices
+            .values()
+            .filter_map(|dev| match &dev.v4 {
+                IPv4State::Dynamic(lease) => Some(lease.ip),
+                _ => None,
+            })
+            .collect();
+        server.pool.reserve_statics(active_dynamic_ips);
 
         let socket = bind_dhcp_socket_async(&self.cfg.iface, self.cfg.port)?;
 
@@ -308,7 +356,7 @@ impl Dhcpv4Service {
                 info!("DHCPv4: Forcing release of {} via CLI", mac);
                 let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                 if let Some(i) = ip {
-                    server.pool.release(i);
+                    server.pool.release(&i);
                 }
             }
             LanforgeEvent::Device(DeviceEvent::LeaseRenew {
@@ -326,7 +374,7 @@ impl Dhcpv4Service {
                     match ip {
                         Some(v) => {
                             info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
-                            server.pool.mark_declined(*v);
+                            server.pool.decline(*v);
                             info!("DHCPv4: Handled statically.");
                         }
                         None => {

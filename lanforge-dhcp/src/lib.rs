@@ -7,6 +7,7 @@
 pub mod error;
 pub mod identity;
 pub mod options;
+pub mod traits;
 pub mod v4;
 pub mod v6;
 

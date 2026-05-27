@@ -49,6 +49,7 @@ use lanforge_types::identifiers::{Duid, MacAddr};
 use std::net::{Ipv6Addr, UdpSocket};
 use std::str::FromStr;
 use std::string::ToString;
+use std::sync::atomic::Ordering;
 use tracing::{debug, info};
 
 use super::config::Dhcpv6Config;
@@ -56,6 +57,9 @@ use super::pool::Ipv6Pool;
 use crate::identity::DeviceIdentity;
 use crate::options::parse_typed_option;
 use std::sync::Arc;
+
+use crate::traits::DhcpPool;
+use lanforge_types::dhcp::Dhcpv6Stats;
 
 /// `IA_NA` and `IA_PD` identifiers assigned in a `DHCPv6` response.
 ///
@@ -107,6 +111,8 @@ pub struct Dhcpv6Server {
     pub ndp_poke_sock: Arc<UdpSocket>,
     /// Global context for device lookups and state updates.
     pub ctx: LanforgeContext,
+    /// Shared `DHCPv6` statistics.
+    pub stats: Arc<Dhcpv6Stats>,
 }
 
 impl Dhcpv6Server {
@@ -117,6 +123,7 @@ impl Dhcpv6Server {
         server_duid: Duid,
         ndp_poke_sock: Arc<UdpSocket>,
         ctx: LanforgeContext,
+        stats: Arc<Dhcpv6Stats>,
     ) -> Self {
         Self {
             cfg,
@@ -125,6 +132,7 @@ impl Dhcpv6Server {
             prefix_lifetimes: None,
             ndp_poke_sock,
             ctx,
+            stats,
         }
     }
 
@@ -204,22 +212,31 @@ impl Dhcpv6Server {
 
         match msg.msg_type() {
             MessageType::Solicit => {
+                self.stats.solicits.fetch_add(1, Ordering::Relaxed);
                 self.handle_solicit(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Request => {
+                self.stats.requests.fetch_add(1, Ordering::Relaxed);
                 self.handle_request(msg, client_duid, identity.as_ref(), peer, buf)
             }
-            MessageType::Renew => self.handle_renew(msg, client_duid, identity.as_ref(), peer, buf),
+            MessageType::Renew => {
+                self.stats.renews.fetch_add(1, Ordering::Relaxed);
+                self.handle_renew(msg, client_duid, identity.as_ref(), peer, buf)
+            }
             MessageType::Rebind => {
+                self.stats.rebinds.fetch_add(1, Ordering::Relaxed);
                 self.handle_rebind(msg, client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Release => {
+                self.stats.releases.fetch_add(1, Ordering::Relaxed);
                 self.handle_release(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Decline => {
+                self.stats.declines.fetch_add(1, Ordering::Relaxed);
                 self.handle_decline(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::InformationRequest => {
+                self.stats.info_requests.fetch_add(1, Ordering::Relaxed);
                 self.handle_information_request(msg, &client_duid, peer, buf)
             }
             other => {
@@ -702,6 +719,15 @@ impl Dhcpv6Server {
     }
 
     fn base_reply(&self, msg: &Message, msg_type: MessageType, client_duid: &Duid) -> Message {
+        match msg_type {
+            MessageType::Reply => {
+                self.stats.replies.fetch_add(1, Ordering::Relaxed);
+            }
+            MessageType::Advertise => {
+                self.stats.advertises.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
         let mut reply = Message::new(msg_type);
         reply.set_xid(msg.xid());
 
@@ -969,7 +995,14 @@ mod tests {
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
         let ndp_poke_sock = Arc::new(UdpSocket::bind("[::1]:0").unwrap());
-        Dhcpv6Server::new(cfg, pool, server_duid, ndp_poke_sock, ctx)
+        Dhcpv6Server::new(
+            cfg,
+            pool,
+            server_duid,
+            ndp_poke_sock,
+            ctx.clone(),
+            ctx.dhcpv6_stats(),
+        )
     }
 
     fn dummy_client_duid() -> Duid {
@@ -1022,12 +1055,14 @@ mod tests {
         let pool = Ipv6Pool::new(&Vec::new(), None, 64);
         let sock = UdpSocket::bind("::0:0").unwrap();
         let ndp_poke_sock = Arc::new(sock);
+        let ctx = init_test_context();
         let mut srv = Dhcpv6Server::new(
             cfg,
             pool,
             Duid::new(vec![1, 2, 3]),
             ndp_poke_sock,
-            init_test_context(),
+            ctx.clone(),
+            ctx.dhcpv6_stats(),
         );
 
         let msg = build_solicit(true);
@@ -1269,12 +1304,14 @@ mod tests {
         let pool = Ipv6Pool::new(&Vec::new(), Some(ula), 48);
         let sock = UdpSocket::bind("::0:0").unwrap();
         let ndp_poke_sock = Arc::new(sock);
+        let ctx = init_test_context();
         let mut srv = Dhcpv6Server::new(
             cfg,
             pool,
             dummy_client_duid(),
             ndp_poke_sock,
-            init_test_context(),
+            ctx.clone(),
+            ctx.dhcpv6_stats(),
         );
 
         let mut msg = Message::new(MessageType::Solicit);

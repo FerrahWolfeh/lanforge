@@ -47,6 +47,7 @@ use std::{
 
 use lanforge_types::{
     device::{Device, TransientHost},
+    dhcp::{Dhcpv4Stats, Dhcpv6Stats},
     identifiers::{Duid, MacAddr},
     network::DnsReverseResolver,
     network::dns::upstream::UpstreamTarget,
@@ -155,6 +156,18 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_dns_stats(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
         self.inner.dns_stats.read().clone()
+    }
+
+    /// Returns the `DHCPv4` stats concretely.
+    #[must_use]
+    pub fn dhcpv4_stats(&self) -> Arc<Dhcpv4Stats> {
+        self.inner.dhcpv4_stats.clone()
+    }
+
+    /// Returns the `DHCPv6` stats concretely.
+    #[must_use]
+    pub fn dhcpv6_stats(&self) -> Arc<Dhcpv6Stats> {
+        self.inner.dhcpv6_stats.clone()
     }
 
     /// Returns the shared DNS context, if set.

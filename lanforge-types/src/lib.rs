@@ -2,6 +2,7 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod auth;
 pub mod device;
+pub mod dhcp;
 pub mod events;
 pub mod identifiers;
 pub mod network;

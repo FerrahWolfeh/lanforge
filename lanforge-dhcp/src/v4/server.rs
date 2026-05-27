@@ -42,6 +42,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::traits::DhcpPool;
+use lanforge_types::dhcp::Dhcpv4Stats;
+
 use super::config::Dhcpv4Config;
 use super::pool::IpPool;
 use crate::identity::DeviceIdentity;
@@ -101,18 +104,21 @@ pub struct DhcpServer {
     pub last_assigned_ip: Option<Ipv4Addr>,
     /// Global context for device lookups and state updates.
     pub ctx: LanforgeContext,
+    /// Shared `DHCPv4` statistics.
+    pub stats: Arc<Dhcpv4Stats>,
 }
 
 impl DhcpServer {
     /// Creates a new DHCP server with an empty pool seeded from the config range.
     #[must_use]
-    pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
+    pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext, stats: Arc<Dhcpv4Stats>) -> Self {
         let pool = IpPool::new(cfg.get_effective_pools());
         Self {
             cfg,
             pool,
             last_assigned_ip: None,
             ctx,
+            stats,
         }
     }
 
@@ -185,6 +191,9 @@ impl DhcpServer {
         identity: &DeviceIdentity,
         broadcast: bool,
     ) -> HandleResult {
+        self.stats
+            .discovers
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mac = identity.mac;
         let requested = Self::get_requested_ip(msg);
 
@@ -197,6 +206,9 @@ impl DhcpServer {
 
         info!("DHCPv4: {identity} is looking for an address -> Offering {offered_ip}");
         let packet = self.build_reply(msg, MessageType::Offer, offered_ip);
+        self.stats
+            .offers
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         HandleResult::Reply {
             packet,
             broadcast,
@@ -214,6 +226,9 @@ impl DhcpServer {
         identity: &DeviceIdentity,
         broadcast: bool,
     ) -> HandleResult {
+        self.stats
+            .requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mac = identity.mac;
         // RFC 2131 §3.1 — REQUEST can happen in multiple contexts
 
@@ -257,6 +272,9 @@ impl DhcpServer {
 
         info!("DHCPv4: Assigning {assigned_ip} to {identity}");
         let packet = self.build_reply(msg, MessageType::Ack, assigned_ip);
+        self.stats
+            .acks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         HandleResult::Reply {
             packet,
             broadcast,
@@ -269,27 +287,37 @@ impl DhcpServer {
     // ── RELEASE ──────────────────────────────────────────────────────────
 
     fn handle_release(&mut self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
+        self.stats
+            .releases
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ip = msg.ciaddr();
         info!("DHCPv4: {identity} released its address {ip}");
-        self.pool.release(ip);
+        self.pool.release(&ip);
         HandleResult::Release { ip }
     }
 
     // ── DECLINE ──────────────────────────────────────────────────────────
 
     fn handle_decline(&mut self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
+        self.stats
+            .declines
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(declined_ip) = Self::get_requested_ip(msg) {
             warn!("DHCPv4: {identity} declined {declined_ip} (address conflict)! Quarantining IP.");
-            self.pool.mark_declined(declined_ip);
+            self.pool.decline(declined_ip);
+            HandleResult::Release { ip: declined_ip }
         } else {
             warn!("DHCPv4: {identity} declined an unspecified IP");
+            HandleResult::Ignore
         }
-        HandleResult::Ignore
     }
 
     // ── INFORM ───────────────────────────────────────────────────────────
 
     fn handle_inform(&self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
+        self.stats
+            .informs
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ip = msg.ciaddr();
         info!("DHCPv4: {identity} ({ip}) requested configuration options");
 
@@ -448,6 +476,9 @@ impl DhcpServer {
     }
 
     fn send_nak(&self, request: &Message, message: &str) -> HandleResult {
+        self.stats
+            .naks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut reply = Message::default();
         reply
             .set_opcode(Opcode::BootReply)
@@ -550,7 +581,10 @@ mod tests {
 
     fn dummy_server() -> (DhcpServer, LanforgeContext) {
         let ctx = init_test_context();
-        (DhcpServer::new(dummy_config(), ctx.clone()), ctx)
+        (
+            DhcpServer::new(dummy_config(), ctx.clone(), ctx.dhcpv4_stats()),
+            ctx,
+        )
     }
 
     fn dummy_mac() -> MacAddr {
@@ -754,10 +788,10 @@ mod tests {
         srv.pool.allocate(&ctx, mac, Some(ip));
 
         // Cliente detectou conflito de ARP e enviou DECLINE
-        let raw_msg = build_raw_msg(MessageType::Decline, mac, None, Some(ip), None);
+        let raw_msg = build_raw_msg(MessageType::Decline, mac, Some(ip), None, None);
         let res = srv.handle_packet(&raw_msg, None);
 
-        assert!(matches!(res, HandleResult::Ignore));
+        assert!(matches!(res, HandleResult::Release { ip: declined_ip } if declined_ip == ip));
         assert_eq!(
             srv.last_assignment_for(),
             None,

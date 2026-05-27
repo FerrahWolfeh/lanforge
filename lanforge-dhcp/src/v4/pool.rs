@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
+use crate::traits::DhcpPool;
 use lanforge_types::device::IPv4State;
 use lanforge_types::identifiers::MacAddr;
 
@@ -72,12 +73,6 @@ impl IpPool {
             declined: HashMap::new(),
             available,
         }
-    }
-
-    /// Isolates a problematic IP reported via DECLINE.
-    pub fn mark_declined(&mut self, ip: Ipv4Addr) {
-        self.remove_from_available(ip);
-        self.declined.insert(ip, Instant::now());
     }
 
     /// Cleans up quarantine IPs.
@@ -148,9 +143,9 @@ impl IpPool {
         // 2. Try the requested IP if it's free and in range
         if let Some(req) = requested
             && self.is_in_range(req)
-            && self.is_available_in_pool(req)
         {
-            if ctx.get_mac_by_ip(IpAddr::V4(req)).is_none() {
+            if ctx.get_mac_by_ip(IpAddr::V4(req)).is_none() && !self.declined.contains_key(&req) {
+                self.remove_from_available(req);
                 return Some(req);
             }
             // Not actually free according to single source of truth, sync
@@ -222,13 +217,6 @@ impl IpPool {
         None
     }
 
-    /// Return an IP to the available pool.
-    pub fn release(&mut self, ip: Ipv4Addr) {
-        if self.is_in_range(ip) {
-            self.add_to_available(ip);
-        }
-    }
-
     fn add_to_available(&mut self, ip: Ipv4Addr) {
         self.available.insert(u32::from(ip));
     }
@@ -236,10 +224,10 @@ impl IpPool {
     fn remove_from_available(&mut self, ip: Ipv4Addr) {
         self.available.remove(u32::from(ip));
     }
+}
 
-    /// Reserves a batch of static addresses by removing them from the available pool.
-    /// This prevents dynamic allocation collisions on startup.
-    pub fn reserve_statics(&mut self, ips: impl IntoIterator<Item = Ipv4Addr>) {
+impl DhcpPool<Ipv4Addr> for IpPool {
+    fn reserve_statics(&mut self, ips: impl IntoIterator<Item = Ipv4Addr>) {
         for ip in ips {
             if self.is_in_range(ip) {
                 self.remove_from_available(ip);
@@ -247,11 +235,19 @@ impl IpPool {
         }
     }
 
-    /// Check if an IP is in the dynamic available pool.
-    fn is_available_in_pool(&self, ip: Ipv4Addr) -> bool {
-        self.available.contains(u32::from(ip))
+    fn release(&mut self, ip: &Ipv4Addr) {
+        if self.is_in_range(*ip) {
+            self.add_to_available(*ip);
+        }
     }
 
+    fn decline(&mut self, ip: Ipv4Addr) {
+        self.remove_from_available(ip);
+        self.declined.insert(ip, Instant::now());
+    }
+}
+
+impl IpPool {
     /// Check if an IP is within any of the configured dynamic ranges.
     #[must_use]
     pub fn is_in_range(&self, ip: Ipv4Addr) -> bool {
@@ -262,6 +258,7 @@ impl IpPool {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
 
     use lanforge_types::{
@@ -345,7 +342,7 @@ mod tests {
             },
         });
 
-        p.mark_declined(declined_ip);
+        p.decline(declined_ip);
 
         // Request IPs
         let expiry = SystemTime::now() + Duration::from_hours(1);
@@ -372,7 +369,7 @@ mod tests {
 
         // Put all 6 IPs in quarantine simulating a problematic network
         for i in 100..=105 {
-            p.mark_declined(Ipv4Addr::new(192, 168, 0, i));
+            p.decline(Ipv4Addr::new(192, 168, 0, i));
         }
 
         let rescued_ip = p.allocate(&ctx, mac(1), None).unwrap();
@@ -393,7 +390,7 @@ mod tests {
         let ip = Ipv4Addr::new(192, 168, 1, 100);
 
         // 1. Mark as declined
-        p.mark_declined(ip);
+        p.decline(ip);
         assert!(p.available.is_empty());
         assert_eq!(p.declined.len(), 1);
 

@@ -15,6 +15,7 @@ lanforge-dns = { path = "../lanforge-dns", optional = true }
 lanforge-dns-wire = { path = "../lanforge-dns-wire", optional = true }
 lanforge-macros = { path = "../lanforge-macros", optional = true }
 lanforge-types = { path = "../lanforge-types", optional = true }
+lanforge-dhcp = { path = "../lanforge-dhcp", optional = true }
 
 # Workspace
 thiserror = { workspace = true }
@@ -66,6 +67,7 @@ server = [
     "dep:lanforge-macros",
     "dep:lanforge-core",
     "dep:lanforge-types",
+    "dep:lanforge-dhcp",
     "dep:chrono",
     "dep:async-trait",
     "dep:rand",

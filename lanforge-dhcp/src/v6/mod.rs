@@ -56,6 +56,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
 
+use crate::traits::DhcpPool;
 use config::Dhcpv6Config;
 use pool::Ipv6Pool;
 use server::{Dhcpv6Server, HandleResult};
@@ -125,12 +126,25 @@ impl StatusProvider for Dhcpv6Service {
             drop(state);
             (leases, total, avail)
         };
+        let v6_stats = self.ctx.dhcpv6_stats().snapshot();
         let stats = vec![
             (Cow::Borrowed("iface"), self.config.iface.clone()),
             (Cow::Borrowed("port"), self.config.port.to_string()),
             (Cow::Borrowed("leases_active"), active_leases.to_string()),
             (Cow::Borrowed("pool_total"), pool_total.to_string()),
             (Cow::Borrowed("pool_available"), pool_available.to_string()),
+            (Cow::Borrowed("solicits"), v6_stats.solicits.to_string()),
+            (Cow::Borrowed("advertises"), v6_stats.advertises.to_string()),
+            (Cow::Borrowed("requests"), v6_stats.requests.to_string()),
+            (Cow::Borrowed("replies"), v6_stats.replies.to_string()),
+            (Cow::Borrowed("renews"), v6_stats.renews.to_string()),
+            (Cow::Borrowed("rebinds"), v6_stats.rebinds.to_string()),
+            (Cow::Borrowed("releases"), v6_stats.releases.to_string()),
+            (Cow::Borrowed("declines"), v6_stats.declines.to_string()),
+            (
+                Cow::Borrowed("info_requests"),
+                v6_stats.info_requests.to_string(),
+            ),
         ];
         ServiceBanner {
             name: "DHCPv6 Server".to_string(),
@@ -200,6 +214,7 @@ impl AsyncService for Dhcpv6Service {
             Duid::generate_ll_from_mac(server_mac),
             ndp_poke_sock,
             self.ctx.clone(),
+            self.ctx.dhcpv6_stats(),
         );
 
         // Pre-allocate static reservations for ULA prefix

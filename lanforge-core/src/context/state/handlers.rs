@@ -13,6 +13,7 @@ use lanforge_types::device::{
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, Ipv6AddrOrSuffix};
+use lanforge_types::update::DeviceUpdate;
 
 impl State {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -705,51 +706,56 @@ impl State {
         EventVec::new()
     }
 
-    pub(crate) fn handle_dhcp_v4_pool_updated(
-        &mut self,
-        range_start: Ipv4Addr,
-        range_end: Ipv4Addr,
-        subnet_mask: Ipv4Addr,
-        total: u32,
-        used: u32,
-        available: u32,
-        utilization_percent: f32,
-    ) -> EventVec {
-        let _ = subnet_mask; // Keep compiler quiet if unused, but we might want it or not.
-        self.interfaces.v4_pool = Some(DhcpPoolStats {
-            range_start: Some(IpAddr::V4(range_start)),
-            range_end: Some(IpAddr::V4(range_end)),
-            prefix: None,
-            prefix_len: None,
+    pub(crate) fn handle_dhcp_v4_pool_updated(&mut self, update: &DeviceUpdate) -> EventVec {
+        let DeviceUpdate::DhcpV4PoolUpdated {
+            range_start,
+            range_end,
+            subnet_mask: _,
             total,
             used,
             available,
             utilization_percent,
+        } = update
+        else {
+            return EventVec::new();
+        };
+        self.interfaces.v4_pool = Some(DhcpPoolStats {
+            range_start: Some(IpAddr::V4(*range_start)),
+            range_end: Some(IpAddr::V4(*range_end)),
+            prefix: None,
+            prefix_len: None,
+            total: *total,
+            used: *used,
+            available: *available,
+            utilization_percent: *utilization_percent,
         });
         EventVec::new()
     }
 
-    pub(crate) fn handle_dhcp_v6_pool_updated(
-        &mut self,
-        pool_id: u32,
-        prefix: Ipv6Addr,
-        prefix_len: u8,
-        total: u32,
-        used: u32,
-        available: u32,
-        utilization_percent: f32,
-    ) -> EventVec {
-        self.interfaces.v6_pools.insert(
+    pub(crate) fn handle_dhcp_v6_pool_updated(&mut self, update: &DeviceUpdate) -> EventVec {
+        let DeviceUpdate::DhcpV6PoolUpdated {
             pool_id,
+            prefix,
+            prefix_len,
+            total,
+            used,
+            available,
+            utilization_percent,
+        } = update
+        else {
+            return EventVec::new();
+        };
+        self.interfaces.v6_pools.insert(
+            *pool_id,
             DhcpPoolStats {
                 range_start: None,
                 range_end: None,
-                prefix: Some(IpAddr::V6(prefix)),
-                prefix_len: Some(prefix_len),
-                total,
-                used,
-                available,
-                utilization_percent,
+                prefix: Some(IpAddr::V6(*prefix)),
+                prefix_len: Some(*prefix_len),
+                total: *total,
+                used: *used,
+                available: *available,
+                utilization_percent: *utilization_percent,
             },
         );
         EventVec::new()

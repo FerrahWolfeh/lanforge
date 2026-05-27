@@ -28,7 +28,7 @@ pub fn generate_metrics(ctx: &LanforgeContext, uptime_secs: u64) -> String {
     let status = ctx.get_status().unwrap_or_default();
 
     append_device_metrics(&mut out, &devices);
-    append_dhcp_metrics(&mut out, &status, v4_leases, v6_leases);
+    append_dhcp_metrics(&mut out, ctx, &status, v4_leases, v6_leases);
     append_dns_metrics(&mut out, ctx);
     append_core_metrics(&mut out, counters);
     append_system_metrics(&mut out, &status, uptime_secs);
@@ -67,13 +67,116 @@ fn append_device_metrics(out: &mut String, devices: &[Arc<Device>]) {
     );
 }
 
+fn append_dhcpv4_packet_metrics(out: &mut String, ctx: &LanforgeContext) {
+    let v4_stats = ctx.dhcpv4_stats().snapshot();
+    out.push_str(
+        "# HELP lanforge_dhcp_packets_total Total DHCP packets processed/sent by message type\n",
+    );
+    out.push_str("# TYPE lanforge_dhcp_packets_total counter\n");
+    let _ = writeln!(
+        out,
+        "lanforge_dhcp_packets_total{{proto=\"v4\",msg_type=\"discover\"}} {}",
+        v4_stats.discovers
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcp_packets_total{{proto=\"v4\",msg_type=\"offer\"}} {}",
+        v4_stats.offers
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcp_packets_total{{proto=\"v4\",msg_type=\"request\"}} {}",
+        v4_stats.requests
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcp_packets_total{{proto=\"v4\",msg_type=\"ack\"}} {}",
+        v4_stats.acks
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcp_packets_total{{proto=\"v4\",msg_type=\"nak\"}} {}",
+        v4_stats.naks
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcp_packets_total{{proto=\"v4\",msg_type=\"release\"}} {}",
+        v4_stats.releases
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcp_packets_total{{proto=\"v4\",msg_type=\"decline\"}} {}",
+        v4_stats.declines
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcp_packets_total{{proto=\"v4\",msg_type=\"inform\"}} {}",
+        v4_stats.informs
+    );
+}
+
+fn append_dhcpv6_packet_metrics(out: &mut String, ctx: &LanforgeContext) {
+    let v6_stats = ctx.dhcpv6_stats().snapshot();
+    out.push_str("# HELP lanforge_dhcpv6_packets_total Total DHCPv6 packets processed/sent by message type\n");
+    out.push_str("# TYPE lanforge_dhcpv6_packets_total counter\n");
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"solicit\"}} {}",
+        v6_stats.solicits
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"advertise\"}} {}",
+        v6_stats.advertises
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"request\"}} {}",
+        v6_stats.requests
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"reply\"}} {}",
+        v6_stats.replies
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"renew\"}} {}",
+        v6_stats.renews
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"rebind\"}} {}",
+        v6_stats.rebinds
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"release\"}} {}",
+        v6_stats.releases
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"decline\"}} {}",
+        v6_stats.declines
+    );
+    let _ = writeln!(
+        out,
+        "lanforge_dhcpv6_packets_total{{proto=\"v6\",msg_type=\"info_request\"}} {}",
+        v6_stats.info_requests
+    );
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn append_dhcp_metrics(
     out: &mut String,
+    ctx: &LanforgeContext,
     status: &SystemStatus,
     v4_leases: usize,
     v6_leases: usize,
 ) {
+    append_dhcpv4_packet_metrics(out, ctx);
+    append_dhcpv6_packet_metrics(out, ctx);
+
     out.push_str("# HELP lanforge_dhcp_leases_active Total active dynamic leases\n");
     out.push_str("# TYPE lanforge_dhcp_leases_active gauge\n");
     let _ = writeln!(

@@ -56,7 +56,9 @@
 use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
 use crate::context::state::State;
 use crate::error::CoreError;
+use crate::service::StatusProvider;
 use lanforge_types::device::Device;
+use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::system::SystemStatus;
 use parking_lot::RwLock;
@@ -67,13 +69,13 @@ use std::time::{Instant, SystemTime};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 
+pub mod caps;
+pub mod dns_handle;
 pub mod read;
 pub mod state;
 #[cfg(test)]
 pub mod tests;
 pub mod write;
-pub mod caps;
-pub mod dns_handle;
 
 pub use self::caps::CompiledCaps;
 pub use self::dns_handle::DnsHandle;
@@ -182,6 +184,10 @@ struct LanforgeContextInner {
     dns_stats: RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
     /// Shared DNS context for DoT/DoH, updated by the DNS module.
     dns_context: RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
+    /// Shared `DHCPv4` statistics.
+    dhcpv4_stats: Arc<Dhcpv4Stats>,
+    /// Shared `DHCPv6` statistics.
+    dhcpv6_stats: Arc<Dhcpv6Stats>,
     /// Timestamp of the last successful database flush.
     last_db_flush: RwLock<Option<SystemTime>>,
     /// Internal counters for event rates.
@@ -193,7 +199,7 @@ struct LanforgeContextInner {
     /// Global counter for active API clients (Control UDS, HTTP, etc.).
     pub active_clients: Arc<AtomicUsize>,
     /// Decoupled status providers.
-    status_providers: RwLock<Vec<Arc<dyn crate::service::StatusProvider>>>,
+    status_providers: RwLock<Vec<Arc<dyn StatusProvider>>>,
     /// Decoupled DNS handle.
     dns_handle: RwLock<Option<DnsHandle>>,
     /// Context creation timestamp for calculating uptime.
@@ -237,6 +243,8 @@ impl LanforgeContext {
             if_ready: AtomicBool::new(false),
             dns_stats: RwLock::new(None),
             dns_context: RwLock::new(None),
+            dhcpv4_stats: Arc::new(Dhcpv4Stats::new()),
+            dhcpv6_stats: Arc::new(Dhcpv6Stats::new()),
             last_db_flush: RwLock::new(None),
             event_counters: EventCounters::default(),
             last_scan: RwLock::new(Instant::now()),
@@ -376,7 +384,7 @@ impl LanforgeContext {
     }
 
     /// Registers a decoupled status provider.
-    pub fn register_status_provider(&self, provider: Arc<dyn crate::service::StatusProvider>) {
+    pub fn register_status_provider(&self, provider: Arc<dyn StatusProvider>) {
         let mut list = self.inner.status_providers.write();
         let name = provider.banner().name;
         if let Some(pos) = list.iter().position(|p| p.banner().name == name) {
@@ -388,7 +396,7 @@ impl LanforgeContext {
 
     /// Returns a list of all registered status providers.
     #[must_use]
-    pub fn status_providers(&self) -> Vec<Arc<dyn crate::service::StatusProvider>> {
+    pub fn status_providers(&self) -> Vec<Arc<dyn StatusProvider>> {
         self.inner.status_providers.read().clone()
     }
 

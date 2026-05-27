@@ -28,6 +28,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr};
 use std::time::Instant;
 
+use crate::traits::DhcpPool;
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::device::{IPv6State, Ipv6AddrOrSuffix};
 use lanforge_types::identifiers::{Duid, MacAddr};
@@ -198,16 +199,6 @@ impl Ipv6Pool {
     /// Updates the dynamic GUA prefix.
     pub const fn set_gua_prefix(&mut self, prefix: Ipv6Addr) {
         self.gua_prefix = Some(prefix);
-    }
-
-    /// Reserves a batch of static addresses by marking them as taken.
-    /// This prevents dynamic allocation collisions on startup.
-    pub fn reserve_statics(&mut self, ips: impl IntoIterator<Item = Ipv6Addr>) {
-        for ip in ips {
-            if !self.reserved_static.contains(&ip) {
-                self.reserved_static.push(ip);
-            }
-        }
     }
 
     /// Computes live utilization statistics per active prefix (ULA, GUA).
@@ -462,7 +453,7 @@ impl Ipv6Pool {
         if let Some(req_ip) = requested
             && Self::is_on_prefix(&req_ip, &prefix)
             && !already_assigned.contains(&req_ip) // Added check
-            && self.is_available(ctx, &req_ip, mac)
+            && self.is_available(ctx, &req_ip, mac, duid)
         {
             return Some(req_ip);
         }
@@ -479,14 +470,9 @@ impl Ipv6Pool {
                 let pref_segs = prefix.segments();
                 if pref_segs[0..4] == *p {
                     pool_attempted = true;
-                    if let Some(ip) = self.allocate_from_range(
-                        ctx,
-                        prefix,
-                        duid.as_bytes(),
-                        *start_u128,
-                        *end_u128,
-                        mac,
-                    ) && !already_assigned.contains(&ip)
+                    if let Some(ip) =
+                        self.allocate_from_range(ctx, prefix, *start_u128, *end_u128, mac, duid)
+                        && !already_assigned.contains(&ip)
                     {
                         // Added check
                         return Some(ip);
@@ -505,14 +491,9 @@ impl Ipv6Pool {
                 pool_attempted = true;
                 let start_u128 = Self::combine_pref_suf(&prefix, *start_suffix);
                 let end_u128 = Self::combine_pref_suf(&prefix, *end_suffix);
-                if let Some(ip) = self.allocate_from_range(
-                    ctx,
-                    prefix,
-                    duid.as_bytes(),
-                    start_u128,
-                    end_u128,
-                    mac,
-                ) && !already_assigned.contains(&ip)
+                if let Some(ip) =
+                    self.allocate_from_range(ctx, prefix, start_u128, end_u128, mac, duid)
+                    && !already_assigned.contains(&ip)
                 {
                     // Added check
                     return Some(ip);
@@ -528,7 +509,7 @@ impl Ipv6Pool {
             // Step 1: Deterministic IID
             let det_suffix = Self::generate_deterministic_u128(&prefix, duid.as_bytes(), mask);
             let ip = Ipv6Addr::from((pref_int | (det_suffix & mask)).to_be_bytes());
-            if self.is_available(ctx, &ip, mac) {
+            if self.is_available(ctx, &ip, mac, duid) {
                 return Some(ip);
             }
 
@@ -536,7 +517,7 @@ impl Ipv6Pool {
             for _ in 0..10 {
                 let random_suffix: u128 = random::<u128>() & mask;
                 let ip = Ipv6Addr::from((pref_int | random_suffix).to_be_bytes());
-                if self.is_available(ctx, &ip, mac) {
+                if self.is_available(ctx, &ip, mac, duid) {
                     return Some(ip);
                 }
             }
@@ -632,17 +613,17 @@ impl Ipv6Pool {
         &self,
         ctx: &LanforgeContext,
         prefix: Ipv6Addr,
-        identifier: &[u8],
         start: u128,
         end: u128,
         target_mac: Option<MacAddr>,
+        target_duid: &Duid,
     ) -> Option<Ipv6Addr> {
         let size = end - start + 1;
 
         // 1. Deterministic Candidate (Stability)
-        let det_offset = Self::generate_deterministic_u128(&prefix, identifier, size);
+        let det_offset = Self::generate_deterministic_u128(&prefix, target_duid.as_bytes(), size);
         let det_ip = Ipv6Addr::from((start + (det_offset % size)).to_be_bytes());
-        if self.is_available(ctx, &det_ip, target_mac) {
+        if self.is_available(ctx, &det_ip, target_mac, target_duid) {
             return Some(det_ip);
         }
 
@@ -650,7 +631,7 @@ impl Ipv6Pool {
         for _ in 0..10 {
             let offset = random::<u128>() % size;
             let ip = Ipv6Addr::from((start + offset).to_be_bytes());
-            if self.is_available(ctx, &ip, target_mac) {
+            if self.is_available(ctx, &ip, target_mac, target_duid) {
                 return Some(ip);
             }
         }
@@ -659,7 +640,7 @@ impl Ipv6Pool {
         let max_scan = size.min(1000); // Cap scan to avoid locking up on huge subnets
         for offset in 0..max_scan {
             let ip = Ipv6Addr::from((start + offset).to_be_bytes());
-            if self.is_available(ctx, &ip, target_mac) {
+            if self.is_available(ctx, &ip, target_mac, target_duid) {
                 return Some(ip);
             }
         }
@@ -694,11 +675,18 @@ impl Ipv6Pool {
         ctx: &LanforgeContext,
         ip: &Ipv6Addr,
         target_mac: Option<MacAddr>,
+        target_duid: &Duid,
     ) -> bool {
         if let Some(mac) = ctx.get_mac_by_ip(IpAddr::V6(*ip))
             && Some(mac) != target_mac
         {
-            return false;
+            if let Some(device) = ctx.get_device(&mac)
+                && device.duid.as_ref() == Some(target_duid)
+            {
+                // Owned by the same client (matching DUID), so it is available
+            } else {
+                return false;
+            }
         }
 
         if self.reserved_static.contains(ip) {
@@ -706,11 +694,6 @@ impl Ipv6Pool {
         }
 
         !self.blacklisted.contains_key(ip)
-    }
-
-    pub const fn release(&mut self, _ip: &Ipv6Addr) {
-        // Releases are handled by DeviceTable event updates matching the IP.
-        // We do not manage the mapping internally anymore.
     }
 
     /// Allocates an IPv6 prefix for the given DUID+IAID (Prefix Delegation).
@@ -771,6 +754,26 @@ impl Ipv6Pool {
     }
 
     pub fn decline(&mut self, ip: Ipv6Addr) {
+        self.release(&ip);
+        self.blacklisted.insert(ip, Instant::now());
+    }
+}
+
+impl DhcpPool<Ipv6Addr> for Ipv6Pool {
+    fn reserve_statics(&mut self, ips: impl IntoIterator<Item = Ipv6Addr>) {
+        for ip in ips {
+            if !self.reserved_static.contains(&ip) {
+                self.reserved_static.push(ip);
+            }
+        }
+    }
+
+    fn release(&mut self, _ip: &Ipv6Addr) {
+        // Releases are handled by DeviceTable event updates matching the IP.
+        // We do not manage the mapping internally anymore.
+    }
+
+    fn decline(&mut self, ip: Ipv6Addr) {
         self.release(&ip);
         self.blacklisted.insert(ip, Instant::now());
     }
