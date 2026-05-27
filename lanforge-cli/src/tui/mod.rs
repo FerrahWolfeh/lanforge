@@ -6,11 +6,15 @@ use crossterm::{
 };
 use lanforge_api::api::DnsQueryLogEntry;
 use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
+use lanforge_types::network::{
+    DnsRecordType,
+    dns::adblock::{RewriteAnswer, RewriteRule},
+};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::io::stdout;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
+use std::{io::stdout, net::Ipv4Addr};
+use std::{net::Ipv6Addr, sync::Arc};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tui_input::backend::crossterm::EventHandler;
@@ -24,10 +28,13 @@ pub mod theme;
 pub mod ui;
 pub mod utils;
 
-use crate::cli::LanforgeClient;
 use crate::tui::action::PendingAction;
 use crate::tui::app::{InputPurpose, TuiApp, TuiMode, TuiTab};
 use crate::tui::event::AppEvent;
+use crate::{
+    cli::LanforgeClient,
+    tui::{app::InputContext, ui::widgets::toast::Toast},
+};
 
 pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
     // Setup terminal
@@ -176,7 +183,43 @@ fn handle_tui_key_event(
                                 })
                             })
                         }
-                        InputPurpose::DnsQuery => None,
+                        InputPurpose::DnsQuery => {
+                            let client = client.clone();
+                            let tx = event_tx.clone();
+                            tokio::spawn(async move {
+                                let result = client
+                                    .dns_query(value, None)
+                                    .await
+                                    .map_err(|e| e.to_string());
+                                let _ = tx.send(AppEvent::DnsQueryResult(Box::new(result))).await;
+                            });
+                            None
+                        }
+                        InputPurpose::DnsRewriteAdd => {
+                            let parts: Vec<&str> = value.split_whitespace().collect();
+                            if parts.len() == 2 {
+                                let domain = parts[0].to_string();
+                                let answer_str = parts[1].to_string();
+                                answer_str.parse::<RewriteAnswer>().map_or(None, |answer| {
+                                    let rtype = if answer_str.parse::<Ipv4Addr>().is_ok() {
+                                        DnsRecordType::A
+                                    } else if answer_str.parse::<Ipv6Addr>().is_ok() {
+                                        DnsRecordType::AAAA
+                                    } else {
+                                        DnsRecordType::CNAME
+                                    };
+                                    let rule = RewriteRule {
+                                        id: None,
+                                        domain,
+                                        rtype,
+                                        answer,
+                                    };
+                                    Some(PendingAction::DnsRewriteAdd { rule })
+                                })
+                            } else {
+                                None
+                            }
+                        }
                     };
                     if let Some(act) = action {
                         if act.is_destructive() {
@@ -259,6 +302,29 @@ fn handle_tui_key_event(
                 }
                 _ => {}
             },
+            TuiTab::Dns => match key.code {
+                KeyCode::Char('d') => {
+                    app.input_context = Some(InputContext {
+                        prompt: "Dig Domain Name:".to_string(),
+                        purpose: InputPurpose::DnsQuery,
+                    });
+                    app.mode = TuiMode::Input;
+                }
+                KeyCode::Char('a') if app.dns_show_rewrites => {
+                    app.input_context = Some(InputContext {
+                        prompt: "Add Rewrite (domain answer):".to_string(),
+                        purpose: InputPurpose::DnsRewriteAdd,
+                    });
+                    app.mode = TuiMode::Input;
+                }
+                KeyCode::Char('x') | KeyCode::Delete if app.dns_show_rewrites => {
+                    if let Some((id, domain)) = app.selected_rewrite() {
+                        app.pending_action = Some(PendingAction::DnsRewriteRemove { id, domain });
+                        app.mode = TuiMode::Confirming;
+                    }
+                }
+                _ => {}
+            },
             TuiTab::Adblock => match key.code {
                 KeyCode::Char('t') => {
                     let current = app
@@ -275,7 +341,7 @@ fn handle_tui_key_event(
                     });
                 }
                 KeyCode::Char('T') => {
-                    app.input_context = Some(crate::tui::app::InputContext {
+                    app.input_context = Some(InputContext {
                         prompt: "Disable Adblock for (seconds):".to_string(),
                         purpose: InputPurpose::AdblockTimedDisable,
                     });
@@ -294,14 +360,14 @@ fn handle_tui_key_event(
                     });
                 }
                 KeyCode::Char('a') => {
-                    app.input_context = Some(crate::tui::app::InputContext {
+                    app.input_context = Some(InputContext {
                         prompt: "Allow domain:".to_string(),
                         purpose: InputPurpose::AdblockAllow,
                     });
                     app.mode = TuiMode::Input;
                 }
                 KeyCode::Char('b') => {
-                    app.input_context = Some(crate::tui::app::InputContext {
+                    app.input_context = Some(InputContext {
                         prompt: "Block domain:".to_string(),
                         purpose: InputPurpose::AdblockBlock,
                     });
@@ -391,6 +457,10 @@ fn handle_tui_key_event(
             _ => {}
         }
     }
+
+    if old_mode == TuiMode::Detail && app.mode == TuiMode::Normal && app.active_tab == TuiTab::Dns {
+        app.last_dns_query_result = None;
+    }
 }
 
 fn handle_app_event(
@@ -456,14 +526,16 @@ fn handle_app_event(
         AppEvent::WhoisUpdate(s) => {
             app.state.selected_whois = Some(*s);
         }
+        AppEvent::DnsQueryResult(res) => {
+            app.last_dns_query_result = Some(*res);
+            app.mode = TuiMode::Detail;
+        }
         AppEvent::ActionResult(result) => match result {
             crate::tui::action::ActionResult::Success(msg) => {
-                app.toasts
-                    .push_back(crate::tui::ui::widgets::toast::Toast::success(msg));
+                app.toasts.push_back(Toast::success(msg));
             }
             crate::tui::action::ActionResult::Error(msg) => {
-                app.toasts
-                    .push_back(crate::tui::ui::widgets::toast::Toast::error(msg));
+                app.toasts.push_back(Toast::error(msg));
             }
         },
         AppEvent::Tick => {

@@ -4,7 +4,7 @@
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
-use std::{cmp::Ordering, collections::HashMap};
+use std::{cmp::Ordering, collections::HashMap, fmt::Write};
 
 use crate::tui::app::TuiApp;
 use crate::tui::state::TuiState;
@@ -38,9 +38,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     render_analytics_row(f, main_chunks[2], &app.state);
 
     if app.dns_show_rewrites {
-        render_rewrites_table(f, main_chunks[3], &app.state);
+        render_rewrites_table(f, main_chunks[3], app);
     } else {
         render_recent_queries(f, main_chunks[3], &app.state);
+    }
+
+    if app.mode == crate::tui::app::TuiMode::Detail {
+        render_detail(f, area, app);
     }
 }
 
@@ -831,8 +835,23 @@ fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
     f.render_widget(table, area);
 }
 
-fn render_rewrites_table(f: &mut Frame, area: Rect, state: &TuiState) {
-    let rewrites = state.dns_rewrites.as_ref();
+fn render_rewrites_table(f: &mut Frame, area: Rect, app: &mut TuiApp) {
+    let rewrites = app.state.dns_rewrites.as_ref();
+
+    // Clamp selected index to matching_count
+    let matching_count = rewrites.map_or(0, |r| r.rewrites.len());
+    if matching_count > 0 {
+        if let Some(selected) = app.dns_rewrites_state.selected() {
+            if selected >= matching_count {
+                app.dns_rewrites_state.select(Some(matching_count - 1));
+            }
+        } else {
+            app.dns_rewrites_state.select(Some(0));
+        }
+    } else {
+        app.dns_rewrites_state.select(None);
+    }
+
     let header = Row::new(vec!["ID", "DOMÍNIO", "TIPO", "DESTINO"])
         .style(Style::default().fg(theme::TEXT_DIM))
         .bottom_margin(0);
@@ -868,12 +887,77 @@ fn render_rewrites_table(f: &mut Frame, area: Rect, state: &TuiState) {
     .block(
         Block::default()
             .title(format!(
-                "── REWRITES (r: toggle) ── {} regras ativas",
-                rewrites.map_or(0, |r| r.rewrites.len())
+                "── REWRITES (r: toggle) ── {matching_count} regras ativas"
             ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER)),
-    );
+    )
+    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+    .highlight_symbol(">> ");
 
-    f.render_widget(table, area);
+    f.render_stateful_widget(table, area, &mut app.dns_rewrites_state);
+}
+
+fn render_detail(f: &mut Frame, area: Rect, app: &TuiApp) {
+    let detail_area = centered_rect(80, 70, area);
+    f.render_widget(ratatui::widgets::Clear, detail_area);
+
+    let block = Block::default()
+        .title(" DNS Query Diagnostic ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ACCENT));
+
+    let text = match &app.last_dns_query_result {
+        Some(Ok(resp)) => {
+            let mut summary = format!(
+                "Outcome:       {}\nLatency:       {} ms\nAuthoritative: {}\n\nResolved Records:\n",
+                resp.result,
+                resp.latency_ms,
+                if resp.authoritative { "Yes" } else { "No" }
+            );
+
+            if resp.records.is_empty() {
+                summary.push_str("No records returned.\n");
+            } else {
+                for r in &resp.records {
+                    let _ = writeln!(
+                        summary,
+                        "  - Type: {:<6} Name: {:<20} Target: {} (TTL: {}s)",
+                        r.kind.to_string(),
+                        r.name,
+                        r.data,
+                        r.ttl
+                    );
+                }
+            }
+            summary
+        }
+        Some(Err(err)) => {
+            format!("DNS query failed:\n\n{err}")
+        }
+        None => "No DNS query results loaded.".to_string(),
+    };
+
+    let p = Paragraph::new(format!("{text}\n\n[Esc] Close")).block(block);
+    f.render_widget(p, detail_area);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }

@@ -2,6 +2,7 @@ use crate::tui::action::PendingAction;
 use crate::tui::state::TuiState;
 use crate::tui::ui::widgets::toast::Toast;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use lanforge_api::api::DnsQueryResponse;
 use lanforge_types::identifiers::MacAddr;
 use ratatui::widgets::TableState;
 use std::collections::VecDeque;
@@ -41,6 +42,7 @@ pub enum InputPurpose {
     AdblockBlock,
     AdblockTimedDisable,
     DnsQuery,
+    DnsRewriteAdd,
 }
 
 impl TuiTab {
@@ -100,6 +102,10 @@ pub struct TuiApp {
 
     // Adblock view focus
     pub adblock_allowlist_focused: bool,
+
+    // DNS view rewrites state
+    pub dns_rewrites_state: TableState,
+    pub last_dns_query_result: Option<Result<DnsQueryResponse, String>>,
 }
 
 impl Default for TuiApp {
@@ -129,6 +135,8 @@ impl TuiApp {
             input: Input::default(),
             input_context: None,
             adblock_allowlist_focused: false,
+            dns_rewrites_state: TableState::default(),
+            last_dns_query_result: None,
         }
     }
 
@@ -231,11 +239,19 @@ impl TuiApp {
                 self.device_list_state.select(Some(i));
             }
             TuiTab::Dns => {
-                let i = self
-                    .dns_query_log_state
-                    .selected()
-                    .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
-                self.dns_query_log_state.select(Some(i));
+                if self.dns_show_rewrites {
+                    let i = self
+                        .dns_rewrites_state
+                        .selected()
+                        .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                    self.dns_rewrites_state.select(Some(i));
+                } else {
+                    let i = self
+                        .dns_query_log_state
+                        .selected()
+                        .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                    self.dns_query_log_state.select(Some(i));
+                }
             }
             TuiTab::Adblock if self.adblock_allowlist_focused => {
                 let i = self
@@ -265,8 +281,13 @@ impl TuiApp {
                 self.device_list_state.select(Some(i));
             }
             TuiTab::Dns => {
-                let i = self.dns_query_log_state.selected().map_or(0, |i| i + 1);
-                self.dns_query_log_state.select(Some(i));
+                if self.dns_show_rewrites {
+                    let i = self.dns_rewrites_state.selected().map_or(0, |i| i + 1);
+                    self.dns_rewrites_state.select(Some(i));
+                } else {
+                    let i = self.dns_query_log_state.selected().map_or(0, |i| i + 1);
+                    self.dns_query_log_state.select(Some(i));
+                }
             }
             TuiTab::Adblock if self.adblock_allowlist_focused => {
                 let i = self.adblock_allowlist_state.selected().map_or(0, |i| i + 1);
@@ -336,5 +357,14 @@ impl TuiApp {
         filtered_leases
             .get(selected_idx)
             .map(|lease| (lease.mac, lease.hostname.clone()))
+    }
+
+    /// Returns `Some((id, domain))` of the currently selected rewrite rule.
+    #[must_use]
+    pub fn selected_rewrite(&self) -> Option<(i64, String)> {
+        let selected_idx = self.dns_rewrites_state.selected()?;
+        let resp = self.state.dns_rewrites.as_ref()?;
+        let rule = resp.rewrites.get(selected_idx)?;
+        Some((rule.id?, rule.domain.clone()))
     }
 }

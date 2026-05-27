@@ -2,10 +2,7 @@ use crate::cli::LanforgeClient;
 use crate::tui::action::{ActionResult, PendingAction};
 
 /// Executes the given `PendingAction` using the `LanforgeClient` and returns an `ActionResult`.
-pub async fn execute_action(
-    client: &LanforgeClient,
-    action: PendingAction,
-) -> ActionResult {
+pub async fn execute_action(client: &LanforgeClient, action: PendingAction) -> ActionResult {
     match action {
         PendingAction::Scan => match client.scan().await {
             Ok(r) => ActionResult::Success(r.message),
@@ -31,7 +28,8 @@ pub async fn execute_action(
             Ok(r) => ActionResult::Success(r.message),
             Err(e) => ActionResult::Error(e.to_string()),
         },
-        PendingAction::AdblockToggle { enable } => match client.dns_adblock_set(enable, None).await {
+        PendingAction::AdblockToggle { enable } => match client.dns_adblock_set(enable, None).await
+        {
             Ok(r) => ActionResult::Success(r.message),
             Err(e) => ActionResult::Error(e.to_string()),
         },
@@ -62,6 +60,14 @@ pub async fn execute_action(
             Err(e) => ActionResult::Error(e.to_string()),
         },
         PendingAction::LeaseRelease { mac, .. } => match client.lease_release(mac, None).await {
+            Ok(r) => ActionResult::Success(r.message),
+            Err(e) => ActionResult::Error(e.to_string()),
+        },
+        PendingAction::DnsRewriteAdd { rule } => match client.dns_rewrite_add(rule).await {
+            Ok(r) => ActionResult::Success(r.message),
+            Err(e) => ActionResult::Error(e.to_string()),
+        },
+        PendingAction::DnsRewriteRemove { id, .. } => match client.dns_rewrite_remove(id).await {
             Ok(r) => ActionResult::Success(r.message),
             Err(e) => ActionResult::Error(e.to_string()),
         },

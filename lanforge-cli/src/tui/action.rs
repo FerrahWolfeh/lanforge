@@ -1,4 +1,5 @@
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::adblock::RewriteRule;
 
 /// A pending action waiting for confirmation.
 #[derive(Debug, Clone)]
@@ -24,6 +25,10 @@ pub enum PendingAction {
     // DHCP
     LeaseRenew { mac: MacAddr, hostname: String },
     LeaseRelease { mac: MacAddr, hostname: String },
+
+    // DNS Rewrites
+    DnsRewriteAdd { rule: RewriteRule },
+    DnsRewriteRemove { id: i64, domain: String },
 }
 
 /// Result of an async action, delivered back to the TUI via `AppEvent`.
@@ -52,6 +57,8 @@ impl PendingAction {
             Self::AdblockBlock { .. } => "Block Domain",
             Self::LeaseRenew { .. } => "Renew DHCP Lease",
             Self::LeaseRelease { .. } => "Release DHCP Lease",
+            Self::DnsRewriteAdd { .. } => "Add DNS Rewrite Rule",
+            Self::DnsRewriteRemove { .. } => "Remove DNS Rewrite Rule",
         }
     }
 
@@ -73,6 +80,8 @@ impl PendingAction {
             Self::AdblockBlock { domain } => format!("Add {domain} to the custom blocklist."),
             Self::LeaseRenew { hostname, mac } => format!("Force the daemon to extend/renew the DHCP lease for {hostname} ({mac})."),
             Self::LeaseRelease { hostname, mac } => format!("Release the active DHCP lease for {hostname} ({mac}). The device may lose connectivity."),
+            Self::DnsRewriteAdd { rule } => format!("Add DNS rewrite rule for {} to resolve as {}.", rule.domain, rule.answer),
+            Self::DnsRewriteRemove { domain, .. } => format!("Remove DNS rewrite rule for {domain}."),
         }
     }
 
@@ -80,7 +89,10 @@ impl PendingAction {
     pub const fn is_destructive(&self) -> bool {
         matches!(
             self,
-            Self::Shutdown | Self::Purge { .. } | Self::LeaseRelease { .. }
+            Self::Shutdown
+                | Self::Purge { .. }
+                | Self::LeaseRelease { .. }
+                | Self::DnsRewriteRemove { .. }
         )
     }
 }

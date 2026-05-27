@@ -27,12 +27,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
                     ]);
                 }
                 TuiTab::Dns => {
-                    hints.extend(&[
-                        "↑↓:Navigate",
-                        "r:Toggle Rewrites",
-                        "F:Flush Cache",
-                        "/:Search",
-                    ]);
+                    hints.extend(&["↑↓:Navigate", "r:Toggle Rewrites", "F:Flush Cache"]);
+                    if app.dns_show_rewrites {
+                        hints.extend(&["a:Add", "x/Del:Delete"]);
+                    } else {
+                        hints.push("d:Query");
+                    }
+                    hints.push("/:Search");
                 }
                 TuiTab::Adblock => {
                     hints.extend(&["t:Toggle", "r:Reload Lists", "a:Allow", "b:Block"]);
