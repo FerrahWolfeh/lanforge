@@ -1,5 +1,8 @@
 use std::net::SocketAddr;
 
+use super::common::{
+    CacheMeta, HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse, LogMeta,
+};
 pub use lanforge_types::network::dns::{
     AdblockUrlEntry, DnsAdblockStatusResponse, DnsCacheEntry, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsStatsResponse,
@@ -135,4 +138,168 @@ pub struct DnsUpstreamConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsReverseResolversResponse {
     pub resolvers: Vec<DnsReverseResolver>,
+}
+
+impl HttpWrappedResponse for DnsStatsResponse {
+    type Wrapper = HttpDataResponse<DnsStatsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsAnalyticsResponse {
+    type Wrapper = HttpDataResponse<DnsAnalyticsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsUpstreamsResponse {
+    type Wrapper = HttpDataResponse<DnsUpstreamsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsQueryResponse {
+    type Wrapper = HttpDataResponse<DnsQueryResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsCacheResponse {
+    type Wrapper = HttpPaginatedResponse<Vec<DnsCacheEntry>, CacheMeta>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpPaginatedResponse {
+            data: self.entries,
+            meta: CacheMeta {
+                total: self.total,
+                limit: 50,
+                offset: 0,
+            },
+        }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        Self {
+            entries: wrapper.data,
+            total: wrapper.meta.total,
+        }
+    }
+}
+
+impl HttpWrappedResponse for DnsCacheStatsExtResponse {
+    type Wrapper = HttpDataResponse<DnsCacheStatsExtResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsAdblockStatusResponse {
+    type Wrapper = HttpDataResponse<DnsAdblockStatusResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsAdblockUrlsResponse {
+    type Wrapper = HttpDataResponse<DnsAdblockUrlsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsAllowlistResponse {
+    type Wrapper = HttpDataResponse<DnsAllowlistResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsRewritesResponse {
+    type Wrapper = HttpDataResponse<DnsRewritesResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsQueryLogResponse {
+    type Wrapper = HttpPaginatedResponse<Vec<DnsQueryLogEntry>, LogMeta>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpPaginatedResponse {
+            data: self.entries,
+            meta: LogMeta {
+                total: self.total,
+                limit: 100,
+                offset: 0,
+            },
+        }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        Self {
+            entries: wrapper.data,
+            total: wrapper.meta.total,
+        }
+    }
+}
+
+impl HttpWrappedResponse for DnsReverseResolversResponse {
+    type Wrapper = HttpDataResponse<DnsReverseResolversResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
 }

@@ -1,5 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use super::common::{HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse};
 use lanforge_types::{
     device::{
         DeviceClass, IpClassification, LearningMethod, LeaseHistoryEntry, Origin, TransientOrigin,
@@ -168,4 +169,70 @@ impl Default for TransientHostEntry {
 pub struct TransientHostsResponse {
     /// The list of transient hosts.
     pub hosts: Vec<TransientHostEntry>,
+}
+
+impl HttpWrappedResponse for DevicesResponse {
+    type Wrapper = HttpPaginatedResponse<Vec<DeviceEntry>, DevicesMeta>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpPaginatedResponse {
+            data: self.devices,
+            meta: self.meta,
+        }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        Self {
+            devices: wrapper.data,
+            meta: wrapper.meta,
+        }
+    }
+}
+
+impl HttpWrappedResponse for HostsResponse {
+    type Wrapper = HttpDataResponse<HostsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for WhoisResponse {
+    type Wrapper = HttpDataResponse<WhoisResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for TopologyResponse {
+    type Wrapper = HttpDataResponse<TopologyResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for TransientHostsResponse {
+    type Wrapper = HttpDataResponse<TransientHostsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
 }

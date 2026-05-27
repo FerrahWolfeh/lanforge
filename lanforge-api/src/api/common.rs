@@ -1,6 +1,6 @@
+pub use lanforge_types::system::{Cap, ServerCapabilities, ServiceBanner};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-pub use lanforge_types::system::{Cap, ServerCapabilities, ServiceBanner};
 
 /// Supported response encodings.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -91,6 +91,50 @@ pub struct HttpErrorResponse {
     pub error: String,
 }
 
+/// Trait to associate a query-response type with its HTTP response wrapper structure.
+pub trait HttpWrappedResponse: Sized {
+    type Wrapper: Serialize + for<'de> Deserialize<'de>;
+
+    fn wrap(self) -> Self::Wrapper;
+    fn unwrap(wrapper: Self::Wrapper) -> Self;
+}
+
+impl<T: HttpWrappedResponse> HttpWrappedResponse for Box<T> {
+    type Wrapper = T::Wrapper;
+
+    fn wrap(self) -> Self::Wrapper {
+        (*self).wrap()
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        Box::new(T::unwrap(wrapper))
+    }
+}
+
+impl HttpWrappedResponse for SimpleSuccess {
+    type Wrapper = HttpDataResponse<SimpleSuccess>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for serde_json::Value {
+    type Wrapper = HttpDataResponse<serde_json::Value>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
 /// Errors that can occur during RPC calls.
 #[derive(Debug, Serialize, Deserialize, thiserror::Error, Clone)]
 pub enum RpcCallError {
@@ -106,7 +150,9 @@ pub enum RpcCallError {
     InvalidResponseType,
 }
 
-use lanforge_types::events::{NetworkChange, AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, SystemEvent};
+use lanforge_types::events::{
+    AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, SystemEvent,
+};
 
 /// Event categories used for filtering event streams.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -152,7 +198,9 @@ impl EventKind {
             Self::DeviceUpdated => {
                 matches!(
                     event,
-                    LanforgeEvent::Device(DeviceEvent::NetworkUpdate { .. } | DeviceEvent::AdminUpdate { .. })
+                    LanforgeEvent::Device(
+                        DeviceEvent::NetworkUpdate { .. } | DeviceEvent::AdminUpdate { .. }
+                    )
                 )
             }
             Self::DevicePurged => {

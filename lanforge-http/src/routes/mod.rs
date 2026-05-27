@@ -70,11 +70,10 @@ macro_rules! http_response {
     // 2. Standard wrapper for any variant (e.g. Status)
     ($expr:expr, $variant:ident) => {
         match $expr {
-            lanforge_api::api::Response::$variant(res) => (
-                axum::http::StatusCode::OK,
-                axum::Json(lanforge_api::api::HttpDataResponse { data: res }),
-            )
-                .into_response(),
+            lanforge_api::api::Response::$variant(res) => {
+                use lanforge_api::api::HttpWrappedResponse;
+                (axum::http::StatusCode::OK, axum::Json(res.wrap())).into_response()
+            }
             lanforge_api::api::Response::Error { error } => {
                 let status = if error.contains("not found") {
                     axum::http::StatusCode::NOT_FOUND

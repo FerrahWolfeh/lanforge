@@ -1,6 +1,8 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use super::common::{Capabilities, ServerCapabilities, ServiceBanner};
+use super::common::{
+    Capabilities, HttpDataResponse, HttpWrappedResponse, ServerCapabilities, ServiceBanner,
+};
 use lanforge_types::system::ServiceState;
 use serde::{Deserialize, Serialize};
 
@@ -262,4 +264,40 @@ pub struct SystemConfigExport {
     pub dns_allowlist: Vec<AllowlistEntry>,
     #[serde(default)]
     pub overwrite: bool,
+}
+
+impl HttpWrappedResponse for StatusResponse {
+    type Wrapper = HttpDataResponse<StatusResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for ServiceBannersResponse {
+    type Wrapper = HttpDataResponse<ServiceBannersResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for SystemConfigExport {
+    type Wrapper = HttpDataResponse<SystemConfigExport>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
 }

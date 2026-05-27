@@ -11,9 +11,9 @@ use lanforge_api::api::{
     DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
-    HostConfigEntry, HostsResponse, HttpDataResponse, HttpErrorResponse, HttpPaginatedResponse,
-    LeasesResponse, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse,
-    TransientHostsResponse, WhoisResponse,
+    HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse,
+    SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse, TransientHostsResponse,
+    WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{
@@ -109,6 +109,8 @@ impl LanforgeClient {
             if let Ok(content) = read_to_string(login_path)
                 && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
             {
+                use std::os::unix::net::UnixStream;
+
                 let get_token = |u: &str| -> Option<String> {
                     if let Some(servers) = val.get("servers").and_then(|v| v.as_object())
                         && let Some(t) = servers.get(u).and_then(|v| v.as_str())
@@ -128,7 +130,7 @@ impl LanforgeClient {
                     if token.is_none() {
                         token = get_token(r);
                     }
-                } else if std::os::unix::net::UnixStream::connect(&args.socket).is_err() {
+                } else if UnixStream::connect(&args.socket).is_err() {
                     let mut default_url = val
                         .get("default")
                         .and_then(|v| v.as_str())
@@ -186,52 +188,13 @@ impl LanforgeClient {
     }
 
     #[cfg(feature = "remote")]
-    fn decode_bytes<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-        if let Ok(wrapper) = serde_json::from_slice::<HttpDataResponse<T>>(bytes) {
-            return Ok(wrapper.data);
-        }
-        let type_name = std::any::type_name::<T>();
-        if type_name.ends_with("DevicesResponse") {
-            let paginated: HttpPaginatedResponse<
-                Vec<lanforge_api::api::DeviceEntry>,
-                lanforge_api::api::DevicesMeta,
-            > = serde_json::from_slice(bytes)?;
-            let res = lanforge_api::api::DevicesResponse {
-                devices: paginated.data,
-                meta: paginated.meta,
-            };
-            return Ok(serde_json::from_value(serde_json::to_value(res)?)?);
-        }
-        if type_name.ends_with("DnsCacheResponse") {
-            let paginated: HttpPaginatedResponse<
-                Vec<lanforge_api::api::DnsCacheEntry>,
-                lanforge_api::api::CacheMeta,
-            > = serde_json::from_slice(bytes)?;
-            let res = lanforge_api::api::DnsCacheResponse {
-                entries: paginated.data,
-                total: paginated.meta.total,
-            };
-            return Ok(serde_json::from_value(serde_json::to_value(res)?)?);
-        }
-        if type_name.ends_with("DnsQueryLogResponse") {
-            let paginated: HttpPaginatedResponse<
-                Vec<lanforge_api::api::DnsQueryLogEntry>,
-                lanforge_api::api::LogMeta,
-            > = serde_json::from_slice(bytes)?;
-            let res = lanforge_api::api::DnsQueryLogResponse {
-                entries: paginated.data,
-                total: paginated.meta.total,
-            };
-            return Ok(serde_json::from_value(serde_json::to_value(res)?)?);
-        }
-        if let Ok(val) = serde_json::from_slice::<T>(bytes) {
-            return Ok(val);
-        }
-        color_eyre::eyre::bail!("Failed to decode API response");
+    fn decode_bytes<T: HttpWrappedResponse>(bytes: &[u8]) -> Result<T> {
+        let wrapper = serde_json::from_slice::<T::Wrapper>(bytes)?;
+        Ok(T::unwrap(wrapper))
     }
 
     #[cfg(feature = "remote")]
-    async fn http_get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
+    async fn http_get<T: HttpWrappedResponse>(&self, path: &str) -> Result<T> {
         let base = self.remote.as_ref().unwrap();
         let url = format!("{base}/api/v1{path}");
         let mut req = self.http_client.get(&url);
@@ -248,11 +211,13 @@ impl LanforgeClient {
             color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
         if status == reqwest::StatusCode::NO_CONTENT {
-            if let Ok(val) = serde_json::from_str::<T>(r#"{"message":"Success"}"#) {
-                return Ok(val);
+            if let Ok(wrapper) =
+                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
+            {
+                return Ok(T::unwrap(wrapper));
             }
-            if let Ok(val) = serde_json::from_str::<T>("null") {
-                return Ok(val);
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
+                return Ok(T::unwrap(wrapper));
             }
         }
         let bytes = resp.bytes().await?;
@@ -260,7 +225,7 @@ impl LanforgeClient {
     }
 
     #[cfg(feature = "remote")]
-    async fn http_post<B: serde::Serialize + Send + Sync, T: serde::de::DeserializeOwned>(
+    async fn http_post<B: serde::Serialize + Send + Sync, T: HttpWrappedResponse>(
         &self,
         path: &str,
         body: &B,
@@ -281,11 +246,13 @@ impl LanforgeClient {
             color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
         if status == reqwest::StatusCode::NO_CONTENT {
-            if let Ok(val) = serde_json::from_str::<T>(r#"{"message":"Success"}"#) {
-                return Ok(val);
+            if let Ok(wrapper) =
+                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
+            {
+                return Ok(T::unwrap(wrapper));
             }
-            if let Ok(val) = serde_json::from_str::<T>("null") {
-                return Ok(val);
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
+                return Ok(T::unwrap(wrapper));
             }
         }
         let bytes = resp.bytes().await?;
@@ -293,7 +260,7 @@ impl LanforgeClient {
     }
 
     #[cfg(feature = "remote")]
-    async fn http_delete<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
+    async fn http_delete<T: HttpWrappedResponse>(&self, path: &str) -> Result<T> {
         let base = self.remote.as_ref().unwrap();
         let url = format!("{base}/api/v1{path}");
         let mut req = self.http_client.delete(&url);
@@ -310,11 +277,13 @@ impl LanforgeClient {
             color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
         if status == reqwest::StatusCode::NO_CONTENT {
-            if let Ok(val) = serde_json::from_str::<T>(r#"{"message":"Success"}"#) {
-                return Ok(val);
+            if let Ok(wrapper) =
+                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
+            {
+                return Ok(T::unwrap(wrapper));
             }
-            if let Ok(val) = serde_json::from_str::<T>("null") {
-                return Ok(val);
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
+                return Ok(T::unwrap(wrapper));
             }
         }
         let bytes = resp.bytes().await?;
@@ -322,7 +291,7 @@ impl LanforgeClient {
     }
 
     #[cfg(feature = "remote")]
-    async fn http_patch<B: serde::Serialize + Send + Sync, T: serde::de::DeserializeOwned>(
+    async fn http_patch<B: serde::Serialize + Send + Sync, T: HttpWrappedResponse>(
         &self,
         path: &str,
         body: &B,
@@ -343,11 +312,13 @@ impl LanforgeClient {
             color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
         if status == reqwest::StatusCode::NO_CONTENT {
-            if let Ok(val) = serde_json::from_str::<T>(r#"{"message":"Success"}"#) {
-                return Ok(val);
+            if let Ok(wrapper) =
+                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
+            {
+                return Ok(T::unwrap(wrapper));
             }
-            if let Ok(val) = serde_json::from_str::<T>("null") {
-                return Ok(val);
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
+                return Ok(T::unwrap(wrapper));
             }
         }
         let bytes = resp.bytes().await?;

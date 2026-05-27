@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+use super::common::{HttpDataResponse, HttpWrappedResponse};
 use lanforge_types::identifiers::MacAddr;
 use serde::{Deserialize, Serialize};
 
@@ -53,4 +54,28 @@ pub struct DhcpPoolEntry {
     pub used: u32,
     pub available: u32,
     pub utilization_percent: f32,
+}
+
+impl HttpWrappedResponse for LeasesResponse {
+    type Wrapper = HttpDataResponse<LeasesResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DhcpPoolsResponse {
+    type Wrapper = HttpDataResponse<DhcpPoolsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
 }

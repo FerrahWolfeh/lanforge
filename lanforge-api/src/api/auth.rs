@@ -1,4 +1,6 @@
 use lanforge_types::auth::ApiScopes;
+
+use super::common::{HttpDataResponse, HttpWrappedResponse};
 use serde::{Deserialize, Serialize};
 
 /// Response containing a generated API token.
@@ -26,4 +28,28 @@ pub struct AuthTokenEntry {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuthTokensResponse {
     pub tokens: Vec<AuthTokenEntry>,
+}
+
+impl HttpWrappedResponse for AuthTokenResponse {
+    type Wrapper = HttpDataResponse<AuthTokenResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for AuthTokensResponse {
+    type Wrapper = HttpDataResponse<AuthTokensResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
 }
