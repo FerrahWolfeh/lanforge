@@ -1,3 +1,4 @@
+use crate::tui::action::ActionResult;
 use crossterm::event::KeyEvent;
 use lanforge_api::api::{
     DevicesResponse, DhcpPoolsResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
@@ -27,5 +28,6 @@ pub enum AppEvent {
     DnsAdblockUrlsUpdate(DnsAdblockUrlsResponse),
     DnsAllowlistUpdate(DnsAllowlistResponse),
     WhoisUpdate(Box<WhoisResponse>),
+    ActionResult(ActionResult),
     Tick,
 }

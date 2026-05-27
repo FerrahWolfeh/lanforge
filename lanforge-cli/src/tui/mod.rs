@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use crossterm::{
-    event::{self as ct_event, KeyEvent},
+    event::{self as ct_event, KeyCode, KeyEvent},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -13,8 +13,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
+use tui_input::backend::crossterm::EventHandler;
 
+pub mod action;
 pub mod app;
+pub mod dispatch;
 pub mod event;
 pub mod state;
 pub mod theme;
@@ -22,7 +25,8 @@ pub mod ui;
 pub mod utils;
 
 use crate::cli::LanforgeClient;
-use crate::tui::app::{TuiApp, TuiMode, TuiTab};
+use crate::tui::action::PendingAction;
+use crate::tui::app::{InputPurpose, TuiApp, TuiMode, TuiTab};
 use crate::tui::event::AppEvent;
 
 pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
@@ -115,6 +119,7 @@ pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
     std::process::exit(0);
 }
 
+#[allow(clippy::too_many_lines)]
 fn handle_tui_key_event(
     app: &mut TuiApp,
     key: KeyEvent,
@@ -122,6 +127,87 @@ fn handle_tui_key_event(
     event_tx: &mpsc::Sender<AppEvent>,
     active_tab: &Arc<AtomicU8>,
 ) {
+    if app.mode == TuiMode::Confirming {
+        match key.code {
+            KeyCode::Char('y' | 'Y') => {
+                if let Some(action) = app.pending_action.take() {
+                    let client = client.clone();
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        let result = crate::tui::dispatch::execute_action(&client, action).await;
+                        let _ = tx.send(AppEvent::ActionResult(result)).await;
+                    });
+                }
+                app.mode = TuiMode::Normal;
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                app.pending_action = None;
+                app.mode = TuiMode::Normal;
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    if app.mode == TuiMode::Input {
+        match key.code {
+            KeyCode::Esc => {
+                app.input_context = None;
+                app.mode = TuiMode::Normal;
+                app.input.reset();
+            }
+            KeyCode::Enter => {
+                let value = app.input.value().to_string();
+                if value.is_empty() {
+                    app.input_context = None;
+                    app.mode = TuiMode::Normal;
+                } else if let Some(ctx) = app.input_context.take() {
+                    let action = match ctx.purpose {
+                        InputPurpose::AdblockAllow => {
+                            Some(PendingAction::AdblockAllow { domain: value })
+                        }
+                        InputPurpose::AdblockBlock => {
+                            Some(PendingAction::AdblockBlock { domain: value })
+                        }
+                        InputPurpose::AdblockTimedDisable => {
+                            value.parse::<u64>().map_or(None, |secs| {
+                                Some(PendingAction::AdblockTimedDisable {
+                                    duration_secs: secs,
+                                })
+                            })
+                        }
+                        InputPurpose::DnsQuery => None,
+                    };
+                    if let Some(act) = action {
+                        if act.is_destructive() {
+                            app.pending_action = Some(act);
+                            app.mode = TuiMode::Confirming;
+                        } else {
+                            let client = client.clone();
+                            let tx = event_tx.clone();
+                            tokio::spawn(async move {
+                                let result =
+                                    crate::tui::dispatch::execute_action(&client, act).await;
+                                let _ = tx.send(AppEvent::ActionResult(result)).await;
+                            });
+                            app.mode = TuiMode::Normal;
+                        }
+                    } else {
+                        app.mode = TuiMode::Normal;
+                    }
+                } else {
+                    app.mode = TuiMode::Normal;
+                }
+                app.input.reset();
+            }
+            _ => {
+                let req = ct_event::Event::Key(key);
+                app.input.handle_event(&req);
+            }
+        }
+        return;
+    }
+
     let old_mode = app.mode;
     app.handle_key_event(key);
 
@@ -228,7 +314,25 @@ fn handle_app_event(
         AppEvent::WhoisUpdate(s) => {
             app.state.selected_whois = Some(*s);
         }
-        AppEvent::Tick => {}
+        AppEvent::ActionResult(result) => match result {
+            crate::tui::action::ActionResult::Success(msg) => {
+                app.toasts
+                    .push_back(crate::tui::ui::widgets::toast::Toast::success(msg));
+            }
+            crate::tui::action::ActionResult::Error(msg) => {
+                app.toasts
+                    .push_back(crate::tui::ui::widgets::toast::Toast::error(msg));
+            }
+        },
+        AppEvent::Tick => {
+            while let Some(toast) = app.toasts.front() {
+                if toast.is_expired() {
+                    app.toasts.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
     }
 }
 

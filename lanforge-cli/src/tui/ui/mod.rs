@@ -4,7 +4,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
-    widgets::{Block, Borders, Paragraph, Tabs},
+    widgets::{Block, Borders, Tabs},
 };
 
 pub mod adblock;
@@ -16,6 +16,7 @@ pub mod events;
 pub mod header;
 pub mod services;
 pub mod topology;
+pub mod widgets;
 
 pub fn render(f: &mut Frame, app: &mut TuiApp) {
     let chunks = Layout::default()
@@ -70,11 +71,16 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
     }
 
     // 4. Footer
-    let help_text = if app.mode == TuiMode::Filtering {
-        "TYPE TO FILTER...  Enter/Esc: Confirm"
-    } else {
-        "q:Quit  1-8:Tabs  ↑↓:Navigate  Enter:Details  /:Search"
-    };
-    let footer = Paragraph::new(help_text).style(Style::default().fg(theme::TEXT_DIM));
-    f.render_widget(footer, chunks[3]);
+    widgets::footer::render(f, chunks[3], app);
+
+    // 5. Overlays (rendered on top of everything)
+    if app.mode == TuiMode::Confirming {
+        widgets::confirm::render(f, f.area(), app);
+    }
+    if app.mode == TuiMode::Input {
+        widgets::input::render(f, f.area(), app);
+    }
+
+    // 6. Toasts (always on top)
+    widgets::toast::render(f, f.area(), app);
 }

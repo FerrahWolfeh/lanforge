@@ -1,6 +1,10 @@
+use crate::tui::action::PendingAction;
 use crate::tui::state::TuiState;
+use crate::tui::ui::widgets::toast::Toast;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
+use std::collections::VecDeque;
+use tui_input::Input;
 use tui_tree_widget::TreeState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +24,22 @@ pub enum TuiMode {
     Normal,
     Filtering,
     Detail,
+    Confirming,
+    Input,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputContext {
+    pub prompt: String,
+    pub purpose: InputPurpose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputPurpose {
+    AdblockAllow,
+    AdblockBlock,
+    AdblockTimedDisable,
+    DnsQuery,
 }
 
 impl TuiTab {
@@ -65,6 +85,16 @@ pub struct TuiApp {
     pub filter_text: String,
     pub dns_show_rewrites: bool,
     pub should_quit: bool,
+
+    // Toast system
+    pub toasts: VecDeque<Toast>,
+
+    // Confirmation dialog
+    pub pending_action: Option<PendingAction>,
+
+    // Text input
+    pub input: Input,
+    pub input_context: Option<InputContext>,
 }
 
 impl Default for TuiApp {
@@ -89,10 +119,17 @@ impl TuiApp {
             filter_text: String::new(),
             dns_show_rewrites: false,
             should_quit: false,
+            toasts: VecDeque::new(),
+            pending_action: None,
+            input: Input::default(),
+            input_context: None,
         }
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) {
+        if self.mode == TuiMode::Confirming || self.mode == TuiMode::Input {
+            return;
+        }
         if self.mode == TuiMode::Filtering {
             match key.code {
                 KeyCode::Enter | KeyCode::Esc => self.mode = TuiMode::Normal,
