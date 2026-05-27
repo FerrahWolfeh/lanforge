@@ -183,6 +183,28 @@ impl ClientContext {
             .await
             .unwrap_or_default();
 
+        let top_blocked_domains = self
+            .log_db
+            .get_dns_top_blocked_domains(limit)
+            .await
+            .unwrap_or_default();
+        let top_blocked_clients = self
+            .log_db
+            .get_dns_top_blocked_clients(limit)
+            .await
+            .unwrap_or_default();
+        let blocked_query_rate = self
+            .log_db
+            .get_dns_blocked_query_rate(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    .saturating_sub(600),
+            )
+            .await
+            .unwrap_or_default();
+
         Response::DnsAnalytics(DnsAnalyticsResponse {
             top_domains: top_domains
                 .into_iter()
@@ -229,6 +251,29 @@ impl ClientContext {
                     })
                     .collect()
             },
+            top_blocked_domains: top_blocked_domains
+                .into_iter()
+                .map(|(domain, count)| TopDomainEntry { domain, count })
+                .collect(),
+            top_blocked_clients: top_blocked_clients
+                .into_iter()
+                .map(|(ip, count)| {
+                    let hostname = self
+                        .ctx
+                        .get_mac_by_ip(ip.parse().unwrap_or_else(|_| "0.0.0.0".parse().unwrap()))
+                        .and_then(|m| self.ctx.get_device(&m))
+                        .map(|d| d.display_hostname().to_string());
+                    TopClientEntry {
+                        ip,
+                        hostname,
+                        count,
+                    }
+                })
+                .collect(),
+            blocked_query_rate: blocked_query_rate
+                .into_iter()
+                .map(|(timestamp, count)| QueryRateEntry { timestamp, count })
+                .collect(),
         })
     }
 }

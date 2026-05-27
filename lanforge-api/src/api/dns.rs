@@ -50,6 +50,9 @@ pub struct DnsAnalyticsResponse {
     pub query_rate: Vec<QueryRateEntry>,
     pub top_clients: Vec<TopClientEntry>,
     pub protocol_stats: Vec<ProtocolStatEntry>,
+    pub top_blocked_domains: Vec<TopDomainEntry>,
+    pub top_blocked_clients: Vec<TopClientEntry>,
+    pub blocked_query_rate: Vec<QueryRateEntry>,
 }
 
 /// A single entry in the top clients list.

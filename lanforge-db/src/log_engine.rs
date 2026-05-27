@@ -178,7 +178,9 @@ impl LogDb {
             }
         }
 
-        tx.commit().await.map_err(LanforgeDbError::TransactionFailed)?;
+        tx.commit()
+            .await
+            .map_err(LanforgeDbError::TransactionFailed)?;
 
         if last_timestamp > 0 {
             self.maybe_prune(last_timestamp).await?;
@@ -258,7 +260,9 @@ impl LogDb {
             }
         }
 
-        tx.commit().await.map_err(LanforgeDbError::TransactionFailed)?;
+        tx.commit()
+            .await
+            .map_err(LanforgeDbError::TransactionFailed)?;
 
         if last_timestamp > 0 {
             self.maybe_prune(last_timestamp).await?;
@@ -522,6 +526,79 @@ impl LogDb {
         Ok(rows
             .into_iter()
             .map(|r| (r.get("protocol"), r.get::<i64, _>("count") as u64))
+            .collect())
+    }
+
+    /// Retrieves top blocked domains by query count.
+    pub async fn get_dns_top_blocked_domains(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, LanforgeDbError> {
+        let rows = sqlx::query(
+            "SELECT domain, COUNT(*) as count 
+             FROM dns_queries 
+             WHERE result = 'blocked' OR result = 'cachedblock' 
+             GROUP BY domain 
+             ORDER BY count DESC 
+             LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("domain"), r.get::<i64, _>("count") as u64))
+            .collect())
+    }
+
+    /// Retrieves top blocked clients by query count.
+    pub async fn get_dns_top_blocked_clients(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, LanforgeDbError> {
+        let rows = sqlx::query(
+            "SELECT src_ip, COUNT(*) as count 
+             FROM dns_queries 
+             WHERE result = 'blocked' OR result = 'cachedblock' 
+             GROUP BY src_ip 
+             ORDER BY count DESC 
+             LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("src_ip"), r.get::<i64, _>("count") as u64))
+            .collect())
+    }
+
+    /// Retrieves blocked query rate timeline (grouped by 30s buckets).
+    pub async fn get_dns_blocked_query_rate(
+        &self,
+        since_secs: u64,
+    ) -> Result<Vec<(u64, u64)>, LanforgeDbError> {
+        let rows = sqlx::query(
+            "SELECT (timestamp / 30) * 30 as bucket, COUNT(*) as count 
+             FROM dns_queries 
+             WHERE timestamp >= ? AND (result = 'blocked' OR result = 'cachedblock')
+             GROUP BY bucket 
+             ORDER BY bucket ASC",
+        )
+        .bind(since_secs as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.get::<i64, _>("bucket") as u64,
+                    r.get::<i64, _>("count") as u64,
+                )
+            })
             .collect())
     }
 
