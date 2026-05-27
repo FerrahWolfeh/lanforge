@@ -1,7 +1,10 @@
-use color_eyre::eyre::{Context, Result};
+use color_eyre::eyre::{Context, Result, eyre};
 #[cfg(feature = "remote")]
 use directories::ProjectDirs;
 use lanforge_types::auth::ApiScopes;
+use lanforge_types::network::DnsRecordType;
+use lanforge_types::network::dns::adblock::AdblockUrlKind;
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
 #[cfg(feature = "remote")]
 use reqwest::Client;
 use tokio::net::UnixStream;
@@ -21,7 +24,7 @@ use lanforge_types::{
     network::dns::adblock::{BlockingMode, RewriteRule},
     update::LeaseTarget,
 };
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::args::LanforgeArgs;
 
@@ -401,7 +404,7 @@ impl LanforgeClient {
         let mut rpc = self.connect_rpc().await?;
         rpc.list_devices(filter, vendor, method, format, limit, offset)
             .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+            .map_err(|e| eyre!("RPC Error: {e}"))
     }
 
     pub async fn whois(&self, target: String) -> Result<Box<WhoisResponse>> {
@@ -423,7 +426,7 @@ impl LanforgeClient {
     // --- DHCP & Leases ---
 
     pub async fn leases(&self, count: bool) -> Result<LeasesResponse> {
-        dispatch!(self, get => format!("/leases?count={count}"), leases(count))
+        dispatch!(self, get => format!("/dhcp/leases?count={count}"), leases(count))
     }
 
     pub async fn lease_renew(
@@ -432,7 +435,7 @@ impl LanforgeClient {
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess> {
         let t_str = target.as_ref().map(std::string::ToString::to_string);
-        dispatch!(self, post => format!("/leases/{mac}/renew"), serde_json::json!({ "target": t_str }), lease_renew(mac, target))
+        dispatch!(self, post => format!("/dhcp/leases/{mac}/renew"), serde_json::json!({ "target": t_str }), lease_renew(mac, target))
     }
 
     pub async fn lease_release(
@@ -441,7 +444,7 @@ impl LanforgeClient {
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess> {
         let t_str = target.as_ref().map(std::string::ToString::to_string);
-        dispatch!(self, post => format!("/leases/{mac}/release"), serde_json::json!({ "target": t_str }), lease_release(mac, target))
+        dispatch!(self, post => format!("/dhcp/leases/{mac}/release"), serde_json::json!({ "target": t_str }), lease_release(mac, target))
     }
 
     pub async fn dhcp_pools(&self) -> Result<DhcpPoolsResponse> {
@@ -575,8 +578,8 @@ impl LanforgeClient {
 
     pub async fn dns_upstream_add(
         &self,
-        addr: std::net::SocketAddr,
-        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Result<SimpleSuccess> {
         let q = domain
@@ -588,8 +591,8 @@ impl LanforgeClient {
 
     pub async fn dns_upstream_remove(
         &self,
-        addr: std::net::SocketAddr,
-        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
     ) -> Result<SimpleSuccess> {
         let proto_str = format!("{protocol:?}").to_lowercase();
         dispatch!(self, delete => format!("/dns/upstreams?addr={addr}&protocol={proto_str}"), dns_upstream_remove(addr, protocol))
@@ -598,7 +601,7 @@ impl LanforgeClient {
     pub async fn dns_query(
         &self,
         name: String,
-        record_type: Option<lanforge_types::network::DnsRecordType>,
+        record_type: Option<DnsRecordType>,
     ) -> Result<DnsQueryResponse> {
         let rt = record_type.map_or_else(|| "A".to_string(), |r| format!("{r:?}"));
         dispatch!(self, get => format!("/dns/query?name={name}&record_type={rt}"), dns_query(name, record_type))
@@ -628,7 +631,7 @@ impl LanforgeClient {
         let mut rpc = self.connect_rpc().await?;
         rpc.dns_cache_dump(limit, offset)
             .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+            .map_err(|e| eyre!("RPC Error: {e}"))
     }
 
     pub async fn dns_cache_flush(&self) -> Result<SimpleSuccess> {
@@ -694,7 +697,7 @@ impl LanforgeClient {
     pub async fn dns_adblock_url_add(
         &self,
         url: String,
-        kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
+        kind: AdblockUrlKind,
     ) -> Result<SimpleSuccess> {
         let kind_str = format!("{kind:?}").to_lowercase();
         dispatch!(self, post => format!("/dns/adblock/sources?url={url}&kind={kind_str}"), serde_json::json!({}), dns_adblock_url_add(url, kind))
@@ -729,7 +732,7 @@ impl LanforgeClient {
         let mut rpc = self.connect_rpc().await?;
         rpc.dns_rewrite_add(rule)
             .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+            .map_err(|e| eyre!("RPC Error: {e}"))
     }
 
     pub async fn dns_rewrite_remove(&self, id: i64) -> Result<SimpleSuccess> {
@@ -774,7 +777,7 @@ impl LanforgeClient {
         let mut rpc = self.connect_rpc().await?;
         rpc.dns_query_log(follow, n, client, offset)
             .await
-            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+            .map_err(|e| eyre!("RPC Error: {e}"))
     }
 
     pub async fn system_config_export(&self) -> Result<Box<SystemConfigExport>> {

@@ -108,11 +108,11 @@ pub async fn run_tui(client: Arc<LanforgeClient>) -> Result<()> {
     }
 
     // Restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
 
-    Ok(())
+    std::process::exit(0);
 }
 
 fn handle_tui_key_event(
