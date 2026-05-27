@@ -1,98 +1,111 @@
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::theme;
-use lanforge_types::device::Device;
+use lanforge_api::api::TopologyEntry;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tui_tree_widget::{Tree, TreeItem};
 
-pub fn render(f: &mut Frame, app: &mut TuiApp, area: Rect) {
+pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     let chunks = Layout::default()
         .constraints([Constraint::Min(10), Constraint::Length(3)])
         .split(area);
 
-    let devices: Vec<_> = app
+    let empty_vec = Vec::new();
+    let entries = app
         .state
-        .state
+        .topology
         .as_ref()
-        .map_or_else(Vec::new, |st| st.devices.values().collect());
+        .map_or(&empty_vec, |t| &t.entries);
 
-    let (parent_to_children, orphans, roots) = get_topology_data(app, &devices);
-    let tree_items = build_tree_items(roots, &parent_to_children, orphans, &devices);
+    let (parent_to_children, orphans, roots, entry_map) = get_topology_data(app, entries);
+    let tree_items = build_tree_items(roots, &parent_to_children, orphans, &entry_map);
 
     render_tree(f, app, chunks[0], &tree_items);
     render_help_footer(f, app, chunks[1]);
 }
 
+#[allow(clippy::type_complexity)]
 fn get_topology_data<'a>(
     app: &TuiApp,
-    devices: &'a [&Arc<Device>],
+    entries: &'a [TopologyEntry],
 ) -> (
-    HashMap<String, Vec<&'a Device>>,
-    Vec<&'a Device>,
+    HashMap<String, Vec<&'a TopologyEntry>>,
+    Vec<&'a TopologyEntry>,
     Vec<String>,
+    HashMap<String, &'a TopologyEntry>,
 ) {
-    let mut parent_to_children: HashMap<String, Vec<&Device>> = HashMap::new();
-    let mut orphans: Vec<&Device> = Vec::new();
     let filter = app.filter_text.to_lowercase();
-
-    for dev in devices {
-        // Apply filter
-        if !filter.is_empty() {
-            let matches = dev.hostname.name.to_lowercase().contains(&filter)
-                || dev.mac.contains_str(&filter);
-            if !matches {
-                continue;
-            }
-        }
-
-        if let Some(topo) = &dev.topology {
-            if let Some(parent) = &topo.parent_mac {
-                parent_to_children
-                    .entry(parent.to_string())
-                    .or_default()
-                    .push(dev);
+    let filtered_entries: Vec<&TopologyEntry> = entries
+        .iter()
+        .filter(|entry| {
+            if filter.is_empty() {
+                true
             } else {
-                orphans.push(dev);
+                entry.hostname.to_lowercase().contains(&filter)
+                    || entry.mac.to_string().to_lowercase().contains(&filter)
             }
-        } else {
-            orphans.push(dev);
+        })
+        .collect();
+
+    let entry_map: HashMap<String, &TopologyEntry> = filtered_entries
+        .iter()
+        .map(|e| (e.mac.to_string(), *e))
+        .collect();
+
+    let mut parent_to_children: HashMap<String, Vec<&TopologyEntry>> = HashMap::new();
+    for entry in &filtered_entries {
+        if let Some(parent) = &entry.parent_mac {
+            parent_to_children
+                .entry(parent.to_string())
+                .or_default()
+                .push(entry);
         }
     }
 
-    let mut roots: Vec<String> = parent_to_children
-        .keys()
-        .filter(|k| {
-            !devices.iter().any(|d| {
-                d.mac.to_string() == **k
-                    && d.topology.as_ref().is_some_and(|t| t.parent_mac.is_some())
-            })
-        })
-        .cloned()
-        .collect();
-
+    let mut roots: Vec<String> = Vec::new();
+    for parent_mac in parent_to_children.keys() {
+        let is_root = entry_map.get(parent_mac).is_none_or(|entry| {
+            entry
+                .parent_mac
+                .as_ref()
+                .is_none_or(|p| !entry_map.contains_key(&p.to_string()))
+        });
+        if is_root {
+            roots.push(parent_mac.clone());
+        }
+    }
     roots.sort();
 
-    (parent_to_children, orphans, roots)
+    let mut orphans = Vec::new();
+    for entry in &filtered_entries {
+        let parent_missing = entry
+            .parent_mac
+            .as_ref()
+            .is_none_or(|p| !entry_map.contains_key(&p.to_string()));
+        if parent_missing && !parent_to_children.contains_key(&entry.mac.to_string()) {
+            orphans.push(*entry);
+        }
+    }
+
+    (parent_to_children, orphans, roots, entry_map)
 }
 
 fn build_tree_items(
     roots: Vec<String>,
-    parent_to_children: &HashMap<String, Vec<&Device>>,
-    orphans: Vec<&Device>,
-    devices: &[&Arc<Device>],
+    parent_to_children: &HashMap<String, Vec<&TopologyEntry>>,
+    orphans: Vec<&TopologyEntry>,
+    entry_map: &HashMap<String, &TopologyEntry>,
 ) -> Vec<TreeItem<'static, String>> {
     let mut tree_items = Vec::new();
 
     for root_mac in roots {
-        let root_hostname = devices
-            .iter()
-            .find(|d| d.mac.to_string() == root_mac)
-            .map_or("Unknown Switch", |d| d.hostname.name.as_str());
+        let root_hostname = entry_map
+            .get(&root_mac)
+            .map_or("Unknown Switch", |e| e.hostname.as_str());
 
         let text = Text::from(vec![Line::from(vec![
             Span::styled("🖧  ", Style::default().fg(Color::Cyan)),
@@ -114,7 +127,7 @@ fn build_tree_items(
         for orphan in orphans {
             let text = Text::from(vec![Line::from(vec![
                 Span::styled("❓ ", Style::default().fg(Color::Gray)),
-                Span::raw(format!("{} [{}]", orphan.hostname.name, orphan.mac)),
+                Span::raw(format!("{} [{}]", orphan.hostname, orphan.mac)),
             ])]);
             let item = TreeItem::new_leaf(format!("orphan-{}", orphan.mac), text);
             orphan_items.push(item);
@@ -198,37 +211,28 @@ fn render_help_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
 
 fn build_children(
     parent_mac: &str,
-    map: &HashMap<String, Vec<&Device>>,
+    map: &HashMap<String, Vec<&TopologyEntry>>,
 ) -> Option<Vec<TreeItem<'static, String>>> {
     map.get(parent_mac).map(|children| {
         let mut items = Vec::new();
         let mut sorted = children.clone();
         sorted.sort_by(|a, b| {
-            let port_a = a
-                .topology
-                .as_ref()
-                .and_then(|t| t.port.as_deref())
-                .unwrap_or("");
-            let port_b = b
-                .topology
-                .as_ref()
-                .and_then(|t| t.port.as_deref())
-                .unwrap_or("");
+            let port_a = a.port.as_deref().unwrap_or("");
+            let port_b = b.port.as_deref().unwrap_or("");
             port_a.cmp(port_b).then_with(|| a.mac.cmp(&b.mac))
         });
 
         for child in sorted {
             let port_str = child
-                .topology
+                .port
                 .as_ref()
-                .and_then(|t| t.port.as_deref())
                 .map(|p| format!(" (Port: {p})"))
                 .unwrap_or_default();
 
             let text = Text::from(vec![Line::from(vec![
                 Span::styled("💻 ", Style::default().fg(Color::Green)),
                 Span::styled(
-                    format!("{} [{}]", child.hostname.name, child.mac),
+                    format!("{} [{}]", child.hostname, child.mac),
                     Style::default().fg(Color::White),
                 ),
                 Span::styled(port_str, Style::default().fg(Color::DarkGray)),

@@ -10,9 +10,12 @@ use ratatui::{
 pub mod adblock;
 pub mod dashboard;
 pub mod devices;
+pub mod dhcp;
 pub mod dns;
 pub mod events;
 pub mod header;
+pub mod services;
+pub mod topology;
 
 pub fn render(f: &mut Frame, app: &mut TuiApp) {
     let chunks = Layout::default()
@@ -61,44 +64,9 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         TuiTab::Dns => dns::render(f, chunks[2], app),
         TuiTab::Adblock => adblock::render(f, chunks[2], app),
         TuiTab::Events => events::render(f, chunks[2], &app.state, app.auto_scroll),
-        TuiTab::Topology => {
-            let content_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::BORDER))
-                .title(" Topology Tab ");
-            f.render_widget(
-                Paragraph::new(format!(
-                    "Network Topology (stub). Entries: {}",
-                    app.state.topology.as_ref().map_or(0, |t| t.entries.len())
-                ))
-                .block(content_block),
-                chunks[2],
-            );
-        }
-        TuiTab::Dhcp => {
-            let content_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::BORDER))
-                .title(" DHCP Tab ");
-            f.render_widget(
-                Paragraph::new(format!(
-                    "DHCP Leases & Pools (stub). Leases count: {}",
-                    app.state.leases.as_ref().map_or(0, |l| l.leases.len())
-                ))
-                .block(content_block),
-                chunks[2],
-            );
-        }
-        TuiTab::Services => {
-            let content_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::BORDER))
-                .title(" Services Tab ");
-            f.render_widget(
-                Paragraph::new("Background System Services (stub).").block(content_block),
-                chunks[2],
-            );
-        }
+        TuiTab::Topology => topology::render(f, chunks[2], app),
+        TuiTab::Dhcp => dhcp::render(f, chunks[2], app),
+        TuiTab::Services => services::render(f, chunks[2], &app.state),
     }
 
     // 4. Footer
