@@ -74,12 +74,13 @@ pub struct AssignedIAs {
 
 /// Outcome of processing a `DHCPv6` message.
 pub enum HandleResult<'a> {
-    /// A reply packet is ready (encoded bytes, destination IP, learned DUID, MAC, IAIDs).
+    /// A reply packet is ready (encoded bytes, destination IP, learned DUID, MAC, assigned IAIDs, released IAIDs).
     Reply(
         &'a [u8],
         Ipv6Addr,
         Option<Duid>,
         Option<MacAddr>,
+        AssignedIAs,
         AssignedIAs,
     ),
     /// No response necessary — message was malformed or directed to another server.
@@ -289,6 +290,9 @@ impl Dhcpv6Server {
         self.add_boot_options(&mut reply, identity);
         self.add_custom_options(&mut reply);
         let mut ias = AssignedIAs::default();
+        if let Some(DhcpOption::StatusCode(_)) = msg.opts().get(OptionCode::StatusCode) {
+            // keep standard behavior
+        }
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             ias.na.push(iana.id);
         }
@@ -296,7 +300,14 @@ impl Dhcpv6Server {
             ias.pd.push(iapd.id);
         }
 
-        HandleResult::Reply(encode_msg(&reply, buf), peer, learned_duid, mac, ias)
+        HandleResult::Reply(
+            encode_msg(&reply, buf),
+            peer,
+            learned_duid,
+            mac,
+            ias,
+            AssignedIAs::default(),
+        )
     }
 
     fn process_iana_solicit(
@@ -529,7 +540,14 @@ impl Dhcpv6Server {
             ias.pd.push(iapd.id);
         }
 
-        HandleResult::Reply(encode_msg(&reply, buf), peer, Some(client_duid), mac, ias)
+        HandleResult::Reply(
+            encode_msg(&reply, buf),
+            peer,
+            Some(client_duid),
+            mac,
+            ias,
+            AssignedIAs::default(),
+        )
     }
 
     fn handle_renew<'a>(
@@ -623,22 +641,70 @@ impl Dhcpv6Server {
         }
 
         let mac = identity.map(|i| i.mac);
+        let mut released_ias = AssignedIAs::default();
 
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA)
             && let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr)
         {
-            if let Some(id) = identity {
-                info!("DHCPv6: {id} released its address {}", ia_addr.addr);
+            // Validate client lease ownership
+            if self.pool.has_binding(&self.ctx, client_duid, iana.id) {
+                let bindings = self.pool.lookup(&self.ctx, client_duid, iana.id);
+                if bindings.contains(&ia_addr.addr) {
+                    if let Some(id) = identity {
+                        info!("DHCPv6: {id} released its address {}", ia_addr.addr);
+                    } else {
+                        info!(
+                            "DHCPv6: Anonymous device released its address {}",
+                            ia_addr.addr
+                        );
+                    }
+                    self.pool.release(&ia_addr.addr);
+                    released_ias.na.push(iana.id);
+                } else {
+                    tracing::warn!(
+                        "DHCPv6: RELEASE from {} for {} ignored: client does not own this lease.",
+                        client_duid,
+                        ia_addr.addr
+                    );
+                }
             } else {
-                info!(
-                    "DHCPv6: Anonymous device released its address {}",
-                    ia_addr.addr
+                tracing::warn!(
+                    "DHCPv6: RELEASE from {} for {} ignored: no binding found for IAID {}.",
+                    client_duid,
+                    ia_addr.addr,
+                    iana.id
                 );
             }
-            self.pool.release(&ia_addr.addr);
         }
 
-        self.send_status(
+        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD) {
+            // Validate client prefix lease ownership
+            if self
+                .pool
+                .has_prefix_binding(&self.ctx, client_duid, iapd.id)
+            {
+                if let Some(id) = identity {
+                    info!(
+                        "DHCPv6: {id} released prefix delegation for IAID {}",
+                        iapd.id
+                    );
+                } else {
+                    info!(
+                        "DHCPv6: Anonymous device released prefix delegation for IAID {}",
+                        iapd.id
+                    );
+                }
+                released_ias.pd.push(iapd.id);
+            } else {
+                tracing::warn!(
+                    "DHCPv6: RELEASE prefix delegation from {} for IAID {} ignored: no binding found.",
+                    client_duid,
+                    iapd.id
+                );
+            }
+        }
+
+        self.send_status_with_releases(
             &StatusContext {
                 msg,
                 client_duid,
@@ -648,6 +714,7 @@ impl Dhcpv6Server {
             MessageType::Reply,
             Status::Success,
             "Released",
+            released_ias,
             buf,
         )
     }
@@ -665,26 +732,50 @@ impl Dhcpv6Server {
         }
 
         let mac = identity.map(|i| i.mac);
+        let mut released_ias = AssignedIAs::default();
+
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
             for opt in iana.opts.iter() {
                 if let DhcpOption::IAAddr(ia_addr) = opt {
-                    if let Some(id) = identity {
-                        info!(
-                            "DHCPv6: {id} declined address {} (DAD Failure)",
-                            ia_addr.addr
-                        );
+                    // Validate client lease ownership
+                    if self.pool.has_binding(&self.ctx, client_duid, iana.id) {
+                        let bindings = self.pool.lookup(&self.ctx, client_duid, iana.id);
+                        if bindings.contains(&ia_addr.addr) {
+                            if let Some(id) = identity {
+                                info!(
+                                    "DHCPv6: {id} declined address {} (DAD Failure)",
+                                    ia_addr.addr
+                                );
+                            } else {
+                                info!(
+                                    "DHCPv6: Anonymous device declined address {} (DAD Failure)",
+                                    ia_addr.addr
+                                );
+                            }
+                            self.pool.decline(ia_addr.addr);
+                            if !released_ias.na.contains(&iana.id) {
+                                released_ias.na.push(iana.id);
+                            }
+                        } else {
+                            tracing::warn!(
+                                "DHCPv6: DECLINE from {} for {} ignored: client does not own this lease.",
+                                client_duid,
+                                ia_addr.addr
+                            );
+                        }
                     } else {
-                        info!(
-                            "DHCPv6: Anonymous device declined address {} (DAD Failure)",
-                            ia_addr.addr
+                        tracing::warn!(
+                            "DHCPv6: DECLINE from {} for {} ignored: no binding found for IAID {}.",
+                            client_duid,
+                            ia_addr.addr,
+                            iana.id
                         );
                     }
-                    self.pool.decline(ia_addr.addr);
                 }
             }
         }
 
-        self.send_status(
+        self.send_status_with_releases(
             &StatusContext {
                 msg,
                 client_duid,
@@ -694,6 +785,7 @@ impl Dhcpv6Server {
             MessageType::Reply,
             Status::Success,
             "Decline acknowledged",
+            released_ias,
             buf,
         )
     }
@@ -714,6 +806,7 @@ impl Dhcpv6Server {
             peer,
             None,
             None,
+            AssignedIAs::default(),
             AssignedIAs::default(),
         )
     }
@@ -755,12 +848,13 @@ impl Dhcpv6Server {
         }
     }
 
-    fn send_status<'a>(
+    fn send_status_with_releases<'a>(
         &self,
         ctx: &StatusContext<'_>,
         msg_type: MessageType,
         status: Status,
         text: &str,
+        released_ias: AssignedIAs,
         buf: &'a mut Vec<u8>,
     ) -> HandleResult<'a> {
         let mut reply = self.base_reply(ctx.msg, msg_type, ctx.client_duid);
@@ -774,6 +868,7 @@ impl Dhcpv6Server {
             Some(ctx.client_duid.clone()),
             ctx.mac,
             AssignedIAs::default(),
+            released_ias,
         )
     }
 
@@ -822,6 +917,7 @@ impl Dhcpv6Server {
             Some(ctx.client_duid.clone()),
             ctx.mac,
             ias,
+            AssignedIAs::default(),
         )
     }
 
@@ -874,6 +970,14 @@ impl Dhcpv6Server {
 
     fn add_custom_options(&self, reply: &mut Message) {
         for (code, val) in &self.cfg.options {
+            // Protect critical protocol options from being overwritten
+            if matches!(*code, 1 | 2 | 3 | 5 | 25) {
+                tracing::warn!(
+                    "DHCPv6: Custom option {} ignored: cannot overwrite critical protocol options.",
+                    code
+                );
+                continue;
+            }
             if let Some(data) = parse_typed_option(val) {
                 reply
                     .opts_mut()
@@ -942,7 +1046,7 @@ fn encode_msg<'a>(msg: &Message, buf: &'a mut Vec<u8>) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test_utils::init_test_context, v6::config::Dhcpv6PoolConfig};
+    use crate::{test_utils::init_test_context, v6::config::Dhcpv6PoolConfig, v6::pool::PoolRange};
     use dhcproto::{
         Decodable, Decoder,
         v6::{DhcpOptions, IANA, OptionCode},
@@ -951,8 +1055,11 @@ mod tests {
         device::{Device, Ipv6AddrOrSuffix, Origin},
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState},
     };
-    use std::collections::HashMap;
-    use std::net::{Ipv6Addr, UdpSocket};
+    use std::{collections::HashMap, time::Duration};
+    use std::{
+        net::{Ipv6Addr, UdpSocket},
+        time::SystemTime,
+    };
 
     fn dummy_server() -> Dhcpv6Server {
         let ctx = init_test_context();
@@ -1077,7 +1184,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
@@ -1128,7 +1235,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
@@ -1170,7 +1277,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
@@ -1220,7 +1327,7 @@ mod tests {
         let res = srv.handle_decline(&msg, &duid, Some(&identity), peer_ip(), &mut resp_vec);
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 assert_eq!(reply.msg_type(), MessageType::Reply);
                 assert!(reply.opts().get(OptionCode::StatusCode).is_some());
@@ -1254,7 +1361,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA)
                     && let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr)
@@ -1276,7 +1383,7 @@ mod tests {
             srv.handle_information_request(&msg, &dummy_client_duid(), peer_ip(), &mut resp_vec);
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 assert_eq!(reply.msg_type(), MessageType::Reply);
                 assert!(reply.opts().get(OptionCode::IANA).is_none());
@@ -1333,7 +1440,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IAPD(iapd)) = reply.opts().get(OptionCode::IAPD) {
                     assert_eq!(iapd.id, 888);
@@ -1420,5 +1527,149 @@ mod tests {
             reply.opts().get(OptionCode::Unknown(59)).is_some(),
             "Missing custom Bootfile URL (Option 59)"
         );
+    }
+
+    #[test]
+    fn unauthorized_v6_release_is_ignored() {
+        let mut srv = dummy_server();
+        let ctx = srv.ctx.clone();
+        let duid_legit = Duid::new(vec![1, 2, 3]);
+        let duid_rogue = Duid::new(vec![9, 9, 9]);
+        let ip = "fd00::100".parse().unwrap();
+        let iaid = 777;
+
+        // 1. DUID legit has the lease in context
+        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+            mac: Some(dummy_mac()),
+            duid: duid_legit,
+            iaid,
+            ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        // 2. DUID rogue tries to release the IP
+        let mut msg = Message::new(MessageType::Release);
+        msg.opts_mut()
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.to_vec()));
+        msg.opts_mut()
+            .insert(DhcpOption::ClientId(duid_rogue.bytes.to_vec()));
+
+        let mut iana_opts = DhcpOptions::new();
+        iana_opts.insert(DhcpOption::IAAddr(IAAddr {
+            addr: ip,
+            preferred_life: 3600,
+            valid_life: 3600,
+            opts: DhcpOptions::new(),
+        }));
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: iaid,
+            t1: 1800,
+            t2: 2880,
+            opts: iana_opts,
+        }));
+
+        let mut resp_vec = Vec::new();
+        let res = srv.handle_release(&msg, &duid_rogue, None, peer_ip(), &mut resp_vec);
+
+        match res {
+            HandleResult::Reply(_, _, _, _, _, released) => {
+                assert!(
+                    released.na.is_empty(),
+                    "Rogue RELEASE should not release anything"
+                );
+            }
+            HandleResult::Ignore => panic!("Expected Reply"),
+        }
+    }
+
+    #[test]
+    fn unauthorized_v6_decline_is_ignored() {
+        let mut srv = dummy_server();
+        let ctx = srv.ctx.clone();
+        let duid_legit = Duid::new(vec![1, 2, 3]);
+        let duid_rogue = Duid::new(vec![9, 9, 9]);
+        let ip = "fd00::100".parse().unwrap();
+        let iaid = 777;
+
+        // 1. DUID legit has the lease
+        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+            mac: Some(dummy_mac()),
+            duid: duid_legit,
+            iaid,
+            ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        // 2. DUID rogue declines the IP
+        let mut msg = Message::new(MessageType::Decline);
+        msg.opts_mut()
+            .insert(DhcpOption::ServerId(srv.server_duid.bytes.to_vec()));
+        msg.opts_mut()
+            .insert(DhcpOption::ClientId(duid_rogue.bytes.to_vec()));
+
+        let mut iana_opts = DhcpOptions::new();
+        iana_opts.insert(DhcpOption::IAAddr(IAAddr {
+            addr: ip,
+            preferred_life: 3600,
+            valid_life: 3600,
+            opts: DhcpOptions::new(),
+        }));
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
+            id: iaid,
+            t1: 1800,
+            t2: 2880,
+            opts: iana_opts,
+        }));
+
+        let mut resp_vec = Vec::new();
+        let res = srv.handle_decline(&msg, &duid_rogue, None, peer_ip(), &mut resp_vec);
+
+        match res {
+            HandleResult::Reply(_, _, _, _, _, released) => {
+                assert!(
+                    released.na.is_empty(),
+                    "Rogue DECLINE should not release anything"
+                );
+            }
+            HandleResult::Ignore => panic!("Expected Reply"),
+        }
+    }
+
+    #[test]
+    fn v6_custom_options_overwriting_is_prevented() {
+        let mut srv = dummy_server();
+        srv.cfg.options.insert(1, "hex:01".to_string()); // Client ID override attempt
+        srv.cfg.options.insert(2, "hex:02".to_string()); // Server ID override attempt
+        srv.cfg.options.insert(99, "s:hello".to_string()); // allowed custom option
+
+        let mut reply = Message::new(MessageType::Reply);
+        srv.add_custom_options(&mut reply);
+
+        // Option 1 and 2 must NOT be present in custom options output
+        assert!(reply.opts().get(OptionCode::Unknown(1)).is_none());
+        assert!(reply.opts().get(OptionCode::Unknown(2)).is_none());
+        // Option 99 must be present
+        assert!(reply.opts().get(OptionCode::Unknown(99)).is_some());
+    }
+
+    #[test]
+    fn invalid_v6_pool_range_underflow_protection() {
+        // Create pool configuration with range_start > range_end
+        let cfg = Dhcpv6PoolConfig {
+            range_start: Some(Ipv6AddrOrSuffix::Full("fd00::200".parse().unwrap())),
+            range_end: Some(Ipv6AddrOrSuffix::Full("fd00::100".parse().unwrap())),
+            address: None,
+        };
+        let range = PoolRange::from_config(&cfg);
+        // Should fallback to empty Floating range
+        assert!(matches!(range, PoolRange::Floating { .. }));
+        if let PoolRange::Floating {
+            start_suffix,
+            end_suffix,
+        } = range
+        {
+            assert_eq!(start_suffix, [0; 8]);
+            assert_eq!(end_suffix, [0; 8]);
+        }
     }
 }

@@ -65,7 +65,15 @@ impl IpPool {
     pub fn new(pools: Vec<Dhcpv4PoolConfig>) -> Self {
         let mut available = RoaringBitmap::new();
         for pool in &pools {
-            available.insert_range(u32::from(pool.range_start)..=u32::from(pool.range_end));
+            if pool.range_start <= pool.range_end {
+                available.insert_range(u32::from(pool.range_start)..=u32::from(pool.range_end));
+            } else {
+                tracing::warn!(
+                    "[DHCPv4] Invalid pool range: start {} is greater than end {}",
+                    pool.range_start,
+                    pool.range_end
+                );
+            }
         }
 
         Self {
@@ -114,7 +122,13 @@ impl IpPool {
     fn total_pool_size(&self) -> u32 {
         self.pools
             .iter()
-            .map(|p| u32::from(p.range_end).saturating_sub(u32::from(p.range_start)) + 1)
+            .map(|p| {
+                if p.range_start <= p.range_end {
+                    u32::from(p.range_end).saturating_sub(u32::from(p.range_start)) + 1
+                } else {
+                    0
+                }
+            })
             .sum()
     }
 

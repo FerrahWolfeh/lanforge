@@ -291,6 +291,17 @@ impl DhcpServer {
             .releases
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ip = msg.ciaddr();
+
+        // Validate client lease ownership to prevent spoofed/rogue release DoS
+        let owned_ip = self.ctx.get_device(&identity.mac).and_then(|d| d.v4.ip());
+        if owned_ip != Some(ip) {
+            warn!(
+                "DHCPv4: RELEASE from {} for {} ignored: client does not own this lease.",
+                identity, ip
+            );
+            return HandleResult::Ignore;
+        }
+
         info!("DHCPv4: {identity} released its address {ip}");
         self.pool.release(&ip);
         HandleResult::Release { ip }
@@ -303,6 +314,16 @@ impl DhcpServer {
             .declines
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(declined_ip) = Self::get_requested_ip(msg) {
+            // Validate client lease ownership to prevent rogue decline starvation DoS
+            let owned_ip = self.ctx.get_device(&identity.mac).and_then(|d| d.v4.ip());
+            if owned_ip != Some(declined_ip) {
+                warn!(
+                    "DHCPv4: DECLINE from {} for {} ignored: client does not own this lease.",
+                    identity, declined_ip
+                );
+                return HandleResult::Ignore;
+            }
+
             warn!("DHCPv4: {identity} declined {declined_ip} (address conflict)! Quarantining IP.");
             self.pool.decline(declined_ip);
             HandleResult::Release { ip: declined_ip }
@@ -466,6 +487,14 @@ impl DhcpServer {
 
     fn add_custom_options(&self, opts: &mut v4::DhcpOptions) {
         for (code, val) in &self.cfg.options {
+            // Protect critical protocol options from being overwritten
+            if matches!(*code, 53 | 54 | 51 | 1) {
+                warn!(
+                    "DHCPv4: Custom option {} ignored: cannot overwrite critical protocol options.",
+                    code
+                );
+                continue;
+            }
             if let Some(data) = parse_typed_option(val) {
                 opts.insert(DhcpOption::Unknown(UnknownOption::new(
                     (*code).into(),
@@ -761,6 +790,11 @@ mod tests {
         let ip = Ipv4Addr::new(192, 168, 1, 100);
 
         srv.pool.allocate(&ctx, mac, Some(ip));
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac,
+            ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
         srv.last_assigned_ip = Some(ip);
         assert_eq!(srv.last_assignment_for(), Some(ip));
 
@@ -786,6 +820,11 @@ mod tests {
         let ip = Ipv4Addr::new(192, 168, 1, 100);
 
         srv.pool.allocate(&ctx, mac, Some(ip));
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac,
+            ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
 
         // Cliente detectou conflito de ARP e enviou DECLINE
         let raw_msg = build_raw_msg(MessageType::Decline, mac, Some(ip), None, None);
@@ -921,5 +960,70 @@ mod tests {
             reply_opts.get(v4::OptionCode::ClassIdentifier).is_some(),
             "Missing Class Identifier (Option 60)"
         );
+    }
+
+    #[test]
+    fn unauthorized_release_is_ignored() {
+        let (mut srv, ctx) = dummy_server();
+        let mac_legit = dummy_mac();
+        let mac_rogue = MacAddr([0x99, 0x99, 0x99, 0x99, 0x99, 0x99]);
+        let ip = Ipv4Addr::new(192, 168, 1, 100);
+
+        // 1. MAC legit has the lease in context
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac: mac_legit,
+            ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        // 2. MAC rogue tries to release the IP
+        let raw_msg = build_raw_msg(MessageType::Release, mac_rogue, None, Some(ip), None);
+        let res = srv.handle_packet(&raw_msg, None);
+
+        assert!(
+            matches!(res, HandleResult::Ignore),
+            "Rogue RELEASE must be ignored"
+        );
+    }
+
+    #[test]
+    fn unauthorized_decline_is_ignored() {
+        let (mut srv, ctx) = dummy_server();
+        let mac_legit = dummy_mac();
+        let mac_rogue = MacAddr([0x99, 0x99, 0x99, 0x99, 0x99, 0x99]);
+        let ip = Ipv4Addr::new(192, 168, 1, 100);
+
+        // 1. MAC legit has the lease
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac: mac_legit,
+            ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        // 2. MAC rogue declines the IP
+        let raw_msg = build_raw_msg(MessageType::Decline, mac_rogue, Some(ip), None, None);
+        let res = srv.handle_packet(&raw_msg, None);
+
+        assert!(
+            matches!(res, HandleResult::Ignore),
+            "Rogue DECLINE must be ignored"
+        );
+    }
+
+    #[test]
+    fn custom_options_overwriting_is_prevented() {
+        let (mut srv, _ctx) = dummy_server();
+        srv.cfg.options.insert(53, "hex:01".to_string()); // MessageType override attempt
+        srv.cfg.options.insert(54, "hex:c0a80101".to_string()); // ServerIdentifier override attempt
+        srv.cfg.options.insert(99, "s:hello".to_string()); // allowed custom option
+
+        let mut opts = v4::DhcpOptions::new();
+        srv.add_custom_options(&mut opts);
+
+        // Option 53 and 54 must NOT be present in custom options output
+        assert!(opts.get(53.into()).is_none());
+        assert!(opts.get(54.into()).is_none());
+        // Option 99 must be present
+        assert!(opts.get(99.into()).is_some());
     }
 }

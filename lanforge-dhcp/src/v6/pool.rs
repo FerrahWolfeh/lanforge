@@ -60,6 +60,7 @@ pub enum PoolRange {
 
 impl PoolRange {
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn from_config(cfg: &Dhcpv6PoolConfig) -> Self {
         if let Some(ref cidr) = cfg.address
             && let Some((addr, len)) = Self::parse_cidr(cidr)
@@ -106,40 +107,76 @@ impl PoolRange {
                 let s_segs = start.segments();
                 let e_segs = end.segments();
                 if s_segs[0..4] == e_segs[0..4] {
-                    Self::Fixed {
-                        prefix: [s_segs[0], s_segs[1], s_segs[2], s_segs[3]],
-                        start_u128: u128::from_be_bytes(start.octets()),
-                        end_u128: u128::from_be_bytes(end.octets()),
+                    let start_u128 = u128::from_be_bytes(start.octets());
+                    let end_u128 = u128::from_be_bytes(end.octets());
+                    if start_u128 <= end_u128 {
+                        Self::Fixed {
+                            prefix: [s_segs[0], s_segs[1], s_segs[2], s_segs[3]],
+                            start_u128,
+                            end_u128,
+                        }
+                    } else {
+                        tracing::warn!(
+                            "[DHCPv6] Invalid Fixed range: start {} is greater than end {}. Falling back to empty.",
+                            start,
+                            end
+                        );
+                        Self::Floating {
+                            start_suffix: [0; 8],
+                            end_suffix: [0; 8],
+                        }
                     }
                 } else {
-                    Self::Floating {
-                        start_suffix: [
-                            s_segs[4].to_be_bytes()[0],
-                            s_segs[4].to_be_bytes()[1],
-                            s_segs[5].to_be_bytes()[0],
-                            s_segs[5].to_be_bytes()[1],
-                            s_segs[6].to_be_bytes()[0],
-                            s_segs[6].to_be_bytes()[1],
-                            s_segs[7].to_be_bytes()[0],
-                            s_segs[7].to_be_bytes()[1],
-                        ],
-                        end_suffix: [
-                            e_segs[4].to_be_bytes()[0],
-                            e_segs[4].to_be_bytes()[1],
-                            e_segs[5].to_be_bytes()[0],
-                            e_segs[5].to_be_bytes()[1],
-                            e_segs[6].to_be_bytes()[0],
-                            e_segs[6].to_be_bytes()[1],
-                            e_segs[7].to_be_bytes()[0],
-                            e_segs[7].to_be_bytes()[1],
-                        ],
+                    let start_suffix = [
+                        s_segs[4].to_be_bytes()[0],
+                        s_segs[4].to_be_bytes()[1],
+                        s_segs[5].to_be_bytes()[0],
+                        s_segs[5].to_be_bytes()[1],
+                        s_segs[6].to_be_bytes()[0],
+                        s_segs[6].to_be_bytes()[1],
+                        s_segs[7].to_be_bytes()[0],
+                        s_segs[7].to_be_bytes()[1],
+                    ];
+                    let end_suffix = [
+                        e_segs[4].to_be_bytes()[0],
+                        e_segs[4].to_be_bytes()[1],
+                        e_segs[5].to_be_bytes()[0],
+                        e_segs[5].to_be_bytes()[1],
+                        e_segs[6].to_be_bytes()[0],
+                        e_segs[6].to_be_bytes()[1],
+                        e_segs[7].to_be_bytes()[0],
+                        e_segs[7].to_be_bytes()[1],
+                    ];
+                    if start_suffix <= end_suffix {
+                        Self::Floating {
+                            start_suffix,
+                            end_suffix,
+                        }
+                    } else {
+                        tracing::warn!(
+                            "[DHCPv6] Invalid Floating range suffixes. Falling back to empty."
+                        );
+                        Self::Floating {
+                            start_suffix: [0; 8],
+                            end_suffix: [0; 8],
+                        }
                     }
                 }
             }
             (Some(Ipv6AddrOrSuffix::Suffix(s)), Some(Ipv6AddrOrSuffix::Suffix(e))) => {
-                Self::Floating {
-                    start_suffix: *s,
-                    end_suffix: *e,
+                if s <= e {
+                    Self::Floating {
+                        start_suffix: *s,
+                        end_suffix: *e,
+                    }
+                } else {
+                    tracing::warn!(
+                        "[DHCPv6] Invalid Suffix range suffixes. Falling back to empty."
+                    );
+                    Self::Floating {
+                        start_suffix: [0; 8],
+                        end_suffix: [0; 8],
+                    }
                 }
             }
             _ => Self::Floating {
@@ -232,7 +269,11 @@ impl Ipv6Pool {
                             fixed_p[0], fixed_p[1], fixed_p[2], fixed_p[3], 0, 0, 0, 0,
                         );
                         if fixed_prefix == prefix {
-                            let size = end_u128.saturating_sub(*start_u128) + 1;
+                            let size = if *end_u128 >= *start_u128 {
+                                end_u128.saturating_sub(*start_u128) + 1
+                            } else {
+                                0
+                            };
                             total_size =
                                 total_size.saturating_add(u32::try_from(size).unwrap_or(u32::MAX));
                         }
@@ -243,7 +284,11 @@ impl Ipv6Pool {
                     } => {
                         let start = u64::from_be_bytes(*start_suffix);
                         let end = u64::from_be_bytes(*end_suffix);
-                        let size = end.saturating_sub(start) + 1;
+                        let size = if end >= start {
+                            end.saturating_sub(start) + 1
+                        } else {
+                            0
+                        };
                         total_size =
                             total_size.saturating_add(u32::try_from(size).unwrap_or(u32::MAX));
                     }
@@ -618,7 +663,10 @@ impl Ipv6Pool {
         target_mac: Option<MacAddr>,
         target_duid: &Duid,
     ) -> Option<Ipv6Addr> {
-        let size = end - start + 1;
+        if end < start {
+            return None;
+        }
+        let size = end.saturating_sub(start) + 1;
 
         // 1. Deterministic Candidate (Stability)
         let det_offset = Self::generate_deterministic_u128(&prefix, target_duid.as_bytes(), size);

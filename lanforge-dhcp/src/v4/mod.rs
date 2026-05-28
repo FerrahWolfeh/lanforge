@@ -301,12 +301,14 @@ impl Dhcpv4Service {
                             } else {
                                 (dest_ip, *mac.as_ref())
                             };
-                            let _ = raw_tx.send_dhcp(
+                            if let Err(e) = raw_tx.send_dhcp(
                                 &packet,
                                 self.cfg.server_id,
                                 final_dst_ip,
                                 dst_mac_arr,
-                            );
+                            ) {
+                                warn!("DHCPv4: Failed to inject L2 reply packet: {e}");
+                            }
                         } else {
                             let relay_addr = SocketAddrV4::new(giaddr, self.cfg.port);
                             let _ = socket.try_send_to(&packet, relay_addr.into());
@@ -367,7 +369,9 @@ impl Dhcpv4Service {
                 let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                 if let Some(ip) = ip {
                     let packet = server.build_forcerenew(*mac, ip);
-                    let _ = raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref());
+                    if let Err(e) = raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref()) {
+                        warn!("DHCPv4: Failed to inject L2 FORCERENEW packet to {ip} ({mac}): {e}");
+                    }
                 }
             }
             LanforgeEvent::Device(DeviceEvent::AdminUpdate { mac, change, .. }) => {

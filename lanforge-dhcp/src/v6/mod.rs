@@ -342,8 +342,14 @@ impl Dhcpv6Service {
             }
 
             let handle_res = server.handle_packet(&msg, peer_ip, resolved_mac, &mut resp_vec);
-            if let HandleResult::Reply(reply_bytes, dest_ip, learned_duid, opt_mac, ias) =
-                handle_res
+            if let HandleResult::Reply(
+                reply_bytes,
+                dest_ip,
+                learned_duid,
+                opt_mac,
+                assigned_ias,
+                released_ias,
+            ) = handle_res
             {
                 let client_port = if self.config.port == 547 {
                     546
@@ -356,7 +362,8 @@ impl Dhcpv6Service {
                     &self.ctx,
                     opt_mac,
                     learned_duid.as_ref(),
-                    &ias,
+                    &assigned_ias,
+                    &released_ias,
                     server,
                     &self.config,
                 );
@@ -505,20 +512,21 @@ fn apply_learned_state(
     ctx: &LanforgeContext,
     opt_mac: Option<MacAddr>,
     learned_duid: Option<&Duid>,
-    ias: &server::AssignedIAs,
+    assigned_ias: &server::AssignedIAs,
+    released_ias: &server::AssignedIAs,
     server: &Dhcpv6Server,
     config: &Dhcpv6Config,
 ) {
     let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
 
     // 1. Process IA_NA (Non-temporary Addresses)
-    for &iaid in &ias.na {
-        let assigned_ips = learned_duid.map_or_else(
+    for &iaid in &assigned_ias.na {
+        let assigned_ip_addrs = learned_duid.map_or_else(
             || opt_mac.map_or_else(Vec::new, |mac| server.pool.lookup_by_mac_legacy(ctx, mac)),
             |duid| server.last_assignment_for(duid, iaid),
         );
 
-        if assigned_ips.is_empty() {
+        if assigned_ip_addrs.is_empty() {
             if let Some(duid) = learned_duid {
                 // No IPs assigned yet, but IAID is known
                 let _ = ctx.apply(DeviceUpdate::DuidAssociated {
@@ -529,7 +537,7 @@ fn apply_learned_state(
             }
         } else {
             // One or more IPs assigned
-            for ip in assigned_ips {
+            for ip in assigned_ip_addrs {
                 if let Some(duid) = learned_duid {
                     let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
                         mac: opt_mac,
@@ -557,7 +565,7 @@ fn apply_learned_state(
     }
 
     // 2. Process IA_PD (Prefix Delegation)
-    for &iaid in &ias.pd {
+    for &iaid in &assigned_ias.pd {
         let assigned_prefix = learned_duid
             .as_ref()
             .and_then(|duid| server.pool.lookup_prefix(ctx, duid, iaid));
@@ -570,6 +578,22 @@ fn apply_learned_state(
                 prefix,
                 len,
                 expires,
+            });
+        }
+    }
+
+    // 3. Process Released/Declined IA_NAs and IA_PDs
+    if let Some(mac) = opt_mac {
+        for &iaid in &released_ias.na {
+            let _ = ctx.apply(DeviceUpdate::LeaseReleased {
+                mac,
+                target: LeaseTarget::V6 { iaid },
+            });
+        }
+        for &iaid in &released_ias.pd {
+            let _ = ctx.apply(DeviceUpdate::LeaseReleased {
+                mac,
+                target: LeaseTarget::V6Prefix { iaid },
             });
         }
     }
