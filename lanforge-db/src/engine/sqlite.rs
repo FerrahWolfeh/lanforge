@@ -3,7 +3,7 @@ use super::utils::system_time_to_unix;
 use crate::error::LanforgeDbError;
 use lanforge_types::device::{IPv4State, IPv6State, V6PrefixLease};
 use lanforge_types::{device::Device, identifiers::MacAddr};
-use sqlx::{Sqlite, Transaction};
+use sqlx::{AssertSqlSafe, Sqlite, Transaction};
 use std::net::Ipv4Addr;
 
 pub async fn upsert_device(
@@ -53,7 +53,7 @@ async fn upsert_base_device_internal(
             duid = EXCLUDED.duid,
             origin = EXCLUDED.origin,
             managed_at = EXCLUDED.managed_at,
-            class = EXCLUDED.class"
+            class = EXCLUDED.class",
     )
     .bind(mac_str)
     .bind(&device.hostname.name)
@@ -62,7 +62,8 @@ async fn upsert_base_device_internal(
     .bind(device.origin.as_str())
     .bind(device.managed_at.map(system_time_to_unix))
     .bind(device.class as i64)
-    .execute(&mut **tx).await?;
+    .execute(&mut **tx)
+    .await?;
 
     // 2. Topology table
     if let Some(topo) = &device.topology {
@@ -177,7 +178,7 @@ async fn prune_stale_child_rows(
             .collect::<Vec<_>>()
             .join(",");
         let query = format!("DELETE FROM v6_leases WHERE mac = ? AND iaid NOT IN ({params})");
-        let mut q = sqlx::query(&query).bind(mac);
+        let mut q = sqlx::query(AssertSqlSafe(query)).bind(mac);
         for iaid in active_iaids {
             q = q.bind(iaid);
         }
@@ -202,7 +203,7 @@ async fn prune_stale_child_rows(
             .collect::<Vec<_>>()
             .join(",");
         let query = format!("DELETE FROM v6_prefixes WHERE mac = ? AND iaid NOT IN ({params})");
-        let mut q = sqlx::query(&query).bind(mac);
+        let mut q = sqlx::query(AssertSqlSafe(query)).bind(mac);
         for iaid in active_prefix_iaids {
             q = q.bind(iaid);
         }
@@ -233,7 +234,7 @@ async fn prune_stale_child_rows(
             .collect::<Vec<_>>()
             .join(",");
         let query = format!("DELETE FROM slaac_addrs WHERE mac = ? AND ip NOT IN ({params})");
-        let mut q = sqlx::query(&query).bind(mac);
+        let mut q = sqlx::query(AssertSqlSafe(query)).bind(mac);
         for ip in active_slaac {
             q = q.bind(ip);
         }
@@ -258,7 +259,7 @@ async fn prune_stale_child_rows(
             .collect::<Vec<_>>()
             .join(",");
         let query = format!("DELETE FROM seen_v4 WHERE mac = ? AND ip NOT IN ({params})");
-        let mut q = sqlx::query(&query).bind(mac);
+        let mut q = sqlx::query(AssertSqlSafe(query)).bind(mac);
         for ip in active_seen {
             q = q.bind(ip);
         }
@@ -380,7 +381,7 @@ pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>,
             s.v4_static, s.v6_suffix, s.boot_file
          FROM devices d
          LEFT JOIN device_topology t ON d.mac = t.mac
-         LEFT JOIN static_devices s ON d.mac = s.mac"
+         LEFT JOIN static_devices s ON d.mac = s.mac",
     )
     .fetch_all(pool)
     .await
@@ -421,13 +422,16 @@ pub async fn load_v6_prefixes(
 pub async fn load_slaac_addrs(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, last_seen FROM slaac_addrs")
-        .fetch_all(pool)
-        .await?;
+    let rows =
+        sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, last_seen FROM slaac_addrs")
+            .fetch_all(pool)
+            .await?;
     Ok(rows)
 }
 
-pub async fn load_seen_v4(pool: &sqlx::SqlitePool) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+pub async fn load_seen_v4(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, last_seen FROM seen_v4")
         .fetch_all(pool)
         .await?;
@@ -492,13 +496,12 @@ pub async fn find_mac_by_hostname(
     pool: &sqlx::SqlitePool,
     hostname: &str,
 ) -> Result<Option<MacAddr>, LanforgeDbError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT mac FROM devices WHERE hostname = ? OR hostname = ? LIMIT 1",
-    )
-    .bind(hostname)
-    .bind(hostname.to_ascii_lowercase())
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT mac FROM devices WHERE hostname = ? OR hostname = ? LIMIT 1")
+            .bind(hostname)
+            .bind(hostname.to_ascii_lowercase())
+            .fetch_optional(pool)
+            .await?;
 
     Ok(row.and_then(|(mac,)| MacAddr::parse(&mac)))
 }

@@ -26,7 +26,7 @@ use tracing::debug;
 use crate::error::LanforgeDbError;
 use futures::StreamExt;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
-use sqlx::{Row, SqlitePool};
+use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
 /// A SQLite-backed log store for transient system events.
 ///
@@ -121,7 +121,9 @@ impl LogDb {
             ",
         );
 
-        sqlx::query(&init_query).execute(&pool).await?;
+        sqlx::query(AssertSqlSafe(init_query))
+            .execute(&pool)
+            .await?;
 
         debug!("In-memory log database initialized");
         Ok(Self {
