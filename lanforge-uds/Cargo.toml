@@ -18,17 +18,10 @@ lanforge-types = { path = "../lanforge-types" }
 # Workspace
 tokio = { workspace = true, features = ["io-util", "net", "sync", "rt"] }
 serde = { workspace = true, features = ["rc"] }
-serde_json = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-async-trait = "0.1.86"
 futures = { workspace = true }
 postcard = { workspace = true }
-tokio-util = { version = "0.7.18" }
-parking_lot = { workspace = true }
-chrono = { workspace = true }
-rand = "0.10.1"
-hex = "0.4.3"
 hotpath = { workspace = true, optional = true }
 
 [features]

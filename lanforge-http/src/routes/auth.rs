@@ -61,3 +61,32 @@ async fn handle_validate(
     };
     Json(serde_json::json!({ "data": { "valid": valid } }))
 }
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub password: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct LoginResponse {
+    pub token: String,
+}
+
+pub async fn handle_login(
+    State(state): State<AppState>,
+    Json(payload): Json<LoginRequest>,
+) -> crate::error::Result<impl IntoResponse> {
+    if let Some(hash) = &state.cfg.auth_password_hash {
+        if lanforge_core::utils::auth::verify_password(hash, &payload.password) {
+            let token = state.auth.generate_token("admin")?;
+            Ok((StatusCode::OK, Json(LoginResponse { token })).into_response())
+        } else {
+            Err(crate::error::HttpError::Auth(
+                "Invalid password".to_string(),
+            ))
+        }
+    } else {
+        let token = state.auth.generate_token("admin")?;
+        Ok((StatusCode::OK, Json(LoginResponse { token })).into_response())
+    }
+}

@@ -1,5 +1,5 @@
-use crate::routes::create_client_ctx;
 use crate::server::AppState;
+use crate::{error::HttpError, routes::create_client_ctx};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -14,12 +14,15 @@ use lanforge_core::bus::LanforgeEvent;
 use lanforge_types::network::{
     DnsRecordType,
     dns::{
-        adblock::{AdblockUrlKind, RewriteRule, BlockingMode},
+        adblock::{AdblockUrlKind, BlockingMode, RewriteRule},
         upstream::UpstreamProtocol,
     },
 };
 use serde::Deserialize;
-use std::{convert::Infallible, net::{Ipv4Addr, Ipv6Addr, SocketAddr}};
+use std::{
+    convert::Infallible,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+};
 
 #[derive(Debug, Deserialize)]
 pub struct AnalyticsQuery {
@@ -334,18 +337,19 @@ async fn handle_rewrites(State(state): State<AppState>) -> impl IntoResponse {
 async fn handle_rewrite_add(
     State(state): State<AppState>,
     Json(payload): Json<RewriteRequest>,
-) -> impl IntoResponse {
+) -> crate::error::Result<impl IntoResponse> {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(
+    let answer = payload.answer.parse().map_err(HttpError::Generic)?;
+    Ok(crate::http_response!(
         ctx.handle_dns_rewrite_add(RewriteRule {
             id: None,
             domain: payload.domain,
             rtype: payload.rtype,
-            answer: payload.answer.parse().unwrap(),
+            answer,
         })
         .await,
         Success => NoContent
-    )
+    ))
 }
 
 async fn handle_rewrite_remove(

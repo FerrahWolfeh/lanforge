@@ -64,3 +64,91 @@ async fn test_http_error_into_response() {
     let response = ax_response::into_response(err);
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[cfg(feature = "server")]
+#[tokio::test]
+async fn test_handle_login() {
+    use crate::config::HttpConfig;
+    use crate::routes::auth::{LoginRequest, handle_login};
+    use crate::server::AppState;
+    use axum::Json;
+    use axum::extract::State;
+    use lanforge_core::bus::EventBus;
+    use lanforge_core::context::LanforgeContext;
+    use lanforge_core::context::state::State as CoreState;
+    use lanforge_db::config::DatabaseConfig;
+    use lanforge_db::engine::LanforgeDb;
+    use lanforge_db::log_engine::LogDb;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    let bus = Arc::new(EventBus::new());
+    let core_state = CoreState::new();
+    let ctx = LanforgeContext::new(bus, core_state, None);
+    let db = Arc::new(
+        LanforgeDb::open(&DatabaseConfig {
+            url: "sqlite::memory:".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let log_db = Arc::new(LogDb::open("sqlite::memory:").await.unwrap());
+
+    // 1. Test when auth is disabled (auth_password_hash = None)
+    let state_no_auth = AppState {
+        cfg: Arc::new(HttpConfig {
+            auth_password_hash: None,
+            ..Default::default()
+        }),
+        ctx: ctx.clone(),
+        db: db.clone(),
+        log_db: log_db.clone(),
+        auth: Arc::new(AuthManager::new()),
+        start_time: Instant::now(),
+    };
+
+    let res = handle_login(
+        State(state_no_auth),
+        Json(LoginRequest {
+            password: "any_password".to_string(),
+        }),
+    )
+    .await;
+    assert!(res.is_ok());
+
+    // 2. Test when auth is enabled
+    let password = "my_secure_password";
+    let hash = lanforge_core::utils::auth::hash_password(password);
+    let state_with_auth = AppState {
+        cfg: Arc::new(HttpConfig {
+            auth_password_hash: Some(hash),
+            ..Default::default()
+        }),
+        ctx,
+        db,
+        log_db,
+        auth: Arc::new(AuthManager::new()),
+        start_time: Instant::now(),
+    };
+
+    // Correct password
+    let res_correct = handle_login(
+        State(state_with_auth.clone()),
+        Json(LoginRequest {
+            password: password.to_string(),
+        }),
+    )
+    .await;
+    assert!(res_correct.is_ok());
+
+    // Incorrect password
+    let res_incorrect = handle_login(
+        State(state_with_auth),
+        Json(LoginRequest {
+            password: "wrong_password".to_string(),
+        }),
+    )
+    .await;
+    assert!(res_incorrect.is_err());
+}

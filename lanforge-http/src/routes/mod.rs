@@ -22,7 +22,9 @@ pub fn router() -> Router<AppState> {
         .nest("/events", events::router())
         .nest("/hosts", hosts::router());
 
-    Router::new().nest("/v1", v1)
+    Router::new()
+        .nest("/v1", v1)
+        .route("/auth/login", axum::routing::post(auth::handle_login))
 }
 
 #[must_use]

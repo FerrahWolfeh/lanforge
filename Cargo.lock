@@ -2835,10 +2835,7 @@ dependencies = [
 name = "lanforge-uds"
 version = "1.1.0"
 dependencies = [
- "async-trait",
- "chrono",
  "futures",
- "hex",
  "hotpath",
  "lanforge-api",
  "lanforge-api-dispatch",
@@ -2847,14 +2844,10 @@ dependencies = [
  "lanforge-dns",
  "lanforge-macros",
  "lanforge-types",
- "parking_lot",
  "postcard",
- "rand 0.10.1",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 

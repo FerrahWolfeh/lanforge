@@ -71,7 +71,7 @@ impl ControlService {
             fs::create_dir_all(parent).map_err(CoreError::Io)?;
         }
         let listener = UnixListener::bind(path_ref).map_err(CoreError::Io)?;
-        let _ = fs::set_permissions(path_ref, Permissions::from_mode(0o666));
+        let _ = fs::set_permissions(path_ref, Permissions::from_mode(0o660));
         Ok(listener)
     }
 
@@ -220,6 +220,11 @@ where
             return Err(UdsError::Io(e));
         }
         let len = u32::from_be_bytes(len_bytes) as usize;
+        if len > 10 * 1024 * 1024 {
+            return Err(UdsError::EncodingError(format!(
+                "Request length limit exceeded: {len} bytes (max: 10MB)"
+            )));
+        }
 
         // Read payload
         let mut req_buf = vec![0u8; len];
