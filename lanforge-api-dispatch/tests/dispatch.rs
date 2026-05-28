@@ -251,3 +251,121 @@ async fn test_dns_rewrite_add_dynamic() {
         panic!("Expected DnsRewrites response");
     }
 }
+
+#[tokio::test]
+async fn test_dispatch_host_set_invalid_ip_ignored() {
+    let client_ctx = init_test_context().await;
+
+    // 1. Add a valid static host configuration
+    let entry = HostConfigEntry {
+        mac: MacAddr::parse("00:11:22:33:44:55").unwrap(),
+        hostname: "test-host".to_string(),
+        v4_fixed: Some("192.168.1.100".parse().unwrap()),
+        v6_suffix: None,
+        origin: Origin::Static,
+    };
+    let add_res = client_ctx.handle_host_add(entry).await;
+    assert!(matches!(add_res, Response::Success(_)));
+
+    // 2. Call handle_host_set with an invalid IP address
+    let _ = client_ctx
+        .handle_host_set(
+            MacAddr::parse("00:11:22:33:44:55").unwrap(),
+            "v4_static".to_string(),
+            "invalid-ip-string".to_string(),
+        )
+        .await;
+
+    // 3. Verify that the configuration in the state remains unchanged (still 192.168.1.100)
+    let res = client_ctx.handle_hosts().await;
+    if let Response::Hosts(h) = res {
+        assert_eq!(h.hosts.len(), 1);
+        assert_eq!(h.hosts[0].v4_fixed, Some("192.168.1.100".parse().unwrap()));
+    } else {
+        panic!("Expected Response::Hosts");
+    }
+}
+
+#[tokio::test]
+async fn test_dispatch_system_config_import_overwrite() {
+    let client_ctx = init_test_context().await;
+
+    // 1. Seed some initial host configurations
+    let entry1 = HostConfigEntry {
+        mac: MacAddr::parse("00:00:00:00:00:01").unwrap(),
+        hostname: "old-host-1".to_string(),
+        v4_fixed: Some("192.168.1.10".parse().unwrap()),
+        v6_suffix: None,
+        origin: Origin::Static,
+    };
+    let _ = client_ctx.handle_host_add(entry1).await;
+
+    // 2. Prepare import configuration (contains "new-host-2")
+    let new_entry = HostConfigEntry {
+        mac: MacAddr::parse("00:00:00:00:00:02").unwrap(),
+        hostname: "new-host-2".to_string(),
+        v4_fixed: Some("192.168.1.20".parse().unwrap()),
+        v6_suffix: None,
+        origin: Origin::Static,
+    };
+
+    // Case A: Import with overwrite = false
+    let import_cfg_merge = SystemConfigExport {
+        hosts: vec![new_entry.clone()],
+        dns_rewrites: vec![],
+        dns_upstreams: vec![],
+        dns_adblock_config: Default::default(),
+        dns_adblock_urls: vec![],
+        dns_allowlist: vec![],
+        overwrite: false,
+    };
+    let merge_res = client_ctx
+        .handle_system_config_import(import_cfg_merge)
+        .await;
+    assert!(matches!(merge_res, Response::Success(_)));
+
+    // Verify both hosts exist (merged)
+    let res = client_ctx.handle_hosts().await;
+    if let Response::Hosts(h) = res {
+        assert_eq!(
+            h.hosts.len(),
+            2,
+            "Expected both old and new hosts to be present"
+        );
+        assert!(h.hosts.iter().any(|x| x.hostname == "old-host-1"));
+        assert!(h.hosts.iter().any(|x| x.hostname == "new-host-2"));
+    } else {
+        panic!("Expected Response::Hosts");
+    }
+
+    // Case B: Import with overwrite = true
+    let new_entry_3 = HostConfigEntry {
+        mac: MacAddr::parse("00:00:00:00:00:03").unwrap(),
+        hostname: "new-host-3".to_string(),
+        v4_fixed: Some("192.168.1.30".parse().unwrap()),
+        v6_suffix: None,
+        origin: Origin::Static,
+    };
+    let import_cfg_overwrite = SystemConfigExport {
+        hosts: vec![new_entry_3],
+        dns_rewrites: vec![],
+        dns_upstreams: vec![],
+        dns_adblock_config: Default::default(),
+        dns_adblock_urls: vec![],
+        dns_allowlist: vec![],
+        overwrite: true,
+    };
+    let overwrite_res = client_ctx
+        .handle_system_config_import(import_cfg_overwrite)
+        .await;
+    assert!(matches!(overwrite_res, Response::Success(_)));
+
+    // Verify only the new imported host exists (old ones cleared)
+    let res = client_ctx.handle_hosts().await;
+    if let Response::Hosts(h) = res {
+        assert_eq!(h.hosts.len(), 1, "Expected previous hosts to be wiped");
+        assert_eq!(h.hosts[0].hostname, "new-host-3");
+    } else {
+        panic!("Expected Response::Hosts");
+    }
+}
