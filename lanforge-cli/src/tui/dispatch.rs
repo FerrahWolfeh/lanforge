@@ -109,5 +109,11 @@ pub async fn execute_action(client: &LanforgeClient, action: PendingAction) -> A
                 Err(e) => ActionResult::Error(e.to_string()),
             }
         }
+        PendingAction::ServiceControl { id, action, .. } => {
+            match client.service_control(id, action).await {
+                Ok(r) => ActionResult::Success(r.message),
+                Err(e) => ActionResult::Error(e.to_string()),
+            }
+        }
     }
 }

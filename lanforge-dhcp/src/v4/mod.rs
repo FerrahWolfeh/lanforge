@@ -38,7 +38,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_macros::lanforge_service;
 use lanforge_types::device::IPv4State;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
@@ -162,9 +162,10 @@ impl StatusProvider for Dhcpv4Service {
             ),
         ];
         ServiceBanner {
+            id: "dhcpv4".to_string(),
             name: "DHCPv4 Server".to_string(),
-            state: ServiceState::Online,
-            uptime_secs: self.ctx.uptime_secs(),
+            state: self.ctx.get_service_state("dhcpv4"),
+            uptime_secs: self.ctx.get_service_uptime("dhcpv4"),
             stats,
         }
     }

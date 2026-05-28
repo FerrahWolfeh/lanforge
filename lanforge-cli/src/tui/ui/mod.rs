@@ -67,7 +67,7 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         TuiTab::Events => events::render(f, chunks[2], &app.state, app.auto_scroll),
         TuiTab::Topology => topology::render(f, chunks[2], app),
         TuiTab::Dhcp => dhcp::render(f, chunks[2], app),
-        TuiTab::Services => services::render(f, chunks[2], &app.state),
+        TuiTab::Services => services::render(f, chunks[2], app),
     }
 
     // 4. Footer

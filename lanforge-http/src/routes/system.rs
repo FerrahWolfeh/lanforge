@@ -16,16 +16,25 @@ pub struct ContextDumpQuery {
     pub only_orphans: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ServiceControlPayload {
+    pub action: lanforge_types::system::ServiceAction,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(handle_status))
         .route("/service_banners", get(handle_service_banners))
+        .route("/service/{id}/control", post(handle_service_control))
         .route("/scan", post(handle_scan))
         .route("/reload", post(handle_reload))
         .route("/shutdown", post(handle_shutdown))
         .route("/topology", get(handle_topology))
         .route("/context", get(handle_context_dump))
-        .route("/config", get(handle_export_config).post(handle_import_config))
+        .route(
+            "/config",
+            get(handle_export_config).post(handle_import_config),
+        )
 }
 
 use crate::routes::create_client_ctx;
@@ -83,4 +92,16 @@ async fn handle_import_config(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_system_config_import(config).await, Success => NoContent)
+}
+
+async fn handle_service_control(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<ServiceControlPayload>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_service_control(id, payload.action).await,
+        Success => NoContent
+    )
 }

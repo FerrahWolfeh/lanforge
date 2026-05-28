@@ -5,7 +5,7 @@ use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -49,14 +49,24 @@ impl TftpService {
 impl StatusProvider for TftpService {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
-            (std::borrow::Cow::Borrowed("listen"), self.cfg.listen_addr.clone()),
-            (std::borrow::Cow::Borrowed("root_dir"), self.cfg.root_dir.to_string_lossy().to_string()),
-            (std::borrow::Cow::Borrowed("block_size"), self.cfg.block_size.to_string()),
+            (
+                std::borrow::Cow::Borrowed("listen"),
+                self.cfg.listen_addr.clone(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("root_dir"),
+                self.cfg.root_dir.to_string_lossy().to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("block_size"),
+                self.cfg.block_size.to_string(),
+            ),
         ];
         ServiceBanner {
+            id: "tftp".to_string(),
             name: "TFTP Server".to_string(),
-            state: ServiceState::Online,
-            uptime_secs: self.ctx.uptime_secs(),
+            state: self.ctx.get_service_state("tftp"),
+            uptime_secs: self.ctx.get_service_uptime("tftp"),
             stats,
         }
     }

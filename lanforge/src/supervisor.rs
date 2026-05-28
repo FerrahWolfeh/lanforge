@@ -21,6 +21,7 @@
 use lanforge_core::bus::{LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_types::system::{ServiceAction, ServiceState};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
@@ -40,8 +41,36 @@ where
     loop {
         let mut service = factory();
         let meta = service.meta();
+        let id = meta.id;
         let description = service.describe();
         let name = meta.display_name;
+
+        // If the service is marked Inactive/Stopped, park the supervisor and wait for a Start/Restart event.
+        if ctx.get_service_state(id) == ServiceState::Inactive {
+            let mut bus_rx = ctx.bus().subscribe();
+            let mut started = false;
+            while !started {
+                tokio::select! {
+                    e = bus_rx.recv() => {
+                        match e {
+                            Ok(te) => match te.event {
+                                LanforgeEvent::System(SystemEvent::Shutdown) => return,
+                                LanforgeEvent::System(SystemEvent::ServiceControl { id: target_id, action })
+                                    if target_id == id && matches!(action, ServiceAction::Start | ServiceAction::Restart) => {
+                                        started = true;
+                                    }
+                                _ => {}
+                            },
+                            Err(_) => return, // Bus closed
+                        }
+                    }
+                }
+            }
+            consecutive_failures = 0;
+        }
+
+        ctx.set_service_state(id, ServiceState::Starting);
+        ctx.set_service_start(id, Instant::now());
         let start = Instant::now();
 
         debug!("▸ Starting async service: {}", description);
@@ -50,21 +79,52 @@ where
 
         let mut bus_rx = ctx.bus().subscribe();
         tokio::select! {
-            shutdown = async {
+            shutdown_or_control = async {
                 loop {
                     match bus_rx.recv().await {
-                        Ok(e) if matches!(e.event, LanforgeEvent::System(SystemEvent::Shutdown)) => return true,
-                        Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {},
-                        Err(_) => return false,
+                        Ok(e) => match e.event {
+                            LanforgeEvent::System(SystemEvent::Shutdown) => return Some(SystemEvent::Shutdown),
+                            LanforgeEvent::System(SystemEvent::ServiceControl { id: target_id, action }) if target_id == id => {
+                                return Some(SystemEvent::ServiceControl { id: target_id, action });
+                            }
+                            _ => {}
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(_) => return None,
                     }
                 }
             } => {
-                if shutdown {
-                    info!("▪ {} shutting down", description);
-                    if let Err(e) = service.on_shutdown() {
-                        error!("Error during async service '{}' shutdown: {e}", name);
+                match shutdown_or_control {
+                    Some(SystemEvent::Shutdown) => {
+                        info!("▪ {} shutting down", description);
+                        if let Err(e) = service.on_shutdown() {
+                            error!("Error during async service '{}' shutdown: {e}", name);
+                        }
+                        ctx.set_service_state(id, ServiceState::Inactive);
+                        ctx.clear_service_start(id);
+                        return;
                     }
-                    return;
+                    Some(SystemEvent::ServiceControl { action, .. }) => {
+                        info!("▪ {} control action requested: {:?}", description, action);
+                        if let Err(e) = service.on_shutdown() {
+                            error!("Error during async service '{}' shutdown: {e}", name);
+                        }
+                        match action {
+                            ServiceAction::Stop => {
+                                ctx.set_service_state(id, ServiceState::Inactive);
+                                ctx.clear_service_start(id);
+                                consecutive_failures = 0;
+                            }
+                            ServiceAction::Restart => {
+                                ctx.set_service_state(id, ServiceState::Starting);
+                                consecutive_failures = 0;
+                            }
+                            ServiceAction::Start => {
+                                // Already started/starting, ignore
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             res = service.run(ctrl) => {
@@ -72,6 +132,8 @@ where
                     Ok(()) => {
                         if !ctx.is_running() {
                             info!("▪ {} exited (shutdown)", description);
+                            ctx.set_service_state(id, ServiceState::Inactive);
+                            ctx.clear_service_start(id);
                             return;
                         }
 
@@ -82,6 +144,7 @@ where
                                 "▪ {} exited Ok(()) after only {:.1}s (<{}s min), treating as soft failure ({consecutive_failures}x)",
                                 description, uptime.as_secs_f64(), MINIMUM_HEALTHY_UPTIME.as_secs()
                             );
+                            ctx.set_service_state(id, ServiceState::Error);
                             true // Apply backoff
                         } else {
                             debug!("▪ {} exited cleanly after {:.0}s, restarting", description, uptime.as_secs_f64());
@@ -92,6 +155,7 @@ where
                     Err(err) => {
                         consecutive_failures += 1;
                         error!("✗ {} failed ({}x): {:#}", description, consecutive_failures, err);
+                        ctx.set_service_state(id, ServiceState::Error);
                         true // Apply backoff
                     }
                 };
@@ -101,9 +165,11 @@ where
                         if meta.critical {
                             error!("FATAL: Critical service '{}' failed after {} retries. Shutting down.", name, consecutive_failures);
                             ctx.terminate();
+                            ctx.set_service_state(id, ServiceState::Error);
                             return;
                         }
                         warn!("Service '{}' exhausted {} retries — giving up", name, meta.max_retries);
+                        ctx.set_service_state(id, ServiceState::Error);
                         return;
                     }
 
@@ -119,17 +185,43 @@ where
                     );
 
                     tokio::select! {
-                        () = async {
+                        shutdown_or_control = async {
                             loop {
                                 match bus_rx.recv().await {
-                                    Ok(e) if matches!(e.event, LanforgeEvent::System(SystemEvent::Shutdown)) => return,
-                                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {},
-                                    Err(_) => return,
+                                    Ok(e) => match e.event {
+                                        LanforgeEvent::System(SystemEvent::Shutdown) => return Some(SystemEvent::Shutdown),
+                                        LanforgeEvent::System(SystemEvent::ServiceControl { id: target_id, action }) if target_id == id => {
+                                            return Some(SystemEvent::ServiceControl { id: target_id, action });
+                                        }
+                                        _ => {}
+                                    }
+                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                    Err(_) => return None,
                                 }
                             }
                         } => {
-                            info!("Supervisor '{}' received shutdown signal during backoff, stopping", name);
-                            return;
+                            match shutdown_or_control {
+                                Some(SystemEvent::Shutdown) => {
+                                    info!("Supervisor '{}' received shutdown signal during backoff, stopping", name);
+                                    ctx.set_service_state(id, ServiceState::Inactive);
+                                    ctx.clear_service_start(id);
+                                    return;
+                                }
+                                Some(SystemEvent::ServiceControl { action, .. }) => {
+                                    info!("Supervisor '{}' received control action during backoff: {:?}", name, action);
+                                    match action {
+                                        ServiceAction::Stop => {
+                                            ctx.set_service_state(id, ServiceState::Inactive);
+                                            ctx.clear_service_start(id);
+                                        }
+                                        ServiceAction::Start | ServiceAction::Restart => {
+                                            ctx.set_service_state(id, ServiceState::Starting);
+                                            consecutive_failures = 0;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                         () = tokio::time::sleep(backoff) => {}
                     }
@@ -425,6 +517,96 @@ mod tests {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             // Simulate "healthy" work
             tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_dynamic_control() {
+        let ctx = init_test_context();
+        let bus = ctx.bus();
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = attempts.clone();
+
+        // Spawn supervisor in background
+        let ctx_clone = ctx.clone();
+        let handle = tokio::spawn(async move {
+            supervise_async(&ctx_clone, move || {
+                let a = attempts_clone.clone();
+                ControlTestService { attempts: a }
+            })
+            .await;
+        });
+
+        // Give it a moment to start and set state to Online
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(ctx.get_service_state("control-test"), ServiceState::Online);
+        assert!(attempts.load(Ordering::Relaxed) >= 1);
+
+        // 1. Stop service
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+            id: "control-test".to_string(),
+            action: ServiceAction::Stop,
+        }));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            ctx.get_service_state("control-test"),
+            ServiceState::Inactive
+        );
+
+        // Attempts shouldn't increase while stopped
+        let attempts_after_stop = attempts.load(Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(attempts.load(Ordering::Relaxed), attempts_after_stop);
+
+        // 2. Start service again
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+            id: "control-test".to_string(),
+            action: ServiceAction::Start,
+        }));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(ctx.get_service_state("control-test"), ServiceState::Online);
+        assert!(attempts.load(Ordering::Relaxed) > attempts_after_stop);
+
+        // 3. Restart service
+        let attempts_before_restart = attempts.load(Ordering::Relaxed);
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+            id: "control-test".to_string(),
+            action: ServiceAction::Restart,
+        }));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(ctx.get_service_state("control-test"), ServiceState::Online);
+        assert!(attempts.load(Ordering::Relaxed) > attempts_before_restart);
+
+        // Shutdown
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+        let _ = handle.await;
+    }
+
+    struct ControlTestService {
+        attempts: Arc<AtomicU32>,
+    }
+    impl LanforgeService for ControlTestService {
+        fn meta(&self) -> ServiceMeta {
+            ServiceMeta {
+                id: "control-test",
+                display_name: "Control Test Service",
+                critical: false,
+                max_retries: 0,
+                base_backoff: Duration::from_millis(5),
+                max_backoff: Duration::from_millis(20),
+                stack_kb: 0,
+                multi_threaded: false,
+            }
+        }
+    }
+    impl lanforge_core::service::AsyncService for ControlTestService {
+        async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            ctrl.signal_ready();
+            // Wait infinitely until dropped/cancelled
+            std::future::pending::<()>().await;
             Ok(())
         }
     }

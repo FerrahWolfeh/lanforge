@@ -1,5 +1,5 @@
 use lanforge_types::network::dns::TransportProtocol;
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,9 +46,10 @@ impl StatusProvider for DotService {
     fn banner(&self) -> ServiceBanner {
         let port = self.cfg.dot_listen.map_or(853, |a| a.port());
         ServiceBanner {
+            id: "dot".to_string(),
             name: "DNS over TLS".to_string(),
-            state: ServiceState::Online,
-            uptime_secs: self.ctx.uptime_secs(),
+            state: self.ctx.get_service_state("dot"),
+            uptime_secs: self.ctx.get_service_uptime("dot"),
             stats: vec![(std::borrow::Cow::Borrowed("port"), port.to_string())],
         }
     }

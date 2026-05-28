@@ -6,6 +6,7 @@ pub mod dhcp;
 pub mod dns;
 pub mod host;
 pub mod lease;
+pub mod service;
 pub mod simple;
 pub mod status;
 pub mod topology;

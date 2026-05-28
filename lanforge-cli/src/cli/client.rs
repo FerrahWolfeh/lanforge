@@ -5,6 +5,7 @@ use lanforge_types::auth::ApiScopes;
 use lanforge_types::network::DnsRecordType;
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::system::ServiceAction;
 #[cfg(feature = "remote")]
 use reqwest::Client;
 use tokio::net::UnixStream;
@@ -15,8 +16,8 @@ use lanforge_api::api::{
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse,
-    SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse, TransientHostsResponse,
-    WhoisResponse,
+    ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse,
+    TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{
@@ -334,8 +335,23 @@ impl LanforgeClient {
         dispatch!(self, get_box => "/status", status())
     }
 
-    pub async fn service_banners(&self) -> Result<lanforge_api::api::ServiceBannersResponse> {
+    pub async fn service_banners(&self) -> Result<ServiceBannersResponse> {
         dispatch!(self, get => "/service_banners", service_banners())
+    }
+
+    pub async fn service_control(
+        &self,
+        id: String,
+        action: ServiceAction,
+    ) -> Result<SimpleSuccess> {
+        #[allow(unused_variables)]
+        let body = serde_json::json!({ "action": action });
+        dispatch!(
+            self,
+            post => format!("/service/{id}/control"),
+            body,
+            service_control(id, action)
+        )
     }
 
     pub async fn context_dump(

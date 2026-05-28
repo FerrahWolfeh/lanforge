@@ -1,7 +1,7 @@
 use lanforge_api::api::EventKind;
 use lanforge_api::rpc::{LanforgeRpcDispatcher, RpcRequest, RpcResponse};
 use lanforge_api_dispatch::ClientContext;
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 use tokio::sync::Mutex;
 
 use crate::config::ApiConfig;
@@ -460,9 +460,10 @@ impl StatusProvider for ControlService {
             stats.push((std::borrow::Cow::Borrowed("tcp_port"), p.to_string()));
         }
         ServiceBanner {
+            id: "control".to_string(),
             name: "Control API".to_string(),
-            state: ServiceState::Online,
-            uptime_secs: self.ctx.uptime_secs(),
+            state: self.ctx.get_service_state("control"),
+            uptime_secs: self.ctx.get_service_uptime("control"),
             stats,
         }
     }

@@ -19,7 +19,7 @@ use lanforge_types::network::dns::{
     DnsCacheStatsExtResponse, DnsClass, DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType,
     DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
 };
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -371,16 +371,10 @@ impl lanforge_core::service::StatusProvider for DnsService {
         ];
 
         ServiceBanner {
+            id: "dns".to_string(),
             name: "DNS Server".to_string(),
-            state: if self.cfg.enabled {
-                ServiceState::Online
-            } else {
-                ServiceState::Offline
-            },
-            uptime_secs: self
-                .ctx
-                .get_status()
-                .map_or(0, |s| if s.dns_enabled { 1 } else { 0 }),
+            state: self.ctx.get_service_state("dns"),
+            uptime_secs: self.ctx.get_service_uptime("dns"),
             stats,
         }
     }
@@ -548,13 +542,19 @@ async fn handle_dns_request(
             #[cfg(feature = "adblock")]
             {
                 if let Some(mode) = blocking_mode {
-                    let _ = db.set_adblock_config_value("blocking_mode", &mode.to_string()).await;
+                    let _ = db
+                        .set_adblock_config_value("blocking_mode", &mode.to_string())
+                        .await;
                 }
                 if let Some(ip) = blocking_ip_v4 {
-                    let _ = db.set_adblock_config_value("blocking_ip_v4", &ip.to_string()).await;
+                    let _ = db
+                        .set_adblock_config_value("blocking_ip_v4", &ip.to_string())
+                        .await;
                 }
                 if let Some(ip) = blocking_ip_v6 {
-                    let _ = db.set_adblock_config_value("blocking_ip_v6", &ip.to_string()).await;
+                    let _ = db
+                        .set_adblock_config_value("blocking_ip_v6", &ip.to_string())
+                        .await;
                 }
                 let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
                     lanforge_core::bus::DnsEvent::ConfigAdblockChanged,

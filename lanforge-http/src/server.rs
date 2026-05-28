@@ -22,7 +22,7 @@ use lanforge_core::{
 use lanforge_db::{engine::LanforgeDb, log_engine::LogDb};
 use lanforge_dns::server::transport::tls as tls_utils;
 use lanforge_macros::lanforge_service;
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
@@ -109,14 +109,24 @@ impl HttpService {
 impl lanforge_core::service::StatusProvider for HttpService {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
-            (std::borrow::Cow::Borrowed("listen"), self.cfg.listen.to_string()),
-            (std::borrow::Cow::Borrowed("https_enabled"), self.cfg.https_enabled.to_string()),
-            (std::borrow::Cow::Borrowed("doh_enabled"), self.cfg.doh_enabled.to_string()),
+            (
+                std::borrow::Cow::Borrowed("listen"),
+                self.cfg.listen.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("https_enabled"),
+                self.cfg.https_enabled.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("doh_enabled"),
+                self.cfg.doh_enabled.to_string(),
+            ),
         ];
         ServiceBanner {
+            id: "http".to_string(),
             name: "HTTP API".to_string(),
-            state: ServiceState::Online,
-            uptime_secs: self.ctx.uptime_secs(),
+            state: self.ctx.get_service_state("http"),
+            uptime_secs: self.ctx.get_service_uptime("http"),
             stats,
         }
     }

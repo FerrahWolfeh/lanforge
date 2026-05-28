@@ -160,9 +160,19 @@ pub mod vec_as_map {
 /// Banner representing the status and metrics of a decoupled service.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ServiceBanner {
+    pub id: String,
     pub name: String,
     pub state: ServiceState,
     pub uptime_secs: u64,
     #[serde(with = "vec_as_map")]
     pub stats: Vec<(Cow<'static, str>, String)>,
+}
+
+/// Actions that can be performed on a service.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceAction {
+    Start,
+    Stop,
+    Restart,
 }

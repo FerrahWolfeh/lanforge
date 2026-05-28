@@ -48,7 +48,7 @@ pub mod packet;
 
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::NetworkError;
@@ -198,14 +198,24 @@ impl StatusProvider for RaService {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
             (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
-            (std::borrow::Cow::Borrowed("max_interval"), self.cfg.max_interval.as_secs().to_string()),
-            (std::borrow::Cow::Borrowed("managed"), self.cfg.managed.to_string()),
-            (std::borrow::Cow::Borrowed("other_config"), self.cfg.other_config.to_string()),
+            (
+                std::borrow::Cow::Borrowed("max_interval"),
+                self.cfg.max_interval.as_secs().to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("managed"),
+                self.cfg.managed.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("other_config"),
+                self.cfg.other_config.to_string(),
+            ),
         ];
         ServiceBanner {
+            id: "ra".to_string(),
             name: "RA Server".to_string(),
-            state: ServiceState::Online,
-            uptime_secs: self.ctx.uptime_secs(),
+            state: self.ctx.get_service_state("ra"),
+            uptime_secs: self.ctx.get_service_uptime("ra"),
             stats,
         }
     }

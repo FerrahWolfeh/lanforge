@@ -263,6 +263,7 @@ impl ServiceControl {
     /// This is idempotent; multiple calls will only result in one signal.
     pub fn signal_ready(&self) {
         if !self.signaled.swap(true, Ordering::SeqCst) {
+            self.ctx.set_service_state(self.id, ServiceState::Online);
             let _ = self
                 .ctx
                 .bus()
@@ -279,7 +280,7 @@ impl ServiceControl {
     }
 }
 
-use lanforge_types::system::ServiceBanner;
+use lanforge_types::system::{ServiceBanner, ServiceState};
 
 /// Trait implemented by decoupled services to provide dynamic status and metrics.
 pub trait StatusProvider: Send + Sync {

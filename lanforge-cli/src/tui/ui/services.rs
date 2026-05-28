@@ -1,4 +1,4 @@
-use crate::tui::state::TuiState;
+use crate::tui::app::TuiApp;
 use crate::tui::{theme, utils};
 use lanforge_types::system::ServiceState;
 use ratatui::Frame;
@@ -7,7 +7,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 
 #[allow(clippy::too_many_lines)]
-pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
+pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
+    let state = &app.state;
     let header_cells = ["Service", "State", "Uptime", "Metrics / Details"]
         .iter()
         .map(|h| {
@@ -142,6 +143,19 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
         }
     }
 
+    let matching_count = rows.len();
+    if matching_count > 0 {
+        if let Some(selected) = app.service_list_state.selected() {
+            if selected >= matching_count {
+                app.service_list_state.select(Some(matching_count - 1));
+            }
+        } else {
+            app.service_list_state.select(Some(0));
+        }
+    } else {
+        app.service_list_state.select(None);
+    }
+
     let t = Table::new(
         rows,
         [
@@ -157,7 +171,9 @@ pub fn render(f: &mut Frame, area: Rect, state: &TuiState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER))
             .title(" Service Health Dashboard "),
-    );
+    )
+    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+    .highlight_symbol(">> ");
 
-    f.render_widget(t, area);
+    f.render_stateful_widget(t, area, &mut app.service_list_state);
 }

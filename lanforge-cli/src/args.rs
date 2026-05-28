@@ -68,11 +68,11 @@ pub struct LanforgeArgs {
 #[cfg(feature = "tui")]
 use crate::cli::commands::tui::TuiArgs;
 use crate::cli::commands::{
-    auth::AuthArgs, config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs, dns::DnsArgs, host::HostArgs,
-    lease::LeaseArgs, simple::ContextArgs, simple::LoginArgs, simple::PurgeArgs,
-    simple::ReloadArgs, simple::ScanArgs, simple::ShutdownArgs, simple::WatchArgs,
-    status::ServicesArgs, status::StatusArgs, topology::TopologyArgs, whois::WhoisArgs,
-    wol::WolArgs,
+    auth::AuthArgs, config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs,
+    dns::DnsArgs, host::HostArgs, lease::LeaseArgs, service::ServiceArgs, simple::ContextArgs,
+    simple::LoginArgs, simple::PurgeArgs, simple::ReloadArgs, simple::ScanArgs,
+    simple::ShutdownArgs, simple::WatchArgs, status::ServicesArgs, status::StatusArgs,
+    topology::TopologyArgs, whois::WhoisArgs, wol::WolArgs,
 };
 
 use crate::cli::{Execute, LanforgeClient};
@@ -120,6 +120,8 @@ pub enum Command {
     Dns(DnsArgs),
     /// System configuration import/export
     Config(ConfigArgs),
+    /// Manage daemon background services (start, stop, restart)
+    Service(ServiceArgs),
     /// Interactive TUI dashboard
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
@@ -148,9 +150,9 @@ impl Execute for Command {
             Self::Auth(args) => args.execute(client).await,
             Self::Dns(args) => args.execute(client).await,
             Self::Config(args) => args.execute(client).await,
+            Self::Service(args) => args.execute(client).await,
             #[cfg(feature = "tui")]
             Self::Tui(args) => args.execute(client).await,
         }
     }
 }
-

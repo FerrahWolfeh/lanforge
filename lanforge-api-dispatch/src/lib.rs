@@ -52,6 +52,18 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
+    async fn service_control(
+        &self,
+        id: String,
+        action: lanforge_types::system::ServiceAction,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_service_control(id, action).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(RpcCallError::Internal(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
     async fn service_banners(
         &self,
     ) -> Result<lanforge_api::api::ServiceBannersResponse, RpcCallError> {
@@ -358,7 +370,10 @@ impl LanforgeRpc for ClientContext {
         blocking_ip_v4: Option<Ipv4Addr>,
         blocking_ip_v6: Option<Ipv6Addr>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_adblock_config_set(blocking_mode, blocking_ip_v4, blocking_ip_v6).await {
+        match self
+            .handle_dns_adblock_config_set(blocking_mode, blocking_ip_v4, blocking_ip_v6)
+            .await
+        {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

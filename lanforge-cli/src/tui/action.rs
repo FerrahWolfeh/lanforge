@@ -2,6 +2,7 @@ use lanforge_api::api::HostConfigEntry;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::adblock::{AdblockUrlKind, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::system::ServiceAction;
 
 /// A pending action waiting for confirmation.
 #[derive(Debug, Clone)]
@@ -13,36 +14,84 @@ pub enum PendingAction {
     DnsCacheFlush,
 
     // Device
-    Wol { mac: MacAddr, hostname: String },
-    Purge { mac: MacAddr, hostname: String },
+    Wol {
+        mac: MacAddr,
+        hostname: String,
+    },
+    Purge {
+        mac: MacAddr,
+        hostname: String,
+    },
 
     // Adblock
-    AdblockToggle { enable: bool },
-    AdblockTimedDisable { duration_secs: u64 },
+    AdblockToggle {
+        enable: bool,
+    },
+    AdblockTimedDisable {
+        duration_secs: u64,
+    },
     AdblockReload,
-    AdblockAllow { domain: String },
-    AdblockUnallow { domain: String },
-    AdblockBlock { domain: String },
+    AdblockAllow {
+        domain: String,
+    },
+    AdblockUnallow {
+        domain: String,
+    },
+    AdblockBlock {
+        domain: String,
+    },
 
     // DHCP
-    LeaseRenew { mac: MacAddr, hostname: String },
-    LeaseRelease { mac: MacAddr, hostname: String },
+    LeaseRenew {
+        mac: MacAddr,
+        hostname: String,
+    },
+    LeaseRelease {
+        mac: MacAddr,
+        hostname: String,
+    },
 
     // DNS Rewrites
-    DnsRewriteAdd { rule: RewriteRule },
-    DnsRewriteRemove { id: i64, domain: String },
+    DnsRewriteAdd {
+        rule: RewriteRule,
+    },
+    DnsRewriteRemove {
+        id: i64,
+        domain: String,
+    },
 
     // Hosts Management
-    HostAdd { entry: HostConfigEntry },
-    HostRemove { mac: MacAddr, hostname: String },
+    HostAdd {
+        entry: HostConfigEntry,
+    },
+    HostRemove {
+        mac: MacAddr,
+        hostname: String,
+    },
 
     // Upstreams Management
-    DnsUpstreamAdd { target: UpstreamTarget },
-    DnsUpstreamRemove { target: UpstreamTarget },
+    DnsUpstreamAdd {
+        target: UpstreamTarget,
+    },
+    DnsUpstreamRemove {
+        target: UpstreamTarget,
+    },
 
     // Adblock Sources Management
-    AdblockSourceAdd { url: String, kind: AdblockUrlKind },
-    AdblockSourceRemove { url: String },
+    AdblockSourceAdd {
+        url: String,
+        kind: AdblockUrlKind,
+    },
+    AdblockSourceRemove {
+        url: String,
+    },
+
+    // Services Control
+    ServiceControl {
+        id: String,
+        name: String,
+        action: ServiceAction,
+    },
 }
 
 /// Result of an async action, delivered back to the TUI via `AppEvent`.
@@ -79,6 +128,11 @@ impl PendingAction {
             Self::DnsUpstreamRemove { .. } => "Remove DNS Upstream",
             Self::AdblockSourceAdd { .. } => "Add Adblock Source",
             Self::AdblockSourceRemove { .. } => "Remove Adblock Source",
+            Self::ServiceControl { action, .. } => match action {
+                ServiceAction::Start => "Start Service",
+                ServiceAction::Stop => "Stop Service",
+                ServiceAction::Restart => "Restart Service",
+            },
         }
     }
 
@@ -108,6 +162,11 @@ impl PendingAction {
             Self::DnsUpstreamRemove { target } => format!("Remove DNS upstream resolver {} using protocol {}?", target.addr, target.protocol),
             Self::AdblockSourceAdd { url, .. } => format!("Add adblock blocklist source URL: {url}."),
             Self::AdblockSourceRemove { url } => format!("Remove adblock blocklist source URL: {url}?"),
+            Self::ServiceControl { id, name, action } => match action {
+                ServiceAction::Start => format!("Start background service {name} ({id})."),
+                ServiceAction::Stop => format!("Stop background service {name} ({id}). This will release resources and may affect connected devices."),
+                ServiceAction::Restart => format!("Restart background service {name} ({id}). This will re-initialize the service."),
+            },
         }
     }
 
@@ -122,6 +181,11 @@ impl PendingAction {
                 | Self::HostRemove { .. }
                 | Self::DnsUpstreamRemove { .. }
                 | Self::AdblockSourceRemove { .. }
+                | Self::ServiceControl {
+                    action: lanforge_types::system::ServiceAction::Stop
+                        | lanforge_types::system::ServiceAction::Restart,
+                    ..
+                }
         )
     }
 }

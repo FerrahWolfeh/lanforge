@@ -99,6 +99,7 @@ pub struct TuiApp {
     pub dns_query_log_state: TableState,
     pub adblock_allowlist_state: TableState,
     pub lease_table_state: TableState,
+    pub service_list_state: TableState,
     pub tree_state_topology: TreeState<String>,
     pub auto_scroll: bool,
     pub filter_text: String,
@@ -143,6 +144,7 @@ impl TuiApp {
             dns_query_log_state: TableState::default(),
             adblock_allowlist_state: TableState::default(),
             lease_table_state: TableState::default(),
+            service_list_state: TableState::default(),
             tree_state_topology: TreeState::default(),
             auto_scroll: true,
             filter_text: String::new(),
@@ -314,6 +316,13 @@ impl TuiApp {
             TuiTab::Topology => {
                 self.tree_state_topology.key_up();
             }
+            TuiTab::Services => {
+                let i = self
+                    .service_list_state
+                    .selected()
+                    .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                self.service_list_state.select(Some(i));
+            }
             _ => {}
         }
     }
@@ -351,6 +360,14 @@ impl TuiApp {
             }
             TuiTab::Topology => {
                 self.tree_state_topology.key_down();
+            }
+            TuiTab::Services => {
+                let max = self.services_count().saturating_sub(1);
+                let i = self
+                    .service_list_state
+                    .selected()
+                    .map_or(0, |i| (i + 1).min(max));
+                self.service_list_state.select(Some(i));
             }
             _ => {}
         }
@@ -440,5 +457,59 @@ impl TuiApp {
                 protocol: entry.protocol,
                 hostname: None,
             })
+    }
+
+    /// Returns `Some((id, name))` of the currently selected service.
+    #[must_use]
+    pub fn selected_service(&self) -> Option<(String, String)> {
+        let selected_idx = self.service_list_state.selected()?;
+        let mut services = Vec::new();
+        if let Some(resp) = &self.state.service_banners
+            && !resp.banners.is_empty()
+        {
+            for banner in &resp.banners {
+                services.push((banner.id.clone(), banner.name.clone()));
+            }
+        } else if let Some(status) = &self.state.status
+            && !status.service_banners.is_empty()
+        {
+            for banner in &status.service_banners {
+                services.push((banner.id.clone(), banner.name.clone()));
+            }
+        } else if let Some(status) = &self.state.status {
+            let svcs = &status.services;
+            services.push(("dhcpv4".to_string(), "DHCPv4".to_string()));
+            services.push(("dhcpv6".to_string(), "DHCPv6".to_string()));
+            services.push(("dns".to_string(), "DNS".to_string()));
+            services.push(("ra".to_string(), "Router Advert".to_string()));
+            services.push(("ndp_monitor".to_string(), "NDP Monitor".to_string()));
+            services.push(("control_api".to_string(), "Control API".to_string()));
+            if svcs.http_api.is_some() {
+                services.push(("http_api".to_string(), "HTTP API".to_string()));
+            }
+            services.push(("db_worker".to_string(), "DB Worker".to_string()));
+        }
+        services.get(selected_idx).cloned()
+    }
+
+    const fn services_count(&self) -> usize {
+        if let Some(resp) = &self.state.service_banners
+            && !resp.banners.is_empty()
+        {
+            resp.banners.len()
+        } else if let Some(status) = &self.state.status
+            && !status.service_banners.is_empty()
+        {
+            status.service_banners.len()
+        } else if let Some(status) = &self.state.status {
+            let svcs = &status.services;
+            let mut count = 7;
+            if svcs.http_api.is_some() {
+                count += 1;
+            }
+            count
+        } else {
+            0
+        }
     }
 }

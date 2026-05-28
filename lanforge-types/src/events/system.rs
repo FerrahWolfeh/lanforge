@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::system::ServiceBanner;
+use crate::system::{ServiceAction, ServiceBanner};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SystemEvent {
@@ -13,4 +13,5 @@ pub enum SystemEvent {
     ReloadConfig,
     ConfigUpdate { password_hash: String },
     ServiceStatusBanner(ServiceBanner),
+    ServiceControl { id: String, action: ServiceAction },
 }

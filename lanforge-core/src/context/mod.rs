@@ -60,7 +60,7 @@ use crate::service::StatusProvider;
 use lanforge_types::device::Device;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::system::SystemStatus;
+use lanforge_types::system::{ServiceState, SystemStatus};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -202,6 +202,10 @@ struct LanforgeContextInner {
     status_providers: RwLock<Vec<Arc<dyn StatusProvider>>>,
     /// Decoupled DNS handle.
     dns_handle: RwLock<Option<DnsHandle>>,
+    /// Dynamic service states.
+    service_states: RwLock<HashMap<String, ServiceState>>,
+    /// Dynamic service start times.
+    service_starts: RwLock<HashMap<String, Instant>>,
     /// Context creation timestamp for calculating uptime.
     start_time: Instant,
     /// Database worker metrics.
@@ -252,6 +256,8 @@ impl LanforgeContext {
             active_clients: Arc::new(AtomicUsize::new(0)),
             status_providers: RwLock::new(Vec::new()),
             dns_handle: RwLock::new(None),
+            service_states: RwLock::new(HashMap::new()),
+            service_starts: RwLock::new(HashMap::new()),
             start_time: Instant::now(),
             db_metrics: DbWorkerMetrics::default(),
         });
@@ -409,6 +415,52 @@ impl LanforgeContext {
     #[must_use]
     pub fn dns_handle(&self) -> Option<DnsHandle> {
         self.inner.dns_handle.read().clone()
+    }
+
+    /// Sets the dynamic state of a service.
+    pub fn set_service_state(&self, id: &str, state: ServiceState) {
+        self.inner
+            .service_states
+            .write()
+            .insert(id.to_string(), state);
+    }
+
+    /// Sets the start time of a service.
+    pub fn set_service_start(&self, id: &str, start: Instant) {
+        self.inner
+            .service_starts
+            .write()
+            .insert(id.to_string(), start);
+    }
+
+    /// Clears the start time of a service.
+    pub fn clear_service_start(&self, id: &str) {
+        self.inner.service_starts.write().remove(id);
+    }
+
+    /// Returns the dynamic state of a service, defaulting to Offline.
+    #[must_use]
+    pub fn get_service_state(&self, id: &str) -> ServiceState {
+        self.inner
+            .service_states
+            .read()
+            .get(id)
+            .copied()
+            .unwrap_or(ServiceState::Offline)
+    }
+
+    /// Returns the uptime of a service in seconds, or 0 if not running.
+    #[must_use]
+    pub fn get_service_uptime(&self, id: &str) -> u64 {
+        if self.get_service_state(id) == ServiceState::Online {
+            self.inner
+                .service_starts
+                .read()
+                .get(id)
+                .map_or(0, |start| start.elapsed().as_secs())
+        } else {
+            0
+        }
     }
 }
 

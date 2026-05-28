@@ -391,6 +391,16 @@ fn format_system_event(now: &str, event: &SystemEvent, verbose: bool, _ascii: bo
                 );
             }
         }
+        SystemEvent::ServiceControl { id, action } => {
+            if verbose {
+                println!(
+                    "[{now}] {} Service control action on {}: {:?}",
+                    "SYS".yellow().bold(),
+                    id.white(),
+                    action
+                );
+            }
+        }
     }
 }
 

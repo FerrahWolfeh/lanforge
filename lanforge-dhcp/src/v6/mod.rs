@@ -48,7 +48,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::utils::mac_from_eui64_link_local;
 use lanforge_types::device::IPv6State;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
@@ -147,13 +147,10 @@ impl StatusProvider for Dhcpv6Service {
             ),
         ];
         ServiceBanner {
+            id: "dhcpv6".to_string(),
             name: "DHCPv6 Server".to_string(),
-            state: if self.config.enabled {
-                ServiceState::Online
-            } else {
-                ServiceState::Offline
-            },
-            uptime_secs: self.ctx.uptime_secs(),
+            state: self.ctx.get_service_state("dhcpv6"),
+            uptime_secs: self.ctx.get_service_uptime("dhcpv6"),
             stats,
         }
     }

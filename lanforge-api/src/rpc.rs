@@ -12,9 +12,10 @@ use lanforge_types::{
     identifiers::MacAddr,
     network::dns::{
         DnsRecordType,
-        adblock::{AdblockUrlKind, RewriteRule, BlockingMode},
+        adblock::{AdblockUrlKind, BlockingMode, RewriteRule},
         upstream::UpstreamProtocol,
     },
+    system::ServiceAction,
     update::LeaseTarget,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -23,6 +24,11 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 #[async_trait::async_trait]
 pub trait LanforgeRpc {
     async fn status(&self) -> Result<Box<StatusResponse>, RpcCallError>;
+    async fn service_control(
+        &self,
+        id: String,
+        action: ServiceAction,
+    ) -> Result<SimpleSuccess, RpcCallError>;
     async fn service_banners(&self) -> Result<ServiceBannersResponse, RpcCallError>;
     async fn list_devices(
         &self,

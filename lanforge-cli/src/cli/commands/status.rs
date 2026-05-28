@@ -2,6 +2,7 @@ use super::format_uptime;
 use crate::cli::{Execute, LanforgeClient};
 use bytesize::ByteSize;
 use color_eyre::eyre::Result;
+use colored::Colorize;
 use iocraft::prelude::*;
 use lanforge_api::api::ServiceStatusInfo;
 use lanforge_api::api::StatusResponse;
@@ -53,9 +54,17 @@ pub fn render_services_in_depth(resp: &lanforge_api::api::ServiceBannersResponse
             .map(|(k, v)| format!("{k}={v}"))
             .collect::<Vec<_>>()
             .join(", ");
+        let state_string = banner.state.as_str();
+        let state_colored = match state_string {
+            "online" | "active" => state_string.green(),
+            "starting" => state_string.cyan(),
+            "inactive" | "offline" => state_string.dimmed(),
+            "degraded" | "error" | "failed" => state_string.red(),
+            _ => state_string.normal(),
+        };
         println!(
             "  {:<20} | {:<10} | {:<15} | {}",
-            banner.name, banner.state, uptime_str, stats_str
+            banner.name, state_colored, uptime_str, stats_str
         );
     }
 }
@@ -285,8 +294,19 @@ fn render_insights(st: &StatusResponse, ascii: bool) {
 
 #[component]
 fn ServiceLine<'a>(props: &ServiceLineProps<'a>) -> impl Into<AnyElement<'a>> {
-    let is_online = props.state == props.online_val;
-    let color = if is_online { Color::Green } else { Color::Red };
+    let color = match props.state {
+        "online" | "active" => Color::Green,
+        "starting" => Color::Cyan,
+        "inactive" | "offline" => Color::DarkGrey,
+        "degraded" | "error" | "failed" => Color::Red,
+        _ => {
+            if props.state == props.online_val {
+                Color::Green
+            } else {
+                Color::Red
+            }
+        }
+    };
     let bullet = if props.ascii { "*" } else { "●" };
 
     element! {

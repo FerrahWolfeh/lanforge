@@ -15,6 +15,7 @@ use lanforge_types::{
             upstream::UpstreamTarget,
         },
     },
+    system::ServiceAction,
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -562,6 +563,67 @@ fn handle_tui_key_event(
                     if let Some((mac, hostname)) = app.selected_lease() {
                         app.pending_action = Some(PendingAction::LeaseRelease { mac, hostname });
                         app.mode = TuiMode::Confirming;
+                    }
+                }
+                _ => {}
+            },
+            TuiTab::Services => match key.code {
+                KeyCode::Char('s') => {
+                    if let Some((id, name)) = app.selected_service() {
+                        let client = client.clone();
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let action = PendingAction::ServiceControl {
+                                id,
+                                name,
+                                action: ServiceAction::Start,
+                            };
+                            let result =
+                                crate::tui::dispatch::execute_action(&client, action).await;
+                            let _ = tx.send(AppEvent::ActionResult(result)).await;
+                        });
+                    }
+                }
+                KeyCode::Char('k') => {
+                    if let Some((id, name)) = app.selected_service() {
+                        let action = PendingAction::ServiceControl {
+                            id,
+                            name,
+                            action: ServiceAction::Stop,
+                        };
+                        if action.is_destructive() {
+                            app.pending_action = Some(action);
+                            app.mode = TuiMode::Confirming;
+                        } else {
+                            let client = client.clone();
+                            let tx = event_tx.clone();
+                            tokio::spawn(async move {
+                                let result =
+                                    crate::tui::dispatch::execute_action(&client, action).await;
+                                let _ = tx.send(AppEvent::ActionResult(result)).await;
+                            });
+                        }
+                    }
+                }
+                KeyCode::Char('r') => {
+                    if let Some((id, name)) = app.selected_service() {
+                        let action = PendingAction::ServiceControl {
+                            id,
+                            name,
+                            action: ServiceAction::Restart,
+                        };
+                        if action.is_destructive() {
+                            app.pending_action = Some(action);
+                            app.mode = TuiMode::Confirming;
+                        } else {
+                            let client = client.clone();
+                            let tx = event_tx.clone();
+                            tokio::spawn(async move {
+                                let result =
+                                    crate::tui::dispatch::execute_action(&client, action).await;
+                                let _ = tx.send(AppEvent::ActionResult(result)).await;
+                            });
+                        }
                     }
                 }
                 _ => {}

@@ -77,7 +77,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
                 TuiTab::Dhcp => {
                     hints.extend(&["↑↓:Navigate", "r:Renew", "R:Release", "/:Search"]);
                 }
-                TuiTab::Services => {}
+                TuiTab::Services => {
+                    hints.extend(&["↑↓:Navigate", "s:Start", "k:Stop", "r:Restart"]);
+                }
             }
             hints.join("  ")
         }
