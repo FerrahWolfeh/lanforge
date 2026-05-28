@@ -33,14 +33,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
         ])
         .split(area);
 
-    render_top_row(f, main_chunks[0], &app.state);
+    render_top_row(f, main_chunks[0], app);
     render_query_rate(f, main_chunks[1], &app.state);
     render_analytics_row(f, main_chunks[2], &app.state);
 
     if app.dns_show_rewrites {
         render_rewrites_table(f, main_chunks[3], app);
     } else {
-        render_recent_queries(f, main_chunks[3], &app.state);
+        render_recent_queries(f, main_chunks[3], app);
     }
 
     if app.mode == crate::tui::app::TuiMode::Detail {
@@ -48,7 +48,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     }
 }
 
-fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
+fn render_top_row(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -58,9 +58,9 @@ fn render_top_row(f: &mut Frame, area: Rect, state: &TuiState) {
         ])
         .split(area);
 
-    render_resolver_stats(f, chunks[0], state);
-    render_upstreams_and_subservices(f, chunks[1], state);
-    render_cache_stats_ext(f, chunks[2], state);
+    render_resolver_stats(f, chunks[0], &app.state);
+    render_upstreams_and_subservices(f, chunks[1], app);
+    render_cache_stats_ext(f, chunks[2], &app.state);
 }
 
 struct ResolverStatsCalc {
@@ -227,7 +227,7 @@ fn build_stats_lines(state: &TuiState, calc: &ResolverStatsCalc) -> Vec<Line<'st
     ]
 }
 
-fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
+fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -236,15 +236,29 @@ fn render_upstreams_and_subservices(f: &mut Frame, area: Rect, state: &TuiState)
         ])
         .split(area);
 
-    render_upstreams_table(f, chunks[0], state);
-    render_subservices(f, chunks[1], state);
+    render_upstreams_table(f, chunks[0], app);
+    render_subservices(f, chunks[1], &app.state);
 }
 
-fn render_upstreams_table(f: &mut Frame, area: Rect, state: &TuiState) {
+fn render_upstreams_table(f: &mut Frame, area: Rect, app: &mut TuiApp) {
+    let state = &app.state;
     let upstreams = state.dns_upstreams.as_ref();
     let header = Row::new(vec!["HOST", "PROTO", "STATUS", "p50", "p95", "OK%"])
         .style(Style::default().fg(theme::TEXT_DIM))
         .bottom_margin(0);
+
+    let matching_count = upstreams.map_or(0, |u| u.upstreams.len());
+    if matching_count > 0 {
+        if let Some(selected) = app.dns_upstreams_state.selected() {
+            if selected >= matching_count {
+                app.dns_upstreams_state.select(Some(matching_count - 1));
+            }
+        } else if app.dns_focus == crate::tui::app::DnsFocus::Upstreams {
+            app.dns_upstreams_state.select(Some(0));
+        }
+    } else {
+        app.dns_upstreams_state.select(None);
+    }
 
     let rows: Vec<Row> = upstreams.map_or(Vec::new(), |u| {
         u.upstreams
@@ -289,6 +303,12 @@ fn render_upstreams_table(f: &mut Frame, area: Rect, state: &TuiState) {
             .collect()
     });
 
+    let border_color = if app.dns_focus == crate::tui::app::DnsFocus::Upstreams {
+        theme::ACCENT
+    } else {
+        theme::BORDER
+    };
+
     let upstreams_table = Table::new(
         rows,
         [
@@ -305,9 +325,12 @@ fn render_upstreams_table(f: &mut Frame, area: Rect, state: &TuiState) {
         Block::default()
             .title("── UPSTREAMS ──")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER)),
-    );
-    f.render_widget(upstreams_table, area);
+            .border_style(Style::default().fg(border_color)),
+    )
+    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+    .highlight_symbol(">> ");
+
+    f.render_stateful_widget(upstreams_table, area, &mut app.dns_upstreams_state);
 }
 
 fn render_subservices(f: &mut Frame, area: Rect, state: &TuiState) {
@@ -768,7 +791,8 @@ fn render_protocols(f: &mut Frame, area: Rect, state: &TuiState) {
     f.render_widget(proto_table, area);
 }
 
-fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
+fn render_recent_queries(f: &mut Frame, area: Rect, app: &TuiApp) {
+    let state = &app.state;
     let header = Row::new(vec!["TIME", "CLIENT", "DOMAIN", "TYPE", "RESULT", "LAT"])
         .style(Style::default().fg(theme::TEXT_DIM))
         .bottom_margin(0);
@@ -812,6 +836,12 @@ fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
         })
         .collect();
 
+    let border_color = if app.dns_focus == crate::tui::app::DnsFocus::Main {
+        theme::ACCENT
+    } else {
+        theme::BORDER
+    };
+
     let count = state.dns_live_queries.len();
     let table = Table::new(
         rows,
@@ -829,7 +859,7 @@ fn render_recent_queries(f: &mut Frame, area: Rect, state: &TuiState) {
         Block::default()
             .title(format!("── LIVE QUERIES ({count}) ──"))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER)),
+            .border_style(Style::default().fg(border_color)),
     );
 
     f.render_widget(table, area);
@@ -874,6 +904,12 @@ fn render_rewrites_table(f: &mut Frame, area: Rect, app: &mut TuiApp) {
             .collect()
     });
 
+    let border_color = if app.dns_focus == crate::tui::app::DnsFocus::Main {
+        theme::ACCENT
+    } else {
+        theme::BORDER
+    };
+
     let table = Table::new(
         rows,
         [
@@ -890,7 +926,7 @@ fn render_rewrites_table(f: &mut Frame, area: Rect, app: &mut TuiApp) {
                 "── REWRITES (r: toggle) ── {matching_count} regras ativas"
             ))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER)),
+            .border_style(Style::default().fg(border_color)),
     )
     .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
     .highlight_symbol(">> ");

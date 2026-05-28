@@ -71,5 +71,43 @@ pub async fn execute_action(client: &LanforgeClient, action: PendingAction) -> A
             Ok(r) => ActionResult::Success(r.message),
             Err(e) => ActionResult::Error(e.to_string()),
         },
+        PendingAction::HostAdd { entry } => match client.host_add(entry).await {
+            Ok(r) => ActionResult::Success(r.message),
+            Err(e) => ActionResult::Error(e.to_string()),
+        },
+        PendingAction::HostRemove { mac, .. } => match client.host_remove(mac).await {
+            Ok(r) => ActionResult::Success(r.message),
+            Err(e) => ActionResult::Error(e.to_string()),
+        },
+        PendingAction::DnsUpstreamAdd { target } => {
+            match client
+                .dns_upstream_add(target.addr, target.protocol, target.hostname)
+                .await
+            {
+                Ok(r) => ActionResult::Success(r.message),
+                Err(e) => ActionResult::Error(e.to_string()),
+            }
+        }
+        PendingAction::DnsUpstreamRemove { target } => {
+            match client
+                .dns_upstream_remove(target.addr, target.protocol)
+                .await
+            {
+                Ok(r) => ActionResult::Success(r.message),
+                Err(e) => ActionResult::Error(e.to_string()),
+            }
+        }
+        PendingAction::AdblockSourceAdd { url, kind } => {
+            match client.dns_adblock_url_add(url, kind).await {
+                Ok(r) => ActionResult::Success(r.message),
+                Err(e) => ActionResult::Error(e.to_string()),
+            }
+        }
+        PendingAction::AdblockSourceRemove { url } => {
+            match client.dns_adblock_url_remove(url).await {
+                Ok(r) => ActionResult::Success(r.message),
+                Err(e) => ActionResult::Error(e.to_string()),
+            }
+        }
     }
 }

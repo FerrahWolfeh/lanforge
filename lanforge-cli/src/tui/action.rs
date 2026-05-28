@@ -1,5 +1,7 @@
+use lanforge_api::api::HostConfigEntry;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::adblock::RewriteRule;
+use lanforge_types::network::dns::adblock::{AdblockUrlKind, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 
 /// A pending action waiting for confirmation.
 #[derive(Debug, Clone)]
@@ -29,6 +31,18 @@ pub enum PendingAction {
     // DNS Rewrites
     DnsRewriteAdd { rule: RewriteRule },
     DnsRewriteRemove { id: i64, domain: String },
+
+    // Hosts Management
+    HostAdd { entry: HostConfigEntry },
+    HostRemove { mac: MacAddr, hostname: String },
+
+    // Upstreams Management
+    DnsUpstreamAdd { target: UpstreamTarget },
+    DnsUpstreamRemove { target: UpstreamTarget },
+
+    // Adblock Sources Management
+    AdblockSourceAdd { url: String, kind: AdblockUrlKind },
+    AdblockSourceRemove { url: String },
 }
 
 /// Result of an async action, delivered back to the TUI via `AppEvent`.
@@ -59,6 +73,12 @@ impl PendingAction {
             Self::LeaseRelease { .. } => "Release DHCP Lease",
             Self::DnsRewriteAdd { .. } => "Add DNS Rewrite Rule",
             Self::DnsRewriteRemove { .. } => "Remove DNS Rewrite Rule",
+            Self::HostAdd { .. } => "Save Host Configuration",
+            Self::HostRemove { .. } => "Remove Host Configuration",
+            Self::DnsUpstreamAdd { .. } => "Add DNS Upstream",
+            Self::DnsUpstreamRemove { .. } => "Remove DNS Upstream",
+            Self::AdblockSourceAdd { .. } => "Add Adblock Source",
+            Self::AdblockSourceRemove { .. } => "Remove Adblock Source",
         }
     }
 
@@ -82,6 +102,12 @@ impl PendingAction {
             Self::LeaseRelease { hostname, mac } => format!("Release the active DHCP lease for {hostname} ({mac}). The device may lose connectivity."),
             Self::DnsRewriteAdd { rule } => format!("Add DNS rewrite rule for {} to resolve as {}.", rule.domain, rule.answer),
             Self::DnsRewriteRemove { domain, .. } => format!("Remove DNS rewrite rule for {domain}."),
+            Self::HostAdd { entry } => format!("Save static host configuration for {} ({}).", entry.hostname, entry.mac),
+            Self::HostRemove { mac, hostname } => format!("Remove static host configuration for {hostname} ({mac}). The device will return to dynamic configuration state."),
+            Self::DnsUpstreamAdd { target } => format!("Add DNS upstream resolver {} using protocol {}.", target.addr, target.protocol),
+            Self::DnsUpstreamRemove { target } => format!("Remove DNS upstream resolver {} using protocol {}?", target.addr, target.protocol),
+            Self::AdblockSourceAdd { url, .. } => format!("Add adblock blocklist source URL: {url}."),
+            Self::AdblockSourceRemove { url } => format!("Remove adblock blocklist source URL: {url}?"),
         }
     }
 
@@ -93,6 +119,9 @@ impl PendingAction {
                 | Self::Purge { .. }
                 | Self::LeaseRelease { .. }
                 | Self::DnsRewriteRemove { .. }
+                | Self::HostRemove { .. }
+                | Self::DnsUpstreamRemove { .. }
+                | Self::AdblockSourceRemove { .. }
         )
     }
 }

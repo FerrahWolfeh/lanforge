@@ -4,7 +4,7 @@
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
-use crate::tui::app::TuiApp;
+use crate::tui::app::{AdblockFocus, TuiApp};
 use crate::tui::state::TuiState;
 use crate::tui::theme;
 use crate::tui::utils::resolve_client_name;
@@ -45,7 +45,7 @@ fn render_top_row(f: &mut Frame, area: Rect, app: &mut TuiApp) {
         .split(area);
 
     render_stats(f, chunks[0], &app.state);
-    render_sources(f, chunks[1], &app.state);
+    render_sources(f, chunks[1], app);
     render_allowlist(f, chunks[2], app);
 }
 
@@ -154,12 +154,26 @@ fn render_stats(f: &mut Frame, area: Rect, state: &TuiState) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn render_sources(f: &mut Frame, area: Rect, state: &TuiState) {
+fn render_sources(f: &mut Frame, area: Rect, app: &mut TuiApp) {
+    let state = &app.state;
     let header = Row::new(vec!["SOURCE", "STATUS", "ENTRIES", "UPDATED", "ACTIVE"])
         .style(Style::default().fg(theme::TEXT_DIM))
         .bottom_margin(0);
 
     let rows: Vec<Row> = state.dns_adblock_urls.as_ref().map_or(Vec::new(), |resp| {
+        let matching_count = resp.urls.len();
+        if matching_count > 0 {
+            if let Some(selected) = app.adblock_sources_state.selected() {
+                if selected >= matching_count {
+                    app.adblock_sources_state.select(Some(matching_count - 1));
+                }
+            } else if app.adblock_focus == AdblockFocus::Sources {
+                app.adblock_sources_state.select(Some(0));
+            }
+        } else {
+            app.adblock_sources_state.select(None);
+        }
+
         resp.urls
             .iter()
             .map(|entry| {
@@ -219,6 +233,12 @@ fn render_sources(f: &mut Frame, area: Rect, state: &TuiState) {
             .collect()
     });
 
+    let border_color = if app.adblock_focus == AdblockFocus::Sources {
+        theme::ACCENT
+    } else {
+        theme::BORDER
+    };
+
     let table = Table::new(
         rows,
         [
@@ -234,10 +254,12 @@ fn render_sources(f: &mut Frame, area: Rect, state: &TuiState) {
         Block::default()
             .title("── BLOCKLIST SOURCES ──")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER)),
-    );
+            .border_style(Style::default().fg(border_color)),
+    )
+    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+    .highlight_symbol(">> ");
 
-    f.render_widget(table, area);
+    f.render_stateful_widget(table, area, &mut app.adblock_sources_state);
 }
 
 fn render_allowlist(f: &mut Frame, area: Rect, app: &mut TuiApp) {
@@ -252,7 +274,7 @@ fn render_allowlist(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     let list_height = (area.height as usize).saturating_sub(2 + tip_height); // borders + tips
 
     let selected_idx = app.adblock_allowlist_state.selected();
-    let is_focused = app.adblock_allowlist_focused;
+    let is_focused = app.adblock_focus == AdblockFocus::Allowlist;
 
     // Clamp selected index to entries count
     let entries_count = entries.len();
@@ -328,9 +350,9 @@ fn render_allowlist(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     )));
     lines.push(Line::from(Span::styled(
         if is_focused {
-            "d: Remove entry  Tab: Unfocus"
+            "d: Remove entry  Tab: Focus Sources"
         } else {
-            "Tab: Focus list to edit"
+            "Tab: Focus Allowlist"
         },
         Style::default().fg(theme::TEXT_DIM),
     )));

@@ -4,11 +4,17 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use lanforge_api::api::DnsQueryLogEntry;
+use lanforge_api::api::{DnsQueryLogEntry, HostConfigEntry};
 use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
-use lanforge_types::network::{
-    DnsRecordType,
-    dns::adblock::{RewriteAnswer, RewriteRule},
+use lanforge_types::{
+    device::Origin,
+    network::{
+        DnsRecordType,
+        dns::{
+            adblock::{AdblockUrlKind, RewriteAnswer, RewriteRule},
+            upstream::UpstreamTarget,
+        },
+    },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -28,9 +34,12 @@ pub mod theme;
 pub mod ui;
 pub mod utils;
 
-use crate::tui::action::PendingAction;
-use crate::tui::app::{InputPurpose, TuiApp, TuiMode, TuiTab};
+use crate::tui::app::{AdblockFocus, InputPurpose, TuiApp, TuiMode, TuiTab};
 use crate::tui::event::AppEvent;
+use crate::tui::{
+    action::{ActionResult, PendingAction},
+    app::DnsFocus,
+};
 use crate::{
     cli::LanforgeClient,
     tui::{app::InputContext, ui::widgets::toast::Toast},
@@ -220,6 +229,65 @@ fn handle_tui_key_event(
                                 None
                             }
                         }
+                        InputPurpose::HostAdd { mac } => {
+                            let parts: Vec<&str> = value.split_whitespace().collect();
+                            if parts.is_empty() {
+                                None
+                            } else {
+                                let hostname = parts[0].to_string();
+                                let mut v4_fixed = None;
+                                let mut v6_suffix = None;
+                                for part in parts.iter().skip(1) {
+                                    if let Ok(ip) = part.parse::<Ipv4Addr>() {
+                                        v4_fixed = Some(ip);
+                                    } else if let Ok(ip) = part.parse::<Ipv6Addr>() {
+                                        v6_suffix = Some(ip);
+                                    }
+                                }
+                                let entry = HostConfigEntry {
+                                    mac,
+                                    hostname,
+                                    v4_fixed,
+                                    v6_suffix,
+                                    origin: Origin::Static,
+                                };
+                                Some(PendingAction::HostAdd { entry })
+                            }
+                        }
+                        InputPurpose::DnsUpstreamAdd => {
+                            use std::str::FromStr;
+                            match UpstreamTarget::from_str(&value) {
+                                Ok(target) => Some(PendingAction::DnsUpstreamAdd { target }),
+                                Err(e) => {
+                                    let tx = event_tx.clone();
+                                    tokio::spawn(async move {
+                                        let _ = tx
+                                            .send(AppEvent::ActionResult(ActionResult::Error(
+                                                format!("Invalid Upstream URI: {e}"),
+                                            )))
+                                            .await;
+                                    });
+                                    None
+                                }
+                            }
+                        }
+                        InputPurpose::AdblockSourceAdd => {
+                            let parts: Vec<&str> = value.split_whitespace().collect();
+                            if parts.is_empty() {
+                                None
+                            } else {
+                                let url = parts[0].to_string();
+                                let kind = if parts.len() > 1 {
+                                    match parts[1].to_lowercase().as_str() {
+                                        "allowlist" => AdblockUrlKind::Allowlist,
+                                        _ => AdblockUrlKind::Blocklist,
+                                    }
+                                } else {
+                                    AdblockUrlKind::Blocklist
+                                };
+                                Some(PendingAction::AdblockSourceAdd { url, kind })
+                            }
+                        }
                     };
                     if let Some(act) = action {
                         if act.is_destructive() {
@@ -303,25 +371,42 @@ fn handle_tui_key_event(
                 _ => {}
             },
             TuiTab::Dns => match key.code {
-                KeyCode::Char('d') => {
+                KeyCode::Char('d') if app.dns_focus == DnsFocus::Main => {
                     app.input_context = Some(InputContext {
                         prompt: "Dig Domain Name:".to_string(),
                         purpose: InputPurpose::DnsQuery,
                     });
                     app.mode = TuiMode::Input;
                 }
-                KeyCode::Char('a') if app.dns_show_rewrites => {
+                KeyCode::Char('a') if app.dns_show_rewrites && app.dns_focus == DnsFocus::Main => {
                     app.input_context = Some(InputContext {
                         prompt: "Add Rewrite (domain answer):".to_string(),
                         purpose: InputPurpose::DnsRewriteAdd,
                     });
                     app.mode = TuiMode::Input;
                 }
-                KeyCode::Char('x') | KeyCode::Delete if app.dns_show_rewrites => {
+                KeyCode::Char('x') | KeyCode::Delete
+                    if app.dns_show_rewrites && app.dns_focus == DnsFocus::Main =>
+                {
                     if let Some((id, domain)) = app.selected_rewrite() {
                         app.pending_action = Some(PendingAction::DnsRewriteRemove { id, domain });
                         app.mode = TuiMode::Confirming;
                     }
+                }
+                KeyCode::Char('d' | 'x') | KeyCode::Delete
+                    if app.dns_focus == DnsFocus::Upstreams =>
+                {
+                    if let Some(target) = app.selected_upstream() {
+                        app.pending_action = Some(PendingAction::DnsUpstreamRemove { target });
+                        app.mode = TuiMode::Confirming;
+                    }
+                }
+                KeyCode::Char('u') => {
+                    app.input_context = Some(InputContext {
+                        prompt: "Add Upstream (ex: tls://dns.google@8.8.8.8:853):".to_string(),
+                        purpose: InputPurpose::DnsUpstreamAdd,
+                    });
+                    app.mode = TuiMode::Input;
                 }
                 _ => {}
             },
@@ -359,21 +444,21 @@ fn handle_tui_key_event(
                         let _ = tx.send(AppEvent::ActionResult(result)).await;
                     });
                 }
-                KeyCode::Char('a') => {
+                KeyCode::Char('a') if app.adblock_focus == AdblockFocus::Allowlist => {
                     app.input_context = Some(InputContext {
                         prompt: "Allow domain:".to_string(),
                         purpose: InputPurpose::AdblockAllow,
                     });
                     app.mode = TuiMode::Input;
                 }
-                KeyCode::Char('b') => {
+                KeyCode::Char('b') if app.adblock_focus == AdblockFocus::Allowlist => {
                     app.input_context = Some(InputContext {
                         prompt: "Block domain:".to_string(),
                         purpose: InputPurpose::AdblockBlock,
                     });
                     app.mode = TuiMode::Input;
                 }
-                KeyCode::Char('d') if app.adblock_allowlist_focused => {
+                KeyCode::Char('d') if app.adblock_focus == AdblockFocus::Allowlist => {
                     if let Some(selected_idx) = app.adblock_allowlist_state.selected()
                         && let Some(allowlist_resp) = &app.state.dns_allowlist
                         && let Some(entry) = allowlist_resp.allowlist.get(selected_idx)
@@ -387,6 +472,21 @@ fn handle_tui_key_event(
                                 crate::tui::dispatch::execute_action(&client, action).await;
                             let _ = tx.send(AppEvent::ActionResult(result)).await;
                         });
+                    }
+                }
+                KeyCode::Char('a') if app.adblock_focus == AdblockFocus::Sources => {
+                    app.input_context = Some(InputContext {
+                        prompt: "Add Source URL (url [blocklist|allowlist]):".to_string(),
+                        purpose: InputPurpose::AdblockSourceAdd,
+                    });
+                    app.mode = TuiMode::Input;
+                }
+                KeyCode::Char('d' | 'x') | KeyCode::Delete
+                    if app.adblock_focus == AdblockFocus::Sources =>
+                {
+                    if let Some(url) = app.selected_source() {
+                        app.pending_action = Some(PendingAction::AdblockSourceRemove { url });
+                        app.mode = TuiMode::Confirming;
                     }
                 }
                 _ => {}
@@ -407,6 +507,39 @@ fn handle_tui_key_event(
                 KeyCode::Char('d') => {
                     if let Some((mac, hostname)) = app.selected_device() {
                         app.pending_action = Some(PendingAction::Purge { mac, hostname });
+                        app.mode = TuiMode::Confirming;
+                    }
+                }
+                KeyCode::Char('h') => {
+                    if let Some((mac, hostname)) = app.selected_device() {
+                        let mut prepopulate = hostname;
+                        if let Some(devices_resp) = &app.state.devices
+                            && let Some(dev) = devices_resp.devices.iter().find(|d| d.mac == mac)
+                        {
+                            if !dev.display_v4.is_empty() && dev.display_v4 != "—" {
+                                prepopulate.push(' ');
+                                prepopulate.push_str(&dev.display_v4);
+                            }
+                            if !dev.display_v6.is_empty() && dev.display_v6 != "—" {
+                                prepopulate.push(' ');
+                                prepopulate.push_str(&dev.display_v6);
+                            }
+                        }
+                        app.input = tui_input::Input::new(prepopulate);
+                        app.input_context = Some(InputContext {
+                            prompt: "Promote/Edit Host (hostname [ipv4] [ipv6]):".to_string(),
+                            purpose: InputPurpose::HostAdd { mac },
+                        });
+                        app.mode = TuiMode::Input;
+                    }
+                }
+                KeyCode::Char('x') | KeyCode::Delete => {
+                    if let Some((mac, hostname)) = app.selected_device()
+                        && let Some(devices_resp) = &app.state.devices
+                        && let Some(dev) = devices_resp.devices.iter().find(|d| d.mac == mac)
+                        && dev.origin != Origin::Dynamic
+                    {
+                        app.pending_action = Some(PendingAction::HostRemove { mac, hostname });
                         app.mode = TuiMode::Confirming;
                     }
                 }
@@ -531,10 +664,10 @@ fn handle_app_event(
             app.mode = TuiMode::Detail;
         }
         AppEvent::ActionResult(result) => match result {
-            crate::tui::action::ActionResult::Success(msg) => {
+            ActionResult::Success(msg) => {
                 app.toasts.push_back(Toast::success(msg));
             }
-            crate::tui::action::ActionResult::Error(msg) => {
+            ActionResult::Error(msg) => {
                 app.toasts.push_back(Toast::error(msg));
             }
         },

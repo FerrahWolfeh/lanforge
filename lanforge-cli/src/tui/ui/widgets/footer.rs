@@ -1,5 +1,6 @@
-use crate::tui::app::{TuiApp, TuiMode, TuiTab};
+use crate::tui::app::{AdblockFocus, DnsFocus, TuiApp, TuiMode, TuiTab};
 use crate::tui::theme::TEXT_DIM;
+use lanforge_types::device::Origin;
 use ratatui::{Frame, layout::Rect, style::Style, widgets::Paragraph};
 
 pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
@@ -23,12 +24,28 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
                         "Enter:Detail",
                         "w:Wake",
                         "d:Purge",
-                        "/:Search",
+                        "h:Host Config",
                     ]);
+                    if let Some((mac, _)) = app.selected_device()
+                        && let Some(devices_resp) = &app.state.devices
+                        && let Some(dev) = devices_resp.devices.iter().find(|d| d.mac == mac)
+                        && dev.origin != Origin::Dynamic
+                    {
+                        hints.push("x/Del:Remove Host");
+                    }
+                    hints.push("/:Search");
                 }
                 TuiTab::Dns => {
-                    hints.extend(&["↑↓:Navigate", "r:Toggle Rewrites", "F:Flush Cache"]);
-                    if app.dns_show_rewrites {
+                    hints.extend(&[
+                        "↑↓:Navigate",
+                        "Tab:Focus",
+                        "u:Add Upstream",
+                        "r:Toggle Rewrites",
+                        "F:Flush Cache",
+                    ]);
+                    if app.dns_focus == DnsFocus::Upstreams {
+                        hints.push("d/x/Del:Remove Upstream");
+                    } else if app.dns_show_rewrites {
                         hints.extend(&["a:Add", "x/Del:Delete"]);
                     } else {
                         hints.push("d:Query");
@@ -36,13 +53,20 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
                     hints.push("/:Search");
                 }
                 TuiTab::Adblock => {
-                    hints.extend(&["t:Toggle", "r:Reload Lists", "a:Allow", "b:Block"]);
-                    if app.adblock_allowlist_focused {
-                        hints.extend(&["d:Remove", "Tab:Unfocus"]);
+                    hints.extend(&["t:Toggle", "r:Reload Lists"]);
+                    if app.adblock_focus == AdblockFocus::Allowlist {
+                        hints.extend(&["a:Allow", "b:Block"]);
+                        if app.adblock_allowlist_state.selected().is_some() {
+                            hints.push("d:Remove Domain");
+                        }
+                        hints.extend(&["Tab:Focus Sources", "/:Search"]);
                     } else {
-                        hints.push("Tab:Focus list");
+                        hints.extend(&["a:Add Source", "Tab:Focus Allowlist"]);
+                        if app.adblock_sources_state.selected().is_some() {
+                            hints.push("d:Remove Source");
+                        }
+                        hints.push("/:Search");
                     }
-                    hints.push("/:Search");
                 }
                 TuiTab::Events => {
                     hints.extend(&["Space:Toggle Auto-Scroll"]);

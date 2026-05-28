@@ -3,11 +3,23 @@ use crate::tui::state::TuiState;
 use crate::tui::ui::widgets::toast::Toast;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use lanforge_api::api::DnsQueryResponse;
-use lanforge_types::identifiers::MacAddr;
+use lanforge_types::{identifiers::MacAddr, network::dns::upstream::UpstreamTarget};
 use ratatui::widgets::TableState;
 use std::collections::VecDeque;
 use tui_input::Input;
 use tui_tree_widget::TreeState;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdblockFocus {
+    Allowlist,
+    Sources,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsFocus {
+    Main,
+    Upstreams,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiTab {
@@ -43,6 +55,9 @@ pub enum InputPurpose {
     AdblockTimedDisable,
     DnsQuery,
     DnsRewriteAdd,
+    HostAdd { mac: MacAddr },
+    DnsUpstreamAdd,
+    AdblockSourceAdd,
 }
 
 impl TuiTab {
@@ -101,9 +116,12 @@ pub struct TuiApp {
     pub input_context: Option<InputContext>,
 
     // Adblock view focus
-    pub adblock_allowlist_focused: bool,
+    pub adblock_focus: AdblockFocus,
+    pub adblock_sources_state: TableState,
 
     // DNS view rewrites state
+    pub dns_focus: DnsFocus,
+    pub dns_upstreams_state: TableState,
     pub dns_rewrites_state: TableState,
     pub last_dns_query_result: Option<Result<DnsQueryResponse, String>>,
 }
@@ -134,7 +152,10 @@ impl TuiApp {
             pending_action: None,
             input: Input::default(),
             input_context: None,
-            adblock_allowlist_focused: false,
+            adblock_focus: AdblockFocus::Allowlist,
+            adblock_sources_state: TableState::default(),
+            dns_focus: DnsFocus::Main,
+            dns_upstreams_state: TableState::default(),
             dns_rewrites_state: TableState::default(),
             last_dns_query_result: None,
         }
@@ -213,7 +234,16 @@ impl TuiApp {
                 }
             }
             KeyCode::Tab | KeyCode::BackTab if self.active_tab == TuiTab::Adblock => {
-                self.adblock_allowlist_focused = !self.adblock_allowlist_focused;
+                self.adblock_focus = match self.adblock_focus {
+                    AdblockFocus::Allowlist => AdblockFocus::Sources,
+                    AdblockFocus::Sources => AdblockFocus::Allowlist,
+                };
+            }
+            KeyCode::Tab | KeyCode::BackTab if self.active_tab == TuiTab::Dns => {
+                self.dns_focus = match self.dns_focus {
+                    DnsFocus::Main => DnsFocus::Upstreams,
+                    DnsFocus::Upstreams => DnsFocus::Main,
+                };
             }
             _ => {}
         }
@@ -239,7 +269,13 @@ impl TuiApp {
                 self.device_list_state.select(Some(i));
             }
             TuiTab::Dns => {
-                if self.dns_show_rewrites {
+                if self.dns_focus == DnsFocus::Upstreams {
+                    let i = self
+                        .dns_upstreams_state
+                        .selected()
+                        .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                    self.dns_upstreams_state.select(Some(i));
+                } else if self.dns_show_rewrites {
                     let i = self
                         .dns_rewrites_state
                         .selected()
@@ -253,12 +289,20 @@ impl TuiApp {
                     self.dns_query_log_state.select(Some(i));
                 }
             }
-            TuiTab::Adblock if self.adblock_allowlist_focused => {
-                let i = self
-                    .adblock_allowlist_state
-                    .selected()
-                    .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
-                self.adblock_allowlist_state.select(Some(i));
+            TuiTab::Adblock => {
+                if self.adblock_focus == AdblockFocus::Allowlist {
+                    let i = self
+                        .adblock_allowlist_state
+                        .selected()
+                        .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                    self.adblock_allowlist_state.select(Some(i));
+                } else {
+                    let i = self
+                        .adblock_sources_state
+                        .selected()
+                        .map_or(0, |i| if i == 0 { 0 } else { i - 1 });
+                    self.adblock_sources_state.select(Some(i));
+                }
             }
             TuiTab::Dhcp => {
                 let i = self
@@ -281,7 +325,10 @@ impl TuiApp {
                 self.device_list_state.select(Some(i));
             }
             TuiTab::Dns => {
-                if self.dns_show_rewrites {
+                if self.dns_focus == DnsFocus::Upstreams {
+                    let i = self.dns_upstreams_state.selected().map_or(0, |i| i + 1);
+                    self.dns_upstreams_state.select(Some(i));
+                } else if self.dns_show_rewrites {
                     let i = self.dns_rewrites_state.selected().map_or(0, |i| i + 1);
                     self.dns_rewrites_state.select(Some(i));
                 } else {
@@ -289,9 +336,14 @@ impl TuiApp {
                     self.dns_query_log_state.select(Some(i));
                 }
             }
-            TuiTab::Adblock if self.adblock_allowlist_focused => {
-                let i = self.adblock_allowlist_state.selected().map_or(0, |i| i + 1);
-                self.adblock_allowlist_state.select(Some(i));
+            TuiTab::Adblock => {
+                if self.adblock_focus == AdblockFocus::Allowlist {
+                    let i = self.adblock_allowlist_state.selected().map_or(0, |i| i + 1);
+                    self.adblock_allowlist_state.select(Some(i));
+                } else {
+                    let i = self.adblock_sources_state.selected().map_or(0, |i| i + 1);
+                    self.adblock_sources_state.select(Some(i));
+                }
             }
             TuiTab::Dhcp => {
                 let i = self.lease_table_state.selected().map_or(0, |i| i + 1);
@@ -366,5 +418,27 @@ impl TuiApp {
         let resp = self.state.dns_rewrites.as_ref()?;
         let rule = resp.rewrites.get(selected_idx)?;
         Some((rule.id?, rule.domain.clone()))
+    }
+
+    /// Returns the selected blocklist source URL (if any).
+    #[must_use]
+    pub fn selected_source(&self) -> Option<String> {
+        let selected_idx = self.adblock_sources_state.selected()?;
+        let resp = self.state.dns_adblock_urls.as_ref()?;
+        resp.urls.get(selected_idx).map(|entry| entry.url.clone())
+    }
+
+    /// Returns the selected upstream DNS target (if any).
+    #[must_use]
+    pub fn selected_upstream(&self) -> Option<UpstreamTarget> {
+        let selected_idx = self.dns_upstreams_state.selected()?;
+        let resp = self.state.dns_upstreams.as_ref()?;
+        resp.upstreams
+            .get(selected_idx)
+            .map(|entry| UpstreamTarget {
+                addr: entry.target,
+                protocol: entry.protocol,
+                hostname: None,
+            })
     }
 }
