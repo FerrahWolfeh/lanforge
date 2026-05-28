@@ -24,20 +24,63 @@ async fn resolve_local_a_record() {
 }
 
 #[tokio::test]
-async fn resolve_local_ptr_ipv4() {
+async fn resolve_local_ptr() {
     let ctx = init_test_context();
     let cfg = mock_config();
-    let mac = MacAddr([1, 2, 3, 4, 5, 2]);
-    let ip = Ipv4Addr::new(192, 168, 1, 20);
-    register_test_device(&ctx, "printer", mac, ip);
+
+    // Register IPv4 device
+    let mac_v4 = MacAddr([1, 2, 3, 4, 5, 2]);
+    let ip_v4 = Ipv4Addr::new(192, 168, 1, 20);
+    register_test_device(&ctx, "printer", mac_v4, ip_v4);
+
+    // Register IPv6 device
+    let mac_v6 = MacAddr([1, 2, 3, 4, 5, 3]);
+    let ip_v6 = Ipv6Addr::from_str("2001:db8::beef").unwrap();
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
+        mac: mac_v6,
+        addr: ip_v6,
+        is_active: true,
+    });
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac: mac_v6,
+        hostname: "ipv6-host".to_string(),
+    });
 
     let dns_ctx = mock_dns_context(ctx, cfg).await;
 
-    // Reverse DNS for 192.168.1.20
-    let ptr_name = "20.1.168.192.in-addr.arpa";
-    let (host, domain) = dns_ctx.local.resolve_ptr(ptr_name).unwrap().unwrap();
-    assert_eq!(host, "printer");
-    assert_eq!(domain, "lan");
+    struct TestCase {
+        qname: &'static str,
+        expected_host: &'static str,
+    }
+
+    let cases = vec![
+        TestCase {
+            qname: "20.1.168.192.in-addr.arpa",
+            expected_host: "printer",
+        },
+        TestCase {
+            qname: "20.1.168.192.in-addr.arpa.",
+            expected_host: "printer",
+        },
+        TestCase {
+            qname: "f.e.e.b.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
+            expected_host: "ipv6-host",
+        },
+        TestCase {
+            qname: "f.e.e.b.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
+            expected_host: "ipv6-host",
+        },
+    ];
+
+    for case in cases {
+        let (host, domain) = dns_ctx
+            .local
+            .resolve_ptr(case.qname)
+            .unwrap()
+            .unwrap_or_else(|| panic!("Failed to resolve: {}", case.qname));
+        assert_eq!(host, case.expected_host, "Failed on input: {}", case.qname);
+        assert_eq!(domain, "lan");
+    }
 }
 
 #[tokio::test]

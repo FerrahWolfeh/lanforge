@@ -6,12 +6,16 @@ use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
 use lanforge_dns::telemetry::DnsStats;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
+use lanforge_types::device::TransientOrigin;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
+    DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
 };
+use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 use lanforge_types::update::DeviceUpdate;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
@@ -214,7 +218,6 @@ async fn dns_simulation_upstream() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn dns_simulation_cache_case_insensitive() {
     let (ctx, db) = init_test_context().await;
 
@@ -300,5 +303,225 @@ async fn dns_simulation_cache_case_insensitive() {
         "Cache hit count did not increase for case-insensitive query"
     );
 
+    ctx.terminate();
+}
+
+#[tokio::test]
+async fn dns_simulation_malformed_and_special_prefixes() {
+    let (ctx, db) = init_test_context().await;
+
+    let cfg = DnsConfig {
+        enabled: true,
+        listen: "127.0.0.1:1057".parse().unwrap(), // Be mindful of the port collision issue
+        ..Default::default()
+    };
+
+    let mut service = DnsService::new(cfg, ctx.clone(), db);
+    let ctrl = ServiceControl::new("dns-boundary", ctx.clone());
+    ctx.set_db_ready(true);
+    let mut rx = ctx.bus().subscribe();
+
+    tokio::spawn(async move {
+        let _ = service.run(ctrl).await;
+    });
+
+    // Wait for ready...
+    while let Ok(event) = rx.recv().await {
+        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
+            && name == "dns-boundary"
+        {
+            break;
+        }
+    }
+
+    let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
+    client_sock.connect("127.0.0.1:1057").await.unwrap();
+
+    // 1. TEST CASE: Sending complete garbage bytes (Not a valid DNS message)
+    let garbage = [0u8; 20];
+    client_sock.send(&garbage).await.unwrap();
+
+    // Expectation: The service should log/drop it and NOT panic or crash.
+    // We verify the service is still alive by sending a valid query right after.
+
+    let mut query = DnsMessage::new();
+    query.header.id = 9999;
+    query.header.qdcount = 1;
+    query.questions.push(DnsQuestion {
+        name: Arc::from("invalid-prefix:something.lan"), // testing weird custom strings
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+
+    let query_bytes = WireEncoder::new().encode_message(&query);
+    client_sock.send(&query_bytes).await.unwrap();
+
+    let mut buf = [0u8; 512];
+
+    // Check if the server immediately replies with an error for the garbage bytes
+    if let Ok(Ok(n)) =
+        tokio::time::timeout(Duration::from_millis(100), client_sock.recv(&mut buf)).await
+    {
+        let response = WireDecoder::new(&buf[..n]).decode_message().unwrap();
+        // It might return FormatError with ID 0 because it couldn't parse the original ID
+        assert_eq!(response.header.id, 0);
+        assert_eq!(response.header.rcode, DnsResponseCode::FormErr);
+    }
+
+    // Now send the valid query with the custom/weird syntax
+    let mut query = DnsMessage::new();
+    query.header.id = 9999;
+    query.header.qdcount = 1;
+    query.questions.push(DnsQuestion {
+        name: Arc::from("invalid-prefix:something.lan"),
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+
+    let query_bytes = WireEncoder::new().encode_message(&query);
+    client_sock.send(&query_bytes).await.unwrap();
+
+    let n = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
+        .await
+        .expect("Service timed out on valid query after garbage")
+        .unwrap();
+
+    let response = WireDecoder::new(&buf[..n]).decode_message().unwrap();
+
+    // This one should now match cleanly
+    assert_eq!(response.header.id, 9999);
+    assert_eq!(response.header.rcode, DnsResponseCode::NXDomain);
+
+    ctx.terminate();
+}
+
+#[tokio::test]
+async fn dns_simulation_transient_ip_reverse_dns() {
+    let (ctx, db) = init_test_context().await;
+
+    // 1. Bind mock DNS upstream server to 127.0.0.1:0
+    let mock_upstream = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = mock_upstream.local_addr().unwrap();
+
+    // 2. Setup Config
+    let cfg = DnsConfig {
+        enabled: true,
+        listen: "127.0.0.1:1059".parse().unwrap(),
+        search_domains: vec!["lan".to_string()],
+        ..Default::default()
+    };
+
+    // Configure reverse resolver rule pointing to our mock upstream server
+    let resolver_target = UpstreamTarget {
+        addr: upstream_addr,
+        protocol: UpstreamProtocol::Udp,
+        hostname: None,
+    };
+    let subnet = IpSubnet::from_str("127.0.0.1/32").unwrap();
+    let resolver_rule = DnsReverseResolver {
+        subnet,
+        resolver: resolver_target,
+    };
+    let _ = ctx.apply(DeviceUpdate::AddReverseResolver {
+        resolver: resolver_rule,
+    });
+
+    // 3. Start DNS Service
+    let mut service = DnsService::new(cfg, ctx.clone(), db);
+    let ctrl = ServiceControl::new("dns-transient", ctx.clone());
+
+    ctx.set_db_ready(true);
+    let mut rx = ctx.bus().subscribe();
+
+    tokio::spawn(async move {
+        service.run(ctrl).await.expect("Service failed");
+    });
+
+    // Wait for ServiceReady
+    loop {
+        let event = rx.recv().await.expect("Bus closed");
+        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
+            && name == "dns-transient"
+        {
+            break;
+        }
+    }
+
+    // 4. Mock upstream behavior to answer PTR queries
+    let (tx_shutdown, mut rx_shutdown) = tokio::sync::oneshot::channel::<()>();
+    let mock_task = tokio::spawn(async move {
+        let mut buf = [0u8; 512];
+        tokio::select! {
+            res = mock_upstream.recv_from(&mut buf) => {
+                if let Ok((len, src)) = res {
+                    let mut decoder = WireDecoder::new(&buf[..len]);
+                    let msg = decoder.decode_message().unwrap();
+                    assert_eq!(msg.questions.len(), 1);
+                    assert_eq!(msg.questions[0].qtype, DnsRecordType::PTR);
+
+                    let mut resp_msg = DnsMessage::new();
+                    resp_msg.header.id = msg.header.id;
+                    resp_msg.header.qr = true;
+                    resp_msg.header.qdcount = 1;
+                    resp_msg.header.ancount = 1;
+                    resp_msg.questions.push(msg.questions[0].clone());
+                    resp_msg.answers.push(DnsRecord {
+                        name: msg.questions[0].name.clone(),
+                        rtype: DnsRecordType::PTR,
+                        rclass: DnsClass::IN,
+                        ttl: 30,
+                        rdata: DnsRData::PTR(Arc::from("socket-transient.local.")),
+                    });
+
+                    let mut encoder = WireEncoder::new();
+                    let resp_bytes = encoder.encode_message(&resp_msg);
+                    let _ = mock_upstream.send_to(&resp_bytes, src).await;
+                }
+            }
+            _ = &mut rx_shutdown => {}
+        }
+    });
+
+    // 5. Send DNS query from 127.0.0.1 via client socket to trigger the background lookup
+    let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
+    client_sock.connect("127.0.0.1:1059").await.unwrap();
+
+    let mut query = DnsMessage::new();
+    query.header.id = 7777;
+    query.header.qdcount = 1;
+    query.questions.push(DnsQuestion {
+        name: Arc::from("nonexistent-host.lan"),
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+    let query_bytes = WireEncoder::new().encode_message(&query);
+    client_sock.send(&query_bytes).await.unwrap();
+
+    let mut buf = [0u8; 512];
+    let _n = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
+        .await
+        .expect("Timeout waiting for DNS response")
+        .expect("Recv failed");
+
+    // 6. Poll until the background task resolves the transient IP
+    let client_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    let mut resolved = false;
+    for _ in 0..50 {
+        if let Some(host) = ctx.get_transient_host(&client_ip) {
+            assert_eq!(host.hostname.name, "socket-transient.local");
+            assert_eq!(host.origin, TransientOrigin::LocalPtr);
+            resolved = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        resolved,
+        "Transient host resolution in background via sockets failed"
+    );
+
+    // Cleanup
+    let _ = tx_shutdown.send(());
+    let _ = mock_task.await;
     ctx.terminate();
 }
