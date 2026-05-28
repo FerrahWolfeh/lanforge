@@ -339,7 +339,7 @@ async fn handle_rewrite_add(
     Json(payload): Json<RewriteRequest>,
 ) -> crate::error::Result<impl IntoResponse> {
     let ctx = create_client_ctx(&state);
-    let answer = payload.answer.parse().map_err(HttpError::Generic)?;
+    let answer = payload.answer.parse().map_err(HttpError::BadRequest)?;
     Ok(crate::http_response!(
         ctx.handle_dns_rewrite_add(RewriteRule {
             id: None,

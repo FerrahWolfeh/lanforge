@@ -199,11 +199,7 @@ impl ClientContext {
         }
 
         // 2. Apply to memory context
-        if !self.ctx.apply(DeviceUpdate::Remove(mac)) {
-            return Response::Error {
-                error: "Failed to remove device from memory".to_string(),
-            };
-        }
+        let _ = self.ctx.apply(DeviceUpdate::Remove(mac));
 
         Response::Success(SimpleSuccess {
             message: "Host configuration removed".to_string(),

@@ -28,16 +28,20 @@ async fn init_test_context() -> (LanforgeContext, Arc<LanforgeDb>, Arc<LogDb>) {
 async fn test_http_simulation_basic() {
     let (ctx, db, log_db) = init_test_context().await;
 
-    // 1. Setup Config
+    // Bind on :0 so the OS assigns a free port, avoiding conflicts when
+    // tests run in parallel or multiple `cargo test` processes run concurrently.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener); // HttpService will re-bind; window is negligibly small in CI
+
     let http_cfg = HttpConfig {
-        listen: "127.0.0.1:1080".parse().unwrap(),
+        listen: format!("127.0.0.1:{port}").parse().unwrap(),
         enabled: true,
         allow_plaintext_http: true,
         ..Default::default()
     };
     let cfg = Arc::new(http_cfg);
 
-    // 2. Start HTTP Service
     let mut service = HttpService::new(cfg, ctx.clone(), db, log_db);
     let ctrl = ServiceControl::new("http", ctx.clone());
 
@@ -57,12 +61,9 @@ async fn test_http_simulation_basic() {
         }
     }
 
-    // 3. Query using reqwest
     let client = reqwest::Client::new();
-
-    // Test /status
     let res = client
-        .get("http://127.0.0.1:1080/api/v1/status")
+        .get(format!("http://127.0.0.1:{port}/api/v1/status"))
         .send()
         .await
         .expect("Failed to send request");

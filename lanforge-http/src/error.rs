@@ -52,6 +52,10 @@ pub enum HttpError {
     #[error("Internal error: {0}")]
     Internal(String),
 
+    /// Client-provided value could not be parsed or is invalid.
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
     /// Generic catch-all error.
     #[error("Error: {0}")]
     Generic(String),

@@ -158,7 +158,9 @@ where
             Ok(claims) => Ok(Self {
                 name: claims.sub,
                 method: AuthMethod::Jwt,
-                scopes: lanforge_types::auth::ApiScopes::from_slice(&[lanforge_types::auth::ApiScope::Admin]),
+                scopes: lanforge_types::auth::ApiScopes::from_slice(&[
+                    lanforge_types::auth::ApiScope::Admin,
+                ]),
             }),
             Err(_) => Err(HttpError::Auth("Invalid or expired token".into())),
         }
@@ -184,7 +186,13 @@ pub async fn middleware(
     }
 
     let path = req.uri().path();
-    if path == "/api/v1/auth/validate" || path == "/api/auth/login" || path == "/api/v1/auth/login" {
+    if path == "/api/v1/auth/validate"
+        || path == "/v1/auth/validate"
+        || path == "/api/auth/login"
+        || path == "/auth/login"
+        || path == "/api/v1/auth/login"
+        || path == "/v1/auth/login"
+    {
         return Ok(next.run(req).await);
     }
 
@@ -214,7 +222,9 @@ pub async fn middleware(
                 Ok(claims) => AuthenticatedUser {
                     name: claims.sub,
                     method: AuthMethod::Jwt,
-                    scopes: lanforge_types::auth::ApiScopes::from_slice(&[lanforge_types::auth::ApiScope::Admin]),
+                    scopes: lanforge_types::auth::ApiScopes::from_slice(&[
+                        lanforge_types::auth::ApiScope::Admin,
+                    ]),
                 },
                 Err(_) => return Err(HttpError::Auth("Invalid or expired token".into())),
             }

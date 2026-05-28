@@ -164,15 +164,23 @@ async fn test_dispatch_system_config_import_export() {
             refresh_hours: 12,
             refresh_at_night: true,
         },
-        dns_adblock_urls: vec![AdblockUrlEntry {
-            id: None,
-            url: "https://example.com/adblock.hosts".to_string(),
-            kind: AdblockUrlKind::Blocklist,
-        }],
-        dns_allowlist: vec![AllowlistEntry {
-            id: 0,
-            domain: "allowed-import.lan".to_string(),
-        }],
+        dns_adblock_urls: if cfg!(feature = "adblock") {
+            vec![AdblockUrlEntry {
+                id: None,
+                url: "https://example.com/adblock.hosts".to_string(),
+                kind: AdblockUrlKind::Blocklist,
+            }]
+        } else {
+            vec![]
+        },
+        dns_allowlist: if cfg!(feature = "adblock") {
+            vec![AllowlistEntry {
+                id: 0,
+                domain: "allowed-import.lan".to_string(),
+            }]
+        } else {
+            vec![]
+        },
         overwrite: true,
     };
 
@@ -209,15 +217,20 @@ async fn test_dispatch_system_config_import_export() {
         assert_eq!(cfg.dns_adblock_config.blocking_mode, BlockingMode::NullIp);
         assert_eq!(cfg.dns_adblock_config.refresh_hours, 12);
 
-        assert_eq!(cfg.dns_adblock_urls.len(), 1);
-        assert_eq!(
-            cfg.dns_adblock_urls[0].url,
-            "https://example.com/adblock.hosts"
-        );
-        assert_eq!(cfg.dns_adblock_urls[0].kind, AdblockUrlKind::Blocklist);
+        if cfg!(feature = "adblock") {
+            assert_eq!(cfg.dns_adblock_urls.len(), 1);
+            assert_eq!(
+                cfg.dns_adblock_urls[0].url,
+                "https://example.com/adblock.hosts"
+            );
+            assert_eq!(cfg.dns_adblock_urls[0].kind, AdblockUrlKind::Blocklist);
 
-        assert_eq!(cfg.dns_allowlist.len(), 1);
-        assert_eq!(cfg.dns_allowlist[0].domain, "allowed-import.lan");
+            assert_eq!(cfg.dns_allowlist.len(), 1);
+            assert_eq!(cfg.dns_allowlist[0].domain, "allowed-import.lan");
+        } else {
+            assert_eq!(cfg.dns_adblock_urls.len(), 0);
+            assert_eq!(cfg.dns_allowlist.len(), 0);
+        }
     } else {
         panic!("Expected Response::SystemConfig");
     }
