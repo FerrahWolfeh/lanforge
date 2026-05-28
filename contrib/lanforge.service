@@ -12,7 +12,7 @@ Environment=LANFORGE_CONFIG=/etc/lanforge/lanforge.toml
 # Permissions & Capabilities
 # Requer CAP_NET_RAW (sockets), CAP_NET_ADMIN (netlink/multicast), CAP_NET_BIND_SERVICE (portas 67/547)
 User=root
-Group=root
+Group=lanforge
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 
@@ -30,7 +30,7 @@ ReadWritePaths=/run/lanforge /var/lib/lanforge /mnt/ram/dnsmasq
 NoNewPrivileges=yes
 
 RuntimeDirectory=lanforge
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0750
 
 # Ensure the DB path matches ARCHITECTURE.md logic
 # (Optional) Pre-start to sync DB from disk to RAM
