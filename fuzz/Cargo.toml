@@ -1,0 +1,57 @@
+[package]
+name = "lanforge-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lanforge-dns-wire = { path = "../lanforge-dns-wire" }
+lanforge-types = { path = "../lanforge-types" }
+lanforge-dhcp = { path = "../lanforge-dhcp" }
+lanforge-core = { path = "../lanforge-core" }
+lanforge-dns = { path = "../lanforge-dns" }
+dhcproto = "0.15.0"
+arbitrary = { version = "1.4.2", features = ["derive"] }
+bytes = "1.11.1"
+dashmap = "6.1.0"
+
+[[bin]]
+name = "fuzz_dns_wire"
+path = "fuzz_targets/fuzz_dns_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_identifiers"
+path = "fuzz_targets/fuzz_identifiers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_dns_roundtrip"
+path = "fuzz_targets/fuzz_dns_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_dns_cache"
+path = "fuzz_targets/fuzz_dns_cache.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_dhcp_server"
+path = "fuzz_targets/fuzz_dhcp_server.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

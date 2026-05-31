@@ -32,6 +32,8 @@
 //! | Decline | Mark IP as conflicted (2h quarantine) | None |
 //! | Inform | Provide config options (no IP) | Ack |
 
+const MAX_LEASE_TIME: u32 = 30 * 24 * 60 * 60; // 30 dias em segundos
+
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
@@ -428,9 +430,11 @@ impl DhcpServer {
                 opts.insert(DhcpOption::DomainSearch(names));
             }
 
+            let safe_lease_time = std::cmp::min(self.cfg.lease_time, MAX_LEASE_TIME);
+
             // T1 = 50% of lease time, T2 = 87.5%
-            opts.insert(DhcpOption::Renewal(self.cfg.lease_time / 2));
-            opts.insert(DhcpOption::Rebinding(self.cfg.lease_time * 7 / 8));
+            opts.insert(DhcpOption::Renewal(safe_lease_time / 2));
+            opts.insert(DhcpOption::Rebinding(safe_lease_time.saturating_mul(7) / 8));
 
             // Hybrid PXE / HTTP Boot Support
             self.add_boot_options(request, opts);
