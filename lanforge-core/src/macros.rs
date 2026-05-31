@@ -6,7 +6,7 @@
 #[macro_export]
 macro_rules! match_event {
     ($timed_event:expr, { $( $(#[$attr:meta])* $variant:pat => $action:expr $(,)? )* }) => {
-        match $timed_event.event {
+        match &$timed_event.event {
             $( $(#[$attr])* $variant => $action, )*
             _ => {}
         }

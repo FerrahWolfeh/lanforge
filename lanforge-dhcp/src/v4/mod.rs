@@ -27,34 +27,34 @@
 //! are handled automatically by the `LanforgeContext`.
 
 pub mod config;
+pub mod io;
 pub mod pool;
 pub mod raw;
 pub mod server;
 
-use dhcproto::v4::{DhcpOption, Message, Opcode, OptionCode};
+use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent};
-use lanforge_core::context::LanforgeContext;
+use lanforge_core::bus::{AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent};
+use lanforge_core::context::{LanforgeContext, ServiceHandle};
 use lanforge_macros::lanforge_service;
 use lanforge_types::device::IPv4State;
+use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::system::ServiceBanner;
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
-use socket2::{Domain, Protocol, Socket, Type};
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use tokio::net::UdpSocket as TokioUdpSocket;
-use tracing::{info, warn};
-
-use raw::RawSender;
 use server::{DhcpServer, HandleResult};
+use std::net::Ipv4Addr;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime};
+use tracing::{info, warn};
 
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 
 use crate::traits::DhcpPool;
 use crate::v4::config::Dhcpv4Config;
+use crate::v4::io::Dhcpv4Transport;
 
 #[lanforge_service(
     id = "dhcpv4",
@@ -87,8 +87,7 @@ impl Dhcpv4Service {
 
 impl StatusProvider for Dhcpv4Service {
     fn banner(&self) -> ServiceBanner {
-        let (active_leases, pool_total, pool_available) = {
-            let state = self.ctx.read();
+        let (active_leases, pool_total, pool_available) = self.ctx.with_state(|state| {
             let leases = u32::try_from(
                 state
                     .devices
@@ -102,9 +101,8 @@ impl StatusProvider for Dhcpv4Service {
                 .v4_pool
                 .as_ref()
                 .map_or((0, 0), |p| (p.total, p.available));
-            drop(state);
             (leases, total, avail)
-        };
+        });
         let v4_stats = self.ctx.dhcpv4_stats().snapshot();
         let stats = vec![
             (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
@@ -178,30 +176,26 @@ impl AsyncService for Dhcpv4Service {
         self.ctx.wait_for_db().await?;
         self.ctx.wait_for_interfaces().await?;
 
-        let mut server =
-            DhcpServer::new(self.cfg.clone(), self.ctx.clone(), self.ctx.dhcpv4_stats());
+        let mut server = DhcpServer::new(self.cfg.clone(), self.ctx.clone());
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
         let registry = self.ctx.get_static_registry();
         server.pool.reserve_statics(registry.v4_ips());
 
         // Seed with active dynamic leases from context
-        let active_dynamic_ips: Vec<Ipv4Addr> = self
-            .ctx
-            .read()
-            .devices
-            .values()
-            .filter_map(|dev| match &dev.v4 {
-                IPv4State::Dynamic(lease) => Some(lease.ip),
-                _ => None,
-            })
-            .collect();
+        let active_dynamic_ips: Vec<Ipv4Addr> = self.ctx.with_state(|state| {
+            state
+                .devices
+                .values()
+                .filter_map(|dev| match &dev.v4 {
+                    IPv4State::Dynamic(lease) => Some(lease.ip),
+                    _ => None,
+                })
+                .collect()
+        });
         server.pool.reserve_statics(active_dynamic_ips);
 
-        let socket = bind_dhcp_socket_async(&self.cfg.iface, self.cfg.port)?;
-
-        let mut raw_tx =
-            RawSender::new(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
+        let transport = Dhcpv4Transport::new(&self.cfg.iface, self.cfg.port)?;
 
         ctrl.signal_ready();
 
@@ -211,14 +205,14 @@ impl AsyncService for Dhcpv4Service {
 
         loop {
             tokio::select! {
-                res = socket.recv_from(&mut buf) => {
+                res = transport.recv(&mut buf) => {
                     match res {
                         Ok((len, _)) => {
                             self.handle_incoming_packet(
                                 &buf[..len],
                                 &mut server,
-                                &mut raw_tx,
-                                &socket,
+                                &transport,
+                                &handle,
                             );
                         }
                         Err(e) => warn!("DHCPv4: recv_from error: {e}"),
@@ -226,12 +220,7 @@ impl AsyncService for Dhcpv4Service {
                 }
                 event = handle.next_event() => {
                     let Some(timed_event) = event else { break; };
-                    if let Err(e) = self.handle_bus_event(&timed_event.event, &mut server, &mut raw_tx) {
-                        if matches!(e, CoreError::Shutdown) {
-                            return Ok(());
-                        }
-                        warn!("DHCPv4: Bus event error: {e}");
-                    }
+                    self.handle_bus_event(&timed_event, &mut server, &transport);
                 }
                 _ = cleanup_timer.tick() => {
                     server.pool.cleanup_quarantine(std::time::Instant::now());
@@ -259,8 +248,8 @@ impl Dhcpv4Service {
         &self,
         data: &[u8],
         server: &mut DhcpServer,
-        raw_tx: &mut RawSender,
-        socket: &TokioUdpSocket,
+        transport: &Dhcpv4Transport,
+        handle: &ServiceHandle,
     ) {
         if let Ok(msg) = Message::decode(&mut Decoder::new(data))
             && msg.opcode() == Opcode::BootRequest
@@ -273,13 +262,31 @@ impl Dhcpv4Service {
 
                 // Diagnostic: Publish DHCPv4 Transaction
                 if let Some(DhcpOption::MessageType(t)) = msg.opts().get(OptionCode::MessageType) {
-                    let _ = self.ctx.bus().publish(LanforgeEvent::Device(
-                        DeviceEvent::DhcpV4Transaction {
-                            mac,
-                            msg_type: DhcpV4MessageType::from(u8::from(*t)),
-                            details: None,
-                        },
-                    ));
+                    let msg_type = u8::from(*t);
+                    let stats = self.ctx.dhcpv4_stats();
+                    match msg_type {
+                        1 => {
+                            stats.discovers.fetch_add(1, Ordering::Relaxed);
+                        }
+                        3 => {
+                            stats.requests.fetch_add(1, Ordering::Relaxed);
+                        }
+                        4 => {
+                            stats.declines.fetch_add(1, Ordering::Relaxed);
+                        }
+                        7 => {
+                            stats.releases.fetch_add(1, Ordering::Relaxed);
+                        }
+                        8 => {
+                            stats.informs.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {}
+                    }
+                    let _ = handle.publish(LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
+                        mac,
+                        msg_type: DhcpV4MessageType::from(msg_type),
+                        details: None,
+                    }));
                 }
 
                 let handle_res = {
@@ -294,24 +301,32 @@ impl Dhcpv4Service {
                         dest_ip,
                         giaddr,
                         hostname: req_hostname,
+                        msg_type,
                     } => {
-                        if giaddr == Ipv4Addr::UNSPECIFIED {
-                            let (final_dst_ip, dst_mac_arr) = if broadcast {
-                                (Ipv4Addr::BROADCAST, [0xff; 6])
-                            } else {
-                                (dest_ip, *mac.as_ref())
-                            };
-                            if let Err(e) = raw_tx.send_dhcp(
-                                &packet,
-                                self.cfg.server_id,
-                                final_dst_ip,
-                                dst_mac_arr,
-                            ) {
-                                warn!("DHCPv4: Failed to inject L2 reply packet: {e}");
+                        let stats = self.ctx.dhcpv4_stats();
+                        match msg_type {
+                            MessageType::Offer => {
+                                stats.offers.fetch_add(1, Ordering::Relaxed);
                             }
-                        } else {
-                            let relay_addr = SocketAddrV4::new(giaddr, self.cfg.port);
-                            let _ = socket.try_send_to(&packet, relay_addr.into());
+                            MessageType::Ack => {
+                                stats.acks.fetch_add(1, Ordering::Relaxed);
+                            }
+                            MessageType::Nak => {
+                                stats.naks.fetch_add(1, Ordering::Relaxed);
+                            }
+                            _ => {}
+                        }
+
+                        if let Err(e) = transport.send_reply(
+                            &packet,
+                            self.cfg.server_id,
+                            broadcast,
+                            dest_ip,
+                            giaddr,
+                            mac,
+                            self.cfg.port,
+                        ) {
+                            warn!("DHCPv4: Failed to send reply: {e}");
                         }
 
                         if let Some(assigned_ip) = server.last_assignment_for() {
@@ -347,11 +362,11 @@ impl Dhcpv4Service {
 
     fn handle_bus_event(
         &self,
-        event: &LanforgeEvent,
+        event: &TimedEvent,
         server: &mut DhcpServer,
-        raw_tx: &mut RawSender,
-    ) -> Result<(), CoreError> {
-        match event {
+        transport: &Dhcpv4Transport,
+    ) {
+        lanforge_core::match_event!(event, {
             LanforgeEvent::Device(DeviceEvent::LeaseRelease {
                 mac,
                 target: LeaseTarget::V4,
@@ -369,8 +384,16 @@ impl Dhcpv4Service {
                 let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                 if let Some(ip) = ip {
                     let packet = server.build_forcerenew(*mac, ip);
-                    if let Err(e) = raw_tx.send_dhcp(&packet, self.cfg.server_id, ip, *mac.as_ref()) {
-                        warn!("DHCPv4: Failed to inject L2 FORCERENEW packet to {ip} ({mac}): {e}");
+                    if let Err(e) = transport.send_reply(
+                        &packet,
+                        self.cfg.server_id,
+                        false,
+                        ip,
+                        Ipv4Addr::UNSPECIFIED,
+                        *mac,
+                        self.cfg.port,
+                    ) {
+                        warn!("DHCPv4: Failed to send FORCERENEW to {ip} ({mac}): {e}");
                     }
                 }
             }
@@ -388,35 +411,6 @@ impl Dhcpv4Service {
                     }
                 }
             }
-            LanforgeEvent::System(SystemEvent::Shutdown) => {
-                info!("DHCPv4: Shutdown received");
-                return Err(CoreError::Shutdown);
-            }
-            _ => {}
-        }
-        Ok(())
+        });
     }
-}
-
-/// Binds a tokio UDP socket with `SO_BROADCAST` and `SO_BINDTODEVICE`.
-fn bind_dhcp_socket_async(iface: &str, port: u16) -> Result<TokioUdpSocket, CoreError> {
-    let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
-
-    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| CoreError::Generic(format!("socket(AF_INET, SOCK_DGRAM): {e}")))?;
-
-    sock.set_reuse_address(true)
-        .map_err(|e| CoreError::Generic(e.to_string()))?;
-    sock.set_broadcast(true)
-        .map_err(|e| CoreError::Generic(e.to_string()))?;
-    sock.bind_device(Some(iface.as_bytes()))
-        .map_err(|e| CoreError::Generic(format!("SO_BINDTODEVICE({iface}): {e}")))?;
-    sock.set_nonblocking(true)
-        .map_err(|e| CoreError::Generic(e.to_string()))?;
-    sock.bind(&socket2::SockAddr::from(addr))
-        .map_err(|e| CoreError::Generic(format!("bind(0.0.0.0:{port}): {e}")))?;
-
-    let std_socket: UdpSocket = sock.into();
-    TokioUdpSocket::from_std(std_socket)
-        .map_err(|e| CoreError::Generic(format!("tokio UdpSocket conversion: {e}")))
 }

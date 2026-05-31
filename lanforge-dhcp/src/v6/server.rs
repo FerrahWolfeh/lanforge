@@ -46,20 +46,17 @@ use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::utils::mac_from_eui64_link_local;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use std::net::{Ipv6Addr, UdpSocket};
+use std::net::Ipv6Addr;
 use std::str::FromStr;
 use std::string::ToString;
-use std::sync::atomic::Ordering;
 use tracing::{debug, info};
 
 use super::config::Dhcpv6Config;
 use super::pool::Ipv6Pool;
 use crate::identity::DeviceIdentity;
-use crate::options::parse_typed_option;
-use std::sync::Arc;
+use crate::options::iter_custom_options;
 
 use crate::traits::DhcpPool;
-use lanforge_types::dhcp::Dhcpv6Stats;
 
 /// `IA_NA` and `IA_PD` identifiers assigned in a `DHCPv6` response.
 ///
@@ -74,7 +71,7 @@ pub struct AssignedIAs {
 
 /// Outcome of processing a `DHCPv6` message.
 pub enum HandleResult<'a> {
-    /// A reply packet is ready (encoded bytes, destination IP, learned DUID, MAC, assigned IAIDs, released IAIDs).
+    /// A reply packet is ready (encoded bytes, destination IP, learned DUID, MAC, assigned IAIDs, released IAIDs, message type).
     Reply(
         &'a [u8],
         Ipv6Addr,
@@ -82,6 +79,7 @@ pub enum HandleResult<'a> {
         Option<MacAddr>,
         AssignedIAs,
         AssignedIAs,
+        MessageType,
     ),
     /// No response necessary — message was malformed or directed to another server.
     Ignore,
@@ -108,12 +106,8 @@ pub struct Dhcpv6Server {
     pub server_duid: Duid,
     /// Learned lifetimes from the `GUA` prefix (`preferred`, `valid`) via `RA`.
     pub prefix_lifetimes: Option<(u32, u32)>,
-    /// Persistent socket for `NDP` probes (avoids repeated `socket()` syscalls).
-    pub ndp_poke_sock: Arc<UdpSocket>,
     /// Global context for device lookups and state updates.
     pub ctx: LanforgeContext,
-    /// Shared `DHCPv6` statistics.
-    pub stats: Arc<Dhcpv6Stats>,
 }
 
 impl Dhcpv6Server {
@@ -122,18 +116,14 @@ impl Dhcpv6Server {
         cfg: Dhcpv6Config,
         pool: Ipv6Pool,
         server_duid: Duid,
-        ndp_poke_sock: Arc<UdpSocket>,
         ctx: LanforgeContext,
-        stats: Arc<Dhcpv6Stats>,
     ) -> Self {
         Self {
             cfg,
             pool,
             server_duid,
             prefix_lifetimes: None,
-            ndp_poke_sock,
             ctx,
-            stats,
         }
     }
 
@@ -213,31 +203,22 @@ impl Dhcpv6Server {
 
         match msg.msg_type() {
             MessageType::Solicit => {
-                self.stats.solicits.fetch_add(1, Ordering::Relaxed);
                 self.handle_solicit(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Request => {
-                self.stats.requests.fetch_add(1, Ordering::Relaxed);
                 self.handle_request(msg, client_duid, identity.as_ref(), peer, buf)
             }
-            MessageType::Renew => {
-                self.stats.renews.fetch_add(1, Ordering::Relaxed);
-                self.handle_renew(msg, client_duid, identity.as_ref(), peer, buf)
-            }
+            MessageType::Renew => self.handle_renew(msg, client_duid, identity.as_ref(), peer, buf),
             MessageType::Rebind => {
-                self.stats.rebinds.fetch_add(1, Ordering::Relaxed);
                 self.handle_rebind(msg, client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Release => {
-                self.stats.releases.fetch_add(1, Ordering::Relaxed);
                 self.handle_release(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::Decline => {
-                self.stats.declines.fetch_add(1, Ordering::Relaxed);
                 self.handle_decline(msg, &client_duid, identity.as_ref(), peer, buf)
             }
             MessageType::InformationRequest => {
-                self.stats.info_requests.fetch_add(1, Ordering::Relaxed);
                 self.handle_information_request(msg, &client_duid, peer, buf)
             }
             other => {
@@ -307,6 +288,7 @@ impl Dhcpv6Server {
             mac,
             ias,
             AssignedIAs::default(),
+            reply_type,
         )
     }
 
@@ -547,6 +529,7 @@ impl Dhcpv6Server {
             mac,
             ias,
             AssignedIAs::default(),
+            MessageType::Reply,
         )
     }
 
@@ -808,19 +791,11 @@ impl Dhcpv6Server {
             None,
             AssignedIAs::default(),
             AssignedIAs::default(),
+            MessageType::Reply,
         )
     }
 
     fn base_reply(&self, msg: &Message, msg_type: MessageType, client_duid: &Duid) -> Message {
-        match msg_type {
-            MessageType::Reply => {
-                self.stats.replies.fetch_add(1, Ordering::Relaxed);
-            }
-            MessageType::Advertise => {
-                self.stats.advertises.fetch_add(1, Ordering::Relaxed);
-            }
-            _ => {}
-        }
         let mut reply = Message::new(msg_type);
         reply.set_xid(msg.xid());
 
@@ -869,6 +844,7 @@ impl Dhcpv6Server {
             ctx.mac,
             AssignedIAs::default(),
             released_ias,
+            msg_type,
         )
     }
 
@@ -918,6 +894,7 @@ impl Dhcpv6Server {
             ctx.mac,
             ias,
             AssignedIAs::default(),
+            MessageType::Reply,
         )
     }
 
@@ -969,23 +946,11 @@ impl Dhcpv6Server {
     }
 
     fn add_custom_options(&self, reply: &mut Message) {
-        for (code, val) in &self.cfg.options {
-            // Protect critical protocol options from being overwritten
-            if matches!(*code, 1 | 2 | 3 | 5 | 25) {
-                tracing::warn!(
-                    "DHCPv6: Custom option {} ignored: cannot overwrite critical protocol options.",
-                    code
-                );
-                continue;
-            }
-            if let Some(data) = parse_typed_option(val) {
-                reply
-                    .opts_mut()
-                    .insert(DhcpOption::Unknown(UnknownOption::new(
-                        (*code).into(),
-                        data,
-                    )));
-            }
+        const PROTECTED: &[u16] = &[1, 2, 3, 5, 25];
+        for (code, data) in iter_custom_options(&self.cfg.options, PROTECTED) {
+            reply
+                .opts_mut()
+                .insert(DhcpOption::Unknown(UnknownOption::new(code.into(), data)));
         }
     }
 
@@ -1056,10 +1021,7 @@ mod tests {
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState},
     };
     use std::{collections::HashMap, time::Duration};
-    use std::{
-        net::{Ipv6Addr, UdpSocket},
-        time::SystemTime,
-    };
+    use std::{net::Ipv6Addr, time::SystemTime};
 
     fn dummy_server() -> Dhcpv6Server {
         let ctx = init_test_context();
@@ -1101,15 +1063,7 @@ mod tests {
         let server_duid = Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
         ]);
-        let ndp_poke_sock = Arc::new(UdpSocket::bind("[::1]:0").unwrap());
-        Dhcpv6Server::new(
-            cfg,
-            pool,
-            server_duid,
-            ndp_poke_sock,
-            ctx.clone(),
-            ctx.dhcpv6_stats(),
-        )
+        Dhcpv6Server::new(cfg, pool, server_duid, ctx)
     }
 
     fn dummy_client_duid() -> Duid {
@@ -1160,17 +1114,8 @@ mod tests {
             options: HashMap::new(),
         };
         let pool = Ipv6Pool::new(&Vec::new(), None, 64);
-        let sock = UdpSocket::bind("::0:0").unwrap();
-        let ndp_poke_sock = Arc::new(sock);
         let ctx = init_test_context();
-        let mut srv = Dhcpv6Server::new(
-            cfg,
-            pool,
-            Duid::new(vec![1, 2, 3]),
-            ndp_poke_sock,
-            ctx.clone(),
-            ctx.dhcpv6_stats(),
-        );
+        let mut srv = Dhcpv6Server::new(cfg, pool, Duid::new(vec![1, 2, 3]), ctx);
 
         let msg = build_solicit(true);
         let mut resp_vec = Vec::with_capacity(1024);
@@ -1184,7 +1129,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
@@ -1235,7 +1180,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
@@ -1277,7 +1222,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
                     if let Some(DhcpOption::StatusCode(status)) =
@@ -1327,7 +1272,7 @@ mod tests {
         let res = srv.handle_decline(&msg, &duid, Some(&identity), peer_ip(), &mut resp_vec);
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 assert_eq!(reply.msg_type(), MessageType::Reply);
                 assert!(reply.opts().get(OptionCode::StatusCode).is_some());
@@ -1361,7 +1306,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA)
                     && let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr)
@@ -1383,7 +1328,7 @@ mod tests {
             srv.handle_information_request(&msg, &dummy_client_duid(), peer_ip(), &mut resp_vec);
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 assert_eq!(reply.msg_type(), MessageType::Reply);
                 assert!(reply.opts().get(OptionCode::IANA).is_none());
@@ -1409,17 +1354,8 @@ mod tests {
             options: HashMap::new(),
         };
         let pool = Ipv6Pool::new(&Vec::new(), Some(ula), 48);
-        let sock = UdpSocket::bind("::0:0").unwrap();
-        let ndp_poke_sock = Arc::new(sock);
         let ctx = init_test_context();
-        let mut srv = Dhcpv6Server::new(
-            cfg,
-            pool,
-            dummy_client_duid(),
-            ndp_poke_sock,
-            ctx.clone(),
-            ctx.dhcpv6_stats(),
-        );
+        let mut srv = Dhcpv6Server::new(cfg, pool, dummy_client_duid(), ctx);
 
         let mut msg = Message::new(MessageType::Solicit);
         msg.opts_mut().insert(DhcpOption::IAPD(IAPD {
@@ -1440,7 +1376,7 @@ mod tests {
         );
 
         match res {
-            HandleResult::Reply(bytes, _, _, _, _, _) => {
+            HandleResult::Reply(bytes, _, _, _, _, _, _) => {
                 let reply = decode_reply(bytes);
                 if let Some(DhcpOption::IAPD(iapd)) = reply.opts().get(OptionCode::IAPD) {
                     assert_eq!(iapd.id, 888);
@@ -1572,7 +1508,7 @@ mod tests {
         let res = srv.handle_release(&msg, &duid_rogue, None, peer_ip(), &mut resp_vec);
 
         match res {
-            HandleResult::Reply(_, _, _, _, _, released) => {
+            HandleResult::Reply(_, _, _, _, _, released, _) => {
                 assert!(
                     released.na.is_empty(),
                     "Rogue RELEASE should not release anything"
@@ -1625,7 +1561,7 @@ mod tests {
         let res = srv.handle_decline(&msg, &duid_rogue, None, peer_ip(), &mut resp_vec);
 
         match res {
-            HandleResult::Reply(_, _, _, _, _, released) => {
+            HandleResult::Reply(_, _, _, _, _, released, _) => {
                 assert!(
                     released.na.is_empty(),
                     "Rogue DECLINE should not release anything"

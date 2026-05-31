@@ -2630,6 +2630,7 @@ dependencies = [
  "lanforge-core",
  "lanforge-macros",
  "lanforge-types",
+ "parking_lot",
  "pnet",
  "rand 0.10.1",
  "roaring",

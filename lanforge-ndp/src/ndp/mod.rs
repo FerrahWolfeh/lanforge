@@ -291,8 +291,8 @@ impl AsyncService for NeighborMonitor {
                     };
                     lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, ula, .. }) => {
-                            current_gua = gua;
-                            current_ula = ula;
+                            current_gua = *gua;
+                            current_ula = *ula;
                         }
                         LanforgeEvent::Network(NetworkEvent::NeighborScanRequested) => {
                             self.spawn_subnet_scan("Manual CLI Request");

@@ -140,7 +140,7 @@ impl AsyncService for ControlService {
                         Ok(timed_event) => {
                             lanforge_core::match_event!(timed_event, {
                                 LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, .. }) => {
-                                    current_gua = gua;
+                                    current_gua = *gua;
                                 }
                                 LanforgeEvent::System(SystemEvent::Shutdown) => break,
                                 _ => {}

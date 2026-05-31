@@ -45,12 +45,11 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::traits::DhcpPool;
-use lanforge_types::dhcp::Dhcpv4Stats;
 
 use super::config::Dhcpv4Config;
 use super::pool::IpPool;
 use crate::identity::DeviceIdentity;
-use crate::options::parse_typed_option;
+use crate::options::iter_custom_options;
 
 /// Outcome of processing a DHCP message from a client.
 pub enum HandleResult {
@@ -71,6 +70,8 @@ pub enum HandleResult {
         giaddr: Ipv4Addr,
         /// Hostname suggested by the client (Option 12), for logging.
         hostname: Option<String>,
+        /// Outgoing message type.
+        msg_type: MessageType,
     },
     /// Client formally released its lease (RELEASE message).
     ///
@@ -106,21 +107,18 @@ pub struct DhcpServer {
     pub last_assigned_ip: Option<Ipv4Addr>,
     /// Global context for device lookups and state updates.
     pub ctx: LanforgeContext,
-    /// Shared `DHCPv4` statistics.
-    pub stats: Arc<Dhcpv4Stats>,
 }
 
 impl DhcpServer {
     /// Creates a new DHCP server with an empty pool seeded from the config range.
     #[must_use]
-    pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext, stats: Arc<Dhcpv4Stats>) -> Self {
+    pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
         let pool = IpPool::new(cfg.get_effective_pools());
         Self {
             cfg,
             pool,
             last_assigned_ip: None,
             ctx,
-            stats,
         }
     }
 
@@ -193,9 +191,6 @@ impl DhcpServer {
         identity: &DeviceIdentity,
         broadcast: bool,
     ) -> HandleResult {
-        self.stats
-            .discovers
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mac = identity.mac;
         let requested = Self::get_requested_ip(msg);
 
@@ -208,15 +203,13 @@ impl DhcpServer {
 
         info!("DHCPv4: {identity} is looking for an address -> Offering {offered_ip}");
         let packet = self.build_reply(msg, MessageType::Offer, offered_ip);
-        self.stats
-            .offers
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         HandleResult::Reply {
             packet,
             broadcast,
             dest_ip: offered_ip,
             giaddr: msg.giaddr(),
             hostname: Self::get_hostname(msg),
+            msg_type: MessageType::Offer,
         }
     }
 
@@ -228,9 +221,6 @@ impl DhcpServer {
         identity: &DeviceIdentity,
         broadcast: bool,
     ) -> HandleResult {
-        self.stats
-            .requests
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mac = identity.mac;
         // RFC 2131 §3.1 — REQUEST can happen in multiple contexts
 
@@ -274,24 +264,19 @@ impl DhcpServer {
 
         info!("DHCPv4: Assigning {assigned_ip} to {identity}");
         let packet = self.build_reply(msg, MessageType::Ack, assigned_ip);
-        self.stats
-            .acks
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         HandleResult::Reply {
             packet,
             broadcast,
             dest_ip: assigned_ip,
             giaddr: msg.giaddr(),
             hostname: Self::get_hostname(msg),
+            msg_type: MessageType::Ack,
         }
     }
 
     // ── RELEASE ──────────────────────────────────────────────────────────
 
     fn handle_release(&mut self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
-        self.stats
-            .releases
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ip = msg.ciaddr();
 
         // Validate client lease ownership to prevent spoofed/rogue release DoS
@@ -312,9 +297,6 @@ impl DhcpServer {
     // ── DECLINE ──────────────────────────────────────────────────────────
 
     fn handle_decline(&mut self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
-        self.stats
-            .declines
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(declined_ip) = Self::get_requested_ip(msg) {
             // Validate client lease ownership to prevent rogue decline starvation DoS
             let owned_ip = self.ctx.get_device(&identity.mac).and_then(|d| d.v4.ip());
@@ -338,9 +320,6 @@ impl DhcpServer {
     // ── INFORM ───────────────────────────────────────────────────────────
 
     fn handle_inform(&self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
-        self.stats
-            .informs
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ip = msg.ciaddr();
         info!("DHCPv4: {identity} ({ip}) requested configuration options");
 
@@ -352,6 +331,7 @@ impl DhcpServer {
             dest_ip: ip,
             giaddr: msg.giaddr(),
             hostname: Self::get_hostname(msg),
+            msg_type: MessageType::Ack,
         }
     }
 
@@ -490,28 +470,13 @@ impl DhcpServer {
     }
 
     fn add_custom_options(&self, opts: &mut v4::DhcpOptions) {
-        for (code, val) in &self.cfg.options {
-            // Protect critical protocol options from being overwritten
-            if matches!(*code, 53 | 54 | 51 | 1) {
-                warn!(
-                    "DHCPv4: Custom option {} ignored: cannot overwrite critical protocol options.",
-                    code
-                );
-                continue;
-            }
-            if let Some(data) = parse_typed_option(val) {
-                opts.insert(DhcpOption::Unknown(UnknownOption::new(
-                    (*code).into(),
-                    data,
-                )));
-            }
+        const PROTECTED: &[u8] = &[53, 54, 51, 1];
+        for (code, data) in iter_custom_options(&self.cfg.options, PROTECTED) {
+            opts.insert(DhcpOption::Unknown(UnknownOption::new(code.into(), data)));
         }
     }
 
     fn send_nak(&self, request: &Message, message: &str) -> HandleResult {
-        self.stats
-            .naks
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut reply = Message::default();
         reply
             .set_opcode(Opcode::BootReply)
@@ -537,6 +502,7 @@ impl DhcpServer {
             dest_ip: Ipv4Addr::BROADCAST,
             giaddr: request.giaddr(),
             hostname: None,
+            msg_type: MessageType::Nak,
         }
     }
 
@@ -614,10 +580,7 @@ mod tests {
 
     fn dummy_server() -> (DhcpServer, LanforgeContext) {
         let ctx = init_test_context();
-        (
-            DhcpServer::new(dummy_config(), ctx.clone(), ctx.dhcpv4_stats()),
-            ctx,
-        )
+        (DhcpServer::new(dummy_config(), ctx.clone()), ctx)
     }
 
     fn dummy_mac() -> MacAddr {

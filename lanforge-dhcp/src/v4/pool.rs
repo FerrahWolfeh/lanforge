@@ -180,18 +180,29 @@ impl IpPool {
         }
 
         // 3.5. Garbage Collection: If pool is empty, scan for naturally expired leases
-        let mut recovered = Vec::new();
+        let mut recovered = RoaringBitmap::new();
         for pool in &self.pools {
-            for i in u32::from(pool.range_start)..=u32::from(pool.range_end) {
-                let ip = Ipv4Addr::from(i);
-                if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() && !self.declined.contains_key(&ip) {
-                    recovered.push(ip);
-                }
+            if pool.range_start <= pool.range_end {
+                recovered.insert_range(u32::from(pool.range_start)..=u32::from(pool.range_end));
             }
         }
-        for ip in recovered {
-            self.add_to_available(ip);
+
+        let mut active_ips = RoaringBitmap::new();
+        ctx.with_state(|state| {
+            for dev in state.devices.values() {
+                if let Some(ip) = dev.v4.ip() {
+                    active_ips.insert(u32::from(ip));
+                }
+            }
+        });
+
+        recovered -= active_ips;
+
+        for ip in self.declined.keys() {
+            recovered.remove(u32::from(*ip));
         }
+
+        self.available = recovered;
 
         // Second pass after GC
         while !self.available.is_empty() {

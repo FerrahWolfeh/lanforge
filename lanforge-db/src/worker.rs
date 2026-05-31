@@ -261,30 +261,30 @@ impl AsyncService for DbWorker {
                     // 2. Process specific events
                     let mut break_loop = false;
                     lanforge_core::match_event!(timed_event, {
-                        LanforgeEvent::Device(DeviceEvent::NetworkUpdate { mac, ref change, .. }) => {
+                        LanforgeEvent::Device(DeviceEvent::NetworkUpdate { mac, change, .. }) => {
                             if change.is_persistent() {
-                                self.dirty_macs.insert(mac);
+                                self.dirty_macs.insert(*mac);
                                 if change.is_lease_change() {
-                                    self.dirty_lease_macs.insert(mac);
+                                    self.dirty_lease_macs.insert(*mac);
                                 }
                                 // If it was previously purged, it's now alive again
-                                self.purged_macs.remove(&mac);
+                                self.purged_macs.remove(mac);
                             }
                         }
                         LanforgeEvent::Device(DeviceEvent::AdminUpdate { mac, .. }) => {
-                            self.dirty_macs.insert(mac);
-                            self.purged_macs.remove(&mac);
+                            self.dirty_macs.insert(*mac);
+                            self.purged_macs.remove(mac);
                         }
                         LanforgeEvent::Device(DeviceEvent::Discovered { mac, .. })
                         | LanforgeEvent::Device(DeviceEvent::Expired { mac, .. }) => {
-                            self.dirty_macs.insert(mac);
-                            self.dirty_lease_macs.insert(mac);
-                            self.purged_macs.remove(&mac);
+                            self.dirty_macs.insert(*mac);
+                            self.dirty_lease_macs.insert(*mac);
+                            self.purged_macs.remove(mac);
                         }
                         LanforgeEvent::Device(DeviceEvent::Purged { mac }) => {
-                            self.purged_macs.insert(mac);
-                            self.dirty_macs.remove(&mac);
-                            self.dirty_lease_macs.remove(&mac);
+                            self.purged_macs.insert(*mac);
+                            self.dirty_macs.remove(mac);
+                            self.dirty_lease_macs.remove(mac);
 
                             // Flush immediately for administrative host removal
                             self.flush_batch(&db, &log_db).await;
@@ -325,20 +325,20 @@ impl AsyncService for DbWorker {
                             break_loop = true;
                         }
                         #[cfg(feature = "adblock")]
-                        LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, ref domain }) => {
+                        LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, domain }) => {
                             let src_mac = self
                                 .ctx
                                 .read()
-                                .get_mac_by_ip(src_addr)
+                                .get_mac_by_ip(*src_addr)
                                 .map(|m| m.to_string());
                             if let Err(e) = log_db
-                                .record_dns_block(&timed_event, src_addr, domain, src_mac)
+                                .record_dns_block(&timed_event, *src_addr, domain, src_mac)
                                 .await
                             {
                                 error!("DNS log record error: {e}");
                             }
                         }
-                        LanforgeEvent::Dns(DnsEvent::QueryResolved(ref entry)) => {
+                        LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) => {
                             self.dns_log_buffer.push(entry.clone());
                             if self.dns_log_buffer.len() >= 100 {
                                 if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer).await {
