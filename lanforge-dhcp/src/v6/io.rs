@@ -28,23 +28,7 @@ impl Dhcpv6Transport {
         Ok(Self { socket })
     }
 
-    /// Reads the hardware MAC address of the interface from sysfs.
-    #[must_use]
-    pub fn read_iface_mac(iface: &str) -> [u8; 6] {
-        let mac_str = std::fs::read_to_string(format!("/sys/class/net/{iface}/address"))
-            .unwrap_or_else(|_| "02:04:06:08:0a:0c\n".to_string());
 
-        let mut server_mac = [0u8; 6];
-        let mac_bytes: Vec<u8> = mac_str
-            .trim()
-            .split(':')
-            .filter_map(|x| u8::from_str_radix(x, 16).ok())
-            .collect();
-        if mac_bytes.len() == 6 {
-            server_mac.copy_from_slice(&mac_bytes);
-        }
-        server_mac
-    }
 
     /// Receives a packet asynchronously from the UDP socket.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {

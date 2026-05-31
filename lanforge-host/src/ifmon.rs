@@ -24,11 +24,13 @@ use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::packet_route::address::AddressAttribute;
+use rtnetlink::packet_route::link::LinkAttribute;
 use std::net::IpAddr;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
@@ -125,6 +127,17 @@ impl AddressMonitor {
                         state.gua_valid = info.ifa_valid;
                     }
                     _ => {}
+                }
+            }
+        }
+
+        // Fetch MAC address via rtnetlink link query
+        let mut link_stream = self.handle.link().get().match_index(ifindex).execute();
+        if let Some(msg) = link_stream.try_next().await? {
+            for attr in &msg.attributes {
+                if let LinkAttribute::Address(addr_bytes) = attr {
+                    state.mac = MacAddr::from_slice(addr_bytes);
+                    break;
                 }
             }
         }

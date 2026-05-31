@@ -1037,6 +1037,7 @@ mod tests {
             ula: Some(ula),
             gua_preferred: 3600,
             gua_valid: 3600,
+            mac: None,
         };
 
         // Use instance apply instead of global singleton

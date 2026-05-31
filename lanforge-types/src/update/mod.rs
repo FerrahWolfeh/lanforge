@@ -60,6 +60,7 @@ pub struct InterfaceState {
     pub ula: Option<Ipv6Addr>,
     pub gua_preferred: u32,
     pub gua_valid: u32,
+    pub mac: Option<MacAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]

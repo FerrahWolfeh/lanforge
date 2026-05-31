@@ -142,14 +142,14 @@ impl Duid {
     /// use lanforge_types::identifiers::{Duid, MacAddr};
     ///
     /// let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-    /// let duid = Duid::generate_ll_from_mac(mac.0);
+    /// let duid = Duid::generate_ll_from_mac(&mac.0);
     /// assert_eq!(duid.as_bytes().len(), 10);
     /// assert_eq!(duid.duid_type(), "DUID-LL (Link-layer address)");
     /// ```
     #[must_use]
-    pub fn generate_ll_from_mac(mac: [u8; 6]) -> Self {
+    pub fn generate_ll_from_mac(mac: &[u8]) -> Self {
         let mut bytes = vec![0x00, 0x03, 0x00, 0x01];
-        bytes.extend_from_slice(&mac);
+        bytes.extend_from_slice(mac);
         Self::new(bytes)
     }
 }
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn duid_extract_mac() {
         let mac_raw = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
-        let duid = Duid::generate_ll_from_mac(mac_raw);
+        let duid = Duid::generate_ll_from_mac(&mac_raw);
         let extracted = duid.extract_mac().expect("should extract");
         assert_eq!(extracted.0, mac_raw);
     }

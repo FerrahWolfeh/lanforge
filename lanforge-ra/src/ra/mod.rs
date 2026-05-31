@@ -238,8 +238,9 @@ impl AsyncService for RaService {
 
         let mut bus_rx = self.ctx.bus().subscribe();
 
-        let iface_index =
-            get_iface_index(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
+        let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
+            CoreError::Generic("Target interface index is not configured in context".to_string())
+        })?;
 
         // Parallel optimization: Wait for interface data ONLY if not already present
         if self
@@ -255,7 +256,21 @@ impl AsyncService for RaService {
             self.ctx.wait_for_interfaces().await?;
         }
 
-        let mac = get_iface_mac(&self.cfg.iface).map_err(|e| CoreError::Generic(e.to_string()))?;
+        let mac = self
+            .ctx
+            .with_state(|state| {
+                state
+                    .interfaces
+                    .interface_ips
+                    .get(&iface_index)
+                    .and_then(|i| i.mac)
+            })
+            .ok_or_else(|| {
+                CoreError::Generic(format!(
+                    "MAC address for interface index {iface_index} is not resolved"
+                ))
+            })?
+            .0;
 
         let socket = create_ra_socket(&self.cfg.iface, iface_index)
             .map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -601,31 +616,6 @@ fn set_sockopt_raw(
     } else {
         Err(io::Error::last_os_error())
     }
-}
-
-// ---------------------------------------------------------------------------
-// Interface Helpers (sysfs — direct read without extra syscalls)
-// ---------------------------------------------------------------------------
-
-fn get_iface_index(iface: &str) -> Result<u32, NetworkError> {
-    std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
-        .map_err(|e| NetworkError::Generic(format!("ifindex de '{iface}': {e}")))?
-        .trim()
-        .parse::<u32>()
-        .map_err(|e| NetworkError::Generic(format!("parse ifindex: {e}")))
-}
-
-fn get_iface_mac(iface: &str) -> Result<[u8; 6], NetworkError> {
-    let s = std::fs::read_to_string(format!("/sys/class/net/{iface}/address"))
-        .map_err(|e| NetworkError::Generic(format!("MAC de '{iface}': {e}")))?;
-    let bytes: Vec<u8> = s
-        .trim()
-        .split(':')
-        .map(|x| u8::from_str_radix(x, 16).map_err(|e| NetworkError::InvalidMac(e.to_string())))
-        .collect::<Result<Vec<u8>, NetworkError>>()?;
-    bytes
-        .try_into()
-        .map_err(|_| NetworkError::InvalidMac("MAC deve ter 6 bytes".to_string()))
 }
 
 #[cfg(test)]

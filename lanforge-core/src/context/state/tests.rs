@@ -5,7 +5,7 @@ use crate::context::LanforgeContext;
 use crate::context::state::State;
 use lanforge_types::device::Device;
 use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
-use lanforge_types::events::{NetworkChange, DeviceEvent, LanforgeEvent};
+use lanforge_types::events::{DeviceEvent, LanforgeEvent, NetworkChange};
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -544,7 +544,7 @@ fn test_multiple_iaids_and_prefixes() {
 fn apply_update_duid_associated_resolves_orphan() {
     let ctx = setup();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
-    let duid = Duid::generate_ll_from_mac([1, 2, 3, 4, 5, 6]);
+    let duid = Duid::generate_ll_from_mac(&[1, 2, 3, 4, 5, 6]);
     let iaid = 42;
     let ip: Ipv6Addr = "fd00::dead:beef".parse().unwrap();
     let expires = SystemTime::now() + Duration::from_hours(1);
@@ -1040,7 +1040,10 @@ fn test_hostname_origin_priority() {
         hostname: "dhcp-host".to_string(),
     });
     assert!(changed);
-    assert_eq!(ctx.get_device(&mac).unwrap().hostname.origin, HostnameOrigin::Dhcp);
+    assert_eq!(
+        ctx.get_device(&mac).unwrap().hostname.origin,
+        HostnameOrigin::Dhcp
+    );
 
     // 2. MDNS hint overrides DHCP hint (Mdns > Dhcp)
     let changed = ctx.apply(DeviceUpdate::MdnsHostnameHint {
@@ -1049,7 +1052,10 @@ fn test_hostname_origin_priority() {
     });
     assert!(changed);
     assert_eq!(ctx.get_device(&mac).unwrap().hostname.name, "mdns-host");
-    assert_eq!(ctx.get_device(&mac).unwrap().hostname.origin, HostnameOrigin::Mdns);
+    assert_eq!(
+        ctx.get_device(&mac).unwrap().hostname.origin,
+        HostnameOrigin::Mdns
+    );
 
     // 3. CLI update overrides MDNS hint (Static > Mdns)
     let changed = ctx.apply(DeviceUpdate::CliHostUpdated {
@@ -1067,7 +1073,10 @@ fn test_hostname_origin_priority() {
     });
     assert!(changed);
     assert_eq!(ctx.get_device(&mac).unwrap().hostname.name, "static-host");
-    assert_eq!(ctx.get_device(&mac).unwrap().hostname.origin, HostnameOrigin::Static);
+    assert_eq!(
+        ctx.get_device(&mac).unwrap().hostname.origin,
+        HostnameOrigin::Static
+    );
 
     // 4. DHCP hint cannot override Static hostname
     let changed = ctx.apply(DeviceUpdate::DhcpHostnameHint {
@@ -1116,4 +1125,3 @@ fn test_apply_v4_lease_ignores_static() {
     let dev = ctx.get_device(&mac).unwrap();
     assert!(matches!(dev.v4, IPv4State::Static(ip) if ip == static_ip));
 }
-

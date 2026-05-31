@@ -165,14 +165,31 @@ impl AsyncService for Dhcpv6Service {
             return Ok(());
         }
 
-        // Setup transport socket and read interface MAC
+        // Setup transport socket
         let transport = io::Dhcpv6Transport::new(&self.config.iface, self.config.port)?;
-        let server_mac = io::Dhcpv6Transport::read_iface_mac(&self.config.iface);
 
         // 1. Wait for DB and Interface Ready
         info!("DHCPv6: Waiting for dependencies (DB and Interfaces)...");
         self.ctx.wait_for_db().await?;
         self.ctx.wait_for_interfaces().await?;
+
+        let target_ifindex = self.ctx.target_ifindex().ok_or_else(|| {
+            CoreError::Generic("Target interface index is not configured in context".to_string())
+        })?;
+        let server_mac = self
+            .ctx
+            .with_state(|state| {
+                state
+                    .interfaces
+                    .interface_ips
+                    .get(&target_ifindex)
+                    .and_then(|i| i.mac)
+            })
+            .ok_or_else(|| {
+                CoreError::Generic(format!(
+                    "MAC address for interface index {target_ifindex} is not resolved"
+                ))
+            })?;
 
         let mut server = Dhcpv6Server::new(
             self.config.clone(),
@@ -181,7 +198,7 @@ impl AsyncService for Dhcpv6Service {
                 self.config.ula_prefix,
                 self.config.ula_prefix_len,
             ),
-            Duid::generate_ll_from_mac(server_mac),
+            Duid::generate_ll_from_mac(server_mac.as_bytes()),
             self.ctx.clone(),
         );
 
