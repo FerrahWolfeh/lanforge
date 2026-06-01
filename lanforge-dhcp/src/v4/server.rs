@@ -993,4 +993,83 @@ mod tests {
         // Option 99 must be present
         assert!(opts.get(99.into()).is_some());
     }
+
+    #[test]
+    fn pool_exhaustion_ignores_discover_and_naks_request() {
+        let ctx = init_test_context();
+        // Configure a server with a pool of only 2 IPs (.100 and .101)
+        let mut cfg = dummy_config();
+        cfg.range_start = Some(Ipv4Addr::new(192, 168, 1, 100));
+        cfg.range_end = Some(Ipv4Addr::new(192, 168, 1, 101));
+        let mut srv = DhcpServer::new(cfg, ctx.clone());
+
+        let mac1 = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+        let mac2 = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02]);
+        let mac3 = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x03]);
+
+        // 1. MAC1 DISCOVER -> OFFER (192.168.1.100 or .101)
+        let disc1 = build_raw_msg(MessageType::Discover, mac1, None, None, None);
+        let res1 = srv.handle_packet(&disc1, None);
+        assert!(matches!(
+            res1,
+            HandleResult::Reply {
+                msg_type: MessageType::Offer,
+                ..
+            }
+        ));
+
+        // Simulate lease assignment in DB context for MAC1 (consumes .100)
+        let ip1 = srv.last_assignment_for().unwrap();
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac: mac1,
+            ip: ip1,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        // 2. MAC2 DISCOVER -> OFFER (the other IP)
+        let disc2 = build_raw_msg(MessageType::Discover, mac2, None, None, None);
+        let res2 = srv.handle_packet(&disc2, None);
+        assert!(matches!(
+            res2,
+            HandleResult::Reply {
+                msg_type: MessageType::Offer,
+                ..
+            }
+        ));
+
+        // Simulate lease assignment for MAC2 (consumes .101)
+        let ip2 = srv.last_assignment_for().unwrap();
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac: mac2,
+            ip: ip2,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        assert_ne!(ip1, ip2);
+
+        // 3. MAC3 DISCOVER -> IGNORED (pool exhausted!)
+        let disc3 = build_raw_msg(MessageType::Discover, mac3, None, None, None);
+        let res3 = srv.handle_packet(&disc3, None);
+        assert!(matches!(res3, HandleResult::Ignore));
+
+        // 4. MAC3 REQUEST for any IP -> NAK (pool exhausted!)
+        let req3 = build_raw_msg(
+            MessageType::Request,
+            mac3,
+            Some(Ipv4Addr::new(192, 168, 1, 102)),
+            None,
+            None,
+        );
+        let res4 = srv.handle_packet(&req3, None);
+        match res4 {
+            HandleResult::Reply { packet, .. } => {
+                let reply = decode_reply(&packet);
+                assert_eq!(
+                    reply.opts().get(v4::OptionCode::MessageType),
+                    Some(&DhcpOption::MessageType(MessageType::Nak))
+                );
+            }
+            _ => panic!("Expected NAK for REQUEST when pool is exhausted"),
+        }
+    }
 }

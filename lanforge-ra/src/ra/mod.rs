@@ -116,6 +116,8 @@ pub struct RaState {
     last_gua: Option<Ipv6Addr>,
     /// Last detected ULA
     last_ula: Option<Ipv6Addr>,
+    /// Deprecated prefixes: (Prefix, `deprecation_end`, `valid_end`)
+    pub(crate) deprecated_prefixes: Vec<(Ipv6Addr, Instant, Instant)>,
 }
 
 impl RaState {
@@ -126,6 +128,7 @@ impl RaState {
             unicast_rl: HashMap::new(),
             last_gua: None,
             last_ula: None,
+            deprecated_prefixes: Vec::new(),
         }
     }
 
@@ -490,20 +493,72 @@ fn send_ra_internal(
     let gua = if_ips.gua;
     let ula = if_ips.ula;
 
-    if gua != state.last_gua || ula != state.last_ula {
+    let now = Instant::now();
+
+    if gua != state.last_gua {
+        if let Some(old_gua) = state.last_gua {
+            let deprecation_end = now + Duration::from_hours(2);
+            let valid_end = now + Duration::from_hours(2);
+            if !state
+                .deprecated_prefixes
+                .iter()
+                .any(|(ip, _, _)| *ip == old_gua)
+            {
+                state
+                    .deprecated_prefixes
+                    .push((old_gua, deprecation_end, valid_end));
+            }
+        }
         info!(
             gua = ?gua,
-            ula = ?ula,
-            "RA: Internal prefix state updated"
+            "RA: Internal GUA prefix state updated"
         );
         state.last_gua = gua;
+    }
+
+    if ula != state.last_ula {
+        if let Some(old_ula) = state.last_ula {
+            let deprecation_end = now + Duration::from_hours(2);
+            let valid_end = now + Duration::from_hours(2);
+            if !state
+                .deprecated_prefixes
+                .iter()
+                .any(|(ip, _, _)| *ip == old_ula)
+            {
+                state
+                    .deprecated_prefixes
+                    .push((old_ula, deprecation_end, valid_end));
+            }
+        }
+        info!(
+            ula = ?ula,
+            "RA: Internal ULA prefix state updated"
+        );
         state.last_ula = ula;
     }
+
+    // Clean up expired deprecated prefixes
+    state
+        .deprecated_prefixes
+        .retain(|(_, deprecation_end, _)| *deprecation_end > now);
+
+    let deprecated_list: Vec<(Ipv6Addr, u32)> = state
+        .deprecated_prefixes
+        .iter()
+        .map(|&(ip, _, valid_end)| {
+            let remaining = if valid_end > now {
+                u32::try_from((valid_end - now).as_secs()).unwrap_or(u32::MAX)
+            } else {
+                0
+            };
+            (ip, remaining)
+        })
+        .collect();
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());
     let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, iface_index));
 
-    let mut pkt = build_ra_packet(cfg, mac, gua.as_ref());
+    let mut pkt = build_ra_packet(cfg, mac, gua.as_ref(), &deprecated_list);
 
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
     pkt[2] = (csum >> 8) as u8;
@@ -620,6 +675,12 @@ fn set_sockopt_raw(
 
 #[cfg(test)]
 mod tests {
+    use lanforge_core::{bus::EventBus, context::state::State};
+    use lanforge_types::{
+        identifiers::MacAddr,
+        update::{DeviceUpdate, InterfaceState},
+    };
+
     use super::*;
     use std::time::Duration;
 
@@ -676,5 +737,127 @@ mod tests {
                 && normal_interval <= Duration::from_secs(100),
             "Intervalo normal fora dos limites: {normal_interval:?}",
         );
+    }
+
+    #[test]
+    fn prefix_rotation_and_deprecation() {
+        // 1. Setup LanforgeContext
+        let bus = Arc::new(EventBus::new());
+        let ctx = LanforgeContext::new(bus, State::new(), Some(1));
+
+        // 2. Set initial interface state (old prefix)
+        let old_gua: Ipv6Addr = "2001:db8::1".parse().unwrap();
+        let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
+        let initial_iface = InterfaceState {
+            v4: None,
+            link_local: Some(link_local),
+            gua: Some(old_gua),
+            ula: None,
+            gua_preferred: 3600,
+            gua_valid: 7200,
+            mac: Some(MacAddr([0x11, 0x22, 0x33, 0x44, 0x55, 0x66])),
+        };
+        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+            ifindex: 1,
+            state: initial_iface,
+        });
+
+        // 3. Initialize RaState and run the check
+        let mut state = RaState::new();
+
+        // Perform first send (mocked or just executing the internal logic)
+        let if_ips = ctx.get_interface_state(1);
+        assert_eq!(if_ips.gua, Some(old_gua));
+
+        // First transition: last_gua becomes Some(old_gua)
+        state.last_gua = if_ips.gua;
+
+        // 4. Trigger rotation: change GUA in interface state
+        let new_gua: Ipv6Addr = "2001:db8:abc::1".parse().unwrap();
+        let rotated_iface = InterfaceState {
+            v4: None,
+            link_local: Some(link_local),
+            gua: Some(new_gua),
+            ula: None,
+            gua_preferred: 3600,
+            gua_valid: 7200,
+            mac: Some(MacAddr([0x11, 0x22, 0x33, 0x44, 0x55, 0x66])),
+        };
+        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+            ifindex: 1,
+            state: rotated_iface,
+        });
+
+        // Get the updated interface state
+        let if_ips = ctx.get_interface_state(1);
+        assert_eq!(if_ips.gua, Some(new_gua));
+
+        // 5. Simulate send_ra_internal transition for rotation:
+        let now = Instant::now();
+        if if_ips.gua != state.last_gua {
+            if let Some(old) = state.last_gua {
+                let deprecation_end = now + Duration::from_hours(2);
+                let valid_end = now + Duration::from_hours(2);
+                state
+                    .deprecated_prefixes
+                    .push((old, deprecation_end, valid_end));
+            }
+            state.last_gua = if_ips.gua;
+        }
+
+        // Verify that old_gua is now deprecated in state
+        assert_eq!(state.deprecated_prefixes.len(), 1);
+        assert_eq!(state.deprecated_prefixes[0].0, old_gua);
+
+        // 6. Test build_ra_packet with the deprecated prefix list
+        let cfg = RaConfig {
+            prefixes: vec![PrefixConfig::gua_dynamic()],
+            ..Default::default()
+        };
+        let mac = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        let deprecated_list = vec![(old_gua, 7200)];
+        let pkt = build_ra_packet(&cfg, mac, Some(&new_gua), &deprecated_list);
+
+        // Find prefix options in the packet
+        let mut idx = 0;
+        let mut found_prefixes = Vec::new();
+        while idx + 32 <= pkt.len() {
+            if pkt[idx] == 3 && pkt[idx + 1] == 4 {
+                let prefix_len = pkt[idx + 2];
+                let flags = pkt[idx + 3];
+                let valid_lt = u32::from_be_bytes(pkt[idx + 4..idx + 8].try_into().unwrap());
+                let preferred_lt = u32::from_be_bytes(pkt[idx + 8..idx + 12].try_into().unwrap());
+                let prefix_bytes: [u8; 16] = pkt[idx + 16..idx + 32].try_into().unwrap();
+                let prefix_addr = Ipv6Addr::from(prefix_bytes);
+                found_prefixes.push((prefix_addr, prefix_len, flags, valid_lt, preferred_lt));
+                idx += 32;
+            } else {
+                idx += 1;
+            }
+        }
+
+        assert_eq!(
+            found_prefixes.len(),
+            2,
+            "Expected 2 prefix options in RA packet"
+        );
+
+        // Match first (new GUA)
+        let (p1, len1, _, valid1, pref1) = found_prefixes[0];
+        let mut expected_p1 = new_gua.octets();
+        expected_p1[8..16].copy_from_slice(&[0; 8]); // mask out /64 host bits
+        assert_eq!(p1, Ipv6Addr::from(expected_p1));
+        assert_eq!(len1, 64);
+        assert_eq!(valid1, 30 * 24 * 3600); // default valid
+        assert_eq!(pref1, 7 * 24 * 3600); // default preferred
+
+        // Match second (deprecated old GUA)
+        let (p2, len2, _, valid2, pref2) = found_prefixes[1];
+        let mut expected_p2 = old_gua.octets();
+        expected_p2[8..16].copy_from_slice(&[0; 8]);
+        assert_eq!(p2, Ipv6Addr::from(expected_p2));
+        assert_eq!(len2, 64);
+        assert_eq!(valid2, 7200);
+        assert_eq!(pref2, 0); // Must be deprecated (preferred=0)
     }
 }

@@ -15,7 +15,9 @@
 //! [ Option 31: DNSSL (search domains) ]
 //! ```
 
-use super::config::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RdnssConfig};
+use super::config::{
+    DnsslConfig, PrefixConfig, PrefixLifetime, PrefixSource, RaConfig, RdnssConfig,
+};
 use std::net::Ipv6Addr;
 
 /// `ICMPv6` type for `Router Advertisement` (`134` per `RFC 4861`).
@@ -38,7 +40,12 @@ pub const ICMPV6_TYPE_RA: u8 = 134;
 /// A `Vec<u8>` containing the full `ICMPv6` `RA` packet with checksum calculated.
 /// The caller must prepend an IPv6 header (src=link-local, dst=`ff02::1`, `next_hdr=58`).
 #[must_use]
-pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Addr>) -> Vec<u8> {
+pub fn build_ra_packet(
+    cfg: &RaConfig,
+    mac: [u8; 6],
+    gua_prefix: Option<&Ipv6Addr>,
+    deprecated_prefixes: &[(Ipv6Addr, u32)],
+) -> Vec<u8> {
     let mut p = Vec::with_capacity(256);
 
     // ── ICMPv6 Header ────────────────────────────────────────────────────
@@ -88,6 +95,21 @@ pub fn build_ra_packet(cfg: &RaConfig, mac: [u8; 6], gua_prefix: Option<&Ipv6Add
         if let Some(addr) = addr {
             push_prefix_option(&mut p, &addr, pc);
         }
+    }
+
+    // ── Deprecated Prefixes (RFC 4861 §6.2.4 / §6.2.6) ───────────────────
+    for &(addr, remaining_valid) in deprecated_prefixes {
+        let pc = PrefixConfig {
+            source: PrefixSource::Static,
+            address: Some(addr.to_string()),
+            prefix_len: 64,
+            on_link: true,
+            autonomous: true,
+            router_addr: true,
+            valid_lifetime: PrefixLifetime::Secs(remaining_valid),
+            preferred_lifetime: PrefixLifetime::Secs(0),
+        };
+        push_prefix_option(&mut p, &addr, &pc);
     }
 
     // ── Option 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
@@ -344,7 +366,7 @@ mod tests {
             ..Default::default()
         };
         let mac = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66];
-        let pkt = build_ra_packet(&cfg, mac, None);
+        let pkt = build_ra_packet(&cfg, mac, None, &[]);
 
         assert_eq!(pkt[0], ICMPV6_TYPE_RA, "tipo ICMPv6 deve ser 134");
         assert_eq!(pkt[1], 0, "code deve ser 0");
@@ -363,7 +385,7 @@ mod tests {
 
         // Sem MTU configurado
         let cfg_no_mtu = RaConfig::default();
-        let pkt_no_mtu = build_ra_packet(&cfg_no_mtu, mac, None);
+        let pkt_no_mtu = build_ra_packet(&cfg_no_mtu, mac, None, &[]);
         // Não deve conter o byte de type '5' (MTU option) após o Source Link-Layer (type 1)
         assert!(!pkt_no_mtu.windows(2).any(|w| w[0] == 5 && w[1] == 1));
 
@@ -372,7 +394,7 @@ mod tests {
             mtu: Some(1492),
             ..Default::default()
         };
-        let pkt_with_mtu = build_ra_packet(&cfg_with_mtu, mac, None);
+        let pkt_with_mtu = build_ra_packet(&cfg_with_mtu, mac, None, &[]);
 
         // Deve conter Type 5, Length 1, Reservado (2 bytes), MTU 1492 (0x05D4)
         let expected_mtu_block = [5u8, 1, 0, 0, 0, 0, 0x05, 0xD4];
@@ -391,7 +413,7 @@ mod tests {
             ..Default::default()
         };
         let mac = [0x11; 6];
-        let pkt = build_ra_packet(&cfg, mac, None);
+        let pkt = build_ra_packet(&cfg, mac, None, &[]);
 
         assert!(!pkt.contains(&25u8), "Pacote não deve conter option RDNSS");
         assert!(!pkt.contains(&31u8), "Pacote não deve conter option DNSSL");
@@ -410,7 +432,7 @@ mod tests {
         let mac = [0x11; 6];
         let gua: Ipv6Addr = "2001:db8::".parse().unwrap();
 
-        let pkt = build_ra_packet(&cfg, mac, Some(&gua));
+        let pkt = build_ra_packet(&cfg, mac, Some(&gua), &[]);
 
         // Opção de prefixo (Type 3) deve aparecer exatamente duas vezes
         let prefix_count = pkt.windows(2).filter(|w| w[0] == 3 && w[1] == 4).count();

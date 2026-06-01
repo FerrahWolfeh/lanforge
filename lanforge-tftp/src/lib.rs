@@ -81,6 +81,10 @@ impl AsyncService for TftpService {
             ))
         })?;
 
+        let local_addr = socket.local_addr().map_err(CoreError::Io)?;
+        self.cfg.listen_addr = local_addr.to_string();
+        self.ctx.register_status_provider(Arc::new(self.clone()));
+
         info!("🚀 TFTP Server listening on {}", self.cfg.listen_addr);
         ctrl.signal_ready();
 
@@ -160,7 +164,19 @@ async fn handle_rrq(
     let filename = String::from_utf8_lossy(filename_bytes).to_string();
 
     // Security: prevent path traversal
-    let path = cfg.root_dir.join(&filename);
+    let rel_path = std::path::Path::new(&filename);
+    if rel_path.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return send_error(&socket, src, 2, "Access violation").await;
+    }
+
+    let path = cfg.root_dir.join(rel_path);
     if !path.starts_with(&cfg.root_dir) {
         return send_error(&socket, src, 2, "Access violation").await;
     }

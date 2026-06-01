@@ -151,34 +151,45 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     );
                     match filter.load_from_urls("blocklist", &blocklist_urls) {
                         Ok(new_list) => {
-                            let count = new_list.len();
-                            let current_hash = hash_set_unordered(&new_list);
-
-                            if current_hash == last_blocklist_hash && last_blocklist_hash != 0 {
-                                info!(
-                                    "🛡️ Adblock: blocklist content unchanged (hash: {:016x}) — skipping rebuild",
-                                    current_hash
+                            if new_list.is_empty() && !blocklist_urls.is_empty() {
+                                error!(
+                                    "❌ Adblock: downloaded 0 domains from {} sources. Keeping last loaded blocklist.",
+                                    blocklist_urls.len()
                                 );
                             } else {
-                                info!(
-                                    "🛡️ Adblock: downloaded {} unique domains, building FST at {}...",
-                                    count,
-                                    cache_path.display()
-                                );
-                                match DiskBlocklist::build(new_list, &cache_path, 50000) {
-                                    Ok(bl) => {
-                                        filter.replace_blocklist(bl);
-                                        last_blocklist_hash = current_hash;
-                                        let _ =
-                                            std::fs::write(&hash_path, current_hash.to_string());
-                                        info!(
-                                            "🛡️ Adblock: blocklist built and saved — {} domains in {:.1}s",
-                                            count,
-                                            start.elapsed().as_secs_f32()
-                                        );
-                                    }
-                                    Err(e) => {
-                                        error!("❌ Adblock: failed to build disk blocklist: {e}");
+                                let count = new_list.len();
+                                let current_hash = hash_set_unordered(&new_list);
+
+                                if current_hash == last_blocklist_hash && last_blocklist_hash != 0 {
+                                    info!(
+                                        "🛡️ Adblock: blocklist content unchanged (hash: {:016x}) — skipping rebuild",
+                                        current_hash
+                                    );
+                                } else {
+                                    info!(
+                                        "🛡️ Adblock: downloaded {} unique domains, building FST at {}...",
+                                        count,
+                                        cache_path.display()
+                                    );
+                                    match DiskBlocklist::build(new_list, &cache_path, 50000) {
+                                        Ok(bl) => {
+                                            filter.replace_blocklist(bl);
+                                            last_blocklist_hash = current_hash;
+                                            let _ = std::fs::write(
+                                                &hash_path,
+                                                current_hash.to_string(),
+                                            );
+                                            info!(
+                                                "🛡️ Adblock: blocklist built and saved — {} domains in {:.1}s",
+                                                count,
+                                                start.elapsed().as_secs_f32()
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "❌ Adblock: failed to build disk blocklist: {e}"
+                                            );
+                                        }
                                     }
                                 }
                             }

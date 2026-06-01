@@ -37,3 +37,6 @@ smol_str = "0.3.6"
 nursery = "warn"
 all = "warn"
 pedantic = "warn"
+
+[dev-dependencies]
+tempfile = { workspace = true }
