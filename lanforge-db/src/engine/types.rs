@@ -17,6 +17,7 @@ impl Pool {
                 let opts = SqliteConnectOptions::from_str(url)?
                     .create_if_missing(true)
                     .journal_mode(SqliteJournalMode::Wal)
+                    .pragma("synchronous", "normal")
                     .foreign_keys(true);
 
                 let pool = SqlitePoolOptions::new()

@@ -79,15 +79,6 @@ impl LanforgeDb {
                     .map_err(|e| {
                         LanforgeDbError::Migration("setting WAL mode".into(), e.to_string())
                     })?;
-                sqlx::query("PRAGMA synchronous=NORMAL")
-                    .execute(p)
-                    .await
-                    .map_err(|e| {
-                        LanforgeDbError::Migration(
-                            "setting synchronous=NORMAL".into(),
-                            e.to_string(),
-                        )
-                    })?;
                 sqlx::query("PRAGMA foreign_keys=OFF")
                     .execute(p)
                     .await
@@ -444,11 +435,11 @@ impl LanforgeDb {
     fn populate_state(
         table: &mut State,
         device_rows: Vec<DeviceRow>,
-        v4_leases: Vec<(String, String, i64)>,
-        v6_leases: Vec<(String, i64, String, i64)>,
-        v6_prefixes: Vec<(String, i64, String, i32, i64)>,
-        slaac_addrs: Vec<(String, String, i64)>,
-        seen_v4: Vec<(String, String, i64)>,
+        v4_leases: Vec<(MacAddr, Ipv4Addr, SystemTime)>,
+        v6_leases: Vec<(MacAddr, u32, Ipv6Addr, SystemTime)>,
+        v6_prefixes: Vec<(MacAddr, u32, Ipv6Addr, u8, SystemTime)>,
+        slaac_addrs: Vec<(MacAddr, Ipv6Addr, SystemTime)>,
+        seen_v4: Vec<(MacAddr, Ipv4Addr, SystemTime)>,
     ) {
         Self::populate_devices(table, device_rows);
         Self::populate_v4_leases(table, v4_leases);
@@ -533,68 +524,52 @@ impl LanforgeDb {
         }
     }
 
-    fn populate_v4_leases(table: &mut State, leases: Vec<(String, String, i64)>) {
-        for (mac_s, ip_s, exp) in leases {
-            if let Some(mac) = MacAddr::parse(&mac_s)
-                && let Ok(ip) = ip_s.parse::<Ipv4Addr>()
-            {
-                table.apply_update(DeviceUpdate::V4LeaseGranted {
-                    mac,
-                    ip,
-                    expires: unix_to_system_time(exp),
-                });
-            }
+    fn populate_v4_leases(table: &mut State, leases: Vec<(MacAddr, Ipv4Addr, SystemTime)>) {
+        for (mac, ip, expires) in leases {
+            table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
         }
     }
 
-    fn populate_v6_leases(table: &mut State, leases: Vec<(String, i64, String, i64)>) {
-        for (mac_s, iaid, ip_s, exp) in leases {
-            if let Some(mac) = MacAddr::parse(&mac_s)
-                && let Ok(ip) = ip_s.parse::<Ipv6Addr>()
-            {
-                let duid = table
-                    .get_duid_by_mac(mac)
-                    .cloned()
-                    .unwrap_or_else(|| Duid::new(vec![]));
-                table.apply_update(DeviceUpdate::V6LeaseGranted {
-                    mac: Some(mac),
-                    duid,
-                    iaid: u32::try_from(iaid).unwrap_or(0),
-                    ip,
-                    expires: unix_to_system_time(exp),
-                });
-            }
+    fn populate_v6_leases(table: &mut State, leases: Vec<(MacAddr, u32, Ipv6Addr, SystemTime)>) {
+        for (mac, iaid, ip, expires) in leases {
+            let duid = table
+                .get_duid_by_mac(mac)
+                .cloned()
+                .unwrap_or_else(|| Duid::new(vec![]));
+            table.apply_update(DeviceUpdate::V6LeaseGranted {
+                mac: Some(mac),
+                duid,
+                iaid,
+                ip,
+                expires,
+            });
         }
     }
 
-    fn populate_v6_prefixes(table: &mut State, prefixes: Vec<(String, i64, String, i32, i64)>) {
-        for (mac_s, iaid, px_s, len, exp) in prefixes {
-            if let Some(mac) = MacAddr::parse(&mac_s)
-                && let Ok(prefix) = px_s.parse::<Ipv6Addr>()
-            {
-                let duid = table
-                    .get_duid_by_mac(mac)
-                    .cloned()
-                    .unwrap_or_else(|| Duid::new(vec![]));
-                table.apply_update(DeviceUpdate::V6PrefixAssigned {
-                    mac: Some(mac),
-                    duid,
-                    iaid: u32::try_from(iaid).unwrap_or(0),
-                    prefix,
-                    len: u8::try_from(len).unwrap_or(0),
-                    expires: unix_to_system_time(exp),
-                });
-            }
+    fn populate_v6_prefixes(
+        table: &mut State,
+        prefixes: Vec<(MacAddr, u32, Ipv6Addr, u8, SystemTime)>,
+    ) {
+        for (mac, iaid, prefix, len, expires) in prefixes {
+            let duid = table
+                .get_duid_by_mac(mac)
+                .cloned()
+                .unwrap_or_else(|| Duid::new(vec![]));
+            table.apply_update(DeviceUpdate::V6PrefixAssigned {
+                mac: Some(mac),
+                duid,
+                iaid,
+                prefix,
+                len,
+                expires,
+            });
         }
     }
 
-    fn populate_slaac_addrs(table: &mut State, addrs: Vec<(String, String, i64)>) {
+    fn populate_slaac_addrs(table: &mut State, addrs: Vec<(MacAddr, Ipv6Addr, SystemTime)>) {
         use std::sync::Arc;
-        for (mac_s, ip_s, last_seen) in addrs {
-            if let Some(mac) = MacAddr::parse(&mac_s)
-                && let Ok(ip) = ip_s.parse::<Ipv6Addr>()
-                && let Some(dev_arc) = table.devices.get_mut(&mac)
-            {
+        for (mac, ip, last_seen) in addrs {
+            if let Some(dev_arc) = table.devices.get_mut(&mac) {
                 let dev = Arc::make_mut(dev_arc);
                 let exists = dev.v6.iter().any(|state| {
                     if let IPv6State::Slaac(addr, _) = state {
@@ -604,27 +579,23 @@ impl LanforgeDb {
                     }
                 });
                 if !exists {
-                    dev.v6
-                        .push(IPv6State::Slaac(ip, unix_to_system_time(last_seen)));
+                    dev.v6.push(IPv6State::Slaac(ip, last_seen));
                 }
             }
         }
     }
 
-    fn populate_seen_v4(table: &mut State, seen: Vec<(String, String, i64)>) {
+    fn populate_seen_v4(table: &mut State, seen: Vec<(MacAddr, Ipv4Addr, SystemTime)>) {
         use std::sync::Arc;
-        for (mac_s, ip_s, last_seen) in seen {
-            if let Some(mac) = MacAddr::parse(&mac_s)
-                && let Ok(ip) = ip_s.parse::<Ipv4Addr>()
-                && let Some(dev_arc) = table.devices.get_mut(&mac)
-            {
+        for (mac, ip, last_seen) in seen {
+            if let Some(dev_arc) = table.devices.get_mut(&mac) {
                 let dev = Arc::make_mut(dev_arc);
                 let exists = dev.seen_v4.iter().any(|(addr, _)| *addr == ip);
                 if !exists {
                     if dev.seen_v4.len() >= 4 {
                         dev.seen_v4.remove(0);
                     }
-                    dev.seen_v4.push((ip, unix_to_system_time(last_seen)));
+                    dev.seen_v4.push((ip, last_seen));
                 }
             }
         }

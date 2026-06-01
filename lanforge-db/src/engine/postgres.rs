@@ -1,11 +1,13 @@
-use super::types::DeviceRow;
-use super::utils::system_time_to_unix;
+use super::types::{ApiTokenRow, DeviceRow, DnsUpstreamRow};
+use super::utils::{system_time_to_unix, unix_to_system_time};
 use crate::error::LanforgeDbError;
+use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{Device, IPv4State, IPv6State, V6PrefixLease};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::HostnameOrigin;
 use sqlx::{Postgres, Transaction};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::time::SystemTime;
 
 pub async fn upsert_device(
     tx: &mut Transaction<'_, Postgres>,
@@ -15,8 +17,8 @@ pub async fn upsert_device(
 
     upsert_base_device_internal(tx, device, &mac_str).await?;
 
-    // Clear child tables
-    clear_child_tables(tx, &mac_str).await?;
+    // Prune stale child rows
+    prune_stale_child_rows(tx, &mac_str, device).await?;
 
     // Repopulate child tables
     persist_v4_lease(tx, &mac_str, &device.v4).await?;
@@ -50,48 +52,54 @@ async fn upsert_base_device_internal(
         HostnameOrigin::Mdns => "mdns",
     };
     // 1. Core devices table
-    sqlx::query(
-        "INSERT INTO devices (mac, hostname, hostname_origin, duid, origin, managed_at, class)
-         VALUES ($1::MACADDR, $2, $3::hostname_origin_t, $4, $5::device_origin, to_timestamp($6::double precision), $7)
+    sqlx::query!(
+        "INSERT INTO net.devices (mac, hostname, hostname_origin, duid, origin, managed_at, class)
+         VALUES ($1::text::MACADDR, $2, $3::text::hostname_origin_t, $4, $5::text::device_origin, to_timestamp($6::double precision), $7)
          ON CONFLICT(mac) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             hostname_origin = EXCLUDED.hostname_origin,
             duid = EXCLUDED.duid,
             origin = EXCLUDED.origin,
             managed_at = EXCLUDED.managed_at,
-            class = EXCLUDED.class"
+            class = EXCLUDED.class",
+        mac_str,
+        device.hostname.name,
+        host_orig_str,
+        device.duid.as_ref().map(|d| d.bytes.as_ref()),
+        device.origin.as_str(),
+        device.managed_at.map(|t| system_time_to_unix(t) as f64),
+        device.class as i32
     )
-    .bind(mac_str)
-    .bind(&device.hostname.name)
-    .bind(host_orig_str)
-    .bind(device.duid.as_ref().map(|d| d.bytes.to_vec()))
-    .bind(device.origin.as_str())
-    .bind(device.managed_at.map(|t| system_time_to_unix(t) as f64))
-    .bind(device.class as i32)
     .execute(&mut **tx).await?;
 
     // 2. Topology table
     if let Some(topo) = &device.topology {
-        sqlx::query(
-            "INSERT INTO device_topology (mac, parent_mac, parent_port, local_ifindex, topo_updated)
-             VALUES ($1::MACADDR, $2::MACADDR, $3, $4, to_timestamp($5::double precision))
+        let parent_mac_str = topo.parent_mac.map(|m| m.to_string());
+        let parent_port = topo.port.as_ref();
+        let local_ifindex = i32::try_from(topo.local_ifindex).unwrap_or(0);
+        let last_updated = system_time_to_unix(topo.last_updated) as f64;
+        sqlx::query!(
+            "INSERT INTO net.device_topology (mac, parent_mac, parent_port, local_ifindex, topo_updated)
+             VALUES ($1::text::MACADDR, $2::text::MACADDR, $3, $4, to_timestamp($5::double precision))
              ON CONFLICT(mac) DO UPDATE SET
                 parent_mac = EXCLUDED.parent_mac,
                 parent_port = EXCLUDED.parent_port,
                 local_ifindex = EXCLUDED.local_ifindex,
-                topo_updated = EXCLUDED.topo_updated"
+                topo_updated = EXCLUDED.topo_updated",
+            mac_str,
+            parent_mac_str.as_deref(),
+            parent_port.as_deref(),
+            local_ifindex,
+            last_updated
         )
-        .bind(mac_str)
-        .bind(topo.parent_mac.map(|m| m.to_string()))
-        .bind(&topo.port)
-        .bind(i32::try_from(topo.local_ifindex).unwrap_or(0))
-        .bind(system_time_to_unix(topo.last_updated) as f64)
         .execute(&mut **tx).await?;
     } else {
-        sqlx::query("DELETE FROM device_topology WHERE mac = $1::MACADDR")
-            .bind(mac_str)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query!(
+            "DELETE FROM net.device_topology WHERE mac = $1::text::MACADDR",
+            mac_str
+        )
+        .execute(&mut **tx)
+        .await?;
     }
 
     Ok(())
@@ -116,54 +124,157 @@ async fn persist_static_device(
     });
 
     if v4_static.is_some() || v6_suffix.is_some() || device.boot_file.is_some() {
-        sqlx::query(
-            "INSERT INTO static_devices (mac, v4_static, v6_suffix, boot_file)
-             VALUES ($1::MACADDR, $2::INET, $3::INET, $4)
+        sqlx::query!(
+            "INSERT INTO dhcp.static_devices (mac, v4_static, v6_suffix, boot_file)
+             VALUES ($1::text::MACADDR, $2::text::INET, $3::text::INET, $4)
              ON CONFLICT(mac) DO UPDATE SET
                 v4_static = EXCLUDED.v4_static,
                 v6_suffix = EXCLUDED.v6_suffix,
                 boot_file = EXCLUDED.boot_file",
+            mac_str,
+            v4_static.as_deref(),
+            v6_suffix.as_deref(),
+            device.boot_file.as_deref()
         )
-        .bind(mac_str)
-        .bind(v4_static)
-        .bind(v6_suffix)
-        .bind(&device.boot_file)
         .execute(&mut **tx)
         .await?;
     } else {
-        sqlx::query("DELETE FROM static_devices WHERE mac = $1::MACADDR")
-            .bind(mac_str)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query!(
+            "DELETE FROM dhcp.static_devices WHERE mac = $1::text::MACADDR",
+            mac_str
+        )
+        .execute(&mut **tx)
+        .await?;
     }
 
     Ok(())
 }
 
-async fn clear_child_tables(
+async fn prune_stale_child_rows(
     tx: &mut Transaction<'_, Postgres>,
     mac: &str,
+    device: &Device,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM v4_leases WHERE mac = $1::MACADDR")
-        .bind(mac)
+    // 1. v4_leases
+    if let IPv4State::Dynamic(lease) = &device.v4 {
+        let ip_str = lease.ip.to_string();
+        sqlx::query!(
+            "DELETE FROM dhcp.v4_leases WHERE mac = $1::text::MACADDR AND ip != $2::text::INET",
+            mac,
+            ip_str
+        )
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM v6_leases WHERE mac = $1::MACADDR")
-        .bind(mac)
+    } else {
+        sqlx::query!(
+            "DELETE FROM dhcp.v4_leases WHERE mac = $1::text::MACADDR",
+            mac
+        )
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM v6_prefixes WHERE mac = $1::MACADDR")
-        .bind(mac)
+    }
+
+    // 2. v6_leases
+    let active_iaids: Vec<i64> = device
+        .v6
+        .iter()
+        .filter_map(|s| {
+            if let IPv6State::Dynamic(lease) = s {
+                Some(i64::from(lease.iaid))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if active_iaids.is_empty() {
+        sqlx::query!(
+            "DELETE FROM dhcp.v6_leases WHERE mac = $1::text::MACADDR",
+            mac
+        )
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM slaac_addrs WHERE mac = $1::MACADDR")
-        .bind(mac)
+    } else {
+        sqlx::query!(
+            "DELETE FROM dhcp.v6_leases WHERE mac = $1::text::MACADDR AND NOT (iaid = ANY($2::int8[]))",
+            mac,
+            &active_iaids
+        )
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM seen_v4 WHERE mac = $1::MACADDR")
-        .bind(mac)
+    }
+
+    // 3. v6_prefixes
+    let active_prefix_iaids: Vec<i64> = device
+        .v6_prefixes
+        .iter()
+        .map(|p| i64::from(p.iaid))
+        .collect();
+    if active_prefix_iaids.is_empty() {
+        sqlx::query!(
+            "DELETE FROM net.v6_prefixes WHERE mac = $1::text::MACADDR",
+            mac
+        )
         .execute(&mut **tx)
         .await?;
+    } else {
+        sqlx::query!(
+            "DELETE FROM net.v6_prefixes WHERE mac = $1::text::MACADDR AND NOT (iaid = ANY($2::int8[]))",
+            mac,
+            &active_prefix_iaids
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    // 4. slaac_addrs
+    let active_slaac: Vec<String> = device
+        .v6
+        .iter()
+        .filter_map(|s| {
+            if let IPv6State::Slaac(ip, _) = s {
+                Some(ip.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if active_slaac.is_empty() {
+        sqlx::query!(
+            "DELETE FROM net.slaac_addrs WHERE mac = $1::text::MACADDR",
+            mac
+        )
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query!(
+            "DELETE FROM net.slaac_addrs WHERE mac = $1::text::MACADDR AND NOT (ip = ANY(($2::text[])::inet[]))",
+            mac,
+            &active_slaac
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    // 5. seen_v4
+    let active_seen: Vec<String> = device
+        .seen_v4
+        .iter()
+        .map(|(ip, _)| ip.to_string())
+        .collect();
+    if active_seen.is_empty() {
+        sqlx::query!("DELETE FROM net.seen_v4 WHERE mac = $1::text::MACADDR", mac)
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        sqlx::query!(
+            "DELETE FROM net.seen_v4 WHERE mac = $1::text::MACADDR AND NOT (ip = ANY(($2::text[])::inet[]))",
+            mac,
+            &active_seen
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -175,12 +286,16 @@ async fn persist_v4_lease(
     if let IPv4State::Dynamic(lease) = v4 {
         let expires = system_time_to_unix(lease.expires) as f64;
         let ip_str = lease.ip.to_string();
-        sqlx::query("INSERT INTO v4_leases (mac, ip, expires) VALUES ($1::MACADDR, $2::INET, to_timestamp($3::double precision))")
-            .bind(mac)
-            .bind(ip_str)
-            .bind(expires)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query!(
+            "INSERT INTO dhcp.v4_leases (mac, ip, expires)
+             VALUES ($1::text::MACADDR, $2::text::INET, to_timestamp($3::double precision))
+             ON CONFLICT(mac) DO UPDATE SET ip = EXCLUDED.ip, expires = EXCLUDED.expires",
+            mac,
+            ip_str,
+            expires
+        )
+        .execute(&mut **tx)
+        .await?;
     }
     Ok(())
 }
@@ -195,12 +310,17 @@ async fn persist_v6_leases(
             let expires = system_time_to_unix(lease.expires) as f64;
             let ip_str = lease.ip.to_string();
             let iaid = i64::from(lease.iaid);
-            sqlx::query("INSERT INTO v6_leases (mac, iaid, ip, expires) VALUES ($1::MACADDR, $2, $3::INET, to_timestamp($4::double precision)) ON CONFLICT(mac, iaid) DO NOTHING")
-                .bind(mac)
-                .bind(iaid)
-                .bind(ip_str)
-                .bind(expires)
-                .execute(&mut **tx).await?;
+            sqlx::query!(
+                "INSERT INTO dhcp.v6_leases (mac, iaid, ip, expires)
+                 VALUES ($1::text::MACADDR, $2, $3::text::INET, to_timestamp($4::double precision))
+                 ON CONFLICT(mac, iaid) DO UPDATE SET ip = EXCLUDED.ip, expires = EXCLUDED.expires",
+                mac,
+                iaid,
+                ip_str,
+                expires
+            )
+            .execute(&mut **tx)
+            .await?;
         }
     }
     Ok(())
@@ -216,13 +336,17 @@ async fn persist_v6_prefixes(
         let px_str = prefix.prefix.to_string();
         let iaid = i64::from(prefix.iaid);
         let len = i32::from(prefix.len);
-        sqlx::query("INSERT INTO v6_prefixes (mac, iaid, cidr, expires) VALUES ($1::MACADDR, $2, ($3 || '/' || $4)::CIDR, to_timestamp($5::double precision)) ON CONFLICT(mac, iaid) DO NOTHING")
-            .bind(mac)
-            .bind(iaid)
-            .bind(px_str)
-            .bind(len)
-            .bind(expires)
-            .execute(&mut **tx).await?;
+        sqlx::query!(
+            "INSERT INTO net.v6_prefixes (mac, iaid, cidr, expires)
+             VALUES ($1::text::MACADDR, $2, ($3::text || '/' || $4::integer)::CIDR, to_timestamp($5::double precision))
+             ON CONFLICT(mac, iaid) DO UPDATE SET cidr = EXCLUDED.cidr, expires = EXCLUDED.expires",
+            mac,
+            iaid,
+            px_str,
+            len,
+            expires
+        )
+        .execute(&mut **tx).await?;
     }
     Ok(())
 }
@@ -236,12 +360,14 @@ async fn persist_slaac_addrs(
         if let IPv6State::Slaac(ip, timestamp) = state {
             let ip_str = ip.to_string();
             let ts = system_time_to_unix(*timestamp) as f64;
-            sqlx::query(
-                "INSERT INTO slaac_addrs (mac, ip, last_seen) VALUES ($1::MACADDR, $2::INET, to_timestamp($3::double precision)) ON CONFLICT(mac, ip) DO UPDATE SET last_seen = EXCLUDED.last_seen",
+            sqlx::query!(
+                "INSERT INTO net.slaac_addrs (mac, ip, last_seen)
+                 VALUES ($1::text::MACADDR, $2::text::INET, to_timestamp($3::double precision))
+                 ON CONFLICT(mac, ip) DO UPDATE SET last_seen = EXCLUDED.last_seen",
+                mac,
+                ip_str,
+                ts
             )
-            .bind(mac)
-            .bind(ip_str)
-            .bind(ts)
             .execute(&mut **tx)
             .await?;
         }
@@ -257,12 +383,14 @@ async fn persist_seen_v4(
     for (ip, timestamp) in seen {
         let ip_str = ip.to_string();
         let ts = system_time_to_unix(*timestamp) as f64;
-        sqlx::query(
-            "INSERT INTO seen_v4 (mac, ip, last_seen) VALUES ($1::MACADDR, $2::INET, to_timestamp($3::double precision)) ON CONFLICT(mac, ip) DO UPDATE SET last_seen = EXCLUDED.last_seen",
+        sqlx::query!(
+            "INSERT INTO net.seen_v4 (mac, ip, last_seen)
+             VALUES ($1::text::MACADDR, $2::text::INET, to_timestamp($3::double precision))
+             ON CONFLICT(mac, ip) DO UPDATE SET last_seen = EXCLUDED.last_seen",
+            mac,
+            ip_str,
+            ts
         )
-        .bind(mac)
-        .bind(ip_str)
-        .bind(ts)
         .execute(&mut **tx)
         .await?;
     }
@@ -272,9 +400,9 @@ async fn persist_seen_v4(
 // Loading logic
 
 pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, LanforgeDbError> {
-    sqlx::query_as::<_, DeviceRow>(
+    let rows = sqlx::query!(
         "SELECT 
-            d.mac::TEXT, d.hostname, 
+            d.mac::TEXT as mac, d.hostname, 
             (CASE d.hostname_origin
                 WHEN 'dhcp' THEN 0
                 WHEN 'static' THEN 1
@@ -284,76 +412,161 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lan
                 WHEN 'netbios' THEN 0
                 WHEN 'user' THEN 1
                 ELSE 0
-             END)::INT8 as hostname_origin,
+             END)::INT8 as \"hostname_origin!\",
             d.duid, 
             d.origin::TEXT as origin, 
-            EXTRACT(EPOCH FROM d.managed_at)::INT8 as managed_at, 
-            d.class::INT8,
-            t.parent_mac::TEXT, t.parent_port, t.local_ifindex::INT8, 
-            EXTRACT(EPOCH FROM t.topo_updated)::INT8 as topo_updated,
+            EXTRACT(EPOCH FROM d.managed_at)::INT8 as \"managed_at?\", 
+            d.class::INT8 as \"class!\",
+            t.parent_mac::TEXT as parent_mac, t.parent_port, t.local_ifindex::INT8 as parent_ifindex, 
+            EXTRACT(EPOCH FROM t.topo_updated)::INT8 as \"topo_updated?\",
             host(s.v4_static) as v4_static, host(s.v6_suffix) as v6_suffix, s.boot_file
-         FROM devices d
-         LEFT JOIN device_topology t ON d.mac = t.mac
-         LEFT JOIN static_devices s ON d.mac = s.mac",
+         FROM net.devices d
+         LEFT JOIN net.device_topology t ON d.mac = t.mac
+         LEFT JOIN dhcp.static_devices s ON d.mac = s.mac"
     )
     .fetch_all(pool)
-    .await
-    .map_err(Into::into)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| DeviceRow {
+            mac: row.mac.unwrap_or_default(),
+            hostname: row.hostname,
+            hostname_origin: row.hostname_origin,
+            duid: row.duid,
+            origin: row.origin.unwrap_or_default(),
+            managed_at: row.managed_at,
+            class: row.class,
+            parent_mac: row.parent_mac,
+            parent_port: row.parent_port,
+            local_ifindex: row.parent_ifindex,
+            topo_updated: row.topo_updated,
+            v4_static: row.v4_static,
+            v6_suffix: row.v6_suffix,
+            boot_file: row.boot_file,
+        })
+        .collect())
 }
 
 pub async fn load_v4_leases(
     pool: &sqlx::PgPool,
-) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM expires)::INT8 FROM v4_leases",
+) -> Result<Vec<(MacAddr, Ipv4Addr, SystemTime)>, LanforgeDbError> {
+    let rows = sqlx::query!(
+        "SELECT mac::TEXT as mac, host(ip) as ip, EXTRACT(EPOCH FROM expires)::INT8 as \"expires!\" FROM dhcp.v4_leases"
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for r in rows {
+        if let Some(mac_str) = r.mac
+            && let Some(mac) = MacAddr::parse(&mac_str)
+            && let Some(ip_str) = r.ip
+            && let Ok(ip) = ip_str.parse::<Ipv4Addr>()
+        {
+            results.push((mac, ip, unix_to_system_time(r.expires)));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn load_v6_leases(
     pool: &sqlx::PgPool,
-) -> Result<Vec<(String, i64, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, i64, String, i64)>(
-        "SELECT mac::TEXT, iaid, host(ip) as ip, EXTRACT(EPOCH FROM expires)::INT8 FROM v6_leases",
+) -> Result<Vec<(MacAddr, u32, Ipv6Addr, SystemTime)>, LanforgeDbError> {
+    let rows = sqlx::query!(
+        "SELECT mac::TEXT as mac, iaid, host(ip) as ip, EXTRACT(EPOCH FROM expires)::INT8 as \"expires!\" FROM dhcp.v6_leases"
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for r in rows {
+        if let Some(mac_str) = r.mac
+            && let Some(mac) = MacAddr::parse(&mac_str)
+            && let Some(ip_str) = r.ip
+            && let Ok(ip) = ip_str.parse::<Ipv6Addr>()
+        {
+            results.push((
+                mac,
+                u32::try_from(r.iaid).unwrap_or(0),
+                ip,
+                unix_to_system_time(r.expires),
+            ));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn load_v6_prefixes(
     pool: &sqlx::PgPool,
-) -> Result<Vec<(String, i64, String, i32, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, i64, String, i32, i64)>(
-        "SELECT mac::TEXT, iaid, host(cidr) as prefix, masklen(cidr) as len, EXTRACT(EPOCH FROM expires)::INT8 FROM v6_prefixes",
+) -> Result<Vec<(MacAddr, u32, Ipv6Addr, u8, SystemTime)>, LanforgeDbError> {
+    let rows = sqlx::query!(
+        "SELECT mac::TEXT as mac, iaid, host(cidr) as prefix, masklen(cidr) as \"len!\", EXTRACT(EPOCH FROM expires)::INT8 as \"expires!\" FROM net.v6_prefixes"
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for r in rows {
+        if let Some(mac_str) = r.mac
+            && let Some(mac) = MacAddr::parse(&mac_str)
+            && let Some(prefix_str) = r.prefix
+            && let Ok(prefix) = prefix_str.parse::<Ipv6Addr>()
+        {
+            results.push((
+                mac,
+                u32::try_from(r.iaid).unwrap_or(0),
+                prefix,
+                u8::try_from(r.len).unwrap_or(0),
+                unix_to_system_time(r.expires),
+            ));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn load_slaac_addrs(
     pool: &sqlx::PgPool,
-) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 FROM slaac_addrs",
+) -> Result<Vec<(MacAddr, Ipv6Addr, SystemTime)>, LanforgeDbError> {
+    let rows = sqlx::query!(
+        "SELECT mac::TEXT as mac, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 as \"last_seen!\" FROM net.slaac_addrs"
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for r in rows {
+        if let Some(mac_str) = r.mac
+            && let Some(mac) = MacAddr::parse(&mac_str)
+            && let Some(ip_str) = r.ip
+            && let Ok(ip) = ip_str.parse::<Ipv6Addr>()
+        {
+            results.push((mac, ip, unix_to_system_time(r.last_seen)));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn load_seen_v4(
     pool: &sqlx::PgPool,
-) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT mac::TEXT, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 FROM seen_v4",
+) -> Result<Vec<(MacAddr, Ipv4Addr, SystemTime)>, LanforgeDbError> {
+    let rows = sqlx::query!(
+        "SELECT mac::TEXT as mac, host(ip) as ip, EXTRACT(EPOCH FROM last_seen)::INT8 as \"last_seen!\" FROM net.seen_v4"
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for r in rows {
+        if let Some(mac_str) = r.mac
+            && let Some(mac) = MacAddr::parse(&mac_str)
+            && let Some(ip_str) = r.ip
+            && let Ok(ip) = ip_str.parse::<Ipv4Addr>()
+        {
+            results.push((mac, ip, unix_to_system_time(r.last_seen)));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn record_lease_event(
@@ -364,14 +577,17 @@ pub async fn record_lease_event(
     action_str: &str,
     now: i64,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("INSERT INTO lease_history (mac, ip, lease_type, action, occurred_at) VALUES ($1::MACADDR, $2::INET, $3::lease_type_t, $4::lease_action_t, to_timestamp($5::double precision))")
-        .bind(mac_str)
-        .bind(ip)
-        .bind(lease_type)
-        .bind(action_str)
-        .bind(now as f64)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "INSERT INTO dhcp.lease_history (mac, ip, lease_type, action, occurred_at)
+         VALUES ($1::text::MACADDR, $2::text::INET, $3::text::lease_type_t, $4::text::lease_action_t, to_timestamp($5::double precision))",
+        mac_str,
+        ip,
+        lease_type,
+        action_str,
+        now as f64
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -379,12 +595,24 @@ pub async fn get_lease_history(
     pool: &sqlx::PgPool,
     mac_str: &str,
 ) -> Result<Vec<(String, String, String, i64)>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (String, String, String, i64)>(
-        "SELECT host(ip) as ip, lease_type::TEXT, action::TEXT, EXTRACT(EPOCH FROM occurred_at)::INT8 FROM lease_history WHERE mac = $1::MACADDR ORDER BY occurred_at DESC LIMIT 100"
+    let rows = sqlx::query!(
+        "SELECT host(ip) as ip, lease_type::TEXT as lease_type, action::TEXT as action, EXTRACT(EPOCH FROM occurred_at)::INT8 as \"occurred_at!\"
+         FROM dhcp.lease_history WHERE mac = $1::text::MACADDR ORDER BY occurred_at DESC LIMIT 100",
+        mac_str
     )
-    .bind(mac_str)
     .fetch_all(pool).await?;
-    Ok(rows)
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.ip.unwrap_or_default(),
+                row.lease_type.unwrap_or_default(),
+                row.action.unwrap_or_default(),
+                row.occurred_at,
+            )
+        })
+        .collect())
 }
 
 pub async fn vacuum(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
@@ -393,15 +621,15 @@ pub async fn vacuum(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
 }
 
 pub async fn prune_zombies(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
-    let result = sqlx::query(
-        "DELETE FROM devices
-         WHERE origin = 'dynamic'::device_origin
+    let result = sqlx::query!(
+        "DELETE FROM net.devices
+         WHERE origin = 'dynamic'::text::device_origin
            AND hostname = ''
-           AND mac NOT IN (SELECT mac FROM v4_leases)
-           AND mac NOT IN (SELECT mac FROM v6_leases)
-           AND mac NOT IN (SELECT mac FROM v6_prefixes)
-           AND mac NOT IN (SELECT mac FROM slaac_addrs)
-           AND mac NOT IN (SELECT mac FROM seen_v4)",
+           AND mac NOT IN (SELECT mac FROM dhcp.v4_leases)
+           AND mac NOT IN (SELECT mac FROM dhcp.v6_leases)
+           AND mac NOT IN (SELECT mac FROM net.v6_prefixes)
+           AND mac NOT IN (SELECT mac FROM net.slaac_addrs)
+           AND mac NOT IN (SELECT mac FROM net.seen_v4)"
     )
     .execute(pool)
     .await?;
@@ -412,21 +640,23 @@ pub async fn find_mac_by_hostname(
     pool: &sqlx::PgPool,
     hostname: &str,
 ) -> Result<Option<MacAddr>, LanforgeDbError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT mac::TEXT FROM devices WHERE hostname = $1 OR LOWER(hostname) = LOWER($1) LIMIT 1",
+    let row = sqlx::query!(
+        "SELECT mac::TEXT as mac FROM net.devices WHERE hostname = $1 OR LOWER(hostname) = LOWER($1) LIMIT 1",
+        hostname
     )
-    .bind(hostname)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.and_then(|(mac,)| MacAddr::parse(&mac)))
+    Ok(row
+        .and_then(|r| r.mac)
+        .and_then(|mac_str| MacAddr::parse(&mac_str)))
 }
 
 pub async fn store_api_token(
     pool: &sqlx::PgPool,
     token: &str,
     name: &str,
-    scopes: &lanforge_types::auth::ApiScopes,
+    scopes: &ApiScopes,
     expires_at: Option<i64>,
     now: i64,
 ) -> Result<i64, LanforgeDbError> {
@@ -435,56 +665,55 @@ pub async fn store_api_token(
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let row: (i32,) = sqlx::query_as(
-        "INSERT INTO api_tokens (token, name, created_at, scopes, expires_at) VALUES ($1, $2, to_timestamp($3::double precision), $4, to_timestamp($5::double precision)) RETURNING id",
+    let row = sqlx::query!(
+        "INSERT INTO auth.api_tokens (token, name, created_at, scopes, expires_at) VALUES ($1, $2, to_timestamp($3::double precision), $4, to_timestamp($5::double precision)) RETURNING id",
+        token,
+        name,
+        now as f64,
+        scopes_str,
+        expires_at.map(|e| e as f64)
     )
-    .bind(token)
-    .bind(name)
-    .bind(now as f64)
-    .bind(scopes_str)
-    .bind(expires_at.map(|e| e as f64))
     .fetch_one(pool)
     .await?;
-    Ok(i64::from(row.0))
+    Ok(i64::from(row.id))
 }
 
 pub async fn validate_api_token(
     pool: &sqlx::PgPool,
     token: &str,
     now: i64,
-) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LanforgeDbError> {
-    let res: Option<(String, String, Option<i64>)> =
-        sqlx::query_as("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 FROM api_tokens WHERE token = $1")
-            .bind(token)
+) -> Result<Option<(String, ApiScopes)>, LanforgeDbError> {
+    let res =
+        sqlx::query!("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 as \"expires_at?\" FROM auth.api_tokens WHERE token = $1", token)
             .fetch_optional(pool)
             .await?;
 
-    if let Some((name, scopes_str, expires_at)) = res {
-        if let Some(exp) = expires_at
+    if let Some(row) = res {
+        if let Some(exp) = row.expires_at
             && now > exp
         {
             return Ok(None); // Token expired
         }
-        sqlx::query(
+        sqlx::query!(
             "UPDATE api_tokens SET last_used = to_timestamp($1::double precision) WHERE token = $2",
+            now as f64,
+            token
         )
-        .bind(now as f64)
-        .bind(token)
         .execute(pool)
         .await?;
-        let scopes = scopes_str
+        let scopes = row
+            .scopes
             .split(',')
             .filter_map(|s| s.parse().ok())
             .collect();
-        Ok(Some((name, scopes)))
+        Ok(Some((row.name, scopes)))
     } else {
         Ok(None)
     }
 }
 
 pub async fn delete_api_token(pool: &sqlx::PgPool, token: &str) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM api_tokens WHERE token = $1")
-        .bind(token)
+    sqlx::query!("DELETE FROM auth.api_tokens WHERE token = $1", token)
         .execute(pool)
         .await?;
     Ok(())
@@ -495,60 +724,52 @@ pub async fn delete_api_token_by_id_or_name(
     id_or_name: &str,
 ) -> Result<(), LanforgeDbError> {
     if let Ok(id) = id_or_name.parse::<i32>() {
-        sqlx::query("DELETE FROM api_tokens WHERE id = $1")
-            .bind(id)
+        sqlx::query!("DELETE FROM auth.api_tokens WHERE id = $1", id)
             .execute(pool)
             .await?;
     } else {
-        sqlx::query("DELETE FROM api_tokens WHERE name = $1")
-            .bind(id_or_name)
+        sqlx::query!("DELETE FROM auth.api_tokens WHERE name = $1", id_or_name)
             .execute(pool)
             .await?;
     }
     Ok(())
 }
 
-pub async fn load_api_tokens(
-    pool: &sqlx::PgPool,
-) -> Result<Vec<crate::engine::types::ApiTokenRow>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (i32, String, String, i64, Option<i64>, String, Option<i64>)>(
-        "SELECT id, token, name, EXTRACT(EPOCH FROM created_at)::INT8, EXTRACT(EPOCH FROM last_used)::INT8, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 FROM api_tokens ORDER BY created_at DESC",
+pub async fn load_api_tokens(pool: &sqlx::PgPool) -> Result<Vec<ApiTokenRow>, LanforgeDbError> {
+    let rows = sqlx::query!(
+        "SELECT id, token, name, EXTRACT(EPOCH FROM created_at)::INT8 as \"created_at!\", EXTRACT(EPOCH FROM last_used)::INT8 as \"last_used?\", scopes, EXTRACT(EPOCH FROM expires_at)::INT8 as \"expires_at?\" FROM auth.api_tokens ORDER BY created_at DESC"
     )
     .fetch_all(pool)
     .await?;
 
     Ok(rows
         .into_iter()
-        .map(
-            |(id, token, name, created_at, last_used, scopes, expires_at)| {
-                crate::engine::types::ApiTokenRow {
-                    id: i64::from(id),
-                    token,
-                    name,
-                    created_at,
-                    last_used,
-                    scopes,
-                    expires_at,
-                }
-            },
-        )
+        .map(|row| ApiTokenRow {
+            id: i64::from(row.id),
+            token: row.token,
+            name: row.name,
+            created_at: row.created_at,
+            last_used: row.last_used,
+            scopes: row.scopes,
+            expires_at: row.expires_at,
+        })
         .collect())
 }
 
 pub async fn get_api_token_info(
     pool: &sqlx::PgPool,
     id_or_name: &str,
-) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LanforgeDbError> {
-    let res: Option<(String, String, Option<i64>)> = if let Ok(id) = id_or_name.parse::<i64>() {
-        sqlx::query_as("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 FROM api_tokens WHERE id = $1")
-            .bind(id as i32)
+) -> Result<Option<(String, ApiScopes, Option<i64>)>, LanforgeDbError> {
+    let res = if let Ok(id) = id_or_name.parse::<i64>() {
+        sqlx::query!("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 as \"expires_at?\" FROM auth.api_tokens WHERE id = $1", id as i32)
             .fetch_optional(pool)
             .await?
+            .map(|row| (row.name, row.scopes, row.expires_at))
     } else {
-        sqlx::query_as("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 FROM api_tokens WHERE name = $1")
-            .bind(id_or_name)
+        sqlx::query!("SELECT name, scopes, EXTRACT(EPOCH FROM expires_at)::INT8 as \"expires_at?\" FROM auth.api_tokens WHERE name = $1", id_or_name)
             .fetch_optional(pool)
             .await?
+            .map(|row| (row.name, row.scopes, row.expires_at))
     };
     if let Some((name, scopes_str, expires_at)) = res {
         let scopes = scopes_str
@@ -563,23 +784,19 @@ pub async fn get_api_token_info(
 
 pub async fn load_dns_upstreams(
     pool: &sqlx::PgPool,
-) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LanforgeDbError> {
-    let rows = sqlx::query_as::<_, (i32, String, String, Option<String>)>(
-        "SELECT id, addr, protocol, domain FROM upstreams ORDER BY id ASC",
-    )
-    .fetch_all(pool)
-    .await?;
+) -> Result<Vec<DnsUpstreamRow>, LanforgeDbError> {
+    let rows = sqlx::query!("SELECT id, addr, protocol, domain FROM dns.upstreams ORDER BY id ASC")
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .into_iter()
-        .map(
-            |(id, addr, protocol, domain)| crate::engine::types::DnsUpstreamRow {
-                id: i64::from(id),
-                addr,
-                protocol,
-                domain,
-            },
-        )
+        .map(|row| DnsUpstreamRow {
+            id: i64::from(row.id),
+            addr: row.addr,
+            protocol: row.protocol,
+            domain: row.domain,
+        })
         .collect())
 }
 
@@ -589,15 +806,15 @@ pub async fn add_dns_upstream(
     protocol: &str,
     domain: Option<&str>,
 ) -> Result<i64, LanforgeDbError> {
-    let row: (i32,) = sqlx::query_as(
-        "INSERT INTO upstreams (addr, protocol, domain) VALUES ($1, $2, $3) ON CONFLICT (addr, protocol) DO UPDATE SET domain = EXCLUDED.domain RETURNING id",
+    let row = sqlx::query!(
+        "INSERT INTO dns.upstreams (addr, protocol, domain) VALUES ($1, $2, $3) ON CONFLICT (addr, protocol) DO UPDATE SET domain = EXCLUDED.domain RETURNING id",
+        addr,
+        protocol,
+        domain
     )
-    .bind(addr)
-    .bind(protocol)
-    .bind(domain)
     .fetch_one(pool)
     .await?;
-    Ok(i64::from(row.0))
+    Ok(i64::from(row.id))
 }
 
 pub async fn remove_dns_upstream(
@@ -605,15 +822,19 @@ pub async fn remove_dns_upstream(
     addr: &str,
     protocol: &str,
 ) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM upstreams WHERE addr = $1 AND protocol = $2")
-        .bind(addr)
-        .bind(protocol)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM dns.upstreams WHERE addr = $1 AND protocol = $2",
+        addr,
+        protocol
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 pub async fn clear_dns_upstreams(pool: &sqlx::PgPool) -> Result<(), LanforgeDbError> {
-    sqlx::query("DELETE FROM upstreams").execute(pool).await?;
+    sqlx::query!("DELETE FROM dns.upstreams")
+        .execute(pool)
+        .await?;
     Ok(())
 }

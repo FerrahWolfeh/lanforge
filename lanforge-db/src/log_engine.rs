@@ -26,7 +26,9 @@ use tracing::debug;
 use crate::error::LanforgeDbError;
 use futures::StreamExt;
 use lanforge_core::bus::{LanforgeEvent, TimedEvent};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{AssertSqlSafe, Row, SqlitePool};
+use std::str::FromStr;
 
 /// A SQLite-backed log store for transient system events.
 ///
@@ -68,19 +70,14 @@ impl LogDb {
             }
         }
 
-        let pool = SqlitePool::connect(url).await?;
+        let opts = SqliteConnectOptions::from_str(url)?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .pragma("synchronous", "normal")
+            .pragma("auto_vacuum", "incremental")
+            .pragma("page_size", "4096");
 
-        // Initialize PRAGMAs for performance and reliability
-        sqlx::query("PRAGMA journal_mode=WAL")
-            .execute(&pool)
-            .await?;
-        sqlx::query("PRAGMA synchronous=NORMAL")
-            .execute(&pool)
-            .await?;
-        sqlx::query("PRAGMA auto_vacuum=INCREMENTAL")
-            .execute(&pool)
-            .await?;
-        sqlx::query("PRAGMA page_size=4096").execute(&pool).await?;
+        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
 
         #[cfg_attr(not(feature = "adblock"), allow(unused_mut))]
         let mut init_query = "

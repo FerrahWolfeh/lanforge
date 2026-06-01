@@ -1,10 +1,11 @@
 use super::types::DeviceRow;
-use super::utils::system_time_to_unix;
+use super::utils::{system_time_to_unix, unix_to_system_time};
 use crate::error::LanforgeDbError;
 use lanforge_types::device::{IPv4State, IPv6State, V6PrefixLease};
 use lanforge_types::{device::Device, identifiers::MacAddr};
 use sqlx::{AssertSqlSafe, Sqlite, Transaction};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::time::SystemTime;
 
 pub async fn upsert_device(
     tx: &mut Transaction<'_, Sqlite>,
@@ -390,52 +391,108 @@ pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>,
 
 pub async fn load_v4_leases(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+) -> Result<Vec<(MacAddr, Ipv4Addr, SystemTime)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, expires FROM v4_leases")
         .fetch_all(pool)
         .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for (mac_str, ip_str, exp) in rows {
+        if let Some(mac) = MacAddr::parse(&mac_str)
+            && let Ok(ip) = ip_str.parse::<Ipv4Addr>()
+        {
+            results.push((mac, ip, unix_to_system_time(exp)));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn load_v6_leases(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, i64, String, i64)>, LanforgeDbError> {
+) -> Result<Vec<(MacAddr, u32, Ipv6Addr, SystemTime)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i64)>(
         "SELECT mac, iaid, ip, expires FROM v6_leases",
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for (mac_str, iaid, ip_str, exp) in rows {
+        if let Some(mac) = MacAddr::parse(&mac_str)
+            && let Ok(ip) = ip_str.parse::<Ipv6Addr>()
+        {
+            results.push((
+                mac,
+                u32::try_from(iaid).unwrap_or(0),
+                ip,
+                unix_to_system_time(exp),
+            ));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn load_v6_prefixes(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, i64, String, i32, i64)>, LanforgeDbError> {
+) -> Result<Vec<(MacAddr, u32, Ipv6Addr, u8, SystemTime)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, i64, String, i32, i64)>(
         "SELECT mac, iaid, prefix, len, expires FROM v6_prefixes",
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for (mac_str, iaid, prefix_str, len, exp) in rows {
+        if let Some(mac) = MacAddr::parse(&mac_str)
+            && let Ok(prefix) = prefix_str.parse::<Ipv6Addr>()
+        {
+            results.push((
+                mac,
+                u32::try_from(iaid).unwrap_or(0),
+                prefix,
+                u8::try_from(len).unwrap_or(0),
+                unix_to_system_time(exp),
+            ));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn load_slaac_addrs(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+) -> Result<Vec<(MacAddr, Ipv6Addr, SystemTime)>, LanforgeDbError> {
     let rows =
         sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, last_seen FROM slaac_addrs")
             .fetch_all(pool)
             .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for (mac_str, ip_str, last_seen) in rows {
+        if let Some(mac) = MacAddr::parse(&mac_str)
+            && let Ok(ip) = ip_str.parse::<Ipv6Addr>()
+        {
+            results.push((mac, ip, unix_to_system_time(last_seen)));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn load_seen_v4(
     pool: &sqlx::SqlitePool,
-) -> Result<Vec<(String, String, i64)>, LanforgeDbError> {
+) -> Result<Vec<(MacAddr, Ipv4Addr, SystemTime)>, LanforgeDbError> {
     let rows = sqlx::query_as::<_, (String, String, i64)>("SELECT mac, ip, last_seen FROM seen_v4")
         .fetch_all(pool)
         .await?;
-    Ok(rows)
+
+    let mut results = Vec::with_capacity(rows.len());
+    for (mac_str, ip_str, last_seen) in rows {
+        if let Some(mac) = MacAddr::parse(&mac_str)
+            && let Ok(ip) = ip_str.parse::<Ipv4Addr>()
+        {
+            results.push((mac, ip, unix_to_system_time(last_seen)));
+        }
+    }
+    Ok(results)
 }
 
 pub async fn record_lease_event(
