@@ -2531,6 +2531,7 @@ dependencies = [
  "lanforge-api",
  "lanforge-core",
  "lanforge-db",
+ "lanforge-dhcp",
  "lanforge-dns",
  "lanforge-dns-wire",
  "lanforge-macros",

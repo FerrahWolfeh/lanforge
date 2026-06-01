@@ -55,10 +55,9 @@ impl ClientContext {
         }
         if let Some(ip) = entry.v6_suffix {
             dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
-            dev.v6.push(IPv6State::Static(
-                Ipv6AddrOrSuffix::Full(ip),
-                SystemTime::now(),
-            ));
+            let suf =
+                Ipv6AddrOrSuffix::parse(&ip.to_string()).unwrap_or(Ipv6AddrOrSuffix::Full(ip));
+            dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
         }
         dev.origin = Origin::Static;
         dev.managed_at = Some(SystemTime::now());
@@ -77,7 +76,13 @@ impl ClientContext {
                 hostname: entry.hostname.into(),
                 duid: FieldUpdate::NoChange,
                 v4_static: entry.v4_fixed.into(),
-                v6_suffix: entry.v6_suffix.map(Ipv6AddrOrSuffix::Full).into(),
+                v6_suffix: entry
+                    .v6_suffix
+                    .map(|ip| {
+                        Ipv6AddrOrSuffix::parse(&ip.to_string())
+                            .unwrap_or(Ipv6AddrOrSuffix::Full(ip))
+                    })
+                    .into(),
                 boot_file: FieldUpdate::NoChange,
                 origin: Origin::Static,
                 dns_fallback: FieldUpdate::NoChange,

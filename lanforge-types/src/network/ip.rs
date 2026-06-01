@@ -10,6 +10,24 @@ pub enum Ipv6AddrOrSuffix {
     Suffix([u8; 8]),
 }
 
+impl From<Ipv6AddrOrSuffix> for Ipv6Addr {
+    fn from(value: Ipv6AddrOrSuffix) -> Self {
+        match value {
+            Ipv6AddrOrSuffix::Full(ip) => ip,
+            Ipv6AddrOrSuffix::Suffix(s) => Self::new(
+                0,
+                0,
+                0,
+                0,
+                u16::from_be_bytes([s[0], s[1]]),
+                u16::from_be_bytes([s[2], s[3]]),
+                u16::from_be_bytes([s[4], s[5]]),
+                u16::from_be_bytes([s[6], s[7]]),
+            ),
+        }
+    }
+}
+
 impl FromStr for Ipv6AddrOrSuffix {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {

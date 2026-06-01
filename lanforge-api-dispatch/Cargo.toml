@@ -39,3 +39,6 @@ hotpath = [
     "lanforge-db/hotpath",
     "lanforge-dns/hotpath",
 ]
+
+[dev-dependencies]
+lanforge-dhcp = { path = "../lanforge-dhcp" }

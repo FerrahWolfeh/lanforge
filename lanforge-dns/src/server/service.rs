@@ -273,6 +273,15 @@ impl AsyncService for DnsService {
                                 }
                                 dns_ctx.recursive.replace_upstreams(upstreams);
                                 info!("✅ DNS: Upstreams reloaded.");
+                                if !dns_ctx.recursive.is_empty() {
+                                    dns_ctx.cache.invalidate_all();
+                                    info!("✅ DNS: Cache invalidated after upstream reload.");
+                                }
+                            }
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::CacheFlush) => {
+                                info!("🔄 DNS: Flushing cache...");
+                                dns_ctx.cache.invalidate_all();
+                                info!("✅ DNS: Cache flushed.");
                             }
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigRewritesChanged) => {
                                 info!("🔄 DNS: Reloading rewrites from DB...");

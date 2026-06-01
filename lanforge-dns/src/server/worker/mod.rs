@@ -8,14 +8,11 @@ use crate::server::DnsContext;
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
+#[cfg(feature = "adblock")]
+use std::{path::Path, time::Instant};
 use std::{
     sync::{Arc, atomic::Ordering},
     time::Duration,
-};
-#[cfg(feature = "adblock")]
-use std::{
-    path::Path,
-    time::Instant,
 };
 use tokio::task::JoinHandle;
 #[cfg(feature = "adblock")]
@@ -26,8 +23,16 @@ use tracing::{error, info, warn};
 pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
         if let Some(filter) = &ctx.filter {
-            let cache_path = Path::new("/var/lib/lanforge/blocklist.fst");
-            let hash_path = Path::new("/var/lib/lanforge/blocklist.hash");
+            let cache_dir = ctx
+                .cfg
+                .adblock_cache_dir
+                .as_deref()
+                .unwrap_or("/var/lib/lanforge");
+            let cache_path = Path::new(cache_dir).join("blocklist.fst");
+            let hash_path = Path::new(cache_dir).join("blocklist.hash");
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             let mut rx = ctx.bus.subscribe();
             let mut last_blocklist_hash = 0u64;
             let mut cache_loaded = false;
@@ -55,17 +60,17 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 // 1. Try to load from disk if not yet loaded
                 let mut skip_download_pass = false;
                 if !cache_loaded && cache_path.exists() {
-                    if let Ok(metadata) = std::fs::metadata(cache_path)
+                    if let Ok(metadata) = std::fs::metadata(&cache_path)
                         && let Ok(modified) = metadata.modified()
                     {
                         let elapsed = modified.elapsed().unwrap_or_default().as_secs();
                         if elapsed < u64::from(db_cfg.refresh_hours) * 3600 {
                             info!("🛡️ Adblock: loading cached blocklist from disk...");
-                            match DiskBlocklist::load(cache_path, 50000) {
+                            match DiskBlocklist::load(&cache_path, 50000) {
                                 Ok(bl) => {
                                     info!("🛡️ Adblock: loaded {} domains from cache", bl.len());
                                     filter.replace_blocklist(bl);
-                                    if let Ok(hash_str) = std::fs::read_to_string(hash_path)
+                                    if let Ok(hash_str) = std::fs::read_to_string(&hash_path)
                                         && let Ok(h) = hash_str.trim().parse::<u64>()
                                     {
                                         last_blocklist_hash = h;
@@ -80,8 +85,8 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     error!(
                                         "❌ Adblock: cached FST file corrupted or invalid ({e}). Deleting cache and forcing rebuild..."
                                     );
-                                    let _ = std::fs::remove_file(cache_path);
-                                    let _ = std::fs::remove_file(hash_path);
+                                    let _ = std::fs::remove_file(&cache_path);
+                                    let _ = std::fs::remove_file(&hash_path);
                                 }
                             }
                         }
@@ -116,10 +121,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                             Duration::from_secs(60)
                         } else {
                             warn!("🛡️ Adblock: will retry on next refresh cycle");
-                            compute_next_refresh(
-                                db_cfg.refresh_hours,
-                                db_cfg.refresh_at_night,
-                            )
+                            compute_next_refresh(db_cfg.refresh_hours, db_cfg.refresh_at_night)
                         };
                         tokio::select! {
                             _ = tokio::time::sleep(sleep_dur) => {}
@@ -141,7 +143,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     );
                     filter.clear_blocklist();
                     last_blocklist_hash = 0;
-                    let _ = std::fs::remove_file(hash_path);
+                    let _ = std::fs::remove_file(&hash_path);
                 } else {
                     info!(
                         "🛡️ Adblock: downloading {} blocklist sources...",
@@ -163,11 +165,12 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     count,
                                     cache_path.display()
                                 );
-                                match DiskBlocklist::build(new_list, cache_path, 50000) {
+                                match DiskBlocklist::build(new_list, &cache_path, 50000) {
                                     Ok(bl) => {
                                         filter.replace_blocklist(bl);
                                         last_blocklist_hash = current_hash;
-                                        let _ = std::fs::write(hash_path, current_hash.to_string());
+                                        let _ =
+                                            std::fs::write(&hash_path, current_hash.to_string());
                                         info!(
                                             "🛡️ Adblock: blocklist built and saved — {} domains in {:.1}s",
                                             count,
@@ -207,10 +210,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 }
 
                 // Refresh scheduling
-                let sleep_dur = compute_next_refresh(
-                    db_cfg.refresh_hours,
-                    db_cfg.refresh_at_night,
-                );
+                let sleep_dur = compute_next_refresh(db_cfg.refresh_hours, db_cfg.refresh_at_night);
                 info!(
                     "🛡️ Adblock: next refresh in {:.1}h",
                     sleep_dur.as_secs_f64() / 3600.0
@@ -229,8 +229,12 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     info!("🛡️ Adblock: manual reload triggered via event bus");
                                     break;
                                 }
-                                LanforgeEvent::Dns(DnsEvent::AdblockToggle { enabled: true, .. }) => {
-                                    info!("🛡️ Adblock: re-enabled, triggering refresh");
+                                LanforgeEvent::Dns(DnsEvent::AdblockToggle { .. }) => {
+                                    info!("🛡️ Adblock: toggle event received, checking status");
+                                    break;
+                                }
+                                LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged) => {
+                                    info!("🛡️ Adblock: config changed, reloading");
                                     break;
                                 }
                                 _ => continue, // Ignore other events

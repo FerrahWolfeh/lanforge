@@ -2,7 +2,7 @@ use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport,
 };
 use lanforge_api_dispatch::ClientContext;
-use lanforge_core::bus::EventBus;
+use lanforge_core::bus::{EventBus, LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_db::config::DatabaseConfig;
@@ -16,8 +16,11 @@ use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockUrlKind, BlockingMode, RewriteAnswer, RewriteRule,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::update::DeviceUpdate;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::time::SystemTime;
 
 async fn init_test_context() -> ClientContext {
     let bus = Arc::new(EventBus::new());
@@ -381,4 +384,160 @@ async fn test_dispatch_system_config_import_overwrite() {
     } else {
         panic!("Expected Response::Hosts");
     }
+}
+
+#[tokio::test]
+async fn lease_release_removes_all_leases_from_pool() {
+    let client_ctx = init_test_context().await;
+    let mut rx = client_ctx.ctx.bus().subscribe();
+
+    let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
+    let res = client_ctx.handle_lease_release(mac, None).await;
+
+    assert!(matches!(res, Response::Success(_)));
+
+    let timed_event = rx.recv().await.unwrap();
+    if let LanforgeEvent::Network(NetworkEvent::LeaseReleaseRequested {
+        mac: evt_mac,
+        target: evt_target,
+    }) = timed_event.event
+    {
+        assert_eq!(evt_mac, mac);
+        assert!(evt_target.is_none());
+    } else {
+        panic!("Expected LeaseReleaseRequested event");
+    }
+}
+
+#[tokio::test]
+async fn wol_sends_packet_to_correct_device() {
+    let client_ctx = init_test_context().await;
+
+    let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
+    let ip = "192.168.1.100".parse().unwrap();
+    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+
+    // Seed the device in state so it has a hostname hint and IP
+    let _ = client_ctx
+        .ctx
+        .apply(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+    let _ = client_ctx.ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "target-device".to_string(),
+    });
+
+    let mut rx = client_ctx.ctx.bus().subscribe();
+
+    // Call WOL by hostname
+    let res = client_ctx.handle_wol("target-device".to_string()).await;
+    assert!(matches!(res, Response::Success(_)));
+
+    let timed_event = rx.recv().await.unwrap();
+    if let LanforgeEvent::Network(NetworkEvent::WolTriggered {
+        mac: evt_mac,
+        ip_hint: evt_ip,
+    }) = timed_event.event
+    {
+        assert_eq!(evt_mac, mac);
+        assert_eq!(evt_ip, Some(ip));
+    } else {
+        panic!("Expected WolTriggered event");
+    }
+}
+
+#[tokio::test]
+async fn test_static_host_deletion_should_purge_all_leases() {
+    let client_ctx = init_test_context().await;
+    let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
+
+    // 1. Add host config
+    let entry = HostConfigEntry {
+        mac,
+        hostname: "test-host".to_string(),
+        v4_fixed: Some("192.168.1.100".parse().unwrap()),
+        v6_suffix: None,
+        origin: Origin::Static,
+    };
+    let add_res = client_ctx.handle_host_add(entry).await;
+    assert!(matches!(add_res, Response::Success(_)));
+
+    // 2. Grant lease information in memory context
+    let ip = "192.168.1.100".parse().unwrap();
+    let expires = SystemTime::now() + std::time::Duration::from_secs(3600);
+    let _ = client_ctx
+        .ctx
+        .apply(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+
+    // Verify device has lease in memory context
+    {
+        let dev = client_ctx.ctx.get_device(&mac).unwrap();
+        assert_eq!(dev.origin, Origin::Static);
+        assert!(dev.v4.ip().is_some());
+    }
+
+    // 3. Remove host
+    let remove_res = client_ctx.handle_host_remove(mac).await;
+    assert!(matches!(remove_res, Response::Success(_)));
+
+    // 4. Verify device is purged from memory and database
+    assert!(client_ctx.ctx.get_device(&mac).is_none());
+    let db_state = client_ctx.db.load_table().await.unwrap();
+    assert!(db_state.get_device(&mac).is_none());
+}
+
+#[tokio::test]
+async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
+    use lanforge_dhcp::v4::config::Dhcpv4PoolConfig;
+    use lanforge_dhcp::v4::pool::IpPool;
+    use lanforge_dhcp::v6::config::Dhcpv6PoolConfig;
+    use lanforge_dhcp::v6::pool::Ipv6Pool;
+    use lanforge_types::identifiers::Duid;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    let client_ctx = init_test_context().await;
+    let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
+    let duid = Duid::new(vec![1, 2, 3, 4]);
+    let v6_suffix = Ipv6Addr::from_str("::100").unwrap();
+
+    // 1. Add static host configuration via API
+    let entry = HostConfigEntry {
+        mac,
+        hostname: "test-static".to_string(),
+        v4_fixed: Some("192.168.1.100".parse().unwrap()),
+        v6_suffix: Some(v6_suffix),
+        origin: Origin::Static,
+    };
+    let add_res = client_ctx.handle_host_add(entry).await;
+    assert!(matches!(add_res, Response::Success(_)));
+
+    // Associate DUID to MAC in memory context so that DHCPv6 allocate can resolve DUID to MAC
+    let _ = client_ctx.ctx.apply(DeviceUpdate::DuidAssociated {
+        mac: Some(mac),
+        duid: duid.clone(),
+        iaid: 1,
+    });
+
+    // 2. Instantiate pools and allocate
+    let mut v4_pool = IpPool::new(vec![Dhcpv4PoolConfig {
+        range_start: "192.168.1.50".parse().unwrap(),
+        range_end: "192.168.1.150".parse().unwrap(),
+    }]);
+
+    let mut v6_pool = Ipv6Pool::new(
+        &[Dhcpv6PoolConfig {
+            address: Some("fd00::/64".to_string()),
+            range_start: None,
+            range_end: None,
+        }],
+        Some("fd00::".parse().unwrap()),
+        64,
+    );
+
+    // 3. Allocate and verify static addresses are returned
+    let allocated_v4 = v4_pool.allocate(&client_ctx.ctx, mac, None).unwrap();
+    assert_eq!(allocated_v4, "192.168.1.100".parse::<Ipv4Addr>().unwrap());
+
+    let allocated_v6 = v6_pool.allocate(&client_ctx.ctx, &duid, 1, Some(mac), None);
+    assert_eq!(allocated_v6.len(), 1);
+    assert_eq!(allocated_v6[0], "fd00::100".parse::<Ipv6Addr>().unwrap());
 }

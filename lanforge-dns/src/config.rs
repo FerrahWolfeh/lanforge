@@ -80,6 +80,9 @@ pub struct DnsConfig {
     /// Whether the micro-adblocker is enabled.
     #[serde(skip)]
     pub adblock_enabled: bool,
+    /// Directory to store adblock cache files.
+    #[serde(skip)]
+    pub adblock_cache_dir: Option<String>,
     /// List of URLs to fetch blocklists from.
     #[serde(skip)]
     pub adblock_urls: Vec<String>,
@@ -149,6 +152,7 @@ impl Default for DnsConfig {
             ttl: 60,
             multi_search_labels: vec![vec![b"lan".to_vec()]],
             adblock_enabled: false,
+            adblock_cache_dir: None,
             adblock_urls: Vec::new(),
             adblock_allowlist_urls: Vec::new(),
             adblock_refresh_hours: 12,
