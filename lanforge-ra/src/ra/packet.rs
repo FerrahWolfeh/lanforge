@@ -16,7 +16,7 @@
 //! ```
 
 use super::config::{
-    DnsslConfig, PrefixConfig, PrefixLifetime, PrefixSource, RaConfig, RdnssConfig,
+    PrefixConfig, PrefixLifetime, PrefixSource, RaConfig,
 };
 use std::net::Ipv6Addr;
 
@@ -113,11 +113,6 @@ pub fn build_ra_packet(
     }
 
     // ── Option 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
-    let rdnss_lt = |rd: &RdnssConfig| -> u32 {
-        rd.lifetime
-            .unwrap_or_else(|| u32::try_from(cfg.max_interval.as_secs() * 2).unwrap_or(u32::MAX))
-    };
-
     for rdnss in &cfg.rdnss {
         if rdnss.servers.is_empty() {
             continue;
@@ -127,18 +122,13 @@ pub fn build_ra_packet(
         // length in 8B units: 1 (8B header) + 2 per server (16B each)
         p.push(u8::try_from(1 + 2 * n).unwrap_or(u8::MAX));
         p.extend([0u8; 2]); // reserved
-        p.extend(rdnss_lt(rdnss).to_be_bytes());
+        p.extend(get_dns_lifetime(rdnss.lifetime, cfg.max_interval).to_be_bytes());
         for srv in &rdnss.servers {
             p.extend_from_slice(&srv.octets());
         }
     }
 
     // ── Option 31: DNSSL (RFC 8106 §3.2) ─────────────────────────────────
-    let dnssl_lt = |ds: &DnsslConfig| -> u32 {
-        ds.lifetime
-            .unwrap_or_else(|| u32::try_from(cfg.max_interval.as_secs() * 2).unwrap_or(u32::MAX))
-    };
-
     for dnssl in &cfg.dnssl {
         if dnssl.domains.is_empty() {
             continue;
@@ -150,12 +140,30 @@ pub fn build_ra_packet(
         p.push(31u8);
         p.push(u8::try_from(padded / 8).unwrap_or(u8::MAX));
         p.extend([0u8; 2]); // reserved
-        p.extend(dnssl_lt(dnssl).to_be_bytes());
+        p.extend(get_dns_lifetime(dnssl.lifetime, cfg.max_interval).to_be_bytes());
         p.extend_from_slice(&encoded);
         p.resize(p.len() + (padded - total), 0u8); // zero padding
     }
 
     p
+}
+
+/// Resolves the effective lifetime of a DNS option, defaulting to 2 × `max_interval` if not set.
+fn get_dns_lifetime(configured_lifetime: Option<u32>, max_interval: std::time::Duration) -> u32 {
+    configured_lifetime.unwrap_or_else(|| {
+        u32::try_from(max_interval.as_secs() * 2).unwrap_or(u32::MAX)
+    })
+}
+
+/// Zeros out the host bits of an IPv6 address based on the prefix length.
+#[must_use]
+pub fn mask_ipv6_address(addr: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
+    let mut octets = addr.octets();
+    let host_bytes = usize::from((128 - prefix_len) / 8);
+    for i in octets.iter_mut().skip(16 - host_bytes) {
+        *i = 0;
+    }
+    Ipv6Addr::from(octets)
 }
 
 /// Pushes a Prefix Information Option (type 3) onto the RA packet.
@@ -180,12 +188,8 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) 
     p.extend(cfg.preferred_lifetime.as_u32().to_be_bytes());
     p.extend([0u8; 4]); // reserved
 
-    // Zero out host bits based on prefix_len — usually /64 = zero out the last 8 bytes.
-    let mut octets = addr.octets();
-    let host_bytes = ((128 - cfg.prefix_len) / 8) as usize;
-    for i in octets.iter_mut().skip(16 - host_bytes) {
-        *i = 0;
-    }
+    // Zero out host bits based on prefix_len.
+    let octets = mask_ipv6_address(addr, cfg.prefix_len).octets();
     p.extend_from_slice(&octets);
 }
 
@@ -258,6 +262,7 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ra::config::RdnssConfig;
     use std::time::Duration;
 
     #[test]
@@ -334,6 +339,8 @@ mod tests {
     fn prefix_masking_zeros_host_bits() {
         let addr: Ipv6Addr = "2001:db8:cafe:1::abcd:ef01".parse().unwrap();
         let expected: Ipv6Addr = "2001:db8:cafe:1::".parse().unwrap();
+        assert_eq!(mask_ipv6_address(&addr, 64), expected);
+
         let mut p = Vec::new();
         push_prefix_option(&mut p, &addr, &PrefixConfig::gua_dynamic());
         // bytes 16..32 = prefixo mascarado na opção (offset 4 = type+len+plen+flags)

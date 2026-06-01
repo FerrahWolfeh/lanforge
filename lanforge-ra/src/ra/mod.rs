@@ -170,6 +170,28 @@ impl RaState {
     pub(crate) fn record_unicast(&mut self, dst: Ipv6Addr) {
         self.unicast_rl.insert(dst, Instant::now());
     }
+
+    pub(crate) fn update_prefix_and_deprecate(&mut self, current: Option<Ipv6Addr>, is_gua: bool) {
+        let last = if is_gua { self.last_gua } else { self.last_ula };
+        if current != last {
+            if let Some(old) = last {
+                let now = Instant::now();
+                let deprecation_end = now + Duration::from_hours(2);
+                let valid_end = now + Duration::from_hours(2);
+                if !self.deprecated_prefixes.iter().any(|(ip, _, _)| *ip == old) {
+                    self.deprecated_prefixes
+                        .push((old, deprecation_end, valid_end));
+                }
+            }
+            let prefix_type = if is_gua { "GUA" } else { "ULA" };
+            info!("RA: Internal {prefix_type} prefix state updated: {current:?}");
+            if is_gua {
+                self.last_gua = current;
+            } else {
+                self.last_ula = current;
+            }
+        }
+    }
 }
 
 #[lanforge_macros::lanforge_service(
@@ -194,6 +216,48 @@ impl RaService {
             ctx: ctx.clone(),
         }));
         Self { cfg, ctx }
+    }
+
+    async fn resolve_interface_resources(
+        &self,
+        iface_index: u32,
+    ) -> Result<([u8; 6], AsyncFd<Socket>), CoreError> {
+        // Parallel optimization: Wait for interface data ONLY if not already present
+        if self
+            .ctx
+            .get_interface_state(iface_index)
+            .link_local
+            .is_none()
+        {
+            info!(
+                "RA: Waiting for interface discovery on '{}'...",
+                self.cfg.iface
+            );
+            self.ctx.wait_for_interfaces().await?;
+        }
+
+        let mac = self
+            .ctx
+            .with_state(|state| {
+                state
+                    .interfaces
+                    .interface_ips
+                    .get(&iface_index)
+                    .and_then(|i| i.mac)
+            })
+            .ok_or_else(|| {
+                CoreError::Generic(format!(
+                    "MAC address for interface index {iface_index} is not resolved"
+                ))
+            })?
+            .0;
+
+        let socket = create_ra_socket(&self.cfg.iface, iface_index)
+            .map_err(|e| CoreError::Generic(e.to_string()))?;
+        socket.set_nonblocking(true).map_err(CoreError::Io)?;
+        let async_socket = AsyncFd::new(socket).map_err(CoreError::Io)?;
+
+        Ok((mac, async_socket))
     }
 }
 
@@ -245,40 +309,7 @@ impl AsyncService for RaService {
             CoreError::Generic("Target interface index is not configured in context".to_string())
         })?;
 
-        // Parallel optimization: Wait for interface data ONLY if not already present
-        if self
-            .ctx
-            .get_interface_state(iface_index)
-            .link_local
-            .is_none()
-        {
-            info!(
-                "RA: Waiting for interface discovery on '{}'...",
-                self.cfg.iface
-            );
-            self.ctx.wait_for_interfaces().await?;
-        }
-
-        let mac = self
-            .ctx
-            .with_state(|state| {
-                state
-                    .interfaces
-                    .interface_ips
-                    .get(&iface_index)
-                    .and_then(|i| i.mac)
-            })
-            .ok_or_else(|| {
-                CoreError::Generic(format!(
-                    "MAC address for interface index {iface_index} is not resolved"
-                ))
-            })?
-            .0;
-
-        let socket = create_ra_socket(&self.cfg.iface, iface_index)
-            .map_err(|e| CoreError::Generic(e.to_string()))?;
-        socket.set_nonblocking(true).map_err(CoreError::Io)?;
-        let async_socket = AsyncFd::new(socket).map_err(CoreError::Io)?;
+        let (mac, async_socket) = self.resolve_interface_resources(iface_index).await?;
 
         ctrl.signal_ready();
 
@@ -495,47 +526,8 @@ fn send_ra_internal(
 
     let now = Instant::now();
 
-    if gua != state.last_gua {
-        if let Some(old_gua) = state.last_gua {
-            let deprecation_end = now + Duration::from_hours(2);
-            let valid_end = now + Duration::from_hours(2);
-            if !state
-                .deprecated_prefixes
-                .iter()
-                .any(|(ip, _, _)| *ip == old_gua)
-            {
-                state
-                    .deprecated_prefixes
-                    .push((old_gua, deprecation_end, valid_end));
-            }
-        }
-        info!(
-            gua = ?gua,
-            "RA: Internal GUA prefix state updated"
-        );
-        state.last_gua = gua;
-    }
-
-    if ula != state.last_ula {
-        if let Some(old_ula) = state.last_ula {
-            let deprecation_end = now + Duration::from_hours(2);
-            let valid_end = now + Duration::from_hours(2);
-            if !state
-                .deprecated_prefixes
-                .iter()
-                .any(|(ip, _, _)| *ip == old_ula)
-            {
-                state
-                    .deprecated_prefixes
-                    .push((old_ula, deprecation_end, valid_end));
-            }
-        }
-        info!(
-            ula = ?ula,
-            "RA: Internal ULA prefix state updated"
-        );
-        state.last_ula = ula;
-    }
+    state.update_prefix_and_deprecate(gua, true);
+    state.update_prefix_and_deprecate(ula, false);
 
     // Clean up expired deprecated prefixes
     state
@@ -793,17 +785,7 @@ mod tests {
         assert_eq!(if_ips.gua, Some(new_gua));
 
         // 5. Simulate send_ra_internal transition for rotation:
-        let now = Instant::now();
-        if if_ips.gua != state.last_gua {
-            if let Some(old) = state.last_gua {
-                let deprecation_end = now + Duration::from_hours(2);
-                let valid_end = now + Duration::from_hours(2);
-                state
-                    .deprecated_prefixes
-                    .push((old, deprecation_end, valid_end));
-            }
-            state.last_gua = if_ips.gua;
-        }
+        state.update_prefix_and_deprecate(if_ips.gua, true);
 
         // Verify that old_gua is now deprecated in state
         assert_eq!(state.deprecated_prefixes.len(), 1);
