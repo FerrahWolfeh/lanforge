@@ -1,0 +1,48 @@
+[package]
+name = "lanforge-discovery"
+version = "1.0.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Lanforge
+lanforge-core = { workspace = true }
+lanforge-macros = { workspace = true }
+lanforge-types = { workspace = true }
+lanforge-dns-wire = { workspace = true }
+
+# Workspace
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "time",
+    "net",
+    "io-util",
+    "macros",
+    "sync",
+] }
+serde = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+
+# Third party
+netlink-packet-core = "0.8.1"
+rtnetlink = "0.20.0"
+netlink-sys = "0.8.8"
+futures = "0.3.32"
+socket2 = "0.6.3"
+pnet = "0.35.0"
+libc = "0.2.186"
+hotpath = { workspace = true, optional = true }
+
+[features]
+hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath-alloc = [
+    "hotpath",
+    "hotpath/hotpath-alloc",
+    "lanforge-core/hotpath-alloc",
+]
+default = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

@@ -1,0 +1,27 @@
+[package]
+name = "lanforge-api"
+version = "0.31.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Lanforge
+lanforge-types = { workspace = true }
+lanforge-macros = { workspace = true }
+
+# Workspace
+tokio = { workspace = true, features = ["io-util"] }
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+postcard.workspace = true
+async-trait = "0.1.86"
+futures.workspace = true
+
+[features]
+default = []
+adblock = []

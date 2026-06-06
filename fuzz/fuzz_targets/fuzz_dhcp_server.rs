@@ -11,7 +11,6 @@ use lanforge_core::context::state::State;
 use lanforge_core::context::LanforgeContext;
 use lanforge_dhcp::v4::config::Dhcpv4Config;
 use lanforge_dhcp::v4::server::{DhcpServer, HandleResult};
-use lanforge_types::dhcp::Dhcpv4Stats;
 
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
 use dhcproto::Encodable;
@@ -103,11 +102,10 @@ struct FuzzDhcpServerInput {
 }
 
 fuzz_target!(|input: FuzzDhcpServerInput| {
-    // 1. Setup events, state, context, stats
+    // 1. Setup events, state, context
     let bus = Arc::new(EventBus::new());
     let state = State::new();
     let ctx = LanforgeContext::new(bus, state, None);
-    let stats = Arc::new(Dhcpv4Stats::default());
 
     // 2. Setup config
     let cfg = Dhcpv4Config {
@@ -129,7 +127,7 @@ fuzz_target!(|input: FuzzDhcpServerInput| {
         options: HashMap::new(),
     };
 
-    let mut server = DhcpServer::new(cfg, ctx, stats);
+    let mut server = DhcpServer::new(cfg, ctx);
 
     // 3. Process packets
     for fuzz_pkt in input.packets {

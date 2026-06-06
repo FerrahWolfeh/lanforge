@@ -1,23 +1,10 @@
 [workspace]
 members = [
-    "lanforge",
-    "lanforge-api",
-    "lanforge-api-dispatch",
-    "lanforge-cli",
-    "lanforge-core",
-    "lanforge-db",
-    "lanforge-dhcp",
-    "lanforge-dns",
-    "lanforge-host",
-    "lanforge-http",
-    "lanforge-discovery",
-    "lanforge-macros",
-    "lanforge-ra",
-    "lanforge-dns-wire",
-    "lanforge-tftp",
-    "lanforge-types",
-    "lanforge-uds",
-    "lanforge-wol",
+    "crates/core/*",
+    "crates/net/*",
+    "crates/api/*",
+    "crates/db/*",
+    "crates/bin/*",
 ]
 resolver = "3"
 
@@ -27,6 +14,26 @@ edition = "2024"
 authors = ["Ferrah Aiko <ferrahwolfeh@proton.me>"]
 
 [workspace.dependencies]
+# Actual lanforge stuff
+lanforge-core = { path = "crates/core/lanforge-core" }
+lanforge-macros = { path = "crates/core/lanforge-macros" }
+lanforge-types = { path = "crates/core/lanforge-types" }
+lanforge-db = { path = "crates/db/lanforge-db" }
+lanforge-api = { path = "crates/api/lanforge-api" }
+lanforge-http = { path = "crates/api/lanforge-http", default-features = false }
+lanforge-uds = { path = "crates/api/lanforge-uds" }
+lanforge-cli = { path = "crates/bin/lanforge-cli" }
+lanforge-discovery = { path = "crates/net/lanforge-discovery" }
+lanforge-dns = { path = "crates/net/lanforge-dns" }
+lanforge-dns-wire = { path = "crates/net/lanforge-dns-wire" }
+lanforge-dhcp = { path = "crates/net/lanforge-dhcp" }
+lanforge-host = { path = "crates/net/lanforge-host" }
+lanforge-ra = { path = "crates/net/lanforge-ra" }
+lanforge-tftp = { path = "crates/net/lanforge-tftp" }
+lanforge-wol = { path = "crates/net/lanforge-wol" }
+lanforge-api-dispatch = { path = "crates/api/lanforge-api-dispatch" }
+
+# Third party
 hotpath = { version = "0.16.1", default-features = false }
 tikv-jemallocator = { version = "0.7.0", features = ["profiling"] }
 tokio = { version = "1.52.3" }

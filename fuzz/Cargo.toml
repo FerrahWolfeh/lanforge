@@ -9,11 +9,11 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-lanforge-dns-wire = { path = "../lanforge-dns-wire" }
-lanforge-types = { path = "../lanforge-types" }
-lanforge-dhcp = { path = "../lanforge-dhcp" }
-lanforge-core = { path = "../lanforge-core" }
-lanforge-dns = { path = "../lanforge-dns" }
+lanforge-dns-wire = { path = "../crates/net/lanforge-dns-wire" }
+lanforge-types = { path = "../crates/core/lanforge-types" }
+lanforge-dhcp = { path = "../crates/net/lanforge-dhcp" }
+lanforge-core = { path = "../crates/core/lanforge-core" }
+lanforge-dns = { path = "../crates/net/lanforge-dns" }
 dhcproto = "0.15.0"
 arbitrary = { version = "1.4.2", features = ["derive"] }
 bytes = "1.11.1"

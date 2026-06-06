@@ -1,0 +1,40 @@
+[package]
+name = "lanforge-uds"
+version = "1.1.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Lanforge
+lanforge-api = { workspace = true }
+lanforge-api-dispatch = { workspace = true }
+lanforge-core = { workspace = true }
+lanforge-db = { workspace = true }
+lanforge-dns = { workspace = true }
+lanforge-macros = { workspace = true }
+lanforge-types = { workspace = true }
+
+# Workspace
+tokio = { workspace = true, features = ["io-util", "net", "sync", "rt"] }
+serde = { workspace = true, features = ["rc"] }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+postcard = { workspace = true }
+hotpath = { workspace = true, optional = true }
+
+[features]
+adblock = [
+    "lanforge-api-dispatch/adblock",
+    "lanforge-core/adblock",
+    "lanforge-db/adblock",
+    "lanforge-dns/adblock",
+]
+hotpath = [
+    "dep:hotpath",
+    "lanforge-api-dispatch/hotpath",
+    "lanforge-core/hotpath",
+    "lanforge-db/hotpath",
+    "lanforge-dns/hotpath",
+]

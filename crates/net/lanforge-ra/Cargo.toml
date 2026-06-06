@@ -1,0 +1,42 @@
+[package]
+name = "lanforge-ra"
+version = "1.1.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Lanforge
+lanforge-core = { workspace = true }
+lanforge-macros = { workspace = true }
+lanforge-types = { workspace = true }
+
+# Workspace
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "time",
+    "net",
+    "io-util",
+    "macros",
+    "sync",
+] }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+# Third party
+socket2 = "0.6.3"
+rand = "0.10.1"
+libc = "0.2.183"
+hotpath = { workspace = true, optional = true }
+
+[features]
+hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath-alloc = [
+    "hotpath",
+    "hotpath/hotpath-alloc",
+    "lanforge-core/hotpath-alloc",
+]
+default = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

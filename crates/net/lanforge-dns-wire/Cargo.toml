@@ -1,0 +1,15 @@
+[package]
+name = "lanforge-dns-wire"
+version = "1.0.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+lanforge-types = { workspace = true }
+hotpath = { workspace = true, optional = true }
+
+[features]
+hotpath = ["dep:hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+default = []

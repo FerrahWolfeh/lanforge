@@ -1,0 +1,150 @@
+[package]
+name = "lanforge"
+version = "0.23.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "lanforged"
+path = "src/main.rs"
+
+[features]
+default = [
+    "sqlite",
+    "postgres",
+    "dns-dot",
+    "dns-doh",
+    "adblock",
+    "http",
+    "doh-server",
+]
+
+# Profiling & Diagnostics
+hotpath = [
+    "dep:hotpath",
+    "hotpath/hotpath",
+    "hotpath/threads",
+    "hotpath/tokio",
+    "lanforge-core/hotpath",
+    "lanforge-api-dispatch/hotpath",
+    "lanforge-dns/hotpath",
+    "lanforge-dhcp/hotpath",
+    "lanforge-ra/hotpath",
+    "lanforge-discovery/hotpath",
+    "lanforge-host/hotpath",
+    "lanforge-db/hotpath",
+]
+hotpath-mcp = ["hotpath", "hotpath/hotpath-mcp"]
+hotpath-alloc = [
+    "hotpath",
+    "hotpath/hotpath-alloc",
+    "lanforge-core/hotpath-alloc",
+    "lanforge-dns/hotpath-alloc",
+    "lanforge-dhcp/hotpath-alloc",
+    "lanforge-ra/hotpath-alloc",
+    "lanforge-discovery/hotpath-alloc",
+    "lanforge-host/hotpath-alloc",
+    "lanforge-db/hotpath-alloc",
+]
+jemalloc = ["dep:tikv-jemallocator"]
+
+
+# Database Backends
+sqlite = ["lanforge-db/sqlite"]
+postgres = ["lanforge-db/postgres"]
+
+# DNS Upstream Protocols (Forwarding)
+dns-dot = ["lanforge-dns/dot"]
+dns-doq = ["lanforge-dns/doq"]
+dns-doh = ["lanforge-dns/doh-upstream"]
+dns-full = ["dns-dot", "dns-doq"]
+
+# Networking Protocols
+http = ["lanforge-http/server"]
+https = ["lanforge-http/server"]
+doh-server = ["lanforge-http/doh"]
+
+# Core Features
+adblock = [
+    "lanforge-dns/adblock",
+    "lanforge-db/adblock",
+    "lanforge-uds/adblock",
+    "lanforge-http/adblock",
+]
+zstd = []
+
+# Meta-features
+full = [
+    "dns-full",
+    "dns-doh",
+    "http",
+    "https",
+    "doh-server",
+    "adblock",
+    "postgres",
+    "sqlite",
+]
+
+
+[dependencies]
+# Lanforge
+lanforge-types = { workspace = true }
+lanforge-core = { workspace = true }
+lanforge-db = { workspace = true }
+lanforge-dns = { workspace = true }
+lanforge-dhcp = { workspace = true }
+lanforge-ra = { workspace = true }
+lanforge-discovery = { workspace = true }
+lanforge-wol = { workspace = true }
+lanforge-host = { workspace = true }
+lanforge-api = { workspace = true }
+lanforge-uds = { workspace = true }
+lanforge-http = { workspace = true }
+lanforge-tftp = { workspace = true }
+
+
+# Async & runtime
+tokio = { workspace = true, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "signal",
+    "process",
+    "time",
+    "sync",
+    "io-util",
+] }
+futures = { workspace = true }
+rustls = { workspace = true }
+
+# CLI e config
+clap = { workspace = true }
+serde = { workspace = true }
+toml = "1.1.2"
+
+# Networking / netlink
+netlink-sys = "0.8"
+rtnetlink = "0.20"
+pnet = "0.35.0"
+
+# Observabilidade
+anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
+tracing = { workspace = true, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+    "ansi",
+] }
+hotpath = { workspace = true, optional = true }
+tikv-jemallocator = { workspace = true, optional = true }
+
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "io-util"] }
+tempfile = "3.10.1"
+serde_json = { workspace = true }
+lanforge-api-dispatch = { workspace = true }

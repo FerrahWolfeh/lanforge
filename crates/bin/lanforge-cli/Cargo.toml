@@ -1,0 +1,81 @@
+[package]
+name = "lanforge-cli"
+version = "2.0.3"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+name = "lanforge_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lanforge"
+path = "src/main.rs"
+
+[features]
+default = ["remote", "tui"]
+zstd = ["dep:zstd"]
+remote = [
+    "dep:lanforge-http",
+    "dep:reqwest",
+    "dep:tokio-tungstenite",
+    "dep:url",
+    "dep:futures",
+    "dep:http",
+]
+tui = ["dep:ratatui", "dep:crossterm", "dep:tui-tree-widget", "dep:tui-input"]
+
+[dependencies]
+# Lanforge
+lanforge-types = { workspace = true, features = ["adblock"] }
+lanforge-macros = { workspace = true }
+lanforge-api = { workspace = true }
+lanforge-http = { workspace = true, features = [
+    "client",
+], optional = true }
+
+# Workspace
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true, features = [
+    "json",
+    "rustls",
+    "stream",
+], optional = true }
+clap = { workspace = true }
+rustls = { workspace = true }
+
+
+# Third party
+bytesize = "2.3.1"
+color-eyre = "0.6.5"
+colored = "3.1.1"
+inquire = "0.9.4"
+iocraft = "0.8.0"
+mac_oui = { version = "0.4.11", features = ["with-db"] }
+postcard.workspace = true
+zstd = { version = "0.13.3", optional = true }
+duration-str = "0.21.0"
+ratatui = { version = "0.30.1", features = ["crossterm"], optional = true }
+crossterm = { version = "0.29.0", optional = true }
+tui-tree-widget = { version = "0.24.0", optional = true }
+tui-input = { version = "0.15.3", optional = true }
+tokio-tungstenite = { version = "0.29.0", features = [
+    "rustls-tls-webpki-roots",
+], optional = true }
+url = { version = "2.5.4", optional = true }
+futures = { version = "0.3.31", optional = true }
+http = { version = "1.2.0", optional = true }
+async-trait = "0.1.89"
+directories = "6.0.0"
+
+[dev-dependencies]
+lanforge-core = { workspace = true, features = ["adblock"] }
+lanforge-uds = { workspace = true, features = ["adblock"] }
+lanforge-db = { workspace = true, features = ["adblock"] }
+tempfile = { workspace = true }

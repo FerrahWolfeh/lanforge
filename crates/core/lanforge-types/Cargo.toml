@@ -1,0 +1,16 @@
+[package]
+name = "lanforge-types"
+version = "0.7.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[features]
+adblock = []
+
+[dependencies]
+# Lanforge
+lanforge-macros = { workspace = true }
+
+serde = { workspace = true, features = ["rc"] }
+smallvec = { workspace = true }
