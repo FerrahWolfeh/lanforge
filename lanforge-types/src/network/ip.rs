@@ -3,29 +3,86 @@ use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv6Addr};
 use std::str::FromStr;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Ipv6Suffix(pub [u8; 8]);
+
+impl Ipv6Suffix {
+    /// Combina com um prefixo /64 para produzir um endereço completo.
+    #[must_use]
+    pub fn resolve(&self, prefix: Ipv6Addr) -> Ipv6Addr {
+        let mut bytes = prefix.octets();
+        bytes[8..16].copy_from_slice(&self.0);
+        Ipv6Addr::from(bytes)
+    }
+
+    /// Extrai o sufixo de um endereço completo (os últimos 64 bits).
+    #[must_use]
+    pub fn from_addr(addr: Ipv6Addr) -> Self {
+        let oct = addr.octets();
+        let mut s = [0u8; 8];
+        s.copy_from_slice(&oct[8..16]);
+        Self(s)
+    }
+
+    /// Compara o sufixo com os últimos 64 bits de um endereço.
+    #[must_use]
+    pub fn matches(&self, addr: Ipv6Addr) -> bool {
+        addr.octets()[8..16] == self.0
+    }
+}
+
+impl FromStr for Ipv6Suffix {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err("Empty IPv6 suffix".to_string());
+        }
+        let full_s = if s.contains("::") { s.to_string() } else { format!("::{s}") };
+        let ip = full_s.parse::<Ipv6Addr>()
+            .map_err(|_| format!("Invalid IPv6 suffix: {s}"))?;
+        let segs = ip.segments();
+        if segs[0] != 0 || segs[1] != 0 || segs[2] != 0 || segs[3] != 0 {
+            return Err(format!("Not a suffix (has prefix bits set): {s}"));
+        }
+        Ok(Self::from_addr(ip))
+    }
+}
+
+impl fmt::Display for Ipv6Suffix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ip = Ipv6Addr::new(
+            0,
+            0,
+            0,
+            0,
+            u16::from_be_bytes([self.0[0], self.0[1]]),
+            u16::from_be_bytes([self.0[2], self.0[3]]),
+            u16::from_be_bytes([self.0[4], self.0[5]]),
+            u16::from_be_bytes([self.0[6], self.0[7]]),
+        );
+        ip.fmt(f)
+    }
+}
+
+impl TryFrom<String> for Ipv6Suffix {
+    type Error = String;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::from_str(&s)
+    }
+}
+
+impl From<Ipv6Suffix> for String {
+    fn from(val: Ipv6Suffix) -> Self {
+        val.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(try_from = "String", into = "String")]
 pub enum Ipv6AddrOrSuffix {
     Full(Ipv6Addr),
-    Suffix([u8; 8]),
-}
-
-impl From<Ipv6AddrOrSuffix> for Ipv6Addr {
-    fn from(value: Ipv6AddrOrSuffix) -> Self {
-        match value {
-            Ipv6AddrOrSuffix::Full(ip) => ip,
-            Ipv6AddrOrSuffix::Suffix(s) => Self::new(
-                0,
-                0,
-                0,
-                0,
-                u16::from_be_bytes([s[0], s[1]]),
-                u16::from_be_bytes([s[2], s[3]]),
-                u16::from_be_bytes([s[4], s[5]]),
-                u16::from_be_bytes([s[6], s[7]]),
-            ),
-        }
-    }
+    Suffix(Ipv6Suffix),
 }
 
 impl FromStr for Ipv6AddrOrSuffix {
@@ -40,15 +97,7 @@ impl Ipv6AddrOrSuffix {
     pub fn matches(&self, addr: Ipv6Addr) -> bool {
         match self {
             Self::Full(ip) => *ip == addr,
-            Self::Suffix(suffix) => {
-                let segs = addr.segments();
-                let mut addr_suffix = [0u8; 8];
-                addr_suffix[0..2].copy_from_slice(&segs[4].to_be_bytes());
-                addr_suffix[2..4].copy_from_slice(&segs[5].to_be_bytes());
-                addr_suffix[4..6].copy_from_slice(&segs[6].to_be_bytes());
-                addr_suffix[6..8].copy_from_slice(&segs[7].to_be_bytes());
-                &addr_suffix == suffix
-            }
+            Self::Suffix(suffix) => suffix.matches(addr),
         }
     }
 
@@ -60,12 +109,7 @@ impl Ipv6AddrOrSuffix {
         if let Ok(ip) = s.parse::<Ipv6Addr>() {
             let segs = ip.segments();
             if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 {
-                let mut bytes = [0u8; 8];
-                bytes[0..2].copy_from_slice(&segs[4].to_be_bytes());
-                bytes[2..4].copy_from_slice(&segs[5].to_be_bytes());
-                bytes[4..6].copy_from_slice(&segs[6].to_be_bytes());
-                bytes[6..8].copy_from_slice(&segs[7].to_be_bytes());
-                return Some(Self::Suffix(bytes));
+                return Some(Self::Suffix(Ipv6Suffix::from_addr(ip)));
             }
             return Some(Self::Full(ip));
         }
@@ -77,12 +121,11 @@ impl Ipv6AddrOrSuffix {
         let full_s = format!("::{s}");
         full_s.parse::<Ipv6Addr>().map_or(None, |ip| {
             let segs = ip.segments();
-            let mut bytes = [0u8; 8];
-            bytes[0..2].copy_from_slice(&segs[4].to_be_bytes());
-            bytes[2..4].copy_from_slice(&segs[5].to_be_bytes());
-            bytes[4..6].copy_from_slice(&segs[6].to_be_bytes());
-            bytes[6..8].copy_from_slice(&segs[7].to_be_bytes());
-            Some(Self::Suffix(bytes))
+            if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 {
+                Some(Self::Suffix(Ipv6Suffix::from_addr(ip)))
+            } else {
+                None
+            }
         })
     }
 
@@ -95,7 +138,7 @@ impl Ipv6AddrOrSuffix {
                 if let Some(p) = prefix {
                     bytes.copy_from_slice(&p.octets());
                 }
-                bytes[8..16].copy_from_slice(s);
+                bytes[8..16].copy_from_slice(&s.0);
                 u128::from_be_bytes(bytes)
             }
         }
@@ -106,19 +149,7 @@ impl fmt::Display for Ipv6AddrOrSuffix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Full(ip) => ip.fmt(f),
-            Self::Suffix(s) => {
-                let ip = Ipv6Addr::new(
-                    0,
-                    0,
-                    0,
-                    0,
-                    u16::from_be_bytes([s[0], s[1]]),
-                    u16::from_be_bytes([s[2], s[3]]),
-                    u16::from_be_bytes([s[4], s[5]]),
-                    u16::from_be_bytes([s[6], s[7]]),
-                );
-                ip.fmt(f)
-            }
+            Self::Suffix(s) => s.fmt(f),
         }
     }
 }

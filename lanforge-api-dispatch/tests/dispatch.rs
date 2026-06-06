@@ -8,7 +8,7 @@ use lanforge_core::context::state::State;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
-use lanforge_types::device::Origin;
+use lanforge_types::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::DnsRecordType;
 use lanforge_types::network::dns::AdblockUrlEntry;
@@ -17,7 +17,6 @@ use lanforge_types::network::dns::adblock::{
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::update::DeviceUpdate;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
@@ -490,7 +489,7 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
     let client_ctx = init_test_context().await;
     let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
     let duid = Duid::new(vec![1, 2, 3, 4]);
-    let v6_suffix = Ipv6Addr::from_str("::100").unwrap();
+    let v6_suffix = Ipv6AddrOrSuffix::parse("::100").unwrap();
 
     // 1. Add static host configuration via API
     let entry = HostConfigEntry {

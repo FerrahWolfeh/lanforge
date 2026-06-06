@@ -9,6 +9,6 @@ pub use dns::{
     DnsRecordType, DnsResponseCode, QueryLogEntry, QueryResult, UpstreamHealthSnapshot,
 };
 pub use hostname::{Hostname, HostnameOrigin};
-pub use ip::{IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ip, classify_ipv6, is_ula};
+pub use ip::{IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, Ipv6Suffix, classify_ip, classify_ipv6, is_ula};
 pub use neighbor::NeighborEvent;
 pub use subnet::{DnsReverseResolver, IpSubnet};

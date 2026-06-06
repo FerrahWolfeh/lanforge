@@ -7,7 +7,7 @@ use crossterm::{
 use lanforge_api::api::{DnsQueryLogEntry, HostConfigEntry};
 use lanforge_api::rpc::{LanforgeRpcClient, RpcResponse};
 use lanforge_types::{
-    device::Origin,
+    device::{Ipv6AddrOrSuffix, Origin},
     network::{
         DnsRecordType,
         dns::{
@@ -241,8 +241,8 @@ fn handle_tui_key_event(
                                 for part in parts.iter().skip(1) {
                                     if let Ok(ip) = part.parse::<Ipv4Addr>() {
                                         v4_fixed = Some(ip);
-                                    } else if let Ok(ip) = part.parse::<Ipv6Addr>() {
-                                        v6_suffix = Some(ip);
+                                    } else if let Ok(suf) = part.parse::<Ipv6AddrOrSuffix>() {
+                                        v6_suffix = Some(suf);
                                     }
                                 }
                                 let entry = HostConfigEntry {

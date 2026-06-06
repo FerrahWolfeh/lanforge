@@ -5,7 +5,7 @@ use lanforge_types::{
     identifiers::{Duid, MacAddr},
     update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
 };
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 use std::time::SystemTime;
 
 impl ClientContext {
@@ -27,7 +27,7 @@ impl ClientContext {
                     _ => None,
                 },
                 v6_suffix: dev.v6.iter().find_map(|s| match s {
-                    IPv6State::Static(suf, _) => Some(Ipv6Addr::from(*suf)),
+                    IPv6State::Static(suf, _) => Some(*suf),
                     _ => None,
                 }),
                 origin: dev.origin,
@@ -53,10 +53,8 @@ impl ClientContext {
         if let Some(ip) = entry.v4_fixed {
             dev.v4 = IPv4State::Static(ip);
         }
-        if let Some(ip) = entry.v6_suffix {
+        if let Some(suf) = entry.v6_suffix {
             dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
-            let suf =
-                Ipv6AddrOrSuffix::parse(&ip.to_string()).unwrap_or(Ipv6AddrOrSuffix::Full(ip));
             dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
         }
         dev.origin = Origin::Static;
@@ -76,13 +74,7 @@ impl ClientContext {
                 hostname: entry.hostname.into(),
                 duid: FieldUpdate::NoChange,
                 v4_static: entry.v4_fixed.into(),
-                v6_suffix: entry
-                    .v6_suffix
-                    .map(|ip| {
-                        Ipv6AddrOrSuffix::parse(&ip.to_string())
-                            .unwrap_or(Ipv6AddrOrSuffix::Full(ip))
-                    })
-                    .into(),
+                v6_suffix: entry.v6_suffix.into(),
                 boot_file: FieldUpdate::NoChange,
                 origin: Origin::Static,
                 dns_fallback: FieldUpdate::NoChange,

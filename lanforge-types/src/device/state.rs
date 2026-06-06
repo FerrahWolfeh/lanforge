@@ -95,7 +95,7 @@ impl IPv6State {
             | Self::Slaac(ip, _)
             | Self::LinkLocal(ip, _)
             | Self::Discovery(ip, _) => Some(*ip),
-            Self::Static(suf, _) => prefix.map(|p| Ipv6Addr::from(suf.as_u128(Some(p)))),
+            Self::Static(Ipv6AddrOrSuffix::Suffix(suffix), _) => prefix.map(|p| suffix.resolve(p)),
         }
     }
 

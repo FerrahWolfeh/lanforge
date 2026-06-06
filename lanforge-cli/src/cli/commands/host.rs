@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 
 use crate::cli::wizard::{fuzzy_select_host, prompt_select, prompt_text};
 use crate::cli::{Execute, LanforgeClient};
@@ -8,7 +8,7 @@ use color_eyre::eyre::{Result, bail, eyre};
 use inquire::{Confirm, Text as InquireText};
 use iocraft::prelude::*;
 use lanforge_api::api::HostConfigEntry;
-use lanforge_types::device::Origin;
+use lanforge_types::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_types::identifiers::MacAddr;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -137,7 +137,7 @@ async fn execute_add(
         mac: final_mac.parse::<MacAddr>().map_err(|e| eyre!("{e}"))?,
         hostname: final_hostname,
         v4_fixed: final_v4.map(|s| s.parse::<Ipv4Addr>()).transpose()?,
-        v6_suffix: final_v6.map(|s| s.parse::<Ipv6Addr>()).transpose()?,
+        v6_suffix: final_v6.map(|s| s.parse::<Ipv6AddrOrSuffix>().map_err(|e| eyre!("{e}"))).transpose()?,
         origin: Origin::Static,
     };
     let resp = client.host_add(entry).await?;

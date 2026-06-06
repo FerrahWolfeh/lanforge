@@ -375,7 +375,7 @@ fn test_cli_host_updated_sync() {
     assert!(
         matches!(dev.v4, IPv4State::Static(ip) if ip == "192.168.1.10".parse::<Ipv4Addr>().unwrap())
     );
-    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == [0,0,0,0,0,0,0,0x10])));
+    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == lanforge_types::network::Ipv6Suffix([0,0,0,0,0,0,0,0x10]))));
     assert!(dev.is_static());
 
     // 3. Verify static_entries sync
@@ -388,7 +388,7 @@ fn test_cli_host_updated_sync() {
     assert_eq!(entry.hostname, "cli-host");
     assert_eq!(entry.v4_static, Some("192.168.1.10".parse().unwrap()));
     assert!(
-        matches!(entry.v6_suffix, Some(Ipv6AddrOrSuffix::Suffix(b)) if b == [0,0,0,0,0,0,0,0x10])
+        matches!(entry.v6_suffix, Some(Ipv6AddrOrSuffix::Suffix(b)) if b == lanforge_types::network::Ipv6Suffix([0,0,0,0,0,0,0,0x10]))
     );
 
     // 4. Partial update (Only hostname)

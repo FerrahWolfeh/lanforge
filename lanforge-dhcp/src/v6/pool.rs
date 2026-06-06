@@ -166,8 +166,8 @@ impl PoolRange {
             (Some(Ipv6AddrOrSuffix::Suffix(s)), Some(Ipv6AddrOrSuffix::Suffix(e))) => {
                 if s <= e {
                     Self::Floating {
-                        start_suffix: *s,
-                        end_suffix: *e,
+                        start_suffix: s.0,
+                        end_suffix: e.0,
                     }
                 } else {
                     tracing::warn!(
@@ -340,20 +340,7 @@ impl Ipv6Pool {
     pub fn construct_addr(&self, prefix: Ipv6Addr, suffix: &Ipv6AddrOrSuffix) -> Ipv6Addr {
         match suffix {
             Ipv6AddrOrSuffix::Full(ip) => *ip,
-            Ipv6AddrOrSuffix::Suffix(s) => {
-                let p_segs = prefix.segments();
-                let combined = [
-                    p_segs[0],
-                    p_segs[1],
-                    p_segs[2],
-                    p_segs[3],
-                    u16::from_be_bytes([s[0], s[1]]),
-                    u16::from_be_bytes([s[2], s[3]]),
-                    u16::from_be_bytes([s[4], s[5]]),
-                    u16::from_be_bytes([s[6], s[7]]),
-                ];
-                Ipv6Addr::from(combined)
-            }
+            Ipv6AddrOrSuffix::Suffix(s) => s.resolve(prefix),
         }
     }
 
@@ -830,7 +817,7 @@ impl DhcpPool<Ipv6Addr> for Ipv6Pool {
 #[cfg(test)]
 mod tests {
     use lanforge_types::{
-        device::Origin,
+        device::{Ipv6Suffix, Origin},
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
     };
 
@@ -936,8 +923,8 @@ mod tests {
         let gua = "2001:db8::".parse::<Ipv6Addr>().unwrap();
 
         let pools = vec![Dhcpv6PoolConfig {
-            range_start: Some(Ipv6AddrOrSuffix::Suffix([0, 0, 0, 0, 0, 0, 0, 1])),
-            range_end: Some(Ipv6AddrOrSuffix::Suffix([0, 0, 0, 0, 0, 0, 0, 0xFF])),
+            range_start: Some(Ipv6AddrOrSuffix::Suffix(Ipv6Suffix([0, 0, 0, 0, 0, 0, 0, 1]))),
+            range_end: Some(Ipv6AddrOrSuffix::Suffix(Ipv6Suffix([0, 0, 0, 0, 0, 0, 0, 0xFF]))),
             address: None,
         }];
 

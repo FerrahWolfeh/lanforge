@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use super::common::{HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse};
 use lanforge_types::{
     device::{
-        DeviceClass, DeviceStatus, IpClassification, LearningMethod, LeaseHistoryEntry, Origin,
+        DeviceClass, DeviceStatus, IpClassification, Ipv6AddrOrSuffix, LearningMethod, LeaseHistoryEntry, Origin,
         TransientOrigin,
     },
     identifiers::{Duid, MacAddr},
@@ -36,7 +36,7 @@ pub struct HostConfigEntry {
     /// Fixed IPv4 address, if set.
     pub v4_fixed: Option<Ipv4Addr>,
     /// IPv6 Interface ID (suffix) or Full address.
-    pub v6_suffix: Option<Ipv6Addr>,
+    pub v6_suffix: Option<Ipv6AddrOrSuffix>,
     /// Source of the configuration (e.g., "Toml", "Cli").
     pub origin: Origin,
 }

@@ -89,16 +89,19 @@ fn byte_parse_arpa<'a>(mut labels: impl Iterator<Item = &'a [u8]>) -> Option<IpA
 pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &Ipv6AddrOrSuffix) -> Option<Ipv6Addr> {
     match suffix {
         Ipv6AddrOrSuffix::Full(ip) => Some(*ip),
-        Ipv6AddrOrSuffix::Suffix(s) => Some(Ipv6Addr::new(
-            prefix_segs[0],
-            prefix_segs[1],
-            prefix_segs[2],
-            prefix_segs[3],
-            u16::from_be_bytes([s[0], s[1]]),
-            u16::from_be_bytes([s[2], s[3]]),
-            u16::from_be_bytes([s[4], s[5]]),
-            u16::from_be_bytes([s[6], s[7]]),
-        )),
+        Ipv6AddrOrSuffix::Suffix(s) => {
+            let prefix = Ipv6Addr::new(
+                prefix_segs[0],
+                prefix_segs[1],
+                prefix_segs[2],
+                prefix_segs[3],
+                0,
+                0,
+                0,
+                0,
+            );
+            Some(s.resolve(prefix))
+        }
     }
 }
 
