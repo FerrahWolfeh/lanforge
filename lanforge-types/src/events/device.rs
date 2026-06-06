@@ -1,4 +1,4 @@
-use crate::device::DeviceClass;
+use crate::device::{DeviceClass, DeviceStatus};
 use crate::identifiers::{Duid, MacAddr};
 use crate::network::Ipv6AddrOrSuffix;
 use crate::update::LeaseTarget;
@@ -30,6 +30,7 @@ pub enum NetworkChange {
     /// The device's reachability status has changed.
     StatusChanged {
         online: bool,
+        status: DeviceStatus,
         hostname: Option<String>,
     },
 
@@ -41,12 +42,6 @@ pub enum NetworkChange {
 
     /// An IPv4 neighbor event (ARP) was observed.
     ArpActivity { ip: Ipv4Addr },
-
-    /// The device's physical or logical topology has changed.
-    TopologyChanged {
-        parent_mac: Option<MacAddr>,
-        port: Option<String>,
-    },
 
     /// A specific IP address associated with the device was deleted.
     IpDeleted { ip: IpAddr },
@@ -70,8 +65,7 @@ impl NetworkChange {
             | Self::LeaseExpired { .. }
             | Self::DuidAssociated { .. }
             | Self::IpDeleted { .. }
-            | Self::SlaacObserved { .. }
-            | Self::TopologyChanged { .. } => true,
+            | Self::SlaacObserved { .. } => true,
 
             Self::ArpActivity { .. }
             | Self::NdpActivity { .. }

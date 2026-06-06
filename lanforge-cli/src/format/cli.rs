@@ -454,15 +454,7 @@ fn format_change_net(change: &NetworkChange) -> String {
                 format!("has gone {}", "Offline".red().bold())
             }
         }
-        NetworkChange::TopologyChanged { parent_mac, port } => {
-            let parent = parent_mac.map_or_else(|| "Local".to_string(), |m| m.to_string());
-            let port = port.as_deref().unwrap_or("?");
-            format!(
-                "topology updated: behind {} on port {}",
-                parent.bright_cyan(),
-                port.bright_yellow()
-            )
-        }
+
         NetworkChange::IpDeleted { ip } => {
             format!("IP deleted: {}", ip.to_string().red())
         }

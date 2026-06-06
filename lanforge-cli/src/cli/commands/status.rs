@@ -188,7 +188,7 @@ fn render_services(st: &StatusResponse, ascii: bool) {
                     ServiceLine(name: "mDNS", state: st.services.mdns_prober.state.as_ref(), online_val: "active", meta: "Device Discovery Prober", ascii: ascii)
                     ServiceLine(name: "Iface Mon", state: st.services.iface_monitor.state.as_ref(), online_val: "online", meta: "Interface Address Watcher", ascii: ascii)
                     ServiceLine(
-                        name: "NDP Mon",
+                        name: "Discovery",
                         state: st.services.ndp_monitor.state.as_ref(),
                         online_val: "online",
                         meta: ndp_meta.as_str(),

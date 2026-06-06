@@ -15,7 +15,6 @@ pub mod dns;
 pub mod events;
 pub mod header;
 pub mod services;
-pub mod topology;
 pub mod widgets;
 
 pub fn render(f: &mut Frame, app: &mut TuiApp) {
@@ -39,9 +38,8 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         "[3] DNS",
         "[4] Adblock",
         "[5] Events",
-        "[6] Topology",
-        "[7] DHCP",
-        "[8] Services",
+        "[6] DHCP",
+        "[7] Services",
     ];
     let tabs = Tabs::new(titles)
         .block(
@@ -65,7 +63,6 @@ pub fn render(f: &mut Frame, app: &mut TuiApp) {
         TuiTab::Dns => dns::render(f, chunks[2], app),
         TuiTab::Adblock => adblock::render(f, chunks[2], app),
         TuiTab::Events => events::render(f, chunks[2], &app.state, app.auto_scroll),
-        TuiTab::Topology => topology::render(f, chunks[2], app),
         TuiTab::Dhcp => dhcp::render(f, chunks[2], app),
         TuiTab::Services => services::render(f, chunks[2], app),
     }

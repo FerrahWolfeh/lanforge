@@ -5,7 +5,7 @@ use lanforge_api::api::{
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
     DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
     DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse,
-    Response, RpcCallError, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse,
+    Response, RpcCallError, SimpleSuccess, StatusResponse, SystemConfigExport,
     TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
@@ -546,14 +546,6 @@ impl LanforgeRpc for ClientContext {
     async fn leases(&self, count: bool) -> Result<LeasesResponse, RpcCallError> {
         match self.handle_leases(count).await {
             Response::Leases(r) => Ok(r),
-            Response::Error { error } => Err(Self::map_error(error)),
-            _ => Err(RpcCallError::InvalidResponseType),
-        }
-    }
-
-    async fn topology(&self) -> Result<TopologyResponse, RpcCallError> {
-        match self.handle_topology().await {
-            Response::Topology(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

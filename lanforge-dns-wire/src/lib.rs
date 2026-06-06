@@ -6,11 +6,11 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use lanforge_types::network::dns::adblock::{DnsService, DnsServiceProtocol};
 use lanforge_types::network::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
     DnsResponseCode,
 };
-use lanforge_types::network::dns::adblock::{DnsService, DnsServiceProtocol};
 
 /// Simple view into the DNS message header.
 pub struct WireHeader<'a> {

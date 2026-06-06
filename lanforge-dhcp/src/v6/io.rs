@@ -28,8 +28,6 @@ impl Dhcpv6Transport {
         Ok(Self { socket })
     }
 
-
-
     /// Receives a packet asynchronously from the UDP socket.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.socket.recv_from(buf).await

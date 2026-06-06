@@ -1053,14 +1053,14 @@ mod tests {
         assert!(matches!(res3, HandleResult::Ignore));
 
         // 4. MAC3 REQUEST for any IP -> NAK (pool exhausted!)
-        let req3 = build_raw_msg(
+        let reqst3 = build_raw_msg(
             MessageType::Request,
             mac3,
             Some(Ipv4Addr::new(192, 168, 1, 102)),
             None,
             None,
         );
-        let res4 = srv.handle_packet(&req3, None);
+        let res4 = srv.handle_packet(&reqst3, None);
         match res4 {
             HandleResult::Reply { packet, .. } => {
                 let reply = decode_reply(&packet);

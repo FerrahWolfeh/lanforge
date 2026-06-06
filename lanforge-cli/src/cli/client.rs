@@ -16,7 +16,7 @@ use lanforge_api::api::{
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse,
-    ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse,
+    ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
     TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
@@ -433,10 +433,6 @@ impl LanforgeClient {
 
     pub async fn purge(&self, mac: MacAddr) -> Result<SimpleSuccess> {
         dispatch!(self, delete => format!("/devices/{mac}"), purge(mac))
-    }
-
-    pub async fn topology(&self) -> Result<TopologyResponse> {
-        dispatch!(self, get => "/topology", topology())
     }
 
     // --- DHCP & Leases ---

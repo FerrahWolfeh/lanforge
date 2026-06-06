@@ -46,8 +46,8 @@ where
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
-    let stale_interval = Duration::from_mins(2);
-    let mut stale_timer = interval(stale_interval);
+    let stale_check_interval = Duration::from_secs(30);
+    let mut stale_timer = interval(stale_check_interval);
     stale_timer.tick().await;
 
     // Initial scan request to kick off discovery across all services
@@ -77,7 +77,7 @@ where
     let result = loop {
         tokio::select! {
             _ = stale_timer.tick() => {
-                ctx.expire_stale(stale_interval);
+                ctx.expire_stale(Duration::from_secs(cfg.monitor_toml.stale_timeout_secs));
             }
             _ = sigusr1.recv() => {
                 info!("SIGUSR1 received, forcing state synchronization...");

@@ -150,33 +150,32 @@ impl RewriteStore {
                 );
                 true
             }
-            RewriteAnswer::Device { identifier, fallback } => {
+            RewriteAnswer::Device {
+                identifier,
+                fallback,
+            } => {
                 if let Some(ips) = ctx.local.resolve_device(identifier, qtype) {
                     WireResponseWriter::write_ip_response(
-                        data,
-                        question,
-                        &ips,
-                        5, // Short 5s TTL for dynamic resolves
-                        edns,
-                        ra,
-                        resp,
+                        data, question, &ips, 5, // Short 5s TTL for dynamic resolves
+                        edns, ra, resp,
                     );
                     true
                 } else if let Some(fb) = fallback {
                     Self::resolve_rewrite_wire(data, header, question, ctx, fb, resp)
                 } else {
                     WireResponseWriter::write_error_response(
-                        data,
-                        question,
-                        3, // NXDOMAIN
-                        edns,
-                        ra,
-                        resp,
+                        data, question, 3, // NXDOMAIN
+                        edns, ra, resp,
                     );
                     true
                 }
             }
-            RewriteAnswer::Service { service, protocol, device, port } => {
+            RewriteAnswer::Service {
+                service,
+                protocol,
+                device,
+                port,
+            } => {
                 if qtype == DnsRecordType::SRV || qtype == DnsRecordType::ANY {
                     let target_domain = format!("{}.lan", device);
                     WireResponseWriter::write_srv_response(
@@ -254,7 +253,10 @@ impl RewriteStore {
                 resp.extend_from_slice(&rb.success_cname(target)?);
                 Ok(true)
             }
-            RewriteAnswer::Device { identifier, fallback } => {
+            RewriteAnswer::Device {
+                identifier,
+                fallback,
+            } => {
                 if let Some(ips) = ctx.local.resolve_device(identifier, qtype) {
                     resp.clear();
                     let qname = rb.qname();
@@ -284,7 +286,12 @@ impl RewriteStore {
                     Ok(true)
                 }
             }
-            RewriteAnswer::Service { service: _, protocol: _, device, port } => {
+            RewriteAnswer::Service {
+                service: _,
+                protocol: _,
+                device,
+                port,
+            } => {
                 if qtype == DnsRecordType::SRV || qtype == DnsRecordType::ANY {
                     let target_domain = format!("{}.lan", device);
                     let record = DnsRecord {

@@ -22,7 +22,6 @@ impl CompiledCaps {
         compiled.push(Cap::Ra);
         compiled.push(Cap::NdpDiscovery);
         compiled.push(Cap::MdnsProbe);
-        compiled.push(Cap::LldpProbe);
         compiled.push(Cap::Uds);
         compiled.push(Cap::Http);
         compiled.push(Cap::Zstd);

@@ -9,7 +9,6 @@ pub mod lease;
 pub mod service;
 pub mod simple;
 pub mod status;
-pub mod topology;
 #[cfg(feature = "tui")]
 pub mod tui;
 pub mod whois;

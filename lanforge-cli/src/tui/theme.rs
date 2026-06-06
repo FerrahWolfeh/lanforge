@@ -18,6 +18,7 @@ pub const MOCHA_SUBTEXT0: Color = Color::Rgb(166, 173, 200);
 
 // Semantic Theme
 pub const ONLINE: Color = MOCHA_GREEN;
+pub const STALE: Color = MOCHA_YELLOW;
 pub const OFFLINE: Color = MOCHA_SURFACE2;
 
 pub const HEADER_BG: Color = MOCHA_BASE;

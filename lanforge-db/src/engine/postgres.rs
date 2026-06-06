@@ -72,36 +72,6 @@ async fn upsert_base_device_internal(
     )
     .execute(&mut **tx).await?;
 
-    // 2. Topology table
-    if let Some(topo) = &device.topology {
-        let parent_mac_str = topo.parent_mac.map(|m| m.to_string());
-        let parent_port = topo.port.as_ref();
-        let local_ifindex = i32::try_from(topo.local_ifindex).unwrap_or(0);
-        let last_updated = system_time_to_unix(topo.last_updated) as f64;
-        sqlx::query!(
-            "INSERT INTO net.device_topology (mac, parent_mac, parent_port, local_ifindex, topo_updated)
-             VALUES ($1::text::MACADDR, $2::text::MACADDR, $3, $4, to_timestamp($5::double precision))
-             ON CONFLICT(mac) DO UPDATE SET
-                parent_mac = EXCLUDED.parent_mac,
-                parent_port = EXCLUDED.parent_port,
-                local_ifindex = EXCLUDED.local_ifindex,
-                topo_updated = EXCLUDED.topo_updated",
-            mac_str,
-            parent_mac_str.as_deref(),
-            parent_port.as_deref(),
-            local_ifindex,
-            last_updated
-        )
-        .execute(&mut **tx).await?;
-    } else {
-        sqlx::query!(
-            "DELETE FROM net.device_topology WHERE mac = $1::text::MACADDR",
-            mac_str
-        )
-        .execute(&mut **tx)
-        .await?;
-    }
-
     Ok(())
 }
 
@@ -417,11 +387,8 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lan
             d.origin::TEXT as origin, 
             EXTRACT(EPOCH FROM d.managed_at)::INT8 as \"managed_at?\", 
             d.class::INT8 as \"class!\",
-            t.parent_mac::TEXT as parent_mac, t.parent_port, t.local_ifindex::INT8 as parent_ifindex, 
-            EXTRACT(EPOCH FROM t.topo_updated)::INT8 as \"topo_updated?\",
             host(s.v4_static) as v4_static, host(s.v6_suffix) as v6_suffix, s.boot_file
          FROM net.devices d
-         LEFT JOIN net.device_topology t ON d.mac = t.mac
          LEFT JOIN dhcp.static_devices s ON d.mac = s.mac"
     )
     .fetch_all(pool)
@@ -437,10 +404,6 @@ pub async fn load_device_rows(pool: &sqlx::PgPool) -> Result<Vec<DeviceRow>, Lan
             origin: row.origin.unwrap_or_default(),
             managed_at: row.managed_at,
             class: row.class,
-            parent_mac: row.parent_mac,
-            parent_port: row.parent_port,
-            local_ifindex: row.parent_ifindex,
-            topo_updated: row.topo_updated,
             v4_static: row.v4_static,
             v6_suffix: row.v6_suffix,
             boot_file: row.boot_file,

@@ -386,7 +386,6 @@ pub fn command_dispatch_derive(input: TokenStream) -> TokenStream {
     }.into()
 }
 
-
 /// Derive macro for generating the apply_update dispatch logic in State.
 #[proc_macro_derive(UpdateDispatch, attributes(handler))]
 pub fn update_dispatch_derive(input: TokenStream) -> TokenStream {
@@ -494,9 +493,10 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
                             inner_type = quote! { #inner };
                         }
                         if args.args.len() > 1
-                            && let Some(syn::GenericArgument::Type(err)) = args.args.iter().nth(1) {
-                                global_error_type = quote! { #err };
-                            }
+                            && let Some(syn::GenericArgument::Type(err)) = args.args.iter().nth(1)
+                        {
+                            global_error_type = quote! { #err };
+                        }
                     }
                     if !is_result {
                         inner_type = quote! { #ty };

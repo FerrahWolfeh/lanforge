@@ -92,6 +92,7 @@ impl ClientContext {
             hostname: dev.display_hostname().to_string(),
             origin: dev.origin,
             online: dev.is_online(),
+            status: dev.status,
             last_seen: duration_since_epoch_u64(dev.last_seen),
             learning_method: dev.learning_method(),
             class: dev.class,

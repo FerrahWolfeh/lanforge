@@ -72,7 +72,7 @@ use crate::cli::commands::{
     dns::DnsArgs, host::HostArgs, lease::LeaseArgs, service::ServiceArgs, simple::ContextArgs,
     simple::LoginArgs, simple::PurgeArgs, simple::ReloadArgs, simple::ScanArgs,
     simple::ShutdownArgs, simple::WatchArgs, status::ServicesArgs, status::StatusArgs,
-    topology::TopologyArgs, whois::WhoisArgs, wol::WolArgs,
+    whois::WhoisArgs, wol::WolArgs,
 };
 
 use crate::cli::{Execute, LanforgeClient};
@@ -102,8 +102,6 @@ pub enum Command {
     Shutdown(ShutdownArgs),
     /// Forcefully purge a device from memory and database by its MAC
     Purge(PurgeArgs),
-    /// View network topology hierarchically
-    Topology(TopologyArgs),
     /// Dump internal daemon context
     Context(ContextArgs),
     /// Persistence management
@@ -141,7 +139,6 @@ impl Execute for Command {
             Self::Reload(args) => args.execute(client).await,
             Self::Shutdown(args) => args.execute(client).await,
             Self::Purge(args) => args.execute(client).await,
-            Self::Topology(args) => args.execute(client).await,
             Self::Context(args) => args.execute(client).await,
             Self::Db(args) => args.execute(client).await,
             Self::Host(args) => args.execute(client).await,

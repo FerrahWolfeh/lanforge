@@ -66,30 +66,6 @@ async fn upsert_base_device_internal(
     .execute(&mut **tx)
     .await?;
 
-    // 2. Topology table
-    if let Some(topo) = &device.topology {
-        sqlx::query(
-            "INSERT INTO device_topology (mac, parent_mac, parent_port, local_ifindex, topo_updated)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(mac) DO UPDATE SET
-                parent_mac = EXCLUDED.parent_mac,
-                parent_port = EXCLUDED.parent_port,
-                local_ifindex = EXCLUDED.local_ifindex,
-                topo_updated = EXCLUDED.topo_updated"
-        )
-        .bind(mac_str)
-        .bind(topo.parent_mac.map(|m| m.to_string()))
-        .bind(&topo.port)
-        .bind(i64::from(topo.local_ifindex))
-        .bind(system_time_to_unix(topo.last_updated))
-        .execute(&mut **tx).await?;
-    } else {
-        sqlx::query("DELETE FROM device_topology WHERE mac = ?")
-            .bind(mac_str)
-            .execute(&mut **tx)
-            .await?;
-    }
-
     Ok(())
 }
 
@@ -378,10 +354,8 @@ pub async fn load_device_rows(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceRow>,
     sqlx::query_as::<_, DeviceRow>(
         "SELECT 
             d.mac, d.hostname, d.hostname_origin, d.duid, d.origin, d.managed_at, d.class,
-            t.parent_mac, t.parent_port, t.local_ifindex, t.topo_updated,
             s.v4_static, s.v6_suffix, s.boot_file
          FROM devices d
-         LEFT JOIN device_topology t ON d.mac = t.mac
          LEFT JOIN static_devices s ON d.mac = s.mac",
     )
     .fetch_all(pool)

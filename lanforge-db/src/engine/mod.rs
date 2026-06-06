@@ -10,7 +10,6 @@ use tracing::{debug, info};
 use lanforge_core::context::state::State;
 use lanforge_types::device::{
     Device, DeviceClass, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
-    TopologyInfo,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
@@ -483,17 +482,6 @@ impl LanforgeDb {
                 }
                 if let Some(bytes) = &row.duid {
                     device.duid = Some(Duid::new(bytes.clone()));
-                }
-
-                if let Some(topo_updated) = row.topo_updated
-                    && topo_updated > 0
-                {
-                    device.topology = Some(TopologyInfo {
-                        parent_mac: row.parent_mac.as_ref().and_then(|m| MacAddr::parse(m)),
-                        port: row.parent_port.clone(),
-                        local_ifindex: row.local_ifindex.map(|i| i as u32).unwrap_or(0),
-                        last_updated: unix_to_system_time(topo_updated),
-                    });
                 }
 
                 if matches!(device.origin, Origin::Static) {

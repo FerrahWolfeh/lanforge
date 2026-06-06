@@ -197,7 +197,6 @@ async fn test_smoke_read_endpoints() {
     let cases = [
         ("status", "/api/v1/status"),
         ("service_banners", "/api/v1/service_banners"),
-        ("topology", "/api/v1/topology"),
         ("hosts empty", "/api/v1/hosts"),
         ("dns/rewrites", "/api/v1/dns/rewrites"),
         ("dns/upstreams", "/api/v1/dns/upstreams"),

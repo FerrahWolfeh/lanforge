@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use crate::device::state::{
     IPv4State, IPv6State, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease,
 };
-use crate::device::topology::TopologyInfo;
+
 use crate::events::NetworkChange;
 use crate::identifiers::{Duid, MacAddr};
 use crate::network::{
@@ -17,6 +17,19 @@ use crate::utils::serde::{
     deserialize_seen_v4, deserialize_time, deserialize_time_opt, serialize_seen_v4, serialize_time,
     serialize_time_opt,
 };
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
+)]
+pub enum DeviceStatus {
+    #[default]
+    #[enum_repr(alias = "offline")]
+    Offline,
+    #[enum_repr(alias = "stale")]
+    Stale,
+    #[enum_repr(alias = "online")]
+    Online,
+}
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
@@ -133,7 +146,8 @@ pub struct Device {
     pub duid: Option<Duid>,
     pub dns_fallback: String,
     pub class: DeviceClass,
-    pub topology: Option<TopologyInfo>,
+    pub status: DeviceStatus,
+
     pub boot_file: Option<String>,
 }
 
@@ -156,7 +170,8 @@ impl Device {
             duid: None,
             dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
             class: DeviceClass::None,
-            topology: None,
+            status: DeviceStatus::Offline,
+
             boot_file: None,
         }
     }
@@ -462,9 +477,6 @@ impl Device {
 
     #[must_use]
     pub fn is_worthy(&self) -> bool {
-        if self.topology.is_some() {
-            return true;
-        }
         if !self.hostname.name.is_empty() {
             return true;
         }
@@ -485,19 +497,30 @@ impl Device {
 
     #[must_use]
     pub fn is_online(&self) -> bool {
-        if matches!(self.v4, IPv4State::Dynamic(_)) || self.v6.iter().any(IPv6State::is_dynamic) {
-            return true;
+        self.status == DeviceStatus::Online
+    }
+
+    #[must_use]
+    pub fn evaluate_status(
+        &self,
+        now: SystemTime,
+        stale_timeout: Option<Duration>,
+    ) -> DeviceStatus {
+        let timeout = stale_timeout.unwrap_or(Duration::from_hours(1));
+        let elapsed = now.duration_since(self.last_seen).unwrap_or(Duration::MAX);
+        if elapsed < Self::ONLINE_THRESHOLD {
+            DeviceStatus::Online
+        } else if elapsed < timeout {
+            DeviceStatus::Stale
+        } else {
+            DeviceStatus::Offline
         }
-        SystemTime::now()
-            .duration_since(self.last_seen)
-            .unwrap_or(Duration::MAX)
-            < Self::ONLINE_THRESHOLD
     }
 
     pub fn expire_stale_inner(
         &mut self,
         now: SystemTime,
-        ip_expiry_threshold: Duration,
+        stale_timeout: Duration,
     ) -> Vec<NetworkChange> {
         use crate::update::LeaseTarget;
         let mut events = Vec::new();
@@ -520,7 +543,7 @@ impl Device {
                 false
             }
             IPv6State::Slaac(_, ts) | IPv6State::LinkLocal(_, ts) | IPv6State::Discovery(_, ts) => {
-                now.duration_since(*ts).unwrap_or(Duration::MAX) <= ip_expiry_threshold
+                now.duration_since(*ts).unwrap_or(Duration::MAX) <= stale_timeout
             }
             _ => true,
         });
@@ -547,11 +570,16 @@ impl Device {
         }
 
         // ARP cleanup
-        self.seen_v4.retain(|(_, ts)| {
-            now.duration_since(*ts).unwrap_or(Duration::ZERO) <= ip_expiry_threshold
-        });
+        self.seen_v4
+            .retain(|(_, ts)| now.duration_since(*ts).unwrap_or(Duration::ZERO) <= stale_timeout);
 
         self.last_seen = self.calculate_last_seen();
+
+        let new_status = self.evaluate_status(now, Some(stale_timeout));
+        if self.status != new_status {
+            self.status = new_status;
+        }
+
         events
     }
 
@@ -727,42 +755,48 @@ impl Device {
             IpAddr::V4(ip4) => {
                 if let IPv4State::Dynamic(lease) = &mut self.v4
                     && lease.ip == ip4
+                    && lease.last_seen != SystemTime::UNIX_EPOCH
                 {
                     lease.last_seen = SystemTime::UNIX_EPOCH;
                     changed = true;
                 }
-                if let Some(entry) = self.seen_v4.iter_mut().find(|(a, _)| *a == ip4) {
+                if let Some(entry) = self.seen_v4.iter_mut().find(|(a, _)| *a == ip4)
+                    && entry.1 != SystemTime::UNIX_EPOCH
+                {
                     entry.1 = SystemTime::UNIX_EPOCH;
                     changed = true;
                 }
             }
             IpAddr::V6(ip6) => {
-                let initial_len = self.v6.len();
-                self.v6.retain(|s| match s {
-                    IPv6State::Slaac(addr, _)
-                    | IPv6State::LinkLocal(addr, _)
-                    | IPv6State::Discovery(addr, _) => *addr != ip6,
-                    _ => true,
-                });
-
-                if self.v6.len() == initial_len {
-                    for state in &mut self.v6 {
-                        match state {
-                            IPv6State::Static(Ipv6AddrOrSuffix::Full(addr), ts) if *addr == ip6 => {
+                for state in &mut self.v6 {
+                    match state {
+                        IPv6State::Slaac(addr, ts)
+                        | IPv6State::LinkLocal(addr, ts)
+                        | IPv6State::Discovery(addr, ts)
+                            if *addr == ip6 =>
+                        {
+                            if *ts != SystemTime::UNIX_EPOCH {
                                 *ts = SystemTime::UNIX_EPOCH;
                                 changed = true;
-                                break;
                             }
-                            IPv6State::Dynamic(lease) if lease.ip == ip6 => {
+                            break;
+                        }
+                        IPv6State::Static(Ipv6AddrOrSuffix::Full(addr), ts) if *addr == ip6 => {
+                            if *ts != SystemTime::UNIX_EPOCH {
+                                *ts = SystemTime::UNIX_EPOCH;
+                                changed = true;
+                            }
+                            break;
+                        }
+                        IPv6State::Dynamic(lease) if lease.ip == ip6 => {
+                            if lease.last_seen != SystemTime::UNIX_EPOCH {
                                 lease.last_seen = SystemTime::UNIX_EPOCH;
                                 changed = true;
-                                break;
                             }
-                            _ => {}
+                            break;
                         }
+                        _ => {}
                     }
-                } else {
-                    changed = true;
                 }
             }
         }

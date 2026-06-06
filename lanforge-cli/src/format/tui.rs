@@ -309,17 +309,7 @@ fn format_device_change_net<'a>(change: &'a NetworkChange, spans: &mut Vec<Span<
                 Style::default().fg(theme::MOCHA_MAUVE),
             ));
         }
-        NetworkChange::TopologyChanged { parent_mac, port } => {
-            let parent = parent_mac.map_or_else(|| "Local".to_string(), |m| m.to_string());
-            let port = port.as_deref().unwrap_or("?");
-            spans.push(Span::raw("topology updated: behind "));
-            spans.push(Span::styled(parent, Style::default().fg(theme::IP)));
-            spans.push(Span::raw(" on port "));
-            spans.push(Span::styled(
-                port.to_string(),
-                Style::default().fg(theme::MOCHA_YELLOW),
-            ));
-        }
+
         NetworkChange::LeaseExpired { target } => {
             let target_str = match target {
                 LeaseTarget::V4 => "IPv4 lease".to_string(),

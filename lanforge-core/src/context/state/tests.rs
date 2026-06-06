@@ -827,15 +827,24 @@ fn test_handle_ip_offline_slaac_removal() {
     assert!(dev.is_online());
 
     // 2. Report ip1 as offline
-    // NOTE: Index is populated automatically by SlaacObserved
     let _ = ctx.apply(DeviceUpdate::IpOffline { ip: ip1 });
     let dev = ctx.get_device(&mac).unwrap();
-    assert_eq!(dev.v6.len(), 1, "SLAAC IP should be removed");
+    assert_eq!(dev.v6.len(), 2, "SLAAC IP should still be in memory");
     assert!(dev.is_online(), "Device should still be online via ip2");
 
-    // 3. Report ip2 as offline (device becomes unworthy and is dropped)
+    // 3. Report ip2 as offline (device status becomes Offline)
     let _ = ctx.apply(DeviceUpdate::IpOffline { ip: ip2 });
-    assert!(ctx.get_device(&mac).is_none());
+    let dev = ctx
+        .get_device(&mac)
+        .expect("Device should still exist as offline/stale");
+    assert_eq!(dev.status, lanforge_types::device::DeviceStatus::Offline);
+
+    // 4. Run expire_stale (should prune offline SLAAC IPs and drop unworthy device)
+    ctx.expire_stale(Duration::from_secs(10));
+    assert!(
+        ctx.get_device(&mac).is_none(),
+        "Unworthy offline device should be pruned"
+    );
 }
 #[test]
 fn test_handle_ip_offline_static_ula_persistence() {
@@ -892,8 +901,8 @@ fn test_handle_ip_offline_static_ula_persistence() {
     let dev = ctx.get_device(&mac).unwrap();
 
     assert!(
-        !dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(..))),
-        "SLAAC should be removed"
+        dev.v6.iter().any(|s| matches!(s, IPv6State::Slaac(..))),
+        "SLAAC should still be in memory"
     );
 
     assert!(

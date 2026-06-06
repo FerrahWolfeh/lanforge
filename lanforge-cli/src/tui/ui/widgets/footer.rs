@@ -11,9 +11,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
     let help_text = match app.mode {
         TuiMode::Confirming | TuiMode::Input => String::new(),
         TuiMode::Filtering => "TYPE TO FILTER...  Enter/Esc: Confirm".to_string(),
-        TuiMode::Detail => "Esc:Back  w:Wake  d:Purge  q:Quit  1-8:Tabs".to_string(),
+        TuiMode::Detail => "Esc:Back  w:Wake  d:Purge  q:Quit  1-7:Tabs".to_string(),
         TuiMode::Normal => {
-            let mut hints = vec!["q:Quit", "1-8:Tabs"];
+            let mut hints = vec!["q:Quit", "1-7:Tabs"];
             match app.active_tab {
                 TuiTab::Dashboard => {
                     hints.extend(&["s:Scan", "r:Reload", "F:Flush DNS"]);
@@ -70,9 +70,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
                 }
                 TuiTab::Events => {
                     hints.extend(&["Space:Toggle Auto-Scroll"]);
-                }
-                TuiTab::Topology => {
-                    hints.extend(&["↑↓:Navigate", "Enter:Toggle Node", "/:Search"]);
                 }
                 TuiTab::Dhcp => {
                     hints.extend(&["↑↓:Navigate", "r:Renew", "R:Release", "/:Search"]);

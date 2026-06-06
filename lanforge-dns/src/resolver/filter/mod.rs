@@ -2,9 +2,7 @@ use crate::error::DnsError;
 use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
 use dashmap::DashMap;
-use lanforge_dns_wire::{
-    WireHeader, WireOptScanner, WireQuestion, WireResponseWriter,
-};
+use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::BlockingMode;
 use parking_lot::RwLock;
@@ -290,8 +288,6 @@ impl AdBlocker {
         );
         Ok(new_list)
     }
-
-
 
     pub fn apply_adblock_wire(
         &self,

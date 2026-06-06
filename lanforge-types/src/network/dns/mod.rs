@@ -1,6 +1,9 @@
 use crate::{
     identifiers::MacAddr,
-    network::dns::{adblock::{AdblockUrlKind, BlockingMode}, upstream::UpstreamProtocol},
+    network::dns::{
+        adblock::{AdblockUrlKind, BlockingMode},
+        upstream::UpstreamProtocol,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{

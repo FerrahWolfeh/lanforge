@@ -40,7 +40,8 @@ use crate::ndp::utils::{
     extract_neigh_info, get_ipv4_neighbors, get_ipv4_subnet_iterable, get_ipv6_neighbors,
     probe_neighbor,
 };
-use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkEvent};
+use crate::ping::IcmpPinger;
+use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -65,19 +66,19 @@ use tracing::{debug, error, info, warn};
 
 type NetlinkMessageStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
-/// Monitors kernel neighbor table changes via netlink events.
+/// Unified neighbor discovery (NDP/ARP) and active ICMP ping engine.
 ///
 /// Maintains synchronization with the `LanforgeContext` by applying
 /// `DeviceUpdate` events for every neighbor state change.
 #[lanforge_macros::lanforge_service(
     id = "monitor",
-    name = "Neighbor Monitor",
+    name = "Discovery Service",
     critical = true,
     retries = 0,
     base_backoff = 2,
     max_backoff = 30
 )]
-pub struct NeighborMonitor {
+pub struct DiscoveryService {
     cfg: MonitorConfig,
     handle: Handle,
     messages: NetlinkMessageStream,
@@ -86,8 +87,8 @@ pub struct NeighborMonitor {
     scan_in_progress: Arc<AtomicBool>,
 }
 
-impl NeighborMonitor {
-    /// Creates a new `NeighborMonitor` for the given interface.
+impl DiscoveryService {
+    /// Creates a new `DiscoveryService` for the given interface.
     #[must_use]
     pub fn new(
         cfg: MonitorConfig,
@@ -136,12 +137,12 @@ impl NeighborMonitor {
     fn spawn_subnet_scan(&self, source: &str) {
         if self.scan_in_progress.load(Ordering::SeqCst) {
             tracing::warn!(
-                "NeighborMonitor: Subnet scan already in progress (source: {source}), ignoring request."
+                "DiscoveryService: Subnet scan already in progress (source: {source}), ignoring request."
             );
             return;
         }
 
-        info!("NeighborMonitor: Spawning subnet scan task (source: {source})");
+        info!("DiscoveryService: Spawning subnet scan task (source: {source})");
         let handle = self.handle.clone();
         let ctx = self.ctx.clone();
         let ifindex = self.target_ifindex;
@@ -168,7 +169,7 @@ async fn run_subnet_scan_task(
         let count = range.size_hint().1.unwrap_or(0);
         if count > 0 {
             info!(
-                "NeighborMonitor: Unleashing massive ARP scan for {}/{} ({} addresses)",
+                "DiscoveryService: Unleashing massive ARP scan for {}/{} ({} addresses)",
                 ip, prefix_len, count
             );
             // Notification via event bus
@@ -184,7 +185,7 @@ async fn run_subnet_scan_task(
                     // EEXIST (os error 17) is benign — neighbor already exists in kernel table.
                     let msg = e.to_string();
                     if !msg.contains("os error 17") {
-                        debug!("NeighborMonitor: ARP probe failed for {target_ip}: {e}");
+                        debug!("DiscoveryService: ARP probe failed for {target_ip}: {e}");
                     }
                 }
                 // Pacing for manual scan: from config to avoid CPU spikes
@@ -194,11 +195,154 @@ async fn run_subnet_scan_task(
     }
 }
 
-impl AsyncService for NeighborMonitor {
+impl AsyncService for DiscoveryService {
+    #[allow(clippy::too_many_lines)]
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         // 0. Wait for Interface Ready (Sanity check)
         // This ensures the initial_scan has completed and ctx is seeded with prefixes.
         self.ctx.wait_for_interfaces().await?;
+
+        // 0.5. Spin up the integrated ICMP active pinger helper if enabled
+        let pinger = if self.cfg.ping_enabled {
+            match IcmpPinger::new(self.ctx.clone()) {
+                Ok(p) => {
+                    info!("DiscoveryService: Integrated active ICMP pinger initialized.");
+                    Some(Arc::new(p))
+                }
+                Err(e) => {
+                    warn!("DiscoveryService: Failed to initialize integrated ICMP pinger: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(pinger_ref) = &pinger {
+            // A. Spawn periodic ICMP active ping sweep task
+            let pinger_sweep = pinger_ref.clone();
+            let ctx_sweep = self.ctx.clone();
+            let ping_interval = self.cfg.ping_interval_secs;
+            tokio::spawn(async move {
+                let mut sweep_timer = interval(Duration::from_secs(ping_interval));
+                let mut seq_counter = 0u16;
+                loop {
+                    if !ctx_sweep.is_running() {
+                        break;
+                    }
+                    sweep_timer.tick().await;
+
+                    let ips = {
+                        let state = ctx_sweep.read();
+                        let mut all_ips = Vec::new();
+                        for dev in state.devices.values() {
+                            if dev.origin != lanforge_types::device::Origin::System {
+                                if let Some(v4) = dev.v4.ip() {
+                                    all_ips.push(IpAddr::V4(v4));
+                                }
+                                for (v4_seen, _) in &dev.seen_v4 {
+                                    all_ips.push(IpAddr::V4(*v4_seen));
+                                }
+                                for v6_state in &dev.v6 {
+                                    if let Some(v6_ip) = v6_state.ip() {
+                                        all_ips.push(IpAddr::V6(v6_ip));
+                                    }
+                                }
+                            }
+                        }
+                        drop(state);
+                        all_ips
+                    };
+
+                    for ip in ips {
+                        seq_counter = seq_counter.wrapping_add(1);
+                        let pinger_c = pinger_sweep.clone();
+                        let ctx_c = ctx_sweep.clone();
+                        tokio::spawn(async move {
+                            if matches!(pinger_c.ping(ip, seq_counter).await, Ok(true))
+                                && let Some(mac) = ctx_c.get_mac_by_ip(ip)
+                            {
+                                let update = match ip {
+                                    IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
+                                        mac,
+                                        ip: v4,
+                                        is_active: true,
+                                    },
+                                    IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
+                                        mac,
+                                        ip: v6,
+                                        is_active: true,
+                                    },
+                                };
+                                let _ = ctx_c.apply(update);
+                            }
+                        });
+                        sleep(Duration::from_millis(10)).await;
+                    }
+                }
+            });
+
+            // B. Spawn EventBus subscriber for JIT offline verification pings
+            let pinger_jit = pinger_ref.clone();
+            let ctx_jit = self.ctx.clone();
+            tokio::spawn(async move {
+                let mut bus_rx = ctx_jit.bus().subscribe();
+                let mut seq_counter = 0u16;
+                loop {
+                    if !ctx_jit.is_running() {
+                        break;
+                    }
+                    match bus_rx.recv().await {
+                        Ok(timed_event) => {
+                            if let LanforgeEvent::Device(DeviceEvent::NetworkActivity {
+                                change,
+                                ..
+                            }) = &timed_event.event
+                                && let NetworkChange::IpOffline { ip } = &**change
+                            {
+                                seq_counter = seq_counter.wrapping_add(1);
+                                let pinger_c = pinger_jit.clone();
+                                let ctx_c = ctx_jit.clone();
+                                let target_ip = *ip;
+                                tokio::spawn(async move {
+                                    debug!(
+                                        "DiscoveryService: JIT verification ping triggered for offline transition of {}",
+                                        target_ip
+                                    );
+                                    if matches!(
+                                        pinger_c.ping(target_ip, seq_counter).await,
+                                        Ok(true)
+                                    ) && let Some(mac) = ctx_c.get_mac_by_ip(target_ip)
+                                    {
+                                        let update = match target_ip {
+                                            IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
+                                                mac,
+                                                ip: v4,
+                                                is_active: true,
+                                            },
+                                            IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
+                                                mac,
+                                                ip: v6,
+                                                is_active: true,
+                                            },
+                                        };
+                                        let _ = ctx_c.apply(update);
+                                    }
+                                });
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!(
+                                service = "DiscoveryServicePinger",
+                                lost = n,
+                                "Event bus lagged"
+                            );
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
 
         let mut bus_rx = self.ctx.bus().subscribe();
 
@@ -211,17 +355,17 @@ impl AsyncService for NeighborMonitor {
         // We perform a simple dump of the kernel's neighbor table for the interface.
         // This is "gentle" because it just sends individual Added events for existing entries.
         {
-            debug!("NeighborMonitor: Performing initial neighbor bootstrap...");
+            debug!("DiscoveryService: Performing initial neighbor bootstrap...");
             let mut bootstrap_events = Vec::new();
 
             match get_ipv4_neighbors(&self.handle, Some(self.target_ifindex)).await {
                 Ok(evs) => bootstrap_events.extend(evs),
-                Err(e) => error!("NeighborMonitor: Failed to dump IPv4 neighbors: {e}"),
+                Err(e) => error!("DiscoveryService: Failed to dump IPv4 neighbors: {e}"),
             }
 
             match get_ipv6_neighbors(&self.handle, "", Some(self.target_ifindex)).await {
                 Ok(evs) => bootstrap_events.extend(evs),
-                Err(e) => error!("NeighborMonitor: Failed to dump IPv6 neighbors: {e}"),
+                Err(e) => error!("DiscoveryService: Failed to dump IPv6 neighbors: {e}"),
             }
 
             for event in bootstrap_events {
@@ -246,7 +390,7 @@ impl AsyncService for NeighborMonitor {
                 res = self.messages.recv() => {
                     let Ok((msg, _addr)) = res else {
                         if let Err(broadcast::error::RecvError::Lagged(n)) = res {
-                            warn!(service = "NeighborMonitor", lost = n, "Netlink broadcast lagged");
+                            warn!(service = "DiscoveryService", lost = n, "Netlink broadcast lagged");
                             continue;
                         }
                         break;
@@ -284,7 +428,7 @@ impl AsyncService for NeighborMonitor {
                 res = bus_rx.recv() => {
                     let Ok(timed_event) = res else {
                         if let Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) = res {
-                            warn!(service = "NeighborMonitor", lost = n, "Event bus lagged");
+                            warn!(service = "DiscoveryService", lost = n, "Event bus lagged");
                             continue;
                         }
                         break; // Channel closed
@@ -302,7 +446,7 @@ impl AsyncService for NeighborMonitor {
             }
         }
 
-        info!("NeighborMonitor: Service stopped");
+        info!("DiscoveryService: Service stopped");
         Ok(())
     }
 }

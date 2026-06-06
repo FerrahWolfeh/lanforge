@@ -78,7 +78,8 @@ impl ClientContext {
             .publish(LanforgeEvent::Storage(StorageEvent::DbResetCompleted));
 
         Response::Success(SimpleSuccess {
-            message: "Factory reset completed. Database and transient logs have been cleared.".to_string(),
+            message: "Factory reset completed. Database and transient logs have been cleared."
+                .to_string(),
         })
     }
 }

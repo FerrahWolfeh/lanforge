@@ -94,7 +94,9 @@ impl ClientContext {
             let devices = self.ctx.all_devices();
             for dev in &devices {
                 if dev.origin != lanforge_types::device::Origin::Dynamic {
-                    let _ = self.ctx.apply(lanforge_types::update::DeviceUpdate::Remove(dev.mac));
+                    let _ = self
+                        .ctx
+                        .apply(lanforge_types::update::DeviceUpdate::Remove(dev.mac));
                 }
             }
 

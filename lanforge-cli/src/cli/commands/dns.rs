@@ -17,7 +17,7 @@ use lanforge_api::api::{
 use lanforge_api::rpc::RpcResponse;
 use lanforge_types::events::{DnsEvent, LanforgeEvent};
 use lanforge_types::network::DnsRecordType;
-use lanforge_types::network::dns::adblock::{RewriteRule, BlockingMode};
+use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DnsArgs {
@@ -418,11 +418,14 @@ async fn execute_adblock_config(
     if mode.is_none() && ip_v4.is_none() && ip_v6.is_none() {
         let status = client.dns_adblock_status().await?;
         if client.json {
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "blocking_mode": status.blocking_mode,
-                "blocking_ip_v4": status.blocking_ip_v4,
-                "blocking_ip_v6": status.blocking_ip_v6,
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "blocking_mode": status.blocking_mode,
+                    "blocking_ip_v4": status.blocking_ip_v4,
+                    "blocking_ip_v6": status.blocking_ip_v6,
+                }))?
+            );
         } else {
             println!(" DNS ADBLOCK CONFIGURATION \n");
             println!("  {:<20} {}", "Blocking Mode:", status.blocking_mode);
@@ -437,27 +440,35 @@ async fn execute_adblock_config(
     }
 
     let final_mode = if let Some(m) = mode {
-        let parsed: BlockingMode = m.parse().map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
+        let parsed: BlockingMode = m
+            .parse()
+            .map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
         Some(parsed)
     } else {
         None
     };
 
     let final_ipv4 = if let Some(ip) = ip_v4 {
-        let parsed: Ipv4Addr = ip.parse().map_err(|e| color_eyre::eyre::eyre!("Invalid IPv4: {e}"))?;
+        let parsed: Ipv4Addr = ip
+            .parse()
+            .map_err(|e| color_eyre::eyre::eyre!("Invalid IPv4: {e}"))?;
         Some(parsed)
     } else {
         None
     };
 
     let final_ipv6 = if let Some(ip) = ip_v6 {
-        let parsed: Ipv6Addr = ip.parse().map_err(|e| color_eyre::eyre::eyre!("Invalid IPv6: {e}"))?;
+        let parsed: Ipv6Addr = ip
+            .parse()
+            .map_err(|e| color_eyre::eyre::eyre!("Invalid IPv6: {e}"))?;
         Some(parsed)
     } else {
         None
     };
 
-    let resp = client.dns_adblock_config_set(final_mode, final_ipv4, final_ipv6).await?;
+    let resp = client
+        .dns_adblock_config_set(final_mode, final_ipv4, final_ipv6)
+        .await?;
     println!("✓ {}", resp.message);
     Ok(())
 }

@@ -198,27 +198,6 @@ impl LanforgeContext {
                     Some(DeviceUpdate::NeighborBatch { entries })
                 }
             }
-            DeviceUpdate::TopologyUpdated {
-                mac,
-                parent_mac,
-                ref port,
-                ifindex,
-            } => {
-                let is_redundant = {
-                    let state = self.inner.state.read();
-                    state.devices.get(&mac).is_some_and(|dev| {
-                        dev.topology.as_ref().is_some_and(|old| {
-                            old.parent_mac == parent_mac
-                                && &old.port == port
-                                && old.local_ifindex == ifindex
-                        })
-                    })
-                };
-                if is_redundant {
-                    return None;
-                }
-                Some(update)
-            }
             _ => Some(update),
         }
     }

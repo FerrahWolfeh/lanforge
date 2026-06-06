@@ -1,8 +1,8 @@
 use crate::ClientContext;
-#[cfg(feature = "adblock")]
-use lanforge_api::api::{DnsAllowlistResponse, Response, SimpleSuccess};
 #[cfg(not(feature = "adblock"))]
 use lanforge_api::api::{DnsAllowlistResponse, Response};
+#[cfg(feature = "adblock")]
+use lanforge_api::api::{DnsAllowlistResponse, Response, SimpleSuccess};
 
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};

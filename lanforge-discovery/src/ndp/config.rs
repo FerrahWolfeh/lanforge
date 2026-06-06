@@ -18,6 +18,11 @@ pub struct MonitorConfig {
 
     /// Seconds after which a neighbor is considered stale if no activity is detected.
     pub stale_timeout_secs: u64,
+
+    /// Whether active ping probing is enabled.
+    pub ping_enabled: bool,
+    /// Interval for periodic active ping sweeps (seconds).
+    pub ping_interval_secs: u64,
 }
 
 impl Default for MonitorConfig {
@@ -27,6 +32,8 @@ impl Default for MonitorConfig {
             scan_pacing_ms: 10,
             batch_interval_ms: 100,
             stale_timeout_secs: 3600, // 1 hour
+            ping_enabled: true,
+            ping_interval_secs: 120, // 2 minutes
         }
     }
 }

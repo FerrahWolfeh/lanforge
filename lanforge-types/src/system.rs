@@ -48,7 +48,6 @@ pub enum Cap {
     Ra,
     NdpDiscovery,
     MdnsProbe,
-    LldpProbe,
     Uds,
     Http,
     Zstd,

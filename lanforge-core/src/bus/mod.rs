@@ -10,8 +10,8 @@ pub use lanforge_types::events::{LanforgeEvent, TimedEvent};
 use tokio::sync::broadcast::{self, Receiver};
 
 pub use lanforge_types::events::{
-    NetworkChange, AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, DnsEvent, EventVec,
-    NetworkEvent, StorageEvent, SystemEvent,
+    AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, DnsEvent, EventVec,
+    NetworkChange, NetworkEvent, StorageEvent, SystemEvent,
 };
 
 pub struct EventBus {

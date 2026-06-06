@@ -29,7 +29,6 @@ pub fn router() -> Router<AppState> {
         .route("/scan", post(handle_scan))
         .route("/reload", post(handle_reload))
         .route("/shutdown", post(handle_shutdown))
-        .route("/topology", get(handle_topology))
         .route("/context", get(handle_context_dump))
         .route(
             "/config",
@@ -62,11 +61,6 @@ async fn handle_reload(State(state): State<AppState>) -> impl IntoResponse {
 async fn handle_shutdown(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_shutdown().await, Success => NoContent)
-}
-
-async fn handle_topology(State(state): State<AppState>) -> impl IntoResponse {
-    let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_topology().await, Topology)
 }
 
 async fn handle_context_dump(

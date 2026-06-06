@@ -628,7 +628,7 @@ fn handle_tui_key_event(
                 }
                 _ => {}
             },
-            _ => {}
+            TuiTab::Events => {}
         }
     } else if old_mode == TuiMode::Detail && app.active_tab == TuiTab::Devices {
         match key.code {
@@ -682,9 +682,7 @@ fn handle_app_event(
         AppEvent::DevicesUpdate(s) => {
             app.state.devices = Some(*s);
         }
-        AppEvent::TopologyUpdate(s) => {
-            app.state.topology = Some(*s);
-        }
+
         AppEvent::LeasesUpdate(s) => {
             app.state.leases = Some(s);
         }
@@ -911,15 +909,7 @@ fn fetch_common_data(client: &Arc<LanforgeClient>, tx: &mpsc::Sender<AppEvent>) 
             }
         });
     }
-    {
-        let client = client.clone();
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            if let Ok(s) = client.topology().await {
-                let _ = tx.send(AppEvent::TopologyUpdate(Box::new(s))).await;
-            }
-        });
-    }
+
     {
         let client = client.clone();
         let tx = tx.clone();
@@ -1027,7 +1017,7 @@ async fn run_periodic_fetch(
         let tab_idx = active_tab.load(Ordering::Relaxed);
         let on_dns = tab_idx == TuiTab::Dns.to_index() || tab_idx == TuiTab::Adblock.to_index();
 
-        // Common endpoints: status, banners, devices, topology, leases, pools (every 5s)
+        // Common endpoints: status, banners, devices, leases, pools (every 5s)
         if last_common.elapsed() >= Duration::from_secs(5) {
             fetch_common_data(&client, &tx);
             last_common = Instant::now();

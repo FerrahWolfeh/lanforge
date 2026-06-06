@@ -1,9 +1,9 @@
 //! Neighbor Discovery Protocol (NDP) and ARP event mapping.
 
-use std::net::{IpAddr, Ipv6Addr};
 use crate::identifiers::MacAddr;
 use crate::update::DeviceUpdate;
 use crate::utils::ip_matches_prefix;
+use std::net::{IpAddr, Ipv6Addr};
 
 /// A neighbor event (IPv4 or IPv6) observed via the kernel `RTM_NEWNEIGH` netlink signal.
 #[derive(Debug, Clone, PartialEq, Eq)]

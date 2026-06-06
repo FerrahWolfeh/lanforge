@@ -161,12 +161,6 @@ pub enum DeviceUpdate {
         mac: MacAddr,
         class: DeviceClass,
     },
-    TopologyUpdated {
-        mac: MacAddr,
-        parent_mac: Option<MacAddr>,
-        port: Option<String>,
-        ifindex: u32,
-    },
     Reset,
     NeighborBatch {
         entries: Vec<(MacAddr, IpAddr, bool)>,

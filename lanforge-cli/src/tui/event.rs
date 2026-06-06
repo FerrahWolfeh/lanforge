@@ -4,8 +4,7 @@ use lanforge_api::api::{
     DevicesResponse, DhcpPoolsResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheStatsExtResponse, DnsQueryLogEntry,
     DnsQueryLogResponse, DnsQueryResponse, DnsRewritesResponse, DnsStatsResponse,
-    DnsUpstreamsResponse, LeasesResponse, ServiceBannersResponse, StatusResponse, TopologyResponse,
-    WhoisResponse,
+    DnsUpstreamsResponse, LeasesResponse, ServiceBannersResponse, StatusResponse, WhoisResponse,
 };
 use lanforge_types::events::TimedEvent;
 
@@ -16,7 +15,6 @@ pub enum AppEvent {
     StatusUpdate(Box<StatusResponse>),
     ServiceBannersUpdate(ServiceBannersResponse),
     DevicesUpdate(Box<DevicesResponse>),
-    TopologyUpdate(Box<TopologyResponse>),
     LeasesUpdate(LeasesResponse),
     DhcpPoolsUpdate(DhcpPoolsResponse),
     DnsStatsUpdate(Box<DnsStatsResponse>),

@@ -96,12 +96,6 @@ pub struct DeviceRow {
     pub managed_at: Option<i64>,
     pub class: i64,
 
-    // device_topology table (LEFT JOIN)
-    pub parent_mac: Option<String>,
-    pub parent_port: Option<String>,
-    pub local_ifindex: Option<i64>,
-    pub topo_updated: Option<i64>,
-
     // static_devices table (LEFT JOIN)
     pub v4_static: Option<String>,
     pub v6_suffix: Option<String>,

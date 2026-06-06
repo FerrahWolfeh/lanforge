@@ -35,33 +35,33 @@ impl Middleware for RewriteMiddleware {
                 &domain,
                 resp,
             ) {
-                    ctx.stats.inc_auth();
+                ctx.stats.inc_auth();
 
-                    let src_mac = ctx.local.ctx.get_mac_by_ip(req.src_ip);
+                let src_mac = ctx.local.ctx.get_mac_by_ip(req.src_ip);
 
-                    let mut answer = None;
-                    let mut decoder = WireDecoder::new(resp);
-                    if let Some(msg) = decoder.decode_message()
-                        && let Some(first) = msg.answers.first()
-                    {
-                        answer = Some(format!("{}", first.rdata));
-                    }
-
-                    ctx.record_log(DnsLogEvent {
-                        src_ip: req.src_ip,
-                        src_mac,
-                        domain: Arc::from(domain),
-                        qtype: DnsRecordType::from(req.question.qtype()),
-                        result: QueryResult::Rewritten,
-                        upstream_us: 0,
-                        cached: false,
-                        answer,
-                        protocol: req.protocol,
-                    });
-
-                    return Ok(true);
+                let mut answer = None;
+                let mut decoder = WireDecoder::new(resp);
+                if let Some(msg) = decoder.decode_message()
+                    && let Some(first) = msg.answers.first()
+                {
+                    answer = Some(format!("{}", first.rdata));
                 }
-                Ok(false)
-            })
-        }
+
+                ctx.record_log(DnsLogEvent {
+                    src_ip: req.src_ip,
+                    src_mac,
+                    domain: Arc::from(domain),
+                    qtype: DnsRecordType::from(req.question.qtype()),
+                    result: QueryResult::Rewritten,
+                    upstream_us: 0,
+                    cached: false,
+                    answer,
+                    protocol: req.protocol,
+                });
+
+                return Ok(true);
+            }
+            Ok(false)
+        })
     }
+}

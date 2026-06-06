@@ -4,7 +4,11 @@ use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType};
 use std::time::Instant;
 
 impl ClientContext {
-    pub async fn handle_dns_query(&self, name: String, record_type: Option<DnsRecordType>) -> Response {
+    pub async fn handle_dns_query(
+        &self,
+        name: String,
+        record_type: Option<DnsRecordType>,
+    ) -> Response {
         let qtype = record_type.unwrap_or(DnsRecordType::A);
 
         let start = Instant::now();

@@ -8,7 +8,9 @@ pub mod network;
 pub mod storage;
 pub mod system;
 
-pub use self::device::{NetworkChange, AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType};
+pub use self::device::{
+    AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, NetworkChange,
+};
 pub use self::dns::DnsEvent;
 pub use self::network::NetworkEvent;
 pub use self::storage::StorageEvent;

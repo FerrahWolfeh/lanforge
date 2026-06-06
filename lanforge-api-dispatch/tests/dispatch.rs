@@ -55,13 +55,6 @@ async fn test_dispatch_status() {
 }
 
 #[tokio::test]
-async fn test_dispatch_topology() {
-    let client_ctx = init_test_context().await;
-    let res = client_ctx.handle_topology().await;
-    assert!(matches!(res, Response::Topology(_)));
-}
-
-#[tokio::test]
 async fn test_dispatch_devices() {
     let client_ctx = init_test_context().await;
     let res = client_ctx

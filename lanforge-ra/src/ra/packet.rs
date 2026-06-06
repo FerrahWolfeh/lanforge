@@ -15,9 +15,7 @@
 //! [ Option 31: DNSSL (search domains) ]
 //! ```
 
-use super::config::{
-    PrefixConfig, PrefixLifetime, PrefixSource, RaConfig,
-};
+use super::config::{PrefixConfig, PrefixLifetime, PrefixSource, RaConfig};
 use std::net::Ipv6Addr;
 
 /// `ICMPv6` type for `Router Advertisement` (`134` per `RFC 4861`).
@@ -150,9 +148,8 @@ pub fn build_ra_packet(
 
 /// Resolves the effective lifetime of a DNS option, defaulting to 2 × `max_interval` if not set.
 fn get_dns_lifetime(configured_lifetime: Option<u32>, max_interval: std::time::Duration) -> u32 {
-    configured_lifetime.unwrap_or_else(|| {
-        u32::try_from(max_interval.as_secs() * 2).unwrap_or(u32::MAX)
-    })
+    configured_lifetime
+        .unwrap_or_else(|| u32::try_from(max_interval.as_secs() * 2).unwrap_or(u32::MAX))
 }
 
 /// Zeros out the host bits of an IPv6 address based on the prefix length.

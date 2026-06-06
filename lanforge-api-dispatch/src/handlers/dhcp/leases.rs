@@ -1,7 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{
-    DhcpPoolEntry, DhcpPoolsResponse, DhcpPoolType, LeaseEntry, LeaseKind, LeasesResponse, Response,
-    SimpleSuccess,
+    DhcpPoolEntry, DhcpPoolType, DhcpPoolsResponse, LeaseEntry, LeaseKind, LeasesResponse,
+    Response, SimpleSuccess,
 };
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_types::{

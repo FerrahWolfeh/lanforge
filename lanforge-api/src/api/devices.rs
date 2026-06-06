@@ -3,7 +3,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use super::common::{HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse};
 use lanforge_types::{
     device::{
-        DeviceClass, IpClassification, LearningMethod, LeaseHistoryEntry, Origin, TransientOrigin,
+        DeviceClass, DeviceStatus, IpClassification, LearningMethod, LeaseHistoryEntry, Origin,
+        TransientOrigin,
     },
     identifiers::{Duid, MacAddr},
 };
@@ -51,6 +52,8 @@ pub struct DeviceEntry {
     pub origin: Origin,
     /// Current online/offline status.
     pub online: bool,
+    /// Detailed reachability status (Online, Stale, Offline).
+    pub status: DeviceStatus,
     /// Last seen timestamp.
     pub last_seen: u64,
     /// Hex-encoded DUID for `DHCPv6`, if available.
@@ -111,30 +114,6 @@ pub struct WhoisResponse {
     pub entry: DeviceEntry,
     /// Historical lease assignments.
     pub history: Vec<LeaseHistoryEntry>,
-}
-
-/// A response containing the discovered physical topology.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TopologyResponse {
-    /// The list of devices with known topology connections.
-    pub entries: Vec<TopologyEntry>,
-}
-
-/// A topology connection representing a link between a device and its parent.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TopologyEntry {
-    /// MAC address of the device.
-    pub mac: MacAddr,
-    /// Hostname of the device.
-    pub hostname: String,
-    /// Parent MAC address, if known.
-    pub parent_mac: Option<MacAddr>,
-    /// Port on the parent device, if known.
-    pub port: Option<String>,
-    /// Local interface index connecting to this topology tree.
-    pub local_ifindex: u32,
-    /// Last seen timestamp of this topology link from unix epoch in seconds.
-    pub last_updated: u64,
 }
 
 /// A single entry in the transient hosts list.
@@ -203,18 +182,6 @@ impl HttpWrappedResponse for HostsResponse {
 
 impl HttpWrappedResponse for WhoisResponse {
     type Wrapper = HttpDataResponse<WhoisResponse>;
-
-    fn wrap(self) -> Self::Wrapper {
-        HttpDataResponse { data: self }
-    }
-
-    fn unwrap(wrapper: Self::Wrapper) -> Self {
-        wrapper.data
-    }
-}
-
-impl HttpWrappedResponse for TopologyResponse {
-    type Wrapper = HttpDataResponse<TopologyResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

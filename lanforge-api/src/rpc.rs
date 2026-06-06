@@ -4,7 +4,7 @@ use crate::api::{
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
-    ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport, TopologyResponse,
+    ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
     TransientHostsResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
@@ -152,7 +152,6 @@ pub trait LanforgeRpc {
     ) -> Result<Box<serde_json::Value>, RpcCallError>;
     async fn db_reset(&self) -> Result<SimpleSuccess, RpcCallError>;
     async fn leases(&self, count: bool) -> Result<LeasesResponse, RpcCallError>;
-    async fn topology(&self) -> Result<TopologyResponse, RpcCallError>;
     async fn ak_generate(
         &self,
         name: String,

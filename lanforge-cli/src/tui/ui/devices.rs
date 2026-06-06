@@ -1,5 +1,6 @@
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
+use lanforge_types::device::DeviceStatus;
 use lanforge_types::utils::system_time_to_secs;
 use ratatui::layout::{Direction, Layout};
 use ratatui::{
@@ -195,10 +196,14 @@ fn build_device_rows(app: &TuiApp, rows: &mut Vec<Row<'static>>) -> usize {
 
             matching_count += 1;
 
-            let status_span = if dev.online {
-                Span::styled("● online", Style::default().fg(theme::ONLINE))
-            } else {
-                Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
+            let status_span = match dev.status {
+                DeviceStatus::Online => {
+                    Span::styled("● online", Style::default().fg(theme::ONLINE))
+                }
+                DeviceStatus::Stale => Span::styled("● stale", Style::default().fg(theme::STALE)),
+                DeviceStatus::Offline => {
+                    Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
+                }
             };
 
             let host_display = format!("{} {}", utils::get_class_icon(dev.class), dev.hostname);

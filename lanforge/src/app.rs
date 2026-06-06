@@ -13,6 +13,7 @@ use crate::registry::ServiceRegistry;
 use lanforge_db::worker::DbWorker;
 use lanforge_dhcp::v4::Dhcpv4Service;
 use lanforge_dhcp::v6::Dhcpv6Service;
+use lanforge_discovery::{mdns::MdnsProber, ndp::DiscoveryService};
 use lanforge_dns::server::service::DnsService;
 #[cfg(feature = "dns-doq")]
 use lanforge_dns::server::transport::doq::DoqService;
@@ -21,9 +22,6 @@ use lanforge_dns::server::transport::dot::DotService;
 use lanforge_host::ifmon::AddressMonitor;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
-use lanforge_ndp::ndp::NeighborMonitor;
-use lanforge_probe::lldp::LldpMonitor;
-use lanforge_probe::mdns::MdnsProber;
 use lanforge_ra::ra::RaService;
 use lanforge_tftp::TftpService;
 use lanforge_uds::server::ControlService;
@@ -152,7 +150,6 @@ impl Daemon {
         let db = self.bootstrap.db.clone();
         let log_db = self.bootstrap.log_db.clone();
         let ctx = self.ctx.clone();
-        let ifname = cfg.system.iface.clone();
 
         if !cfg.monitor_toml.enabled {
             tracing::warn!(
@@ -164,10 +161,9 @@ impl Daemon {
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
             async [ctx, cfg] if cfg.mdns_toml.enabled => MdnsProber::new(cfg.mdns_toml.clone(), ctx),
 
-            // 2. Network Monitoring (Interface, Neighbors, LLDP)
+            // 2. Network Monitoring (Interface, Neighbors)
             async [ctx, rt_handle, messages] => AddressMonitor::new(rt_handle, messages.subscribe(), target_ifindex, ctx),
-            async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => NeighborMonitor::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), target_ifindex, ctx),
-            async [ctx, ifname] => LldpMonitor::new(ifname, target_ifindex, ctx),
+            async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => DiscoveryService::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), target_ifindex, ctx),
 
             // 3. IPv6 Protocol Services (RA)
             async [ctx, cfg] if cfg.ra_enabled => RaService::new(cfg.to_ra_config(), ctx),

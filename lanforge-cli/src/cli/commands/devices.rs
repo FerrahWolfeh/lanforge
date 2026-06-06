@@ -9,6 +9,7 @@ use lanforge_api::api::{
     DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse, TransientHostEntry,
     TransientHostsResponse,
 };
+use lanforge_types::device::DeviceStatus;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DevicesArgs {
@@ -118,10 +119,10 @@ pub fn render_devices(resp: &DevicesResponse, ascii: bool) {
 fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
     let dev = &props.device;
     let symbol = dev.origin.symbol();
-    let status_color = if dev.online {
-        Color::Green
-    } else {
-        Color::DarkGrey
+    let status_color = match dev.status {
+        DeviceStatus::Online => Color::Green,
+        DeviceStatus::Stale => Color::Yellow,
+        DeviceStatus::Offline => Color::DarkGrey,
     };
     let host = if dev.hostname.is_empty() {
         "—".to_string()
@@ -235,12 +236,12 @@ fn sort_devices(devices: &mut [DeviceEntry], mode: SortMode) {
                 a.hostname.to_lowercase().cmp(&b.hostname.to_lowercase())
             }
         }
-        SortMode::LastSeen => b.last_seen.cmp(&a.last_seen).then(b.online.cmp(&a.online)),
+        SortMode::LastSeen => b.last_seen.cmp(&a.last_seen).then(b.status.cmp(&a.status)),
         SortMode::Ip => a.display_v4.cmp(&b.display_v4),
         SortMode::Ipv6 => a.display_v6.cmp(&b.display_v6),
         SortMode::Online => b
-            .online
-            .cmp(&a.online)
+            .status
+            .cmp(&a.status)
             .then(b.last_seen.cmp(&a.last_seen))
             .then(a.hostname.cmp(&b.hostname)),
     });

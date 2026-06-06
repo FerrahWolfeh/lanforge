@@ -6,6 +6,7 @@ use crate::cli::{
 };
 use color_eyre::eyre::Result;
 use lanforge_api::rpc::{LanforgeRpcError, RpcResponse};
+use lanforge_types::device::DeviceStatus;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "remote")]
@@ -335,15 +336,14 @@ fn render_watch_event(e: &TimedEvent, device_map: &HashMap<String, String>, verb
                         format!("Observed SLAAC: {}", addr.to_string().yellow())
                     }
                     NetworkChange::StatusChanged {
-                        online,
+                        online: _,
+                        status,
                         hostname: _,
-                    } => {
-                        if *online {
-                            "Status: Online".green().to_string()
-                        } else {
-                            "Status: Offline".red().to_string()
-                        }
-                    }
+                    } => match status {
+                        DeviceStatus::Online => "Status: Online".green().to_string(),
+                        DeviceStatus::Stale => "Status: Stale".yellow().to_string(),
+                        DeviceStatus::Offline => "Status: Offline".red().to_string(),
+                    },
                     NetworkChange::HostnameHint { hostname } => {
                         format!("Hostname updated to: {}", hostname.cyan())
                     }
@@ -364,9 +364,7 @@ fn render_watch_event(e: &TimedEvent, device_map: &HashMap<String, String>, verb
                             .unwrap_or_default();
                         format!("ARP Activity: {} {}", ip_str.yellow(), mapped.cyan())
                     }
-                    NetworkChange::TopologyChanged { parent_mac, port } => {
-                        format!("Topology Changed: parent={parent_mac:?}, port={port:?}")
-                    }
+
                     NetworkChange::IpDeleted { ip } => {
                         format!("IP Deleted: {ip}").red().to_string()
                     }

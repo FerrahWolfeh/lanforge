@@ -10,7 +10,9 @@ pub mod network;
 pub mod tests;
 
 use crate::bus::{AdminChange, DeviceEvent, LanforgeEvent, NetworkChange};
-use lanforge_types::device::{Device, DeviceClass, Ipv6AddrOrSuffix, Origin, TransientHost};
+use lanforge_types::device::{
+    Device, DeviceClass, DeviceStatus, Ipv6AddrOrSuffix, Origin, TransientHost,
+};
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::DnsReverseResolver;
@@ -88,12 +90,6 @@ impl State {
             DeviceUpdate::PruneZombies => self.handle_prune_zombies(),
             DeviceUpdate::RebuildDnsIndices => self.handle_rebuild_dns_indices(),
             DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
-            DeviceUpdate::TopologyUpdated {
-                mac,
-                parent_mac,
-                port,
-                ifindex,
-            } => self.handle_topology_updated(mac, parent_mac, port, ifindex),
             DeviceUpdate::Reset => self.handle_reset(),
             DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries),
             DeviceUpdate::TransientHostResolved {
@@ -319,7 +315,7 @@ impl State {
             .unwrap_or_else(|| Arc::new(Device::new(mac)));
 
         let was_worthy = was_in_table && dev_arc.is_worthy();
-        let was_online = dev_arc.is_online();
+        let was_status = dev_arc.status;
         let mut events = EventVec::new();
 
         {
@@ -352,6 +348,8 @@ impl State {
                 }
             }
 
+            dev.status = dev.evaluate_status(SystemTime::now(), None);
+
             if dev.is_worthy() {
                 self.index_device(mac, dev);
             }
@@ -359,13 +357,14 @@ impl State {
 
         let is_worthy = dev_arc.is_worthy();
         if is_worthy {
-            let now_online = dev_arc.is_online();
-            if was_online != now_online {
+            let now_status = dev_arc.status;
+            if was_status != now_status {
                 let hostname = dev_arc.hostname.name.clone();
                 events.push(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
                     mac,
                     change: Box::new(NetworkChange::StatusChanged {
-                        online: now_online,
+                        online: now_status == DeviceStatus::Online,
+                        status: now_status,
                         hostname: Some(hostname.clone()),
                     }),
                     hostname: Some(hostname),
@@ -393,7 +392,7 @@ impl State {
             .unwrap_or_else(|| Arc::new(Device::new(mac)));
 
         let was_worthy = was_in_table && dev_arc.is_worthy();
-        let was_online = dev_arc.is_online();
+        let was_status = dev_arc.status;
         let mut events = EventVec::new();
 
         {
@@ -418,6 +417,8 @@ impl State {
                 }
             }
 
+            dev.status = dev.evaluate_status(SystemTime::now(), None);
+
             if dev.is_worthy() {
                 self.index_device(mac, dev);
             }
@@ -425,13 +426,14 @@ impl State {
 
         let is_worthy = dev_arc.is_worthy();
         if is_worthy {
-            let now_online = dev_arc.is_online();
-            if was_online != now_online {
+            let now_status = dev_arc.status;
+            if was_status != now_status {
                 let hostname = dev_arc.hostname.name.clone();
                 events.push(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
                     mac,
                     change: Box::new(NetworkChange::StatusChanged {
-                        online: now_online,
+                        online: now_status == DeviceStatus::Online,
+                        status: now_status,
                         hostname: Some(hostname.clone()),
                     }),
                     hostname: Some(hostname),

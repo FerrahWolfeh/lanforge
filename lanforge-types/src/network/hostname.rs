@@ -2,9 +2,7 @@ use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, EnumRepr,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, EnumRepr)]
 pub enum HostnameOrigin {
     #[default]
     Dhcp = 0,

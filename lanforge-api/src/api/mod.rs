@@ -57,8 +57,6 @@ pub enum Response {
     ContextDump(Box<Value>),
     /// List of active DHCP leases.
     Leases(LeasesResponse),
-    /// Hierarchical physical topology.
-    Topology(TopologyResponse),
     /// List of DNS rewrite rules.
     DnsRewrites(DnsRewritesResponse),
     /// List of DNS allowlist entries.

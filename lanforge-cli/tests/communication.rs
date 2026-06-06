@@ -19,7 +19,6 @@ use lanforge_cli::cli::commands::{
     lease::{LeaseAction, LeaseArgs},
     simple::{ContextArgs, ReloadArgs, ScanArgs},
     status::{ServicesArgs, StatusArgs},
-    topology::TopologyArgs,
     whois::WhoisArgs,
     wol::WolArgs,
 };
@@ -444,7 +443,7 @@ async fn test_communication_dns() {
 }
 
 #[tokio::test]
-async fn test_communication_simple_and_topology() {
+async fn test_communication_simple() {
     let dir = tempdir().unwrap();
     let socket_path = dir
         .path()
@@ -463,11 +462,7 @@ async fn test_communication_simple_and_topology() {
     let reload_cmd = ReloadArgs {};
     assert!(reload_cmd.execute(&client).await.is_ok());
 
-    // 3. Topology Command
-    let topology_cmd = TopologyArgs {};
-    assert!(topology_cmd.execute(&client).await.is_ok());
-
-    // 4. Context Dump Command (verifies that we hit context_dump error stub correctly)
+    // 3. Context Dump Command (verifies that we hit context_dump error stub correctly)
     let context_cmd = ContextArgs {
         only_devices: false,
         only_orphans: false,

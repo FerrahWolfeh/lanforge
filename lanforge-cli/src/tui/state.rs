@@ -2,7 +2,7 @@ use lanforge_api::api::{
     DevicesResponse, DhcpPoolsResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheStatsExtResponse, DnsQueryLogEntry,
     DnsQueryLogResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
-    LeasesResponse, ServiceBannersResponse, StatusResponse, TopologyResponse, WhoisResponse,
+    LeasesResponse, ServiceBannersResponse, StatusResponse, WhoisResponse,
 };
 use lanforge_types::events::TimedEvent;
 use std::collections::VecDeque;
@@ -20,7 +20,7 @@ pub struct TuiState {
     pub dns_adblock_urls: Option<DnsAdblockUrlsResponse>,
     pub dns_allowlist: Option<DnsAllowlistResponse>,
     pub devices: Option<DevicesResponse>,
-    pub topology: Option<TopologyResponse>,
+
     pub leases: Option<LeasesResponse>,
     pub dhcp_pools: Option<DhcpPoolsResponse>,
     pub events: VecDeque<TimedEvent>,
@@ -52,7 +52,7 @@ impl TuiState {
             dns_adblock_urls: None,
             dns_allowlist: None,
             devices: None,
-            topology: None,
+
             leases: None,
             dhcp_pools: None,
             events: VecDeque::with_capacity(500),

@@ -8,7 +8,7 @@ use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
 };
 use lanforge_types::device::{
-    Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Origin, TopologyInfo,
+    DeviceStatus, Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Origin,
     TransientHost, TransientOrigin, V6ObservationOrigin, classify_ipv6,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
@@ -456,6 +456,7 @@ impl State {
                 if changed {
                     Some(NetworkChange::StatusChanged {
                         online: true,
+                        status: DeviceStatus::Online,
                         hostname: None,
                     })
                 } else {
@@ -523,36 +524,6 @@ impl State {
                 dev.class = class;
                 Some(AdminChange::Classified { class })
             }
-        })
-    }
-
-    pub(crate) fn handle_topology_updated(
-        &mut self,
-        mac: MacAddr,
-        parent_mac: Option<MacAddr>,
-        port: Option<String>,
-        ifindex: u32,
-    ) -> EventVec {
-        self.mutate_device(mac, |dev| {
-            let new_topo = TopologyInfo {
-                parent_mac,
-                port: port.clone(),
-                local_ifindex: ifindex,
-                last_updated: SystemTime::now(),
-            };
-
-            if let Some(old) = &dev.topology {
-                let same_topo = old.parent_mac == new_topo.parent_mac
-                    && old.port == new_topo.port
-                    && old.local_ifindex == new_topo.local_ifindex;
-
-                if same_topo {
-                    return None;
-                }
-            }
-
-            dev.topology = Some(new_topo);
-            Some(NetworkChange::TopologyChanged { parent_mac, port })
         })
     }
 
@@ -647,14 +618,14 @@ impl State {
         events
     }
 
-    pub fn expire_stale(&mut self, ip_expiry_threshold: Duration) -> EventVec {
+    pub fn expire_stale(&mut self, stale_timeout: Duration) -> EventVec {
         let now = SystemTime::now();
         let mut events = EventVec::new();
 
         let macs: Vec<MacAddr> = self.devices.keys().copied().collect();
         for mac in macs {
             let mut dev_events = self.mutate_device(mac, |dev| {
-                let changes = dev.expire_stale_inner(now, ip_expiry_threshold);
+                let changes = dev.expire_stale_inner(now, stale_timeout);
                 changes.into_iter().next()
             });
             events.append(&mut dev_events);

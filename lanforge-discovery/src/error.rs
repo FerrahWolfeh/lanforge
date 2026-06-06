@@ -14,6 +14,10 @@ pub enum NetworkError {
     #[error("Netlink failure: {0}")]
     Netlink(#[from] rtnetlink::Error),
 
+    /// Socket error.
+    #[error("Socket error: {0}")]
+    Socket(String),
+
     /// Generic networking error.
     #[error("Generic network failure: {0}")]
     Generic(String),

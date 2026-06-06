@@ -120,7 +120,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut TuiApp) {
                     .map_or_else(|| "—".to_string(), |ip| ip.to_string()),
             );
             add_fallback_row(
-                "NDP Monitor",
+                "Discovery",
                 svcs.ndp_monitor.state,
                 svcs.ndp_monitor.uptime_secs,
                 format!("{} neighbors tracked", svcs.ndp_monitor.addrs_tracked),

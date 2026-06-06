@@ -6,7 +6,7 @@ use crate::cli::{Execute, LanforgeClient};
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::WhoisResponse;
-use lanforge_types::device::{LeaseHistoryEntry};
+use lanforge_types::device::{DeviceStatus, LeaseHistoryEntry};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct WhoisArgs {
@@ -16,10 +16,10 @@ pub struct WhoisArgs {
 
 impl Execute for WhoisArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        let target = if let Some(t) = self.target { t } else {
-            let dev =
-                fuzzy_select_device(client, "Select device for whois:")
-                    .await?;
+        let target = if let Some(t) = self.target {
+            t
+        } else {
+            let dev = fuzzy_select_device(client, "Select device for whois:").await?;
             dev.mac.to_string()
         };
 
@@ -50,9 +50,16 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
     .print();
 
     let symbol = dev.origin.symbol();
-    let status_color = if dev.online { Color::Green } else { Color::Red };
-    let status_text = if dev.online { "Online" } else { "Offline" };
-    let border = if ascii { BorderStyle::Classic } else { BorderStyle::Round };
+    let (status_text, status_color) = match dev.status {
+        DeviceStatus::Online => ("Online", Color::Green),
+        DeviceStatus::Stale => ("Stale", Color::Yellow),
+        DeviceStatus::Offline => ("Offline", Color::Red),
+    };
+    let border = if ascii {
+        BorderStyle::Classic
+    } else {
+        BorderStyle::Round
+    };
 
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, border_style: border, border_color: Color::DarkGrey) {
