@@ -5,7 +5,7 @@ use lanforge_types::{
     identifiers::{Duid, MacAddr},
     update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
 };
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
 impl ClientContext {
@@ -27,7 +27,7 @@ impl ClientContext {
                     _ => None,
                 },
                 v6_suffix: dev.v6.iter().find_map(|s| match s {
-                    IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) => Some(*ip),
+                    IPv6State::Static(suf, _) => Some(Ipv6Addr::from(*suf)),
                     _ => None,
                 }),
                 origin: dev.origin,

@@ -9,7 +9,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_types::device::{
-    Device, HostnameOrigin, IPv4State, IPv6State, V4Lease, V6PrefixLease,
+    Device, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, V4Lease, V6PrefixLease,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::update::DeviceUpdate;
@@ -416,4 +416,48 @@ async fn test_ipv4_int_computed_column() {
             .await
             .unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn test_postgres_static_v6_suffix_roundtrip() {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+        return; // Skip if no DATABASE_URL is set
+    };
+    if !url.starts_with("postgres") && !url.starts_with("postgresql") {
+        return; // Skip if not postgres
+    }
+
+    let db = LanforgeDb::open(&DatabaseConfig {
+        url: url.clone(),
+        ..Default::default()
+    })
+    .await
+    .expect("Failed to connect to Postgres test database");
+
+    // Clean up or reset first
+    db.reset().await.unwrap();
+
+    let mac = make_mac(0x99);
+    let mut dev = Device::new(mac);
+    dev.hostname = "PostgresTest".into();
+    dev.hostname.origin = HostnameOrigin::Static;
+    dev.origin = lanforge_types::device::Origin::Static;
+
+    let static_suffix = Ipv6AddrOrSuffix::parse("::f00f").unwrap();
+    dev.v6
+        .push(IPv6State::Static(static_suffix, SystemTime::now()));
+
+    db.upsert_device(&dev).await.unwrap();
+
+    let loaded = db.load_table().await.unwrap();
+    let loaded_dev = loaded.devices.get(&mac).expect("Device missing after load");
+
+    assert_eq!(loaded_dev.hostname.name, "PostgresTest");
+    assert_eq!(loaded_dev.v6.len(), 1);
+    match &loaded_dev.v6[0] {
+        IPv6State::Static(suf, _) => {
+            assert_eq!(suf.to_string(), "::f00f");
+        }
+        _ => panic!("Expected Static IPv6State"),
+    }
 }
