@@ -124,6 +124,10 @@ impl ClientContext {
             overwrite,
         } = config;
 
+        let mut dhcp_v4_dirty = overwrite;
+        let mut dhcp_v6_dirty = overwrite;
+        let mut ra_dirty = overwrite;
+
         let mut total_success = true;
         let mut messages = Vec::new();
 
@@ -341,6 +345,7 @@ impl ClientContext {
                 total_success = false;
                 messages.push(format!("DHCPv4 pools import error: {e}"));
             } else {
+                dhcp_v4_dirty = true;
                 messages.push(format!(
                     "Successfully imported {} DHCPv4 pools",
                     pools.len()
@@ -352,6 +357,7 @@ impl ClientContext {
                 total_success = false;
                 messages.push(format!("DHCPv6 pools import error: {e}"));
             } else {
+                dhcp_v6_dirty = true;
                 messages.push(format!(
                     "Successfully imported {} DHCPv6 pools",
                     pools.len()
@@ -363,6 +369,7 @@ impl ClientContext {
                 total_success = false;
                 messages.push(format!("RA prefixes import error: {e}"));
             } else {
+                ra_dirty = true;
                 messages.push(format!(
                     "Successfully imported {} RA prefixes",
                     prefixes.len()
@@ -374,6 +381,7 @@ impl ClientContext {
                 total_success = false;
                 messages.push(format!("RA RDNSS options import error: {e}"));
             } else {
+                ra_dirty = true;
                 messages.push(format!(
                     "Successfully imported {} RA RDNSS options",
                     rdnss.len()
@@ -385,11 +393,38 @@ impl ClientContext {
                 total_success = false;
                 messages.push(format!("RA DNSSL options import error: {e}"));
             } else {
+                ra_dirty = true;
                 messages.push(format!(
                     "Successfully imported {} RA DNSSL options",
                     dnssl.len()
                 ));
             }
+        }
+
+        if dhcp_v4_dirty && let Ok(pools) = self.db.load_dhcp_v4_pools().await {
+            let _ = self
+                .ctx
+                .apply(lanforge_types::update::DeviceUpdate::UpdateDhcpV4Pools { pools });
+        }
+        if dhcp_v6_dirty && let Ok(pools) = self.db.load_dhcp_v6_pools().await {
+            let _ = self
+                .ctx
+                .apply(lanforge_types::update::DeviceUpdate::UpdateDhcpV6Pools { pools });
+        }
+        if ra_dirty
+            && let (Ok(prefixes), Ok(rdnss), Ok(dnssl)) = (
+                self.db.load_ra_prefixes().await,
+                self.db.load_ra_rdnss().await,
+                self.db.load_ra_dnssl().await,
+            )
+        {
+            let _ = self
+                .ctx
+                .apply(lanforge_types::update::DeviceUpdate::UpdateRaConfig {
+                    prefixes,
+                    rdnss,
+                    dnssl,
+                });
         }
 
         if total_success {

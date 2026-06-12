@@ -4,6 +4,8 @@ use std::time::SystemTime;
 
 use crate::device::{DeviceClass, Origin, TransientOrigin};
 use crate::identifiers::{Duid, MacAddr};
+use crate::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use crate::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use crate::network::{DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -196,5 +198,16 @@ pub enum DeviceUpdate {
         used: u32,
         available: u32,
         utilization_percent: f32,
+    },
+    UpdateDhcpV4Pools {
+        pools: Vec<Dhcpv4Pool>,
+    },
+    UpdateDhcpV6Pools {
+        pools: Vec<Dhcpv6Pool>,
+    },
+    UpdateRaConfig {
+        prefixes: Vec<RAPrefix>,
+        rdnss: Vec<RdnssConfig>,
+        dnssl: Vec<DnsslConfig>,
     },
 }

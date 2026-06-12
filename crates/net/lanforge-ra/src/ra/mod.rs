@@ -48,7 +48,8 @@ pub mod packet;
 
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::system::ServiceBanner;
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+use lanforge_types::system::{RunResult, ServiceBanner};
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::NetworkError;
@@ -259,6 +260,121 @@ impl RaService {
 
         Ok((mac, async_socket))
     }
+
+    async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
+        let mut handle = self.ctx.service_handle();
+        loop {
+            let event = handle.next_event().await;
+            let Some(timed_event) = event else {
+                return Ok(RunResult::Shutdown);
+            };
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::ConfigRaChanged)
+            ) {
+                return Ok(RunResult::ConfigChanged);
+            }
+        }
+    }
+
+    async fn run_server(
+        &self,
+        prefixes: Vec<RAPrefix>,
+        rdnss: Vec<RdnssConfig>,
+        dnssl: Vec<DnsslConfig>,
+        _ctrl: &ServiceControl,
+    ) -> Result<RunResult, CoreError> {
+        let mut current_cfg = self.cfg.clone();
+        current_cfg.prefixes = prefixes;
+        current_cfg.rdnss = rdnss;
+        current_cfg.dnssl = dnssl;
+
+        current_cfg
+            .validate()
+            .map_err(|e| CoreError::Generic(e.to_string()))?;
+
+        info!(
+            "RA: Starting on '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
+            current_cfg.iface,
+            u8::from(current_cfg.managed),
+            u8::from(current_cfg.other_config),
+            current_cfg.max_interval.as_secs(),
+            current_cfg.effective_router_lifetime().as_secs(),
+        );
+
+        let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
+            CoreError::Generic("Target interface index is not configured in context".to_string())
+        })?;
+
+        let (mac, async_socket) = self.resolve_interface_resources(iface_index).await?;
+
+        let mut state = RaState::new();
+
+        // Immediate RA on startup
+        send_ra_internal(
+            &self.ctx,
+            &async_socket,
+            &current_cfg,
+            mac,
+            iface_index,
+            None,
+            &mut state,
+        )
+        .map_err(|e| CoreError::Generic(e.to_string()))?;
+        state.record_multicast();
+
+        let mut next_ra_at = Instant::now() + state.next_interval(&current_cfg);
+
+        let mut buf = [0u8; 1500];
+        let mut handle = self.ctx.service_handle();
+
+        loop {
+            let now = Instant::now();
+            let sleep_duration = if next_ra_at > now {
+                next_ra_at - now
+            } else {
+                Duration::ZERO
+            };
+
+            tokio::select! {
+                // 1. Periodic Advertisement & Timers
+                () = tokio::time::sleep(sleep_duration) => {
+                    self.perform_periodic_ra(&self.ctx, &async_socket, &current_cfg, mac, iface_index, &mut state, &mut next_ra_at);
+                }
+
+                // 2. Packet processing (RS)
+                res = async_socket.readable() => {
+                    let ctx = RaContext {
+                        socket: &async_socket,
+                        mac,
+                        iface_index,
+                        lctx: &self.ctx,
+                    };
+                    self.handle_rs_packet(res, &mut buf, &current_cfg, ctx, &mut state).await?;
+                }
+
+                // 3. EventBus signals
+                res = handle.next_event() => {
+                    let Some(timed_event) = res else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    if matches!(
+                        timed_event.event,
+                        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
+                    ) {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                    lanforge_core::match_event!(timed_event, {
+                        LanforgeEvent::Network(NetworkEvent::PrefixChanged { .. }) => {
+                            info!("RA: Prefix change detected — sending immediate RA burst");
+                            state.initial_sent = 0;
+                            next_ra_at = Instant::now();
+                        }
+                    });
+                }
+            }
+        }
+    }
 }
 
 impl StatusProvider for RaService {
@@ -290,122 +406,30 @@ impl StatusProvider for RaService {
 
 impl AsyncService for RaService {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        self.cfg
-            .validate()
-            .map_err(|e| CoreError::Generic(e.to_string()))?;
-
-        info!(
-            "RA: Starting on '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
-            self.cfg.iface,
-            u8::from(self.cfg.managed),
-            u8::from(self.cfg.other_config),
-            self.cfg.max_interval.as_secs(),
-            self.cfg.effective_router_lifetime().as_secs(),
-        );
-
-        let mut bus_rx = self.ctx.bus().subscribe();
-
-        if self.cfg.prefixes.is_empty() {
-            warn!("⚠️ RA enabled but no prefixes configured — server will remain idle");
-            ctrl.signal_ready();
-            loop {
-                let event = bus_rx.recv().await;
-                match event {
-                    Ok(timed_event) => {
-                        if matches!(
-                            timed_event.event,
-                            LanforgeEvent::System(SystemEvent::Shutdown)
-                        ) {
-                            info!("RA service: shutdown received");
-                            return Ok(());
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(_) => break,
-                }
-            }
-            return Ok(());
-        }
-
-        let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
-            CoreError::Generic("Target interface index is not configured in context".to_string())
-        })?;
-
-        let (mac, async_socket) = self.resolve_interface_resources(iface_index).await?;
+        info!("RA: Waiting for dependencies (DB)...");
+        self.ctx.wait_for_db().await?;
 
         ctrl.signal_ready();
 
-        let mut state = RaState::new();
-
-        // Immediate RA on startup
-        send_ra_internal(
-            &self.ctx,
-            &async_socket,
-            &self.cfg,
-            mac,
-            iface_index,
-            None,
-            &mut state,
-        )
-        .map_err(|e| CoreError::Generic(e.to_string()))?;
-        state.record_multicast();
-
-        let mut next_ra_at = Instant::now() + state.next_interval(&self.cfg);
-
-        let mut buf = [0u8; 1500];
-
         loop {
-            if !self.ctx.is_running() {
-                break;
+            let prefixes = self.ctx.get_ra_prefixes();
+            let rdnss = self.ctx.get_ra_rdnss();
+            let dnssl = self.ctx.get_ra_dnssl();
+
+            if prefixes.is_empty() {
+                warn!("⚠️ RA enabled but no prefixes configured — server will remain idle");
+                match self.wait_for_config_change_or_shutdown().await? {
+                    RunResult::Shutdown => break,
+                    RunResult::ConfigChanged => continue,
+                }
             }
-            let now = Instant::now();
-            let sleep_duration = if next_ra_at > now {
-                next_ra_at - now
-            } else {
-                Duration::ZERO
-            };
 
-            tokio::select! {
-                // 1. Periodic Advertisement & Timers
-                () = tokio::time::sleep(sleep_duration) => {
-                    self.perform_periodic_ra(&self.ctx, &async_socket, mac, iface_index, &mut state, &mut next_ra_at);
-                }
-
-                // 2. Packet processing (RS)
-                res = async_socket.readable() => {
-                    let ctx = RaContext {
-                        socket: &async_socket,
-                        mac,
-                        iface_index,
-                        lctx: &self.ctx,
-                    };
-                    self.handle_rs_packet(res, &mut buf, ctx, &mut state).await?;
-                }
-
-                // 3. EventBus signals
-                res = bus_rx.recv() => {
-                    match res {
-                        Ok(timed_event) => {
-                            lanforge_core::match_event!(timed_event, {
-                                LanforgeEvent::Network(NetworkEvent::PrefixChanged { .. }) => {
-                                    info!("RA: Prefix change detected — sending immediate RA burst");
-                                    state.initial_sent = 0;
-                                    next_ra_at = Instant::now();
-                                }
-                                LanforgeEvent::System(SystemEvent::Shutdown) => {
-                                    info!("RA service: shutdown received");
-                                    return Ok(());
-                                }
-                            });
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            warn!(service = "RA Server", lost = n, "Event bus lagged");
-                        }
-                        Err(_) => break,
-                    }
-                }
+            match self.run_server(prefixes, rdnss, dnssl, &ctrl).await? {
+                RunResult::Shutdown => break,
+                RunResult::ConfigChanged => {}
             }
         }
+
         Ok(())
     }
 }
@@ -424,16 +448,17 @@ impl RaService {
         &self,
         lctx: &LanforgeContext,
         socket: &AsyncFd<Socket>,
+        cfg: &RaConfig,
         mac: [u8; 6],
         iface_index: u32,
         state: &mut RaState,
         next_ra_at: &mut Instant,
     ) {
-        if let Err(e) = send_ra_internal(lctx, socket, &self.cfg, mac, iface_index, None, state) {
+        if let Err(e) = send_ra_internal(lctx, socket, cfg, mac, iface_index, None, state) {
             warn!("RA periodic error: {e:?}");
         } else {
             state.record_multicast();
-            let interval = state.next_interval(&self.cfg);
+            let interval = state.next_interval(cfg);
             *next_ra_at = Instant::now() + interval;
             debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
         }
@@ -444,6 +469,7 @@ impl RaService {
         &self,
         res: io::Result<AsyncFdReadyGuard<'_, Socket>>,
         buf: &mut [u8],
+        cfg: &RaConfig,
         ctx: RaContext<'_>,
         state: &mut RaState,
     ) -> Result<(), CoreError> {
@@ -474,7 +500,7 @@ impl RaService {
                                 if let Err(e) = send_ra_internal(
                                     ctx.lctx,
                                     ctx.socket,
-                                    &self.cfg,
+                                    cfg,
                                     ctx.mac,
                                     ctx.iface_index,
                                     Some(unicast_dst),
@@ -490,7 +516,7 @@ impl RaService {
                                 if let Err(e) = send_ra_internal(
                                     ctx.lctx,
                                     ctx.socket,
-                                    &self.cfg,
+                                    cfg,
                                     ctx.mac,
                                     ctx.iface_index,
                                     None,

@@ -14,4 +14,7 @@ pub enum SystemEvent {
     ConfigUpdate { password_hash: String },
     ServiceStatusBanner(ServiceBanner),
     ServiceControl { id: String, action: ServiceAction },
+    ConfigDhcpV4Changed,
+    ConfigDhcpV6Changed,
+    ConfigRaChanged,
 }

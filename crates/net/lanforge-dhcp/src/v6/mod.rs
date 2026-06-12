@@ -43,7 +43,7 @@ pub mod pool;
 pub mod server;
 
 use lanforge_core::bus::{
-    AdminChange, DeviceEvent, DhcpV6MessageType, LanforgeEvent, NetworkEvent,
+    AdminChange, DeviceEvent, DhcpV6MessageType, LanforgeEvent, NetworkEvent, SystemEvent,
 };
 use lanforge_core::context::{LanforgeContext, ServiceHandle};
 use lanforge_core::match_event;
@@ -51,7 +51,8 @@ use lanforge_core::utils::mac_from_eui64_link_local;
 use lanforge_types::device::IPv6State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::system::ServiceBanner;
+use lanforge_types::network::dhcp::Dhcpv6Pool;
+use lanforge_types::system::{RunResult, ServiceBanner};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -165,34 +166,58 @@ impl AsyncService for Dhcpv6Service {
             return Ok(());
         }
 
-        if self.config.pools.is_empty() {
-            warn!(
-                "⚠️ DHCPv6 enabled but no pools configured — server will not respond to any requests"
-            );
-            ctrl.signal_ready();
-            let mut handle = self.ctx.service_handle();
-            loop {
-                let event = handle.next_event().await;
-                let Some(timed_event) = event else {
-                    break;
-                };
-                if matches!(
-                    timed_event.event,
-                    LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown)
-                ) {
-                    break;
-                }
-            }
-            return Ok(());
-        }
-
-        // Setup transport socket
-        let transport = io::Dhcpv6Transport::new(&self.config.iface, self.config.port)?;
-
         // 1. Wait for DB and Interface Ready
         info!("DHCPv6: Waiting for dependencies (DB and Interfaces)...");
         self.ctx.wait_for_db().await?;
         self.ctx.wait_for_interfaces().await?;
+
+        ctrl.signal_ready();
+
+        loop {
+            let pools = self.ctx.get_dhcp_v6_pools();
+
+            if pools.is_empty() {
+                warn!("⚠️ DHCPv6 enabled but no pools configured — server will remain idle");
+                match self.wait_for_config_change_or_shutdown().await? {
+                    RunResult::Shutdown => break,
+                    RunResult::ConfigChanged => continue,
+                }
+            }
+
+            match self.run_server(pools, &ctrl).await? {
+                RunResult::Shutdown => break,
+                RunResult::ConfigChanged => {}
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Dhcpv6Service {
+    async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
+        let mut handle = self.ctx.service_handle();
+        loop {
+            let event = handle.next_event().await;
+            let Some(timed_event) = event else {
+                return Ok(RunResult::Shutdown);
+            };
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed)
+            ) {
+                return Ok(RunResult::ConfigChanged);
+            }
+        }
+    }
+
+    async fn run_server(
+        &self,
+        pools: Vec<Dhcpv6Pool>,
+        _ctrl: &ServiceControl,
+    ) -> Result<RunResult, CoreError> {
+        let mut current_cfg = self.config.clone();
+        current_cfg.pools = pools;
 
         let target_ifindex = self.ctx.target_ifindex().ok_or_else(|| {
             CoreError::Generic("Target interface index is not configured in context".to_string())
@@ -213,11 +238,11 @@ impl AsyncService for Dhcpv6Service {
             })?;
 
         let mut server = Dhcpv6Server::new(
-            self.config.clone(),
+            current_cfg.clone(),
             Ipv6Pool::new(
-                &self.config.pools,
-                self.config.ula_prefix,
-                self.config.ula_prefix_len,
+                &current_cfg.pools,
+                current_cfg.ula_prefix,
+                current_cfg.ula_prefix_len,
             ),
             Duid::generate_ll_from_mac(server_mac.as_bytes()),
             self.ctx.clone(),
@@ -225,7 +250,7 @@ impl AsyncService for Dhcpv6Service {
 
         // Pre-allocate static reservations for ULA prefix
         let registry = self.ctx.get_static_registry();
-        if let Some(ula) = self.config.ula_prefix {
+        if let Some(ula) = current_cfg.ula_prefix {
             let ula_ips: Vec<_> = registry
                 .v6_reservations()
                 .map(|s| server.pool.construct_addr(ula, &s))
@@ -236,7 +261,7 @@ impl AsyncService for Dhcpv6Service {
         // 2. Re-sync GUA from global state (honoring configured interface)
         if let Some(ifindex) = pnet::datalink::interfaces()
             .iter()
-            .find(|i| i.name == self.config.iface)
+            .find(|i| i.name == current_cfg.iface)
             .map(|i| i.index)
             && let Some((gua, pref, val)) = self.ctx.get_interface_gua_at(ifindex)
         {
@@ -255,12 +280,14 @@ impl AsyncService for Dhcpv6Service {
             server.pool.reserve_statics(gua_ips);
         }
 
+        // Setup transport socket
+        let transport = io::Dhcpv6Transport::new(&current_cfg.iface, current_cfg.port)?;
+
         let mut buf = [0u8; 2048];
         let mut handle = self.ctx.service_handle();
         let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
 
         info!("DHCPv6 state machine started");
-        ctrl.signal_ready();
 
         loop {
             tokio::select! {
@@ -273,7 +300,15 @@ impl AsyncService for Dhcpv6Service {
                     }
                 }
                 event = handle.next_event() => {
-                    let Some(timed_event) = event else { break; };
+                    let Some(timed_event) = event else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    if matches!(
+                        timed_event.event,
+                        LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed)
+                    ) {
+                        return Ok(RunResult::ConfigChanged);
+                    }
                     self.handle_bus_event(&timed_event, &mut server, &transport);
                 }
                 _ = stats_timer.tick() => {
@@ -281,7 +316,6 @@ impl AsyncService for Dhcpv6Service {
                 }
             }
         }
-        Ok(())
     }
 }
 

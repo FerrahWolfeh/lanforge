@@ -16,6 +16,8 @@ use lanforge_types::device::{
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::DnsReverseResolver;
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::update::{
     CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget, StaticEntry,
 };
@@ -108,6 +110,30 @@ impl State {
             }
             DeviceUpdate::DhcpV4PoolUpdated { .. } => self.handle_dhcp_v4_pool_updated(&update),
             DeviceUpdate::DhcpV6PoolUpdated { .. } => self.handle_dhcp_v6_pool_updated(&update),
+            DeviceUpdate::UpdateDhcpV4Pools { pools } => {
+                self.dhcp_v4_pools = pools;
+                smallvec::smallvec![lanforge_types::events::LanforgeEvent::System(
+                    lanforge_types::events::SystemEvent::ConfigDhcpV4Changed
+                )]
+            }
+            DeviceUpdate::UpdateDhcpV6Pools { pools } => {
+                self.dhcp_v6_pools = pools;
+                smallvec::smallvec![lanforge_types::events::LanforgeEvent::System(
+                    lanforge_types::events::SystemEvent::ConfigDhcpV6Changed
+                )]
+            }
+            DeviceUpdate::UpdateRaConfig {
+                prefixes,
+                rdnss,
+                dnssl,
+            } => {
+                self.ra_prefixes = prefixes;
+                self.ra_rdnss = rdnss;
+                self.ra_dnssl = dnssl;
+                smallvec::smallvec![lanforge_types::events::LanforgeEvent::System(
+                    lanforge_types::events::SystemEvent::ConfigRaChanged
+                )]
+            }
         }
     }
 }
@@ -131,6 +157,17 @@ pub struct State {
     pub transient_hosts: HashMap<IpAddr, TransientHost>,
     #[serde(skip)]
     pub reverse_resolvers: Vec<DnsReverseResolver>,
+
+    #[serde(skip)]
+    pub dhcp_v4_pools: Vec<Dhcpv4Pool>,
+    #[serde(skip)]
+    pub dhcp_v6_pools: Vec<Dhcpv6Pool>,
+    #[serde(skip)]
+    pub ra_prefixes: Vec<RAPrefix>,
+    #[serde(skip)]
+    pub ra_rdnss: Vec<RdnssConfig>,
+    #[serde(skip)]
+    pub ra_dnssl: Vec<DnsslConfig>,
 }
 
 impl State {
@@ -155,6 +192,31 @@ impl State {
     }
 
     // --- Getters ---
+
+    #[must_use]
+    pub fn get_dhcp_v4_pools(&self) -> Vec<Dhcpv4Pool> {
+        self.dhcp_v4_pools.clone()
+    }
+
+    #[must_use]
+    pub fn get_dhcp_v6_pools(&self) -> Vec<Dhcpv6Pool> {
+        self.dhcp_v6_pools.clone()
+    }
+
+    #[must_use]
+    pub fn get_ra_prefixes(&self) -> Vec<RAPrefix> {
+        self.ra_prefixes.clone()
+    }
+
+    #[must_use]
+    pub fn get_ra_rdnss(&self) -> Vec<RdnssConfig> {
+        self.ra_rdnss.clone()
+    }
+
+    #[must_use]
+    pub fn get_ra_dnssl(&self) -> Vec<DnsslConfig> {
+        self.ra_dnssl.clone()
+    }
 
     #[must_use]
     pub fn get_device(&self, mac: &MacAddr) -> Option<Arc<Device>> {

@@ -60,6 +60,8 @@ use crate::service::StatusProvider;
 use lanforge_types::device::Device;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::system::{ServiceState, SystemStatus};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -387,6 +389,31 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_status(&self) -> Option<SystemStatus> {
         self.inner.status.read().clone()
+    }
+
+    #[must_use]
+    pub fn get_dhcp_v4_pools(&self) -> Vec<Dhcpv4Pool> {
+        self.read().get_dhcp_v4_pools()
+    }
+
+    #[must_use]
+    pub fn get_dhcp_v6_pools(&self) -> Vec<Dhcpv6Pool> {
+        self.read().get_dhcp_v6_pools()
+    }
+
+    #[must_use]
+    pub fn get_ra_prefixes(&self) -> Vec<RAPrefix> {
+        self.read().get_ra_prefixes()
+    }
+
+    #[must_use]
+    pub fn get_ra_rdnss(&self) -> Vec<RdnssConfig> {
+        self.read().get_ra_rdnss()
+    }
+
+    #[must_use]
+    pub fn get_ra_dnssl(&self) -> Vec<DnsslConfig> {
+        self.read().get_ra_dnssl()
     }
 
     /// Registers a decoupled status provider.

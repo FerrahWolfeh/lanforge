@@ -175,3 +175,9 @@ pub enum ServiceAction {
     Stop,
     Restart,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunResult {
+    Shutdown,
+    ConfigChanged,
+}

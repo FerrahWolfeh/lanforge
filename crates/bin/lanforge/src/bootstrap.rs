@@ -209,6 +209,11 @@ impl Bootstrapper {
                 warn!("Failed to load reverse resolvers from database: {e}");
             }
         }
+        table.dhcp_v4_pools = cfg.dhcpv4_toml.pools.clone();
+        table.dhcp_v6_pools = cfg.dhcpv6_toml.pools.clone();
+        table.ra_prefixes = cfg.ra_toml.prefixes.clone();
+        table.ra_rdnss = cfg.ra_toml.rdnss.clone();
+        table.ra_dnssl = cfg.ra_toml.dnssl.clone();
 
         info!(
             "📦 Databases initialized (Main: {}, Logs: {})",

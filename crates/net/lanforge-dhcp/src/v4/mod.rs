@@ -34,19 +34,20 @@ pub mod server;
 
 use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent};
+use lanforge_core::bus::{AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent};
 use lanforge_core::context::{LanforgeContext, ServiceHandle};
 use lanforge_macros::lanforge_service;
 use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::system::ServiceBanner;
+use lanforge_types::network::dhcp::Dhcpv4Pool;
+use lanforge_types::system::{RunResult, ServiceBanner};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
 
 use lanforge_core::error::CoreError;
@@ -171,33 +172,59 @@ impl StatusProvider for Dhcpv4Service {
 
 impl AsyncService for Dhcpv4Service {
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        // 1. Wait for DB and Interface Ready
         info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
         self.ctx.wait_for_db().await?;
         self.ctx.wait_for_interfaces().await?;
 
-        if self.cfg.get_effective_pools().is_empty() {
-            warn!(
-                "⚠️ DHCPv4 enabled but no pools configured — server will not respond to any requests"
-            );
-            ctrl.signal_ready();
-            let mut handle = self.ctx.service_handle();
-            loop {
-                let event = handle.next_event().await;
-                let Some(timed_event) = event else {
-                    break;
-                };
-                if matches!(
-                    timed_event.event,
-                    LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown)
-                ) {
-                    break;
+        ctrl.signal_ready();
+
+        loop {
+            let pools = self.ctx.get_dhcp_v4_pools();
+
+            if pools.is_empty() {
+                warn!("⚠️ DHCPv4 enabled but no pools configured — server will remain idle");
+                match self.wait_for_config_change_or_shutdown().await? {
+                    RunResult::Shutdown => break,
+                    RunResult::ConfigChanged => continue,
                 }
             }
-            return Ok(());
+
+            match self.run_server(pools, &ctrl).await? {
+                RunResult::Shutdown => break,
+                RunResult::ConfigChanged => {}
+            }
         }
 
-        let mut server = DhcpServer::new(self.cfg.clone(), self.ctx.clone());
+        Ok(())
+    }
+}
+
+impl Dhcpv4Service {
+    async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
+        let mut handle = self.ctx.service_handle();
+        loop {
+            let event = handle.next_event().await;
+            let Some(timed_event) = event else {
+                return Ok(RunResult::Shutdown);
+            };
+            if matches!(
+                timed_event.event,
+                LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)
+            ) {
+                return Ok(RunResult::ConfigChanged);
+            }
+        }
+    }
+
+    async fn run_server(
+        &self,
+        pools: Vec<Dhcpv4Pool>,
+        _ctrl: &ServiceControl,
+    ) -> Result<RunResult, CoreError> {
+        let mut current_cfg = self.cfg.clone();
+        current_cfg.pools = pools;
+
+        let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
         let registry = self.ctx.get_static_registry();
@@ -216,9 +243,7 @@ impl AsyncService for Dhcpv4Service {
         });
         server.pool.reserve_statics(active_dynamic_ips);
 
-        let transport = Dhcpv4Transport::new(&self.cfg.iface, self.cfg.port)?;
-
-        ctrl.signal_ready();
+        let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
 
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle();
@@ -240,18 +265,26 @@ impl AsyncService for Dhcpv4Service {
                     }
                 }
                 event = handle.next_event() => {
-                    let Some(timed_event) = event else { break; };
+                    let Some(timed_event) = event else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    if matches!(
+                        timed_event.event,
+                        LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)
+                    ) {
+                        return Ok(RunResult::ConfigChanged);
+                    }
                     self.handle_bus_event(&timed_event, &mut server, &transport);
                 }
                 _ = cleanup_timer.tick() => {
-                    server.pool.cleanup_quarantine(std::time::Instant::now());
+                    server.pool.cleanup_quarantine(Instant::now());
                     let (total, used, available, util_pct) = server.pool.stats();
-                    let range_start = self.cfg.range_start.or_else(|| self.cfg.pools.first().map(|p| p.range_start)).unwrap_or(Ipv4Addr::UNSPECIFIED);
-                    let range_end = self.cfg.range_end.or_else(|| self.cfg.pools.first().map(|p| p.range_end)).unwrap_or(Ipv4Addr::UNSPECIFIED);
+                    let range_start = current_cfg.range_start.or_else(|| current_cfg.pools.first().map(|p| p.range_start)).unwrap_or(Ipv4Addr::UNSPECIFIED);
+                    let range_end = current_cfg.range_end.or_else(|| current_cfg.pools.first().map(|p| p.range_end)).unwrap_or(Ipv4Addr::UNSPECIFIED);
                     let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated {
                         range_start,
                         range_end,
-                        subnet_mask: self.cfg.subnet_mask,
+                        subnet_mask: current_cfg.subnet_mask,
                         total,
                         used,
                         available,
@@ -260,7 +293,6 @@ impl AsyncService for Dhcpv4Service {
                 }
             }
         }
-        Ok(())
     }
 }
 
