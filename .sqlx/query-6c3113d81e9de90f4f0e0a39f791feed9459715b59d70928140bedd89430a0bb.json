@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE dns.adblock_config SET extras = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6c3113d81e9de90f4f0e0a39f791feed9459715b59d70928140bedd89430a0bb"
+}

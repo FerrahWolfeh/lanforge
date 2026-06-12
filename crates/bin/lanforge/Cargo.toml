@@ -14,7 +14,6 @@ path = "src/main.rs"
 
 [features]
 default = [
-    "sqlite",
     "postgres",
     "dns-dot",
     "dns-doh",
@@ -54,7 +53,6 @@ jemalloc = ["dep:tikv-jemallocator"]
 
 
 # Database Backends
-sqlite = ["lanforge-db/sqlite"]
 postgres = ["lanforge-db/postgres"]
 
 # DNS Upstream Protocols (Forwarding)
@@ -86,7 +84,6 @@ full = [
     "doh-server",
     "adblock",
     "postgres",
-    "sqlite",
 ]
 
 

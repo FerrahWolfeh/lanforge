@@ -1,0 +1,43 @@
+[package]
+name = "lanforge-db-postgres"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[features]
+hotpath = ["lanforge-core/hotpath"]
+hotpath-alloc = ["lanforge-core/hotpath-alloc"]
+
+[dependencies]
+# Lanforge
+lanforge-types = { workspace = true }
+lanforge-macros = { workspace = true }
+lanforge-db-core = { path = "../lanforge-db-core" }
+lanforge-core = { workspace = true }
+
+# Workspace
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+async-trait = "0.1"
+
+# SQL & driver specific
+mac_address = "1.1"
+ipnetwork = "0.21"
+uuid = { version = "1.8", features = ["v4", "serde"] }
+sqlx = { version = "0.9.0", features = [
+    "runtime-tokio",
+    "tls-rustls-aws-lc-rs",
+    "macros",
+    "chrono",
+    "uuid",
+    "migrate",
+    "postgres",
+    "mac_address",
+    "ipnetwork",
+] }

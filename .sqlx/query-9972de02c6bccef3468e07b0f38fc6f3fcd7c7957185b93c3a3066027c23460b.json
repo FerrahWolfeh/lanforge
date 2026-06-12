@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dns.reverse_resolvers",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "9972de02c6bccef3468e07b0f38fc6f3fcd7c7957185b93c3a3066027c23460b"
+}

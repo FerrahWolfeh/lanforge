@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT mac as \"mac!: PgMacAddr\", ip as \"ip!: PgInet\", expires as \"expires!: PgTimestampTz\" FROM dhcp.v4_leases",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mac!: PgMacAddr",
+        "type_info": "Macaddr",
+        "origin": {
+          "Table": {
+            "table": "dhcp.v4_leases",
+            "name": "mac"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ip!: PgInet",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "dhcp.v4_leases",
+            "name": "ip"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "expires!: PgTimestampTz",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "dhcp.v4_leases",
+            "name": "expires"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ff2f403dcd7e330f145b0e56225c9e3305511d809ee7acece8d40c1ed808f21a"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id as \"id!\", addr as \"addr!\", protocol as \"protocol!\", domain FROM dns.upstreams ORDER BY id ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "dns.upstreams",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "addr!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dns.upstreams",
+            "name": "addr"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "protocol!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dns.upstreams",
+            "name": "protocol"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dns.upstreams",
+            "name": "domain"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "466b94431f96052feb27bdd71915dfb0a99433bb2cc2cb085dc3d32fb85eaaa5"
+}

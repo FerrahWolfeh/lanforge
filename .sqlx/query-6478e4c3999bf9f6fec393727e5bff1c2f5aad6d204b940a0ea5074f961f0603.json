@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE dns.adblock_config SET blocking_ip_v4 = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Inet"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6478e4c3999bf9f6fec393727e5bff1c2f5aad6d204b940a0ea5074f961f0603"
+}

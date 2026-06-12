@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "TRUNCATE TABLE net.devices CASCADE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "f053bef5a08e2e1c53a71b67455bcf6f7c39059cfc1cce0a60165735bebdfceb"
+}

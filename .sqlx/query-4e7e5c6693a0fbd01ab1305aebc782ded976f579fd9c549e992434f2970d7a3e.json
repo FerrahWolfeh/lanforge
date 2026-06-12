@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO dns.adblock_rules (domain, action) VALUES ($1, $2::text::dns.adblock_action) ON CONFLICT(domain) DO UPDATE SET action = EXCLUDED.action RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_rules",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4e7e5c6693a0fbd01ab1305aebc782ded976f579fd9c549e992434f2970d7a3e"
+}

@@ -1,0 +1,81 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT enabled as \"enabled!\", blocking_mode::TEXT as \"blocking_mode!\", blocking_ip_v4 as \"blocking_ip_v4: PgInet\", blocking_ip_v6 as \"blocking_ip_v6: PgInet\", refresh_hours as \"refresh_hours!\", refresh_at_night as \"refresh_at_night!\" FROM dns.adblock_config LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "enabled!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_config",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "blocking_mode!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "blocking_ip_v4: PgInet",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_config",
+            "name": "blocking_ip_v4"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "blocking_ip_v6: PgInet",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_config",
+            "name": "blocking_ip_v6"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "refresh_hours!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_config",
+            "name": "refresh_hours"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "refresh_at_night!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_config",
+            "name": "refresh_at_night"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "965faca0fcdde5f12f210831c8d29fb7fc546e1db68a3cd7c72750503b6b3d1c"
+}

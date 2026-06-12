@@ -19,6 +19,9 @@ lanforge-core = { path = "crates/core/lanforge-core" }
 lanforge-macros = { path = "crates/core/lanforge-macros" }
 lanforge-types = { path = "crates/core/lanforge-types" }
 lanforge-db = { path = "crates/db/lanforge-db" }
+lanforge-db-core = { path = "crates/db/lanforge-db-core" }
+lanforge-db-postgres = { path = "crates/db/lanforge-db-postgres" }
+lanforge-db-logbuf = { path = "crates/db/lanforge-db-logbuf" }
 lanforge-api = { path = "crates/api/lanforge-api" }
 lanforge-http = { path = "crates/api/lanforge-http", default-features = false }
 lanforge-uds = { path = "crates/api/lanforge-uds" }

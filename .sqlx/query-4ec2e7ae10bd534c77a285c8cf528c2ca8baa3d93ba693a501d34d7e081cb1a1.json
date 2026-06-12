@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT mac as \"mac!: PgMacAddr\", ip as \"ip!: PgInet\", last_seen as \"last_seen!: PgTimestampTz\" FROM net.seen_v4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mac!: PgMacAddr",
+        "type_info": "Macaddr",
+        "origin": {
+          "Table": {
+            "table": "seen_v4",
+            "name": "mac"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ip!: PgInet",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "seen_v4",
+            "name": "ip"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "last_seen!: PgTimestampTz",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "seen_v4",
+            "name": "last_seen"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4ec2e7ae10bd534c77a285c8cf528c2ca8baa3d93ba693a501d34d7e081cb1a1"
+}

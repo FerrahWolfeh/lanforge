@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dns.allowlist",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "7a0f61c3fd506e716c389c24ada7b1e9dca17f3bf340ce6c8c353885cea1069e"
+}

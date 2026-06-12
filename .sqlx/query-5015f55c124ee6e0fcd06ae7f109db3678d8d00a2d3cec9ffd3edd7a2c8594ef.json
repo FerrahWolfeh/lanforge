@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dns.reverse_resolvers WHERE subnet = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Inet"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5015f55c124ee6e0fcd06ae7f109db3678d8d00a2d3cec9ffd3edd7a2c8594ef"
+}

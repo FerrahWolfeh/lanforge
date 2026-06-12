@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dns.upstreams",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "69ca786e6e3ec39559df21935998ce6dd8546be4e740acf2eaf885dff144d7e1"
+}

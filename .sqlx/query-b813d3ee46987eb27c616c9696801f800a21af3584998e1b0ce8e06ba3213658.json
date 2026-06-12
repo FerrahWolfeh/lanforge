@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dns.rewrites",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b813d3ee46987eb27c616c9696801f800a21af3584998e1b0ce8e06ba3213658"
+}

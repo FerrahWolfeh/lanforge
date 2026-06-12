@@ -2630,15 +2630,69 @@ dependencies = [
  "futures",
  "hotpath",
  "lanforge-core",
+ "lanforge-db-core",
+ "lanforge-db-logbuf",
+ "lanforge-db-postgres",
  "lanforge-macros",
  "lanforge-types",
+ "parking_lot",
  "serde",
  "serde_json",
- "sqlx",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "lanforge-db-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "lanforge-types",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "lanforge-db-logbuf"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures",
+ "lanforge-core",
+ "lanforge-types",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "lanforge-db-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "ipnetwork 0.21.1",
+ "lanforge-core",
+ "lanforge-db-core",
+ "lanforge-macros",
+ "lanforge-types",
+ "mac_address",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2914,7 +2968,6 @@ version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
 dependencies = [
- "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -5877,6 +5930,7 @@ dependencies = [
  "atomic",
  "getrandom 0.4.2",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

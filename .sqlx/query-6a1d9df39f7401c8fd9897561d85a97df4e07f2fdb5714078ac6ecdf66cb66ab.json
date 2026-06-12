@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dhcp.v4_leases WHERE mac = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Macaddr"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6a1d9df39f7401c8fd9897561d85a97df4e07f2fdb5714078ac6ecdf66cb66ab"
+}

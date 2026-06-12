@@ -1,659 +1,194 @@
-use lanforge_core::context::PersistenceSnapshot;
-use lanforge_types::update::DeviceUpdate;
-use lanforge_types::{network::dns::DnsRecordType, update::StaticEntry};
-use std::collections::HashSet;
-use std::net::{Ipv4Addr, Ipv6Addr};
-use std::path::Path;
-use std::time::SystemTime;
-use tracing::{debug, info};
+//! `LanforgeDb` facade for PostgreSQL.
 
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
-use lanforge_types::device::{
-    Device, DeviceClass, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
+use lanforge_db_core::{
+    AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DnsStore, DnsUpstreamEntry,
+    DnsUpstreamStore, delegate_db_call,
 };
-use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_db_postgres::PostgresDatabase;
+use lanforge_types::auth::ApiScopes;
+use lanforge_types::device::{Device, LeaseAction};
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 
-pub mod types;
-pub mod utils;
+pub mod types {
+    pub use lanforge_db_core::{ApiTokenEntry as ApiTokenRow, DnsUpstreamEntry as DnsUpstreamRow};
+}
 
-pub mod dns_config;
-#[cfg(feature = "postgres")]
-pub mod postgres;
-#[cfg(feature = "sqlite")]
-pub mod sqlite;
+pub use lanforge_types::device::LeaseHistoryEntry;
 
-use crate::config::DatabaseConfig;
-use crate::error::LanforgeDbError;
-pub use types::{DeviceRow, LeaseAction, LeaseHistoryEntry, LeaseKind, Pool};
-use utils::{system_time_to_unix, unix_to_system_time};
+use lanforge_types::device::LeaseKind;
+use lanforge_types::network::dns::adblock::{BlockingMode, RewriteAnswer};
+use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
+use std::str::FromStr;
+
+pub struct MockDbState {
+    pub devices: RwLock<HashMap<MacAddr, Device>>,
+    pub dns_rewrites: RwLock<Vec<RewriteRule>>,
+    pub dns_allowlist: RwLock<HashSet<String>>,
+    pub dns_reverse_resolvers: RwLock<Vec<DnsReverseResolver>>,
+    pub adblock_config: RwLock<AdblockDbConfig>,
+    pub adblock_urls: RwLock<Vec<(i64, String, AdblockUrlKind)>>,
+    pub api_tokens: RwLock<Vec<ApiTokenEntry>>,
+    pub dns_upstreams: RwLock<Vec<DnsUpstreamEntry>>,
+    pub lease_history: RwLock<Vec<(MacAddr, LeaseHistoryEntry)>>,
+}
+
+impl Default for MockDbState {
+    fn default() -> Self {
+        Self {
+            devices: RwLock::new(HashMap::new()),
+            dns_rewrites: RwLock::new(Vec::new()),
+            dns_allowlist: RwLock::new(HashSet::new()),
+            dns_reverse_resolvers: RwLock::new(Vec::new()),
+            adblock_config: RwLock::new(AdblockDbConfig::default()),
+            adblock_urls: RwLock::new(Vec::new()),
+            api_tokens: RwLock::new(Vec::new()),
+            dns_upstreams: RwLock::new(Vec::new()),
+            lease_history: RwLock::new(Vec::new()),
+        }
+    }
+}
+
+pub enum DbEngine {
+    Postgres(Arc<PostgresDatabase>),
+    Mock(Arc<MockDbState>),
+}
 
 pub struct LanforgeDb {
-    pub pool: Pool,
+    inner: DbEngine,
 }
 
 impl LanforgeDb {
-    pub async fn open(cfg: &DatabaseConfig) -> Result<Self, LanforgeDbError> {
-        let url = &cfg.url;
-        // Ensure parent directory exists for local SQLite files
-        if url.starts_with("sqlite:") && !url.contains(":memory:") {
-            let path_str = url
-                .strip_prefix("sqlite://")
-                .or_else(|| url.strip_prefix("sqlite:"))
-                .unwrap_or(url);
-
-            let path_str = path_str.split('?').next().unwrap_or(path_str);
-            let path = Path::new(path_str);
-
-            if let Some(parent) = path.parent()
-                && !parent.as_os_str().is_empty()
-                && !parent.exists()
-            {
-                let _ = std::fs::create_dir_all(parent);
-            }
-
-            // Manually create the file if it doesn't exist to avoid "unable to open database file"
-            if !path.exists() {
-                debug!("Creating new database file: {}", path_str);
-                let _ = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .open(path);
-            }
-        }
-
-        let pool = Pool::connect(url, cfg.max_connections, cfg.min_connections)
-            .await
-            .map_err(|e| LanforgeDbError::ConnectionOpen(Path::new(url).to_path_buf(), e))?;
-
-        match &pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                sqlx::query("PRAGMA journal_mode=WAL")
-                    .execute(p)
-                    .await
-                    .map_err(|e| {
-                        LanforgeDbError::Migration("setting WAL mode".into(), e.to_string())
-                    })?;
-                sqlx::query("PRAGMA foreign_keys=OFF")
-                    .execute(p)
-                    .await
-                    .map_err(|e| {
-                        LanforgeDbError::Migration("disabling foreign keys".into(), e.to_string())
-                    })?;
-                sqlx::migrate!("migrations/sqlite")
-                    .run(p)
-                    .await
-                    .map_err(|e| {
-                        LanforgeDbError::Migration(
-                            "applying sqlite migrations".into(),
-                            e.to_string(),
-                        )
-                    })?;
-                sqlx::query("PRAGMA foreign_keys=ON")
-                    .execute(p)
-                    .await
-                    .map_err(|e| {
-                        LanforgeDbError::Migration("enabling foreign keys".into(), e.to_string())
-                    })?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                sqlx::migrate!("migrations/postgres")
-                    .run(p)
-                    .await
-                    .map_err(|e| {
-                        LanforgeDbError::Migration(
-                            "applying postgres migrations".into(),
-                            e.to_string(),
-                        )
-                    })?;
-            }
-        }
-
-        info!("Database opened at {}", url);
-        Ok(Self { pool })
-    }
-
-    #[cfg(test)]
-    pub async fn open_in_memory() -> Result<Self, LanforgeDbError> {
-        #[cfg(feature = "sqlite")]
+    /// Opens the PostgreSQL database pool.
+    pub async fn open(cfg: &crate::config::DatabaseConfig) -> Result<Self, DbError> {
+        if cfg.url.starts_with("sqlite:")
+            || cfg.url.starts_with("mock:")
+            || cfg.url.contains(":memory:")
         {
-            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
-            sqlx::migrate!("migrations/sqlite")
-                .run(&pool)
-                .await
-                .map_err(|e| {
-                    LanforgeDbError::Migration("memory migrations".into(), e.to_string())
-                })?;
-            Ok(Self {
-                pool: Pool::Sqlite(pool),
-            })
-        }
-        #[cfg(all(not(feature = "sqlite"), feature = "postgres"))]
-        {
-            Err(LanforgeDbError::Migration(
-                "postgres in-memory not implemented".into(),
-                "".into(),
-            ))
-        }
-    }
-
-    pub async fn save_table(&self, table: &State) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                let mut tx = p.begin().await?;
-                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac FROM devices")
-                    .fetch_all(&mut *tx)
-                    .await?;
-
-                let snapshot_macs: HashSet<String> =
-                    table.devices().map(|d| d.mac.to_string()).collect();
-
-                for device in table.devices() {
-                    sqlite::upsert_device(&mut tx, &device).await?;
-                }
-
-                for db_mac in db_macs {
-                    if !snapshot_macs.contains(&db_mac) {
-                        sqlx::query("DELETE FROM devices WHERE mac = ?")
-                            .bind(&db_mac)
-                            .execute(&mut *tx)
-                            .await?;
-                    }
-                }
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                let mut tx = p.begin().await?;
-                let db_macs: Vec<String> = sqlx::query_scalar("SELECT mac::TEXT FROM devices")
-                    .fetch_all(&mut *tx)
-                    .await?;
-
-                let snapshot_macs: HashSet<String> =
-                    table.devices().map(|d| d.mac.to_string()).collect();
-
-                for device in table.devices() {
-                    postgres::upsert_device(&mut tx, &device).await?;
-                }
-
-                for db_mac in db_macs {
-                    if !snapshot_macs.contains(&db_mac) {
-                        sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
-                            .bind(&db_mac)
-                            .execute(&mut *tx)
-                            .await?;
-                    }
-                }
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-        }
-        debug!("State persisted successfully");
-        Ok(())
-    }
-
-    pub async fn save_snapshot(
-        &self,
-        snapshot: &PersistenceSnapshot,
-    ) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                let mut tx = p
-                    .begin()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-                let db_devices: Vec<(String, String)> =
-                    sqlx::query_as("SELECT mac, origin FROM devices")
-                        .fetch_all(&mut *tx)
-                        .await?;
-
-                let snapshot_macs: HashSet<String> =
-                    snapshot.devices.keys().map(|m| m.to_string()).collect();
-
-                for device in snapshot.devices.values() {
-                    sqlite::upsert_device(&mut tx, device).await?;
-                }
-
-                for (db_mac, origin) in db_devices {
-                    if !snapshot_macs.contains(&db_mac) && origin == "dynamic" {
-                        sqlx::query("DELETE FROM devices WHERE mac = ?")
-                            .bind(&db_mac)
-                            .execute(&mut *tx)
-                            .await?;
-                    }
-                }
-
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                let mut tx = p
-                    .begin()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-                let db_devices: Vec<(String, String)> =
-                    sqlx::query_as("SELECT mac::TEXT, origin::TEXT FROM devices")
-                        .fetch_all(&mut *tx)
-                        .await?;
-
-                let snapshot_macs: HashSet<String> =
-                    snapshot.devices.keys().map(|m| m.to_string()).collect();
-
-                for device in snapshot.devices.values() {
-                    postgres::upsert_device(&mut tx, device).await?;
-                }
-
-                for (db_mac, origin) in db_devices {
-                    if !snapshot_macs.contains(&db_mac) && origin == "dynamic" {
-                        sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
-                            .bind(&db_mac)
-                            .execute(&mut *tx)
-                            .await?;
-                    }
-                }
-
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-        }
-        debug!("Snapshot persisted successfully");
-        Ok(())
-    }
-
-    pub async fn upsert_device(&self, device: &Device) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                let mut tx = p.begin().await?;
-                sqlite::upsert_device(&mut tx, device).await?;
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                let mut tx = p.begin().await?;
-                postgres::upsert_device(&mut tx, device).await?;
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn upsert_base_device_only(&self, device: &Device) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                let mut tx = p.begin().await?;
-                sqlite::upsert_base_device_only(&mut tx, device).await?;
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                let mut tx = p.begin().await?;
-                postgres::upsert_base_device_only(&mut tx, device).await?;
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn delete_devices(&self, macs: &[MacAddr]) -> Result<(), LanforgeDbError> {
-        if macs.is_empty() {
-            return Ok(());
-        }
-
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                let mut tx = p.begin().await?;
-                for mac in macs {
-                    sqlx::query("DELETE FROM devices WHERE mac = ?")
-                        .bind(mac.to_string())
-                        .execute(&mut *tx)
-                        .await?;
-                }
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                let mut tx = p.begin().await?;
-                for mac in macs {
-                    sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
-                        .bind(mac.to_string())
-                        .execute(&mut *tx)
-                        .await?;
-                }
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn upsert_many<'a, I>(&self, devices: I) -> Result<(), LanforgeDbError>
-    where
-        I: IntoIterator<Item = &'a Device>,
-    {
-        let devices_vec: Vec<&Device> = devices.into_iter().collect();
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                let mut tx = p.begin().await?;
-                for device in devices_vec {
-                    sqlite::upsert_device(&mut tx, device).await?;
-                }
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                let mut tx = p.begin().await?;
-                for device in devices_vec {
-                    postgres::upsert_device(&mut tx, device).await?;
-                }
-                tx.commit()
-                    .await
-                    .map_err(LanforgeDbError::TransactionFailed)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn find_mac_by_hostname(
-        &self,
-        hostname: &str,
-    ) -> Result<Option<MacAddr>, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::find_mac_by_hostname(p, hostname).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::find_mac_by_hostname(p, hostname).await,
-        }
-    }
-
-    pub async fn load_table(&self) -> Result<State, LanforgeDbError> {
-        let mut table = State::new();
-        table.set_indexing_enabled(false);
-
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                Self::populate_state(
-                    &mut table,
-                    sqlite::load_device_rows(p).await?,
-                    sqlite::load_v4_leases(p).await?,
-                    sqlite::load_v6_leases(p).await?,
-                    sqlite::load_v6_prefixes(p).await?,
-                    sqlite::load_slaac_addrs(p).await?,
-                    sqlite::load_seen_v4(p).await?,
-                );
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                Self::populate_state(
-                    &mut table,
-                    postgres::load_device_rows(p).await?,
-                    postgres::load_v4_leases(p).await?,
-                    postgres::load_v6_leases(p).await?,
-                    postgres::load_v6_prefixes(p).await?,
-                    postgres::load_slaac_addrs(p).await?,
-                    postgres::load_seen_v4(p).await?,
-                );
-            }
-        }
-
-        info!("Loaded devices from database");
-        table.set_indexing_enabled(true);
-        Ok(table)
-    }
-
-    fn populate_state(
-        table: &mut State,
-        device_rows: Vec<DeviceRow>,
-        v4_leases: Vec<(MacAddr, Ipv4Addr, SystemTime)>,
-        v6_leases: Vec<(MacAddr, u32, Ipv6Addr, SystemTime)>,
-        v6_prefixes: Vec<(MacAddr, u32, Ipv6Addr, u8, SystemTime)>,
-        slaac_addrs: Vec<(MacAddr, Ipv6Addr, SystemTime)>,
-        seen_v4: Vec<(MacAddr, Ipv4Addr, SystemTime)>,
-    ) {
-        Self::populate_devices(table, device_rows);
-        Self::populate_v4_leases(table, v4_leases);
-        Self::populate_v6_leases(table, v6_leases);
-        Self::populate_v6_prefixes(table, v6_prefixes);
-        Self::populate_slaac_addrs(table, slaac_addrs);
-        Self::populate_seen_v4(table, seen_v4);
-    }
-
-    fn populate_devices(table: &mut State, rows: Vec<DeviceRow>) {
-        for row in rows {
-            if let Some(mac) = MacAddr::parse(&row.mac) {
-                let mut device = Device::new(mac);
-                device.hostname = Hostname {
-                    name: row.hostname.clone(),
-                    origin: match row.hostname_origin {
-                        1 | 6 => HostnameOrigin::Static,
-                        3 => HostnameOrigin::Mdns,
-                        _ => HostnameOrigin::Dhcp,
-                    },
-                };
-                device.last_seen = std::time::SystemTime::UNIX_EPOCH;
-                device.origin = match row.origin.as_str() {
-                    "static" => Origin::Static,
-                    "system" => Origin::System,
-                    _ => Origin::Dynamic,
-                };
-                device.managed_at = row.managed_at.map(unix_to_system_time);
-                device.boot_file.clone_from(&row.boot_file);
-                device.class = DeviceClass::from_repr(row.class as u8).unwrap_or_default();
-
-                if let Some(v4) = &row.v4_static
-                    && let Ok(ip) = v4.parse::<Ipv4Addr>()
-                {
-                    device.v4 = IPv4State::Static(ip);
-                }
-                if let Some(v6) = &row.v6_suffix
-                    && let Some(suf) = Ipv6AddrOrSuffix::parse(v6)
-                {
-                    device.v6.push(IPv6State::Static(suf, device.last_seen));
-                }
-                if let Some(bytes) = &row.duid {
-                    device.duid = Some(Duid::new(bytes.clone()));
-                }
-
-                if matches!(device.origin, Origin::Static) {
-                    table.add_static_entry(
-                        mac,
-                        StaticEntry {
-                            mac,
-                            hostname: device.hostname.name.clone(),
-                            duid: device.duid.clone(),
-                            v4_static: match device.v4 {
-                                IPv4State::Static(ip) => Some(ip),
-                                _ => None,
-                            },
-                            v6_suffix: device.v6.iter().find_map(|s| {
-                                if let IPv6State::Static(suffix, _) = s {
-                                    Some(*suffix)
-                                } else {
-                                    None
-                                }
-                            }),
-                            origin: device.origin,
-                            boot_file: device.boot_file.clone(),
-                        },
-                    );
-                }
-                table.insert_device(mac, device);
-            }
-        }
-    }
-
-    fn populate_v4_leases(table: &mut State, leases: Vec<(MacAddr, Ipv4Addr, SystemTime)>) {
-        for (mac, ip, expires) in leases {
-            table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
-        }
-    }
-
-    fn populate_v6_leases(table: &mut State, leases: Vec<(MacAddr, u32, Ipv6Addr, SystemTime)>) {
-        for (mac, iaid, ip, expires) in leases {
-            let duid = table
-                .get_duid_by_mac(mac)
-                .cloned()
-                .unwrap_or_else(|| Duid::new(vec![]));
-            table.apply_update(DeviceUpdate::V6LeaseGranted {
-                mac: Some(mac),
-                duid,
-                iaid,
-                ip,
-                expires,
+            return Ok(Self {
+                inner: DbEngine::Mock(Arc::new(MockDbState::default())),
             });
         }
+        let db = PostgresDatabase::open(&cfg.url, cfg.max_connections, cfg.min_connections).await?;
+        Ok(Self {
+            inner: DbEngine::Postgres(Arc::new(db)),
+        })
     }
 
-    fn populate_v6_prefixes(
-        table: &mut State,
-        prefixes: Vec<(MacAddr, u32, Ipv6Addr, u8, SystemTime)>,
-    ) {
-        for (mac, iaid, prefix, len, expires) in prefixes {
-            let duid = table
-                .get_duid_by_mac(mac)
-                .cloned()
-                .unwrap_or_else(|| Duid::new(vec![]));
-            table.apply_update(DeviceUpdate::V6PrefixAssigned {
-                mac: Some(mac),
-                duid,
-                iaid,
-                prefix,
-                len,
-                expires,
-            });
-        }
+    /// Backwards compatibility method (returning error for sqlite in-memory).
+    pub async fn open_in_memory() -> Result<Self, DbError> {
+        Ok(Self {
+            inner: DbEngine::Mock(Arc::new(MockDbState::default())),
+        })
     }
 
-    fn populate_slaac_addrs(table: &mut State, addrs: Vec<(MacAddr, Ipv6Addr, SystemTime)>) {
-        use std::sync::Arc;
-        for (mac, ip, last_seen) in addrs {
-            if let Some(dev_arc) = table.devices.get_mut(&mac) {
-                let dev = Arc::make_mut(dev_arc);
-                let exists = dev.v6.iter().any(|state| {
-                    if let IPv6State::Slaac(addr, _) = state {
-                        *addr == ip
-                    } else {
-                        false
-                    }
-                });
-                if !exists {
-                    dev.v6.push(IPv6State::Slaac(ip, last_seen));
-                }
+    // --- DeviceStore ---
+
+    pub async fn save_table(&self, table: &State) -> Result<(), DbError> {
+        delegate_db_call!(self, save_table(table), mock => {
+            let mut dev_map = mock.devices.write();
+            dev_map.clear();
+            for device in table.devices() {
+                dev_map.insert(device.mac, device.as_ref().clone());
             }
-        }
+            Ok(())
+        })
     }
 
-    fn populate_seen_v4(table: &mut State, seen: Vec<(MacAddr, Ipv4Addr, SystemTime)>) {
-        use std::sync::Arc;
-        for (mac, ip, last_seen) in seen {
-            if let Some(dev_arc) = table.devices.get_mut(&mac) {
-                let dev = Arc::make_mut(dev_arc);
-                let exists = dev.seen_v4.iter().any(|(addr, _)| *addr == ip);
-                if !exists {
-                    if dev.seen_v4.len() >= 4 {
-                        dev.seen_v4.remove(0);
-                    }
-                    dev.seen_v4.push((ip, last_seen));
-                }
+    pub async fn save_snapshot(&self, snapshot: &PersistenceSnapshot) -> Result<(), DbError> {
+        delegate_db_call!(self, save_snapshot(snapshot), mock => {
+            let mut dev_map = mock.devices.write();
+            dev_map.clear();
+            for device in snapshot.devices.values() {
+                dev_map.insert(device.mac, device.as_ref().clone());
             }
-        }
+            Ok(())
+        })
     }
 
-    pub async fn remove_device(&self, mac: MacAddr) -> Result<(), LanforgeDbError> {
-        let mac_str = mac.to_string();
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                sqlx::query("DELETE FROM devices WHERE mac = ?")
-                    .bind(&mac_str)
-                    .execute(p)
-                    .await?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                sqlx::query("DELETE FROM devices WHERE mac = $1::MACADDR")
-                    .bind(&mac_str)
-                    .execute(p)
-                    .await?;
-            }
-        }
-        Ok(())
+    pub async fn upsert_device(&self, device: &Device) -> Result<(), DbError> {
+        delegate_db_call!(self, upsert_device(device), mock => {
+            mock.devices.write().insert(device.mac, device.clone());
+            Ok(())
+        })
     }
 
-    pub async fn vacuum(&self) -> Result<(), LanforgeDbError> {
-        debug!("Running VACUUM on database...");
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::vacuum(p)
-                .await
-                .map_err(LanforgeDbError::VacuumFailed)?,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::vacuum(p)
-                .await
-                .map_err(LanforgeDbError::VacuumFailed)?,
-        }
-        Ok(())
+    pub async fn upsert_base_device_only(&self, device: &Device) -> Result<(), DbError> {
+        delegate_db_call!(self, upsert_base_device_only(device), mock => {
+            mock.devices.write().insert(device.mac, device.clone());
+            Ok(())
+        })
     }
 
-    pub async fn prune_zombies(&self) -> Result<usize, LanforgeDbError> {
-        debug!("[db] Pruning zombie entries...");
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => Ok(sqlite::prune_zombies(p).await?),
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => Ok(postgres::prune_zombies(p).await?),
-        }
+    pub async fn delete_devices(&self, macs: &[MacAddr]) -> Result<(), DbError> {
+        delegate_db_call!(self, delete_devices(macs), mock => {
+            let mut dev_map = mock.devices.write();
+            for mac in macs {
+                dev_map.remove(mac);
+            }
+            Ok(())
+        })
     }
 
-    pub async fn reset(&self) -> Result<(), LanforgeDbError> {
-        info!("Resetting database (clearing all tables)...");
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                sqlx::query("DELETE FROM devices").execute(p).await?;
-                sqlx::query("DELETE FROM lease_history").execute(p).await?;
+    pub async fn find_mac_by_hostname(&self, hostname: &str) -> Result<Option<MacAddr>, DbError> {
+        delegate_db_call!(self, find_mac_by_hostname(hostname), mock => {
+            let dev_map = mock.devices.read();
+            let mac = dev_map
+                .values()
+                .find(|d| d.hostname.name == hostname)
+                .map(|d| d.mac);
+            Ok(mac)
+        })
+    }
+
+    pub async fn load_table(&self) -> Result<State, DbError> {
+        delegate_db_call!(self, load_table(), mock => {
+            let mut state = State::new();
+            for (mac, device) in mock.devices.read().iter() {
+                state.insert_device(*mac, device.clone());
             }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                sqlx::query("TRUNCATE TABLE devices CASCADE")
-                    .execute(p)
-                    .await?;
-                sqlx::query("TRUNCATE TABLE lease_history")
-                    .execute(p)
-                    .await?;
-            }
-        }
-        Ok(())
+            Ok(state)
+        })
+    }
+
+    pub async fn remove_device(&self, mac: MacAddr) -> Result<(), DbError> {
+        delegate_db_call!(self, remove_device(mac), mock => {
+            mock.devices.write().remove(&mac);
+            Ok(())
+        })
+    }
+
+    pub async fn vacuum(&self) -> Result<(), DbError> {
+        delegate_db_call!(self, vacuum(), _mock => Ok(()))
+    }
+
+    pub async fn prune_zombies(&self) -> Result<usize, DbError> {
+        delegate_db_call!(self, prune_zombies(), _mock => Ok(0))
+    }
+
+    pub async fn reset(&self) -> Result<(), DbError> {
+        delegate_db_call!(self, reset(), mock => {
+            mock.devices.write().clear();
+            mock.dns_rewrites.write().clear();
+            mock.dns_allowlist.write().clear();
+            mock.dns_reverse_resolvers.write().clear();
+            *mock.adblock_config.write() = AdblockDbConfig::default();
+            mock.adblock_urls.write().clear();
+            mock.api_tokens.write().clear();
+            mock.dns_upstreams.write().clear();
+            mock.lease_history.write().clear();
+            Ok(())
+        })
     }
 
     pub async fn record_lease_event(
@@ -662,58 +197,50 @@ impl LanforgeDb {
         ip: &str,
         lease_type: &str,
         action: LeaseAction,
-    ) -> Result<(), LanforgeDbError> {
-        let now = system_time_to_unix(SystemTime::now());
-        let mac_str = mac.to_string();
-        let action_str = action.as_str();
-
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                sqlite::record_lease_event(p, &mac_str, ip, lease_type, action_str, now).await?;
-            }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                postgres::record_lease_event(p, &mac_str, ip, lease_type, action_str, now).await?;
-            }
-        }
-        Ok(())
+    ) -> Result<(), DbError> {
+        delegate_db_call!(self, record_lease_event(mac, ip, lease_type, action), mock => {
+            let mut history = mock.lease_history.write();
+            let ip_parsed = ip
+                .parse::<IpAddr>()
+                .map_err(|e| DbError::Validation(format!("Invalid IP: {e}")))?;
+            let lease_type_parsed = lease_type
+                .parse::<LeaseKind>()
+                .map_err(DbError::Validation)?;
+            history.push((
+                mac,
+                LeaseHistoryEntry {
+                    ip: ip_parsed,
+                    lease_type: lease_type_parsed,
+                    action,
+                    timestamp: SystemTime::now(),
+                },
+            ));
+            Ok(())
+        })
     }
 
-    pub async fn get_lease_history(
-        &self,
-        mac: MacAddr,
-    ) -> Result<Vec<LeaseHistoryEntry>, LanforgeDbError> {
-        let mac_str = mac.to_string();
-        let rows = match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::get_lease_history(p, &mac_str).await?,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::get_lease_history(p, &mac_str).await?,
-        };
-
-        Ok(rows
-            .into_iter()
-            .map(|(ip, lt, act, ts)| LeaseHistoryEntry {
-                ip: ip
-                    .parse()
-                    .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
-                lease_type: lt.parse().unwrap_or(LeaseKind::V4),
-                action: act.parse().unwrap_or(LeaseAction::Assigned),
-                timestamp: unix_to_system_time(ts),
-            })
-            .collect())
+    pub async fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>, DbError> {
+        delegate_db_call!(self, get_lease_history(mac), mock => {
+            let history = mock.lease_history.read();
+            let mut filtered: Vec<LeaseHistoryEntry> = history
+                .iter()
+                .filter(|(m, _)| *m == mac)
+                .map(|(_, entry)| entry.clone())
+                .collect();
+            filtered.reverse(); // newest first
+            filtered.truncate(100);
+            Ok(filtered)
+        })
     }
 
-    // --- DNS Configuration delegation methods ---
+    // --- DnsStore ---
 
-    pub async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::load_dns_rewrites_sqlite(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::load_dns_rewrites_postgres(p).await,
-        }
+    pub async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
+        delegate_db_call!(self, load_dns_rewrites(), mock => {
+            let mut rewrites = mock.dns_rewrites.read().clone();
+            rewrites.sort_by(|a, b| a.domain.cmp(&b.domain));
+            Ok(rewrites)
+        })
     }
 
     pub async fn upsert_dns_rewrite(
@@ -721,162 +248,225 @@ impl LanforgeDb {
         domain: &str,
         rtype: DnsRecordType,
         answer: &str,
-    ) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                dns_config::upsert_dns_rewrite_sqlite(p, domain, rtype, answer).await
+    ) -> Result<(), DbError> {
+        delegate_db_call!(self, upsert_dns_rewrite(domain, rtype, answer), mock => {
+            let mut rewrites = mock.dns_rewrites.write();
+            if let Some(pos) = rewrites
+                .iter()
+                .position(|r| r.domain == domain && r.rtype == rtype)
+            {
+                if let Ok(ans) = RewriteAnswer::from_str(answer) {
+                    rewrites[pos].answer = ans;
+                }
+            } else {
+                let id = rewrites.len() as i64 + 1;
+                if let Ok(ans) = RewriteAnswer::from_str(answer) {
+                    rewrites.push(RewriteRule {
+                        id: Some(id),
+                        domain: domain.to_string(),
+                        rtype,
+                        answer: ans,
+                    });
+                }
             }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                dns_config::upsert_dns_rewrite_postgres(p, domain, rtype, answer).await
+            Ok(())
+        })
+    }
+
+    pub async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), DbError> {
+        delegate_db_call!(self, delete_dns_rewrite_by_id(id), mock => {
+            let mut rewrites = mock.dns_rewrites.write();
+            rewrites.retain(|r| r.id != Some(id));
+            Ok(())
+        })
+    }
+
+    pub async fn clear_dns_rewrites(&self) -> Result<(), DbError> {
+        delegate_db_call!(self, clear_dns_rewrites(), mock => {
+            mock.dns_rewrites.write().clear();
+            Ok(())
+        })
+    }
+
+    pub async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, DbError> {
+        delegate_db_call!(self, load_dns_allowlist(), mock => {
+            let mut list: Vec<(i64, String)> = mock
+                .dns_allowlist
+                .read()
+                .iter()
+                .enumerate()
+                .map(|(i, domain)| (i as i64 + 1, domain.clone()))
+                .collect();
+            list.sort_by(|a, b| a.1.cmp(&b.1));
+            Ok(list)
+        })
+    }
+
+    pub async fn add_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
+        delegate_db_call!(self, add_dns_allowlist(domain), mock => {
+            mock.dns_allowlist.write().insert(domain.to_string());
+            Ok(())
+        })
+    }
+
+    pub async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
+        delegate_db_call!(self, remove_dns_allowlist(domain), mock => {
+            mock.dns_allowlist.write().remove(domain);
+            Ok(())
+        })
+    }
+
+    pub async fn clear_dns_allowlist(&self) -> Result<(), DbError> {
+        delegate_db_call!(self, clear_dns_allowlist(), mock => {
+            mock.dns_allowlist.write().clear();
+            Ok(())
+        })
+    }
+
+    pub async fn load_dns_reverse_resolvers(&self) -> Result<Vec<DnsReverseResolver>, DbError> {
+        delegate_db_call!(self, load_dns_reverse_resolvers(), mock => Ok(mock.dns_reverse_resolvers.read().clone()))
+    }
+
+    pub async fn add_dns_reverse_resolver(
+        &self,
+        subnet: &IpSubnet,
+        resolver: &UpstreamTarget,
+    ) -> Result<(), DbError> {
+        delegate_db_call!(self, add_dns_reverse_resolver(subnet, resolver), mock => {
+            let mut resolvers = mock.dns_reverse_resolvers.write();
+            if let Some(pos) = resolvers.iter().position(|r| r.subnet == *subnet) {
+                resolvers[pos].resolver = resolver.clone();
+            } else {
+                resolvers.push(DnsReverseResolver {
+                    subnet: *subnet,
+                    resolver: resolver.clone(),
+                });
             }
-        }
+            Ok(())
+        })
     }
 
-    pub async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::delete_dns_rewrite_by_id_sqlite(p, id).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::delete_dns_rewrite_by_id_postgres(p, id).await,
-        }
+    pub async fn remove_dns_reverse_resolver(&self, subnet: &IpSubnet) -> Result<(), DbError> {
+        delegate_db_call!(self, remove_dns_reverse_resolver(subnet), mock => {
+            let mut resolvers = mock.dns_reverse_resolvers.write();
+            resolvers.retain(|r| r.subnet != *subnet);
+            Ok(())
+        })
     }
 
-    pub async fn clear_dns_rewrites(&self) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::clear_dns_rewrites_sqlite(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::clear_dns_rewrites_postgres(p).await,
-        }
+    // --- AdblockStore ---
+
+    pub async fn load_adblock_config(&self) -> Result<AdblockDbConfig, DbError> {
+        delegate_db_call!(self, load_adblock_config(), mock => Ok(mock.adblock_config.read().clone()))
     }
 
-    pub async fn delete_dns_rewrite(&self, _domain: &str) -> Result<(), LanforgeDbError> {
-        // Deprecated, use delete_dns_rewrite_by_id
-        Err(LanforgeDbError::Generic(
-            "delete_dns_rewrite is deprecated".into(),
-        ))
+    // Legacy adblock set config helper
+    pub async fn set_adblock_config_value(&self, key: &str, value: &str) -> Result<(), DbError> {
+        delegate_db_call!(self, set_adblock_config_value(key, value), mock => {
+            let mut cfg = mock.adblock_config.write();
+            match key {
+                "enabled" => cfg.enabled = value == "true",
+                "blocking_mode" => {
+                    if let Ok(m) = BlockingMode::from_str(value) {
+                        cfg.blocking_mode = m;
+                    }
+                }
+                "blocking_ip_v4" => {
+                    if value.is_empty() || value == "none" || value == "null" {
+                        cfg.blocking_ip_v4 = None;
+                    } else if let Ok(ip) = value.parse() {
+                        cfg.blocking_ip_v4 = Some(ip);
+                    }
+                }
+                "blocking_ip_v6" => {
+                    if value.is_empty() || value == "none" || value == "null" {
+                        cfg.blocking_ip_v6 = None;
+                    } else if let Ok(ip) = value.parse() {
+                        cfg.blocking_ip_v6 = Some(ip);
+                    }
+                }
+                "refresh_hours" => {
+                    if let Ok(h) = value.parse() {
+                        cfg.refresh_hours = h;
+                    }
+                }
+                "refresh_at_night" => cfg.refresh_at_night = value == "true",
+                _ => {}
+            }
+            Ok(())
+        })
     }
 
-    pub async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::load_dns_allowlist_sqlite(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::load_dns_allowlist_postgres(p).await,
-        }
+    pub async fn load_adblock_urls(&self) -> Result<Vec<(i64, String, AdblockUrlKind)>, DbError> {
+        delegate_db_call!(self, load_adblock_urls(), mock => Ok(mock.adblock_urls.read().clone()))
     }
 
-    pub async fn add_dns_allowlist(&self, domain: &str) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::add_dns_allowlist_sqlite(p, domain).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::add_dns_allowlist_postgres(p, domain).await,
-        }
+    pub async fn add_adblock_url(&self, url: &str, kind: AdblockUrlKind) -> Result<(), DbError> {
+        delegate_db_call!(self, add_adblock_url(url, kind), mock => {
+            let mut urls = mock.adblock_urls.write();
+            if let Some(pos) = urls.iter().position(|u| u.1 == url) {
+                urls[pos].2 = kind;
+            } else {
+                let id = urls.len() as i64 + 1;
+                urls.push((id, url.to_string(), kind));
+            }
+            Ok(())
+        })
     }
 
-    pub async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::remove_dns_allowlist_sqlite(p, domain).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::remove_dns_allowlist_postgres(p, domain).await,
-        }
+    pub async fn remove_adblock_url(&self, url: &str) -> Result<(), DbError> {
+        delegate_db_call!(self, remove_adblock_url(url), mock => {
+            let mut urls = mock.adblock_urls.write();
+            urls.retain(|u| u.1 != url);
+            Ok(())
+        })
     }
 
-    pub async fn clear_dns_allowlist(&self) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::clear_dns_allowlist_sqlite(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::clear_dns_allowlist_postgres(p).await,
-        }
+    pub async fn clear_adblock_urls(&self) -> Result<(), DbError> {
+        delegate_db_call!(self, clear_adblock_urls(), mock => {
+            mock.adblock_urls.write().clear();
+            Ok(())
+        })
     }
 
-    pub async fn load_adblock_config(&self) -> Result<AdblockDbConfig, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::load_adblock_config_sqlite(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::load_adblock_config_postgres(p).await,
-        }
-    }
-
-    pub async fn set_adblock_config_value(
-        &self,
-        key: &str,
-        value: &str,
-    ) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::set_adblock_config_value_sqlite(p, key, value).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::set_adblock_config_value_postgres(p, key, value).await,
-        }
-    }
-
-    pub async fn load_adblock_urls(
-        &self,
-    ) -> Result<Vec<(i64, String, AdblockUrlKind)>, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::load_adblock_urls_sqlite(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::load_adblock_urls_postgres(p).await,
-        }
-    }
-
-    pub async fn add_adblock_url(
-        &self,
-        url: &str,
-        kind: AdblockUrlKind,
-    ) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::add_adblock_url_sqlite(p, url, kind).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::add_adblock_url_postgres(p, url, kind).await,
-        }
-    }
-
-    pub async fn remove_adblock_url(&self, url: &str) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::remove_adblock_url_sqlite(p, url).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::remove_adblock_url_postgres(p, url).await,
-        }
-    }
-
-    pub async fn clear_adblock_urls(&self) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::clear_adblock_urls_sqlite(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::clear_adblock_urls_postgres(p).await,
-        }
-    }
-
-    // --- API Token methods ---
+    // --- ApiTokenStore ---
 
     pub async fn store_api_token(
         &self,
         token: &str,
         name: &str,
-        scopes: &lanforge_types::auth::ApiScopes,
+        scopes: &ApiScopes,
         expires_at: Option<i64>,
-    ) -> Result<i64, LanforgeDbError> {
-        let now = utils::system_time_to_unix(SystemTime::now());
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                sqlite::store_api_token(p, token, name, scopes, expires_at, now).await
+    ) -> Result<i64, DbError> {
+        match &self.inner {
+            DbEngine::Postgres(db) => {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                db.store_api_token(token, name, scopes, expires_at, now)
+                    .await
             }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                postgres::store_api_token(p, token, name, scopes, expires_at, now).await
+            DbEngine::Mock(mock) => {
+                let mut tokens = mock.api_tokens.write();
+                let id = tokens.len() as i64 + 1;
+                tokens.push(ApiTokenEntry {
+                    id,
+                    token: token.to_string(),
+                    name: name.to_string(),
+                    created_at: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                    last_used: None,
+                    scopes: scopes
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    expires_at,
+                });
+                Ok(id)
             }
         }
     }
@@ -884,72 +474,95 @@ impl LanforgeDb {
     pub async fn validate_api_token(
         &self,
         token: &str,
-    ) -> Result<Option<(String, lanforge_types::auth::ApiScopes)>, LanforgeDbError> {
-        let now = utils::system_time_to_unix(SystemTime::now());
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::validate_api_token(p, token, now).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::validate_api_token(p, token, now).await,
+    ) -> Result<Option<(String, ApiScopes)>, DbError> {
+        match &self.inner {
+            DbEngine::Postgres(db) => {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                db.validate_api_token(token, now).await
+            }
+            DbEngine::Mock(mock) => {
+                let mut tokens = mock.api_tokens.write();
+                if let Some(pos) = tokens.iter().position(|t| t.token == token) {
+                    let mut t = tokens[pos].clone();
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    if let Some(exp) = t.expires_at
+                        && now > exp
+                    {
+                        return Ok(None);
+                    }
+                    t.last_used = Some(now);
+                    tokens[pos] = t.clone();
+                    let scopes = t.scopes.split(',').filter_map(|s| s.parse().ok()).collect();
+                    Ok(Some((t.name, scopes)))
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 
-    pub async fn delete_api_token(&self, token: &str) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::delete_api_token(p, token).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::delete_api_token(p, token).await,
-        }
+    pub async fn delete_api_token(&self, token: &str) -> Result<(), DbError> {
+        delegate_db_call!(self, delete_api_token(token), mock => {
+            let mut tokens = mock.api_tokens.write();
+            tokens.retain(|t| t.token != token);
+            Ok(())
+        })
     }
 
-    pub async fn delete_api_token_by_id_or_name(
-        &self,
-        id_or_name: &str,
-    ) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::delete_api_token_by_id_or_name(p, id_or_name).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::delete_api_token_by_id_or_name(p, id_or_name).await,
-        }
+    pub async fn delete_api_token_by_id_or_name(&self, id_or_name: &str) -> Result<(), DbError> {
+        delegate_db_call!(self, delete_api_token_by_id_or_name(id_or_name), mock => {
+            let mut tokens = mock.api_tokens.write();
+            if let Ok(id) = id_or_name.parse::<i64>() {
+                tokens.retain(|t| t.id != id);
+            } else {
+                tokens.retain(|t| t.name != id_or_name);
+            }
+            Ok(())
+        })
     }
 
-    pub async fn load_api_tokens(
-        &self,
-    ) -> Result<Vec<crate::engine::types::ApiTokenRow>, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::load_api_tokens(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::load_api_tokens(p).await,
-        }
+    pub async fn load_api_tokens(&self) -> Result<Vec<ApiTokenEntry>, DbError> {
+        delegate_db_call!(self, load_api_tokens(), mock => {
+            let mut tokens = mock.api_tokens.read().clone();
+            tokens.sort_by_key(|b| std::cmp::Reverse(b.created_at));
+            Ok(tokens)
+        })
     }
 
     pub async fn get_api_token_info(
         &self,
         id_or_name: &str,
-    ) -> Result<Option<(String, lanforge_types::auth::ApiScopes, Option<i64>)>, LanforgeDbError>
-    {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::get_api_token_info(p, id_or_name).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::get_api_token_info(p, id_or_name).await,
-        }
+    ) -> Result<Option<(String, ApiScopes, Option<i64>)>, DbError> {
+        delegate_db_call!(self, get_api_token_info(id_or_name), mock => {
+            let tokens = mock.api_tokens.read();
+            let found = if let Ok(id) = id_or_name.parse::<i64>() {
+                tokens.iter().find(|t| t.id == id).cloned()
+            } else {
+                tokens.iter().find(|t| t.name == id_or_name).cloned()
+            };
+            if let Some(t) = found {
+                let scopes = t.scopes.split(',').filter_map(|s| s.parse().ok()).collect();
+                Ok(Some((t.name, scopes, t.expires_at)))
+            } else {
+                Ok(None)
+            }
+        })
     }
 
-    // --- DNS Upstreams methods ---
+    // --- DnsUpstreamStore ---
 
-    pub async fn load_dns_upstreams(
-        &self,
-    ) -> Result<Vec<crate::engine::types::DnsUpstreamRow>, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::load_dns_upstreams(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::load_dns_upstreams(p).await,
-        }
+    pub async fn load_dns_upstreams(&self) -> Result<Vec<DnsUpstreamEntry>, DbError> {
+        delegate_db_call!(self, load_dns_upstreams(), mock => {
+            let mut upstreams = mock.dns_upstreams.read().clone();
+            upstreams.sort_by_key(|u| u.id);
+            Ok(upstreams)
+        })
     }
 
     pub async fn add_dns_upstream(
@@ -957,74 +570,40 @@ impl LanforgeDb {
         addr: &str,
         protocol: &str,
         domain: Option<&str>,
-    ) -> Result<i64, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::add_dns_upstream(p, addr, protocol, domain).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::add_dns_upstream(p, addr, protocol, domain).await,
-        }
-    }
-
-    pub async fn remove_dns_upstream(
-        &self,
-        addr: &str,
-        protocol: &str,
-    ) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::remove_dns_upstream(p, addr, protocol).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::remove_dns_upstream(p, addr, protocol).await,
-        }
-    }
-
-    pub async fn clear_dns_upstreams(&self) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => sqlite::clear_dns_upstreams(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => postgres::clear_dns_upstreams(p).await,
-        }
-    }
-
-    pub async fn load_dns_reverse_resolvers(
-        &self,
-    ) -> Result<Vec<DnsReverseResolver>, LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::load_dns_reverse_resolvers_sqlite(p).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::load_dns_reverse_resolvers_postgres(p).await,
-        }
-    }
-
-    pub async fn add_dns_reverse_resolver(
-        &self,
-        subnet: &IpSubnet,
-        resolver: &UpstreamTarget,
-    ) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => {
-                dns_config::add_dns_reverse_resolver_sqlite(p, subnet, resolver).await
+    ) -> Result<i64, DbError> {
+        delegate_db_call!(self, add_dns_upstream(addr, protocol, domain), mock => {
+            let mut upstreams = mock.dns_upstreams.write();
+            if let Some(pos) = upstreams
+                .iter()
+                .position(|u| u.addr == addr && u.protocol == protocol)
+            {
+                upstreams[pos].domain = domain.map(|d| d.to_string());
+                Ok(upstreams[pos].id)
+            } else {
+                let id = upstreams.len() as i64 + 1;
+                upstreams.push(DnsUpstreamEntry {
+                    id,
+                    addr: addr.to_string(),
+                    protocol: protocol.to_string(),
+                    domain: domain.map(|d| d.to_string()),
+                });
+                Ok(id)
             }
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => {
-                dns_config::add_dns_reverse_resolver_postgres(p, subnet, resolver).await
-            }
-        }
+        })
     }
 
-    pub async fn remove_dns_reverse_resolver(
-        &self,
-        subnet: &IpSubnet,
-    ) -> Result<(), LanforgeDbError> {
-        match &self.pool {
-            #[cfg(feature = "sqlite")]
-            Pool::Sqlite(p) => dns_config::remove_dns_reverse_resolver_sqlite(p, subnet).await,
-            #[cfg(feature = "postgres")]
-            Pool::Postgres(p) => dns_config::remove_dns_reverse_resolver_postgres(p, subnet).await,
-        }
+    pub async fn remove_dns_upstream(&self, addr: &str, protocol: &str) -> Result<(), DbError> {
+        delegate_db_call!(self, remove_dns_upstream(addr, protocol), mock => {
+            let mut upstreams = mock.dns_upstreams.write();
+            upstreams.retain(|u| !(u.addr == addr && u.protocol == protocol));
+            Ok(())
+        })
+    }
+
+    pub async fn clear_dns_upstreams(&self) -> Result<(), DbError> {
+        delegate_db_call!(self, clear_dns_upstreams(), mock => {
+            mock.dns_upstreams.write().clear();
+            Ok(())
+        })
     }
 }

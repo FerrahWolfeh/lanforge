@@ -6,15 +6,19 @@ edition.workspace = true
 authors.workspace = true
 
 [features]
-default = ["sqlite"]
-sqlite = ["sqlx/sqlite"]
-postgres = ["sqlx/postgres", "sqlx/mac_address", "sqlx/ipnetwork"]
+default = ["postgres"]
+postgres = ["dep:lanforge-db-postgres"]
 adblock = ["lanforge-core/adblock"]
-hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
+hotpath = [
+    "dep:hotpath",
+    "lanforge-core/hotpath",
+    "lanforge-db-postgres/hotpath",
+]
 hotpath-alloc = [
     "hotpath",
     "hotpath/hotpath-alloc",
     "lanforge-core/hotpath-alloc",
+    "lanforge-db-postgres/hotpath-alloc",
 ]
 
 [dependencies]
@@ -22,6 +26,9 @@ hotpath-alloc = [
 lanforge-core = { workspace = true }
 lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
+lanforge-db-core = { path = "../lanforge-db-core" }
+lanforge-db-logbuf = { path = "../lanforge-db-logbuf" }
+lanforge-db-postgres = { path = "../lanforge-db-postgres", optional = true }
 
 # Workspace
 thiserror = { workspace = true }
@@ -31,17 +38,8 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 hotpath = { workspace = true, optional = true }
-
-# Third party
-sqlx = { version = "0.9.0", features = [
-    "runtime-tokio",
-    "tls-rustls-aws-lc-rs",
-    "macros",
-    "chrono",
-    "uuid",
-    "migrate",
-] }
 futures.workspace = true
+parking_lot.workspace = true
 
 
 [dev-dependencies]

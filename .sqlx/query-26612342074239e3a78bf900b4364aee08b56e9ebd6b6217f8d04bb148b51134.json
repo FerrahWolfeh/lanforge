@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dns.adblock_rules",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "26612342074239e3a78bf900b4364aee08b56e9ebd6b6217f8d04bb148b51134"
+}

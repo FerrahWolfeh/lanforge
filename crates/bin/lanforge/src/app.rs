@@ -127,10 +127,9 @@ impl Daemon {
         }
 
         // Database checks
-        #[cfg(not(feature = "sqlite"))]
         if cfg.database.url.starts_with("sqlite") {
             tracing::error!(
-                "❌ Database URL suggests SQLite but feature 'sqlite' is not compiled in!"
+                "❌ SQLite databases are no longer supported! Please use a PostgreSQL connection string."
             );
         }
 

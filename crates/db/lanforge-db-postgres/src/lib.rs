@@ -1,0 +1,1335 @@
+//! PostgreSQL persistence implementation for Lanforge.
+
+pub mod dto;
+pub mod mapping;
+
+use async_trait::async_trait;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Postgres, Transaction};
+use std::collections::HashSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
+use std::time::SystemTime;
+use tracing::{debug, info};
+
+use lanforge_core::context::PersistenceSnapshot;
+use lanforge_core::context::state::State;
+use lanforge_db_core::{
+    AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DnsStore, DnsUpstreamEntry,
+    DnsUpstreamStore,
+};
+use lanforge_types::auth::ApiScopes;
+use lanforge_types::device::{
+    Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, LeaseAction, LeaseHistoryEntry, LeaseKind,
+    Origin,
+};
+use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::dns::DnsRecordType;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::{DnsReverseResolver, IpSubnet};
+use lanforge_types::update::StaticEntry;
+
+use dto::{
+    AdblockConfigDto, AdblockRuleDto, AdblockSourceDto, ApiTokenDto, DeviceDto, DnsUpstreamDto,
+    LeaseHistoryDto, ReverseResolverDto, RewriteRuleDto, SeenV4Dto, SlaacAddrDto, V4LeaseDto,
+    V6LeaseDto, V6PrefixDto,
+};
+use mapping::{
+    PgCidr, PgDeviceOrigin, PgHostnameOrigin, PgInet, PgLeaseAction, PgLeaseType, PgMacAddr,
+    PgTimestampTz,
+};
+
+/// Helper function to convert `sqlx::Error` to `lanforge_db_core::DbError`.
+fn map_err(e: sqlx::Error) -> DbError {
+    DbError::Backend(e.to_string())
+}
+
+/// PostgreSQL database client.
+pub struct PostgresDatabase {
+    pool: PgPool,
+}
+
+impl PostgresDatabase {
+    /// Opens the PostgreSQL database and runs pending migrations.
+    pub async fn open(
+        url: &str,
+        max_connections: u32,
+        min_connections: u32,
+    ) -> Result<Self, DbError> {
+        let pool = PgPoolOptions::new()
+            .max_connections(max_connections)
+            .min_connections(min_connections)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query("SET search_path TO public, dns, dhcp, net, auth")
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(url)
+            .await
+            .map_err(map_err)?;
+
+        sqlx::migrate!()
+            .run(&pool)
+            .await
+            .map_err(|e| DbError::Backend(format!("Failed to run migrations: {e}")))?;
+
+        info!("PostgreSQL database opened at {url}");
+        Ok(Self { pool })
+    }
+
+    /// Access raw database pool.
+    #[must_use]
+    pub const fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+}
+
+// Helper query loaders (private inside the postgres crate)
+impl PostgresDatabase {
+    async fn load_device_rows(&self) -> Result<Vec<DeviceDto>, DbError> {
+        let rows = sqlx::query_as!(
+            DeviceDto,
+            "SELECT 
+                d.mac as \"mac!: PgMacAddr\", d.hostname, 
+                d.hostname_origin as \"hostname_origin!: PgHostnameOrigin\", 
+                d.duid, 
+                d.origin as \"origin!: PgDeviceOrigin\", 
+                d.managed_at as \"managed_at?: PgTimestampTz\", 
+                d.class as \"class!\",
+                s.v4_static as \"v4_static?: PgInet\", 
+                s.v6_suffix as \"v6_suffix?: PgInet\", 
+                s.boot_file
+             FROM net.devices d
+             LEFT JOIN dhcp.static_devices s ON d.mac = s.mac",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows)
+    }
+
+    async fn load_v4_leases(&self) -> Result<Vec<(MacAddr, Ipv4Addr, SystemTime)>, DbError> {
+        let rows = sqlx::query_as!(
+            V4LeaseDto,
+            "SELECT mac as \"mac!: PgMacAddr\", ip as \"ip!: PgInet\", expires as \"expires!: PgTimestampTz\" FROM dhcp.v4_leases",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(V4LeaseDto::into_tuple).collect())
+    }
+
+    async fn load_v6_leases(&self) -> Result<Vec<(MacAddr, u32, Ipv6Addr, SystemTime)>, DbError> {
+        let rows = sqlx::query_as!(
+            V6LeaseDto,
+            "SELECT mac as \"mac!: PgMacAddr\", iaid as \"iaid!\", ip as \"ip!: PgInet\", expires as \"expires!: PgTimestampTz\" FROM dhcp.v6_leases",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(V6LeaseDto::into_tuple).collect())
+    }
+
+    async fn load_v6_prefixes(
+        &self,
+    ) -> Result<Vec<(MacAddr, u32, Ipv6Addr, u8, SystemTime)>, DbError> {
+        let rows = sqlx::query_as!(
+            V6PrefixDto,
+            "SELECT mac as \"mac!: PgMacAddr\", iaid as \"iaid!\", cidr as \"cidr!: PgCidr\", expires as \"expires!: PgTimestampTz\" FROM net.v6_prefixes",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(V6PrefixDto::into_tuple).collect())
+    }
+
+    async fn load_slaac_addrs(&self) -> Result<Vec<(MacAddr, Ipv6Addr, SystemTime)>, DbError> {
+        let rows = sqlx::query_as!(
+            SlaacAddrDto,
+            "SELECT mac as \"mac!: PgMacAddr\", ip as \"ip!: PgInet\", last_seen as \"last_seen!: PgTimestampTz\" FROM net.slaac_addrs",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(SlaacAddrDto::into_tuple).collect())
+    }
+
+    async fn load_seen_v4(&self) -> Result<Vec<(MacAddr, Ipv4Addr, SystemTime)>, DbError> {
+        let rows = sqlx::query_as!(
+            SeenV4Dto,
+            "SELECT mac as \"mac!: PgMacAddr\", ip as \"ip!: PgInet\", last_seen as \"last_seen!: PgTimestampTz\" FROM net.seen_v4",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(SeenV4Dto::into_tuple).collect())
+    }
+}
+
+impl PostgresDatabase {
+    pub async fn save_table(&self, table: &State) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        let db_macs = sqlx::query_scalar!("SELECT mac as \"mac: PgMacAddr\" FROM net.devices")
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(map_err)?;
+
+        let snapshot_macs: HashSet<PgMacAddr> =
+            table.devices().map(|d| PgMacAddr::from(d.mac)).collect();
+
+        for device in table.devices() {
+            upsert_device_internal(&mut tx, &device).await?;
+        }
+
+        for db_mac in db_macs {
+            if !snapshot_macs.contains(&db_mac) {
+                sqlx::query!(
+                    "DELETE FROM net.devices WHERE mac = $1",
+                    db_mac as PgMacAddr
+                )
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
+            }
+        }
+        tx.commit().await.map_err(map_err)?;
+        debug!("State persisted successfully");
+        Ok(())
+    }
+
+    pub async fn save_snapshot(&self, snapshot: &PersistenceSnapshot) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        let db_devices =
+            sqlx::query!("SELECT mac as \"mac: PgMacAddr\", origin as \"origin: PgDeviceOrigin\" FROM net.devices")
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(map_err)?;
+
+        let snapshot_macs: HashSet<PgMacAddr> = snapshot
+            .devices
+            .keys()
+            .map(|m| PgMacAddr::from(*m))
+            .collect();
+
+        for device in snapshot.devices.values() {
+            upsert_device_internal(&mut tx, device).await?;
+        }
+
+        for row in db_devices {
+            if !snapshot_macs.contains(&row.mac) && row.origin == PgDeviceOrigin::Dynamic {
+                sqlx::query!(
+                    "DELETE FROM net.devices WHERE mac = $1",
+                    row.mac as PgMacAddr
+                )
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
+            }
+        }
+
+        tx.commit().await.map_err(map_err)?;
+        debug!("Snapshot persisted successfully");
+        Ok(())
+    }
+
+    pub async fn load_table(&self) -> Result<State, DbError> {
+        let mut table = State::new();
+        table.set_indexing_enabled(false);
+
+        let device_rows = self.load_device_rows().await?;
+        let v4_leases = self.load_v4_leases().await?;
+        let v6_leases = self.load_v6_leases().await?;
+        let v6_prefixes = self.load_v6_prefixes().await?;
+        let slaac_addrs = self.load_slaac_addrs().await?;
+        let seen_v4 = self.load_seen_v4().await?;
+
+        // Populate state devices
+        for row in device_rows {
+            let mac: MacAddr = row.mac.into();
+            let device = row.into_device();
+
+            if matches!(device.origin, Origin::Static) {
+                table.add_static_entry(
+                    mac,
+                    StaticEntry {
+                        mac,
+                        hostname: device.hostname.name.clone(),
+                        duid: device.duid.clone(),
+                        v4_static: match device.v4 {
+                            IPv4State::Static(ip) => Some(ip),
+                            _ => None,
+                        },
+                        v6_suffix: device.v6.iter().find_map(|s| {
+                            if let IPv6State::Static(suffix, _) = s {
+                                Some(*suffix)
+                            } else {
+                                None
+                            }
+                        }),
+                        origin: device.origin,
+                        boot_file: device.boot_file.clone(),
+                    },
+                );
+            }
+            table.insert_device(mac, device);
+        }
+
+        // Leases and SLAAC
+        for (mac, ip, expires) in v4_leases {
+            table.apply_update(lanforge_types::update::DeviceUpdate::V4LeaseGranted {
+                mac,
+                ip,
+                expires,
+            });
+        }
+        for (mac, iaid, ip, expires) in v6_leases {
+            let duid = table
+                .get_duid_by_mac(mac)
+                .cloned()
+                .unwrap_or_else(|| Duid::new(vec![]));
+            table.apply_update(lanforge_types::update::DeviceUpdate::V6LeaseGranted {
+                mac: Some(mac),
+                duid,
+                iaid,
+                ip,
+                expires,
+            });
+        }
+        for (mac, iaid, prefix, len, expires) in v6_prefixes {
+            let duid = table
+                .get_duid_by_mac(mac)
+                .cloned()
+                .unwrap_or_else(|| Duid::new(vec![]));
+            table.apply_update(lanforge_types::update::DeviceUpdate::V6PrefixAssigned {
+                mac: Some(mac),
+                duid,
+                iaid,
+                prefix,
+                len,
+                expires,
+            });
+        }
+        for (mac, ip, last_seen) in slaac_addrs {
+            if let Some(dev_arc) = table.devices.get_mut(&mac) {
+                let dev = Arc::make_mut(dev_arc);
+                let exists = dev.v6.iter().any(|state| {
+                    if let IPv6State::Slaac(addr, _) = state {
+                        *addr == ip
+                    } else {
+                        false
+                    }
+                });
+                if !exists {
+                    dev.v6.push(IPv6State::Slaac(ip, last_seen));
+                }
+            }
+        }
+        for (mac, ip, last_seen) in seen_v4 {
+            if let Some(dev_arc) = table.devices.get_mut(&mac) {
+                let dev = Arc::make_mut(dev_arc);
+                let exists = dev.seen_v4.iter().any(|(addr, _)| *addr == ip);
+                if !exists {
+                    if dev.seen_v4.len() >= 4 {
+                        dev.seen_v4.remove(0);
+                    }
+                    dev.seen_v4.push((ip, last_seen));
+                }
+            }
+        }
+
+        info!("Loaded devices from database");
+        table.set_indexing_enabled(true);
+        Ok(table)
+    }
+}
+
+#[async_trait]
+impl DeviceStore for PostgresDatabase {
+    async fn upsert_device(&self, device: &Device) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        upsert_device_internal(&mut tx, device).await?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn upsert_base_device_only(&self, device: &Device) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        upsert_base_device_only_internal(&mut tx, device).await?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete_devices(&self, macs: &[MacAddr]) -> Result<(), DbError> {
+        if macs.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        for mac in macs {
+            let pg_mac = PgMacAddr::from(*mac);
+            sqlx::query!(
+                "DELETE FROM net.devices WHERE mac = $1",
+                pg_mac as PgMacAddr
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn find_mac_by_hostname(&self, hostname: &str) -> Result<Option<MacAddr>, DbError> {
+        let row = sqlx::query!(
+            "SELECT mac as \"mac: PgMacAddr\" FROM net.devices WHERE hostname = $1 OR LOWER(hostname) = LOWER($1) LIMIT 1",
+            hostname
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(row.map(|r| r.mac.into()))
+    }
+
+    async fn remove_device(&self, mac: MacAddr) -> Result<(), DbError> {
+        let pg_mac = PgMacAddr::from(mac);
+        sqlx::query!(
+            "DELETE FROM net.devices WHERE mac = $1",
+            pg_mac as PgMacAddr
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn vacuum(&self) -> Result<(), DbError> {
+        // VACUUM cannot be run inside a transaction or prepared. We keep it as plain sqlx::query.
+        sqlx::query("VACUUM")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn prune_zombies(&self) -> Result<usize, DbError> {
+        let result = sqlx::query!(
+            "DELETE FROM net.devices
+             WHERE origin = 'dynamic'::device_origin
+               AND hostname = ''
+               AND mac NOT IN (SELECT mac FROM dhcp.v4_leases)
+               AND mac NOT IN (SELECT mac FROM dhcp.v6_leases)
+               AND mac NOT IN (SELECT mac FROM net.v6_prefixes)
+               AND mac NOT IN (SELECT mac FROM net.slaac_addrs)
+               AND mac NOT IN (SELECT mac FROM net.seen_v4)"
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    async fn reset(&self) -> Result<(), DbError> {
+        sqlx::query!("TRUNCATE TABLE net.devices CASCADE")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        sqlx::query!("TRUNCATE TABLE dhcp.lease_history")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn record_lease_event(
+        &self,
+        mac: MacAddr,
+        ip: &str,
+        lease_type: &str,
+        action: LeaseAction,
+    ) -> Result<(), DbError> {
+        let ip_parsed = ip
+            .parse::<IpAddr>()
+            .map_err(|e| DbError::Validation(format!("Invalid IP: {e}")))?;
+        let lease_type_parsed = lease_type
+            .parse::<LeaseKind>()
+            .map_err(DbError::Validation)?;
+
+        let pg_mac = PgMacAddr::from(mac);
+        let pg_ip = PgInet::from(ip_parsed);
+        let pg_lease = PgLeaseType::from(lease_type_parsed);
+        let pg_action = PgLeaseAction::from(action);
+        let pg_now = PgTimestampTz::from(SystemTime::now());
+
+        sqlx::query!(
+            "INSERT INTO dhcp.lease_history (mac, ip, lease_type, action, occurred_at)
+             VALUES ($1, $2, $3, $4, $5)",
+            pg_mac as PgMacAddr,
+            pg_ip as PgInet,
+            pg_lease as PgLeaseType,
+            pg_action as PgLeaseAction,
+            pg_now as PgTimestampTz
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>, DbError> {
+        let pg_mac = PgMacAddr::from(mac);
+        let rows = sqlx::query_as!(
+            LeaseHistoryDto,
+            "SELECT ip as \"ip!: PgInet\", lease_type as \"lease_type!: PgLeaseType\", action as \"action!: PgLeaseAction\", occurred_at as \"occurred_at!: PgTimestampTz\"
+             FROM dhcp.lease_history WHERE mac = $1 ORDER BY occurred_at DESC LIMIT 100",
+            pg_mac as PgMacAddr
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(LeaseHistoryDto::into_entry).collect())
+    }
+}
+
+// Inner helper methods for transactions
+async fn upsert_device_internal(
+    tx: &mut Transaction<'_, Postgres>,
+    device: &Device,
+) -> Result<(), DbError> {
+    let pg_mac = PgMacAddr::from(device.mac);
+    upsert_base_device_only_internal(tx, device).await?;
+
+    // Prune stale child rows
+    sqlx::query!(
+        "DELETE FROM dhcp.v4_leases WHERE mac = $1",
+        pg_mac as PgMacAddr
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_err)?;
+    sqlx::query!(
+        "DELETE FROM dhcp.v6_leases WHERE mac = $1",
+        pg_mac as PgMacAddr
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_err)?;
+    sqlx::query!(
+        "DELETE FROM net.v6_prefixes WHERE mac = $1",
+        pg_mac as PgMacAddr
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_err)?;
+    sqlx::query!(
+        "DELETE FROM net.slaac_addrs WHERE mac = $1",
+        pg_mac as PgMacAddr
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_err)?;
+    sqlx::query!(
+        "DELETE FROM net.seen_v4 WHERE mac = $1",
+        pg_mac as PgMacAddr
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_err)?;
+
+    // Repopulate child tables
+    if let IPv4State::Dynamic(lease) = &device.v4 {
+        let pg_ip = PgInet::from(lease.ip);
+        let pg_exp = PgTimestampTz::from(lease.expires);
+        sqlx::query!(
+            "INSERT INTO dhcp.v4_leases (mac, ip, expires) VALUES ($1, $2, $3)",
+            pg_mac as PgMacAddr,
+            pg_ip as PgInet,
+            pg_exp as PgTimestampTz
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(map_err)?;
+    }
+
+    for state in &device.v6 {
+        if let IPv6State::Dynamic(lease) = state {
+            let pg_ip = PgInet::from(lease.ip);
+            let pg_exp = PgTimestampTz::from(lease.expires);
+            sqlx::query!(
+                "INSERT INTO dhcp.v6_leases (mac, iaid, ip, expires) VALUES ($1, $2, $3, $4)",
+                pg_mac as PgMacAddr,
+                i64::from(lease.iaid),
+                pg_ip as PgInet,
+                pg_exp as PgTimestampTz
+            )
+            .execute(&mut **tx)
+            .await
+            .map_err(map_err)?;
+        } else if let IPv6State::Slaac(ip, timestamp) = state {
+            let pg_ip = PgInet::from(*ip);
+            let pg_ts = PgTimestampTz::from(*timestamp);
+            sqlx::query!(
+                "INSERT INTO net.slaac_addrs (mac, ip, last_seen)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT(mac, ip) DO UPDATE SET last_seen = EXCLUDED.last_seen",
+                pg_mac as PgMacAddr,
+                pg_ip as PgInet,
+                pg_ts as PgTimestampTz
+            )
+            .execute(&mut **tx)
+            .await
+            .map_err(map_err)?;
+        }
+    }
+
+    for prefix in &device.v6_prefixes {
+        let pg_cidr = PgCidr::from(IpSubnet {
+            addr: IpAddr::V6(prefix.prefix),
+            prefix_len: prefix.len,
+        });
+        let pg_exp = PgTimestampTz::from(prefix.expires);
+        sqlx::query!(
+            "INSERT INTO net.v6_prefixes (mac, iaid, cidr, expires) VALUES ($1, $2, $3, $4)",
+            pg_mac as PgMacAddr,
+            i64::from(prefix.iaid),
+            pg_cidr as PgCidr,
+            pg_exp as PgTimestampTz
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(map_err)?;
+    }
+
+    for (ip, timestamp) in &device.seen_v4 {
+        let pg_ip = PgInet::from(*ip);
+        let pg_ts = PgTimestampTz::from(*timestamp);
+        sqlx::query!(
+            "INSERT INTO net.seen_v4 (mac, ip, last_seen) VALUES ($1, $2, $3)",
+            pg_mac as PgMacAddr,
+            pg_ip as PgInet,
+            pg_ts as PgTimestampTz
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(map_err)?;
+    }
+
+    // Static mapping
+    let v4_static = match &device.v4 {
+        IPv4State::Static(ip) => Some(PgInet::from(*ip)),
+        _ => None,
+    };
+    let v6_suffix = device.v6.iter().find_map(|s| {
+        if let IPv6State::Static(suf, _) = s {
+            let ip = match suf {
+                Ipv6AddrOrSuffix::Full(ip) => *ip,
+                Ipv6AddrOrSuffix::Suffix(s) => Ipv6Addr::new(
+                    0,
+                    0,
+                    0,
+                    0,
+                    u16::from_be_bytes([s.0[0], s.0[1]]),
+                    u16::from_be_bytes([s.0[2], s.0[3]]),
+                    u16::from_be_bytes([s.0[4], s.0[5]]),
+                    u16::from_be_bytes([s.0[6], s.0[7]]),
+                ),
+            };
+            Some(PgInet::from(ip))
+        } else {
+            None
+        }
+    });
+
+    if v4_static.is_some() || v6_suffix.is_some() || device.boot_file.is_some() {
+        sqlx::query!(
+            "INSERT INTO dhcp.static_devices (mac, v4_static, v6_suffix, boot_file)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT(mac) DO UPDATE SET
+                v4_static = EXCLUDED.v4_static,
+                v6_suffix = EXCLUDED.v6_suffix,
+                boot_file = EXCLUDED.boot_file",
+            pg_mac as PgMacAddr,
+            v4_static as Option<PgInet>,
+            v6_suffix as Option<PgInet>,
+            device.boot_file.as_deref()
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(map_err)?;
+    } else {
+        sqlx::query!(
+            "DELETE FROM dhcp.static_devices WHERE mac = $1",
+            pg_mac as PgMacAddr
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(map_err)?;
+    }
+
+    Ok(())
+}
+
+async fn upsert_base_device_only_internal(
+    tx: &mut Transaction<'_, Postgres>,
+    device: &Device,
+) -> Result<(), DbError> {
+    let pg_mac = PgMacAddr::from(device.mac);
+    let pg_hostname_origin = PgHostnameOrigin::from(device.hostname.origin);
+    let pg_origin = PgDeviceOrigin::from(device.origin);
+    let pg_managed_at = device.managed_at.map(PgTimestampTz::from);
+    let pg_class = device.class as i32;
+
+    sqlx::query!(
+        "INSERT INTO net.devices (mac, hostname, hostname_origin, duid, origin, managed_at, class)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT(mac) DO UPDATE SET
+            hostname = EXCLUDED.hostname,
+            hostname_origin = EXCLUDED.hostname_origin,
+            duid = EXCLUDED.duid,
+            origin = EXCLUDED.origin,
+            managed_at = EXCLUDED.managed_at,
+            class = EXCLUDED.class",
+        pg_mac as PgMacAddr,
+        device.hostname.name,
+        pg_hostname_origin as PgHostnameOrigin,
+        device.duid.as_ref().map(|d| d.bytes.as_ref()),
+        pg_origin as PgDeviceOrigin,
+        pg_managed_at as Option<PgTimestampTz>,
+        pg_class
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_err)?;
+
+    Ok(())
+}
+
+#[async_trait]
+impl DnsStore for PostgresDatabase {
+    async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
+        let rows = sqlx::query_as!(
+            RewriteRuleDto,
+            "SELECT id as \"id!\", domain as \"domain!\", rtype as \"rtype!\", answer as \"answer!\" FROM dns.rewrites ORDER BY domain",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(RewriteRuleDto::into_rule).collect())
+    }
+
+    async fn upsert_dns_rewrite(
+        &self,
+        domain: &str,
+        rtype: DnsRecordType,
+        answer: &str,
+    ) -> Result<(), DbError> {
+        let rtype_str = rtype.to_string();
+        sqlx::query!("INSERT INTO dns.rewrites (domain, rtype, answer) VALUES ($1, $2, $3) ON CONFLICT(domain, rtype) DO UPDATE SET answer = EXCLUDED.answer",
+            domain,
+            rtype_str,
+            answer
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), DbError> {
+        let id_i32 = id as i32;
+        sqlx::query!("DELETE FROM dns.rewrites WHERE id = $1", id_i32)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn clear_dns_rewrites(&self) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.rewrites")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, DbError> {
+        let rows = sqlx::query!(
+            "SELECT id as \"id!\", domain as \"domain!\" FROM dns.allowlist ORDER BY domain",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.id as i64, row.domain))
+            .collect())
+    }
+
+    async fn add_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
+        sqlx::query!(
+            "INSERT INTO dns.allowlist (domain) VALUES ($1) ON CONFLICT(domain) DO NOTHING",
+            domain
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.allowlist WHERE domain = $1", domain)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn clear_dns_allowlist(&self) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.allowlist")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_dns_reverse_resolvers(&self) -> Result<Vec<DnsReverseResolver>, DbError> {
+        let rows = sqlx::query_as!(
+            ReverseResolverDto,
+            "SELECT subnet as \"subnet: PgCidr\", resolver_target FROM dns.reverse_resolvers",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(ReverseResolverDto::into_resolver)
+            .collect())
+    }
+
+    async fn add_dns_reverse_resolver(
+        &self,
+        subnet: &IpSubnet,
+        resolver: &UpstreamTarget,
+    ) -> Result<(), DbError> {
+        let pg_subnet = PgCidr::from(*subnet);
+        let resolver_str = String::from(resolver.clone());
+        sqlx::query!("INSERT INTO dns.reverse_resolvers (subnet, resolver_target) VALUES ($1, $2) ON CONFLICT(subnet) DO UPDATE SET resolver_target = EXCLUDED.resolver_target",
+            pg_subnet as PgCidr,
+            resolver_str
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn remove_dns_reverse_resolver(&self, subnet: &IpSubnet) -> Result<(), DbError> {
+        let pg_subnet = PgCidr::from(*subnet);
+        sqlx::query!(
+            "DELETE FROM dns.reverse_resolvers WHERE subnet = $1",
+            pg_subnet as PgCidr
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn clear_dns_reverse_resolvers(&self) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.reverse_resolvers")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AdblockStore for PostgresDatabase {
+    async fn load_adblock_config(&self) -> Result<AdblockDbConfig, DbError> {
+        let row = sqlx::query_as!(
+            AdblockConfigDto,
+            "SELECT enabled as \"enabled!\", blocking_mode::TEXT as \"blocking_mode!\", blocking_ip_v4 as \"blocking_ip_v4: PgInet\", blocking_ip_v6 as \"blocking_ip_v6: PgInet\", refresh_hours as \"refresh_hours!\", refresh_at_night as \"refresh_at_night!\" FROM dns.adblock_config LIMIT 1",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(row.into_config())
+    }
+
+    async fn save_adblock_config(&self, cfg: &AdblockDbConfig) -> Result<(), DbError> {
+        let pg_ip_v4 = cfg.blocking_ip_v4.map(PgInet::from);
+        let pg_ip_v6 = cfg.blocking_ip_v6.map(PgInet::from);
+        let blocking_mode_str = cfg.blocking_mode.to_string();
+        let refresh_hours = cfg.refresh_hours as i16;
+
+        sqlx::query!(
+            "UPDATE dns.adblock_config SET 
+                enabled = $1, 
+                blocking_mode = $2::text::dns.blocking_mode, 
+                blocking_ip_v4 = $3, 
+                blocking_ip_v6 = $4, 
+                refresh_hours = $5, 
+                refresh_at_night = $6",
+            cfg.enabled,
+            blocking_mode_str,
+            pg_ip_v4 as Option<PgInet>,
+            pg_ip_v6 as Option<PgInet>,
+            refresh_hours,
+            cfg.refresh_at_night
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_adblock_sources(
+        &self,
+    ) -> Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError> {
+        let rows = sqlx::query_as!(
+            AdblockSourceDto,
+            "SELECT id as \"id!\", url as \"url!\", kind as \"kind!\", enabled as \"enabled!\" FROM dns.adblock_urls",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(AdblockSourceDto::into_tuple).collect())
+    }
+
+    async fn add_adblock_source(&self, url: &str, kind: AdblockUrlKind) -> Result<i64, DbError> {
+        let kind_str = kind.to_string();
+        let row = sqlx::query!(
+            "INSERT INTO dns.adblock_urls (url, kind) VALUES ($1, $2) ON CONFLICT(url) DO UPDATE SET kind = EXCLUDED.kind RETURNING id",
+            url,
+            kind_str
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(i64::from(row.id))
+    }
+
+    async fn remove_adblock_source(&self, id: i64) -> Result<(), DbError> {
+        let id_i32 = id as i32;
+        sqlx::query!("DELETE FROM dns.adblock_urls WHERE id = $1", id_i32)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn update_adblock_source_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
+        let id_i32 = id as i32;
+        sqlx::query!(
+            "UPDATE dns.adblock_urls SET enabled = $1 WHERE id = $2",
+            enabled,
+            id_i32
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn clear_adblock_sources(&self) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.adblock_urls")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_adblock_rules(&self) -> Result<Vec<(i64, String, String, bool)>, DbError> {
+        let rows = sqlx::query_as!(
+            AdblockRuleDto,
+            "SELECT id as \"id!\", domain as \"domain!\", action::TEXT as \"action!\", enabled as \"enabled!\" FROM dns.adblock_rules",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(AdblockRuleDto::into_tuple).collect())
+    }
+
+    async fn add_adblock_rule(&self, domain: &str, action: &str) -> Result<i64, DbError> {
+        let row = sqlx::query!(
+            "INSERT INTO dns.adblock_rules (domain, action) VALUES ($1, $2::text::dns.adblock_action) ON CONFLICT(domain) DO UPDATE SET action = EXCLUDED.action RETURNING id",
+            domain,
+            action
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(i64::from(row.id))
+    }
+
+    async fn remove_adblock_rule(&self, id: i64) -> Result<(), DbError> {
+        let id_i32 = id as i32;
+        sqlx::query!("DELETE FROM dns.adblock_rules WHERE id = $1", id_i32)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
+        let id_i32 = id as i32;
+        sqlx::query!(
+            "UPDATE dns.adblock_rules SET enabled = $1 WHERE id = $2",
+            enabled,
+            id_i32
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn clear_adblock_rules(&self) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.adblock_rules")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ApiTokenStore for PostgresDatabase {
+    async fn store_api_token(
+        &self,
+        token: &str,
+        name: &str,
+        scopes: &ApiScopes,
+        expires_at: Option<i64>,
+        now: i64,
+    ) -> Result<i64, DbError> {
+        let scopes_str = scopes
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let created_at_dt = chrono::DateTime::from_timestamp(now, 0)
+            .ok_or_else(|| DbError::Validation("Invalid created_at timestamp".to_string()))?;
+        let expires_at_dt = expires_at.and_then(|exp| chrono::DateTime::from_timestamp(exp, 0));
+
+        let pg_created = PgTimestampTz(created_at_dt);
+        let pg_expires = expires_at_dt.map(PgTimestampTz);
+
+        let row = sqlx::query!(
+            "INSERT INTO auth.api_tokens (token, name, created_at, scopes, expires_at) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            token,
+            name,
+            pg_created as PgTimestampTz,
+            scopes_str,
+            pg_expires as Option<PgTimestampTz>
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(i64::from(row.id))
+    }
+
+    async fn validate_api_token(
+        &self,
+        token: &str,
+        now: i64,
+    ) -> Result<Option<(String, ApiScopes)>, DbError> {
+        let res =
+            sqlx::query!("SELECT name as \"name!\", scopes as \"scopes!\", expires_at as \"expires_at?: PgTimestampTz\" FROM auth.api_tokens WHERE token = $1", token)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_err)?;
+
+        if let Some(row) = res {
+            if let Some(exp) = row.expires_at
+                && now > exp.0.timestamp()
+            {
+                return Ok(None);
+            }
+            let now_dt = chrono::DateTime::from_timestamp(now, 0)
+                .ok_or_else(|| DbError::Validation("Invalid now timestamp".to_string()))?;
+            let pg_now = PgTimestampTz(now_dt);
+            sqlx::query!(
+                "UPDATE auth.api_tokens SET last_used = $1 WHERE token = $2",
+                pg_now as PgTimestampTz,
+                token
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+            let scopes = row
+                .scopes
+                .split(',')
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            Ok(Some((row.name, scopes)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn delete_api_token(&self, token: &str) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM auth.api_tokens WHERE token = $1", token)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete_api_token_by_id_or_name(&self, id_or_name: &str) -> Result<(), DbError> {
+        if let Ok(id) = id_or_name.parse::<i32>() {
+            sqlx::query!("DELETE FROM auth.api_tokens WHERE id = $1", id)
+                .execute(&self.pool)
+                .await
+                .map_err(map_err)?;
+        } else {
+            sqlx::query!("DELETE FROM auth.api_tokens WHERE name = $1", id_or_name)
+                .execute(&self.pool)
+                .await
+                .map_err(map_err)?;
+        }
+        Ok(())
+    }
+
+    async fn load_api_tokens(&self) -> Result<Vec<ApiTokenEntry>, DbError> {
+        let rows = sqlx::query_as!(
+            ApiTokenDto,
+            "SELECT id as \"id!\", token as \"token!\", name as \"name!\", created_at as \"created_at: PgTimestampTz\", last_used as \"last_used?: PgTimestampTz\", scopes as \"scopes!\", expires_at as \"expires_at?: PgTimestampTz\" FROM auth.api_tokens ORDER BY created_at DESC"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(ApiTokenDto::into_entry).collect())
+    }
+
+    async fn get_api_token_info(
+        &self,
+        id_or_name: &str,
+    ) -> Result<Option<(String, ApiScopes, Option<i64>)>, DbError> {
+        let res = if let Ok(id) = id_or_name.parse::<i64>() {
+            let id_i32 = id as i32;
+            sqlx::query!("SELECT name as \"name!\", scopes as \"scopes!\", expires_at as \"expires_at?: PgTimestampTz\" FROM auth.api_tokens WHERE id = $1", id_i32)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_err)?
+                .map(|row| (row.name, row.scopes, row.expires_at))
+        } else {
+            sqlx::query!("SELECT name as \"name!\", scopes as \"scopes!\", expires_at as \"expires_at?: PgTimestampTz\" FROM auth.api_tokens WHERE name = $1", id_or_name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_err)?
+                .map(|row| (row.name, row.scopes, row.expires_at))
+        };
+        if let Some((name, scopes_str, expires_at)) = res {
+            let scopes = scopes_str
+                .split(',')
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            Ok(Some((name, scopes, expires_at.map(|dt| dt.0.timestamp()))))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[async_trait]
+impl DnsUpstreamStore for PostgresDatabase {
+    async fn load_dns_upstreams(&self) -> Result<Vec<DnsUpstreamEntry>, DbError> {
+        let rows = sqlx::query_as!(
+            DnsUpstreamDto,
+            "SELECT id as \"id!\", addr as \"addr!\", protocol as \"protocol!\", domain FROM dns.upstreams ORDER BY id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(DnsUpstreamDto::into_entry).collect())
+    }
+
+    async fn add_dns_upstream(
+        &self,
+        addr: &str,
+        protocol: &str,
+        domain: Option<&str>,
+    ) -> Result<i64, DbError> {
+        let row = sqlx::query!(
+            "INSERT INTO dns.upstreams (addr, protocol, domain) VALUES ($1, $2, $3) ON CONFLICT (addr, protocol) DO UPDATE SET domain = EXCLUDED.domain RETURNING id",
+            addr,
+            protocol,
+            domain
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(i64::from(row.id))
+    }
+
+    async fn remove_dns_upstream(&self, addr: &str, protocol: &str) -> Result<(), DbError> {
+        sqlx::query!(
+            "DELETE FROM dns.upstreams WHERE addr = $1 AND protocol = $2",
+            addr,
+            protocol
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn clear_dns_upstreams(&self) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.upstreams")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+impl PostgresDatabase {
+    pub async fn set_adblock_config_value(&self, key: &str, value: &str) -> Result<(), DbError> {
+        let pool = &self.pool;
+        match key {
+            "enabled" => {
+                let val = value == "true";
+                sqlx::query!("UPDATE dns.adblock_config SET enabled = $1", val)
+                    .execute(pool)
+                    .await
+                    .map_err(map_err)?;
+            }
+            "blocking_mode" => {
+                sqlx::query!(
+                    "UPDATE dns.adblock_config SET blocking_mode = $1::text::dns.blocking_mode",
+                    value
+                )
+                .execute(pool)
+                .await
+                .map_err(map_err)?;
+            }
+            "blocking_ip_v4" => {
+                let ip_val = if value.is_empty() || value == "none" || value == "null" {
+                    None
+                } else {
+                    Some(PgInet::from(value.parse::<IpAddr>().map_err(|e| {
+                        DbError::Validation(format!("Invalid IP: {e}"))
+                    })?))
+                };
+                sqlx::query!(
+                    "UPDATE dns.adblock_config SET blocking_ip_v4 = $1",
+                    ip_val as Option<PgInet>
+                )
+                .execute(pool)
+                .await
+                .map_err(map_err)?;
+            }
+            "blocking_ip_v6" => {
+                let ip_val = if value.is_empty() || value == "none" || value == "null" {
+                    None
+                } else {
+                    Some(PgInet::from(value.parse::<IpAddr>().map_err(|e| {
+                        DbError::Validation(format!("Invalid IP: {e}"))
+                    })?))
+                };
+                sqlx::query!(
+                    "UPDATE dns.adblock_config SET blocking_ip_v6 = $1",
+                    ip_val as Option<PgInet>
+                )
+                .execute(pool)
+                .await
+                .map_err(map_err)?;
+            }
+            "refresh_hours" => {
+                let val = value.parse::<i16>().unwrap_or(12);
+                sqlx::query!("UPDATE dns.adblock_config SET refresh_hours = $1", val)
+                    .execute(pool)
+                    .await
+                    .map_err(map_err)?;
+            }
+            "refresh_at_night" => {
+                let val = value == "true";
+                sqlx::query!("UPDATE dns.adblock_config SET refresh_at_night = $1", val)
+                    .execute(pool)
+                    .await
+                    .map_err(map_err)?;
+            }
+            _ => {
+                let extras_str = sqlx::query_scalar!(
+                    "SELECT extras::TEXT as \"extras!: String\" FROM dns.adblock_config LIMIT 1"
+                )
+                .fetch_one(pool)
+                .await
+                .map_err(map_err)?;
+                let mut extras_json: serde_json::Value =
+                    serde_json::from_str(&extras_str).unwrap_or_else(|_| serde_json::json!({}));
+                if let Ok(val_json) = serde_json::from_str::<serde_json::Value>(value) {
+                    extras_json[key] = val_json;
+                } else {
+                    extras_json[key] = serde_json::Value::String(value.to_string());
+                }
+                sqlx::query!("UPDATE dns.adblock_config SET extras = $1", extras_json)
+                    .execute(pool)
+                    .await
+                    .map_err(map_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn load_adblock_urls(&self) -> Result<Vec<(i64, String, AdblockUrlKind)>, DbError> {
+        let rows = sqlx::query!(
+            "SELECT id as \"id!\", url as \"url!\", kind as \"kind!\" FROM dns.adblock_urls",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let kind = row.kind.parse().unwrap_or_default();
+                (i64::from(row.id), row.url, kind)
+            })
+            .collect())
+    }
+
+    pub async fn add_adblock_url(&self, url: &str, kind: AdblockUrlKind) -> Result<(), DbError> {
+        let kind_str = kind.to_string();
+        sqlx::query!("INSERT INTO dns.adblock_urls (url, kind) VALUES ($1, $2) ON CONFLICT(url) DO UPDATE SET kind = EXCLUDED.kind", url, kind_str)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    pub async fn remove_adblock_url(&self, url: &str) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.adblock_urls WHERE url = $1", url)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    pub async fn clear_adblock_urls(&self) -> Result<(), DbError> {
+        sqlx::query!("DELETE FROM dns.adblock_urls")
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}

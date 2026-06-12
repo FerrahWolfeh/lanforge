@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM net.devices\n             WHERE origin = 'dynamic'::device_origin\n               AND hostname = ''\n               AND mac NOT IN (SELECT mac FROM dhcp.v4_leases)\n               AND mac NOT IN (SELECT mac FROM dhcp.v6_leases)\n               AND mac NOT IN (SELECT mac FROM net.v6_prefixes)\n               AND mac NOT IN (SELECT mac FROM net.slaac_addrs)\n               AND mac NOT IN (SELECT mac FROM net.seen_v4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b53d2c67a789e2516591db5430fd6ce5404c8950ecd11253be8861ccfcb7f9e9"
+}
