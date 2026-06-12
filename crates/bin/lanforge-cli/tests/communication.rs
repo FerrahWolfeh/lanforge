@@ -523,6 +523,8 @@ async fn test_communication_config() {
     let export_cmd = ConfigArgs {
         action: ConfigAction::Export {
             output: Some(export_path_str.clone()),
+            encrypt_secrets: false,
+            password: None,
         },
     };
     assert!(export_cmd.execute(&client).await.is_ok());
@@ -533,6 +535,7 @@ async fn test_communication_config() {
             file: Some(export_path_str),
             positional_file: None,
             overwrite: true,
+            password: None,
         },
     };
     assert!(import_cmd.execute(&client).await.is_ok());
@@ -585,4 +588,140 @@ async fn test_communication_devices() {
         target: Some("00:11:22:33:44:55".to_string()),
     };
     assert!(wol_cmd.execute(&client).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_communication_import_production_sample() {
+    let dir = tempdir().unwrap();
+    let socket_path = dir
+        .path()
+        .join("control.sock")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let _ctx = start_test_daemon(socket_path.clone()).await;
+    let client = make_test_client(socket_path);
+
+    // Synthesize a sanitized mock config mirroring the exact structure of a production export
+    let mock_json = r#"{
+    "hosts": [
+        {
+            "mac": "02:4d:45:44:49:41",
+            "hostname": "Media",
+            "v4_fixed": "192.168.10.9",
+            "v6_suffix": "::f00f",
+            "origin": "Static"
+        },
+        {
+            "mac": "c8:bc:9c:f6:6a:28",
+            "hostname": "Huawei-BE3",
+            "v4_fixed": "192.168.254.3",
+            "v6_suffix": null,
+            "origin": "Static"
+        }
+    ],
+    "dns_rewrites": [
+        {
+            "id": 2,
+            "domain": "*.eonteam.xyz",
+            "rtype": "CNAME",
+            "answer": {
+                "device": {
+                    "identifier": "raspie",
+                    "fallback": null
+                }
+            }
+        }
+    ],
+    "dns_upstreams": [
+        {
+            "addr": "9.9.9.9:53",
+            "protocol": "udp",
+            "domain": null
+        }
+    ],
+    "dns_adblock_config": {
+        "enabled": true,
+        "blocking_mode": "null_ip",
+        "blocking_ip_v4": null,
+        "blocking_ip_v6": null,
+        "refresh_hours": 12,
+        "refresh_at_night": false
+    },
+    "dns_adblock_urls": [
+        {
+            "id": 1,
+            "url": "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+            "kind": "blocklist"
+        }
+    ],
+    "dns_allowlist": [],
+    "overwrite": false
+}"#;
+
+    let mock_config_path = dir.path().join("production_sample_mock.json");
+    std::fs::write(&mock_config_path, mock_json).unwrap();
+
+    let import_cmd = ConfigArgs {
+        action: ConfigAction::Import {
+            file: Some(mock_config_path.to_string_lossy().to_string()),
+            positional_file: None,
+            overwrite: true,
+            password: None,
+        },
+    };
+    assert!(import_cmd.execute(&client).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_communication_config_encryption() {
+    let dir = tempdir().unwrap();
+    let socket_path = dir
+        .path()
+        .join("control.sock")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let _ctx = start_test_daemon(socket_path.clone()).await;
+    let client = make_test_client(socket_path);
+
+    // 1. Export config with encryption
+    let export_path = dir.path().join("encrypted_config.json");
+    let export_path_str = export_path.to_str().unwrap().to_string();
+    let export_cmd = ConfigArgs {
+        action: ConfigAction::Export {
+            output: Some(export_path_str.clone()),
+            encrypt_secrets: true,
+            password: Some("supersecurepassword".to_string()),
+        },
+    };
+    assert!(export_cmd.execute(&client).await.is_ok());
+
+    // Verify it is encrypted (reading the file and checking for EncryptedApiTokens format or decrypting it)
+    let content = std::fs::read_to_string(&export_path).unwrap();
+    assert!(content.contains("ciphertext"));
+    assert!(content.contains("salt"));
+    assert!(content.contains("nonce"));
+
+    // 2. Import config with decryption
+    let import_cmd = ConfigArgs {
+        action: ConfigAction::Import {
+            file: Some(export_path_str),
+            positional_file: None,
+            overwrite: true,
+            password: Some("supersecurepassword".to_string()),
+        },
+    };
+    assert!(import_cmd.execute(&client).await.is_ok());
+
+    // 3. Try to import with invalid password (should fail)
+    let invalid_import_cmd = ConfigArgs {
+        action: ConfigAction::Import {
+            file: Some(export_path.to_str().unwrap().to_string()),
+            positional_file: None,
+            overwrite: true,
+            password: Some("wrongpassword".to_string()),
+        },
+    };
+    assert!(invalid_import_cmd.execute(&client).await.is_err());
 }

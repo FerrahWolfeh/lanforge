@@ -1011,13 +1011,14 @@ fn encode_msg<'a>(msg: &Message, buf: &'a mut Vec<u8>) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test_utils::init_test_context, v6::config::Dhcpv6PoolConfig, v6::pool::PoolRange};
+    use crate::{test_utils::init_test_context, v6::pool::PoolRange};
     use dhcproto::{
         Decodable, Decoder,
         v6::{DhcpOptions, IANA, OptionCode},
     };
     use lanforge_types::{
         device::{Device, Ipv6AddrOrSuffix, Origin},
+        network::dhcp::Dhcpv6Pool,
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState},
     };
     use std::{collections::HashMap, time::Duration};
@@ -1050,10 +1051,11 @@ mod tests {
             ula_prefix: Some(ula),
             ula_prefix_len: 64,
             port: 547,
-            pools: vec![Dhcpv6PoolConfig {
+            pools: vec![Dhcpv6Pool {
                 range_start: Some(Ipv6AddrOrSuffix::Full(start)),
                 range_end: Some(Ipv6AddrOrSuffix::Full(end)),
                 address: None,
+                lease_time: None,
             }],
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
@@ -1592,10 +1594,11 @@ mod tests {
     #[test]
     fn invalid_v6_pool_range_underflow_protection() {
         // Create pool configuration with range_start > range_end
-        let cfg = Dhcpv6PoolConfig {
+        let cfg = Dhcpv6Pool {
             range_start: Some(Ipv6AddrOrSuffix::Full("fd00::200".parse().unwrap())),
             range_end: Some(Ipv6AddrOrSuffix::Full("fd00::100".parse().unwrap())),
             address: None,
+            lease_time: None,
         };
         let range = PoolRange::from_config(&cfg);
         // Should fallback to empty Floating range

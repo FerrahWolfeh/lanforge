@@ -305,6 +305,28 @@ impl AsyncService for RaService {
 
         let mut bus_rx = self.ctx.bus().subscribe();
 
+        if self.cfg.prefixes.is_empty() {
+            warn!("⚠️ RA enabled but no prefixes configured — server will remain idle");
+            ctrl.signal_ready();
+            loop {
+                let event = bus_rx.recv().await;
+                match event {
+                    Ok(timed_event) => {
+                        if matches!(
+                            timed_event.event,
+                            LanforgeEvent::System(SystemEvent::Shutdown)
+                        ) {
+                            info!("RA service: shutdown received");
+                            return Ok(());
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
+            }
+            return Ok(());
+        }
+
         let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
             CoreError::Generic("Target interface index is not configured in context".to_string())
         })?;
@@ -670,6 +692,7 @@ mod tests {
     use lanforge_core::{bus::EventBus, context::state::State};
     use lanforge_types::{
         identifiers::MacAddr,
+        network::ra::RAPrefix,
         update::{DeviceUpdate, InterfaceState},
     };
 
@@ -793,7 +816,7 @@ mod tests {
 
         // 6. Test build_ra_packet with the deprecated prefix list
         let cfg = RaConfig {
-            prefixes: vec![PrefixConfig::gua_dynamic()],
+            prefixes: vec![RAPrefix::gua_dynamic()],
             ..Default::default()
         };
         let mac = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];

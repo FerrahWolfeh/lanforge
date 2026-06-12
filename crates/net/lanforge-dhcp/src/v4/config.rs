@@ -4,18 +4,10 @@
 //! (`router`, `DNS`, `domain name`, `search domains`).
 
 use lanforge_macros::ServiceConfig;
+use lanforge_types::network::dhcp::Dhcpv4Pool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-
-/// Configuration for a single `DHCPv4` address pool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Dhcpv4PoolConfig {
-    /// Start of the dynamic IP range (inclusive).
-    pub range_start: Ipv4Addr,
-    /// End of the dynamic IP range (inclusive).
-    pub range_end: Ipv4Addr,
-}
 
 /// `DHCPv4` server configuration — built from the `[dhcp.v4]` TOML section.
 #[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
@@ -37,7 +29,7 @@ pub struct Dhcpv4Config {
     pub range_end: Option<Ipv4Addr>,
 
     /// Multiple pools for address assignment.
-    pub pools: Vec<Dhcpv4PoolConfig>,
+    pub pools: Vec<Dhcpv4Pool>,
 
     /// Lease time in seconds (default: 86400 = 24h).
     pub lease_time: u32,
@@ -87,12 +79,13 @@ impl Default for Dhcpv4Config {
 impl Dhcpv4Config {
     /// Returns all configured pools, including the legacy range if present.
     #[must_use]
-    pub fn get_effective_pools(&self) -> Vec<Dhcpv4PoolConfig> {
+    pub fn get_effective_pools(&self) -> Vec<Dhcpv4Pool> {
         let mut pools = self.pools.clone();
         if let (Some(start), Some(end)) = (self.range_start, self.range_end) {
-            pools.push(Dhcpv4PoolConfig {
+            pools.push(Dhcpv4Pool {
                 range_start: start,
                 range_end: end,
+                lease_time: None,
             });
         }
         pools

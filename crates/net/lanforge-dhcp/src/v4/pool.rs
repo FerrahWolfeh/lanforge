@@ -39,9 +39,8 @@ use lanforge_types::identifiers::MacAddr;
 
 use lanforge_core::context::LanforgeContext;
 
+use lanforge_types::network::dhcp::Dhcpv4Pool;
 use roaring::RoaringBitmap;
-
-use super::config::Dhcpv4PoolConfig;
 
 /// Dynamic IPv4 address pool backed by a roaring bitmap.
 ///
@@ -52,7 +51,7 @@ use super::config::Dhcpv4PoolConfig;
 /// - Quarantines `DECLINEd` IPs for 2 hours to avoid conflict storms
 pub struct IpPool {
     /// Configured pools (ranges).
-    pools: Vec<Dhcpv4PoolConfig>,
+    pools: Vec<Dhcpv4Pool>,
     /// IPs rejected via DECLINE with quarantine timestamp.
     declined: HashMap<Ipv4Addr, Instant>,
     /// Bitmap of free IPs — efficient O(1) insert/remove, O(log n) select.
@@ -62,7 +61,7 @@ pub struct IpPool {
 impl IpPool {
     /// Creates a new pool from a list of range configurations.
     #[must_use]
-    pub fn new(pools: Vec<Dhcpv4PoolConfig>) -> Self {
+    pub fn new(pools: Vec<Dhcpv4Pool>) -> Self {
         let mut available = RoaringBitmap::new();
         for pool in &pools {
             if pool.range_start <= pool.range_end {
@@ -288,20 +287,22 @@ mod tests {
 
     use lanforge_types::{
         device::Origin,
+        network::dhcp::Dhcpv4Pool,
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
     };
 
     use super::*;
     use std::time::{Duration, SystemTime};
 
-    use crate::{test_utils::init_test_context, v4::config::Dhcpv4PoolConfig};
+    use crate::test_utils::init_test_context;
 
     fn pool() -> (IpPool, LanforgeContext) {
         let ctx = init_test_context();
         (
-            IpPool::new(vec![Dhcpv4PoolConfig {
+            IpPool::new(vec![Dhcpv4Pool {
                 range_start: Ipv4Addr::new(192, 168, 0, 100),
                 range_end: Ipv4Addr::new(192, 168, 0, 105),
+                lease_time: None,
             }]),
             ctx,
         )
@@ -408,9 +409,10 @@ mod tests {
     #[test]
     fn test_cleanup_declined_quarantine() {
         let _ctx = init_test_context();
-        let mut p = IpPool::new(vec![Dhcpv4PoolConfig {
+        let mut p = IpPool::new(vec![Dhcpv4Pool {
             range_start: Ipv4Addr::new(192, 168, 1, 100),
             range_end: Ipv4Addr::new(192, 168, 1, 100),
+            lease_time: None,
         }]);
         let ip = Ipv4Addr::new(192, 168, 1, 100);
 

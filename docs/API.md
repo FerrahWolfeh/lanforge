@@ -26,6 +26,8 @@ Endpoints that follow this pattern are marked **HybridStream**.
 | `scan` | Triggers an immediate network scan (ARP/NDP). | No | No | Empty on success, error on failure |
 | `shutdown` | Gracefully shuts down the daemon and exits. | No | No | Empty on success, error on failure |
 | `log` | Retrieves entries from the system event log and optionally streams live events. Backing endpoint for the CLI `watch` command. Follows the **HybridStream** pattern. | Optional | `follow: bool`, `n: Option<usize>`, `filter: Option<Vec<EventKind>>` | HybridStream of Event entries |
+| `system_config_export` | Bulk exports the full system configuration from the database. | No | No | SystemConfigExport api type |
+| `system_config_import` | Bulk imports system configuration, replacing or merging tables. | No | SystemConfigExport api type | Empty on success, error on failure |
 | `context_dump` | Dumps full program state as JSON. **TUI-internal only — not exposed via CLI.** | Yes | `only_devices: bool`, `only_orphans: bool` | JSON Value stream |
 
 > `filter` in `log` is evaluated server-side. The daemon retains only events whose `EventKind` is present in the filter list before emitting them. An absent or empty filter passes all events through.

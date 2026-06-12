@@ -174,6 +174,10 @@ lanforge
 │   ├── renew [target] [-6]         # Force renew (interactive picker if no target)
 │   └── release [target] [-6]       # Force release (interactive picker if no target)
 │
+├── config
+│   ├── export [-o <file>] [-e] [-p <password>] # Export full db config (optional encryption)
+│   └── import [-o <file>] [-w] [-p <password>] # Import full db config (optional decryption)
+│
 ├── db
 │   ├── vacuum                      # SQLite VACUUM
 │   ├── prune                       # Remove zombie entries
@@ -561,6 +565,11 @@ Bar color: Green (<75%), Yellow (75–90%), Red (>90%). In `--ascii` mode: `[===
   ```
 - **`del <id|name>`:** `✓ {message}`.
 - **`renew <id|name>`:** Invalidates old, creates new. Shows new secret in bordered box identical to `gen`.
+
+### 3.31 — `config` subcommands
+
+- **`export [--output <file>] [--encrypt-secrets] [--password <password>]`**: Exports database tables (including hosts, DNS rewrites/upstreams/adblock rules, API tokens, and dynamic configurations like DHCP pools and RA prefixes) to JSON format. If `--encrypt-secrets` or `--password` is provided, the API tokens section is encrypted client-side using Argon2 key derivation and ChaCha20-Poly1305. If `--encrypt-secrets` is true but no password is provided, prompts the user interactively.
+- **`import [--file <file>] [--overwrite] [--password <password>]`**: Imports database tables from a JSON configuration file. If the file contains an encrypted API tokens section, prompts the user interactively for the decryption password (unless `--password` is specified).
 
 ---
 

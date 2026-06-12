@@ -4,9 +4,11 @@ use async_trait::async_trait;
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry};
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 
 /// Database error enum encapsulating all database failures.
@@ -254,6 +256,35 @@ pub trait DnsUpstreamStore: Send + Sync {
 
     /// Clears all registered DNS upstream servers.
     async fn clear_dns_upstreams(&self) -> Result<(), DbError>;
+}
+
+/// Handles dynamic DHCP pools and RA configurations.
+#[async_trait]
+pub trait DynamicConfigStore: Send + Sync {
+    /// Loads dynamic DHCPv4 pools.
+    async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError>;
+    /// Overwrites/saves dynamic DHCPv4 pools.
+    async fn save_dhcp_v4_pools(&self, pools: &[Dhcpv4Pool]) -> Result<(), DbError>;
+
+    /// Loads dynamic DHCPv6 pools.
+    async fn load_dhcp_v6_pools(&self) -> Result<Vec<Dhcpv6Pool>, DbError>;
+    /// Overwrites/saves dynamic DHCPv6 pools.
+    async fn save_dhcp_v6_pools(&self, pools: &[Dhcpv6Pool]) -> Result<(), DbError>;
+
+    /// Loads dynamic RA prefix configurations.
+    async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError>;
+    /// Overwrites/saves dynamic RA prefixes.
+    async fn save_ra_prefixes(&self, prefixes: &[RAPrefix]) -> Result<(), DbError>;
+
+    /// Loads dynamic RA RDNSS options.
+    async fn load_ra_rdnss(&self) -> Result<Vec<RdnssConfig>, DbError>;
+    /// Overwrites/saves dynamic RA RDNSS.
+    async fn save_ra_rdnss(&self, rdnss: &[RdnssConfig]) -> Result<(), DbError>;
+
+    /// Loads dynamic RA DNSSL options.
+    async fn load_ra_dnssl(&self) -> Result<Vec<DnsslConfig>, DbError>;
+    /// Overwrites/saves dynamic RA DNSSL.
+    async fn save_ra_dnssl(&self, dnssl: &[DnsslConfig]) -> Result<(), DbError>;
 }
 
 /// Helper macro to delegate database operations to the active backend (postgres/mock).

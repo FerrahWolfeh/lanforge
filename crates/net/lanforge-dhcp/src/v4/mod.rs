@@ -176,6 +176,27 @@ impl AsyncService for Dhcpv4Service {
         self.ctx.wait_for_db().await?;
         self.ctx.wait_for_interfaces().await?;
 
+        if self.cfg.get_effective_pools().is_empty() {
+            warn!(
+                "⚠️ DHCPv4 enabled but no pools configured — server will not respond to any requests"
+            );
+            ctrl.signal_ready();
+            let mut handle = self.ctx.service_handle();
+            loop {
+                let event = handle.next_event().await;
+                let Some(timed_event) = event else {
+                    break;
+                };
+                if matches!(
+                    timed_event.event,
+                    LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown)
+                ) {
+                    break;
+                }
+            }
+            return Ok(());
+        }
+
         let mut server = DhcpServer::new(self.cfg.clone(), self.ctx.clone());
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool

@@ -4,6 +4,10 @@ pub mod dto;
 pub mod mapping;
 
 use async_trait::async_trait;
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::ra::{
+    DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RdnssConfig,
+};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::HashSet;
@@ -16,7 +20,7 @@ use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
 use lanforge_db_core::{
     AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DnsStore, DnsUpstreamEntry,
-    DnsUpstreamStore,
+    DnsUpstreamStore, DynamicConfigStore,
 };
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{
@@ -1330,6 +1334,322 @@ impl PostgresDatabase {
             .execute(&self.pool)
             .await
             .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl DynamicConfigStore for PostgresDatabase {
+    async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError> {
+        let rows = sqlx::query!(
+            "SELECT range_start as \"range_start!: PgInet\", range_end as \"range_end!: PgInet\", lease_time FROM dhcp.v4_pools"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        let mut pools = Vec::new();
+        for row in rows {
+            let start = match row.range_start.0.ip() {
+                IpAddr::V4(ip) => ip,
+                _ => {
+                    return Err(DbError::Internal(
+                        "Non-IPv4 address in v4_pools".to_string(),
+                    ));
+                }
+            };
+            let end = match row.range_end.0.ip() {
+                IpAddr::V4(ip) => ip,
+                _ => {
+                    return Err(DbError::Internal(
+                        "Non-IPv4 address in v4_pools".to_string(),
+                    ));
+                }
+            };
+            let lease_time = if row.lease_time == 0 {
+                None
+            } else {
+                Some(row.lease_time as u32)
+            };
+            pools.push(Dhcpv4Pool {
+                range_start: start,
+                range_end: end,
+                lease_time,
+            });
+        }
+        Ok(pools)
+    }
+
+    async fn save_dhcp_v4_pools(&self, pools: &[Dhcpv4Pool]) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        sqlx::query!("DELETE FROM dhcp.v4_pools")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+
+        for pool in pools {
+            let pg_start = PgInet::from(pool.range_start);
+            let pg_end = PgInet::from(pool.range_end);
+            let lease_time = pool.lease_time.unwrap_or(0) as i32;
+            sqlx::query!(
+                "INSERT INTO dhcp.v4_pools (range_start, range_end, lease_time) VALUES ($1, $2, $3)",
+                pg_start as PgInet,
+                pg_end as PgInet,
+                lease_time
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_dhcp_v6_pools(&self) -> Result<Vec<Dhcpv6Pool>, DbError> {
+        let rows =
+            sqlx::query!("SELECT range_start, range_end, address, lease_time FROM dhcp.v6_pools")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_err)?;
+
+        let mut pools = Vec::new();
+        for row in rows {
+            let range_start = row.range_start.as_deref().and_then(Ipv6AddrOrSuffix::parse);
+            let range_end = row.range_end.as_deref().and_then(Ipv6AddrOrSuffix::parse);
+            let lease_time = if row.lease_time == 0 {
+                None
+            } else {
+                Some(row.lease_time as u32)
+            };
+            pools.push(Dhcpv6Pool {
+                range_start,
+                range_end,
+                address: row.address,
+                lease_time,
+            });
+        }
+        Ok(pools)
+    }
+
+    async fn save_dhcp_v6_pools(&self, pools: &[Dhcpv6Pool]) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        sqlx::query!("DELETE FROM dhcp.v6_pools")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+
+        for pool in pools {
+            let start_str = pool.range_start.map(|x| x.to_string());
+            let end_str = pool.range_end.map(|x| x.to_string());
+            let lease_time = pool.lease_time.unwrap_or(0) as i32;
+            sqlx::query!(
+                "INSERT INTO dhcp.v6_pools (range_start, range_end, address, lease_time) VALUES ($1, $2, $3, $4)",
+                start_str,
+                end_str,
+                pool.address,
+                lease_time
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError> {
+        let rows = sqlx::query!(
+            "SELECT source, address as \"address?: PgInet\", prefix_len, on_link, autonomous, preferred_lifetime, valid_lifetime FROM ra.prefixes"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        let mut prefixes = Vec::new();
+        for row in rows {
+            let source = match row.source.as_str() {
+                "static" => PrefixSource::Static,
+                "ula" => PrefixSource::Ula,
+                "auto_gua" => PrefixSource::AutoGua,
+                _ => PrefixSource::AutoGua,
+            };
+            let address = row.address.map(|pg_inet| pg_inet.0.ip().to_string());
+            let valid_lifetime = match row.valid_lifetime {
+                None => PrefixLifetime::Infinity,
+                Some(secs) => PrefixLifetime::Secs(secs as u32),
+            };
+            let preferred_lifetime = match row.preferred_lifetime {
+                None => PrefixLifetime::Infinity,
+                Some(secs) => PrefixLifetime::Secs(secs as u32),
+            };
+            prefixes.push(RAPrefix {
+                source,
+                address,
+                prefix_len: row.prefix_len as u8,
+                on_link: row.on_link,
+                autonomous: row.autonomous,
+                router_addr: true,
+                valid_lifetime,
+                preferred_lifetime,
+            });
+        }
+        Ok(prefixes)
+    }
+
+    async fn save_ra_prefixes(&self, prefixes: &[RAPrefix]) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        sqlx::query!("DELETE FROM ra.prefixes")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+
+        for prefix in prefixes {
+            let source_str = match &prefix.source {
+                PrefixSource::Static => "static",
+                PrefixSource::Ula => "ula",
+                PrefixSource::AutoGua => "auto_gua",
+            };
+            let pg_addr = prefix.address.as_ref().and_then(|s| {
+                let ip_str = s.split('/').next()?;
+                ip_str.parse::<IpAddr>().ok().map(PgInet::from)
+            });
+            let valid_lifetime = match prefix.valid_lifetime {
+                PrefixLifetime::Infinity => None,
+                PrefixLifetime::Secs(secs) => Some(secs as i32),
+            };
+            let preferred_lifetime = match prefix.preferred_lifetime {
+                PrefixLifetime::Infinity => None,
+                PrefixLifetime::Secs(secs) => Some(secs as i32),
+            };
+            sqlx::query!(
+                "INSERT INTO ra.prefixes (source, address, prefix_len, on_link, autonomous, preferred_lifetime, valid_lifetime)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                source_str,
+                pg_addr as Option<PgInet>,
+                prefix.prefix_len as i16,
+                prefix.on_link,
+                prefix.autonomous,
+                preferred_lifetime,
+                valid_lifetime
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_ra_rdnss(&self) -> Result<Vec<RdnssConfig>, DbError> {
+        let rows = sqlx::query!(
+            "SELECT r.id, r.lifetime, s.address as \"address!: PgInet\"
+             FROM ra.rdnss r
+             JOIN ra.rdnss_servers s ON r.id = s.rdnss_id
+             ORDER BY r.id"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        use std::collections::BTreeMap;
+        let mut configs_map: BTreeMap<i32, RdnssConfig> = BTreeMap::new();
+        for row in rows {
+            let entry = configs_map.entry(row.id).or_insert_with(|| RdnssConfig {
+                servers: Vec::new(),
+                lifetime: row.lifetime.map(|t| t as u32),
+            });
+            if let IpAddr::V6(v6) = row.address.0.ip() {
+                entry.servers.push(v6);
+            }
+        }
+        Ok(configs_map.into_values().collect())
+    }
+
+    async fn save_ra_rdnss(&self, rdnss: &[RdnssConfig]) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        sqlx::query!("DELETE FROM ra.rdnss")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+
+        for cfg in rdnss {
+            let lifetime = cfg.lifetime.map(|t| t as i32);
+            let row = sqlx::query!(
+                "INSERT INTO ra.rdnss (lifetime) VALUES ($1) RETURNING id",
+                lifetime
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_err)?;
+
+            for server in &cfg.servers {
+                let pg_server = PgInet::from(IpAddr::V6(*server));
+                sqlx::query!(
+                    "INSERT INTO ra.rdnss_servers (rdnss_id, address) VALUES ($1, $2)",
+                    row.id,
+                    pg_server as PgInet
+                )
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
+            }
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_ra_dnssl(&self) -> Result<Vec<DnsslConfig>, DbError> {
+        let rows = sqlx::query!(
+            "SELECT d.id, d.lifetime, m.domain
+             FROM ra.dnssl d
+             JOIN ra.dnssl_domains m ON d.id = m.dnssl_id
+             ORDER BY d.id"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        use std::collections::BTreeMap;
+        let mut configs_map: BTreeMap<i32, DnsslConfig> = BTreeMap::new();
+        for row in rows {
+            let entry = configs_map.entry(row.id).or_insert_with(|| DnsslConfig {
+                domains: Vec::new(),
+                lifetime: row.lifetime.map(|t| t as u32),
+            });
+            entry.domains.push(row.domain);
+        }
+        Ok(configs_map.into_values().collect())
+    }
+
+    async fn save_ra_dnssl(&self, dnssl: &[DnsslConfig]) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        sqlx::query!("DELETE FROM ra.dnssl")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+
+        for cfg in dnssl {
+            let lifetime = cfg.lifetime.map(|t| t as i32);
+            let row = sqlx::query!(
+                "INSERT INTO ra.dnssl (lifetime) VALUES ($1) RETURNING id",
+                lifetime
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_err)?;
+
+            for domain in &cfg.domains {
+                sqlx::query!(
+                    "INSERT INTO ra.dnssl_domains (dnssl_id, domain) VALUES ($1, $2)",
+                    row.id,
+                    domain
+                )
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
+            }
+        }
+        tx.commit().await.map_err(map_err)?;
         Ok(())
     }
 }

@@ -15,8 +15,11 @@
 //! [ Option 31: DNSSL (search domains) ]
 //! ```
 
-use super::config::{PrefixConfig, PrefixLifetime, PrefixSource, RaConfig};
+use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix};
+
 use std::net::Ipv6Addr;
+
+use crate::ra::RaConfig;
 
 /// `ICMPv6` type for `Router Advertisement` (`134` per `RFC 4861`).
 pub const ICMPV6_TYPE_RA: u8 = 134;
@@ -97,7 +100,7 @@ pub fn build_ra_packet(
 
     // ── Deprecated Prefixes (RFC 4861 §6.2.4 / §6.2.6) ───────────────────
     for &(addr, remaining_valid) in deprecated_prefixes {
-        let pc = PrefixConfig {
+        let pc = RAPrefix {
             source: PrefixSource::Static,
             address: Some(addr.to_string()),
             prefix_len: 64,
@@ -167,7 +170,7 @@ pub fn mask_ipv6_address(addr: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
 ///
 /// Follows RFC 4861 §4.6.2: sets L/A/R flags, prefix length, lifetimes,
 /// and rounds the prefix to 64 bits for SLAAC compatibility.
-pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &PrefixConfig) {
+pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &RAPrefix) {
     p.push(3u8); // type
     p.push(4u8); // length = 4 × 8 = 32 bytes
     p.push(cfg.prefix_len);
@@ -258,8 +261,9 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use lanforge_types::network::ra::RdnssConfig;
+
     use super::*;
-    use crate::ra::config::RdnssConfig;
     use std::time::Duration;
 
     #[test]
@@ -339,7 +343,7 @@ mod tests {
         assert_eq!(mask_ipv6_address(&addr, 64), expected);
 
         let mut p = Vec::new();
-        push_prefix_option(&mut p, &addr, &PrefixConfig::gua_dynamic());
+        push_prefix_option(&mut p, &addr, &RAPrefix::gua_dynamic());
         // bytes 16..32 = prefixo mascarado na opção (offset 4 = type+len+plen+flags)
         let prefix_bytes: [u8; 16] = p[16..32].try_into().unwrap();
         assert_eq!(Ipv6Addr::from(prefix_bytes), expected);
@@ -363,7 +367,7 @@ mod tests {
             managed: true,
             other_config: true,
             max_interval: Duration::from_secs(100),
-            prefixes: vec![PrefixConfig::ula("fd97:f00d:cafe:3731::")],
+            prefixes: vec![RAPrefix::ula("fd97:f00d:cafe:3731::")],
             rdnss: vec![RdnssConfig::new(vec![
                 "fd97:f00d:cafe:3731::1".parse().unwrap(),
             ])],
@@ -427,8 +431,8 @@ mod tests {
     fn multiple_prefixes_appended_correctly() {
         let cfg = RaConfig {
             prefixes: vec![
-                PrefixConfig::ula("fd00::"),
-                PrefixConfig::gua_dynamic(), // AutoGua
+                RAPrefix::ula("fd00::"),
+                RAPrefix::gua_dynamic(), // AutoGua
             ],
             ..Default::default()
         };

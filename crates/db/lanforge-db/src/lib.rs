@@ -59,3 +59,5 @@ pub mod log_engine;
 #[cfg(test)]
 mod tests;
 pub mod worker;
+
+pub use lanforge_db_core::DynamicConfigStore;

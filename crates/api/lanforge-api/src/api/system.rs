@@ -3,6 +3,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use super::common::{
     Capabilities, HttpDataResponse, HttpWrappedResponse, ServerCapabilities, ServiceBanner,
 };
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::system::ServiceState;
 use serde::{Deserialize, Serialize};
 
@@ -252,6 +254,16 @@ use lanforge_types::network::dns::{
     adblock::{AdblockDbConfig, RewriteRule},
 };
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExportedApiToken {
+    pub token: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used: Option<i64>,
+    pub scopes: String,
+    pub expires_at: Option<i64>,
+}
+
 /// Unified system configuration export aggregating all persistent database tables.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(deny_unknown_fields)]
@@ -262,6 +274,12 @@ pub struct SystemConfigExport {
     pub dns_adblock_config: AdblockDbConfig,
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
     pub dns_allowlist: Vec<AllowlistEntry>,
+    pub api_tokens: Option<Vec<ExportedApiToken>>,
+    pub dhcp_v4_pools: Option<Vec<Dhcpv4Pool>>,
+    pub dhcp_v6_pools: Option<Vec<Dhcpv6Pool>>,
+    pub ra_prefixes: Option<Vec<RAPrefix>>,
+    pub ra_rdnss: Option<Vec<RdnssConfig>>,
+    pub ra_dnssl: Option<Vec<DnsslConfig>>,
     #[serde(default)]
     pub overwrite: bool,
 }

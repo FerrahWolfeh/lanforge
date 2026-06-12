@@ -165,6 +165,27 @@ impl AsyncService for Dhcpv6Service {
             return Ok(());
         }
 
+        if self.config.pools.is_empty() {
+            warn!(
+                "⚠️ DHCPv6 enabled but no pools configured — server will not respond to any requests"
+            );
+            ctrl.signal_ready();
+            let mut handle = self.ctx.service_handle();
+            loop {
+                let event = handle.next_event().await;
+                let Some(timed_event) = event else {
+                    break;
+                };
+                if matches!(
+                    timed_event.event,
+                    LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown)
+                ) {
+                    break;
+                }
+            }
+            return Ok(());
+        }
+
         // Setup transport socket
         let transport = io::Dhcpv6Transport::new(&self.config.iface, self.config.port)?;
 

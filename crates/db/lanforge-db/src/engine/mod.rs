@@ -1,5 +1,6 @@
 //! `LanforgeDb` facade for PostgreSQL.
 
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7,15 +8,17 @@ use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
 use lanforge_db_core::{
     AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DnsStore, DnsUpstreamEntry,
-    DnsUpstreamStore, delegate_db_call,
+    DnsUpstreamStore, DynamicConfigStore, delegate_db_call,
 };
 use lanforge_db_postgres::PostgresDatabase;
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{Device, LeaseAction};
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 
 pub mod types {
@@ -41,6 +44,11 @@ pub struct MockDbState {
     pub api_tokens: RwLock<Vec<ApiTokenEntry>>,
     pub dns_upstreams: RwLock<Vec<DnsUpstreamEntry>>,
     pub lease_history: RwLock<Vec<(MacAddr, LeaseHistoryEntry)>>,
+    pub dhcp_v4_pools: RwLock<Vec<Dhcpv4Pool>>,
+    pub dhcp_v6_pools: RwLock<Vec<Dhcpv6Pool>>,
+    pub ra_prefixes: RwLock<Vec<RAPrefix>>,
+    pub ra_rdnss: RwLock<Vec<RdnssConfig>>,
+    pub ra_dnssl: RwLock<Vec<DnsslConfig>>,
 }
 
 impl Default for MockDbState {
@@ -55,6 +63,11 @@ impl Default for MockDbState {
             api_tokens: RwLock::new(Vec::new()),
             dns_upstreams: RwLock::new(Vec::new()),
             lease_history: RwLock::new(Vec::new()),
+            dhcp_v4_pools: RwLock::new(Vec::new()),
+            dhcp_v6_pools: RwLock::new(Vec::new()),
+            ra_prefixes: RwLock::new(Vec::new()),
+            ra_rdnss: RwLock::new(Vec::new()),
+            ra_dnssl: RwLock::new(Vec::new()),
         }
     }
 }
@@ -187,6 +200,11 @@ impl LanforgeDb {
             mock.api_tokens.write().clear();
             mock.dns_upstreams.write().clear();
             mock.lease_history.write().clear();
+            mock.dhcp_v4_pools.write().clear();
+            mock.dhcp_v6_pools.write().clear();
+            mock.ra_prefixes.write().clear();
+            mock.ra_rdnss.write().clear();
+            mock.ra_dnssl.write().clear();
             Ok(())
         })
     }
@@ -603,6 +621,64 @@ impl LanforgeDb {
     pub async fn clear_dns_upstreams(&self) -> Result<(), DbError> {
         delegate_db_call!(self, clear_dns_upstreams(), mock => {
             mock.dns_upstreams.write().clear();
+            Ok(())
+        })
+    }
+}
+
+#[async_trait]
+impl DynamicConfigStore for LanforgeDb {
+    async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError> {
+        delegate_db_call!(self, load_dhcp_v4_pools(), mock => Ok(mock.dhcp_v4_pools.read().clone()))
+    }
+
+    async fn save_dhcp_v4_pools(&self, pools: &[Dhcpv4Pool]) -> Result<(), DbError> {
+        delegate_db_call!(self, save_dhcp_v4_pools(pools), mock => {
+            *mock.dhcp_v4_pools.write() = pools.to_vec();
+            Ok(())
+        })
+    }
+
+    async fn load_dhcp_v6_pools(&self) -> Result<Vec<Dhcpv6Pool>, DbError> {
+        delegate_db_call!(self, load_dhcp_v6_pools(), mock => Ok(mock.dhcp_v6_pools.read().clone()))
+    }
+
+    async fn save_dhcp_v6_pools(&self, pools: &[Dhcpv6Pool]) -> Result<(), DbError> {
+        delegate_db_call!(self, save_dhcp_v6_pools(pools), mock => {
+            *mock.dhcp_v6_pools.write() = pools.to_vec();
+            Ok(())
+        })
+    }
+
+    async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError> {
+        delegate_db_call!(self, load_ra_prefixes(), mock => Ok(mock.ra_prefixes.read().clone()))
+    }
+
+    async fn save_ra_prefixes(&self, prefixes: &[RAPrefix]) -> Result<(), DbError> {
+        delegate_db_call!(self, save_ra_prefixes(prefixes), mock => {
+            *mock.ra_prefixes.write() = prefixes.to_vec();
+            Ok(())
+        })
+    }
+
+    async fn load_ra_rdnss(&self) -> Result<Vec<RdnssConfig>, DbError> {
+        delegate_db_call!(self, load_ra_rdnss(), mock => Ok(mock.ra_rdnss.read().clone()))
+    }
+
+    async fn save_ra_rdnss(&self, rdnss: &[RdnssConfig]) -> Result<(), DbError> {
+        delegate_db_call!(self, save_ra_rdnss(rdnss), mock => {
+            *mock.ra_rdnss.write() = rdnss.to_vec();
+            Ok(())
+        })
+    }
+
+    async fn load_ra_dnssl(&self) -> Result<Vec<DnsslConfig>, DbError> {
+        delegate_db_call!(self, load_ra_dnssl(), mock => Ok(mock.ra_dnssl.read().clone()))
+    }
+
+    async fn save_ra_dnssl(&self, dnssl: &[DnsslConfig]) -> Result<(), DbError> {
+        delegate_db_call!(self, save_ra_dnssl(dnssl), mock => {
+            *mock.ra_dnssl.write() = dnssl.to_vec();
             Ok(())
         })
     }

@@ -1,7 +1,9 @@
+pub mod dhcp;
 pub mod dns;
 mod hostname;
 mod ip;
 mod neighbor;
+pub mod ra;
 pub mod subnet;
 
 pub use dns::{
@@ -9,6 +11,8 @@ pub use dns::{
     DnsRecordType, DnsResponseCode, QueryLogEntry, QueryResult, UpstreamHealthSnapshot,
 };
 pub use hostname::{Hostname, HostnameOrigin};
-pub use ip::{IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, Ipv6Suffix, classify_ip, classify_ipv6, is_ula};
+pub use ip::{
+    IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, Ipv6Suffix, classify_ip, classify_ipv6, is_ula,
+};
 pub use neighbor::NeighborEvent;
 pub use subnet::{DnsReverseResolver, IpSubnet};

@@ -4,6 +4,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_db::DynamicConfigStore;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_host::ifmon::AddressMonitor;
@@ -50,7 +51,7 @@ impl Bootstrapper {
     /// Executes the full bootstrap sequence.
     pub async fn run() -> Result<(BootstrapResult, LanforgeContext)> {
         // --- PHASE 1: Initialization ---
-        let cfg = Arc::new(Config::load());
+        let mut cfg = Config::load();
 
         info!(
             "🚀 Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
@@ -58,9 +59,10 @@ impl Bootstrapper {
         );
 
         let bus = Arc::new(EventBus::new());
-        let (initial_table, db, log_db) = Self::init_device_table(&cfg).await?;
+        let (initial_table, db, log_db) = Self::init_device_table(&mut cfg).await?;
         let db = Arc::new(db);
         let log_db = Arc::new(log_db);
+        let cfg = Arc::new(cfg);
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
@@ -107,7 +109,7 @@ impl Bootstrapper {
         ))
     }
 
-    async fn init_device_table(cfg: &Config) -> Result<(State, LanforgeDb, LogDb)> {
+    async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
         let db = LanforgeDb::open(&cfg.database).await.map_err(|e| {
             error!("❌ Erro fatal abrindo leases DB: {e}");
             e
@@ -117,6 +119,78 @@ impl Bootstrapper {
             error!("❌ Erro fatal abrindo logs DB: {e}");
             e
         })?;
+
+        // 1. Check/seed/load DHCPv4 Pools
+        let v4_pools = db.load_dhcp_v4_pools().await?;
+        if v4_pools.is_empty() {
+            let mut seed = Vec::new();
+            for mut pool in cfg.dhcpv4_toml.get_effective_pools() {
+                if pool.lease_time.is_none() {
+                    pool.lease_time = Some(cfg.dhcpv4_toml.lease_time);
+                }
+                seed.push(pool);
+            }
+            db.save_dhcp_v4_pools(&seed).await?;
+            info!(
+                "Seeded {} DHCPv4 pools from TOML configuration into database",
+                seed.len()
+            );
+        }
+        cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools().await?;
+        cfg.dhcpv4_toml.range_start = None;
+        cfg.dhcpv4_toml.range_end = None;
+
+        // 2. Check/seed/load DHCPv6 Pools
+        let v6_pools = db.load_dhcp_v6_pools().await?;
+        if v6_pools.is_empty() {
+            let mut seed = Vec::new();
+            for pool in &cfg.dhcpv6_toml.pools {
+                let mut p = pool.clone();
+                if p.lease_time.is_none() {
+                    p.lease_time = Some(cfg.dhcpv6_toml.lease_time);
+                }
+                seed.push(p);
+            }
+            db.save_dhcp_v6_pools(&seed).await?;
+            info!(
+                "Seeded {} DHCPv6 pools from TOML configuration into database",
+                seed.len()
+            );
+        }
+        cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools().await?;
+
+        // 3. Check/seed/load RA Prefixes
+        let ra_prefixes = db.load_ra_prefixes().await?;
+        if ra_prefixes.is_empty() {
+            db.save_ra_prefixes(&cfg.ra_toml.prefixes).await?;
+            info!(
+                "Seeded {} RA prefixes from TOML configuration into database",
+                cfg.ra_toml.prefixes.len()
+            );
+        }
+        cfg.ra_toml.prefixes = db.load_ra_prefixes().await?;
+
+        // 4. Check/seed/load RA RDNSS
+        let ra_rdnss = db.load_ra_rdnss().await?;
+        if ra_rdnss.is_empty() {
+            db.save_ra_rdnss(&cfg.ra_toml.rdnss).await?;
+            info!(
+                "Seeded {} RA RDNSS options from TOML configuration into database",
+                cfg.ra_toml.rdnss.len()
+            );
+        }
+        cfg.ra_toml.rdnss = db.load_ra_rdnss().await?;
+
+        // 5. Check/seed/load RA DNSSL
+        let ra_dnssl = db.load_ra_dnssl().await?;
+        if ra_dnssl.is_empty() {
+            db.save_ra_dnssl(&cfg.ra_toml.dnssl).await?;
+            info!(
+                "Seeded {} RA DNSSL options from TOML configuration into database",
+                cfg.ra_toml.dnssl.len()
+            );
+        }
+        cfg.ra_toml.dnssl = db.load_ra_dnssl().await?;
 
         let mut table = db.load_table().await.unwrap_or_else(|e| {
             warn!("Falha ao carregar DB ({e}), iniciando do zero");

@@ -11,6 +11,7 @@ use lanforge_db::log_engine::LogDb;
 use lanforge_types::device::{Ipv6AddrOrSuffix, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::DnsRecordType;
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockUrlKind, BlockingMode, RewriteAnswer, RewriteRule,
@@ -19,7 +20,7 @@ use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::update::DeviceUpdate;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 async fn init_test_context() -> ClientContext {
     let bus = Arc::new(EventBus::new());
@@ -177,6 +178,7 @@ async fn test_dispatch_system_config_import_export() {
             vec![]
         },
         overwrite: true,
+        ..Default::default()
     };
 
     // 3. Import the configuration
@@ -326,6 +328,7 @@ async fn test_dispatch_system_config_import_overwrite() {
         dns_adblock_urls: vec![],
         dns_allowlist: vec![],
         overwrite: false,
+        ..Default::default()
     };
     let merge_res = client_ctx
         .handle_system_config_import(import_cfg_merge)
@@ -362,6 +365,7 @@ async fn test_dispatch_system_config_import_overwrite() {
         dns_adblock_urls: vec![],
         dns_allowlist: vec![],
         overwrite: true,
+        ..Default::default()
     };
     let overwrite_res = client_ctx
         .handle_system_config_import(import_cfg_overwrite)
@@ -479,9 +483,7 @@ async fn test_static_host_deletion_should_purge_all_leases() {
 
 #[tokio::test]
 async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
-    use lanforge_dhcp::v4::config::Dhcpv4PoolConfig;
     use lanforge_dhcp::v4::pool::IpPool;
-    use lanforge_dhcp::v6::config::Dhcpv6PoolConfig;
     use lanforge_dhcp::v6::pool::Ipv6Pool;
     use lanforge_types::identifiers::Duid;
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -510,16 +512,18 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
     });
 
     // 2. Instantiate pools and allocate
-    let mut v4_pool = IpPool::new(vec![Dhcpv4PoolConfig {
+    let mut v4_pool = IpPool::new(vec![Dhcpv4Pool {
         range_start: "192.168.1.50".parse().unwrap(),
         range_end: "192.168.1.150".parse().unwrap(),
+        lease_time: Some(Duration::from_hours(24).as_secs() as u32),
     }]);
 
     let mut v6_pool = Ipv6Pool::new(
-        &[Dhcpv6PoolConfig {
+        &[Dhcpv6Pool {
             address: Some("fd00::/64".to_string()),
             range_start: None,
             range_end: None,
+            lease_time: Some(Duration::from_hours(24).as_secs() as u32),
         }],
         Some("fd00::".parse().unwrap()),
         64,

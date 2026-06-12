@@ -33,11 +33,12 @@ use lanforge_dhcp::v6::config::Dhcpv6Config;
 use lanforge_discovery::{mdns::MdnsConfig, ndp::config::MonitorConfig};
 use lanforge_dns::config::DnsConfig;
 use lanforge_http::config::HttpConfig;
-use lanforge_ra::ra::{DnsslConfig, PrefixConfig, PrefixSource, RaConfig, RaServiceConfig};
+use lanforge_ra::ra::{RaConfig, RaServiceConfig};
 use lanforge_tftp::config::TftpConfig;
 use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_types::network::dns::adblock::BlockingMode;
 use lanforge_types::network::dns::upstream::UpstreamEntry;
+use lanforge_types::network::ra::{DnsslConfig, PrefixSource, RAPrefix};
 use lanforge_types::system::SystemStatus;
 use lanforge_uds::config::ApiConfig;
 pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
@@ -232,7 +233,7 @@ impl Config {
 
         // Ensure at least one prefix exists if none configured
         if cfg.prefixes.is_empty() {
-            cfg.prefixes.push(PrefixConfig::gua_dynamic());
+            cfg.prefixes.push(RAPrefix::gua_dynamic());
         }
 
         // Add default search domains if none in RA config
@@ -345,7 +346,7 @@ impl Config {
                 .ra_toml
                 .prefixes
                 .iter()
-                .find_map(PrefixConfig::resolved_address);
+                .find_map(RAPrefix::resolved_address);
         }
 
         cfg

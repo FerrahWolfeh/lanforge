@@ -365,3 +365,21 @@ Payload for adding runtime DNS upstreams to the database.
 }
 ```
 
+### SystemConfigExport
+Aggregated backup configuration containing all database tables and settings.
+
+- `hosts`: List of `HostConfigEntry` objects.
+- `dns_rewrites`: List of `RewriteRule` objects.
+- `dns_upstreams`: List of `DnsUpstreamConfig` objects.
+- `dns_adblock_config`: `AdblockDbConfig` object.
+- `dns_adblock_urls`: List of `AdblockUrlEntry` objects.
+- `dns_allowlist`: List of `AllowlistEntry` objects.
+- `api_tokens`: Optional list of `ExportedApiToken` objects.
+- `dhcp_v4_pools`: Optional list of `Dhcpv4Pool` objects.
+- `dhcp_v6_pools`: Optional list of `Dhcpv6Pool` objects.
+- `ra_prefixes`: Optional list of `RAPrefix` objects.
+- `ra_rdnss`: Optional list of `RdnssConfig` objects.
+- `ra_dnssl`: Optional list of `DnsslConfig` objects.
+- `overwrite`: Boolean to indicate whether to overwrite existing database configurations.
+
+

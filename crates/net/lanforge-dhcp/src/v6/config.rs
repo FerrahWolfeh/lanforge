@@ -4,26 +4,10 @@
 //! fixed ranges, floating suffix ranges, or single static addresses.
 
 use lanforge_macros::ServiceConfig;
+use lanforge_types::network::dhcp::Dhcpv6Pool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
-
-use lanforge_types::device::Ipv6AddrOrSuffix;
-
-/// Configuration for a single `DHCPv6` address pool.
-///
-/// Pools can be defined as:
-/// - **Fixed range**: explicit `range_start`/`range_end` suffixes
-/// - **Single address**: static `address` string (CIDR notation)
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Dhcpv6PoolConfig {
-    /// Lower bound suffix for the pool range (relative to prefix).
-    pub range_start: Option<Ipv6AddrOrSuffix>,
-    /// Upper bound suffix for the pool range (relative to prefix).
-    pub range_end: Option<Ipv6AddrOrSuffix>,
-    /// Static CIDR address (alternative to range-based pools).
-    pub address: Option<String>,
-}
 
 /// `DHCPv6` server configuration — built from the `[dhcp.v6]` TOML section.
 ///
@@ -51,7 +35,7 @@ pub struct Dhcpv6Config {
     #[serde(skip)]
     pub port: u16,
     /// Multiple pools for address assignment (ULA + GUA).
-    pub pools: Vec<Dhcpv6PoolConfig>,
+    pub pools: Vec<Dhcpv6Pool>,
     /// DNS servers to announce to clients (`DHCPv6` Option 23).
     pub dns_servers: Vec<Ipv6Addr>,
     /// Search domains to announce to clients (`DHCPv6` Option 24).

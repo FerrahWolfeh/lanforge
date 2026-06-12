@@ -32,9 +32,8 @@ use crate::traits::DhcpPool;
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::device::{IPv6State, Ipv6AddrOrSuffix};
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::dhcp::Dhcpv6Pool;
 use rand::random;
-
-use super::config::Dhcpv6PoolConfig;
 
 /// Range definition for a `DHCPv6` address pool.
 #[derive(Clone, Debug)]
@@ -61,7 +60,7 @@ pub enum PoolRange {
 impl PoolRange {
     #[must_use]
     #[allow(clippy::too_many_lines)]
-    pub fn from_config(cfg: &Dhcpv6PoolConfig) -> Self {
+    pub fn from_config(cfg: &Dhcpv6Pool) -> Self {
         if let Some(ref cidr) = cfg.address
             && let Some((addr, len)) = Self::parse_cidr(cidr)
         {
@@ -219,11 +218,7 @@ pub struct Ipv6Pool {
 }
 
 impl Ipv6Pool {
-    pub fn new(
-        pools: &[Dhcpv6PoolConfig],
-        ula_prefix: Option<Ipv6Addr>,
-        ula_prefix_len: u8,
-    ) -> Self {
+    pub fn new(pools: &[Dhcpv6Pool], ula_prefix: Option<Ipv6Addr>, ula_prefix_len: u8) -> Self {
         Self {
             pools: pools.iter().map(PoolRange::from_config).collect(),
             ula_prefix,
@@ -818,6 +813,7 @@ impl DhcpPool<Ipv6Addr> for Ipv6Pool {
 mod tests {
     use lanforge_types::{
         device::{Ipv6Suffix, Origin},
+        network::dhcp::Dhcpv6Pool,
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
     };
 
@@ -876,10 +872,11 @@ mod tests {
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::102".parse().unwrap();
         let ula = "fd00::".parse().ok();
-        let pools = vec![Dhcpv6PoolConfig {
+        let pools = vec![Dhcpv6Pool {
             range_start: Some(Ipv6AddrOrSuffix::Full(start)),
             range_end: Some(Ipv6AddrOrSuffix::Full(end)),
             address: None,
+            lease_time: None,
         }];
         let mut pool = Ipv6Pool::new(&pools, ula, 64);
 
@@ -922,10 +919,15 @@ mod tests {
         let ula = "fd00::".parse::<Ipv6Addr>().ok();
         let gua = "2001:db8::".parse::<Ipv6Addr>().unwrap();
 
-        let pools = vec![Dhcpv6PoolConfig {
-            range_start: Some(Ipv6AddrOrSuffix::Suffix(Ipv6Suffix([0, 0, 0, 0, 0, 0, 0, 1]))),
-            range_end: Some(Ipv6AddrOrSuffix::Suffix(Ipv6Suffix([0, 0, 0, 0, 0, 0, 0, 0xFF]))),
+        let pools = vec![Dhcpv6Pool {
+            range_start: Some(Ipv6AddrOrSuffix::Suffix(Ipv6Suffix([
+                0, 0, 0, 0, 0, 0, 0, 1,
+            ]))),
+            range_end: Some(Ipv6AddrOrSuffix::Suffix(Ipv6Suffix([
+                0, 0, 0, 0, 0, 0, 0, 0xFF,
+            ]))),
             address: None,
+            lease_time: None,
         }];
 
         let mut pool = Ipv6Pool::new(&pools, ula, 64);
@@ -982,10 +984,11 @@ mod tests {
         let ctx = init_test_context();
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::200".parse().unwrap();
-        let pools = vec![Dhcpv6PoolConfig {
+        let pools = vec![Dhcpv6Pool {
             range_start: Some(Ipv6AddrOrSuffix::Full(start)),
             range_end: Some(Ipv6AddrOrSuffix::Full(end)),
             address: None,
+            lease_time: None,
         }];
         let mut pool = Ipv6Pool::new(&pools, None, 64);
 
@@ -1055,10 +1058,11 @@ mod tests {
         let ctx = init_test_context();
         let start = "fd00::100".parse().unwrap();
         let end = "fd00::100".parse().unwrap();
-        let pools = vec![Dhcpv6PoolConfig {
+        let pools = vec![Dhcpv6Pool {
             range_start: Some(Ipv6AddrOrSuffix::Full(start)),
             range_end: Some(Ipv6AddrOrSuffix::Full(end)),
             address: None,
+            lease_time: None,
         }];
         let mut pool = Ipv6Pool::new(&pools, None, 64);
 
@@ -1122,10 +1126,11 @@ mod tests {
         let ctx = init_test_context();
         let start: Ipv6Addr = "fd00::100".parse().unwrap();
         let end: Ipv6Addr = "fd00::102".parse().unwrap();
-        let pools = vec![Dhcpv6PoolConfig {
+        let pools = vec![Dhcpv6Pool {
             range_start: Some(Ipv6AddrOrSuffix::Full(start)),
             range_end: Some(Ipv6AddrOrSuffix::Full(end)),
             address: None,
+            lease_time: None,
         }];
         let mut pool = Ipv6Pool::new(&pools, None, 64);
 
@@ -1174,10 +1179,11 @@ mod tests {
     #[test]
     fn test_cidr_expansion() {
         // 1. Floating CIDR ::/120 (expect 256 addresses)
-        let cfg1 = Dhcpv6PoolConfig {
+        let cfg1 = Dhcpv6Pool {
             range_start: None,
             range_end: None,
             address: Some("::/120".to_string()),
+            lease_time: None,
         };
         let range1 = PoolRange::from_config(&cfg1);
         if let PoolRange::Floating {
@@ -1192,10 +1198,11 @@ mod tests {
         }
 
         // 2. Fixed CIDR fd00::/120
-        let cfg2 = Dhcpv6PoolConfig {
+        let cfg2 = Dhcpv6Pool {
             range_start: None,
             range_end: None,
             address: Some("fd00::/120".to_string()),
+            lease_time: None,
         };
         let range2 = PoolRange::from_config(&cfg2);
         if let PoolRange::Fixed {
@@ -1218,10 +1225,11 @@ mod tests {
     fn test_static_overrides_sticky() {
         let ctx = init_test_context();
         let ula = "fd00::".parse().unwrap();
-        let pools = vec![Dhcpv6PoolConfig {
+        let pools = vec![Dhcpv6Pool {
             range_start: Some(Ipv6AddrOrSuffix::parse("::1").unwrap()),
             range_end: Some(Ipv6AddrOrSuffix::parse("::10").unwrap()),
             address: None,
+            lease_time: None,
         }];
         let mut pool = Ipv6Pool::new(&pools, Some(ula), 64);
 
@@ -1287,10 +1295,11 @@ mod tests {
         let ctx = init_test_context();
         let ula = "fd00::".parse().unwrap();
         let gua = "2001:db8::".parse().unwrap();
-        let pools = vec![Dhcpv6PoolConfig {
+        let pools = vec![Dhcpv6Pool {
             range_start: Some(Ipv6AddrOrSuffix::parse("::1").unwrap()),
             range_end: Some(Ipv6AddrOrSuffix::parse("::10").unwrap()), // size = 16
             address: None,
+            lease_time: None,
         }];
         let mut pool = Ipv6Pool::new(&pools, Some(ula), 64);
         pool.set_gua_prefix(gua);
