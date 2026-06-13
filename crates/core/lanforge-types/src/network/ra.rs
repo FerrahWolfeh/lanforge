@@ -34,12 +34,39 @@
 use serde::{Deserialize, Serialize};
 use std::{net::Ipv6Addr, str::FromStr, time::Duration};
 
+// ---------------------------------------------------------------------------
+// RFC 4861 §6.2.1 and §10 Constants
+// ---------------------------------------------------------------------------
+
+/// Maximum interval between the initial RAs during startup (§6.2.6).
+/// Ensures newly connected clients don't wait for the full `MaxRtrAdvInterval`.
+pub const MAX_INITIAL_RTR_ADVERT_INTERVAL: Duration = Duration::from_secs(16);
+
+/// Number of initial RAs sent with a reduced interval (§6.2.6).
+pub const MAX_INITIAL_RTR_ADVERTISEMENTS: u8 = 3;
+
+/// Minimum delay between consecutive multicast RAs (§6.2.4).
+/// Protects against RA storms when multiple clients solicit simultaneously.
+pub const MIN_DELAY_BETWEEN_RAS: Duration = Duration::from_secs(3);
+
+/// Maximum random delay before responding to an RS (§6.2.6), in ms.
+pub const MAX_RA_DELAY_TIME_MS: u64 = 500;
+
 /// The default Valid Lifetime (30 days in seconds) for a Prefix Information Option (RFC 4861 §4.6.2).
 pub const DEFAULT_VALID_LIFETIME_SECS: u32 = 30 * 24 * 3600;
 /// The default Preferred Lifetime (7 days in seconds) for a Prefix Information Option (RFC 4861 §4.6.2).
 pub const DEFAULT_PREFERRED_LIFETIME_SECS: u32 = 7 * 24 * 3600;
 /// Special value representing an infinite lifetime (all bits set: `0xFFFF_FFFF`).
 pub const LIFETIME_INFINITY: u32 = u32::MAX;
+
+/// `ICMPv6` Type for Router Solicitation.
+pub const ICMPV6_TYPE_RS: u8 = 133;
+/// `ICMPv6` Type for Router Advertisement.
+pub const ICMPV6_TYPE_RA: u8 = 134;
+/// `ICMPv6` Type for Neighbor Solicitation.
+pub const ICMPV6_TYPE_NS: u8 = 135;
+/// `ICMPv6` Type for Neighbor Advertisement.
+pub const ICMPV6_TYPE_NA: u8 = 136;
 
 /// Lifetime for a prefix — finite in seconds or infinite.
 ///

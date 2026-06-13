@@ -48,7 +48,10 @@ pub mod packet;
 
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+use lanforge_types::network::ra::{
+    DnsslConfig, ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
+    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, RAPrefix, RdnssConfig,
+};
 use lanforge_types::system::{RunResult, ServiceBanner};
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
@@ -68,26 +71,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::unix::{AsyncFd, AsyncFdReadyGuard};
 use tracing::{debug, info, warn};
-
-// ---------------------------------------------------------------------------
-// RFC 4861 §6.2.1 and §10 Constants
-// ---------------------------------------------------------------------------
-
-/// Maximum interval between the initial RAs during startup (§6.2.6).
-/// Ensures newly connected clients don't wait for the full `MaxRtrAdvInterval`.
-const MAX_INITIAL_RTR_ADVERT_INTERVAL: Duration = Duration::from_secs(16);
-
-/// Number of initial RAs sent with a reduced interval (§6.2.6).
-const MAX_INITIAL_RTR_ADVERTISEMENTS: u8 = 3;
-
-/// Minimum delay between consecutive multicast RAs (§6.2.4).
-/// Protects against RA storms when multiple clients solicit simultaneously.
-const MIN_DELAY_BETWEEN_RAS: Duration = Duration::from_secs(3);
-
-/// Maximum random delay before responding to an RS (§6.2.6), in ms.
-const MAX_RA_DELAY_TIME_MS: u64 = 500;
-
-const ICMPV6_TYPE_RS: u8 = 133;
 
 // ICMP6_FILTER = 1 (linux/icmpv6.h — not exposed by libc crate)
 const ICMP6_FILTER: libc::c_int = 1;
