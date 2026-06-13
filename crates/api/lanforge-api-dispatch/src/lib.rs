@@ -6,7 +6,7 @@ use lanforge_api::api::{
     DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
     DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse,
     Response, RpcCallError, SimpleSuccess, StatusResponse, SystemConfigExport,
-    TransientHostsResponse, WhoisResponse,
+    SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
@@ -598,9 +598,9 @@ impl LanforgeRpc for ClientContext {
     async fn system_config_import(
         &self,
         config: SystemConfigExport,
-    ) -> Result<SimpleSuccess, RpcCallError> {
+    ) -> Result<SystemConfigImportResponse, RpcCallError> {
         match self.handle_system_config_import(config).await {
-            Response::Success(s) => Ok(s),
+            Response::SystemConfigImport(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

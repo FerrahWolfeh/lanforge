@@ -85,7 +85,10 @@ async fn handle_import_config(
     Json(config): Json<SystemConfigExport>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_system_config_import(config).await, Success => NoContent)
+    crate::http_response!(
+        ctx.handle_system_config_import(config).await,
+        SystemConfigImport
+    )
 }
 
 async fn handle_service_control(

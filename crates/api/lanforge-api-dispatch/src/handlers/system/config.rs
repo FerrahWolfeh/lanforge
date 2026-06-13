@@ -1,6 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{
-    AllowlistEntry, DnsUpstreamConfig, Response, SimpleSuccess, SystemConfigExport,
+    AllowlistEntry, DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
+    SystemConfigImportResponse,
 };
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_db::DynamicConfigStore;
@@ -129,7 +130,7 @@ impl ClientContext {
         let mut ra_dirty = overwrite;
 
         let mut total_success = true;
-        let mut messages = Vec::new();
+        let mut results = Vec::new();
 
         if overwrite {
             // Clear existing static hosts
@@ -145,19 +146,39 @@ impl ClientContext {
             // Clear DNS rewrites, upstreams, adblock URLs, allowlist
             if let Err(e) = self.db.clear_dns_rewrites().await {
                 total_success = false;
-                messages.push(format!("Failed to clear DNS rewrites: {e}"));
+                results.push(ImportResult {
+                    section: ImportSection::DnsRewrites,
+                    success: false,
+                    count: 0,
+                    error: Some(format!("Failed to clear DNS rewrites: {e}")),
+                });
             }
             if let Err(e) = self.db.clear_dns_upstreams().await {
                 total_success = false;
-                messages.push(format!("Failed to clear DNS upstreams: {e}"));
+                results.push(ImportResult {
+                    section: ImportSection::DnsUpstreams,
+                    success: false,
+                    count: 0,
+                    error: Some(format!("Failed to clear DNS upstreams: {e}")),
+                });
             }
             if let Err(e) = self.db.clear_adblock_urls().await {
                 total_success = false;
-                messages.push(format!("Failed to clear Adblock URLs: {e}"));
+                results.push(ImportResult {
+                    section: ImportSection::DnsAdblockUrls,
+                    success: false,
+                    count: 0,
+                    error: Some(format!("Failed to clear Adblock URLs: {e}")),
+                });
             }
             if let Err(e) = self.db.clear_dns_allowlist().await {
                 total_success = false;
-                messages.push(format!("Failed to clear DNS allowlist: {e}"));
+                results.push(ImportResult {
+                    section: ImportSection::DnsAllowlist,
+                    success: false,
+                    count: 0,
+                    error: Some(format!("Failed to clear DNS allowlist: {e}")),
+                });
             }
 
             // Clear API Tokens
@@ -176,39 +197,79 @@ impl ClientContext {
         }
 
         // 1. Import hosts
-        let res = self.handle_host_import(hosts).await;
-        if let Response::Success(s) = res {
-            messages.push(s.message);
-        } else if let Response::Error { error } = res {
-            total_success = false;
-            messages.push(format!("Host import error: {error}"));
+        let mut hosts_count = 0;
+        let mut hosts_success = true;
+        let mut hosts_err = None;
+        for entry in hosts {
+            match self.handle_host_add(entry).await {
+                Response::Success(_) => hosts_count += 1,
+                Response::Error { error } => {
+                    hosts_success = false;
+                    hosts_err = Some(error);
+                }
+                _ => {}
+            }
         }
+        if !hosts_success {
+            total_success = false;
+        }
+        results.push(ImportResult {
+            section: ImportSection::Hosts,
+            success: hosts_success,
+            count: hosts_count,
+            error: hosts_err,
+        });
 
         // 2. Import DNS rewrites
-        let res = self.handle_dns_rewrite_import(dns_rewrites).await;
-        if let Response::Success(s) = res {
-            messages.push(s.message);
-        } else if let Response::Error { error } = res {
-            total_success = false;
-            messages.push(format!("DNS rewrite import error: {error}"));
+        let mut rewrites_count = 0;
+        let mut rewrites_success = true;
+        let mut rewrites_err = None;
+        for rule in dns_rewrites {
+            match self.handle_dns_rewrite_add(rule).await {
+                Response::Success(_) => rewrites_count += 1,
+                Response::Error { error } => {
+                    rewrites_success = false;
+                    rewrites_err = Some(error);
+                }
+                _ => {}
+            }
         }
+        if !rewrites_success {
+            total_success = false;
+        }
+        results.push(ImportResult {
+            section: ImportSection::DnsRewrites,
+            success: rewrites_success,
+            count: rewrites_count,
+            error: rewrites_err,
+        });
 
         // 3. Import DNS upstreams
         let mut upstream_count = 0;
+        let mut upstreams_success = true;
+        let mut upstreams_err = None;
         for u in dns_upstreams {
-            let res = self
+            match self
                 .handle_dns_upstream_add(u.addr, u.protocol, u.domain)
-                .await;
-            if let Response::Success(_) = res {
-                upstream_count += 1;
-            } else if let Response::Error { error } = res {
-                total_success = false;
-                messages.push(format!("Upstream import error: {error}"));
+                .await
+            {
+                Response::Success(_) => upstream_count += 1,
+                Response::Error { error } => {
+                    upstreams_success = false;
+                    upstreams_err = Some(error);
+                }
+                _ => {}
             }
         }
-        messages.push(format!(
-            "Successfully imported {upstream_count} DNS upstreams"
-        ));
+        if !upstreams_success {
+            total_success = false;
+        }
+        results.push(ImportResult {
+            section: ImportSection::DnsUpstreams,
+            success: upstreams_success,
+            count: upstream_count,
+            error: upstreams_err,
+        });
 
         // 4. Import Adblock Config
         let AdblockDbConfig {
@@ -221,105 +282,133 @@ impl ClientContext {
         } = dns_adblock_config;
 
         let mut adblock_cfg_success = true;
+        let mut adblock_cfg_err = None;
         if let Err(e) = self
             .db
             .set_adblock_config_value("enabled", if enabled { "true" } else { "false" })
             .await
         {
             adblock_cfg_success = false;
-            total_success = false;
-            messages.push(format!("Adblock config import error: {e}"));
+            adblock_cfg_err = Some(format!("Failed to set enabled: {e}"));
         }
-        if let Err(e) = self
-            .db
-            .set_adblock_config_value("blocking_mode", &blocking_mode.to_string())
-            .await
+        if adblock_cfg_success
+            && let Err(e) = self
+                .db
+                .set_adblock_config_value("blocking_mode", &blocking_mode.to_string())
+                .await
         {
             adblock_cfg_success = false;
-            total_success = false;
-            messages.push(format!("Adblock config import error: {e}"));
+            adblock_cfg_err = Some(format!("Failed to set blocking_mode: {e}"));
         }
-        if let Some(ip) = blocking_ip_v4
+        if adblock_cfg_success
+            && let Some(ip) = blocking_ip_v4
             && let Err(e) = self
                 .db
                 .set_adblock_config_value("blocking_ip_v4", &ip.to_string())
                 .await
         {
             adblock_cfg_success = false;
-            total_success = false;
-            messages.push(format!("Adblock config import error: {e}"));
+            adblock_cfg_err = Some(format!("Failed to set blocking_ip_v4: {e}"));
         }
-        if let Some(ip) = blocking_ip_v6
+        if adblock_cfg_success
+            && let Some(ip) = blocking_ip_v6
             && let Err(e) = self
                 .db
                 .set_adblock_config_value("blocking_ip_v6", &ip.to_string())
                 .await
         {
             adblock_cfg_success = false;
-            total_success = false;
-            messages.push(format!("Adblock config import error: {e}"));
+            adblock_cfg_err = Some(format!("Failed to set blocking_ip_v6: {e}"));
         }
-        if let Err(e) = self
-            .db
-            .set_adblock_config_value("refresh_hours", &refresh_hours.to_string())
-            .await
+        if adblock_cfg_success
+            && let Err(e) = self
+                .db
+                .set_adblock_config_value("refresh_hours", &refresh_hours.to_string())
+                .await
         {
             adblock_cfg_success = false;
-            total_success = false;
-            messages.push(format!("Adblock config import error: {e}"));
+            adblock_cfg_err = Some(format!("Failed to set refresh_hours: {e}"));
         }
-        if let Err(e) = self
-            .db
-            .set_adblock_config_value(
-                "refresh_at_night",
-                if refresh_at_night { "true" } else { "false" },
-            )
-            .await
+        if adblock_cfg_success
+            && let Err(e) = self
+                .db
+                .set_adblock_config_value(
+                    "refresh_at_night",
+                    if refresh_at_night { "true" } else { "false" },
+                )
+                .await
         {
             adblock_cfg_success = false;
-            total_success = false;
-            messages.push(format!("Adblock config import error: {e}"));
+            adblock_cfg_err = Some(format!("Failed to set refresh_at_night: {e}"));
         }
         if adblock_cfg_success {
             let _ = self
                 .ctx
                 .bus()
                 .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
-            messages.push("Successfully imported Adblock configuration".to_string());
+        } else {
+            total_success = false;
         }
+        results.push(ImportResult {
+            section: ImportSection::DnsAdblockConfig,
+            success: adblock_cfg_success,
+            count: if adblock_cfg_success { 1 } else { 0 },
+            error: adblock_cfg_err,
+        });
 
         // 5. Import Adblock URLs
         let mut url_count = 0;
+        let mut url_success = true;
+        let mut url_err = None;
         for u in dns_adblock_urls {
-            let res = self.handle_dns_adblock_url_add(u.url, u.kind).await;
-
-            if let Response::Success(_) = res {
-                url_count += 1;
-            } else if let Response::Error { error } = res {
-                total_success = false;
-                messages.push(format!("Adblock URL import error: {error}"));
+            match self.handle_dns_adblock_url_add(u.url, u.kind).await {
+                Response::Success(_) => url_count += 1,
+                Response::Error { error } => {
+                    url_success = false;
+                    url_err = Some(error);
+                }
+                _ => {}
             }
         }
-        messages.push(format!("Successfully imported {url_count} Adblock URLs"));
+        if !url_success {
+            total_success = false;
+        }
+        results.push(ImportResult {
+            section: ImportSection::DnsAdblockUrls,
+            success: url_success,
+            count: url_count,
+            error: url_err,
+        });
 
         // 6. Import DNS allowlist
         let mut allow_count = 0;
+        let mut allow_success = true;
+        let mut allow_err = None;
         for a in dns_allowlist {
-            let res = self.handle_dns_allow(a.domain).await;
-            if let Response::Success(_) = res {
-                allow_count += 1;
-            } else if let Response::Error { error } = res {
-                total_success = false;
-                messages.push(format!("Allowlist import error: {error}"));
+            match self.handle_dns_allow(a.domain).await {
+                Response::Success(_) => allow_count += 1,
+                Response::Error { error } => {
+                    allow_success = false;
+                    allow_err = Some(error);
+                }
+                _ => {}
             }
         }
-        messages.push(format!(
-            "Successfully imported {allow_count} DNS allowlist entries"
-        ));
+        if !allow_success {
+            total_success = false;
+        }
+        results.push(ImportResult {
+            section: ImportSection::DnsAllowlist,
+            success: allow_success,
+            count: allow_count,
+            error: allow_err,
+        });
 
         // 7. Import API Tokens
         if let Some(tokens) = api_tokens {
             let mut imported_tokens = 0;
+            let mut tokens_success = true;
+            let mut tokens_err = None;
             for t in tokens {
                 let scopes: lanforge_types::auth::ApiScopes =
                     t.scopes.split(',').filter_map(|s| s.parse().ok()).collect();
@@ -328,77 +417,113 @@ impl ClientContext {
                     .store_api_token(&t.token, &t.name, &scopes, t.expires_at)
                     .await
                 {
-                    total_success = false;
-                    messages.push(format!("API token '{}' import error: {e}", t.name));
+                    tokens_success = false;
+                    tokens_err = Some(e.to_string());
                 } else {
                     imported_tokens += 1;
                 }
             }
-            messages.push(format!(
-                "Successfully imported {imported_tokens} API tokens"
-            ));
+            if !tokens_success {
+                total_success = false;
+            }
+            results.push(ImportResult {
+                section: ImportSection::ApiTokens,
+                success: tokens_success,
+                count: imported_tokens,
+                error: tokens_err,
+            });
         }
 
         // 8. Import Dynamic Configs
         if let Some(pools) = dhcp_v4_pools {
+            let mut pools_success = true;
+            let mut pools_err = None;
+            let count = pools.len();
             if let Err(e) = self.db.save_dhcp_v4_pools(&pools).await {
+                pools_success = false;
                 total_success = false;
-                messages.push(format!("DHCPv4 pools import error: {e}"));
+                pools_err = Some(e.to_string());
             } else {
                 dhcp_v4_dirty = true;
-                messages.push(format!(
-                    "Successfully imported {} DHCPv4 pools",
-                    pools.len()
-                ));
             }
+            results.push(ImportResult {
+                section: ImportSection::DhcpV4Pools,
+                success: pools_success,
+                count: if pools_success { count } else { 0 },
+                error: pools_err,
+            });
         }
         if let Some(pools) = dhcp_v6_pools {
+            let mut pools_success = true;
+            let mut pools_err = None;
+            let count = pools.len();
             if let Err(e) = self.db.save_dhcp_v6_pools(&pools).await {
+                pools_success = false;
                 total_success = false;
-                messages.push(format!("DHCPv6 pools import error: {e}"));
+                pools_err = Some(e.to_string());
             } else {
                 dhcp_v6_dirty = true;
-                messages.push(format!(
-                    "Successfully imported {} DHCPv6 pools",
-                    pools.len()
-                ));
             }
+            results.push(ImportResult {
+                section: ImportSection::DhcpV6Pools,
+                success: pools_success,
+                count: if pools_success { count } else { 0 },
+                error: pools_err,
+            });
         }
         if let Some(prefixes) = ra_prefixes {
+            let mut ra_pref_success = true;
+            let mut ra_pref_err = None;
+            let count = prefixes.len();
             if let Err(e) = self.db.save_ra_prefixes(&prefixes).await {
+                ra_pref_success = false;
                 total_success = false;
-                messages.push(format!("RA prefixes import error: {e}"));
+                ra_pref_err = Some(e.to_string());
             } else {
                 ra_dirty = true;
-                messages.push(format!(
-                    "Successfully imported {} RA prefixes",
-                    prefixes.len()
-                ));
             }
+            results.push(ImportResult {
+                section: ImportSection::RaPrefixes,
+                success: ra_pref_success,
+                count: if ra_pref_success { count } else { 0 },
+                error: ra_pref_err,
+            });
         }
         if let Some(rdnss) = ra_rdnss {
+            let mut rdnss_success = true;
+            let mut rdnss_err = None;
+            let count = rdnss.len();
             if let Err(e) = self.db.save_ra_rdnss(&rdnss).await {
+                rdnss_success = false;
                 total_success = false;
-                messages.push(format!("RA RDNSS options import error: {e}"));
+                rdnss_err = Some(e.to_string());
             } else {
                 ra_dirty = true;
-                messages.push(format!(
-                    "Successfully imported {} RA RDNSS options",
-                    rdnss.len()
-                ));
             }
+            results.push(ImportResult {
+                section: ImportSection::RaRdnss,
+                success: rdnss_success,
+                count: if rdnss_success { count } else { 0 },
+                error: rdnss_err,
+            });
         }
         if let Some(dnssl) = ra_dnssl {
+            let mut dnssl_success = true;
+            let mut dnssl_err = None;
+            let count = dnssl.len();
             if let Err(e) = self.db.save_ra_dnssl(&dnssl).await {
+                dnssl_success = false;
                 total_success = false;
-                messages.push(format!("RA DNSSL options import error: {e}"));
+                dnssl_err = Some(e.to_string());
             } else {
                 ra_dirty = true;
-                messages.push(format!(
-                    "Successfully imported {} RA DNSSL options",
-                    dnssl.len()
-                ));
             }
+            results.push(ImportResult {
+                section: ImportSection::RaDnssl,
+                success: dnssl_success,
+                count: if dnssl_success { count } else { 0 },
+                error: dnssl_err,
+            });
         }
 
         if dhcp_v4_dirty && let Ok(pools) = self.db.load_dhcp_v4_pools().await {
@@ -427,14 +552,9 @@ impl ClientContext {
                 });
         }
 
-        if total_success {
-            Response::Success(SimpleSuccess {
-                message: messages.join("; "),
-            })
-        } else {
-            Response::Error {
-                error: messages.join("; "),
-            }
-        }
+        Response::SystemConfigImport(SystemConfigImportResponse {
+            results,
+            total_success,
+        })
     }
 }

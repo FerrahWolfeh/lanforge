@@ -319,3 +319,66 @@ impl HttpWrappedResponse for SystemConfigExport {
         wrapper.data
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportSection {
+    Hosts,
+    DnsRewrites,
+    DnsUpstreams,
+    DnsAdblockConfig,
+    DnsAdblockUrls,
+    DnsAllowlist,
+    ApiTokens,
+    DhcpV4Pools,
+    DhcpV6Pools,
+    RaPrefixes,
+    RaRdnss,
+    RaDnssl,
+}
+
+impl ImportSection {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Hosts => "hosts",
+            Self::DnsRewrites => "dns_rewrites",
+            Self::DnsUpstreams => "dns_upstreams",
+            Self::DnsAdblockConfig => "dns_adblock_config",
+            Self::DnsAdblockUrls => "dns_adblock_urls",
+            Self::DnsAllowlist => "dns_allowlist",
+            Self::ApiTokens => "api_tokens",
+            Self::DhcpV4Pools => "dhcp_v4_pools",
+            Self::DhcpV6Pools => "dhcp_v6_pools",
+            Self::RaPrefixes => "ra_prefixes",
+            Self::RaRdnss => "ra_rdnss",
+            Self::RaDnssl => "ra_dnssl",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ImportResult {
+    pub section: ImportSection,
+    pub success: bool,
+    pub count: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SystemConfigImportResponse {
+    pub results: Vec<ImportResult>,
+    pub total_success: bool,
+}
+
+impl HttpWrappedResponse for SystemConfigImportResponse {
+    type Wrapper = HttpDataResponse<SystemConfigImportResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}

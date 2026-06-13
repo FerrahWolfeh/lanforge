@@ -10,7 +10,7 @@ use lanforge_db::log_engine::LogDb;
 use lanforge_host::ifmon::AddressMonitor;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::Ipv6AddrOrSuffix;
+use lanforge_types::network::{Ipv6AddrOrSuffix, Ipv6Prefix};
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
@@ -109,18 +109,7 @@ impl Bootstrapper {
         ))
     }
 
-    async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
-        let db = LanforgeDb::open(&cfg.database).await.map_err(|e| {
-            error!("❌ Erro fatal abrindo leases DB: {e}");
-            e
-        })?;
-
-        let log_db = LogDb::open(&cfg.database.log_url).await.map_err(|e| {
-            error!("❌ Erro fatal abrindo logs DB: {e}");
-            e
-        })?;
-
-        // 1. Check/seed/load DHCPv4 Pools
+    async fn load_dhcp4_pools<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let v4_pools = db.load_dhcp_v4_pools().await?;
         if v4_pools.is_empty() {
             let mut seed = Vec::new();
@@ -137,10 +126,10 @@ impl Bootstrapper {
             );
         }
         cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools().await?;
-        cfg.dhcpv4_toml.range_start = None;
-        cfg.dhcpv4_toml.range_end = None;
+        Ok(())
+    }
 
-        // 2. Check/seed/load DHCPv6 Pools
+    async fn load_dhcp6_pools<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let v6_pools = db.load_dhcp_v6_pools().await?;
         if v6_pools.is_empty() {
             let mut seed = Vec::new();
@@ -158,8 +147,10 @@ impl Bootstrapper {
             );
         }
         cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools().await?;
+        Ok(())
+    }
 
-        // 3. Check/seed/load RA Prefixes
+    async fn load_ra_prefix<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let ra_prefixes = db.load_ra_prefixes().await?;
         if ra_prefixes.is_empty() {
             db.save_ra_prefixes(&cfg.ra_toml.prefixes).await?;
@@ -169,8 +160,10 @@ impl Bootstrapper {
             );
         }
         cfg.ra_toml.prefixes = db.load_ra_prefixes().await?;
+        Ok(())
+    }
 
-        // 4. Check/seed/load RA RDNSS
+    async fn load_ra_rdnss<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let ra_rdnss = db.load_ra_rdnss().await?;
         if ra_rdnss.is_empty() {
             db.save_ra_rdnss(&cfg.ra_toml.rdnss).await?;
@@ -180,8 +173,10 @@ impl Bootstrapper {
             );
         }
         cfg.ra_toml.rdnss = db.load_ra_rdnss().await?;
+        Ok(())
+    }
 
-        // 5. Check/seed/load RA DNSSL
+    async fn load_ra_dnssl<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let ra_dnssl = db.load_ra_dnssl().await?;
         if ra_dnssl.is_empty() {
             db.save_ra_dnssl(&cfg.ra_toml.dnssl).await?;
@@ -191,6 +186,36 @@ impl Bootstrapper {
             );
         }
         cfg.ra_toml.dnssl = db.load_ra_dnssl().await?;
+        Ok(())
+    }
+
+    async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
+        let db = LanforgeDb::open(&cfg.database).await.map_err(|e| {
+            error!("❌ Erro fatal abrindo leases DB: {e}");
+            e
+        })?;
+
+        let log_db = LogDb::open(&cfg.database.log_url).await.map_err(|e| {
+            error!("❌ Erro fatal abrindo logs DB: {e}");
+            e
+        })?;
+
+        // 1. Check/seed/load DHCPv4 Pools
+        Self::load_dhcp4_pools(&db, cfg).await?;
+        cfg.dhcpv4_toml.range_start = None;
+        cfg.dhcpv4_toml.range_end = None;
+
+        // 2. Check/seed/load DHCPv6 Pools
+        Self::load_dhcp6_pools(&db, cfg).await?;
+
+        // 3. Check/seed/load RA Prefixes
+        Self::load_ra_prefix(&db, cfg).await?;
+
+        // 4. Check/seed/load RA RDNSS
+        Self::load_ra_rdnss(&db, cfg).await?;
+
+        // 5. Check/seed/load RA DNSSL
+        Self::load_ra_dnssl(&db, cfg).await?;
 
         let mut table = db.load_table().await.unwrap_or_else(|e| {
             warn!("Falha ao carregar DB ({e}), iniciando do zero");
@@ -217,7 +242,8 @@ impl Bootstrapper {
 
         info!(
             "📦 Databases initialized (Main: {}, Logs: {})",
-            cfg.database.url, cfg.database.log_url
+            crate::config::sanitize_db_url(&cfg.database.url),
+            crate::config::sanitize_db_url(&cfg.database.log_url)
         );
         Self::inject_self_device(&mut table, cfg);
 
@@ -320,7 +346,10 @@ impl Bootstrapper {
             info!("║  Link-Local: {:<27} ║", ll);
         }
         if let Some(gua) = if_state.gua {
-            info!("║  GUA Prefix: {:<24}/64 ║", gua);
+            info!(
+                "║  GUA Prefix: {:<27} ║",
+                Ipv6Prefix::from_addr(gua).to_string()
+            );
         }
         info!("╚══════════════════════════════════════════╝");
     }

@@ -5,7 +5,7 @@ use crate::api::{
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
     ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    TransientHostsResponse, WhoisResponse,
+    SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
@@ -232,7 +232,7 @@ pub trait LanforgeRpc {
     fn system_config_import(
         &self,
         config: SystemConfigExport,
-    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<SystemConfigImportResponse, RpcCallError>> + Send;
     fn dns_reverse_resolver_add(
         &self,
         subnet: String,

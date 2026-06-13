@@ -17,7 +17,7 @@ use lanforge_api::api::{
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse,
     ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    TransientHostsResponse, WhoisResponse,
+    SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{
@@ -796,7 +796,10 @@ impl LanforgeClient {
         dispatch!(self, get_box => "/config", system_config_export())
     }
 
-    pub async fn system_config_import(&self, config: SystemConfigExport) -> Result<SimpleSuccess> {
+    pub async fn system_config_import(
+        &self,
+        config: SystemConfigExport,
+    ) -> Result<SystemConfigImportResponse> {
         dispatch!(self, post => "/config", config, system_config_import(config))
     }
 

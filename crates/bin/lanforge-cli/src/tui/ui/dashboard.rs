@@ -1,5 +1,6 @@
 use crate::tui::state::TuiState;
 use crate::tui::{theme, utils};
+use lanforge_types::network::Ipv6Prefix;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -48,10 +49,10 @@ fn render_network_status(f: &mut Frame, area: Rect, state: &TuiState) {
                     .map_or_else(|| "—".to_string(), |e| e.to_string()),
                 s.network
                     .ula
-                    .map_or_else(|| "—".to_string(), |e| e.to_string()),
+                    .map_or_else(|| "—".to_string(), |e| Ipv6Prefix::from_addr(e).to_string()),
                 s.network
                     .gua
-                    .map_or_else(|| "—".to_string(), |e| e.to_string()),
+                    .map_or_else(|| "—".to_string(), |e| Ipv6Prefix::from_addr(e).to_string()),
             )
         },
     );

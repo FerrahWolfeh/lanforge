@@ -395,7 +395,7 @@ impl Config {
                     .unwrap_or(&self.database.url)
                     .to_string()
             } else {
-                self.database.url.clone()
+                sanitize_db_url(&self.database.url)
             },
             log_db_path: if self.database.log_url.starts_with("sqlite://") {
                 self.database
@@ -404,7 +404,7 @@ impl Config {
                     .unwrap_or(&self.database.log_url)
                     .to_string()
             } else {
-                self.database.log_url.clone()
+                sanitize_db_url(&self.database.log_url)
             },
             lan_iface: self.system.iface.clone(),
             ula_prefix: if self.system.target_prefix.starts_with("fe80") {
@@ -543,5 +543,31 @@ impl Default for Config {
             devices_file: None,
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
         }
+    }
+}
+
+/// Masks credentials in a database URL (e.g., `postgres://user:password@host/db` -> `postgres://user:****@host/db`)
+#[must_use]
+pub fn sanitize_db_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+
+    // Split the rest into host-part and path-part (if any / exists)
+    let (host_part, path_part) = rest.split_once('/').map_or((rest, ""), |(h, p)| (h, p));
+
+    if let Some((auth, host)) = host_part.split_once('@') {
+        let masked_auth = if let Some((user, _pass)) = auth.split_once(':') {
+            format!("{user}:****")
+        } else {
+            auth.to_string()
+        };
+        if path_part.is_empty() {
+            format!("{scheme}://{masked_auth}@{host}")
+        } else {
+            format!("{scheme}://{masked_auth}@{host}/{path_part}")
+        }
+    } else {
+        url.to_string()
     }
 }

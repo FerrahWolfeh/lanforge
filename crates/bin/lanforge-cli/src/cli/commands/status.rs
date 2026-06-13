@@ -255,7 +255,6 @@ fn render_services(st: &StatusResponse, ascii: bool) {
 }
 
 fn render_insights(st: &StatusResponse, ascii: bool) {
-    let db_size = ByteSize::b(st.db.size_bytes);
     let border = if ascii {
         BorderStyle::Classic
     } else {
@@ -278,8 +277,11 @@ fn render_insights(st: &StatusResponse, ascii: bool) {
                     Text(content: format!("{}", st.devices.managed_cli), color: Color::DarkGrey)
                 }
                 View(flex_direction: FlexDirection::Row) {
-                    Text(content: "SQLite     ", color: Color::DarkGrey)
-                    Text(content: db_size.to_string(), color: Color::Cyan)
+                    Text(content: "Postgres   ", color: Color::DarkGrey)
+                    Text(content: st.services.db_worker.state.as_ref(), color: match st.services.db_worker.state.as_ref() {
+                        "online" | "active" => Color::Green,
+                        _ => Color::Red,
+                    })
                     Text(content: "  at ", color: Color::DarkGrey)
                     Text(content: st.db.path.as_str())
                 }

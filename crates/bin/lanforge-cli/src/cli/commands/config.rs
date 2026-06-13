@@ -4,6 +4,7 @@ use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use clap::Subcommand;
 use color_eyre::eyre::{Result, bail};
+use colored::Colorize;
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::api::devices::HostConfigEntry;
 use lanforge_api::api::dns::{AllowlistEntry, DnsUpstreamConfig};
@@ -236,7 +237,46 @@ async fn execute_import(
     };
 
     let resp = client.system_config_import(system_config).await?;
-    println!("✓ {}", resp.message);
+    if resp.total_success {
+        println!(
+            "{}",
+            "✓ System configuration imported successfully:"
+                .green()
+                .bold()
+        );
+    } else {
+        println!(
+            "{}",
+            "✗ System configuration import completed with errors:"
+                .red()
+                .bold()
+        );
+    }
+
+    for res in &resp.results {
+        let name = match res.section {
+            lanforge_api::api::ImportSection::Hosts => "hosts",
+            lanforge_api::api::ImportSection::DnsRewrites => "DNS rewrites",
+            lanforge_api::api::ImportSection::DnsUpstreams => "DNS upstreams",
+            lanforge_api::api::ImportSection::DnsAdblockConfig => "DNS adblock config",
+            lanforge_api::api::ImportSection::DnsAdblockUrls => "DNS adblock URLs",
+            lanforge_api::api::ImportSection::DnsAllowlist => "DNS allowlist entries",
+            lanforge_api::api::ImportSection::ApiTokens => "API tokens",
+            lanforge_api::api::ImportSection::DhcpV4Pools => "DHCPv4 pools",
+            lanforge_api::api::ImportSection::DhcpV6Pools => "DHCPv6 pools",
+            lanforge_api::api::ImportSection::RaPrefixes => "RA prefixes",
+            lanforge_api::api::ImportSection::RaRdnss => "RA RDNSS options",
+            lanforge_api::api::ImportSection::RaDnssl => "RA DNSSL options",
+        };
+        if res.success {
+            if res.count > 0 || res.section == lanforge_api::api::ImportSection::DnsAdblockConfig {
+                println!("  · Imported {} {}", res.count, name);
+            }
+        } else {
+            let err_msg = res.error.as_deref().unwrap_or("unknown error");
+            println!("  · Failed to import {name}: {err_msg}");
+        }
+    }
     Ok(())
 }
 

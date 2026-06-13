@@ -186,7 +186,7 @@ async fn test_dispatch_system_config_import_export() {
     if let Response::Error { error } = &import_res {
         panic!("Import failed with error: {error}");
     }
-    assert!(matches!(import_res, Response::Success(_)));
+    assert!(matches!(import_res, Response::SystemConfigImport(_)));
 
     // 4. Export again and verify all fields match what was imported
     let res_after = client_ctx.handle_system_config_export().await;
@@ -333,7 +333,7 @@ async fn test_dispatch_system_config_import_overwrite() {
     let merge_res = client_ctx
         .handle_system_config_import(import_cfg_merge)
         .await;
-    assert!(matches!(merge_res, Response::Success(_)));
+    assert!(matches!(merge_res, Response::SystemConfigImport(_)));
 
     // Verify both hosts exist (merged)
     let res = client_ctx.handle_hosts().await;
@@ -370,7 +370,7 @@ async fn test_dispatch_system_config_import_overwrite() {
     let overwrite_res = client_ctx
         .handle_system_config_import(import_cfg_overwrite)
         .await;
-    assert!(matches!(overwrite_res, Response::Success(_)));
+    assert!(matches!(overwrite_res, Response::SystemConfigImport(_)));
 
     // Verify only the new imported host exists (old ones cleared)
     let res = client_ctx.handle_hosts().await;
