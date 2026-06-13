@@ -5,6 +5,12 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use clap::Subcommand;
 use color_eyre::eyre::{Result, bail};
 use lanforge_api::api::SystemConfigExport;
+use lanforge_api::api::devices::HostConfigEntry;
+use lanforge_api::api::dns::{AllowlistEntry, DnsUpstreamConfig};
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -53,26 +59,19 @@ pub struct EncryptedApiTokens {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum ApiTokensSection {
-    Plain(Vec<lanforge_api::api::ExportedApiToken>),
-    Encrypted(EncryptedApiTokens),
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileConfigExport {
-    pub hosts: Vec<lanforge_api::api::devices::HostConfigEntry>,
-    pub dns_rewrites: Vec<lanforge_types::network::dns::adblock::RewriteRule>,
-    pub dns_upstreams: Vec<lanforge_api::api::dns::DnsUpstreamConfig>,
-    pub dns_adblock_config: lanforge_types::network::dns::adblock::AdblockDbConfig,
-    pub dns_adblock_urls: Vec<lanforge_types::network::dns::AdblockUrlEntry>,
-    pub dns_allowlist: Vec<lanforge_api::api::dns::AllowlistEntry>,
-    pub api_tokens: Option<ApiTokensSection>,
-    pub dhcp_v4_pools: Option<Vec<lanforge_types::network::dhcp::Dhcpv4Pool>>,
-    pub dhcp_v6_pools: Option<Vec<lanforge_types::network::dhcp::Dhcpv6Pool>>,
-    pub ra_prefixes: Option<Vec<lanforge_types::network::ra::RAPrefix>>,
-    pub ra_rdnss: Option<Vec<lanforge_types::network::ra::RdnssConfig>>,
-    pub ra_dnssl: Option<Vec<lanforge_types::network::ra::DnsslConfig>>,
+    pub hosts: Vec<HostConfigEntry>,
+    pub dns_rewrites: Vec<RewriteRule>,
+    pub dns_upstreams: Vec<DnsUpstreamConfig>,
+    pub dns_adblock_config: AdblockDbConfig,
+    pub dns_adblock_urls: Vec<AdblockUrlEntry>,
+    pub dns_allowlist: Vec<AllowlistEntry>,
+    pub api_tokens: Option<EncryptedApiTokens>,
+    pub dhcp_v4_pools: Option<Vec<Dhcpv4Pool>>,
+    pub dhcp_v6_pools: Option<Vec<Dhcpv6Pool>>,
+    pub ra_prefixes: Option<Vec<RAPrefix>>,
+    pub ra_rdnss: Option<Vec<RdnssConfig>>,
+    pub ra_dnssl: Option<Vec<DnsslConfig>>,
     #[serde(default)]
     pub overwrite: bool,
 }
@@ -97,12 +96,12 @@ fn encrypt_secrets_block(password: &str, plaintext: &[u8]) -> Result<EncryptedAp
     let mut nonce_bytes = [0u8; 12];
     rand::rng().fill(&mut nonce_bytes);
 
-    let key = Key::from_slice(&key_bytes);
-    let cipher = ChaCha20Poly1305::new(key);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let key = Key::from(key_bytes);
+    let cipher = ChaCha20Poly1305::new(&key);
+    let nonce = Nonce::from(nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(&nonce, plaintext)
         .map_err(|e| color_eyre::eyre::eyre!("Encryption failed: {e}"))?;
 
     Ok(EncryptedApiTokens {
@@ -117,6 +116,9 @@ fn decrypt_secrets_block(password: &str, enc: &EncryptedApiTokens) -> Result<Vec
         hex::decode(&enc.salt).map_err(|e| color_eyre::eyre::eyre!("Invalid salt hex: {e}"))?;
     let nonce_bytes =
         hex::decode(&enc.nonce).map_err(|e| color_eyre::eyre::eyre!("Invalid nonce hex: {e}"))?;
+    let nonce_arr: [u8; 12] = nonce_bytes
+        .try_into()
+        .map_err(|_| color_eyre::eyre::eyre!("Invalid nonce length"))?;
     let ciphertext = hex::decode(&enc.ciphertext)
         .map_err(|e| color_eyre::eyre::eyre!("Invalid ciphertext hex: {e}"))?;
 
@@ -125,12 +127,12 @@ fn decrypt_secrets_block(password: &str, enc: &EncryptedApiTokens) -> Result<Vec
         .hash_password_into(password.as_bytes(), &salt, &mut key_bytes)
         .map_err(|e| color_eyre::eyre::eyre!("Key derivation failed: {e}"))?;
 
-    let key = Key::from_slice(&key_bytes);
-    let cipher = ChaCha20Poly1305::new(key);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let key = Key::from(key_bytes);
+    let cipher = ChaCha20Poly1305::new(&key);
+    let nonce = Nonce::from(nonce_arr);
 
     let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
+        .decrypt(&nonce, ciphertext.as_ref())
         .map_err(|_| color_eyre::eyre::eyre!("Decryption failed. Check your password."))?;
 
     Ok(plaintext)
@@ -149,18 +151,13 @@ async fn execute_export(
             let pass = if let Some(p) = password {
                 p
             } else {
-                let p1 = prompt_password("Enter encryption password:")?;
-                let p2 = prompt_password("Confirm encryption password:")?;
-                if p1 != p2 {
-                    bail!("Passwords do not match.");
-                }
-                p1
+                prompt_password("Enter encryption password:")?
             };
             let plain_bytes = serde_json::to_vec(&tokens)?;
             let enc = encrypt_secrets_block(&pass, &plain_bytes)?;
-            Some(ApiTokensSection::Encrypted(enc))
+            Some(enc)
         } else {
-            Some(ApiTokensSection::Plain(tokens))
+            None
         }
     } else {
         None
@@ -210,19 +207,14 @@ async fn execute_import(
     let content = std::fs::read_to_string(&path)?;
     let file_export: FileConfigExport = serde_json::from_str(&content)?;
 
-    let api_tokens = if let Some(sec) = file_export.api_tokens {
-        match sec {
-            ApiTokensSection::Plain(tokens) => Some(tokens),
-            ApiTokensSection::Encrypted(enc) => {
-                let pass = match password {
-                    Some(p) => p,
-                    None => prompt_password("Enter decryption password:")?,
-                };
-                let plain_bytes = decrypt_secrets_block(&pass, &enc)?;
-                let tokens = serde_json::from_slice(&plain_bytes)?;
-                Some(tokens)
-            }
-        }
+    let api_tokens = if let Some(enc) = file_export.api_tokens {
+        let pass = match password {
+            Some(p) => p,
+            None => prompt_password("Enter decryption password:")?,
+        };
+        let plain_bytes = decrypt_secrets_block(&pass, &enc)?;
+        let tokens = serde_json::from_slice(&plain_bytes)?;
+        Some(tokens)
     } else {
         None
     };

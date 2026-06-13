@@ -336,20 +336,21 @@ impl RaService {
                 Duration::ZERO
             };
 
+            let ctx = RaContext {
+                socket: &async_socket,
+                mac,
+                iface_index,
+                lctx: &self.ctx,
+            };
+
             tokio::select! {
                 // 1. Periodic Advertisement & Timers
                 () = tokio::time::sleep(sleep_duration) => {
-                    self.perform_periodic_ra(&self.ctx, &async_socket, &current_cfg, mac, iface_index, &mut state, &mut next_ra_at);
+                    Self::perform_periodic_ra(ctx, &current_cfg, &mut state, &mut next_ra_at);
                 }
 
                 // 2. Packet processing (RS)
                 res = async_socket.readable() => {
-                    let ctx = RaContext {
-                        socket: &async_socket,
-                        mac,
-                        iface_index,
-                        lctx: &self.ctx,
-                    };
                     self.handle_rs_packet(res, &mut buf, &current_cfg, ctx, &mut state).await?;
                 }
 
@@ -445,16 +446,20 @@ struct RaContext<'a> {
 
 impl RaService {
     fn perform_periodic_ra(
-        &self,
-        lctx: &LanforgeContext,
-        socket: &AsyncFd<Socket>,
+        ctx: RaContext<'_>,
         cfg: &RaConfig,
-        mac: [u8; 6],
-        iface_index: u32,
         state: &mut RaState,
         next_ra_at: &mut Instant,
     ) {
-        if let Err(e) = send_ra_internal(lctx, socket, cfg, mac, iface_index, None, state) {
+        if let Err(e) = send_ra_internal(
+            ctx.lctx,
+            ctx.socket,
+            cfg,
+            ctx.mac,
+            ctx.iface_index,
+            None,
+            state,
+        ) {
             warn!("RA periodic error: {e:?}");
         } else {
             state.record_multicast();
