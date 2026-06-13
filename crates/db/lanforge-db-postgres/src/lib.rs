@@ -7,74 +7,26 @@ use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 
 // Helper macros to reduce query boilerplate
 macro_rules! exec {
-    ($executor:expr, $sql:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query!($sql, $($arg),*)
-            .execute($executor)
-            .await
-            .map_err(map_err)
+    ($query:expr, $executor:expr) => {
+        $query.execute($executor).await.map_err(map_err)
     };
 }
 
 macro_rules! fetch_all {
-    ($executor:expr, $sql:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query!($sql, $($arg),*)
-            .fetch_all($executor)
-            .await
-            .map_err(map_err)
+    ($query:expr, $executor:expr) => {
+        $query.fetch_all($executor).await.map_err(map_err)
     };
 }
 
 macro_rules! fetch_optional {
-    ($executor:expr, $sql:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query!($sql, $($arg),*)
-            .fetch_optional($executor)
-            .await
-            .map_err(map_err)
+    ($query:expr, $executor:expr) => {
+        $query.fetch_optional($executor).await.map_err(map_err)
     };
 }
 
 macro_rules! fetch_one {
-    ($executor:expr, $sql:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query!($sql, $($arg),*)
-            .fetch_one($executor)
-            .await
-            .map_err(map_err)
-    };
-}
-
-macro_rules! fetch_all_as {
-    ($dto:ty, $executor:expr, $sql:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query_as!($dto, $sql, $($arg),*)
-            .fetch_all($executor)
-            .await
-            .map_err(map_err)
-    };
-}
-
-macro_rules! fetch_one_as {
-    ($dto:ty, $executor:expr, $sql:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query_as!($dto, $sql, $($arg),*)
-            .fetch_one($executor)
-            .await
-            .map_err(map_err)
-    };
-}
-
-macro_rules! fetch_all_scalar {
-    ($executor:expr, $sql:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query_scalar!($sql, $($arg),*)
-            .fetch_all($executor)
-            .await
-            .map_err(map_err)
-    };
-}
-
-macro_rules! fetch_one_scalar {
-    ($executor:expr, $sql:literal $(, $arg:expr)* $(,)?) => {
-        sqlx::query_scalar!($sql, $($arg),*)
-            .fetch_one($executor)
-            .await
-            .map_err(map_err)
+    ($query:expr, $executor:expr) => {
+        $query.fetch_one($executor).await.map_err(map_err)
     };
 }
 use lanforge_types::network::ra::{
@@ -159,10 +111,10 @@ impl PostgresDatabase {
 // Helper query loaders (private inside the postgres crate)
 impl PostgresDatabase {
     async fn load_device_rows(&self) -> Result<Vec<DeviceDto>, DbError> {
-        fetch_all_as!(
-            DeviceDto,
-            &self.pool,
-            "SELECT 
+        fetch_all!(
+            sqlx::query_as!(
+                DeviceDto,
+                "SELECT 
                 d.mac as \"mac!: PgMacAddr\", 
                 d.hostname, 
                 d.hostname_origin as \"hostname_origin!: PgHostnameOrigin\", 
@@ -175,32 +127,38 @@ impl PostgresDatabase {
                 s.boot_file
              FROM net.devices d
              LEFT JOIN dhcp.static_devices s ON d.mac = s.mac"
+            ),
+            &self.pool
         )
     }
 
     async fn load_v4_leases(&self) -> Result<Vec<(MacAddr, Ipv4Addr, SystemTime)>, DbError> {
-        let rows = fetch_all_as!(
-            V4LeaseDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                V4LeaseDto,
+                "SELECT 
                 mac as \"mac!: PgMacAddr\", 
                 ip as \"ip!: PgInet\", 
                 expires as \"expires!: PgTimestampTz\" 
              FROM dhcp.v4_leases"
+            ),
+            &self.pool
         )?;
         Ok(rows.into_iter().map(V4LeaseDto::into_tuple).collect())
     }
 
     async fn load_v6_leases(&self) -> Result<Vec<(MacAddr, u32, Ipv6Addr, SystemTime)>, DbError> {
-        let rows = fetch_all_as!(
-            V6LeaseDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                V6LeaseDto,
+                "SELECT 
                 mac as \"mac!: PgMacAddr\", 
                 iaid as \"iaid!\", 
                 ip as \"ip!: PgInet\", 
                 expires as \"expires!: PgTimestampTz\" 
              FROM dhcp.v6_leases"
+            ),
+            &self.pool
         )?;
         Ok(rows.into_iter().map(V6LeaseDto::into_tuple).collect())
     }
@@ -208,41 +166,47 @@ impl PostgresDatabase {
     async fn load_v6_prefixes(
         &self,
     ) -> Result<Vec<(MacAddr, u32, Ipv6Addr, u8, SystemTime)>, DbError> {
-        let rows = fetch_all_as!(
-            V6PrefixDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                V6PrefixDto,
+                "SELECT 
                 mac as \"mac!: PgMacAddr\", 
                 iaid as \"iaid!\", 
                 cidr as \"cidr!: PgCidr\", 
                 expires as \"expires!: PgTimestampTz\" 
              FROM net.v6_prefixes"
+            ),
+            &self.pool
         )?;
         Ok(rows.into_iter().map(V6PrefixDto::into_tuple).collect())
     }
 
     async fn load_slaac_addrs(&self) -> Result<Vec<(MacAddr, Ipv6Addr, SystemTime)>, DbError> {
-        let rows = fetch_all_as!(
-            SlaacAddrDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                SlaacAddrDto,
+                "SELECT 
                 mac as \"mac!: PgMacAddr\", 
                 ip as \"ip!: PgInet\", 
                 last_seen as \"last_seen!: PgTimestampTz\" 
              FROM net.slaac_addrs"
+            ),
+            &self.pool
         )?;
         Ok(rows.into_iter().map(SlaacAddrDto::into_tuple).collect())
     }
 
     async fn load_seen_v4(&self) -> Result<Vec<(MacAddr, Ipv4Addr, SystemTime)>, DbError> {
-        let rows = fetch_all_as!(
-            SeenV4Dto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                SeenV4Dto,
+                "SELECT 
                 mac as \"mac!: PgMacAddr\", 
                 ip as \"ip!: PgInet\", 
                 last_seen as \"last_seen!: PgTimestampTz\" 
              FROM net.seen_v4"
+            ),
+            &self.pool
         )?;
         Ok(rows.into_iter().map(SeenV4Dto::into_tuple).collect())
     }
@@ -251,11 +215,13 @@ impl PostgresDatabase {
 impl PostgresDatabase {
     pub async fn save_table(&self, table: &State) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
-        let db_macs = fetch_all_scalar!(
-            &mut *tx,
-            "SELECT 
+        let db_macs = fetch_all!(
+            sqlx::query_scalar!(
+                "SELECT 
                 mac as \"mac: PgMacAddr\" 
              FROM net.devices"
+            ),
+            &mut *tx
         )?;
 
         let snapshot_macs: HashSet<PgMacAddr> =
@@ -268,10 +234,12 @@ impl PostgresDatabase {
         for db_mac in db_macs {
             if !snapshot_macs.contains(&db_mac) {
                 exec!(
-                    &mut *tx,
-                    "DELETE FROM net.devices 
+                    sqlx::query!(
+                        "DELETE FROM net.devices 
                      WHERE mac = $1",
-                    db_mac as PgMacAddr
+                        db_mac as PgMacAddr
+                    ),
+                    &mut *tx
                 )?;
             }
         }
@@ -283,11 +251,13 @@ impl PostgresDatabase {
     pub async fn save_snapshot(&self, snapshot: &PersistenceSnapshot) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         let db_devices = fetch_all!(
-            &mut *tx,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 mac as \"mac: PgMacAddr\", 
                 origin as \"origin: PgDeviceOrigin\" 
              FROM net.devices"
+            ),
+            &mut *tx
         )?;
 
         let snapshot_macs: HashSet<PgMacAddr> = snapshot
@@ -303,10 +273,12 @@ impl PostgresDatabase {
         for row in db_devices {
             if !snapshot_macs.contains(&row.mac) && row.origin == PgDeviceOrigin::Dynamic {
                 exec!(
-                    &mut *tx,
-                    "DELETE FROM net.devices 
+                    sqlx::query!(
+                        "DELETE FROM net.devices 
                      WHERE mac = $1",
-                    row.mac as PgMacAddr
+                        row.mac as PgMacAddr
+                    ),
+                    &mut *tx
                 )?;
             }
         }
@@ -446,10 +418,12 @@ impl DeviceStore for PostgresDatabase {
         for mac in macs {
             let pg_mac = PgMacAddr::from(*mac);
             exec!(
-                &mut *tx,
-                "DELETE FROM net.devices 
+                sqlx::query!(
+                    "DELETE FROM net.devices 
                  WHERE mac = $1",
-                pg_mac as PgMacAddr
+                    pg_mac as PgMacAddr
+                ),
+                &mut *tx
             )?;
         }
         tx.commit().await.map_err(map_err)?;
@@ -458,13 +432,15 @@ impl DeviceStore for PostgresDatabase {
 
     async fn find_mac_by_hostname(&self, hostname: &str) -> Result<Option<MacAddr>, DbError> {
         let row = fetch_optional!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 mac as \"mac: PgMacAddr\" 
              FROM net.devices 
              WHERE hostname = $1 OR LOWER(hostname) = LOWER($1) 
              LIMIT 1",
-            hostname
+                hostname
+            ),
+            &self.pool
         )?;
 
         Ok(row.map(|r| r.mac.into()))
@@ -473,10 +449,12 @@ impl DeviceStore for PostgresDatabase {
     async fn remove_device(&self, mac: MacAddr) -> Result<(), DbError> {
         let pg_mac = PgMacAddr::from(mac);
         exec!(
-            &self.pool,
-            "DELETE FROM net.devices 
+            sqlx::query!(
+                "DELETE FROM net.devices 
              WHERE mac = $1",
-            pg_mac as PgMacAddr
+                pg_mac as PgMacAddr
+            ),
+            &self.pool
         )?;
         Ok(())
     }
@@ -487,8 +465,8 @@ impl DeviceStore for PostgresDatabase {
 
     async fn prune_zombies(&self) -> Result<usize, DbError> {
         let result = exec!(
-            &self.pool,
-            "DELETE FROM net.devices
+            sqlx::query!(
+                "DELETE FROM net.devices
              WHERE origin = 'dynamic'::device_origin
                AND hostname = ''
                AND mac NOT IN (SELECT mac FROM dhcp.v4_leases)
@@ -496,13 +474,21 @@ impl DeviceStore for PostgresDatabase {
                AND mac NOT IN (SELECT mac FROM net.v6_prefixes)
                AND mac NOT IN (SELECT mac FROM net.slaac_addrs)
                AND mac NOT IN (SELECT mac FROM net.seen_v4)"
+            ),
+            &self.pool
         )?;
         Ok(result.rows_affected() as usize)
     }
 
     async fn reset(&self) -> Result<(), DbError> {
-        exec!(&self.pool, "TRUNCATE TABLE net.devices CASCADE")?;
-        exec!(&self.pool, "TRUNCATE TABLE dhcp.lease_history")?;
+        exec!(
+            sqlx::query!("TRUNCATE TABLE net.devices CASCADE"),
+            &self.pool
+        )?;
+        exec!(
+            sqlx::query!("TRUNCATE TABLE dhcp.lease_history"),
+            &self.pool
+        )?;
         Ok(())
     }
 
@@ -527,24 +513,26 @@ impl DeviceStore for PostgresDatabase {
         let pg_now = PgTimestampTz::from(SystemTime::now());
 
         exec!(
-            &self.pool,
-            "INSERT INTO dhcp.lease_history (mac, ip, lease_type, action, occurred_at)
+            sqlx::query!(
+                "INSERT INTO dhcp.lease_history (mac, ip, lease_type, action, occurred_at)
              VALUES ($1, $2, $3, $4, $5)",
-            pg_mac as PgMacAddr,
-            pg_ip as PgInet,
-            pg_lease as PgLeaseType,
-            pg_action as PgLeaseAction,
-            pg_now as PgTimestampTz
+                pg_mac as PgMacAddr,
+                pg_ip as PgInet,
+                pg_lease as PgLeaseType,
+                pg_action as PgLeaseAction,
+                pg_now as PgTimestampTz
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     async fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>, DbError> {
         let pg_mac = PgMacAddr::from(mac);
-        let rows = fetch_all_as!(
-            LeaseHistoryDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                LeaseHistoryDto,
+                "SELECT 
                 ip as \"ip!: PgInet\", 
                 lease_type as \"lease_type!: PgLeaseType\", 
                 action as \"action!: PgLeaseAction\", 
@@ -553,7 +541,9 @@ impl DeviceStore for PostgresDatabase {
              WHERE mac = $1 
              ORDER BY occurred_at DESC 
              LIMIT 100",
-            pg_mac as PgMacAddr
+                pg_mac as PgMacAddr
+            ),
+            &self.pool
         )?;
 
         Ok(rows.into_iter().map(LeaseHistoryDto::into_entry).collect())
@@ -570,34 +560,44 @@ async fn upsert_device_internal(
 
     // Prune stale child rows
     exec!(
-        &mut **tx,
-        "DELETE FROM dhcp.v4_leases 
+        sqlx::query!(
+            "DELETE FROM dhcp.v4_leases 
          WHERE mac = $1",
-        pg_mac as PgMacAddr
+            pg_mac as PgMacAddr
+        ),
+        &mut **tx
     )?;
     exec!(
-        &mut **tx,
-        "DELETE FROM dhcp.v6_leases 
+        sqlx::query!(
+            "DELETE FROM dhcp.v6_leases 
          WHERE mac = $1",
-        pg_mac as PgMacAddr
+            pg_mac as PgMacAddr
+        ),
+        &mut **tx
     )?;
     exec!(
-        &mut **tx,
-        "DELETE FROM net.v6_prefixes 
+        sqlx::query!(
+            "DELETE FROM net.v6_prefixes 
          WHERE mac = $1",
-        pg_mac as PgMacAddr
+            pg_mac as PgMacAddr
+        ),
+        &mut **tx
     )?;
     exec!(
-        &mut **tx,
-        "DELETE FROM net.slaac_addrs 
+        sqlx::query!(
+            "DELETE FROM net.slaac_addrs 
          WHERE mac = $1",
-        pg_mac as PgMacAddr
+            pg_mac as PgMacAddr
+        ),
+        &mut **tx
     )?;
     exec!(
-        &mut **tx,
-        "DELETE FROM net.seen_v4 
+        sqlx::query!(
+            "DELETE FROM net.seen_v4 
          WHERE mac = $1",
-        pg_mac as PgMacAddr
+            pg_mac as PgMacAddr
+        ),
+        &mut **tx
     )?;
 
     // Repopulate child tables
@@ -605,12 +605,14 @@ async fn upsert_device_internal(
         let pg_ip = PgInet::from(lease.ip);
         let pg_exp = PgTimestampTz::from(lease.expires);
         exec!(
-            &mut **tx,
-            "INSERT INTO dhcp.v4_leases (mac, ip, expires) 
+            sqlx::query!(
+                "INSERT INTO dhcp.v4_leases (mac, ip, expires) 
              VALUES ($1, $2, $3)",
-            pg_mac as PgMacAddr,
-            pg_ip as PgInet,
-            pg_exp as PgTimestampTz
+                pg_mac as PgMacAddr,
+                pg_ip as PgInet,
+                pg_exp as PgTimestampTz
+            ),
+            &mut **tx
         )?;
     }
 
@@ -619,25 +621,29 @@ async fn upsert_device_internal(
             let pg_ip = PgInet::from(lease.ip);
             let pg_exp = PgTimestampTz::from(lease.expires);
             exec!(
-                &mut **tx,
-                "INSERT INTO dhcp.v6_leases (mac, iaid, ip, expires) 
+                sqlx::query!(
+                    "INSERT INTO dhcp.v6_leases (mac, iaid, ip, expires) 
                  VALUES ($1, $2, $3, $4)",
-                pg_mac as PgMacAddr,
-                i64::from(lease.iaid),
-                pg_ip as PgInet,
-                pg_exp as PgTimestampTz
+                    pg_mac as PgMacAddr,
+                    i64::from(lease.iaid),
+                    pg_ip as PgInet,
+                    pg_exp as PgTimestampTz
+                ),
+                &mut **tx
             )?;
         } else if let IPv6State::Slaac(ip, timestamp) = state {
             let pg_ip = PgInet::from(*ip);
             let pg_ts = PgTimestampTz::from(*timestamp);
             exec!(
-                &mut **tx,
-                "INSERT INTO net.slaac_addrs (mac, ip, last_seen)
+                sqlx::query!(
+                    "INSERT INTO net.slaac_addrs (mac, ip, last_seen)
                  VALUES ($1, $2, $3)
                  ON CONFLICT(mac, ip) DO UPDATE SET last_seen = EXCLUDED.last_seen",
-                pg_mac as PgMacAddr,
-                pg_ip as PgInet,
-                pg_ts as PgTimestampTz
+                    pg_mac as PgMacAddr,
+                    pg_ip as PgInet,
+                    pg_ts as PgTimestampTz
+                ),
+                &mut **tx
             )?;
         }
     }
@@ -649,13 +655,15 @@ async fn upsert_device_internal(
         });
         let pg_exp = PgTimestampTz::from(prefix.expires);
         exec!(
-            &mut **tx,
-            "INSERT INTO net.v6_prefixes (mac, iaid, cidr, expires) 
+            sqlx::query!(
+                "INSERT INTO net.v6_prefixes (mac, iaid, cidr, expires) 
              VALUES ($1, $2, $3, $4)",
-            pg_mac as PgMacAddr,
-            i64::from(prefix.iaid),
-            pg_cidr as PgCidr,
-            pg_exp as PgTimestampTz
+                pg_mac as PgMacAddr,
+                i64::from(prefix.iaid),
+                pg_cidr as PgCidr,
+                pg_exp as PgTimestampTz
+            ),
+            &mut **tx
         )?;
     }
 
@@ -663,12 +671,14 @@ async fn upsert_device_internal(
         let pg_ip = PgInet::from(*ip);
         let pg_ts = PgTimestampTz::from(*timestamp);
         exec!(
-            &mut **tx,
-            "INSERT INTO net.seen_v4 (mac, ip, last_seen) 
+            sqlx::query!(
+                "INSERT INTO net.seen_v4 (mac, ip, last_seen) 
              VALUES ($1, $2, $3)",
-            pg_mac as PgMacAddr,
-            pg_ip as PgInet,
-            pg_ts as PgTimestampTz
+                pg_mac as PgMacAddr,
+                pg_ip as PgInet,
+                pg_ts as PgTimestampTz
+            ),
+            &mut **tx
         )?;
     }
 
@@ -700,24 +710,28 @@ async fn upsert_device_internal(
 
     if v4_static.is_some() || v6_suffix.is_some() || device.boot_file.is_some() {
         exec!(
-            &mut **tx,
-            "INSERT INTO dhcp.static_devices (mac, v4_static, v6_suffix, boot_file)
+            sqlx::query!(
+                "INSERT INTO dhcp.static_devices (mac, v4_static, v6_suffix, boot_file)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT(mac) DO UPDATE SET
                 v4_static = EXCLUDED.v4_static,
                 v6_suffix = EXCLUDED.v6_suffix,
                 boot_file = EXCLUDED.boot_file",
-            pg_mac as PgMacAddr,
-            v4_static as Option<PgInet>,
-            v6_suffix as Option<PgInet>,
-            device.boot_file.as_deref()
+                pg_mac as PgMacAddr,
+                v4_static as Option<PgInet>,
+                v6_suffix as Option<PgInet>,
+                device.boot_file.as_deref()
+            ),
+            &mut **tx
         )?;
     } else {
         exec!(
-            &mut **tx,
-            "DELETE FROM dhcp.static_devices 
+            sqlx::query!(
+                "DELETE FROM dhcp.static_devices 
              WHERE mac = $1",
-            pg_mac as PgMacAddr
+                pg_mac as PgMacAddr
+            ),
+            &mut **tx
         )?;
     }
 
@@ -734,9 +748,7 @@ async fn upsert_base_device_only_internal(
     let pg_managed_at = device.managed_at.map(PgTimestampTz::from);
     let pg_class = device.class as i32;
 
-    exec!(
-        &mut **tx,
-        "INSERT INTO net.devices (mac, hostname, hostname_origin, duid, origin, managed_at, class)
+    exec!(sqlx::query!("INSERT INTO net.devices (mac, hostname, hostname_origin, duid, origin, managed_at, class)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT(mac) DO UPDATE SET
             hostname = EXCLUDED.hostname,
@@ -744,31 +756,25 @@ async fn upsert_base_device_only_internal(
             duid = EXCLUDED.duid,
             origin = EXCLUDED.origin,
             managed_at = EXCLUDED.managed_at,
-            class = EXCLUDED.class",
-        pg_mac as PgMacAddr,
-        device.hostname.name,
-        pg_hostname_origin as PgHostnameOrigin,
-        device.duid.as_ref().map(|d| d.bytes.as_ref()),
-        pg_origin as PgDeviceOrigin,
-        pg_managed_at as Option<PgTimestampTz>,
-        pg_class
-    )?;
+            class = EXCLUDED.class", pg_mac as PgMacAddr, device.hostname.name, pg_hostname_origin as PgHostnameOrigin, device.duid.as_ref().map(|d| d.bytes.as_ref()), pg_origin as PgDeviceOrigin, pg_managed_at as Option<PgTimestampTz>, pg_class), &mut **tx)?;
 
     Ok(())
 }
 
 impl DnsStore for PostgresDatabase {
     async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
-        let rows = fetch_all_as!(
-            RewriteRuleDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                RewriteRuleDto,
+                "SELECT 
                 id as \"id!\", 
                 domain as \"domain!\", 
                 rtype as \"rtype!\", 
                 answer as \"answer!\" 
              FROM dns.rewrites 
              ORDER BY domain"
+            ),
+            &self.pool
         )?;
 
         Ok(rows.into_iter().map(RewriteRuleDto::into_rule).collect())
@@ -782,13 +788,15 @@ impl DnsStore for PostgresDatabase {
     ) -> Result<(), DbError> {
         let rtype_str = rtype.to_string();
         exec!(
-            &self.pool,
-            "INSERT INTO dns.rewrites (domain, rtype, answer) 
+            sqlx::query!(
+                "INSERT INTO dns.rewrites (domain, rtype, answer) 
              VALUES ($1, $2, $3) 
              ON CONFLICT(domain, rtype) DO UPDATE SET answer = EXCLUDED.answer",
-            domain,
-            rtype_str,
-            answer
+                domain,
+                rtype_str,
+                answer
+            ),
+            &self.pool
         )?;
         Ok(())
     }
@@ -796,27 +804,31 @@ impl DnsStore for PostgresDatabase {
     async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), DbError> {
         let id_i32 = id as i32;
         exec!(
-            &self.pool,
-            "DELETE FROM dns.rewrites 
+            sqlx::query!(
+                "DELETE FROM dns.rewrites 
              WHERE id = $1",
-            id_i32
+                id_i32
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     async fn clear_dns_rewrites(&self) -> Result<(), DbError> {
-        exec!(&self.pool, "DELETE FROM dns.rewrites")?;
+        exec!(sqlx::query!("DELETE FROM dns.rewrites"), &self.pool)?;
         Ok(())
     }
 
     async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, DbError> {
         let rows = fetch_all!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 id as \"id!\", 
                 domain as \"domain!\" 
              FROM dns.allowlist 
              ORDER BY domain"
+            ),
+            &self.pool
         )?;
         Ok(rows
             .into_iter()
@@ -826,38 +838,44 @@ impl DnsStore for PostgresDatabase {
 
     async fn add_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
         exec!(
-            &self.pool,
-            "INSERT INTO dns.allowlist (domain) 
+            sqlx::query!(
+                "INSERT INTO dns.allowlist (domain) 
              VALUES ($1) 
              ON CONFLICT(domain) DO NOTHING",
-            domain
+                domain
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
         exec!(
-            &self.pool,
-            "DELETE FROM dns.allowlist 
+            sqlx::query!(
+                "DELETE FROM dns.allowlist 
              WHERE domain = $1",
-            domain
+                domain
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     async fn clear_dns_allowlist(&self) -> Result<(), DbError> {
-        exec!(&self.pool, "DELETE FROM dns.allowlist")?;
+        exec!(sqlx::query!("DELETE FROM dns.allowlist"), &self.pool)?;
         Ok(())
     }
 
     async fn load_dns_reverse_resolvers(&self) -> Result<Vec<DnsReverseResolver>, DbError> {
-        let rows = fetch_all_as!(
-            ReverseResolverDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                ReverseResolverDto,
+                "SELECT 
                 subnet as \"subnet: PgCidr\", 
                 resolver_target 
              FROM dns.reverse_resolvers"
+            ),
+            &self.pool
         )?;
 
         Ok(rows
@@ -874,12 +892,14 @@ impl DnsStore for PostgresDatabase {
         let pg_subnet = PgCidr::from(*subnet);
         let resolver_str = String::from(resolver.clone());
         exec!(
-            &self.pool,
-            "INSERT INTO dns.reverse_resolvers (subnet, resolver_target) 
+            sqlx::query!(
+                "INSERT INTO dns.reverse_resolvers (subnet, resolver_target) 
              VALUES ($1, $2) 
              ON CONFLICT(subnet) DO UPDATE SET resolver_target = EXCLUDED.resolver_target",
-            pg_subnet as PgCidr,
-            resolver_str
+                pg_subnet as PgCidr,
+                resolver_str
+            ),
+            &self.pool
         )?;
         Ok(())
     }
@@ -887,26 +907,31 @@ impl DnsStore for PostgresDatabase {
     async fn remove_dns_reverse_resolver(&self, subnet: &IpSubnet) -> Result<(), DbError> {
         let pg_subnet = PgCidr::from(*subnet);
         exec!(
-            &self.pool,
-            "DELETE FROM dns.reverse_resolvers 
+            sqlx::query!(
+                "DELETE FROM dns.reverse_resolvers 
              WHERE subnet = $1",
-            pg_subnet as PgCidr
+                pg_subnet as PgCidr
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     async fn clear_dns_reverse_resolvers(&self) -> Result<(), DbError> {
-        exec!(&self.pool, "DELETE FROM dns.reverse_resolvers")?;
+        exec!(
+            sqlx::query!("DELETE FROM dns.reverse_resolvers"),
+            &self.pool
+        )?;
         Ok(())
     }
 }
 
 impl AdblockStore for PostgresDatabase {
     async fn load_adblock_config(&self) -> Result<AdblockDbConfig, DbError> {
-        let row = fetch_one_as!(
-            AdblockConfigDto,
-            &self.pool,
-            "SELECT 
+        let row = fetch_one!(
+            sqlx::query_as!(
+                AdblockConfigDto,
+                "SELECT 
                 enabled as \"enabled!\", 
                 blocking_mode::TEXT as \"blocking_mode!\", 
                 blocking_ip_v4 as \"blocking_ip_v4: PgInet\", 
@@ -915,6 +940,8 @@ impl AdblockStore for PostgresDatabase {
                 refresh_at_night as \"refresh_at_night!\" 
              FROM dns.adblock_config 
              LIMIT 1"
+            ),
+            &self.pool
         )?;
 
         Ok(row.into_config())
@@ -927,20 +954,22 @@ impl AdblockStore for PostgresDatabase {
         let refresh_hours = cfg.refresh_hours as i16;
 
         exec!(
-            &self.pool,
-            "UPDATE dns.adblock_config SET 
+            sqlx::query!(
+                "UPDATE dns.adblock_config SET 
                 enabled = $1, 
                 blocking_mode = $2::text::dns.blocking_mode, 
                 blocking_ip_v4 = $3, 
                 blocking_ip_v6 = $4, 
                 refresh_hours = $5, 
                 refresh_at_night = $6",
-            cfg.enabled,
-            blocking_mode_str,
-            pg_ip_v4 as Option<PgInet>,
-            pg_ip_v6 as Option<PgInet>,
-            refresh_hours,
-            cfg.refresh_at_night
+                cfg.enabled,
+                blocking_mode_str,
+                pg_ip_v4 as Option<PgInet>,
+                pg_ip_v6 as Option<PgInet>,
+                refresh_hours,
+                cfg.refresh_at_night
+            ),
+            &self.pool
         )?;
         Ok(())
     }
@@ -948,15 +977,17 @@ impl AdblockStore for PostgresDatabase {
     async fn load_adblock_sources(
         &self,
     ) -> Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError> {
-        let rows = fetch_all_as!(
-            AdblockSourceDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                AdblockSourceDto,
+                "SELECT 
                 id as \"id!\", 
                 url as \"url!\", 
                 kind as \"kind!\", 
                 enabled as \"enabled!\" 
              FROM dns.adblock_urls"
+            ),
+            &self.pool
         )?;
 
         Ok(rows.into_iter().map(AdblockSourceDto::into_tuple).collect())
@@ -965,13 +996,15 @@ impl AdblockStore for PostgresDatabase {
     async fn add_adblock_source(&self, url: &str, kind: AdblockUrlKind) -> Result<i64, DbError> {
         let kind_str = kind.to_string();
         let row = fetch_one!(
-            &self.pool,
-            "INSERT INTO dns.adblock_urls (url, kind) 
+            sqlx::query!(
+                "INSERT INTO dns.adblock_urls (url, kind) 
              VALUES ($1, $2) 
              ON CONFLICT(url) DO UPDATE SET kind = EXCLUDED.kind 
              RETURNING id",
-            url,
-            kind_str
+                url,
+                kind_str
+            ),
+            &self.pool
         )?;
         Ok(i64::from(row.id))
     }
@@ -979,10 +1012,12 @@ impl AdblockStore for PostgresDatabase {
     async fn remove_adblock_source(&self, id: i64) -> Result<(), DbError> {
         let id_i32 = id as i32;
         exec!(
-            &self.pool,
-            "DELETE FROM dns.adblock_urls 
+            sqlx::query!(
+                "DELETE FROM dns.adblock_urls 
              WHERE id = $1",
-            id_i32
+                id_i32
+            ),
+            &self.pool
         )?;
         Ok(())
     }
@@ -990,31 +1025,35 @@ impl AdblockStore for PostgresDatabase {
     async fn update_adblock_source_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
         let id_i32 = id as i32;
         exec!(
-            &self.pool,
-            "UPDATE dns.adblock_urls 
+            sqlx::query!(
+                "UPDATE dns.adblock_urls 
              SET enabled = $1 
              WHERE id = $2",
-            enabled,
-            id_i32
+                enabled,
+                id_i32
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     async fn clear_adblock_sources(&self) -> Result<(), DbError> {
-        exec!(&self.pool, "DELETE FROM dns.adblock_urls")?;
+        exec!(sqlx::query!("DELETE FROM dns.adblock_urls"), &self.pool)?;
         Ok(())
     }
 
     async fn load_adblock_rules(&self) -> Result<Vec<(i64, String, String, bool)>, DbError> {
-        let rows = fetch_all_as!(
-            AdblockRuleDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                AdblockRuleDto,
+                "SELECT 
                 id as \"id!\", 
                 domain as \"domain!\", 
                 action::TEXT as \"action!\", 
                 enabled as \"enabled!\" 
              FROM dns.adblock_rules"
+            ),
+            &self.pool
         )?;
 
         Ok(rows.into_iter().map(AdblockRuleDto::into_tuple).collect())
@@ -1022,13 +1061,15 @@ impl AdblockStore for PostgresDatabase {
 
     async fn add_adblock_rule(&self, domain: &str, action: &str) -> Result<i64, DbError> {
         let row = fetch_one!(
-            &self.pool,
-            "INSERT INTO dns.adblock_rules (domain, action) 
+            sqlx::query!(
+                "INSERT INTO dns.adblock_rules (domain, action) 
              VALUES ($1, $2::text::dns.adblock_action) 
              ON CONFLICT(domain) DO UPDATE SET action = EXCLUDED.action 
              RETURNING id",
-            domain,
-            action
+                domain,
+                action
+            ),
+            &self.pool
         )?;
         Ok(i64::from(row.id))
     }
@@ -1036,10 +1077,12 @@ impl AdblockStore for PostgresDatabase {
     async fn remove_adblock_rule(&self, id: i64) -> Result<(), DbError> {
         let id_i32 = id as i32;
         exec!(
-            &self.pool,
-            "DELETE FROM dns.adblock_rules 
+            sqlx::query!(
+                "DELETE FROM dns.adblock_rules 
              WHERE id = $1",
-            id_i32
+                id_i32
+            ),
+            &self.pool
         )?;
         Ok(())
     }
@@ -1047,18 +1090,20 @@ impl AdblockStore for PostgresDatabase {
     async fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
         let id_i32 = id as i32;
         exec!(
-            &self.pool,
-            "UPDATE dns.adblock_rules 
+            sqlx::query!(
+                "UPDATE dns.adblock_rules 
              SET enabled = $1 
              WHERE id = $2",
-            enabled,
-            id_i32
+                enabled,
+                id_i32
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     async fn clear_adblock_rules(&self) -> Result<(), DbError> {
-        exec!(&self.pool, "DELETE FROM dns.adblock_rules")?;
+        exec!(sqlx::query!("DELETE FROM dns.adblock_rules"), &self.pool)?;
         Ok(())
     }
 }
@@ -1085,15 +1130,17 @@ impl ApiTokenStore for PostgresDatabase {
         let pg_expires = expires_at_dt.map(PgTimestampTz);
 
         let row = fetch_one!(
-            &self.pool,
-            "INSERT INTO auth.api_tokens (token, name, created_at, scopes, expires_at) 
+            sqlx::query!(
+                "INSERT INTO auth.api_tokens (token, name, created_at, scopes, expires_at) 
              VALUES ($1, $2, $3, $4, $5) 
              RETURNING id",
-            token,
-            name,
-            pg_created as PgTimestampTz,
-            scopes_str,
-            pg_expires as Option<PgTimestampTz>
+                token,
+                name,
+                pg_created as PgTimestampTz,
+                scopes_str,
+                pg_expires as Option<PgTimestampTz>
+            ),
+            &self.pool
         )?;
         Ok(i64::from(row.id))
     }
@@ -1104,14 +1151,16 @@ impl ApiTokenStore for PostgresDatabase {
         now: i64,
     ) -> Result<Option<(String, ApiScopes)>, DbError> {
         let res = fetch_optional!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 name as \"name!\", 
                 scopes as \"scopes!\", 
                 expires_at as \"expires_at?: PgTimestampTz\" 
              FROM auth.api_tokens 
              WHERE token = $1",
-            token
+                token
+            ),
+            &self.pool
         )?;
 
         if let Some(row) = res {
@@ -1124,12 +1173,14 @@ impl ApiTokenStore for PostgresDatabase {
                 .ok_or_else(|| DbError::Validation("Invalid now timestamp".to_string()))?;
             let pg_now = PgTimestampTz(now_dt);
             exec!(
-                &self.pool,
-                "UPDATE auth.api_tokens 
+                sqlx::query!(
+                    "UPDATE auth.api_tokens 
                  SET last_used = $1 
                  WHERE token = $2",
-                pg_now as PgTimestampTz,
-                token
+                    pg_now as PgTimestampTz,
+                    token
+                ),
+                &self.pool
             )?;
             let scopes = row
                 .scopes
@@ -1144,10 +1195,12 @@ impl ApiTokenStore for PostgresDatabase {
 
     async fn delete_api_token(&self, token: &str) -> Result<(), DbError> {
         exec!(
-            &self.pool,
-            "DELETE FROM auth.api_tokens 
+            sqlx::query!(
+                "DELETE FROM auth.api_tokens 
              WHERE token = $1",
-            token
+                token
+            ),
+            &self.pool
         )?;
         Ok(())
     }
@@ -1155,27 +1208,31 @@ impl ApiTokenStore for PostgresDatabase {
     async fn delete_api_token_by_id_or_name(&self, id_or_name: &str) -> Result<(), DbError> {
         if let Ok(id) = id_or_name.parse::<i32>() {
             exec!(
-                &self.pool,
-                "DELETE FROM auth.api_tokens 
+                sqlx::query!(
+                    "DELETE FROM auth.api_tokens 
                  WHERE id = $1",
-                id
+                    id
+                ),
+                &self.pool
             )?;
         } else {
             exec!(
-                &self.pool,
-                "DELETE FROM auth.api_tokens 
+                sqlx::query!(
+                    "DELETE FROM auth.api_tokens 
                  WHERE name = $1",
-                id_or_name
+                    id_or_name
+                ),
+                &self.pool
             )?;
         }
         Ok(())
     }
 
     async fn load_api_tokens(&self) -> Result<Vec<ApiTokenEntry>, DbError> {
-        let rows = fetch_all_as!(
-            ApiTokenDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                ApiTokenDto,
+                "SELECT 
                 id as \"id!\", 
                 token as \"token!\", 
                 name as \"name!\", 
@@ -1185,6 +1242,8 @@ impl ApiTokenStore for PostgresDatabase {
                 expires_at as \"expires_at?: PgTimestampTz\" 
              FROM auth.api_tokens 
              ORDER BY created_at DESC"
+            ),
+            &self.pool
         )?;
 
         Ok(rows.into_iter().map(ApiTokenDto::into_entry).collect())
@@ -1197,26 +1256,30 @@ impl ApiTokenStore for PostgresDatabase {
         let res = if let Ok(id) = id_or_name.parse::<i64>() {
             let id_i32 = id as i32;
             fetch_optional!(
-                &self.pool,
-                "SELECT 
+                sqlx::query!(
+                    "SELECT 
                     name as \"name!\", 
                     scopes as \"scopes!\", 
                     expires_at as \"expires_at?: PgTimestampTz\" 
                  FROM auth.api_tokens 
                  WHERE id = $1",
-                id_i32
+                    id_i32
+                ),
+                &self.pool
             )?
             .map(|row| (row.name, row.scopes, row.expires_at))
         } else {
             fetch_optional!(
-                &self.pool,
-                "SELECT 
+                sqlx::query!(
+                    "SELECT 
                     name as \"name!\", 
                     scopes as \"scopes!\", 
                     expires_at as \"expires_at?: PgTimestampTz\" 
                  FROM auth.api_tokens 
                  WHERE name = $1",
-                id_or_name
+                    id_or_name
+                ),
+                &self.pool
             )?
             .map(|row| (row.name, row.scopes, row.expires_at))
         };
@@ -1234,16 +1297,18 @@ impl ApiTokenStore for PostgresDatabase {
 
 impl DnsUpstreamStore for PostgresDatabase {
     async fn load_dns_upstreams(&self) -> Result<Vec<DnsUpstreamEntry>, DbError> {
-        let rows = fetch_all_as!(
-            DnsUpstreamDto,
-            &self.pool,
-            "SELECT 
+        let rows = fetch_all!(
+            sqlx::query_as!(
+                DnsUpstreamDto,
+                "SELECT 
                 id as \"id!\", 
                 addr as \"addr!\", 
                 protocol as \"protocol!\", 
                 domain 
              FROM dns.upstreams 
              ORDER BY id ASC"
+            ),
+            &self.pool
         )?;
 
         Ok(rows.into_iter().map(DnsUpstreamDto::into_entry).collect())
@@ -1256,31 +1321,35 @@ impl DnsUpstreamStore for PostgresDatabase {
         domain: Option<&str>,
     ) -> Result<i64, DbError> {
         let row = fetch_one!(
-            &self.pool,
-            "INSERT INTO dns.upstreams (addr, protocol, domain) 
+            sqlx::query!(
+                "INSERT INTO dns.upstreams (addr, protocol, domain) 
              VALUES ($1, $2, $3) 
              ON CONFLICT (addr, protocol) DO UPDATE SET domain = EXCLUDED.domain 
              RETURNING id",
-            addr,
-            protocol,
-            domain
+                addr,
+                protocol,
+                domain
+            ),
+            &self.pool
         )?;
         Ok(i64::from(row.id))
     }
 
     async fn remove_dns_upstream(&self, addr: &str, protocol: &str) -> Result<(), DbError> {
         exec!(
-            &self.pool,
-            "DELETE FROM dns.upstreams 
+            sqlx::query!(
+                "DELETE FROM dns.upstreams 
              WHERE addr = $1 AND protocol = $2",
-            addr,
-            protocol
+                addr,
+                protocol
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     async fn clear_dns_upstreams(&self) -> Result<(), DbError> {
-        exec!(&self.pool, "DELETE FROM dns.upstreams")?;
+        exec!(sqlx::query!("DELETE FROM dns.upstreams"), &self.pool)?;
         Ok(())
     }
 }
@@ -1292,18 +1361,22 @@ impl PostgresDatabase {
             "enabled" => {
                 let val = value == "true";
                 exec!(
-                    pool,
-                    "UPDATE dns.adblock_config 
+                    sqlx::query!(
+                        "UPDATE dns.adblock_config 
                      SET enabled = $1",
-                    val
+                        val
+                    ),
+                    pool
                 )?;
             }
             "blocking_mode" => {
                 exec!(
-                    pool,
-                    "UPDATE dns.adblock_config 
+                    sqlx::query!(
+                        "UPDATE dns.adblock_config 
                      SET blocking_mode = $1::text::dns.blocking_mode",
-                    value
+                        value
+                    ),
+                    pool
                 )?;
             }
             "blocking_ip_v4" => {
@@ -1315,10 +1388,12 @@ impl PostgresDatabase {
                     })?))
                 };
                 exec!(
-                    pool,
-                    "UPDATE dns.adblock_config 
+                    sqlx::query!(
+                        "UPDATE dns.adblock_config 
                      SET blocking_ip_v4 = $1",
-                    ip_val as Option<PgInet>
+                        ip_val as Option<PgInet>
+                    ),
+                    pool
                 )?;
             }
             "blocking_ip_v6" => {
@@ -1330,37 +1405,45 @@ impl PostgresDatabase {
                     })?))
                 };
                 exec!(
-                    pool,
-                    "UPDATE dns.adblock_config 
+                    sqlx::query!(
+                        "UPDATE dns.adblock_config 
                      SET blocking_ip_v6 = $1",
-                    ip_val as Option<PgInet>
+                        ip_val as Option<PgInet>
+                    ),
+                    pool
                 )?;
             }
             "refresh_hours" => {
                 let val = value.parse::<i16>().unwrap_or(12);
                 exec!(
-                    pool,
-                    "UPDATE dns.adblock_config 
+                    sqlx::query!(
+                        "UPDATE dns.adblock_config 
                      SET refresh_hours = $1",
-                    val
+                        val
+                    ),
+                    pool
                 )?;
             }
             "refresh_at_night" => {
                 let val = value == "true";
                 exec!(
-                    pool,
-                    "UPDATE dns.adblock_config 
+                    sqlx::query!(
+                        "UPDATE dns.adblock_config 
                      SET refresh_at_night = $1",
-                    val
+                        val
+                    ),
+                    pool
                 )?;
             }
             _ => {
-                let extras_str = fetch_one_scalar!(
-                    pool,
-                    "SELECT 
+                let extras_str = fetch_one!(
+                    sqlx::query_scalar!(
+                        "SELECT 
                         extras::TEXT as \"extras!: String\" 
                      FROM dns.adblock_config 
                      LIMIT 1"
+                    ),
+                    pool
                 )?;
                 let mut extras_json: serde_json::Value =
                     serde_json::from_str(&extras_str).unwrap_or_else(|_| serde_json::json!({}));
@@ -1370,10 +1453,12 @@ impl PostgresDatabase {
                     extras_json[key] = serde_json::Value::String(value.to_string());
                 }
                 exec!(
-                    pool,
-                    "UPDATE dns.adblock_config 
+                    sqlx::query!(
+                        "UPDATE dns.adblock_config 
                      SET extras = $1",
-                    extras_json
+                        extras_json
+                    ),
+                    pool
                 )?;
             }
         }
@@ -1382,12 +1467,14 @@ impl PostgresDatabase {
 
     pub async fn load_adblock_urls(&self) -> Result<Vec<(i64, String, AdblockUrlKind)>, DbError> {
         let rows = fetch_all!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 id as \"id!\", 
                 url as \"url!\", 
                 kind as \"kind!\" 
              FROM dns.adblock_urls"
+            ),
+            &self.pool
         )?;
 
         Ok(rows
@@ -1402,28 +1489,32 @@ impl PostgresDatabase {
     pub async fn add_adblock_url(&self, url: &str, kind: AdblockUrlKind) -> Result<(), DbError> {
         let kind_str = kind.to_string();
         exec!(
-            &self.pool,
-            "INSERT INTO dns.adblock_urls (url, kind) 
+            sqlx::query!(
+                "INSERT INTO dns.adblock_urls (url, kind) 
              VALUES ($1, $2) 
              ON CONFLICT(url) DO UPDATE SET kind = EXCLUDED.kind",
-            url,
-            kind_str
+                url,
+                kind_str
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     pub async fn remove_adblock_url(&self, url: &str) -> Result<(), DbError> {
         exec!(
-            &self.pool,
-            "DELETE FROM dns.adblock_urls 
+            sqlx::query!(
+                "DELETE FROM dns.adblock_urls 
              WHERE url = $1",
-            url
+                url
+            ),
+            &self.pool
         )?;
         Ok(())
     }
 
     pub async fn clear_adblock_urls(&self) -> Result<(), DbError> {
-        exec!(&self.pool, "DELETE FROM dns.adblock_urls")?;
+        exec!(sqlx::query!("DELETE FROM dns.adblock_urls"), &self.pool)?;
         Ok(())
     }
 }
@@ -1431,12 +1522,14 @@ impl PostgresDatabase {
 impl DynamicConfigStore for PostgresDatabase {
     async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError> {
         let rows = fetch_all!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 range_start as \"range_start!: PgInet\", 
                 range_end as \"range_end!: PgInet\", 
                 lease_time 
              FROM dhcp.v4_pools"
+            ),
+            &self.pool
         )?;
 
         let mut pools = Vec::new();
@@ -1473,19 +1566,21 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn save_dhcp_v4_pools(&self, pools: &[Dhcpv4Pool]) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
-        exec!(&mut *tx, "DELETE FROM dhcp.v4_pools")?;
+        exec!(sqlx::query!("DELETE FROM dhcp.v4_pools"), &mut *tx)?;
 
         for pool in pools {
             let pg_start = PgInet::from(pool.range_start);
             let pg_end = PgInet::from(pool.range_end);
             let lease_time = pool.lease_time.unwrap_or(0) as i32;
             exec!(
-                &mut *tx,
-                "INSERT INTO dhcp.v4_pools (range_start, range_end, lease_time) 
+                sqlx::query!(
+                    "INSERT INTO dhcp.v4_pools (range_start, range_end, lease_time) 
                  VALUES ($1, $2, $3)",
-                pg_start as PgInet,
-                pg_end as PgInet,
-                lease_time
+                    pg_start as PgInet,
+                    pg_end as PgInet,
+                    lease_time
+                ),
+                &mut *tx
             )?;
         }
         tx.commit().await.map_err(map_err)?;
@@ -1494,13 +1589,15 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn load_dhcp_v6_pools(&self) -> Result<Vec<Dhcpv6Pool>, DbError> {
         let rows = fetch_all!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 range_start, 
                 range_end, 
                 address, 
                 lease_time 
              FROM dhcp.v6_pools"
+            ),
+            &self.pool
         )?;
 
         let mut pools = Vec::new();
@@ -1524,20 +1621,22 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn save_dhcp_v6_pools(&self, pools: &[Dhcpv6Pool]) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
-        exec!(&mut *tx, "DELETE FROM dhcp.v6_pools")?;
+        exec!(sqlx::query!("DELETE FROM dhcp.v6_pools"), &mut *tx)?;
 
         for pool in pools {
             let start_str = pool.range_start.map(|x| x.to_string());
             let end_str = pool.range_end.map(|x| x.to_string());
             let lease_time = pool.lease_time.unwrap_or(0) as i32;
             exec!(
-                &mut *tx,
-                "INSERT INTO dhcp.v6_pools (range_start, range_end, address, lease_time) 
+                sqlx::query!(
+                    "INSERT INTO dhcp.v6_pools (range_start, range_end, address, lease_time) 
                  VALUES ($1, $2, $3, $4)",
-                start_str,
-                end_str,
-                pool.address,
-                lease_time
+                    start_str,
+                    end_str,
+                    pool.address,
+                    lease_time
+                ),
+                &mut *tx
             )?;
         }
         tx.commit().await.map_err(map_err)?;
@@ -1546,8 +1645,8 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError> {
         let rows = fetch_all!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 source, 
                 address as \"address?: PgInet\", 
                 prefix_len, 
@@ -1556,6 +1655,8 @@ impl DynamicConfigStore for PostgresDatabase {
                 preferred_lifetime, 
                 valid_lifetime 
              FROM ra.prefixes"
+            ),
+            &self.pool
         )?;
 
         let mut prefixes = Vec::new();
@@ -1591,7 +1692,7 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn save_ra_prefixes(&self, prefixes: &[RAPrefix]) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
-        exec!(&mut *tx, "DELETE FROM ra.prefixes")?;
+        exec!(sqlx::query!("DELETE FROM ra.prefixes"), &mut *tx)?;
 
         for prefix in prefixes {
             let source_str = match &prefix.source {
@@ -1611,18 +1712,8 @@ impl DynamicConfigStore for PostgresDatabase {
                 PrefixLifetime::Infinity => None,
                 PrefixLifetime::Secs(secs) => Some(secs as i32),
             };
-            exec!(
-                &mut *tx,
-                "INSERT INTO ra.prefixes (source, address, prefix_len, on_link, autonomous, preferred_lifetime, valid_lifetime)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                source_str,
-                pg_addr as Option<PgInet>,
-                prefix.prefix_len as i16,
-                prefix.on_link,
-                prefix.autonomous,
-                preferred_lifetime,
-                valid_lifetime
-            )?;
+            exec!(sqlx::query!("INSERT INTO ra.prefixes (source, address, prefix_len, on_link, autonomous, preferred_lifetime, valid_lifetime)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)", source_str, pg_addr as Option<PgInet>, prefix.prefix_len as i16, prefix.on_link, prefix.autonomous, preferred_lifetime, valid_lifetime), &mut *tx)?;
         }
         tx.commit().await.map_err(map_err)?;
         Ok(())
@@ -1630,14 +1721,16 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn load_ra_rdnss(&self) -> Result<Vec<RdnssConfig>, DbError> {
         let rows = fetch_all!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 r.id, 
                 r.lifetime, 
                 s.address as \"address!: PgInet\"
              FROM ra.rdnss r
              JOIN ra.rdnss_servers s ON r.id = s.rdnss_id
              ORDER BY r.id"
+            ),
+            &self.pool
         )?;
 
         use std::collections::BTreeMap;
@@ -1656,26 +1749,30 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn save_ra_rdnss(&self, rdnss: &[RdnssConfig]) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
-        exec!(&mut *tx, "DELETE FROM ra.rdnss")?;
+        exec!(sqlx::query!("DELETE FROM ra.rdnss"), &mut *tx)?;
 
         for cfg in rdnss {
             let lifetime = cfg.lifetime.map(|t| t as i32);
             let row = fetch_one!(
-                &mut *tx,
-                "INSERT INTO ra.rdnss (lifetime) 
+                sqlx::query!(
+                    "INSERT INTO ra.rdnss (lifetime) 
                  VALUES ($1) 
                  RETURNING id",
-                lifetime
+                    lifetime
+                ),
+                &mut *tx
             )?;
 
             for server in &cfg.servers {
                 let pg_server = PgInet::from(IpAddr::V6(*server));
                 exec!(
-                    &mut *tx,
-                    "INSERT INTO ra.rdnss_servers (rdnss_id, address) 
+                    sqlx::query!(
+                        "INSERT INTO ra.rdnss_servers (rdnss_id, address) 
                      VALUES ($1, $2)",
-                    row.id,
-                    pg_server as PgInet
+                        row.id,
+                        pg_server as PgInet
+                    ),
+                    &mut *tx
                 )?;
             }
         }
@@ -1685,14 +1782,16 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn load_ra_dnssl(&self) -> Result<Vec<DnsslConfig>, DbError> {
         let rows = fetch_all!(
-            &self.pool,
-            "SELECT 
+            sqlx::query!(
+                "SELECT 
                 d.id, 
                 d.lifetime, 
                 m.domain
              FROM ra.dnssl d
              JOIN ra.dnssl_domains m ON d.id = m.dnssl_id
              ORDER BY d.id"
+            ),
+            &self.pool
         )?;
 
         use std::collections::BTreeMap;
@@ -1709,25 +1808,29 @@ impl DynamicConfigStore for PostgresDatabase {
 
     async fn save_ra_dnssl(&self, dnssl: &[DnsslConfig]) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
-        exec!(&mut *tx, "DELETE FROM ra.dnssl")?;
+        exec!(sqlx::query!("DELETE FROM ra.dnssl"), &mut *tx)?;
 
         for cfg in dnssl {
             let lifetime = cfg.lifetime.map(|t| t as i32);
             let row = fetch_one!(
-                &mut *tx,
-                "INSERT INTO ra.dnssl (lifetime) 
+                sqlx::query!(
+                    "INSERT INTO ra.dnssl (lifetime) 
                  VALUES ($1) 
                  RETURNING id",
-                lifetime
+                    lifetime
+                ),
+                &mut *tx
             )?;
 
             for domain in &cfg.domains {
                 exec!(
-                    &mut *tx,
-                    "INSERT INTO ra.dnssl_domains (dnssl_id, domain) 
+                    sqlx::query!(
+                        "INSERT INTO ra.dnssl_domains (dnssl_id, domain) 
                      VALUES ($1, $2)",
-                    row.id,
-                    domain
+                        row.id,
+                        domain
+                    ),
+                    &mut *tx
                 )?;
             }
         }
