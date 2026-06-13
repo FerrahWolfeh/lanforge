@@ -700,7 +700,7 @@ async fn test_system_config_contract() {
     let (status, _) = app.post("/api/v1/config", &config).await;
     assert_eq!(
         status,
-        StatusCode::NO_CONTENT,
+        StatusCode::OK,
         "config import overwrite=true should succeed"
     );
 
@@ -742,7 +742,7 @@ async fn test_system_config_contract() {
     let (status, _) = app.post("/api/v1/config", &merge_config).await;
     assert_eq!(
         status,
-        StatusCode::NO_CONTENT,
+        StatusCode::OK,
         "config import overwrite=false should succeed"
     );
 
