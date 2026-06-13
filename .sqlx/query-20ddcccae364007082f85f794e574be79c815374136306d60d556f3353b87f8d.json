@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT \n                range_start as \"range_start!: PgInet\", \n                range_end as \"range_end!: PgInet\", \n                lease_time \n             FROM dhcp.v4_pools",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "range_start!: PgInet",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "dhcp.v4_pools",
+            "name": "range_start"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "range_end!: PgInet",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "dhcp.v4_pools",
+            "name": "range_end"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "lease_time",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "dhcp.v4_pools",
+            "name": "lease_time"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "20ddcccae364007082f85f794e574be79c815374136306d60d556f3353b87f8d"
+}

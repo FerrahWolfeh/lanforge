@@ -17,4 +17,3 @@ chrono = { workspace = true }
 
 # Third party
 uuid = { version = "1.8", features = ["v4", "serde"] }
-async-trait = "0.1"

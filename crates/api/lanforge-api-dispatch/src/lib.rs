@@ -39,7 +39,6 @@ pub struct ClientContext {
     pub active_clients: Arc<AtomicUsize>,
 }
 
-#[async_trait::async_trait]
 impl LanforgeRpc for ClientContext {
     // We will implement the LanforgeRpc trait methods by calling into the hand-written handlers
     // migrated from lanforge-uds.

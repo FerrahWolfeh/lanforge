@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT \n                        extras::TEXT as \"extras!: String\" \n                     FROM dns.adblock_config \n                     LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "extras!: String",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0ce43a9e80e3457a03ba39d7f24f97661924ff62610b675e79206ed3777bc83d"
+}

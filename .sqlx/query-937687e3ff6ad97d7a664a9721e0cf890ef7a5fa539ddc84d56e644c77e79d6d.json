@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dhcp.v4_pools",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "937687e3ff6ad97d7a664a9721e0cf890ef7a5fa539ddc84d56e644c77e79d6d"
+}

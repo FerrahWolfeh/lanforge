@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO ra.dnssl_domains (dnssl_id, domain) \n                     VALUES ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6a9ff58bf7b3a7c4d6f6cab5453cea847f58c6161d1cf6d44b5e53666f265aa4"
+}

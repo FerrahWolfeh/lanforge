@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT \n                id as \"id!\", \n                url as \"url!\", \n                kind as \"kind!\", \n                enabled as \"enabled!\" \n             FROM dns.adblock_urls",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_urls",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "url!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_urls",
+            "name": "url"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "kind!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_urls",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "enabled!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "dns.adblock_urls",
+            "name": "enabled"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8a941e1e7f1225b9cd64cf1e9418c6fbbf61fc3899ff974d285c2d08dc724ae0"
+}

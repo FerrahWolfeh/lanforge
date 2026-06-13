@@ -40,7 +40,6 @@ serde_json = { workspace = true }
 hotpath = { workspace = true, optional = true }
 futures.workspace = true
 parking_lot.workspace = true
-async-trait = "0.1"
 
 
 [dev-dependencies]

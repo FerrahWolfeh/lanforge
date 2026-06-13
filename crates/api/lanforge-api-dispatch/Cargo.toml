@@ -16,7 +16,6 @@ lanforge-macros = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 serde = { workspace = true }
 tracing = { workspace = true }
-async-trait = "0.1.86"
 serde_json = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }

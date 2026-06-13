@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT \n                mac as \"mac: PgMacAddr\" \n             FROM net.devices",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mac: PgMacAddr",
+        "type_info": "Macaddr",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "mac"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1a0939510cb49dff1a31e4fab0bc3231f4bd28ffc88693029eeb80ff3368dd01"
+}

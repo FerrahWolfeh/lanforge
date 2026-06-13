@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO dns.rewrites (domain, rtype, answer) \n             VALUES ($1, $2, $3) \n             ON CONFLICT(domain, rtype) DO UPDATE SET answer = EXCLUDED.answer",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8bedd18a18a1c4fee077713187e412ed38038a36c4e316b0044fa74f36428b00"
+}

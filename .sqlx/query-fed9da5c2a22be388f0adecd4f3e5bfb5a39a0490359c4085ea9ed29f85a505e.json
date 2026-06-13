@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM dns.upstreams \n             WHERE addr = $1 AND protocol = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fed9da5c2a22be388f0adecd4f3e5bfb5a39a0490359c4085ea9ed29f85a505e"
+}

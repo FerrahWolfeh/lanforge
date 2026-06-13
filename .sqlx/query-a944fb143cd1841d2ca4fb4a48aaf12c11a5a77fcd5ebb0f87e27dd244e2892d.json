@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE dns.adblock_config \n                     SET enabled = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a944fb143cd1841d2ca4fb4a48aaf12c11a5a77fcd5ebb0f87e27dd244e2892d"
+}

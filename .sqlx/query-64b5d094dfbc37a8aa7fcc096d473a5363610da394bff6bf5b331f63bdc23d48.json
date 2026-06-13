@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO net.v6_prefixes (mac, iaid, cidr, expires) \n             VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Macaddr",
+        "Int8",
+        "Cidr",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "64b5d094dfbc37a8aa7fcc096d473a5363610da394bff6bf5b331f63bdc23d48"
+}

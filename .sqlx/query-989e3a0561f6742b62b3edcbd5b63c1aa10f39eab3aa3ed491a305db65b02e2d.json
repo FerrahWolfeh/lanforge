@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO ra.prefixes (source, address, prefix_len, on_link, autonomous, preferred_lifetime, valid_lifetime)\n                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Inet",
+        "Int2",
+        "Bool",
+        "Bool",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "989e3a0561f6742b62b3edcbd5b63c1aa10f39eab3aa3ed491a305db65b02e2d"
+}

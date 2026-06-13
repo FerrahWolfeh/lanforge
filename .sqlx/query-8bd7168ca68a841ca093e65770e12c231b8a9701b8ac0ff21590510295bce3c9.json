@@ -1,0 +1,161 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT \n                d.mac as \"mac!: PgMacAddr\", \n                d.hostname, \n                d.hostname_origin as \"hostname_origin!: PgHostnameOrigin\", \n                d.duid, \n                d.origin as \"origin!: PgDeviceOrigin\", \n                d.managed_at as \"managed_at?: PgTimestampTz\", \n                d.class as \"class!\",\n                s.v4_static as \"v4_static?: PgInet\", \n                s.v6_suffix as \"v6_suffix?: PgInet\", \n                s.boot_file\n             FROM net.devices d\n             LEFT JOIN dhcp.static_devices s ON d.mac = s.mac",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mac!: PgMacAddr",
+        "type_info": "Macaddr",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "mac"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "hostname_origin!: PgHostnameOrigin",
+        "type_info": {
+          "Custom": {
+            "name": "hostname_origin_t",
+            "kind": {
+              "Enum": [
+                "dhcp",
+                "dns",
+                "mdns",
+                "ndp",
+                "netbios",
+                "static",
+                "system",
+                "user"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "hostname_origin"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "duid",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "duid"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "origin!: PgDeviceOrigin",
+        "type_info": {
+          "Custom": {
+            "name": "device_origin",
+            "kind": {
+              "Enum": [
+                "static",
+                "system",
+                "dynamic"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "origin"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "managed_at?: PgTimestampTz",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "managed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "class!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "class"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "v4_static?: PgInet",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "dhcp.static_devices",
+            "name": "v4_static"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "v6_suffix?: PgInet",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "dhcp.static_devices",
+            "name": "v6_suffix"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "boot_file",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dhcp.static_devices",
+            "name": "boot_file"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8bd7168ca68a841ca093e65770e12c231b8a9701b8ac0ff21590510295bce3c9"
+}

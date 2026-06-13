@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM net.v6_prefixes \n         WHERE mac = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Macaddr"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6c6568709361bd79659d65811f547bdc3ced42387b21d44843c74fc502ed8570"
+}

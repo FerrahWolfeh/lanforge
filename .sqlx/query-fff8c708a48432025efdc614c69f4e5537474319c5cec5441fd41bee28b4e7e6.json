@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE dns.adblock_config \n                     SET refresh_at_night = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fff8c708a48432025efdc614c69f4e5537474319c5cec5441fd41bee28b4e7e6"
+}

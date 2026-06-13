@@ -483,23 +483,11 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
             match &method.sig.output {
                 syn::ReturnType::Default => {}
                 syn::ReturnType::Type(_, ty) => {
-                    if let syn::Type::Path(type_path) = &**ty
-                        && let Some(segment) = type_path.path.segments.last()
-                        && segment.ident == "Result"
-                        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-                    {
-                        if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                            is_result = true;
-                            inner_type = quote! { #inner };
-                        }
-                        if args.args.len() > 1
-                            && let Some(syn::GenericArgument::Type(err)) = args.args.iter().nth(1)
-                        {
-                            global_error_type = quote! { #err };
-                        }
-                    }
-                    if !is_result {
-                        inner_type = quote! { #ty };
+                    let (is_res, inner, err) = extract_rpc_return_type(ty);
+                    is_result = is_res;
+                    inner_type = quote! { #inner };
+                    if let Some(e) = err {
+                        global_error_type = quote! { #e };
                     }
                 }
             };
@@ -558,7 +546,6 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
             Error(#global_error_type),
         }
 
-        #[async_trait::async_trait]
         pub trait LanforgeRpcDispatcher: #trait_name {
             async fn dispatch(&self, req: RpcRequest) -> RpcResponse {
                 match req {
@@ -786,4 +773,53 @@ pub fn pg_enum_derive(input: TokenStream) -> TokenStream {
             }
         }
     }.into()
+}
+
+fn extract_rpc_return_type(ty: &syn::Type) -> (bool, syn::Type, Option<syn::Type>) {
+    if let Some((inner, err)) = try_extract_result(ty) {
+        return (true, inner, Some(err));
+    }
+
+    if let syn::Type::ImplTrait(impl_trait) = ty {
+        for bound in &impl_trait.bounds {
+            if let syn::TypeParamBound::Trait(trait_bound) = bound
+                && let Some(last_seg) = trait_bound.path.segments.last()
+                    && last_seg.ident == "Future"
+                        && let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments {
+                            for arg in &args.args {
+                                if let syn::GenericArgument::AssocType(assoc_type) = arg
+                                    && assoc_type.ident == "Output" {
+                                        if let Some((inner, err)) = try_extract_result(&assoc_type.ty) {
+                                            return (true, inner, Some(err));
+                                        } else {
+                                            return (false, assoc_type.ty.clone(), None);
+                                        }
+                                    }
+                            }
+                        }
+        }
+    }
+
+    (false, ty.clone(), None)
+}
+
+fn try_extract_result(ty: &syn::Type) -> Option<(syn::Type, syn::Type)> {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(last_seg) = type_path.path.segments.last()
+            && last_seg.ident == "Result"
+                && let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments {
+                    if args.args.len() >= 2 {
+                        let first = args.args.first()?;
+                        let second = args.args.iter().nth(1)?;
+                        if let (syn::GenericArgument::Type(inner), syn::GenericArgument::Type(err)) = (first, second) {
+                            return Some((inner.clone(), err.clone()));
+                        }
+                    } else if args.args.len() == 1 {
+                        let first = args.args.first()?;
+                        if let syn::GenericArgument::Type(inner) = first {
+                            return Some((inner.clone(), syn::parse_quote! { String }));
+                        }
+                    }
+                }
+    None
 }

@@ -19,7 +19,6 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 
 postcard.workspace = true
-async-trait = "0.1.86"
 futures.workspace = true
 
 [features]

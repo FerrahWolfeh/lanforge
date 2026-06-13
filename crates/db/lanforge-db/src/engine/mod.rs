@@ -1,6 +1,5 @@
 //! `LanforgeDb` facade for PostgreSQL.
 
-use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -626,7 +625,6 @@ impl LanforgeDb {
     }
 }
 
-#[async_trait]
 impl DynamicConfigStore for LanforgeDb {
     async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError> {
         delegate_db_call!(self, load_dhcp_v4_pools(), mock => Ok(mock.dhcp_v4_pools.read().clone()))

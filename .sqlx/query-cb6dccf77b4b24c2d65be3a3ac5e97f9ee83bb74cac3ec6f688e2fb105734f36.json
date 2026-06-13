@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE auth.api_tokens \n                 SET last_used = $1 \n                 WHERE token = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cb6dccf77b4b24c2d65be3a3ac5e97f9ee83bb74cac3ec6f688e2fb105734f36"
+}

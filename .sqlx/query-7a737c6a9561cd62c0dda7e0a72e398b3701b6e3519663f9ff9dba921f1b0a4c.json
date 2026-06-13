@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO dhcp.v4_pools (range_start, range_end, lease_time) \n                 VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Inet",
+        "Inet",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7a737c6a9561cd62c0dda7e0a72e398b3701b6e3519663f9ff9dba921f1b0a4c"
+}

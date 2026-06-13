@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO dns.allowlist (domain) \n             VALUES ($1) \n             ON CONFLICT(domain) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "400f59d9b2dcb097a5ba7fbe349b01a4910147c5fe047414e34f68c4fbce3f37"
+}

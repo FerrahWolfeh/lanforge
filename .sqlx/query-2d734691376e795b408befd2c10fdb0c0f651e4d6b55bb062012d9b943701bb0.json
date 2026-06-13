@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM net.devices \n                 WHERE mac = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Macaddr"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2d734691376e795b408befd2c10fdb0c0f651e4d6b55bb062012d9b943701bb0"
+}

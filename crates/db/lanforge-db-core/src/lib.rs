@@ -1,6 +1,7 @@
 //! Abstract database traits, errors, and models for Lanforge.
 
-use async_trait::async_trait;
+use std::future::Future;
+
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry};
 use lanforge_types::identifiers::MacAddr;
@@ -71,220 +72,279 @@ pub struct DnsUpstreamEntry {
 }
 
 /// Handles storage and retrieval of devices and DHCP/SLAAC leases.
-#[async_trait]
 pub trait DeviceStore: Send + Sync {
     /// Upserts a full device state.
-    async fn upsert_device(&self, device: &Device) -> Result<(), DbError>;
+    fn upsert_device(&self, device: &Device) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Upserts only the base device fields (like hostname and origin) avoiding child updates.
-    async fn upsert_base_device_only(&self, device: &Device) -> Result<(), DbError>;
+    fn upsert_base_device_only(
+        &self,
+        device: &Device,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Deletes devices by their MAC addresses.
-    async fn delete_devices(&self, macs: &[MacAddr]) -> Result<(), DbError>;
+    fn delete_devices(&self, macs: &[MacAddr]) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Look up a device MAC address by host name.
-    async fn find_mac_by_hostname(&self, hostname: &str) -> Result<Option<MacAddr>, DbError>;
+    fn find_mac_by_hostname(
+        &self,
+        hostname: &str,
+    ) -> impl Future<Output = Result<Option<MacAddr>, DbError>> + Send;
 
     /// Removes a device by its MAC address.
-    async fn remove_device(&self, mac: MacAddr) -> Result<(), DbError>;
+    fn remove_device(&self, mac: MacAddr) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Triggers VACUUM or backend storage optimization.
-    async fn vacuum(&self) -> Result<(), DbError>;
+    fn vacuum(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Prunes dynamic devices without hostname or active leases/addresses.
-    async fn prune_zombies(&self) -> Result<usize, DbError>;
+    fn prune_zombies(&self) -> impl Future<Output = Result<usize, DbError>> + Send;
 
     /// Clears the devices tables cascade.
-    async fn reset(&self) -> Result<(), DbError>;
+    fn reset(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Records a DHCP lease lifecycle event.
-    async fn record_lease_event(
+    fn record_lease_event(
         &self,
         mac: MacAddr,
         ip: &str,
         lease_type: &str,
         action: LeaseAction,
-    ) -> Result<(), DbError>;
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Retrieves up to 100 recent lease history entries for a MAC address.
-    async fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>, DbError>;
+    fn get_lease_history(
+        &self,
+        mac: MacAddr,
+    ) -> impl Future<Output = Result<Vec<LeaseHistoryEntry>, DbError>> + Send;
 }
 
 /// Handles local DNS rewrites, allowlists, and reverse resolvers.
-#[async_trait]
 pub trait DnsStore: Send + Sync {
     /// Loads all configured custom DNS rewrite rules.
-    async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError>;
+    fn load_dns_rewrites(&self) -> impl Future<Output = Result<Vec<RewriteRule>, DbError>> + Send;
 
     /// Adds or updates a custom DNS rewrite rule.
-    async fn upsert_dns_rewrite(
+    fn upsert_dns_rewrite(
         &self,
         domain: &str,
         rtype: DnsRecordType,
         answer: &str,
-    ) -> Result<(), DbError>;
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Deletes a DNS rewrite rule by its numeric ID.
-    async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), DbError>;
+    fn delete_dns_rewrite_by_id(&self, id: i64)
+    -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Clears all custom DNS rewrites.
-    async fn clear_dns_rewrites(&self) -> Result<(), DbError>;
+    fn clear_dns_rewrites(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Loads the DNS adblock allowlist.
-    async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, DbError>;
+    fn load_dns_allowlist(
+        &self,
+    ) -> impl Future<Output = Result<Vec<(i64, String)>, DbError>> + Send;
 
     /// Adds a domain to the DNS allowlist.
-    async fn add_dns_allowlist(&self, domain: &str) -> Result<(), DbError>;
+    fn add_dns_allowlist(&self, domain: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Removes a domain from the DNS allowlist.
-    async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), DbError>;
+    fn remove_dns_allowlist(
+        &self,
+        domain: &str,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Clears all domains from the allowlist.
-    async fn clear_dns_allowlist(&self) -> Result<(), DbError>;
+    fn clear_dns_allowlist(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Loads all registered dynamic PTR/reverse DNS resolvers.
-    async fn load_dns_reverse_resolvers(&self) -> Result<Vec<DnsReverseResolver>, DbError>;
+    fn load_dns_reverse_resolvers(
+        &self,
+    ) -> impl Future<Output = Result<Vec<DnsReverseResolver>, DbError>> + Send;
 
     /// Adds a new reverse resolver rule for a subnet.
-    async fn add_dns_reverse_resolver(
+    fn add_dns_reverse_resolver(
         &self,
         subnet: &IpSubnet,
         resolver: &UpstreamTarget,
-    ) -> Result<(), DbError>;
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Removes a reverse resolver rule for a subnet.
-    async fn remove_dns_reverse_resolver(&self, subnet: &IpSubnet) -> Result<(), DbError>;
+    fn remove_dns_reverse_resolver(
+        &self,
+        subnet: &IpSubnet,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Clears all registered reverse resolvers.
-    async fn clear_dns_reverse_resolvers(&self) -> Result<(), DbError>;
+    fn clear_dns_reverse_resolvers(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 }
 
 /// Handles adblock configuration, source lists, and custom filtering rules.
-#[async_trait]
 pub trait AdblockStore: Send + Sync {
     /// Loads active global adblock configurations.
-    async fn load_adblock_config(&self) -> Result<AdblockDbConfig, DbError>;
+    fn load_adblock_config(&self) -> impl Future<Output = Result<AdblockDbConfig, DbError>> + Send;
 
     /// Saves global adblock config values (by key/value under the hood).
-    async fn save_adblock_config(&self, cfg: &AdblockDbConfig) -> Result<(), DbError>;
+    fn save_adblock_config(
+        &self,
+        cfg: &AdblockDbConfig,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Loads all adblock filter subscription URLs.
-    async fn load_adblock_sources(
+    fn load_adblock_sources(
         &self,
-    ) -> Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError>;
+    ) -> impl Future<Output = Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError>> + Send;
 
     /// Adds a new adblock filter source URL.
-    async fn add_adblock_source(&self, url: &str, kind: AdblockUrlKind) -> Result<i64, DbError>;
+    fn add_adblock_source(
+        &self,
+        url: &str,
+        kind: AdblockUrlKind,
+    ) -> impl Future<Output = Result<i64, DbError>> + Send;
 
     /// Removes an adblock filter source URL by ID.
-    async fn remove_adblock_source(&self, id: i64) -> Result<(), DbError>;
+    fn remove_adblock_source(&self, id: i64) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Enables or disables an adblock filter source URL.
-    async fn update_adblock_source_status(&self, id: i64, enabled: bool) -> Result<(), DbError>;
+    fn update_adblock_source_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Clears all adblock filter source URLs.
-    async fn clear_adblock_sources(&self) -> Result<(), DbError>;
+    fn clear_adblock_sources(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Loads custom adblock user rules.
-    async fn load_adblock_rules(&self) -> Result<Vec<(i64, String, String, bool)>, DbError>;
+    fn load_adblock_rules(
+        &self,
+    ) -> impl Future<Output = Result<Vec<(i64, String, String, bool)>, DbError>> + Send;
 
     /// Adds a custom adblock user rule (domain and action like block/allow).
-    async fn add_adblock_rule(&self, domain: &str, action: &str) -> Result<i64, DbError>;
+    fn add_adblock_rule(
+        &self,
+        domain: &str,
+        action: &str,
+    ) -> impl Future<Output = Result<i64, DbError>> + Send;
 
     /// Removes a custom adblock user rule by ID.
-    async fn remove_adblock_rule(&self, id: i64) -> Result<(), DbError>;
+    fn remove_adblock_rule(&self, id: i64) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Enables or disables a custom user rule.
-    async fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> Result<(), DbError>;
+    fn update_adblock_rule_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Clears all custom user adblock rules.
-    async fn clear_adblock_rules(&self) -> Result<(), DbError>;
+    fn clear_adblock_rules(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 }
 
 /// Handles API tokens lifecycle and authorization scopes.
-#[async_trait]
 pub trait ApiTokenStore: Send + Sync {
     /// Saves a new API token with scopes.
-    async fn store_api_token(
+    fn store_api_token(
         &self,
         token: &str,
         name: &str,
         scopes: &ApiScopes,
         expires_at: Option<i64>,
         now: i64,
-    ) -> Result<i64, DbError>;
+    ) -> impl Future<Output = Result<i64, DbError>> + Send;
 
     /// Validates an API token and updates its `last_used` timestamp.
-    async fn validate_api_token(
+    fn validate_api_token(
         &self,
         token: &str,
         now: i64,
-    ) -> Result<Option<(String, ApiScopes)>, DbError>;
+    ) -> impl Future<Output = Result<Option<(String, ApiScopes)>, DbError>> + Send;
 
     /// Deletes an API token.
-    async fn delete_api_token(&self, token: &str) -> Result<(), DbError>;
+    fn delete_api_token(&self, token: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Deletes a token by database ID or custom name.
-    async fn delete_api_token_by_id_or_name(&self, id_or_name: &str) -> Result<(), DbError>;
-
-    /// Loads all registered API tokens.
-    async fn load_api_tokens(&self) -> Result<Vec<ApiTokenEntry>, DbError>;
-
-    /// Retrieves detailed info for a token by ID or name.
-    async fn get_api_token_info(
+    fn delete_api_token_by_id_or_name(
         &self,
         id_or_name: &str,
-    ) -> Result<Option<(String, ApiScopes, Option<i64>)>, DbError>;
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Loads all registered API tokens.
+    fn load_api_tokens(&self) -> impl Future<Output = Result<Vec<ApiTokenEntry>, DbError>> + Send;
+
+    /// Retrieves detailed info for a token by ID or name.
+    fn get_api_token_info(
+        &self,
+        id_or_name: &str,
+    ) -> impl Future<Output = Result<Option<(String, ApiScopes, Option<i64>)>, DbError>> + Send;
 }
 
 /// Handles DNS upstream servers configurations.
-#[async_trait]
 pub trait DnsUpstreamStore: Send + Sync {
     /// Loads all upstream DNS servers.
-    async fn load_dns_upstreams(&self) -> Result<Vec<DnsUpstreamEntry>, DbError>;
+    fn load_dns_upstreams(
+        &self,
+    ) -> impl Future<Output = Result<Vec<DnsUpstreamEntry>, DbError>> + Send;
 
     /// Adds a new upstream DNS server.
-    async fn add_dns_upstream(
+    fn add_dns_upstream(
         &self,
         addr: &str,
         protocol: &str,
         domain: Option<&str>,
-    ) -> Result<i64, DbError>;
+    ) -> impl Future<Output = Result<i64, DbError>> + Send;
 
     /// Removes an upstream DNS server.
-    async fn remove_dns_upstream(&self, addr: &str, protocol: &str) -> Result<(), DbError>;
+    fn remove_dns_upstream(
+        &self,
+        addr: &str,
+        protocol: &str,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Clears all registered DNS upstream servers.
-    async fn clear_dns_upstreams(&self) -> Result<(), DbError>;
+    fn clear_dns_upstreams(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 }
 
 /// Handles dynamic DHCP pools and RA configurations.
-#[async_trait]
 pub trait DynamicConfigStore: Send + Sync {
     /// Loads dynamic DHCPv4 pools.
-    async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError>;
+    fn load_dhcp_v4_pools(&self) -> impl Future<Output = Result<Vec<Dhcpv4Pool>, DbError>> + Send;
     /// Overwrites/saves dynamic DHCPv4 pools.
-    async fn save_dhcp_v4_pools(&self, pools: &[Dhcpv4Pool]) -> Result<(), DbError>;
+    fn save_dhcp_v4_pools(
+        &self,
+        pools: &[Dhcpv4Pool],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Loads dynamic DHCPv6 pools.
-    async fn load_dhcp_v6_pools(&self) -> Result<Vec<Dhcpv6Pool>, DbError>;
+    fn load_dhcp_v6_pools(&self) -> impl Future<Output = Result<Vec<Dhcpv6Pool>, DbError>> + Send;
     /// Overwrites/saves dynamic DHCPv6 pools.
-    async fn save_dhcp_v6_pools(&self, pools: &[Dhcpv6Pool]) -> Result<(), DbError>;
+    fn save_dhcp_v6_pools(
+        &self,
+        pools: &[Dhcpv6Pool],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Loads dynamic RA prefix configurations.
-    async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError>;
+    fn load_ra_prefixes(&self) -> impl Future<Output = Result<Vec<RAPrefix>, DbError>> + Send;
     /// Overwrites/saves dynamic RA prefixes.
-    async fn save_ra_prefixes(&self, prefixes: &[RAPrefix]) -> Result<(), DbError>;
+    fn save_ra_prefixes(
+        &self,
+        prefixes: &[RAPrefix],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Loads dynamic RA RDNSS options.
-    async fn load_ra_rdnss(&self) -> Result<Vec<RdnssConfig>, DbError>;
+    fn load_ra_rdnss(&self) -> impl Future<Output = Result<Vec<RdnssConfig>, DbError>> + Send;
     /// Overwrites/saves dynamic RA RDNSS.
-    async fn save_ra_rdnss(&self, rdnss: &[RdnssConfig]) -> Result<(), DbError>;
+    fn save_ra_rdnss(
+        &self,
+        rdnss: &[RdnssConfig],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Loads dynamic RA DNSSL options.
-    async fn load_ra_dnssl(&self) -> Result<Vec<DnsslConfig>, DbError>;
+    fn load_ra_dnssl(&self) -> impl Future<Output = Result<Vec<DnsslConfig>, DbError>> + Send;
     /// Overwrites/saves dynamic RA DNSSL.
-    async fn save_ra_dnssl(&self, dnssl: &[DnsslConfig]) -> Result<(), DbError>;
+    fn save_ra_dnssl(
+        &self,
+        dnssl: &[DnsslConfig],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
 }
 
 /// Helper macro to delegate database operations to the active backend (postgres/mock).
