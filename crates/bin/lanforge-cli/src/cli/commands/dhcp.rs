@@ -145,14 +145,24 @@ pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, a
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
             // Header
             View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
-                Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
-                Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
-                Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
-                Text(content: format!("{:<35}", "IPv6"), color: Color::DarkGrey)
-                Text(content: "EXPIRES", color: Color::DarkGrey)
+                View(width: 25) {
+                    Text(content: "  HOST", color: Color::DarkGrey)
+                }
+                View(width: 20) {
+                    Text(content: "MAC ADDRESS", color: Color::DarkGrey)
+                }
+                View(width: 18) {
+                    Text(content: "IPv4", color: Color::DarkGrey)
+                }
+                View(width: 35) {
+                    Text(content: "IPv6", color: Color::DarkGrey)
+                }
+                View(width: 15) {
+                    Text(content: "EXPIRES", color: Color::DarkGrey)
+                }
             }
             // Separator
-            Text(content: hline.repeat(100), color: Color::DarkGrey)
+            Text(content: hline.repeat(113), color: Color::DarkGrey)
 
             // Rows
             View(flex_direction: FlexDirection::Column) {
@@ -188,12 +198,21 @@ fn MergedLeaseRow(props: &MergedLeaseRowProps) -> impl Into<AnyElement<'_>> {
 
     element! {
         View(flex_direction: FlexDirection::Row) {
-            Text(content: "  ")
-            Text(content: format!("{:<23}", m.hostname))
-            Text(content: format!("{:<20}", m.mac), color: Color::Cyan)
-            Text(content: format!("{:<18}", v4_str), color: Color::Green)
-            Text(content: format!("{:<35}", v6_str), color: Color::Yellow)
-            Text(content: expires_str.to_string(), color: Color::DarkGrey)
+            View(width: 25) {
+                Text(content: format!("  {}", m.hostname))
+            }
+            View(width: 20) {
+                Text(content: format!("{}", m.mac), color: Color::Cyan)
+            }
+            View(width: 18) {
+                Text(content: format!("{}", v4_str), color: Color::Green)
+            }
+            View(width: 35) {
+                Text(content: format!("{}", v6_str), color: Color::Yellow)
+            }
+            View(width: 15) {
+                Text(content: expires_str.to_string(), color: Color::DarkGrey)
+            }
         }
     }
 }

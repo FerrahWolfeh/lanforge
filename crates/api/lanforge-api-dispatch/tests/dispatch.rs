@@ -39,7 +39,6 @@ async fn init_test_context() -> ClientContext {
     ClientContext {
         current_gua: None,
         uptime_secs: 100,
-        last_scan_secs_ago: 5,
         ctx,
         db,
         log_db,

@@ -27,7 +27,6 @@ use lanforge_types::network::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRe
 use lanforge_types::update::DeviceUpdate;
 use serde::{Deserialize, Serialize};
 
-use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -209,9 +208,7 @@ async fn run_mdns_worker(
         tokio::select! {
             res = bus_rx.recv() => {
                 match res {
-                    Ok(timed_event) => {
-                        handle_lanforge_event(&timed_event.event, &tx);
-                    }
+                    Ok(_timed_event) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         warn!(service = "mDNS", lost = n, "Event bus lagged");
                     }
@@ -253,11 +250,6 @@ fn handle_command(cmd: &MdnsCommand, socket_v4: &UdpSocket, socket_v6: &UdpSocke
     }
 }
 
-fn handle_lanforge_event(event: &LanforgeEvent, tx: &Sender<MdnsCommand>) {
-    if matches!(event, LanforgeEvent::Network(NetworkEvent::ScanRequested)) {
-        let _ = tx.try_send(MdnsCommand::ProbeAll);
-    }
-}
 
 fn setup_multicast_socket_v4() -> Result<UdpSocket, NetworkError> {
     use socket2::{Domain, Protocol, Socket, Type};

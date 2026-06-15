@@ -55,9 +55,7 @@ impl TimedEvent {
                 | NetworkEvent::InterfaceUpdated { .. }
                 | NetworkEvent::WolTriggered { .. }
                 | NetworkEvent::RsReceived { .. }
-                | NetworkEvent::ScanRequested
-                | NetworkEvent::NeighborScanRequested
-                | NetworkEvent::SubnetScanStarted { .. }
+
                 | NetworkEvent::LeaseRenewRequested { .. }
                 | NetworkEvent::LeaseReleaseRequested { .. } => true,
             },

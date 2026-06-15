@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr};
 
 use lanforge_core::utils::{ip_matches_prefix, mac_from_eui64_link_local};
 use lanforge_types::{identifiers::MacAddr, network::NeighborEvent, update::DeviceUpdate};
@@ -10,7 +10,7 @@ use rtnetlink::packet_route::{
     },
 };
 
-use crate::ndp::utils::{extract_neigh_info, get_ipv4_subnet_iterable, parse_neighbor_msg};
+use crate::ndp::utils::{extract_neigh_info, parse_neighbor_msg};
 
 fn is_relevant_neigh_event(msg: &NetlinkMessage<RouteNetlinkMessage>, target_prefix: &str) -> bool {
     match &msg.payload {
@@ -287,29 +287,4 @@ fn extract_neigh_info_handles_delete() {
     assert_eq!(event, NeighborEvent::Deleted { ip, ifindex: 2 });
 }
 
-#[test]
-fn test_ipv4_subnet_iterable_24() {
-    let ip: Ipv4Addr = "192.168.1.100".parse().unwrap();
-    let mut range = get_ipv4_subnet_iterable(ip, 24);
 
-    assert_eq!(
-        range.next(),
-        Some("192.168.1.1".parse::<Ipv4Addr>().unwrap())
-    );
-    assert_eq!(
-        range.last(),
-        Some("192.168.1.254".parse::<Ipv4Addr>().unwrap())
-    );
-}
-
-#[test]
-fn test_ipv4_subnet_iterable_30() {
-    let ip: Ipv4Addr = "10.0.0.1".parse().unwrap();
-    let mut range = get_ipv4_subnet_iterable(ip, 30);
-
-    // /30 has 4 addresses: .0 (net), .1, .2, .3 (broadcast)
-    // Usable: .1, .2
-    assert_eq!(range.next(), Some("10.0.0.1".parse::<Ipv4Addr>().unwrap()));
-    assert_eq!(range.next(), Some("10.0.0.2".parse::<Ipv4Addr>().unwrap()));
-    assert_eq!(range.next(), None);
-}

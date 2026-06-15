@@ -50,7 +50,7 @@ pub trait LanforgeRpc {
         n: Option<usize>,
         filter: Option<Vec<EventKind>>,
     ) -> impl Future<Output = Result<(), RpcCallError>> + Send;
-    fn scan(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+
     fn shutdown(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn host_add(
         &self,

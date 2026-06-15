@@ -343,16 +343,6 @@ fn handle_tui_key_event(
     if app.mode == TuiMode::Normal {
         match app.active_tab {
             TuiTab::Dashboard => match key.code {
-                KeyCode::Char('s') => {
-                    let client = client.clone();
-                    let tx = event_tx.clone();
-                    tokio::spawn(async move {
-                        let result =
-                            crate::tui::dispatch::execute_action(&client, PendingAction::Scan)
-                                .await;
-                        let _ = tx.send(AppEvent::ActionResult(result)).await;
-                    });
-                }
                 KeyCode::Char('r') => {
                     app.pending_action = Some(PendingAction::Reload);
                     app.mode = TuiMode::Confirming;

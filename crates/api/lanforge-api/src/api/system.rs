@@ -191,8 +191,6 @@ pub struct ServiceNdp {
     pub uptime_secs: u64,
     /// Total number of unique IPv6 addresses being tracked via neighbor discovery.
     pub addrs_tracked: usize,
-    /// Seconds since the last full scan was performed.
-    pub last_scan_secs_ago: u64,
 }
 
 /// Statistics and path information for the `SQLite` database.

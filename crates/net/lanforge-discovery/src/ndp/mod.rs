@@ -37,8 +37,7 @@ pub mod utils;
 
 use crate::ndp::config::MonitorConfig;
 use crate::ndp::utils::{
-    extract_neigh_info, get_ipv4_neighbors, get_ipv4_subnet_iterable, get_ipv6_neighbors,
-    probe_neighbor,
+    extract_neigh_info, get_ipv4_neighbors, get_ipv6_neighbors,
 };
 use crate::ping::IcmpPinger;
 use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent};
@@ -54,7 +53,6 @@ use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::time::{interval, sleep};
@@ -84,7 +82,6 @@ pub struct DiscoveryService {
     messages: NetlinkMessageStream,
     target_ifindex: u32,
     ctx: LanforgeContext,
-    scan_in_progress: Arc<AtomicBool>,
 }
 
 impl DiscoveryService {
@@ -103,7 +100,6 @@ impl DiscoveryService {
             messages,
             target_ifindex,
             ctx,
-            scan_in_progress: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -132,66 +128,6 @@ impl DiscoveryService {
                 new: new_count,
                 duration_ms: u64::try_from(duration.as_millis()).unwrap_or_default(),
             }));
-    }
-
-    fn spawn_subnet_scan(&self, source: &str) {
-        if self.scan_in_progress.load(Ordering::SeqCst) {
-            tracing::warn!(
-                "DiscoveryService: Subnet scan already in progress (source: {source}), ignoring request."
-            );
-            return;
-        }
-
-        info!("DiscoveryService: Spawning subnet scan task (source: {source})");
-        let handle = self.handle.clone();
-        let ctx = self.ctx.clone();
-        let ifindex = self.target_ifindex;
-        let in_progress = self.scan_in_progress.clone();
-        let pacing = Duration::from_millis(self.cfg.scan_pacing_ms);
-
-        tokio::spawn(async move {
-            in_progress.store(true, Ordering::SeqCst);
-            run_subnet_scan_task(handle, ctx, ifindex, pacing).await;
-            in_progress.store(false, Ordering::SeqCst);
-        });
-    }
-}
-
-async fn run_subnet_scan_task(
-    handle: Handle,
-    ctx: LanforgeContext,
-    ifindex: u32,
-    pacing: Duration,
-) {
-    let interface_state = ctx.get_interface_state(ifindex);
-    if let Some((ip, prefix_len)) = interface_state.v4 {
-        let range = get_ipv4_subnet_iterable(ip, prefix_len);
-        let count = range.size_hint().1.unwrap_or(0);
-        if count > 0 {
-            info!(
-                "DiscoveryService: Unleashing massive ARP scan for {}/{} ({} addresses)",
-                ip, prefix_len, count
-            );
-            // Notification via event bus
-            let _ = ctx
-                .bus()
-                .publish(LanforgeEvent::Network(NetworkEvent::SubnetScanStarted {
-                    subnet: format!("{ip}/{prefix_len}"),
-                }));
-
-            for target_ip in range {
-                if let Err(e) = probe_neighbor(&handle, ifindex, IpAddr::V4(target_ip), None).await
-                {
-                    // EEXIST (os error 17) is benign — neighbor already exists in kernel table.
-                    let msg = e.to_string();
-                    if !msg.contains("os error 17") {
-                        debug!("DiscoveryService: ARP probe failed for {target_ip}: {e}");
-                    }
-                }
-                // Pacing for manual scan: from config to avoid CPU spikes
-                sleep(pacing).await;
-            }
-        }
     }
 }
 
@@ -438,9 +374,7 @@ impl AsyncService for DiscoveryService {
                             current_gua = *gua;
                             current_ula = *ula;
                         }
-                        LanforgeEvent::Network(NetworkEvent::NeighborScanRequested) => {
-                            self.spawn_subnet_scan("Manual CLI Request");
-                        }
+
                     });
                 }
             }

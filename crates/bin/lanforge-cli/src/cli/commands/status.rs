@@ -161,10 +161,7 @@ fn render_services(st: &StatusResponse, ascii: bool) {
     let hline = if ascii { "-" } else { "─" };
 
     if st.service_banners.is_empty() {
-        let ndp_meta = format!(
-            "{} tracked · scan {}s ago",
-            st.services.ndp_monitor.addrs_tracked, st.services.ndp_monitor.last_scan_secs_ago
-        );
+        let ndp_meta = format!("{} tracked", st.services.ndp_monitor.addrs_tracked);
         let dhcp_v4_meta = format!(
             "{} leases · {} free",
             st.services.dhcp_v4.leases_active, st.services.dhcp_v4.pool_free

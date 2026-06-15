@@ -124,10 +124,18 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
                 View(flex_direction: FlexDirection::Column, border_style: border, border_color: Color::DarkGrey, padding_left: 2, padding_right: 2) {
                     // Header
                     View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
-                        Text(content: format!("{:<20}", "TIME"), color: Color::DarkGrey)
-                        Text(content: format!("{:<20}", "IP ADDRESS"), color: Color::DarkGrey)
-                        Text(content: format!("{:<15}", "TYPE"), color: Color::DarkGrey)
-                        Text(content: "ACTION", color: Color::DarkGrey)
+                        View(width: 20) {
+                            Text(content: "TIME", color: Color::DarkGrey)
+                        }
+                        View(width: 20) {
+                            Text(content: "IP ADDRESS", color: Color::DarkGrey)
+                        }
+                        View(width: 15) {
+                            Text(content: "TYPE", color: Color::DarkGrey)
+                        }
+                        View(width: 15) {
+                            Text(content: "ACTION", color: Color::DarkGrey)
+                        }
                     }
                     Text(content: hline.repeat(70), color: Color::DarkGrey)   
                     #(resp.history.iter().map(|h| element! {
@@ -147,10 +155,18 @@ fn HistoryRow(props: &HistoryRowProps) -> impl Into<AnyElement<'_>> {
 
     element! {
         View(flex_direction: FlexDirection::Row) {
-            Text(content: format!("{:<20}", time), color: Color::DarkGrey)
-            Text(content: format!("{:<20}", h.ip.clone()), color: Color::Green)
-            Text(content: format!("{:<15}", h.lease_type), color: Color::Yellow)
-            Text(content: format!("{:?}", h.action), color: Color::Cyan)
+            View(width: 20) {
+                Text(content: format!("{}", time), color: Color::DarkGrey)
+            }
+            View(width: 20) {
+                Text(content: format!("{}", h.ip.clone()), color: Color::Green)
+            }
+            View(width: 15) {
+                Text(content: format!("{}", h.lease_type), color: Color::Yellow)
+            }
+            View(width: 15) {
+                Text(content: format!("{:?}", h.action), color: Color::Cyan)
+            }
         }
     }
 }

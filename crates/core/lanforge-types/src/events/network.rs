@@ -13,11 +13,7 @@ pub enum NetworkEvent {
     InterfaceUpdated {
         ifindex: u32,
     },
-    ScanRequested,
-    NeighborScanRequested,
-    SubnetScanStarted {
-        subnet: String,
-    },
+
     WolTriggered {
         mac: MacAddr,
         ip_hint: Option<Ipv4Addr>,

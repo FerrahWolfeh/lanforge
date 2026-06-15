@@ -13,17 +13,6 @@ use lanforge_types::identifiers::MacAddr;
 use reqwest::Client;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
-pub struct ScanArgs {}
-
-impl Execute for ScanArgs {
-    async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        let resp = client.scan().await?;
-        println!("✓ {}", resp.message);
-        Ok(())
-    }
-}
-
-#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct ReloadArgs {}
 
 impl Execute for ReloadArgs {
@@ -489,18 +478,7 @@ fn render_watch_event(e: &TimedEvent, device_map: &HashMap<String, String>, verb
                     "INTERFACE UPDATED".bold().blue()
                 );
             }
-            NetworkEvent::ScanRequested => {
-                println!(" [{time_str}] {}", "NETWORK SCAN REQUESTED".bold().cyan());
-            }
-            NetworkEvent::NeighborScanRequested => {
-                println!(" [{time_str}] {}", "NEIGHBOR SCAN REQUESTED".bold().cyan());
-            }
-            NetworkEvent::SubnetScanStarted { subnet } => {
-                println!(
-                    " [{time_str}] {} subnet={subnet}",
-                    "SUBNET SCAN STARTED".bold().cyan()
-                );
-            }
+
             NetworkEvent::WolTriggered { mac, ip_hint } => {
                 println!(
                     " [{time_str}] {} mac={mac} ip_hint={:?}",

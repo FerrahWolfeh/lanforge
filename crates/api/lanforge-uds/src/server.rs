@@ -104,7 +104,6 @@ impl ControlService {
         let ctx = ClientContext {
             current_gua,
             uptime_secs: startup_time.elapsed().as_secs(),
-            last_scan_secs_ago: self.ctx.last_scan_secs_ago(),
             ctx: self.ctx.clone(),
             db: self.db.clone(),
             log_db: self.log_db.clone(),

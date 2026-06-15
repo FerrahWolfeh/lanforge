@@ -78,8 +78,6 @@ pub fn render_devices(resp: &DevicesResponse, groups: &[GroupedDevice], ascii: b
                 Text(content: format!("{} total", resp.meta.total))
                 Text(content: "  ·  ", color: Color::DarkGrey)
                 Text(content: format!("{} online", resp.meta.online), color: Color::Green)
-                Text(content: "  ·  ", color: Color::DarkGrey)
-                Text(content: format!("last scan {}s ago", resp.meta.last_scan_secs_ago), color: Color::DarkGrey)
             }
         }
     }
@@ -90,11 +88,21 @@ pub fn render_devices(resp: &DevicesResponse, groups: &[GroupedDevice], ascii: b
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
             // Header
             View(flex_direction: FlexDirection::Row, border_style: BorderStyle::None, padding_bottom: 0) {
-                Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
-                Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
-                Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
-                Text(content: format!("{:<31}", "IPv6 / SLAAC"), color: Color::DarkGrey)
-                Text(content: format!("{:<10}", "SEEN"), color: Color::DarkGrey)
+                View(width: 25) {
+                    Text(content: "  HOST", color: Color::DarkGrey)
+                }
+                View(width: 20) {
+                    Text(content: "MAC ADDRESS", color: Color::DarkGrey)
+                }
+                View(width: 18) {
+                    Text(content: "IPv4", color: Color::DarkGrey)
+                }
+                View(width: 31) {
+                    Text(content: "IPv6 / SLAAC", color: Color::DarkGrey)
+                }
+                View(width: 10) {
+                    Text(content: "SEEN", color: Color::DarkGrey)
+                }
             }
             // Separator
             Text(content: hline.repeat(104), color: Color::DarkGrey)
@@ -134,12 +142,22 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
 
     element! {
         View(flex_direction: FlexDirection::Row) {
-            Text(content: format!("{bullet} "), color: status_color)
-            Text(content: format!("{:<23}", truncate(&host, 20)))
-            Text(content: format!("{:<20}", dev.mac), color: Color::Cyan)
-            Text(content: format!("{:<18}", dev.display_v4), color: Color::Green)
-            Text(content: format!("{:<31}", truncate(&dev.display_v6, 30)), color: Color::Yellow)
-            Text(content: format!("{:<10}", last_seen_compact), color: Color::DarkGrey)
+            View(width: 25, flex_direction: FlexDirection::Row) {
+                Text(content: format!("{bullet} "), color: status_color)
+                Text(content: truncate(&host, 22))
+            }
+            View(width: 20) {
+                Text(content: format!("{}", dev.mac), color: Color::Cyan)
+            }
+            View(width: 18) {
+                Text(content: format!("{}", dev.display_v4), color: Color::Green)
+            }
+            View(width: 31) {
+                Text(content: truncate(&dev.display_v6, 30), color: Color::Yellow)
+            }
+            View(width: 10) {
+                Text(content: format!("{}", last_seen_compact), color: Color::DarkGrey)
+            }
         }
     }
 }
@@ -167,13 +185,21 @@ pub fn render_hosts(resp: &HostsResponse, ascii: bool) {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
             // Header
             View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
-                Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
-                Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
-                Text(content: format!("{:<18}", "FIXED IPv4"), color: Color::DarkGrey)
-                Text(content: "IPv6 SUFFIX", color: Color::DarkGrey)
+                View(width: 25) {
+                    Text(content: "  HOST", color: Color::DarkGrey)
+                }
+                View(width: 20) {
+                    Text(content: "MAC ADDRESS", color: Color::DarkGrey)
+                }
+                View(width: 18) {
+                    Text(content: "FIXED IPv4", color: Color::DarkGrey)
+                }
+                View(width: 20) {
+                    Text(content: "IPv6 SUFFIX", color: Color::DarkGrey)
+                }
             }
             // Separator
-            Text(content: hline.repeat(80), color: Color::DarkGrey)
+            Text(content: hline.repeat(83), color: Color::DarkGrey)
 
             // Rows
             View(flex_direction: FlexDirection::Column) {
@@ -206,11 +232,18 @@ fn HostRow(props: &HostRowProps) -> impl Into<AnyElement<'_>> {
 
     element! {
         View(flex_direction: FlexDirection::Row) {
-            Text(content: "  ")
-            Text(content: format!("{:<23}", truncate(&format!("{} {}", host.hostname, symbol), 23)))
-            Text(content: format!("{:<20}", host.mac), color: Color::Cyan)
-            Text(content: format!("{:<18}", v4_str), color: Color::Green)
-            Text(content: truncate(&v6_str, 20), color: Color::Yellow)
+            View(width: 25) {
+                Text(content: format!("  {}", truncate(&format!("{} {}", host.hostname, symbol), 23)))
+            }
+            View(width: 20) {
+                Text(content: format!("{}", host.mac), color: Color::Cyan)
+            }
+            View(width: 18) {
+                Text(content: format!("{}", v4_str), color: Color::Green)
+            }
+            View(width: 20) {
+                Text(content: truncate(&v6_str, 20), color: Color::Yellow)
+            }
         }
     }
 }
@@ -324,18 +357,27 @@ fn GroupedDeviceRow(props: &GroupedRowProps) -> impl Into<AnyElement<'_>> {
         Into::<AnyElement<'_>>::into(element! {
             View(flex_direction: FlexDirection::Column) {
                 View(flex_direction: FlexDirection::Row) {
-                    Text(content: format!("{bullet} "), color: status_color)
-                    Text(content: format!("{:<23}", truncate(&host_text, 23)), weight: Weight::Bold)
-                    Text(content: format!("{:<20}", "—"), color: Color::DarkGrey)
-                    Text(content: format!("{:<18}", "—"), color: Color::DarkGrey)
-                    Text(content: format!("{:<31}", "—"), color: Color::DarkGrey)
-                    Text(content: format!("{:<10}", last_seen_compact), color: Color::DarkGrey)
+                    View(width: 25, flex_direction: FlexDirection::Row) {
+                        Text(content: format!("{bullet} "), color: status_color)
+                        Text(content: truncate(&host_text, 22), weight: Weight::Bold)
+                    }
+                    View(width: 20) {
+                        Text(content: "—", color: Color::DarkGrey)
+                    }
+                    View(width: 18) {
+                        Text(content: "—", color: Color::DarkGrey)
+                    }
+                    View(width: 31) {
+                        Text(content: "—", color: Color::DarkGrey)
+                    }
+                    View(width: 10) {
+                        Text(content: format!("{}", last_seen_compact), color: Color::DarkGrey)
+                    }
                 }
                 #(interfaces.iter().enumerate().map(|(idx, dev)| {
                     let h_sym = if idx == interfaces.len() - 1 { h_corner } else { h_pipe };
                     let line_drawing = format!("  {h_sym}{h_dash} ");
                     let child_bullet_str = format!("{bullet} ");
-                    let indent_spaces = " ".repeat(18);
 
                     let child_status_color = match dev.status {
                         DeviceStatus::Online => Color::Green,
@@ -346,13 +388,22 @@ fn GroupedDeviceRow(props: &GroupedRowProps) -> impl Into<AnyElement<'_>> {
 
                     element! {
                         View(flex_direction: FlexDirection::Row) {
-                            Text(content: line_drawing, color: Color::DarkGrey)
-                            Text(content: child_bullet_str, color: child_status_color)
-                            Text(content: indent_spaces)
-                            Text(content: format!("{:<20}", dev.mac), color: Color::Cyan)
-                            Text(content: format!("{:<18}", dev.display_v4), color: Color::Green)
-                            Text(content: format!("{:<31}", truncate(&dev.display_v6, 30)), color: Color::Yellow)
-                            Text(content: format!("{:<10}", child_seen), color: Color::DarkGrey)
+                            View(width: 25, flex_direction: FlexDirection::Row) {
+                                Text(content: line_drawing, color: Color::DarkGrey)
+                                Text(content: child_bullet_str, color: child_status_color)
+                            }
+                            View(width: 20) {
+                                Text(content: format!("{}", dev.mac), color: Color::Cyan)
+                            }
+                            View(width: 18) {
+                                Text(content: format!("{}", dev.display_v4), color: Color::Green)
+                            }
+                            View(width: 31) {
+                                Text(content: truncate(&dev.display_v6, 30), color: Color::Yellow)
+                            }
+                            View(width: 10) {
+                                Text(content: format!("{}", child_seen), color: Color::DarkGrey)
+                            }
                         }
                     }
                 }))
@@ -389,14 +440,24 @@ pub fn render_transient_devices(resp: &TransientHostsResponse, ascii: bool) {
         View(flex_direction: FlexDirection::Column, padding_left: 2, margin_top: 1) {
             // Header
             View(flex_direction: FlexDirection::Row, padding_bottom: 0) {
-                Text(content: format!("  {:<18}", "IP ADDRESS"), color: Color::DarkGrey)
-                Text(content: format!("{:<25}", "HOST"), color: Color::DarkGrey)
-                Text(content: format!("{:<15}", "ORIGIN"), color: Color::DarkGrey)
-                Text(content: format!("{:<12}", "RESOLVED"), color: Color::DarkGrey)
-                Text(content: format!("{:<10}", "SEEN"), color: Color::DarkGrey)
+                View(width: 20) {
+                    Text(content: "  IP ADDRESS", color: Color::DarkGrey)
+                }
+                View(width: 25) {
+                    Text(content: "HOST", color: Color::DarkGrey)
+                }
+                View(width: 15) {
+                    Text(content: "ORIGIN", color: Color::DarkGrey)
+                }
+                View(width: 12) {
+                    Text(content: "RESOLVED", color: Color::DarkGrey)
+                }
+                View(width: 10) {
+                    Text(content: "SEEN", color: Color::DarkGrey)
+                }
             }
             // Separator
-            Text(content: hline.repeat(80), color: Color::DarkGrey)
+            Text(content: hline.repeat(82), color: Color::DarkGrey)
 
             // Rows
             View(flex_direction: FlexDirection::Column) {
@@ -416,12 +477,21 @@ fn TransientRow(props: &TransientRowProps) -> impl Into<AnyElement<'_>> {
 
     element! {
         View(flex_direction: FlexDirection::Row) {
-            Text(content: "  ")
-            Text(content: format!("{:<18}", host.ip.to_string()), color: Color::Green)
-            Text(content: format!("{:<25}", truncate(&host.hostname, 24)))
-            Text(content: format!("{:<15}", origin_str), color: Color::Cyan)
-            Text(content: format!("{:<12}", resolved_at_compact), color: Color::DarkGrey)
-            Text(content: format!("{:<10}", last_seen_compact), color: Color::DarkGrey)
+            View(width: 20) {
+                Text(content: format!("  {}", host.ip.to_string()), color: Color::Green)
+            }
+            View(width: 25) {
+                Text(content: truncate(&host.hostname, 24))
+            }
+            View(width: 15) {
+                Text(content: origin_str, color: Color::Cyan)
+            }
+            View(width: 12) {
+                Text(content: resolved_at_compact, color: Color::DarkGrey)
+            }
+            View(width: 10) {
+                Text(content: last_seen_compact, color: Color::DarkGrey)
+            }
         }
     }
 }

@@ -50,10 +50,7 @@ where
     let mut stale_timer = interval(stale_check_interval);
     stale_timer.tick().await;
 
-    // Initial scan request to kick off discovery across all services
-    let _ = ctx
-        .bus()
-        .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
+
 
     info!(
         "Event loop: expecting readiness from {} services: {:?}",
@@ -81,8 +78,7 @@ where
                 ctx.expire_stale(Duration::from_secs(cfg.monitor_toml.stale_timeout_secs));
             }
             _ = sigusr1.recv() => {
-                info!("SIGUSR1 received, forcing state synchronization...");
-                let _ = ctx.bus().publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
+                info!("SIGUSR1 received");
             }
             _ = sigterm.recv() => {
                 info!("SIGTERM received — starting graceful shutdown...");
@@ -171,10 +167,7 @@ fn handle_bus_event<S: BuildHasher>(
             info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
             l_ctx.state.current_gua = gua;
             l_ctx.state.current_ula = ula;
-            let _ = l_ctx
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
+
         }
         LanforgeEvent::System(SystemEvent::ReloadConfig) => {
             info!("ReloadConfig: Initiating soft-reboot...");
@@ -242,11 +235,7 @@ fn handle_db_reset<S: BuildHasher>(l_ctx: &LoopContext<'_, S>) {
     info!("Database reset confirmed. Performing state refresh...");
     l_ctx.ctx.reset();
 
-    info!("State cleared. Triggering new discovery scan...");
-    let _ = l_ctx
-        .ctx
-        .bus()
-        .publish(LanforgeEvent::Network(NetworkEvent::NeighborScanRequested));
+
 }
 
 struct LoopState {

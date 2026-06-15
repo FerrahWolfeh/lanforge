@@ -103,8 +103,6 @@ pub struct DevicesMeta {
     pub total: usize,
     /// Number of devices currently considered online.
     pub online: usize,
-    /// Seconds since the last full network scan.
-    pub last_scan_secs_ago: u64,
 }
 
 /// Detailed aggregated information for a single device.

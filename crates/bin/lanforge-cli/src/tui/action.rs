@@ -8,7 +8,7 @@ use lanforge_types::system::ServiceAction;
 #[derive(Debug, Clone)]
 pub enum PendingAction {
     // System
-    Scan,
+
     Reload,
     Shutdown,
     DnsCacheFlush,
@@ -105,7 +105,7 @@ impl PendingAction {
     #[must_use]
     pub const fn title(&self) -> &'static str {
         match self {
-            Self::Scan => "Scan Network",
+
             Self::Reload => "Reload Daemon",
             Self::Shutdown => "Shutdown Daemon",
             Self::DnsCacheFlush => "Flush DNS Cache",
@@ -139,7 +139,7 @@ impl PendingAction {
     #[must_use]
     pub fn description(&self) -> String {
         match self {
-            Self::Scan => "Trigger a background ARP/ICMP ping sweep on configured interfaces to discover active devices.".to_string(),
+
             Self::Reload => "Reload configuration files and restart local services.".to_string(),
             Self::Shutdown => "Stop the Lanforge daemon. DNS/DHCP services will become inactive.".to_string(),
             Self::DnsCacheFlush => "Clear all cached DNS queries from the local resolver.".to_string(),

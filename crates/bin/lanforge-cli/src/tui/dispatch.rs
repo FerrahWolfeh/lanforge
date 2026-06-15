@@ -13,7 +13,6 @@ pub async fn execute_action(client: &LanforgeClient, action: PendingAction) -> A
     }
 
     match action {
-        PendingAction::Scan => handle!(client.scan().await),
         PendingAction::Reload => handle!(client.reload().await),
         PendingAction::Shutdown => handle!(client.shutdown().await),
         PendingAction::DnsCacheFlush => handle!(client.dns_cache_flush().await),

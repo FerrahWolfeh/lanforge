@@ -235,14 +235,7 @@ fn format_network_event(now: &str, event: &NetworkEvent, _ascii: bool) {
                 );
             }
         }
-        NetworkEvent::SubnetScanStarted { subnet } => {
-            println!(
-                "[{now}] {} {} {}",
-                "ARP".bright_yellow().bold(),
-                "Unleashing massive ARP scan for:".white(),
-                subnet.bright_cyan().bold()
-            );
-        }
+
         NetworkEvent::InterfaceUpdated { ifindex } => {
             println!(
                 "[{now}] {} {} (ifindex={ifindex})",
@@ -257,14 +250,7 @@ fn format_network_event(now: &str, event: &NetworkEvent, _ascii: bool) {
                 "Router Solicitation:".white()
             );
         }
-        NetworkEvent::ScanRequested | NetworkEvent::NeighborScanRequested => {
-            let msg = if matches!(event, NetworkEvent::ScanRequested) {
-                "mDNS Scan requested"
-            } else {
-                "Manual Neighbor Scan (ARP) requested"
-            };
-            println!("[{now}] {} {}", "SYS".yellow().bold(), msg.dimmed());
-        }
+
         NetworkEvent::LeaseRenewRequested { mac, target } => {
             let tag = match target {
                 Some(LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. }) => {

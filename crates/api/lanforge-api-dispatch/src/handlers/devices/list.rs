@@ -49,7 +49,6 @@ impl ClientContext {
             meta: DevicesMeta {
                 total,
                 online,
-                last_scan_secs_ago: self.last_scan_secs_ago,
             },
         })
     }

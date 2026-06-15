@@ -33,7 +33,7 @@ async fn init_test_context() -> ClientContext {
     ClientContext {
         current_gua: None,
         uptime_secs: 10,
-        last_scan_secs_ago: 5,
+
         ctx,
         db,
         log_db,
@@ -45,7 +45,7 @@ async fn init_test_context() -> ClientContext {
 async fn test_host_list_returns_static_and_cli_only() {
     let mut ctx = init_test_context().await;
     ctx.uptime_secs = 10;
-    ctx.last_scan_secs_ago = 5;
+
     let ctx_handle = ctx.ctx.clone();
 
     // 1. Add a CLI device
@@ -138,7 +138,7 @@ async fn test_api_status_reports_gua_and_ula() {
     let ctx = ClientContext {
         current_gua: Some(gua),
         uptime_secs: 100,
-        last_scan_secs_ago: 10,
+
         ctx: ctx_handle.ctx,
         db: ctx_handle.db,
         log_db: ctx_handle.log_db,

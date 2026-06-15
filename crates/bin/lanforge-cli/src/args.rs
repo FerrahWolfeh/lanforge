@@ -70,9 +70,8 @@ use crate::cli::commands::tui::TuiArgs;
 use crate::cli::commands::{
     auth::AuthArgs, config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs,
     dns::DnsArgs, host::HostArgs, lease::LeaseArgs, service::ServiceArgs, simple::ContextArgs,
-    simple::LoginArgs, simple::PurgeArgs, simple::ReloadArgs, simple::ScanArgs,
-    simple::ShutdownArgs, simple::WatchArgs, status::ServicesArgs, status::StatusArgs,
-    whois::WhoisArgs, wol::WolArgs,
+    simple::LoginArgs, simple::PurgeArgs, simple::ReloadArgs, simple::ShutdownArgs,
+    simple::WatchArgs, status::ServicesArgs, status::StatusArgs, whois::WhoisArgs, wol::WolArgs,
 };
 
 use crate::cli::{Execute, LanforgeClient};
@@ -94,8 +93,6 @@ pub enum Command {
     Watch(WatchArgs),
     /// Authenticate and save remote token
     Login(LoginArgs),
-    /// Triggers immediate NDP/mDNS scan cycle
-    Scan(ScanArgs),
     /// Send reload signal to running daemon (reloads static config from TOML)
     Reload(ReloadArgs),
     /// Send shutdown signal to running daemon
@@ -135,7 +132,6 @@ impl Execute for Command {
             Self::Wol(args) => args.execute(client).await,
             Self::Watch(args) => args.execute(client).await,
             Self::Login(args) => args.execute(client).await,
-            Self::Scan(args) => args.execute(client).await,
             Self::Reload(args) => args.execute(client).await,
             Self::Shutdown(args) => args.execute(client).await,
             Self::Purge(args) => args.execute(client).await,

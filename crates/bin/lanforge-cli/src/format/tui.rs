@@ -568,18 +568,7 @@ fn format_network_event<'a>(event: &'a NetworkEvent, spans: &mut Vec<Span<'a>>) 
                     .add_modifier(Modifier::BOLD),
             ));
         }
-        NetworkEvent::SubnetScanStarted { subnet } => {
-            spans.push(Span::styled(
-                "ARP Scan started for ",
-                Style::default().fg(theme::MOCHA_YELLOW),
-            ));
-            spans.push(Span::styled(
-                subnet,
-                Style::default()
-                    .fg(theme::MOCHA_BLUE)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
+
         _ => spans.push(Span::raw(format!("{event:?}"))),
     }
 }

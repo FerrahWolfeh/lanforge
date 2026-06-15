@@ -13,9 +13,9 @@
 //! | `probe_neighbor()` | Trigger an NDP/ARP probe for a specific IP |
 //! | `parse_neighbor_msg()` | Parse a raw netlink neighbor message into a `NeighborEvent` |
 //! | `extract_neigh_info()` | Extract `NeighborEvent` from a full netlink broadcast message |
-//! | `get_ipv4_subnet_iterable()` | Generate all usable IPv4 addresses in a CIDR subnet |
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use std::net::{IpAddr, Ipv6Addr};
 
 use futures::TryStreamExt;
 use lanforge_types::{identifiers::MacAddr, network::NeighborEvent};
@@ -305,20 +305,4 @@ pub async fn probe_neighbor(
     req.execute().await
 }
 
-/// Returns an iterator over all usable IPv4 addresses in a given subnet.
-/// Skips the network address (.0) and the broadcast address (.255 for /24).
-pub fn get_ipv4_subnet_iterable(ip: Ipv4Addr, prefix_len: u8) -> impl Iterator<Item = Ipv4Addr> {
-    let (start, end) = if prefix_len >= 31 {
-        // Intervalo vazio se o prefixo for 31 ou 32 (sem IPs hosts usáveis para scan padrão)
-        (1, 1)
-    } else {
-        let mask = !u32::MAX.checked_shr(u32::from(prefix_len)).unwrap_or(0);
-        let ip_u32 = u32::from_be_bytes(ip.octets());
-        let network = ip_u32 & mask;
-        let broadcast = network | !mask;
-        (network + 1, broadcast)
-    };
 
-    // OPTIMIZATION: Retorna um iterador ao invés de alocar um Vec gigante na memória.
-    (start..end).map(|addr| Ipv4Addr::from(addr.to_be_bytes()))
-}

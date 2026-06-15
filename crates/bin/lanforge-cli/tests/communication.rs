@@ -17,7 +17,7 @@ use lanforge_cli::cli::commands::{
     },
     host::{HostAction, HostArgs},
     lease::{LeaseAction, LeaseArgs},
-    simple::{ContextArgs, ReloadArgs, ScanArgs},
+    simple::{ContextArgs, ReloadArgs},
     status::{ServicesArgs, StatusArgs},
     whois::WhoisArgs,
     wol::WolArgs,
@@ -453,10 +453,6 @@ async fn test_communication_simple() {
         .to_string();
     let _ctx = start_test_daemon(socket_path.clone()).await;
     let client = make_test_client(socket_path);
-
-    // 1. Scan Command
-    let scan_cmd = ScanArgs {};
-    assert!(scan_cmd.execute(&client).await.is_ok());
 
     // 2. Reload Command
     let reload_cmd = ReloadArgs {};

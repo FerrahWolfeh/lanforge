@@ -27,8 +27,7 @@ pub struct ClientContext {
     pub current_gua: Option<Ipv6Addr>,
     /// Uptime of the daemon in seconds.
     pub uptime_secs: u64,
-    /// Seconds since the last network scan.
-    pub last_scan_secs_ago: u64,
+
     /// Lanforge Context.
     pub ctx: LanforgeContext,
     /// Shared lease database.
@@ -107,14 +106,6 @@ impl LanforgeRpc for ClientContext {
         _filter: Option<Vec<lanforge_api::api::EventKind>>,
     ) -> Result<(), RpcCallError> {
         Ok(())
-    }
-
-    async fn scan(&self) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_scan().await {
-            Response::Success(s) => Ok(s),
-            Response::Error { error } => Err(RpcCallError::Internal(error)),
-            _ => Err(RpcCallError::InvalidResponseType),
-        }
     }
 
     async fn shutdown(&self) -> Result<SimpleSuccess, RpcCallError> {

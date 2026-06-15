@@ -215,8 +215,7 @@ struct LanforgeContextInner {
     last_db_flush: RwLock<Option<SystemTime>>,
     /// Internal counters for event rates.
     event_counters: EventCounters,
-    /// Timestamp of the last network scan.
-    last_scan: RwLock<Instant>,
+
     /// Global system status for reporting.
     status: RwLock<Option<SystemStatus>>,
     /// Global counter for active API clients (Control UDS, HTTP, etc.).
@@ -283,7 +282,7 @@ impl LanforgeContext {
             dhcpv6_stats: Arc::new(Dhcpv6Stats::new()),
             last_db_flush: RwLock::new(None),
             event_counters: EventCounters::default(),
-            last_scan: RwLock::new(Instant::now()),
+
             status: RwLock::new(None),
             active_clients: Arc::new(AtomicUsize::new(0)),
             status_providers: RwLock::new(Vec::new()),
@@ -342,16 +341,7 @@ impl LanforgeContext {
         *self.inner.last_db_flush.read()
     }
 
-    /// Records a new network scan timestamp.
-    pub fn record_scan(&self) {
-        *self.inner.last_scan.write() = Instant::now();
-    }
 
-    /// Returns the number of seconds since the last network scan.
-    #[must_use]
-    pub fn last_scan_secs_ago(&self) -> u64 {
-        self.inner.last_scan.read().elapsed().as_secs()
-    }
 
     /// Access the global active API clients counter.
     #[must_use]

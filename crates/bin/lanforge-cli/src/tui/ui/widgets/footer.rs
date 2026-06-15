@@ -16,7 +16,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &TuiApp) {
             let mut hints = vec!["q:Quit", "1-7:Tabs"];
             match app.active_tab {
                 TuiTab::Dashboard => {
-                    hints.extend(&["s:Scan", "r:Reload", "F:Flush DNS"]);
+                    hints.extend(&["r:Reload", "F:Flush DNS"]);
                 }
                 TuiTab::Devices => {
                     hints.extend(&[

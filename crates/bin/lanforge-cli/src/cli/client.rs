@@ -370,10 +370,6 @@ impl LanforgeClient {
         dispatch!(self, post => "/reload", serde_json::json!({}), reload())
     }
 
-    pub async fn scan(&self) -> Result<SimpleSuccess> {
-        dispatch!(self, post => "/scan", serde_json::json!({}), scan())
-    }
-
     pub async fn shutdown(&self) -> Result<SimpleSuccess> {
         dispatch!(self, post => "/shutdown", serde_json::json!({}), shutdown())
     }

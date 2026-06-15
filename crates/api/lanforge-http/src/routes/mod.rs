@@ -32,7 +32,6 @@ pub fn create_client_ctx(state: &AppState) -> ClientContext {
     ClientContext {
         current_gua: None,
         uptime_secs: state.start_time.elapsed().as_secs(),
-        last_scan_secs_ago: state.ctx.last_scan_secs_ago(),
         ctx: state.ctx.clone(),
         db: state.db.clone(),
         log_db: state.log_db.clone(),
