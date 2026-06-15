@@ -193,7 +193,7 @@ impl RaConfig {
     ///
     /// # Example
     /// ```
-    /// use lanforge_ra::ra::config::RaConfig;
+    /// use lanforge_ra::config::RaConfig;
     /// use std::time::Duration;
     ///
     /// let mut cfg = RaConfig::default();

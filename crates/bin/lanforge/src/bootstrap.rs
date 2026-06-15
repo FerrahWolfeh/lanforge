@@ -10,8 +10,11 @@ use lanforge_db::log_engine::LogDb;
 use lanforge_host::ifmon::AddressMonitor;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
+#[cfg(feature = "dns")]
 use lanforge_types::network::dns::AdblockUrlEntry;
+#[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
+#[cfg(feature = "dns")]
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::{Ipv6AddrOrSuffix, Ipv6Prefix};
 use lanforge_types::update::InterfaceState;
@@ -52,13 +55,55 @@ pub struct Bootstrapper;
 
 impl Bootstrapper {
     /// Executes the full bootstrap sequence.
+    #[allow(clippy::too_many_lines)]
     pub async fn run() -> Result<(BootstrapResult, LanforgeContext)> {
         // --- PHASE 1: Initialization ---
         let mut cfg = Config::load();
 
+        let ra_print = {
+            #[cfg(feature = "ra")]
+            {
+                cfg.ra_enabled
+            }
+            #[cfg(not(feature = "ra"))]
+            {
+                false
+            }
+        };
+        let dhcpv4_print = {
+            #[cfg(feature = "dhcp")]
+            {
+                cfg.dhcpv4_enabled
+            }
+            #[cfg(not(feature = "dhcp"))]
+            {
+                false
+            }
+        };
+        let dhcpv6_print = {
+            #[cfg(feature = "dhcp")]
+            {
+                cfg.dhcpv6_enabled
+            }
+            #[cfg(not(feature = "dhcp"))]
+            {
+                false
+            }
+        };
+        let dns_print = {
+            #[cfg(feature = "dns")]
+            {
+                cfg.dns_enabled
+            }
+            #[cfg(not(feature = "dns"))]
+            {
+                false
+            }
+        };
+
         info!(
             "🚀 Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
-            cfg.ra_enabled, cfg.dhcpv4_enabled, cfg.dhcpv6_enabled, cfg.dns_enabled
+            ra_print, dhcpv4_print, dhcpv6_print, dns_print
         );
 
         let bus = Arc::new(EventBus::new());
@@ -69,8 +114,12 @@ impl Bootstrapper {
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
-        ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
-        ctx.update_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
+        #[cfg(feature = "dhcp")]
+        {
+            ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
+            ctx.update_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
+        }
+        #[cfg(feature = "ra")]
         ctx.update_ra_config(
             cfg.ra_toml.prefixes.clone(),
             cfg.ra_toml.rdnss.clone(),
@@ -79,40 +128,43 @@ impl Bootstrapper {
         ctx.set_status(cfg.to_system_status());
 
         // Load DNS settings from database into context
-        if let Ok(upstreams) = db.load_dns_upstreams().await {
-            let mut list = Vec::new();
-            for row in upstreams {
-                let proto_lower = row.protocol.to_lowercase();
-                let prefix = row.domain.as_ref().map_or_else(
-                    || format!("{proto_lower}://"),
-                    |d| format!("{proto_lower}://{d}@"),
-                );
-                let full_str = format!("{prefix}{}", row.addr);
-                if let Ok(target) = <UpstreamTarget as std::str::FromStr>::from_str(&full_str) {
-                    list.push(target);
+        #[cfg(feature = "dns")]
+        {
+            if let Ok(upstreams) = db.load_dns_upstreams().await {
+                let mut list = Vec::new();
+                for row in upstreams {
+                    let proto_lower = row.protocol.to_lowercase();
+                    let prefix = row.domain.as_ref().map_or_else(
+                        || format!("{proto_lower}://"),
+                        |d| format!("{proto_lower}://{d}@"),
+                    );
+                    let full_str = format!("{prefix}{}", row.addr);
+                    if let Ok(target) = <UpstreamTarget as std::str::FromStr>::from_str(&full_str) {
+                        list.push(target);
+                    }
                 }
+                ctx.update_dns_upstreams(list);
             }
-            ctx.update_dns_upstreams(list);
-        }
-        if let Ok(rewrites) = db.load_dns_rewrites().await {
-            ctx.update_dns_rewrites(rewrites);
-        }
-        if let Ok(allowlist) = db.load_dns_allowlist().await {
-            ctx.update_dns_allowlist(allowlist.into_iter().map(|(_, d)| d).collect());
-        }
-        if let Ok(adblock) = db.load_adblock_config().await {
-            ctx.update_dns_adblock(adblock);
-        }
-        if let Ok(urls) = db.load_adblock_urls().await {
-            ctx.update_dns_adblock_urls(
-                urls.into_iter()
-                    .map(|(id, url, kind)| AdblockUrlEntry {
-                        id: Some(id),
-                        url,
-                        kind,
-                    })
-                    .collect(),
-            );
+            if let Ok(rewrites) = db.load_dns_rewrites().await {
+                ctx.update_dns_rewrites(rewrites);
+            }
+            if let Ok(allowlist) = db.load_dns_allowlist().await {
+                ctx.update_dns_allowlist(allowlist.into_iter().map(|(_, d)| d).collect());
+            }
+            if let Ok(adblock) = db.load_adblock_config().await {
+                ctx.update_dns_adblock(adblock);
+            }
+            if let Ok(urls) = db.load_adblock_urls().await {
+                ctx.update_dns_adblock_urls(
+                    urls.into_iter()
+                        .map(|(id, url, kind)| AdblockUrlEntry {
+                            id: Some(id),
+                            url,
+                            kind,
+                        })
+                        .collect(),
+                );
+            }
         }
 
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
@@ -157,6 +209,7 @@ impl Bootstrapper {
         ))
     }
 
+    #[cfg(feature = "dhcp")]
     async fn load_dhcp4_pools<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let v4_pools = db.load_dhcp_v4_pools().await?;
         if v4_pools.is_empty() {
@@ -177,6 +230,7 @@ impl Bootstrapper {
         Ok(())
     }
 
+    #[cfg(feature = "dhcp")]
     async fn load_dhcp6_pools<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let v6_pools = db.load_dhcp_v6_pools().await?;
         if v6_pools.is_empty() {
@@ -198,6 +252,7 @@ impl Bootstrapper {
         Ok(())
     }
 
+    #[cfg(feature = "ra")]
     async fn load_ra_prefix<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let ra_prefixes = db.load_ra_prefixes().await?;
         if ra_prefixes.is_empty() {
@@ -211,6 +266,7 @@ impl Bootstrapper {
         Ok(())
     }
 
+    #[cfg(feature = "ra")]
     async fn load_ra_rdnss<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let ra_rdnss = db.load_ra_rdnss().await?;
         if ra_rdnss.is_empty() {
@@ -224,6 +280,7 @@ impl Bootstrapper {
         Ok(())
     }
 
+    #[cfg(feature = "ra")]
     async fn load_ra_dnssl<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
         let ra_dnssl = db.load_ra_dnssl().await?;
         if ra_dnssl.is_empty() {
@@ -237,6 +294,7 @@ impl Bootstrapper {
         Ok(())
     }
 
+    #[cfg(feature = "dns")]
     async fn load_dns_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
         // Seed upstreams if empty in DB
         let upstreams = db.load_dns_upstreams().await?;
@@ -350,23 +408,31 @@ impl Bootstrapper {
         })?;
 
         // 1. Check/seed/load DHCPv4 Pools
-        Self::load_dhcp4_pools(&db, cfg).await?;
-        cfg.dhcpv4_toml.range_start = None;
-        cfg.dhcpv4_toml.range_end = None;
+        #[cfg(feature = "dhcp")]
+        {
+            Self::load_dhcp4_pools(&db, cfg).await?;
+            cfg.dhcpv4_toml.range_start = None;
+            cfg.dhcpv4_toml.range_end = None;
+        }
 
         // 2. Check/seed/load DHCPv6 Pools
+        #[cfg(feature = "dhcp")]
         Self::load_dhcp6_pools(&db, cfg).await?;
 
         // 3. Check/seed/load RA Prefixes
+        #[cfg(feature = "ra")]
         Self::load_ra_prefix(&db, cfg).await?;
 
         // 4. Check/seed/load RA RDNSS
+        #[cfg(feature = "ra")]
         Self::load_ra_rdnss(&db, cfg).await?;
 
         // 5. Check/seed/load RA DNSSL
+        #[cfg(feature = "ra")]
         Self::load_ra_dnssl(&db, cfg).await?;
 
         // 6. Check/seed/load DNS Config
+        #[cfg(feature = "dns")]
         Self::load_dns_config(&db, cfg).await?;
 
         let mut table = db.load_table().await.unwrap_or_else(|e| {

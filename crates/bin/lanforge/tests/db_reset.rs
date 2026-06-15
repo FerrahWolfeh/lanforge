@@ -1,6 +1,7 @@
 use lanforge::bootstrap::Bootstrapper;
 use lanforge::config::Config;
 use lanforge::config::toml::StaticDeviceCfg;
+use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent};
 use lanforge_core::context::LanforgeContext;
@@ -144,7 +145,7 @@ async fn test_full_db_reset_chain() {
     });
 
     // 6. Send DB Reset Command via RPC Client
-    let mut rpc_client = lanforge_api::rpc::LanforgeRpcClient::new(client);
+    let mut rpc_client = LanforgeRpcClient::new(client);
     let resp = rpc_client.db_reset().await.expect("RPC db_reset failed");
     assert!(
         resp.message.contains("Factory reset completed"),

@@ -77,6 +77,7 @@ where
     let result = loop {
         tokio::select! {
             _ = stale_timer.tick() => {
+                #[cfg(feature = "discovery")]
                 ctx.expire_stale(Duration::from_secs(cfg.monitor_toml.stale_timeout_secs));
             }
             _ = sigusr1.recv() => {

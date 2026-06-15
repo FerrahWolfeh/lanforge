@@ -1,11 +1,19 @@
 use lanforge_db::config::DatabaseConfig;
+#[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::config::Dhcpv4Config;
+#[cfg(feature = "dhcp")]
 use lanforge_dhcp::v6::config::Dhcpv6Config;
+#[cfg(feature = "discovery")]
 use lanforge_discovery::{mdns::MdnsConfig, ndp::config::MonitorConfig};
+#[cfg(feature = "dns")]
 use lanforge_dns::config::DnsConfig;
+#[cfg(feature = "http")]
 use lanforge_http::config::HttpConfig;
+#[cfg(feature = "ra")]
 use lanforge_ra::RaServiceConfig;
+#[cfg(feature = "tftp")]
 use lanforge_tftp::config::TftpConfig;
+#[cfg(feature = "uds")]
 use lanforge_uds::config::ApiConfig;
 use serde::{Deserialize, Serialize};
 
@@ -18,18 +26,27 @@ use tracing::{info, warn};
 pub struct TomlConfig {
     pub system: SystemCfg,
     pub database: DatabaseConfig,
+    #[cfg(feature = "ra")]
     pub ra: RaServiceConfig,
+    #[cfg(feature = "dhcp")]
     pub dhcp: DhcpCfg,
+    #[cfg(feature = "dns")]
     pub dns: DnsConfig,
+    #[cfg(feature = "discovery")]
     pub monitor: MonitorConfig,
+    #[cfg(feature = "discovery")]
     pub mdns: MdnsConfig,
+    #[cfg(feature = "uds")]
     pub api: ApiConfig,
+    #[cfg(feature = "http")]
     pub http: HttpConfig,
+    #[cfg(feature = "tftp")]
     pub tftp: TftpConfig,
     #[serde(default)]
     pub devices: Vec<StaticDeviceCfg>,
 }
 
+#[cfg(feature = "dhcp")]
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct DhcpCfg {
@@ -116,10 +133,19 @@ pub fn load_toml(path: &str) -> TomlConfig {
             info!(
                 "[config]   {} static device(s), RA {}",
                 cfg.devices.len(),
-                if cfg.ra.enabled {
-                    "enabled"
-                } else {
-                    "disabled"
+                {
+                    #[cfg(feature = "ra")]
+                    {
+                        if cfg.ra.enabled {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        }
+                    }
+                    #[cfg(not(feature = "ra"))]
+                    {
+                        "disabled"
+                    }
                 }
             );
             return cfg;
@@ -142,13 +168,21 @@ pub fn load_toml(path: &str) -> TomlConfig {
     let cfg = TomlConfig {
         system: load_section(&value, "system"),
         database: load_section(&value, "database"),
+        #[cfg(feature = "ra")]
         ra: load_section(&value, "ra"),
+        #[cfg(feature = "dhcp")]
         dhcp: load_section(&value, "dhcp"),
+        #[cfg(feature = "dns")]
         dns: load_section(&value, "dns"),
+        #[cfg(feature = "discovery")]
         monitor: load_section(&value, "monitor"),
+        #[cfg(feature = "discovery")]
         mdns: load_section(&value, "mdns"),
+        #[cfg(feature = "uds")]
         api: load_section(&value, "api"),
+        #[cfg(feature = "http")]
         http: load_section(&value, "http"),
+        #[cfg(feature = "tftp")]
         tftp: load_section(&value, "tftp"),
         devices: load_section(&value, "devices"),
     };
@@ -211,7 +245,9 @@ mod tests {
     fn test_default_config() {
         let default_cfg = TomlConfig::default();
         assert_eq!(default_cfg.system.iface, "end0");
+        #[cfg(feature = "ra")]
         assert!(!default_cfg.ra.enabled);
+        #[cfg(feature = "dns")]
         assert_eq!(default_cfg.dns.listen.to_string(), "0.0.0.0:53");
     }
 
@@ -236,9 +272,11 @@ source = "broken" # Invalid variant
         // Helper for section-by-section loading (copy-pasted from load_toml for testing)
 
         let system: SystemCfg = load_section(&value, "system");
+        #[cfg(feature = "ra")]
         let ra: RaServiceConfig = load_section(&value, "ra");
 
         assert_eq!(system.iface, "eth42");
+        #[cfg(feature = "ra")]
         assert!(!ra.enabled); // Should be default
     }
 

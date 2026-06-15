@@ -11,19 +11,26 @@ use crate::config::Config;
 use crate::event_loop::{LoopResult, run_event_loop};
 use crate::registry::ServiceRegistry;
 use lanforge_db::worker::DbWorker;
+#[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::Dhcpv4Service;
+#[cfg(feature = "dhcp")]
 use lanforge_dhcp::v6::Dhcpv6Service;
+#[cfg(feature = "discovery")]
 use lanforge_discovery::{mdns::MdnsProber, ndp::DiscoveryService};
+#[cfg(feature = "dns")]
 use lanforge_dns::server::service::DnsService;
-#[cfg(feature = "dns-doq")]
+#[cfg(all(feature = "dns", feature = "dns-doq"))]
 use lanforge_dns::server::transport::doq::DoqService;
-#[cfg(feature = "dns-dot")]
+#[cfg(all(feature = "dns", feature = "dns-dot"))]
 use lanforge_dns::server::transport::dot::DotService;
 use lanforge_host::ifmon::AddressMonitor;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
+#[cfg(feature = "ra")]
 use lanforge_ra::RaService;
+#[cfg(feature = "tftp")]
 use lanforge_tftp::TftpService;
+#[cfg(feature = "uds")]
 use lanforge_uds::server::ControlService;
 
 /// The central application controller for the Lanforge daemon.
@@ -98,31 +105,34 @@ impl Daemon {
         #[allow(unused_variables)]
         let cfg = &self.bootstrap.cfg;
 
-        #[cfg(not(feature = "dns-dot"))]
-        if cfg.dns_toml.dot_enabled {
-            tracing::error!(
-                "❌ Feature 'dns-dot' (DNS-over-TLS) is enabled in configuration but not compiled in the binary!"
-            );
+        #[cfg(feature = "dns")]
+        {
+            #[cfg(not(feature = "dns-dot"))]
+            if cfg.dns_toml.dot_enabled {
+                tracing::error!(
+                    "❌ Feature 'dns-dot' (DNS-over-TLS) is enabled in configuration but not compiled in the binary!"
+                );
+            }
+
+            #[cfg(not(feature = "dns-doq"))]
+            if cfg.dns_toml.doq_enabled {
+                tracing::error!(
+                    "❌ Feature 'dns-doq' (DNS-over-QUIC) is enabled in configuration but not compiled in the binary!"
+                );
+            }
+
+            #[cfg(not(feature = "adblock"))]
+            if cfg.dns_enabled && cfg.dns_toml.adblock_enabled {
+                tracing::error!(
+                    "❌ Feature 'adblock' is enabled in configuration but not compiled in the binary!"
+                );
+            }
         }
 
-        #[cfg(not(feature = "dns-doq"))]
-        if cfg.dns_toml.doq_enabled {
-            tracing::error!(
-                "❌ Feature 'dns-doq' (DNS-over-QUIC) is enabled in configuration but not compiled in the binary!"
-            );
-        }
-
-        #[cfg(not(feature = "http"))]
+        #[cfg(feature = "http")]
         if cfg.http_toml.enabled {
             tracing::error!(
                 "❌ Feature 'http' (REST API / Metrics) is enabled in configuration but not compiled in the binary!"
-            );
-        }
-
-        #[cfg(not(feature = "adblock"))]
-        if cfg.dns_enabled && cfg.dns_toml.adblock_enabled {
-            tracing::error!(
-                "❌ Feature 'adblock' is enabled in configuration but not compiled in the binary!"
             );
         }
 
@@ -150,6 +160,7 @@ impl Daemon {
         let log_db = self.bootstrap.log_db.clone();
         let ctx = self.ctx.clone();
 
+        #[cfg(feature = "discovery")]
         if !cfg.monitor_toml.enabled {
             tracing::warn!(
                 "⚠️  Neighbor Monitor is DISABLED. Passive device discovery and 'last_seen' tracking will be unavailable."
@@ -158,33 +169,43 @@ impl Daemon {
 
         lanforge_core::spawn_services!(self.registry, &self.ctx, {
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
+
+            #[cfg(feature = "discovery")]
             async [ctx, cfg] if cfg.mdns_toml.enabled => MdnsProber::new(cfg.mdns_toml.clone(), ctx),
 
             // 2. Network Monitoring (Interface, Neighbors)
             async [ctx, rt_handle, messages] => AddressMonitor::new(rt_handle, messages.subscribe(), target_ifindex, ctx),
+
+            #[cfg(feature = "discovery")]
             async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => DiscoveryService::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), target_ifindex, ctx),
 
             // 3. IPv6 Protocol Services (RA)
+            #[cfg(feature = "ra")]
             async [ctx, cfg] if cfg.ra_enabled => RaService::new(cfg.to_ra_config(), ctx),
 
             // 4. Address Assignment (DHCPv4, DHCPv6)
+            #[cfg(feature = "dhcp")]
             async [ctx, cfg] if cfg.dhcpv4_enabled => Dhcpv4Service::new(cfg.to_dhcpv4_config(), ctx),
+            #[cfg(feature = "dhcp")]
             async [ctx, cfg] if cfg.dhcpv6_enabled => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
 
             // 5. Application Services (DNS, API, TFTP)
+            #[cfg(feature = "dns")]
             async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
 
-            #[cfg(feature = "dns-dot")]
+            #[cfg(all(feature = "dns", feature = "dns-dot"))]
             async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.dot_enabled => DotService::new(Arc::new(cfg.to_dns_config()), ctx),
 
-            #[cfg(feature = "dns-doq")]
+            #[cfg(all(feature = "dns", feature = "dns-doq"))]
             async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.doq_enabled => DoqService::new(Arc::new(cfg.to_dns_config()), ctx),
 
+            #[cfg(feature = "uds")]
             async [ctx, cfg, db, log_db] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx, db, log_db),
 
             #[cfg(feature = "http")]
             async [ctx, cfg, db, log_db] if cfg.http_toml.enabled => HttpService::new(Arc::new(cfg.to_http_config()), ctx, db, log_db),
 
+            #[cfg(feature = "tftp")]
             async [ctx, cfg] if cfg.tftp_toml.enabled => TftpService::new(
                 ctx,
                 cfg.tftp_toml.clone(),
