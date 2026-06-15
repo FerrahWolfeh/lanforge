@@ -1,7 +1,5 @@
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
-use lanforge_db::config::DatabaseConfig;
-use lanforge_db::engine::LanforgeDb;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::TransportProtocol;
 use lanforge_types::update::DeviceUpdate;
@@ -81,22 +79,13 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
     pipeline.push(AdblockMiddleware::new());
     pipeline.push(UpstreamMiddleware::new());
 
-    let db = Arc::new(
-        LanforgeDb::open(&DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
-
     DnsContext {
         cfg: cfg_arc.clone(),
         stats: Arc::new(DnsStats::new()),
         bus: ctx.bus(),
+        ctx: ctx.clone(),
         query_log: Some(Arc::new(QueryRing::new(100))),
         pipeline,
-        db,
         local: LocalResolver::new(cfg_arc, ctx),
         recursive,
         cache,

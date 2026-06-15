@@ -5,10 +5,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::update::DeviceUpdate;
 
-use crate::bus::{LanforgeEvent, SystemEvent};
+use crate::bus::{DnsEvent, LanforgeEvent, SystemEvent};
 use crate::context::LanforgeContext;
 
 impl LanforgeContext {
@@ -72,6 +75,46 @@ impl LanforgeContext {
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
+    }
+
+    /// Updates the configured DNS upstreams and publishes the change event.
+    pub fn update_dns_upstreams(&self, upstreams: Vec<UpstreamTarget>) {
+        *self.inner.dns_upstreams.write() = upstreams;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+    }
+
+    /// Updates the configured DNS rewrites and publishes the change event.
+    pub fn update_dns_rewrites(&self, rewrites: Vec<RewriteRule>) {
+        *self.inner.dns_rewrites.write() = rewrites;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+    }
+
+    /// Updates the configured DNS allowlist and publishes the change event.
+    pub fn update_dns_allowlist(&self, allowlist: Vec<String>) {
+        *self.inner.dns_allowlist.write() = allowlist;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
+    }
+
+    /// Updates the configured DNS adblock config and publishes the change event.
+    pub fn update_dns_adblock(&self, adblock: AdblockDbConfig) {
+        *self.inner.dns_adblock.write() = adblock;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+    }
+
+    /// Updates the configured DNS adblock URLs and publishes the change event.
+    pub fn update_dns_adblock_urls(&self, urls: Vec<AdblockUrlEntry>) {
+        *self.inner.dns_adblock_urls.write() = urls;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
     }
 
     /// Completely resets the in-memory state.

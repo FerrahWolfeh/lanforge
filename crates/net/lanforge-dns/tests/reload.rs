@@ -5,10 +5,15 @@ use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
-use lanforge_dns_wire::WireEncoder;
+use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::network::dns::DnsRequest;
 use lanforge_types::network::dns::DnsResponse;
-use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
+use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::dns::{
+    DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
+};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -31,14 +36,6 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
 
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let db = Arc::new(
-        lanforge_db::engine::LanforgeDb::open(&lanforge_db::config::DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
     let ctx = LanforgeContext::new(bus, table, None);
 
     // 1. Setup Config with an upstream
@@ -48,11 +45,12 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
         ..Default::default()
     };
 
-    // Seed an upstream in the database
-    let _ = db.add_dns_upstream("1.1.1.1:53", "Udp", None).await;
+    // Seed an upstream in the context
+    let target = "udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap();
+    ctx.update_dns_upstreams(vec![target]);
 
     // 2. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone(), db.clone());
+    let mut service = DnsService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("dns-reload-test", ctx.clone());
 
     ctx.set_db_ready(true);
@@ -175,6 +173,99 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
             0,
             "Cache should be empty after CacheFlush"
         );
+    }
+
+    ctx.terminate();
+}
+
+#[tokio::test]
+async fn dns_reload_rewrites_on_the_fly() {
+    let bus = Arc::new(EventBus::new());
+    let table = State::new();
+    let ctx = LanforgeContext::new(bus, table, None);
+
+    // 1. Setup Config
+    let cfg = DnsConfig {
+        enabled: true,
+        listen: "127.0.0.1:1064".parse().unwrap(),
+        ..Default::default()
+    };
+
+    // 2. Start DNS Service
+    let mut service = DnsService::new(cfg, ctx.clone());
+    let ctrl = ServiceControl::new("dns-rewrites-reload-test", ctx.clone());
+
+    ctx.set_db_ready(true);
+    let mut rx = ctx.bus().subscribe();
+
+    tokio::spawn(async move {
+        service.run(ctrl).await.expect("Service failed");
+    });
+
+    // Wait for ServiceReady
+    loop {
+        let event = rx.recv().await.expect("Bus closed");
+        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
+            && name == "dns-rewrites-reload-test"
+        {
+            break;
+        }
+    }
+
+    // 3. Query once for my-site.lan (should return ServFail or NXDOMAIN because no rewrites/upstream exist)
+    let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
+    client_sock.connect("127.0.0.1:1064").await.unwrap();
+
+    let mut query = DnsMessage::new();
+    query.header.id = 4321;
+    query.header.qdcount = 1;
+    query.questions.push(DnsQuestion {
+        name: Arc::from("my-site.lan"),
+        qtype: DnsRecordType::A,
+        qclass: DnsClass::IN,
+    });
+
+    let query_bytes = WireEncoder::new().encode_message(&query);
+    client_sock.send(&query_bytes).await.unwrap();
+
+    let mut buf = [0u8; 1024];
+    let n = tokio::time::timeout(Duration::from_secs(5), client_sock.recv(&mut buf))
+        .await
+        .expect("Timeout waiting for DNS response")
+        .unwrap();
+
+    let response = WireDecoder::new(&buf[..n]).decode_message().unwrap();
+    assert_ne!(response.header.rcode, DnsResponseCode::NoError);
+
+    // 4. Update rewrites in the context and trigger reload
+    ctx.update_dns_rewrites(vec![RewriteRule {
+        id: Some(1),
+        domain: "my-site.lan".to_string(),
+        rtype: DnsRecordType::A,
+        answer: RewriteAnswer::A(Ipv4Addr::new(1, 2, 3, 4)),
+    }]);
+
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+
+    // Wait a brief moment for the event to be processed
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // 5. Query again (should now return 1.2.3.4 via rewrite)
+    client_sock.send(&query_bytes).await.unwrap();
+    let n2 = tokio::time::timeout(Duration::from_secs(5), client_sock.recv(&mut buf))
+        .await
+        .expect("Timeout waiting for DNS response after reload")
+        .unwrap();
+
+    let response2 = WireDecoder::new(&buf[..n2]).decode_message().unwrap();
+    assert_eq!(response2.header.rcode, DnsResponseCode::NoError);
+    assert_eq!(response2.answers.len(), 1);
+    if let DnsRData::A(ip) = response2.answers[0].rdata {
+        assert_eq!(ip, Ipv4Addr::new(1, 2, 3, 4));
+    } else {
+        panic!("Expected A record");
     }
 
     ctx.terminate();

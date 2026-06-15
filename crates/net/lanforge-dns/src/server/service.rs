@@ -12,16 +12,15 @@ use crate::server::DnsContext;
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_db::engine::LanforgeDb;
+use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::{
-    DnsCacheStatsExtResponse, DnsClass, DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType,
-    DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
+    DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsMessage, DnsQuestion,
+    DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
 };
 use lanforge_types::system::ServiceBanner;
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tracing::{error, info};
@@ -44,19 +43,17 @@ pub struct DnsService {
     cfg: Arc<DnsConfig>,
     stats: Arc<DnsStats>,
     ctx: LanforgeContext,
-    db: Arc<LanforgeDb>,
 }
 
 impl DnsService {
     #[must_use]
-    pub fn new(cfg: DnsConfig, ctx: LanforgeContext, db: Arc<LanforgeDb>) -> Self {
+    pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
         let stats = Arc::new(DnsStats::new());
         ctx.register_service_state("dns::stats", Arc::clone(&stats));
         let service = Self {
             cfg: Arc::new(cfg),
             stats,
             ctx: ctx.clone(),
-            db,
         };
         ctx.register_status_provider(Arc::new(service.clone()));
         service
@@ -77,25 +74,14 @@ impl DnsService {
             .cache_capacity
             .store(self.cfg.cache_size, Ordering::Relaxed);
         let mut upstreams = Vec::new();
-        if let Ok(rows) = self.db.load_dns_upstreams().await {
-            for row in rows {
-                let proto_lower = row.protocol.to_lowercase();
-                let prefix = match row.domain {
-                    Some(ref d) => format!("{}://{}@", proto_lower, d),
-                    None => format!("{}://", proto_lower),
-                };
-                let full_str = format!("{}{}", prefix, row.addr);
-                if let Ok(target) =
-                    lanforge_types::network::dns::upstream::UpstreamTarget::from_str(&full_str)
-                {
-                    match UpstreamManager::new(&target, Arc::clone(&cache)).await {
-                        Ok(mgr) => upstreams.push(mgr),
-                        Err(e) => error!(
-                            "❌ DNS: Failed to initialize upstream {}: {}",
-                            target.addr, e
-                        ),
-                    }
-                }
+        let ctx_upstreams = self.ctx.get_dns_upstreams();
+        for target in ctx_upstreams {
+            match UpstreamManager::new(&target, Arc::clone(&cache)).await {
+                Ok(mgr) => upstreams.push(mgr),
+                Err(e) => error!(
+                    "❌ DNS: Failed to initialize upstream {}: {}",
+                    target.addr, e
+                ),
             }
         }
 
@@ -103,10 +89,10 @@ impl DnsService {
             tracing::warn!("⚠️ DNS: No upstreams configured. Only local resolution will work.");
         }
         #[cfg(feature = "adblock")]
-        let db_adblock = self.db.load_adblock_config().await.unwrap_or_default();
-        let db_rewrites = self.db.load_dns_rewrites().await.unwrap_or_default();
+        let db_adblock = self.ctx.get_dns_adblock();
+        let db_rewrites = self.ctx.get_dns_rewrites();
         #[cfg(feature = "adblock")]
-        let db_allowlist = self.db.load_dns_allowlist().await.unwrap_or_default();
+        let db_allowlist = self.ctx.get_dns_allowlist();
 
         let rewrites = Arc::new(RewriteStore::new());
         rewrites.replace_rules(db_rewrites);
@@ -119,7 +105,7 @@ impl DnsService {
                 adblock_enabled,
             );
             let blocker = AdBlocker::new(adblock_enabled);
-            blocker.replace_allowlist(db_allowlist.into_iter().map(|(_, d)| d).collect());
+            blocker.replace_allowlist(db_allowlist.into_iter().collect());
             blocker.replace_config(
                 db_adblock.blocking_mode,
                 db_adblock.blocking_ip_v4,
@@ -157,6 +143,7 @@ impl DnsService {
             cfg: Arc::clone(&self.cfg),
             stats: Arc::clone(&self.stats),
             bus: self.ctx.bus(),
+            ctx: self.ctx.clone(),
             query_log,
             pipeline,
             local: LocalResolver::new(Arc::clone(&self.cfg), self.ctx.clone()),
@@ -168,7 +155,6 @@ impl DnsService {
             soa_zone,
             soa_master_ns,
             soa_mailbox,
-            db: Arc::clone(&self.db),
             reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
         };
@@ -235,10 +221,9 @@ impl AsyncService for DnsService {
 
         let mpsc_worker = {
             let dns_ctx = Arc::clone(&dns_ctx);
-            let db = Arc::clone(&self.db);
             tokio::spawn(async move {
                 while let Some((req, resp_tx)) = mpsc_rx.recv().await {
-                    let resp = handle_dns_request(req, Arc::clone(&dns_ctx), Arc::clone(&db)).await;
+                    let resp = handle_dns_request(req, Arc::clone(&dns_ctx)).await;
                     let _ = resp_tx.send(resp);
                 }
             })
@@ -254,22 +239,13 @@ impl AsyncService for DnsService {
                         Ok(timed_event) => match timed_event.event {
                             lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) => break,
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged) => {
-                                info!("🔄 DNS: Reloading upstreams from DB...");
+                                info!("🔄 DNS: Reloading upstreams...");
                                 let mut upstreams = Vec::new();
-                                if let Ok(rows) = self.db.load_dns_upstreams().await {
-                                    for row in rows {
-                                        let proto_lower = row.protocol.to_lowercase();
-                                        let prefix = match row.domain {
-                                            Some(ref d) => format!("{}://{}@", proto_lower, d),
-                                            None => format!("{}://", proto_lower),
-                                        };
-                                        let full_str = format!("{}{}", prefix, row.addr);
-                                        if let Ok(target) = lanforge_types::network::dns::upstream::UpstreamTarget::from_str(&full_str) {
-                                            match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
-                                                Ok(mgr) => upstreams.push(mgr),
-                                                Err(e) => error!("❌ DNS: Failed to initialize upstream {}: {}", target.addr, e),
-                                            }
-                                        }
+                                let ctx_upstreams = self.ctx.get_dns_upstreams();
+                                for target in ctx_upstreams {
+                                    match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
+                                        Ok(mgr) => upstreams.push(mgr),
+                                        Err(e) => error!("❌ DNS: Failed to initialize upstream {}: {}", target.addr, e),
                                     }
                                 }
                                 dns_ctx.recursive.replace_upstreams(upstreams);
@@ -285,40 +261,28 @@ impl AsyncService for DnsService {
                                 info!("✅ DNS: Cache flushed.");
                             }
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigRewritesChanged) => {
-                                info!("🔄 DNS: Reloading rewrites from DB...");
-                                match self.db.load_dns_rewrites().await {
-                                    Ok(rewrites) => {
-                                        dns_ctx.rewrites.replace_rules(rewrites);
-                                        info!("✅ DNS: Rewrites reloaded.");
-                                    }
-                                    Err(e) => error!("❌ DNS: Failed to load rewrites: {}", e),
-                                }
+                                info!("🔄 DNS: Reloading rewrites...");
+                                let rewrites = self.ctx.get_dns_rewrites();
+                                dns_ctx.rewrites.replace_rules(rewrites);
+                                info!("✅ DNS: Rewrites reloaded.");
                             }
                             #[cfg(feature = "adblock")]
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAllowlistChanged) => {
-                                info!("🔄 DNS: Reloading allowlist from DB...");
+                                info!("🔄 DNS: Reloading allowlist...");
                                 if let Some(filter) = &dns_ctx.filter {
-                                    match self.db.load_dns_allowlist().await {
-                                        Ok(allow) => {
-                                            filter.replace_allowlist(allow.into_iter().map(|(_, d)| d).collect());
-                                            info!("✅ DNS: Allowlist reloaded.");
-                                        }
-                                        Err(e) => error!("❌ DNS: Failed to load allowlist: {}", e),
-                                    }
+                                    let allow = self.ctx.get_dns_allowlist();
+                                    filter.replace_allowlist(allow.into_iter().collect());
+                                    info!("✅ DNS: Allowlist reloaded.");
                                 }
                             }
                             #[cfg(feature = "adblock")]
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAdblockChanged) => {
-                                info!("🔄 DNS: Reloading adblock config from DB...");
+                                info!("🔄 DNS: Reloading adblock config...");
                                 if let Some(filter) = &dns_ctx.filter {
-                                    match self.db.load_adblock_config().await {
-                                        Ok(cfg) => {
-                                            filter.replace_config(cfg.blocking_mode, cfg.blocking_ip_v4, cfg.blocking_ip_v6);
-                                            filter.set_enabled(cfg.enabled);
-                                            info!("✅ DNS: Adblock config reloaded.");
-                                        }
-                                        Err(e) => error!("❌ DNS: Failed to load adblock config: {}", e),
-                                    }
+                                    let cfg = self.ctx.get_dns_adblock();
+                                    filter.replace_config(cfg.blocking_mode, cfg.blocking_ip_v4, cfg.blocking_ip_v6);
+                                    filter.set_enabled(cfg.enabled);
+                                    info!("✅ DNS: Adblock config reloaded.");
                                 }
                             }
                             #[cfg(feature = "adblock")]
@@ -364,7 +328,7 @@ impl AsyncService for DnsService {
     }
 }
 
-impl lanforge_core::service::StatusProvider for DnsService {
+impl StatusProvider for DnsService {
     fn banner(&self) -> ServiceBanner {
         let stats = vec![
             (
@@ -390,11 +354,7 @@ impl lanforge_core::service::StatusProvider for DnsService {
     }
 }
 
-async fn handle_dns_request(
-    req: DnsRequest,
-    dns_ctx: Arc<DnsContext>,
-    db: Arc<LanforgeDb>,
-) -> DnsResponse {
+async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsResponse {
     match req {
         DnsRequest::Stats => {
             let stats = &dns_ctx.stats;
@@ -417,43 +377,16 @@ async fn handle_dns_request(
             })
         }
         DnsRequest::Upstreams => DnsResponse::Upstreams(dns_ctx.recursive.snapshots()),
-        DnsRequest::UpstreamAdd {
-            addr,
-            protocol,
-            domain,
-        } => {
-            let addr_str = addr.to_string();
-            let proto_str = format!("{:?}", protocol);
-            match db
-                .add_dns_upstream(&addr_str, &proto_str, domain.as_deref())
-                .await
-            {
-                Ok(_) => {
-                    let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
-                        lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged,
-                    ));
-                    DnsResponse::UpstreamAdd(Ok(()))
-                }
-                Err(e) => DnsResponse::UpstreamAdd(Err(e.to_string())),
-            }
+        DnsRequest::UpstreamAdd { .. } => {
+            DnsResponse::UpstreamAdd(Err("Mutations handled via context/api dispatcher".into()))
         }
-        DnsRequest::UpstreamRemove { addr, protocol } => {
-            let addr_str = addr.to_string();
-            let proto_str = format!("{:?}", protocol);
-            match db.remove_dns_upstream(&addr_str, &proto_str).await {
-                Ok(_) => {
-                    let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
-                        lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged,
-                    ));
-                    DnsResponse::UpstreamRemove(Ok(()))
-                }
-                Err(e) => DnsResponse::UpstreamRemove(Err(e.to_string())),
-            }
+        DnsRequest::UpstreamRemove { .. } => {
+            DnsResponse::UpstreamRemove(Err("Mutations handled via context/api dispatcher".into()))
         }
         DnsRequest::CacheDump { limit, offset } => {
             let mut entries = Vec::new();
             for (name, kind, data, expires_in_secs) in dns_ctx.cache.dump() {
-                entries.push(lanforge_types::network::dns::DnsCacheEntry {
+                entries.push(DnsCacheEntry {
                     name,
                     kind,
                     data,
@@ -465,7 +398,7 @@ async fn handle_dns_request(
             let end = (start + limit.unwrap_or(total)).min(total);
             let paginated = entries[start..end].to_vec();
 
-            DnsResponse::CacheDump(lanforge_types::network::dns::DnsCacheResponse {
+            DnsResponse::CacheDump(DnsCacheResponse {
                 entries: paginated,
                 total,
             })
@@ -504,9 +437,9 @@ async fn handle_dns_request(
                         },
                     )
                 } else {
-                    DnsResponse::AdblockStatus(
-                        lanforge_types::network::dns::DnsAdblockStatusResponse::default(),
-                    )
+                    use lanforge_types::network::dns::DnsAdblockStatusResponse;
+
+                    DnsResponse::AdblockStatus(DnsAdblockStatusResponse::default())
                 }
             }
             #[cfg(not(feature = "adblock"))]
@@ -516,73 +449,18 @@ async fn handle_dns_request(
                 )
             }
         }
-        DnsRequest::AdblockSet {
-            enabled,
-            duration_secs,
-        } => {
-            #[cfg(feature = "adblock")]
-            {
-                if duration_secs.is_none() {
-                    let val = if enabled { "true" } else { "false" };
-                    let _ = db.set_adblock_config_value("enabled", val).await;
-                    let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
-                        lanforge_core::bus::DnsEvent::ConfigAdblockChanged,
-                    ));
-                }
-                let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
-                    lanforge_core::bus::DnsEvent::AdblockToggle {
-                        enabled,
-                        duration_secs,
-                    },
-                ));
-                DnsResponse::AdblockSet(Ok(()))
-            }
-            #[cfg(not(feature = "adblock"))]
-            {
-                let _ = enabled;
-                let _ = duration_secs;
-                DnsResponse::AdblockSet(Err("Adblock not enabled".into()))
-            }
+        DnsRequest::AdblockSet { .. } => {
+            DnsResponse::AdblockSet(Err("Mutations handled via context/api dispatcher".into()))
         }
-        DnsRequest::AdblockConfigSet {
-            blocking_mode,
-            blocking_ip_v4,
-            blocking_ip_v6,
-        } => {
-            #[cfg(feature = "adblock")]
-            {
-                if let Some(mode) = blocking_mode {
-                    let _ = db
-                        .set_adblock_config_value("blocking_mode", &mode.to_string())
-                        .await;
-                }
-                if let Some(ip) = blocking_ip_v4 {
-                    let _ = db
-                        .set_adblock_config_value("blocking_ip_v4", &ip.to_string())
-                        .await;
-                }
-                if let Some(ip) = blocking_ip_v6 {
-                    let _ = db
-                        .set_adblock_config_value("blocking_ip_v6", &ip.to_string())
-                        .await;
-                }
-                let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
-                    lanforge_core::bus::DnsEvent::ConfigAdblockChanged,
-                ));
-                DnsResponse::AdblockConfigSet(Ok(()))
-            }
-            #[cfg(not(feature = "adblock"))]
-            {
-                let _ = blocking_mode;
-                let _ = blocking_ip_v4;
-                let _ = blocking_ip_v6;
-                DnsResponse::AdblockConfigSet(Err("Adblock not enabled".into()))
-            }
-        }
+        DnsRequest::AdblockConfigSet { .. } => DnsResponse::AdblockConfigSet(Err(
+            "Mutations handled via context/api dispatcher".into(),
+        )),
         DnsRequest::AdblockReload => {
             #[cfg(feature = "adblock")]
             {
-                let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
+                use lanforge_core::bus::LanforgeEvent;
+
+                let _ = dns_ctx.bus.publish(LanforgeEvent::Dns(
                     lanforge_core::bus::DnsEvent::AdblockReload,
                 ));
                 DnsResponse::AdblockReload(Ok(()))
@@ -595,65 +473,19 @@ async fn handle_dns_request(
         DnsRequest::AdblockUrlList => {
             #[cfg(feature = "adblock")]
             {
-                match db.load_adblock_urls().await {
-                    Ok(urls) => DnsResponse::AdblockUrlList(
-                        urls.into_iter()
-                            .map(
-                                |(id, url, kind)| lanforge_types::network::dns::AdblockUrlEntry {
-                                    id: Some(id),
-                                    url,
-                                    kind,
-                                },
-                            )
-                            .collect(),
-                    ),
-                    Err(_e) => DnsResponse::AdblockUrlList(Vec::new()),
-                }
+                DnsResponse::AdblockUrlList(dns_ctx.ctx.get_dns_adblock_urls())
             }
             #[cfg(not(feature = "adblock"))]
             {
                 DnsResponse::AdblockUrlList(Vec::new())
             }
         }
-        DnsRequest::AdblockUrlAdd { url, kind } => {
-            #[cfg(feature = "adblock")]
-            {
-                match db.add_adblock_url(&url, kind).await {
-                    Ok(()) => {
-                        let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
-                            lanforge_core::bus::DnsEvent::ConfigAdblockChanged,
-                        ));
-                        DnsResponse::AdblockUrlAdd(Ok(()))
-                    }
-                    Err(e) => DnsResponse::AdblockUrlAdd(Err(e.to_string())),
-                }
-            }
-            #[cfg(not(feature = "adblock"))]
-            {
-                let _ = url;
-                let _ = kind;
-                DnsResponse::AdblockUrlAdd(Err("Adblock not enabled".into()))
-            }
+        DnsRequest::AdblockUrlAdd { .. } => {
+            DnsResponse::AdblockUrlAdd(Err("Mutations handled via context/api dispatcher".into()))
         }
-        DnsRequest::AdblockUrlRemove { url } => {
-            #[cfg(feature = "adblock")]
-            {
-                match db.remove_adblock_url(&url).await {
-                    Ok(()) => {
-                        let _ = dns_ctx.bus.publish(lanforge_core::bus::LanforgeEvent::Dns(
-                            lanforge_core::bus::DnsEvent::ConfigAdblockChanged,
-                        ));
-                        DnsResponse::AdblockUrlRemove(Ok(()))
-                    }
-                    Err(e) => DnsResponse::AdblockUrlRemove(Err(e.to_string())),
-                }
-            }
-            #[cfg(not(feature = "adblock"))]
-            {
-                let _ = url;
-                DnsResponse::AdblockUrlRemove(Err("Adblock not enabled".into()))
-            }
-        }
+        DnsRequest::AdblockUrlRemove { .. } => DnsResponse::AdblockUrlRemove(Err(
+            "Mutations handled via context/api dispatcher".into(),
+        )),
         DnsRequest::Query { name, qtype } => {
             DnsResponse::Query(resolve_diagnostic_internal(&dns_ctx, &name, qtype).await)
         }
@@ -689,7 +521,7 @@ async fn resolve_diagnostic_internal(
         &wire_query,
         &header,
         &question,
-        std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         TransportProtocol::Udp,
     );
 

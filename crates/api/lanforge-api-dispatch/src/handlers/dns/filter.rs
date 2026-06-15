@@ -1,4 +1,5 @@
 use crate::ClientContext;
+use lanforge_api::api::AllowlistEntry;
 #[cfg(not(feature = "adblock"))]
 use lanforge_api::api::{DnsAllowlistResponse, Response};
 #[cfg(feature = "adblock")]
@@ -46,10 +47,11 @@ impl ClientContext {
     pub async fn handle_dns_allow(&self, domain: String) -> Response {
         match self.db.add_dns_allowlist(&domain).await {
             Ok(()) => {
-                let _ = self
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+                let allowlist = self.db.load_dns_allowlist().await.map_or_else(
+                    |_| Vec::new(),
+                    |list| list.into_iter().map(|(_, d)| d).collect(),
+                );
+                self.ctx.update_dns_allowlist(allowlist);
                 Response::Success(SimpleSuccess {
                     message: format!("Domain '{domain}' added to DNS allowlist"),
                 })
@@ -72,10 +74,11 @@ impl ClientContext {
     pub async fn handle_dns_unallow(&self, domain: String) -> Response {
         match self.db.remove_dns_allowlist(&domain).await {
             Ok(()) => {
-                let _ = self
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+                let allowlist = self.db.load_dns_allowlist().await.map_or_else(
+                    |_| Vec::new(),
+                    |list| list.into_iter().map(|(_, d)| d).collect(),
+                );
+                self.ctx.update_dns_allowlist(allowlist);
                 Response::Success(SimpleSuccess {
                     message: format!("Domain '{domain}' removed from DNS allowlist"),
                 })
@@ -99,7 +102,7 @@ impl ClientContext {
             Ok(allowlist) => Response::DnsAllowlist(DnsAllowlistResponse {
                 allowlist: allowlist
                     .into_iter()
-                    .map(|(id, domain)| lanforge_api::api::AllowlistEntry { id, domain })
+                    .map(|(id, domain)| AllowlistEntry { id, domain })
                     .collect(),
             }),
             Err(e) => Response::Error {

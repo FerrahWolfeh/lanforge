@@ -38,7 +38,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
             let mut cache_loaded = false;
 
             loop {
-                let db_cfg = ctx.db.load_adblock_config().await.unwrap_or_default();
+                let db_cfg = ctx.ctx.get_dns_adblock();
 
                 // Wait if disabled
                 if !filter.is_enabled() {
@@ -96,43 +96,23 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 
                 let start = Instant::now();
 
-                // Load URLs from the database (the DB is the source of truth after the refactor)
-                let (blocklist_urls, allowlist_urls) = match ctx.db.load_adblock_urls().await {
-                    Ok(urls) => {
-                        let mut block = Vec::new();
-                        let mut allow = Vec::new();
-                        for (_id, url, kind) in urls {
-                            match kind {
-                                AdblockUrlKind::Blocklist => block.push(url),
-                                AdblockUrlKind::Allowlist => allow.push(url),
-                            }
+                // Load URLs from the context
+                let (blocklist_urls, allowlist_urls) = {
+                    let urls = ctx.ctx.get_dns_adblock_urls();
+                    let mut block = Vec::new();
+                    let mut allow = Vec::new();
+                    for entry in urls {
+                        match entry.kind {
+                            AdblockUrlKind::Blocklist => block.push(entry.url),
+                            AdblockUrlKind::Allowlist => allow.push(entry.url),
                         }
-                        info!(
-                            "🛡️ Adblock: loaded {} blocklist and {} allowlist URLs from database",
-                            block.len(),
-                            allow.len()
-                        );
-                        (block, allow)
                     }
-                    Err(e) => {
-                        error!("❌ Adblock: failed to load URLs from database: {e}");
-                        let sleep_dur = if filter.blocklist_size() == 0 {
-                            warn!("🛡️ Adblock: no blocklist loaded in memory, retrying in 60s...");
-                            Duration::from_secs(60)
-                        } else {
-                            warn!("🛡️ Adblock: will retry on next refresh cycle");
-                            compute_next_refresh(db_cfg.refresh_hours, db_cfg.refresh_at_night)
-                        };
-                        tokio::select! {
-                            _ = tokio::time::sleep(sleep_dur) => {}
-                            Ok(evt) = rx.recv() => {
-                                if let LanforgeEvent::Dns(DnsEvent::AdblockReload) = evt.event {
-                                    info!("🛡️ Adblock: manual reload triggered (retrying after error)");
-                                }
-                            }
-                        }
-                        continue;
-                    }
+                    info!(
+                        "🛡️ Adblock: loaded {} blocklist and {} allowlist URLs from context",
+                        block.len(),
+                        allow.len()
+                    );
+                    (block, allow)
                 };
 
                 if skip_download_pass {

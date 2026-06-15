@@ -24,13 +24,16 @@ impl ClientContext {
         if duration_secs.is_none() {
             // Persistent change
             let val = if enabled { "true" } else { "false" };
-            if let Err(e) = self.db.set_adblock_config_value("enabled", val).await {
-                error!("❌ API: Failed to persist adblock enabled status: {e}");
+            match self.db.set_adblock_config_value("enabled", val).await {
+                Ok(()) => {
+                    if let Ok(cfg) = self.db.load_adblock_config().await {
+                        self.ctx.update_dns_adblock(cfg);
+                    }
+                }
+                Err(e) => {
+                    error!("❌ API: Failed to persist adblock enabled status: {e}");
+                }
             }
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
         }
 
         let _ = self
@@ -119,10 +122,17 @@ impl ClientContext {
     pub async fn handle_dns_adblock_url_add(&self, url: String, kind: AdblockUrlKind) -> Response {
         match self.db.add_adblock_url(&url, kind).await {
             Ok(()) => {
-                let _ = self
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+                if let Ok(urls) = self.db.load_adblock_urls().await {
+                    let entries = urls
+                        .into_iter()
+                        .map(|(id, url, kind)| AdblockUrlEntry {
+                            id: Some(id),
+                            url,
+                            kind,
+                        })
+                        .collect();
+                    self.ctx.update_dns_adblock_urls(entries);
+                }
                 Response::Success(SimpleSuccess {
                     message: format!("Adblock {kind} URL added: {url}"),
                 })
@@ -149,10 +159,17 @@ impl ClientContext {
     pub async fn handle_dns_adblock_url_remove(&self, url: String) -> Response {
         match self.db.remove_adblock_url(&url).await {
             Ok(()) => {
-                let _ = self
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+                if let Ok(urls) = self.db.load_adblock_urls().await {
+                    let entries = urls
+                        .into_iter()
+                        .map(|(id, url, kind)| AdblockUrlEntry {
+                            id: Some(id),
+                            url,
+                            kind,
+                        })
+                        .collect();
+                    self.ctx.update_dns_adblock_urls(entries);
+                }
                 Response::Success(SimpleSuccess {
                     message: format!("Adblock URL removed: {url}"),
                 })
@@ -243,11 +260,8 @@ impl ClientContext {
             updated = true;
         }
 
-        if updated {
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+        if updated && let Ok(cfg) = self.db.load_adblock_config().await {
+            self.ctx.update_dns_adblock(cfg);
         }
 
         Response::Success(SimpleSuccess {

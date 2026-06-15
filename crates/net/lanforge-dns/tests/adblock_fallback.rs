@@ -4,14 +4,13 @@ use common::*;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_db::{config::DatabaseConfig, engine::LanforgeDb};
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::resolver::filter::DiskBlocklist;
 use lanforge_dns::server::worker::spawn_adblock_manager;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
-use lanforge_types::network::dns::adblock::AdblockUrlKind;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind};
 use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsQuestion, DnsRecordType, DnsResponseCode,
+    AdblockUrlEntry, DnsClass, DnsMessage, DnsQuestion, DnsRecordType, DnsResponseCode,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -29,35 +28,20 @@ async fn test_dns_adblock_update_failure_and_fallback() {
     initial_domains.insert("ads.example.com".to_string());
     DiskBlocklist::build(initial_domains, &cache_path, 50000).unwrap();
 
-    // 2. Setup Database with an unreachable URL
-    let db = Arc::new(
-        LanforgeDb::open(&DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
-
-    // Add unreachable URL
-    db.add_adblock_url(
-        "http://127.0.0.1:1/nonexistent.txt",
-        AdblockUrlKind::Blocklist,
-    )
-    .await
-    .unwrap();
-
-    // Configure adblock enabled in DB
-    db.set_adblock_config_value("enabled", "true")
-        .await
-        .unwrap();
-    db.set_adblock_config_value("refresh_hours", "12")
-        .await
-        .unwrap();
-
     // 3. Initialize DnsContext
     let bus = Arc::new(EventBus::new());
     let ctx_instance = LanforgeContext::new(bus, State::new(), None);
+    ctx_instance.update_dns_adblock_urls(vec![AdblockUrlEntry {
+        id: Some(1),
+        url: "http://127.0.0.1:1/nonexistent.txt".to_string(),
+        kind: AdblockUrlKind::Blocklist,
+    }]);
+    ctx_instance.update_dns_adblock(AdblockDbConfig {
+        enabled: true,
+        refresh_hours: 12,
+        ..Default::default()
+    });
+
     let cfg = DnsConfig {
         enabled: true,
         adblock_enabled: true,
@@ -67,14 +51,6 @@ async fn test_dns_adblock_update_failure_and_fallback() {
 
     let dns_ctx = mock_dns_context(ctx_instance, cfg).await;
     let dns_ctx_arc = Arc::new(dns_ctx);
-
-    // Replace context db with our sqlite db
-    // Note: DnsContext struct has `db` field
-    // (we did this in mock_dns_context, but let's override/verify it since we want our configured DB)
-    let dns_ctx_arc = Arc::new(lanforge_dns::server::DnsContext {
-        db: db.clone(),
-        ..Arc::into_inner(dns_ctx_arc).unwrap()
-    });
 
     // Verify initial load from the cache path works
     let filter = dns_ctx_arc.filter.as_ref().unwrap();

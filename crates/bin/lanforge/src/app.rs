@@ -172,7 +172,7 @@ impl Daemon {
             async [ctx, cfg] if cfg.dhcpv6_enabled => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
 
             // 5. Application Services (DNS, API, TFTP)
-            async [ctx, cfg, db] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx, db),
+            async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
 
             #[cfg(feature = "dns-dot")]
             async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.dot_enabled => DotService::new(Arc::new(cfg.to_dns_config()), ctx),

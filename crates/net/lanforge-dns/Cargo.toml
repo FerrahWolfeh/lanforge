@@ -9,7 +9,6 @@ authors.workspace = true
 # Lanforge
 lanforge-core = { workspace = true }
 lanforge-macros = { workspace = true }
-lanforge-db = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-dns-wire = { workspace = true }
 

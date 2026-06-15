@@ -32,28 +32,18 @@ fn init_crypto() {
     });
 }
 
-use lanforge_db::engine::LanforgeDb;
-
-async fn init_test_context() -> (LanforgeContext, Arc<LanforgeDb>) {
+async fn init_test_context() -> LanforgeContext {
     #[cfg(any(feature = "dot", feature = "doq", feature = "doh-upstream"))]
     init_crypto();
 
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let db = Arc::new(
-        LanforgeDb::open(&lanforge_db::config::DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
-    (LanforgeContext::new(bus, table, None), db)
+    LanforgeContext::new(bus, table, None)
 }
 
 #[tokio::test]
 async fn dns_simulation_udp() {
-    let (ctx, db) = init_test_context().await;
+    let ctx = init_test_context().await;
 
     // 1. Setup Config
     let cfg = DnsConfig {
@@ -77,7 +67,7 @@ async fn dns_simulation_udp() {
     });
 
     // 3. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone(), db);
+    let mut service = DnsService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("dns", ctx.clone());
 
     ctx.set_db_ready(true);
@@ -143,7 +133,7 @@ async fn dns_simulation_udp() {
 
 #[tokio::test]
 async fn dns_simulation_upstream() {
-    let (ctx, db) = init_test_context().await;
+    let ctx = init_test_context().await;
 
     // 1. Setup Config with multiple upstreams
     #[allow(unused_mut)]
@@ -153,16 +143,18 @@ async fn dns_simulation_upstream() {
         ..Default::default()
     };
 
-    let _ = db.add_dns_upstream("1.1.1.1:53", "Udp", None).await;
+    let mut upstreams = vec!["udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap()];
 
     #[cfg(feature = "dot")]
-    let _ = db.add_dns_upstream("1.1.1.1:853", "Tls", None).await;
+    upstreams.push("tls://1.1.1.1:853".parse::<UpstreamTarget>().unwrap());
 
     #[cfg(feature = "doq")]
-    let _ = db.add_dns_upstream("94.140.14.14:784", "Quic", None).await;
+    upstreams.push("quic://94.140.14.14:784".parse::<UpstreamTarget>().unwrap());
+
+    ctx.update_dns_upstreams(upstreams);
 
     // 2. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone(), db);
+    let mut service = DnsService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("dns-upstream", ctx.clone());
 
     ctx.set_db_ready(true);
@@ -219,16 +211,16 @@ async fn dns_simulation_upstream() {
 
 #[tokio::test]
 async fn dns_simulation_cache_case_insensitive() {
-    let (ctx, db) = init_test_context().await;
+    let ctx = init_test_context().await;
 
     let cfg = DnsConfig {
         enabled: true,
         listen: "127.0.0.1:1056".parse().unwrap(),
         ..Default::default()
     };
-    let _ = db.add_dns_upstream("1.1.1.1:53", "Udp", None).await;
+    ctx.update_dns_upstreams(vec!["udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap()]);
 
-    let mut service = DnsService::new(cfg, ctx.clone(), db);
+    let mut service = DnsService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("dns-cache", ctx.clone());
     ctx.set_db_ready(true);
     let mut rx = ctx.bus().subscribe();
@@ -306,7 +298,7 @@ async fn dns_simulation_cache_case_insensitive() {
 
 #[tokio::test]
 async fn dns_simulation_malformed_and_special_prefixes() {
-    let (ctx, db) = init_test_context().await;
+    let ctx = init_test_context().await;
 
     let cfg = DnsConfig {
         enabled: true,
@@ -314,7 +306,7 @@ async fn dns_simulation_malformed_and_special_prefixes() {
         ..Default::default()
     };
 
-    let mut service = DnsService::new(cfg, ctx.clone(), db);
+    let mut service = DnsService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("dns-boundary", ctx.clone());
     ctx.set_db_ready(true);
     let mut rx = ctx.bus().subscribe();
@@ -395,7 +387,7 @@ async fn dns_simulation_malformed_and_special_prefixes() {
 
 #[tokio::test]
 async fn dns_simulation_transient_ip_reverse_dns() {
-    let (ctx, db) = init_test_context().await;
+    let ctx = init_test_context().await;
 
     // 1. Bind mock DNS upstream server to 127.0.0.1:0
     let mock_upstream = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -425,7 +417,7 @@ async fn dns_simulation_transient_ip_reverse_dns() {
     });
 
     // 3. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone(), db);
+    let mut service = DnsService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("dns-transient", ctx.clone());
 
     ctx.set_db_ready(true);

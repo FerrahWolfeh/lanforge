@@ -61,6 +61,9 @@ use lanforge_types::device::Device;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::system::{ServiceState, SystemStatus};
 use parking_lot::RwLock;
@@ -194,6 +197,16 @@ struct LanforgeContextInner {
     ra_rdnss: RwLock<Vec<RdnssConfig>>,
     /// Configured RA DNSSL.
     ra_dnssl: RwLock<Vec<DnsslConfig>>,
+    /// Configured DNS upstreams.
+    dns_upstreams: RwLock<Vec<UpstreamTarget>>,
+    /// Configured DNS rewrites.
+    dns_rewrites: RwLock<Vec<RewriteRule>>,
+    /// Configured DNS allowlist.
+    dns_allowlist: RwLock<Vec<String>>,
+    /// Configured DNS adblock config.
+    dns_adblock: RwLock<AdblockDbConfig>,
+    /// Configured DNS adblock source URLs.
+    dns_adblock_urls: RwLock<Vec<AdblockUrlEntry>>,
     /// Shared `DHCPv4` statistics.
     dhcpv4_stats: Arc<Dhcpv4Stats>,
     /// Shared `DHCPv6` statistics.
@@ -261,6 +274,11 @@ impl LanforgeContext {
             ra_prefixes: RwLock::new(Vec::new()),
             ra_rdnss: RwLock::new(Vec::new()),
             ra_dnssl: RwLock::new(Vec::new()),
+            dns_upstreams: RwLock::new(Vec::new()),
+            dns_rewrites: RwLock::new(Vec::new()),
+            dns_allowlist: RwLock::new(Vec::new()),
+            dns_adblock: RwLock::new(AdblockDbConfig::default()),
+            dns_adblock_urls: RwLock::new(Vec::new()),
             dhcpv4_stats: Arc::new(Dhcpv4Stats::new()),
             dhcpv6_stats: Arc::new(Dhcpv6Stats::new()),
             last_db_flush: RwLock::new(None),
@@ -426,6 +444,31 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_ra_dnssl(&self) -> Vec<DnsslConfig> {
         self.inner.ra_dnssl.read().clone()
+    }
+
+    #[must_use]
+    pub fn get_dns_upstreams(&self) -> Vec<UpstreamTarget> {
+        self.inner.dns_upstreams.read().clone()
+    }
+
+    #[must_use]
+    pub fn get_dns_rewrites(&self) -> Vec<RewriteRule> {
+        self.inner.dns_rewrites.read().clone()
+    }
+
+    #[must_use]
+    pub fn get_dns_allowlist(&self) -> Vec<String> {
+        self.inner.dns_allowlist.read().clone()
+    }
+
+    #[must_use]
+    pub fn get_dns_adblock(&self) -> AdblockDbConfig {
+        self.inner.dns_adblock.read().clone()
+    }
+
+    #[must_use]
+    pub fn get_dns_adblock_urls(&self) -> Vec<AdblockUrlEntry> {
+        self.inner.dns_adblock_urls.read().clone()
     }
 
     /// Registers a decoupled status provider.

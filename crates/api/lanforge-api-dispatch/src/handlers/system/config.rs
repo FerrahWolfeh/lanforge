@@ -3,7 +3,6 @@ use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
-use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_db::DynamicConfigStore;
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::AdblockDbConfig;
@@ -152,6 +151,8 @@ impl ClientContext {
                     count: 0,
                     error: Some(format!("Failed to clear DNS rewrites: {e}")),
                 });
+            } else {
+                self.ctx.update_dns_rewrites(Vec::new());
             }
             if let Err(e) = self.db.clear_dns_upstreams().await {
                 total_success = false;
@@ -161,6 +162,8 @@ impl ClientContext {
                     count: 0,
                     error: Some(format!("Failed to clear DNS upstreams: {e}")),
                 });
+            } else {
+                self.ctx.update_dns_upstreams(Vec::new());
             }
             if let Err(e) = self.db.clear_adblock_urls().await {
                 total_success = false;
@@ -170,6 +173,8 @@ impl ClientContext {
                     count: 0,
                     error: Some(format!("Failed to clear Adblock URLs: {e}")),
                 });
+            } else {
+                self.ctx.update_dns_adblock_urls(Vec::new());
             }
             if let Err(e) = self.db.clear_dns_allowlist().await {
                 total_success = false;
@@ -179,6 +184,8 @@ impl ClientContext {
                     count: 0,
                     error: Some(format!("Failed to clear DNS allowlist: {e}")),
                 });
+            } else {
+                self.ctx.update_dns_allowlist(Vec::new());
             }
 
             // Clear API Tokens
@@ -342,10 +349,9 @@ impl ClientContext {
             adblock_cfg_err = Some(format!("Failed to set refresh_at_night: {e}"));
         }
         if adblock_cfg_success {
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+            if let Ok(cfg) = self.db.load_adblock_config().await {
+                self.ctx.update_dns_adblock(cfg);
+            }
         } else {
             total_success = false;
         }

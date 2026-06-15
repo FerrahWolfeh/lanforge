@@ -20,7 +20,8 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 async fn test_adblock_service_lifecycle_and_rebuild() {
     // 1. Spawn a mock HTTP server to host our blocklist
 
-    use lanforge_db::{config::DatabaseConfig, engine::LanforgeDb};
+    use lanforge_types::network::dns::AdblockUrlEntry;
+    use lanforge_types::network::dns::adblock::{AdblockDbConfig, BlockingMode};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
 
@@ -43,14 +44,6 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
 
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let db = Arc::new(
-        LanforgeDb::open(&DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
     let ctx = LanforgeContext::new(bus, table, None);
 
     // 2. Setup Config with adblock compiled but disabled at start
@@ -63,7 +56,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     };
 
     // 3. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone(), db.clone());
+    let mut service = DnsService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("dns-adblock-test", ctx.clone());
 
     ctx.set_db_ready(true);
@@ -115,13 +108,17 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     // 5. Test: Enabling it in the DB and trigger toggle on the fly
     // Let's add blocklist URL to the DB first
     let url = format!("http://127.0.0.1:{}/blocklist.txt", port);
-    let _ = db.add_adblock_url(&url, AdblockUrlKind::Blocklist).await;
+    ctx.update_dns_adblock_urls(vec![AdblockUrlEntry {
+        id: Some(1),
+        url: url.clone(),
+        kind: AdblockUrlKind::Blocklist,
+    }]);
 
-    // Enable adblock and set mode to null_ip in DB config
-    let _ = db.set_adblock_config_value("enabled", "true").await;
-    let _ = db
-        .set_adblock_config_value("blocking_mode", "null_ip")
-        .await;
+    ctx.update_dns_adblock(AdblockDbConfig {
+        enabled: true,
+        blocking_mode: BlockingMode::NullIp,
+        ..Default::default()
+    });
 
     // Trigger toggle and config changed signals
     let _ = ctx
@@ -163,11 +160,12 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     assert_eq!(response2.header.rcode, DnsResponseCode::NoError);
     assert!(!response2.answers.is_empty());
 
-    // 7. Test: React to config changes on the fly
     // Change blocking mode to Refused
-    let _ = db
-        .set_adblock_config_value("blocking_mode", "refused")
-        .await;
+    ctx.update_dns_adblock(AdblockDbConfig {
+        enabled: true,
+        blocking_mode: BlockingMode::Refused,
+        ..Default::default()
+    });
     let _ = ctx
         .bus()
         .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
@@ -184,7 +182,10 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     assert_eq!(response3.header.rcode, DnsResponseCode::Refused);
 
     // 8. Test: Toggle off during runtime
-    let _ = db.set_adblock_config_value("enabled", "false").await;
+    ctx.update_dns_adblock(AdblockDbConfig {
+        enabled: false,
+        ..Default::default()
+    });
     let _ = ctx
         .bus()
         .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));

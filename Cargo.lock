@@ -2812,7 +2812,6 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "lanforge-core",
- "lanforge-db",
  "lanforge-dns-wire",
  "lanforge-macros",
  "lanforge-types",

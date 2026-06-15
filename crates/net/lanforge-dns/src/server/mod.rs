@@ -9,7 +9,8 @@ use crate::resolver::AdBlocker;
 use crate::resolver::recursive::UpstreamManager;
 use crate::resolver::{LocalResolver, RewriteStore, recursive::UpstreamStrategy};
 use crate::telemetry::{DnsStats, QueryRing};
-use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
+use lanforge_core::context::LanforgeContext;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol};
@@ -22,10 +23,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct DnsContext {
     pub cfg: Arc<DnsConfig>,
     pub stats: Arc<DnsStats>,
-    pub bus: Arc<lanforge_core::bus::EventBus>,
+    pub bus: Arc<EventBus>,
+    pub ctx: LanforgeContext,
     pub query_log: Option<Arc<QueryRing>>,
     pub pipeline: Pipeline,
-    pub db: Arc<lanforge_db::engine::LanforgeDb>,
 
     // Sub-components
     pub local: LocalResolver,

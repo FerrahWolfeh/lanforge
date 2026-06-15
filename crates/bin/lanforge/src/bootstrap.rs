@@ -10,6 +10,9 @@ use lanforge_db::log_engine::LogDb;
 use lanforge_host::ifmon::AddressMonitor;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::AdblockUrlKind;
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::{Ipv6AddrOrSuffix, Ipv6Prefix};
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
@@ -74,6 +77,44 @@ impl Bootstrapper {
             cfg.ra_toml.dnssl.clone(),
         );
         ctx.set_status(cfg.to_system_status());
+
+        // Load DNS settings from database into context
+        if let Ok(upstreams) = db.load_dns_upstreams().await {
+            let mut list = Vec::new();
+            for row in upstreams {
+                let proto_lower = row.protocol.to_lowercase();
+                let prefix = row.domain.as_ref().map_or_else(
+                    || format!("{proto_lower}://"),
+                    |d| format!("{proto_lower}://{d}@"),
+                );
+                let full_str = format!("{prefix}{}", row.addr);
+                if let Ok(target) = <UpstreamTarget as std::str::FromStr>::from_str(&full_str) {
+                    list.push(target);
+                }
+            }
+            ctx.update_dns_upstreams(list);
+        }
+        if let Ok(rewrites) = db.load_dns_rewrites().await {
+            ctx.update_dns_rewrites(rewrites);
+        }
+        if let Ok(allowlist) = db.load_dns_allowlist().await {
+            ctx.update_dns_allowlist(allowlist.into_iter().map(|(_, d)| d).collect());
+        }
+        if let Ok(adblock) = db.load_adblock_config().await {
+            ctx.update_dns_adblock(adblock);
+        }
+        if let Ok(urls) = db.load_adblock_urls().await {
+            ctx.update_dns_adblock_urls(
+                urls.into_iter()
+                    .map(|(id, url, kind)| AdblockUrlEntry {
+                        id: Some(id),
+                        url,
+                        kind,
+                    })
+                    .collect(),
+            );
+        }
+
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 
         // --- PHASE 2: Netlink Setup ---
@@ -196,6 +237,107 @@ impl Bootstrapper {
         Ok(())
     }
 
+    async fn load_dns_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
+        // Seed upstreams if empty in DB
+        let upstreams = db.load_dns_upstreams().await?;
+        if upstreams.is_empty() && !cfg.dns_toml.upstreams.is_empty() {
+            for entry in &cfg.dns_toml.upstreams {
+                let target = &entry.target;
+                let _ = db
+                    .add_dns_upstream(
+                        &target.addr.to_string(),
+                        &target.protocol.to_string(),
+                        target.hostname.as_deref(),
+                    )
+                    .await?;
+            }
+            info!(
+                "Seeded {} DNS upstreams from configuration into database",
+                cfg.dns_toml.upstreams.len()
+            );
+        }
+
+        // Seed rewrites if empty in DB
+        let rewrites = db.load_dns_rewrites().await?;
+        if rewrites.is_empty() && !cfg.dns_toml.rewrites.is_empty() {
+            for rule in &cfg.dns_toml.rewrites {
+                db.upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer.to_string())
+                    .await?;
+            }
+            info!(
+                "Seeded {} DNS rewrites from configuration into database",
+                cfg.dns_toml.rewrites.len()
+            );
+        }
+
+        // Seed allowlist if empty in DB
+        let allowlist = db.load_dns_allowlist().await?;
+        if allowlist.is_empty() && !cfg.dns_toml.allowlist.is_empty() {
+            for domain in &cfg.dns_toml.allowlist {
+                db.add_dns_allowlist(domain).await?;
+            }
+            info!(
+                "Seeded {} DNS allowlist domains from configuration into database",
+                cfg.dns_toml.allowlist.len()
+            );
+        }
+
+        // Seed adblock urls if empty in DB
+        let adblock_urls = db.load_adblock_urls().await?;
+        let is_new_adblock = adblock_urls.is_empty();
+        if is_new_adblock {
+            let mut count = 0;
+            for url in &cfg.dns_toml.adblock_urls {
+                db.add_adblock_url(url, AdblockUrlKind::Blocklist).await?;
+                count += 1;
+            }
+            for url in &cfg.dns_toml.adblock_allowlist_urls {
+                db.add_adblock_url(url, AdblockUrlKind::Allowlist).await?;
+                count += 1;
+            }
+            if count > 0 {
+                info!("Seeded {count} Adblock source URLs from configuration into database");
+            }
+
+            // Seed adblock config overrides from TOML on first run
+            db.set_adblock_config_value(
+                "enabled",
+                if cfg.dns_toml.adblock_enabled {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .await?;
+            db.set_adblock_config_value("blocking_mode", &cfg.dns_toml.blocking_mode.to_string())
+                .await?;
+            if let Some(ip) = cfg.dns_toml.blocking_ip_v4 {
+                db.set_adblock_config_value("blocking_ip_v4", &ip.to_string())
+                    .await?;
+            }
+            if let Some(ip) = cfg.dns_toml.blocking_ip_v6 {
+                db.set_adblock_config_value("blocking_ip_v6", &ip.to_string())
+                    .await?;
+            }
+            db.set_adblock_config_value(
+                "refresh_hours",
+                &cfg.dns_toml.adblock_refresh_hours.to_string(),
+            )
+            .await?;
+            db.set_adblock_config_value(
+                "refresh_at_night",
+                if cfg.dns_toml.adblock_refresh_at_night {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
     async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
         let db = LanforgeDb::open(&cfg.database).await.map_err(|e| {
             error!("❌ Erro fatal abrindo leases DB: {e}");
@@ -223,6 +365,9 @@ impl Bootstrapper {
 
         // 5. Check/seed/load RA DNSSL
         Self::load_ra_dnssl(&db, cfg).await?;
+
+        // 6. Check/seed/load DNS Config
+        Self::load_dns_config(&db, cfg).await?;
 
         let mut table = db.load_table().await.unwrap_or_else(|e| {
             warn!("Falha ao carregar DB ({e}), iniciando do zero");

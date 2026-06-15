@@ -3,8 +3,9 @@ use lanforge_api::api::{
     DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamsResponse, ProtocolStatEntry,
     QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
 };
-use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_types::network::dns::{DnsRecordType, DnsRequest, DnsResponse};
+use lanforge_types::network::dns::{
+    DnsRecordType, DnsRequest, DnsResponse, upstream::UpstreamProtocol,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl ClientContext {
@@ -61,33 +62,9 @@ impl ClientContext {
     pub async fn handle_dns_upstream_add(
         &self,
         addr: std::net::SocketAddr,
-        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(DnsResponse::UpstreamAdd(res)) = handle
-                .send_request(DnsRequest::UpstreamAdd {
-                    addr,
-                    protocol,
-                    domain: domain.clone(),
-                })
-                .await
-        {
-            match res {
-                Ok(_) => {
-                    return Response::Success(SimpleSuccess {
-                        message: "Upstream added successfully".into(),
-                    });
-                }
-                Err(e) => {
-                    return Response::Error {
-                        error: format!("Failed to add upstream: {e}"),
-                    };
-                }
-            }
-        }
-
-        // Fallback when DNS service is not running
         let addr_str = addr.to_string();
         let proto_str = format!("{:?}", protocol);
         match self
@@ -96,16 +73,15 @@ impl ClientContext {
             .await
         {
             Ok(_) => {
-                let _ = self
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+                if let Err(e) = self.reload_dns_upstreams_to_context().await {
+                    return Response::Error { error: e };
+                }
                 Response::Success(SimpleSuccess {
-                    message: "Upstream added successfully (fallback)".into(),
+                    message: "Upstream added successfully".into(),
                 })
             }
             Err(e) => Response::Error {
-                error: format!("Failed to add upstream (fallback): {e}"),
+                error: format!("Failed to add upstream: {e}"),
             },
         }
     }
@@ -113,44 +89,45 @@ impl ClientContext {
     pub async fn handle_dns_upstream_remove(
         &self,
         addr: std::net::SocketAddr,
-        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        protocol: UpstreamProtocol,
     ) -> Response {
-        if let Some(handle) = self.ctx.dns_handle()
-            && let Ok(DnsResponse::UpstreamRemove(res)) = handle
-                .send_request(DnsRequest::UpstreamRemove { addr, protocol })
-                .await
-        {
-            match res {
-                Ok(_) => {
-                    return Response::Success(SimpleSuccess {
-                        message: "Upstream removed successfully".into(),
-                    });
-                }
-                Err(e) => {
-                    return Response::Error {
-                        error: format!("Failed to remove upstream: {e}"),
-                    };
-                }
-            }
-        }
-
-        // Fallback when DNS service is not running
         let addr_str = addr.to_string();
         let proto_str = format!("{:?}", protocol);
         match self.db.remove_dns_upstream(&addr_str, &proto_str).await {
             Ok(_) => {
-                let _ = self
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+                if let Err(e) = self.reload_dns_upstreams_to_context().await {
+                    return Response::Error { error: e };
+                }
                 Response::Success(SimpleSuccess {
-                    message: "Upstream removed successfully (fallback)".into(),
+                    message: "Upstream removed successfully".into(),
                 })
             }
             Err(e) => Response::Error {
-                error: format!("Failed to remove upstream (fallback): {e}"),
+                error: format!("Failed to remove upstream: {e}"),
             },
         }
+    }
+
+    async fn reload_dns_upstreams_to_context(&self) -> Result<(), String> {
+        let rows = self
+            .db
+            .load_dns_upstreams()
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut upstreams = Vec::new();
+        for row in rows {
+            let proto_lower = row.protocol.to_lowercase();
+            let prefix = match row.domain {
+                Some(ref d) => format!("{}://{}@", proto_lower, d),
+                None => format!("{}://", proto_lower),
+            };
+            let full_str = format!("{}{}", prefix, row.addr);
+            if let Ok(target) = <lanforge_types::network::dns::upstream::UpstreamTarget as std::str::FromStr>::from_str(&full_str) {
+                upstreams.push(target);
+            }
+        }
+        self.ctx.update_dns_upstreams(upstreams);
+        Ok(())
     }
 
     pub async fn handle_dns_analytics(&self, limit: Option<usize>) -> Response {
