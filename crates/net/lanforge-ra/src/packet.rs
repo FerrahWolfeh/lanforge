@@ -19,7 +19,7 @@ use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix};
 
 use std::net::Ipv6Addr;
 
-use crate::ra::RaConfig;
+use crate::RaConfig;
 
 /// `ICMPv6` type for `Router Advertisement` (`134` per `RFC 4861`).
 pub const ICMPV6_TYPE_RA: u8 = 134;

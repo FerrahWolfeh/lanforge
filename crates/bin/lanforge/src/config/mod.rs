@@ -33,7 +33,7 @@ use lanforge_dhcp::v6::config::Dhcpv6Config;
 use lanforge_discovery::{mdns::MdnsConfig, ndp::config::MonitorConfig};
 use lanforge_dns::config::DnsConfig;
 use lanforge_http::config::HttpConfig;
-use lanforge_ra::ra::{RaConfig, RaServiceConfig};
+use lanforge_ra::{RaConfig, RaServiceConfig};
 use lanforge_tftp::config::TftpConfig;
 use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_types::network::dns::adblock::BlockingMode;

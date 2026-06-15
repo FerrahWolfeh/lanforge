@@ -4,7 +4,7 @@ use lanforge_dhcp::v6::config::Dhcpv6Config;
 use lanforge_discovery::{mdns::MdnsConfig, ndp::config::MonitorConfig};
 use lanforge_dns::config::DnsConfig;
 use lanforge_http::config::HttpConfig;
-use lanforge_ra::ra::RaServiceConfig;
+use lanforge_ra::RaServiceConfig;
 use lanforge_tftp::config::TftpConfig;
 use lanforge_uds::config::ApiConfig;
 use serde::{Deserialize, Serialize};

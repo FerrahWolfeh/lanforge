@@ -22,7 +22,7 @@ use lanforge_dns::server::transport::dot::DotService;
 use lanforge_host::ifmon::AddressMonitor;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
-use lanforge_ra::ra::RaService;
+use lanforge_ra::RaService;
 use lanforge_tftp::TftpService;
 use lanforge_uds::server::ControlService;
 
