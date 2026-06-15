@@ -1,6 +1,8 @@
 use crate::tui::app::{TuiApp, TuiMode};
 use crate::tui::{theme, utils};
+use lanforge_api::api::{DeviceEntry, DevicesResponse};
 use lanforge_types::device::DeviceStatus;
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::utils::system_time_to_secs;
 use ratatui::layout::{Direction, Layout};
 use ratatui::{
@@ -174,65 +176,230 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_device_rows(app: &TuiApp, rows: &mut Vec<Row<'static>>) -> usize {
-    let mut matching_count = 0;
+    let Some(devices_resp) = &app.state.devices else {
+        return 0;
+    };
 
-    if let Some(devices_resp) = &app.state.devices {
-        let mut devices = devices_resp.devices.clone();
-        devices.sort_by_key(|a| a.mac);
+    let items = build_tui_device_items(devices_resp, &app.filter_text);
+    let matching_count = items.len();
 
-        for dev in devices {
-            // Apply filtering case-insensitively
-            if !app.filter_text.is_empty() {
-                let search = app.filter_text.to_lowercase();
-                if !dev.mac.contains_str(&search)
-                    && !dev.hostname.to_lowercase().contains(&search)
-                    && !dev.display_v4.to_lowercase().contains(&search)
-                    && !dev.display_v6.to_lowercase().contains(&search)
-                {
-                    continue;
-                }
+    for item in items {
+        match item {
+            TuiDeviceItem::Single(dev) => {
+                let status_span = match dev.status {
+                    DeviceStatus::Online => {
+                        Span::styled("● online", Style::default().fg(theme::ONLINE))
+                    }
+                    DeviceStatus::Stale => {
+                        Span::styled("● stale", Style::default().fg(theme::STALE))
+                    }
+                    DeviceStatus::Offline => {
+                        Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
+                    }
+                };
+
+                let host_display = format!("{} {}", utils::get_class_icon(dev.class), dev.hostname);
+
+                rows.push(Row::new(vec![
+                    Cell::from(status_span),
+                    Cell::from(Span::styled(
+                        dev.mac.to_string(),
+                        Style::default().fg(theme::MAC),
+                    )),
+                    Cell::from(Span::styled(
+                        host_display,
+                        Style::default().fg(theme::HOSTNAME),
+                    )),
+                    Cell::from(Span::styled(
+                        dev.display_v4.clone(),
+                        Style::default().fg(theme::IP),
+                    )),
+                    Cell::from(Span::styled(
+                        dev.display_v6.clone(),
+                        Style::default().fg(theme::IP),
+                    )),
+                    Cell::from(Span::styled(
+                        dev.origin.to_string(),
+                        Style::default().fg(theme::TEXT_DIM),
+                    )),
+                    Cell::from(Span::raw(utils::parse_iso_relative(dev.last_seen))),
+                ]));
             }
+            TuiDeviceItem::Parent {
+                hostname,
+                status,
+                last_seen,
+                interfaces_count,
+                ..
+            } => {
+                let status_span = match status {
+                    DeviceStatus::Online => {
+                        Span::styled("● online", Style::default().fg(theme::ONLINE))
+                    }
+                    DeviceStatus::Stale => {
+                        Span::styled("● stale", Style::default().fg(theme::STALE))
+                    }
+                    DeviceStatus::Offline => {
+                        Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
+                    }
+                };
 
-            matching_count += 1;
+                let host_display = format!("{hostname} ({interfaces_count} interfaces)");
 
-            let status_span = match dev.status {
-                DeviceStatus::Online => {
-                    Span::styled("● online", Style::default().fg(theme::ONLINE))
-                }
-                DeviceStatus::Stale => Span::styled("● stale", Style::default().fg(theme::STALE)),
-                DeviceStatus::Offline => {
-                    Span::styled("○ offline", Style::default().fg(theme::OFFLINE))
-                }
-            };
+                rows.push(Row::new(vec![
+                    Cell::from(status_span),
+                    Cell::from(Span::styled("—", Style::default().fg(theme::TEXT_DIM))),
+                    Cell::from(Span::styled(
+                        host_display,
+                        Style::default()
+                            .fg(theme::HOSTNAME)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Cell::from(Span::styled("—", Style::default().fg(theme::TEXT_DIM))),
+                    Cell::from(Span::styled("—", Style::default().fg(theme::TEXT_DIM))),
+                    Cell::from(Span::styled("—", Style::default().fg(theme::TEXT_DIM))),
+                    Cell::from(Span::raw(utils::parse_iso_relative(last_seen))),
+                ]));
+            }
+            TuiDeviceItem::Child { entry, is_last } => {
+                let status_span = match entry.status {
+                    DeviceStatus::Online => {
+                        Span::styled("  ● online", Style::default().fg(theme::ONLINE))
+                    }
+                    DeviceStatus::Stale => {
+                        Span::styled("  ● stale", Style::default().fg(theme::STALE))
+                    }
+                    DeviceStatus::Offline => {
+                        Span::styled("  ○ offline", Style::default().fg(theme::OFFLINE))
+                    }
+                };
 
-            let host_display = format!("{} {}", utils::get_class_icon(dev.class), dev.hostname);
+                let branch = if is_last { "  └─ " } else { "  ├─ " };
+                let mac_display = format!("{}{}", branch, entry.mac);
 
-            rows.push(Row::new(vec![
-                Cell::from(status_span),
-                Cell::from(Span::styled(
-                    dev.mac.to_string(),
-                    Style::default().fg(theme::MAC),
-                )),
-                Cell::from(Span::styled(
-                    host_display,
-                    Style::default().fg(theme::HOSTNAME),
-                )),
-                Cell::from(Span::styled(
-                    dev.display_v4.clone(),
-                    Style::default().fg(theme::IP),
-                )),
-                Cell::from(Span::styled(
-                    dev.display_v6.clone(),
-                    Style::default().fg(theme::IP),
-                )),
-                Cell::from(Span::styled(
-                    dev.origin.to_string(),
-                    Style::default().fg(theme::TEXT_DIM),
-                )),
-                Cell::from(Span::raw(utils::parse_iso_relative(dev.last_seen))),
-            ]));
+                rows.push(Row::new(vec![
+                    Cell::from(status_span),
+                    Cell::from(Span::styled(mac_display, Style::default().fg(theme::MAC))),
+                    Cell::from(Span::styled(
+                        format!("└─ {}", entry.hostname),
+                        Style::default().fg(theme::TEXT_DIM),
+                    )),
+                    Cell::from(Span::styled(
+                        entry.display_v4.clone(),
+                        Style::default().fg(theme::IP),
+                    )),
+                    Cell::from(Span::styled(
+                        entry.display_v6.clone(),
+                        Style::default().fg(theme::IP),
+                    )),
+                    Cell::from(Span::styled(
+                        entry.origin.to_string(),
+                        Style::default().fg(theme::TEXT_DIM),
+                    )),
+                    Cell::from(Span::raw(utils::parse_iso_relative(entry.last_seen))),
+                ]));
+            }
         }
     }
+
     matching_count
+}
+
+#[derive(Debug, Clone)]
+pub enum TuiDeviceItem {
+    Single(DeviceEntry),
+    Parent {
+        primary_mac: MacAddr,
+        hostname: String,
+        status: DeviceStatus,
+        last_seen: u64,
+        interfaces_count: usize,
+    },
+    Child {
+        entry: DeviceEntry,
+        is_last: bool,
+    },
+}
+
+#[must_use]
+pub fn build_tui_device_items(
+    devices_resp: &DevicesResponse,
+    filter_text: &str,
+) -> Vec<TuiDeviceItem> {
+    use lanforge_api::api::group_devices;
+
+    let mut devices = devices_resp.devices.clone();
+    devices.sort_by_key(|a| a.mac);
+
+    let mut groups = group_devices(&devices);
+    groups.sort_by_key(|g| g.primary_mac);
+
+    let mut items = Vec::new();
+    let filter = filter_text.to_lowercase();
+
+    for group in groups {
+        if !filter.is_empty() {
+            let mut matches_filter = false;
+            for dev in &group.interfaces {
+                if dev.mac.contains_str(&filter)
+                    || dev.hostname.to_lowercase().contains(&filter)
+                    || dev.display_v4.to_lowercase().contains(&filter)
+                    || dev.display_v6.to_lowercase().contains(&filter)
+                {
+                    matches_filter = true;
+                    break;
+                }
+            }
+            if !matches_filter {
+                continue;
+            }
+        }
+
+        if group.interfaces.len() == 1 {
+            items.push(TuiDeviceItem::Single(group.interfaces[0].clone()));
+        } else {
+            let status = if group
+                .interfaces
+                .iter()
+                .any(|d| d.status == DeviceStatus::Online)
+            {
+                DeviceStatus::Online
+            } else if group
+                .interfaces
+                .iter()
+                .any(|d| d.status == DeviceStatus::Stale)
+            {
+                DeviceStatus::Stale
+            } else {
+                DeviceStatus::Offline
+            };
+
+            let last_seen = group
+                .interfaces
+                .iter()
+                .map(|d| d.last_seen)
+                .max()
+                .unwrap_or(0);
+
+            items.push(TuiDeviceItem::Parent {
+                primary_mac: group.primary_mac,
+                hostname: group.hostname,
+                status,
+                last_seen,
+                interfaces_count: group.interfaces.len(),
+            });
+
+            let len = group.interfaces.len();
+            for (idx, dev) in group.interfaces.into_iter().enumerate() {
+                items.push(TuiDeviceItem::Child {
+                    entry: dev,
+                    is_last: idx == len - 1,
+                });
+            }
+        }
+    }
+
+    items
 }

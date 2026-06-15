@@ -3,8 +3,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use super::common::{HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse};
 use lanforge_types::{
     device::{
-        DeviceClass, DeviceStatus, IpClassification, Ipv6AddrOrSuffix, LearningMethod, LeaseHistoryEntry, Origin,
-        TransientOrigin,
+        DeviceClass, DeviceStatus, IpClassification, Ipv6AddrOrSuffix, LearningMethod,
+        LeaseHistoryEntry, Origin, TransientOrigin,
     },
     identifiers::{Duid, MacAddr},
 };
@@ -201,5 +201,191 @@ impl HttpWrappedResponse for TransientHostsResponse {
 
     fn unwrap(wrapper: Self::Wrapper) -> Self {
         wrapper.data
+    }
+}
+
+/// A representation of multiple network interfaces correlated/grouped into one physical device.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct GroupedDevice {
+    pub hostname: String,
+    pub duid: Option<Duid>,
+    pub primary_mac: MacAddr,
+    pub interfaces: Vec<DeviceEntry>,
+}
+
+#[must_use]
+pub fn group_devices(devices: &[DeviceEntry]) -> Vec<GroupedDevice> {
+    let mut groups: Vec<Vec<DeviceEntry>> = devices.iter().cloned().map(|d| vec![d]).collect();
+
+    // Iteratively merge groups
+    let mut merged = true;
+    while merged {
+        merged = false;
+        'outer: for i in 0..groups.len() {
+            for j in (i + 1)..groups.len() {
+                if should_merge(&groups[i], &groups[j]) {
+                    let mut other = groups.remove(j);
+                    groups[i].append(&mut other);
+                    merged = true;
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    // Construct GroupedDevice list
+    let mut correlated = Vec::new();
+    for mut interfaces in groups {
+        // Sort interfaces inside the group
+        sort_interfaces(&mut interfaces);
+
+        let primary_mac = interfaces[0].mac;
+        let duid = interfaces.iter().find_map(|d| d.duid.clone());
+
+        // Find the best hostname
+        let hostname = interfaces
+            .iter()
+            .find(|d| is_valid_hostname(&d.hostname))
+            .map(|d| d.hostname.clone())
+            .unwrap_or_else(|| {
+                interfaces
+                    .iter()
+                    .find(|d| !d.hostname.is_empty())
+                    .map(|d| d.hostname.clone())
+                    .unwrap_or_else(|| "—".to_string())
+            });
+
+        correlated.push(GroupedDevice {
+            hostname,
+            duid,
+            primary_mac,
+            interfaces,
+        });
+    }
+
+    correlated
+}
+
+fn is_valid_hostname(hostname: &str) -> bool {
+    !hostname.is_empty() && hostname != "<unknown>" && !hostname.starts_with("host-")
+}
+
+fn should_merge(a: &[DeviceEntry], b: &[DeviceEntry]) -> bool {
+    // Check DUID match
+    for dev_a in a {
+        if let Some(ref duid_a) = dev_a.duid {
+            for dev_b in b {
+                if let Some(ref duid_b) = dev_b.duid
+                    && duid_a == duid_b
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    // Check Hostname match
+    for dev_a in a {
+        if is_valid_hostname(&dev_a.hostname) {
+            for dev_b in b {
+                if is_valid_hostname(&dev_b.hostname)
+                    && dev_a.hostname.eq_ignore_ascii_case(&dev_b.hostname)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+pub fn sort_interfaces(interfaces: &mut [DeviceEntry]) {
+    interfaces.sort_by(|a, b| {
+        // Online first
+        let a_online = a.status == DeviceStatus::Online;
+        let b_online = b.status == DeviceStatus::Online;
+        b_online
+            .cmp(&a_online)
+            .then(b.last_seen.cmp(&a.last_seen))
+            .then(a.mac.cmp(&b.mac))
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_group_devices() {
+        let mac1 = MacAddr::parse("00:11:22:33:44:55").unwrap();
+        let mac2 = MacAddr::parse("00:11:22:33:44:56").unwrap();
+        let mac3 = MacAddr::parse("00:11:22:33:44:57").unwrap();
+
+        let duid1 = Duid::new(vec![1, 2, 3]);
+
+        let dev1 = DeviceEntry {
+            mac: mac1,
+            hostname: "my-laptop".to_string(),
+            duid: Some(duid1.clone()),
+            status: DeviceStatus::Online,
+            last_seen: 100,
+            ..Default::default()
+        };
+
+        let dev2 = DeviceEntry {
+            mac: mac2,
+            hostname: "".to_string(),
+            duid: Some(duid1.clone()),
+            status: DeviceStatus::Offline,
+            last_seen: 50,
+            ..Default::default()
+        };
+
+        let dev3 = DeviceEntry {
+            mac: mac3,
+            hostname: "my-laptop".to_string(),
+            duid: None,
+            status: DeviceStatus::Stale,
+            last_seen: 200,
+            ..Default::default()
+        };
+
+        let devices = vec![dev1, dev2, dev3];
+        let groups = group_devices(&devices);
+
+        assert_eq!(groups.len(), 1);
+        let group = &groups[0];
+        assert_eq!(group.hostname, "my-laptop");
+        assert_eq!(group.duid, Some(duid1));
+        assert_eq!(group.interfaces.len(), 3);
+
+        // interfaces should be sorted: online first, then stale, then offline
+        assert_eq!(group.interfaces[0].mac, mac1); // Online, last_seen = 100
+        assert_eq!(group.interfaces[1].mac, mac3); // Stale, last_seen = 200
+        assert_eq!(group.interfaces[2].mac, mac2); // Offline, last_seen = 50
+    }
+
+    #[test]
+    fn test_no_group_on_fallback_hostname() {
+        let mac1 = MacAddr::parse("00:11:22:33:44:55").unwrap();
+        let mac2 = MacAddr::parse("00:11:22:33:44:56").unwrap();
+
+        let dev1 = DeviceEntry {
+            mac: mac1,
+            hostname: "host-001122334455".to_string(),
+            duid: None,
+            ..Default::default()
+        };
+
+        let dev2 = DeviceEntry {
+            mac: mac2,
+            hostname: "host-001122334455".to_string(),
+            duid: None,
+            ..Default::default()
+        };
+
+        let devices = vec![dev1, dev2];
+        let groups = group_devices(&devices);
+
+        assert_eq!(groups.len(), 2);
     }
 }

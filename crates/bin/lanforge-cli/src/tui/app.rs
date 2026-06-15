@@ -1,6 +1,7 @@
-use crate::tui::action::PendingAction;
 use crate::tui::state::TuiState;
+use crate::tui::ui::devices::build_tui_device_items;
 use crate::tui::ui::widgets::toast::Toast;
+use crate::tui::{action::PendingAction, ui::devices::TuiDeviceItem};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use lanforge_api::api::DnsQueryResponse;
 use lanforge_types::{identifiers::MacAddr, network::dns::upstream::UpstreamTarget};
@@ -359,27 +360,19 @@ impl TuiApp {
     pub fn selected_device(&self) -> Option<(MacAddr, String)> {
         let selected_idx = self.device_list_state.selected()?;
         let devices_resp = self.state.devices.as_ref()?;
-        let mut devices = devices_resp.devices.clone();
-        devices.sort_by_key(|a| a.mac);
 
-        let mut filtered_devices = Vec::new();
-        for dev in devices {
-            if !self.filter_text.is_empty() {
-                let search = self.filter_text.to_lowercase();
-                if !dev.mac.contains_str(&search)
-                    && !dev.hostname.to_lowercase().contains(&search)
-                    && !dev.display_v4.to_lowercase().contains(&search)
-                    && !dev.display_v6.to_lowercase().contains(&search)
-                {
-                    continue;
-                }
-            }
-            filtered_devices.push(dev);
+        let items = build_tui_device_items(devices_resp, &self.filter_text);
+        let item = items.get(selected_idx)?;
+
+        match item {
+            TuiDeviceItem::Single(dev) => Some((dev.mac, dev.hostname.clone())),
+            TuiDeviceItem::Parent {
+                primary_mac,
+                hostname,
+                ..
+            } => Some((*primary_mac, hostname.clone())),
+            TuiDeviceItem::Child { entry, .. } => Some((entry.mac, entry.hostname.clone())),
         }
-
-        filtered_devices
-            .get(selected_idx)
-            .map(|dev| (dev.mac, dev.hostname.clone()))
     }
 
     /// Returns `Some((mac, hostname))` of the currently selected lease in the filtered list.

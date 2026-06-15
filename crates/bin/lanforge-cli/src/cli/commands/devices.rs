@@ -6,8 +6,8 @@ use clap::ValueEnum;
 use color_eyre::eyre::Result;
 use iocraft::prelude::*;
 use lanforge_api::api::{
-    DeviceEntry, DevicesResponse, HostConfigEntry, HostsResponse, TransientHostEntry,
-    TransientHostsResponse,
+    DeviceEntry, DevicesResponse, GroupedDevice, HostConfigEntry, HostsResponse,
+    TransientHostEntry, TransientHostsResponse, group_devices,
 };
 use lanforge_types::device::DeviceStatus;
 
@@ -40,15 +40,15 @@ impl Execute for DevicesArgs {
             .list_devices(self.filter.clone(), None, None, None, None, None)
             .await?;
 
-        let mut owned_resp = resp;
-        sort_devices(&mut owned_resp.devices, self.sort);
-
         if client.json {
-            println!("{}", serde_json::to_string_pretty(&owned_resp)?);
+            println!("{}", serde_json::to_string_pretty(&resp)?);
             return Ok(());
         }
 
-        render_devices(&owned_resp, client.ascii);
+        let mut groups = group_devices(&resp.devices);
+        sort_groups(&mut groups, self.sort);
+
+        render_devices(&resp, &groups, client.ascii);
         Ok(())
     }
 }
@@ -69,7 +69,7 @@ pub enum SortMode {
     Online,
 }
 
-pub fn render_devices(resp: &DevicesResponse, ascii: bool) {
+pub fn render_devices(resp: &DevicesResponse, groups: &[GroupedDevice], ascii: bool) {
     element! {
         View(flex_direction: FlexDirection::Column, margin_top: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row) {
@@ -101,7 +101,7 @@ pub fn render_devices(resp: &DevicesResponse, ascii: bool) {
 
             // Rows
             View(flex_direction: FlexDirection::Column) {
-                #(resp.devices.iter().cloned().map(|dev| element! { DeviceRow(device: dev, ascii: ascii) }))
+                #(groups.iter().cloned().map(|group| element! { GroupedDeviceRow(group: group, ascii: ascii) }))
             }
         }
     }.print();
@@ -224,27 +224,147 @@ fn truncate(s: &str, max_width: usize) -> String {
     }
 }
 
-fn sort_devices(devices: &mut [DeviceEntry], mode: SortMode) {
-    devices.sort_by(|a, b| match mode {
-        SortMode::Mac => a.mac.cmp(&b.mac),
-        SortMode::Host => {
-            if a.hostname.is_empty() && !b.hostname.is_empty() {
-                Ordering::Greater
-            } else if !a.hostname.is_empty() && b.hostname.is_empty() {
-                Ordering::Less
-            } else {
-                a.hostname.to_lowercase().cmp(&b.hostname.to_lowercase())
+pub fn sort_groups(groups: &mut [GroupedDevice], mode: SortMode) {
+    groups.sort_by(|a, b| {
+        let a_primary = &a.interfaces[0];
+        let b_primary = &b.interfaces[0];
+
+        match mode {
+            SortMode::Mac => a.primary_mac.cmp(&b.primary_mac),
+            SortMode::Host => {
+                if a.hostname.is_empty() && !b.hostname.is_empty() {
+                    Ordering::Greater
+                } else if !a.hostname.is_empty() && b.hostname.is_empty() {
+                    Ordering::Less
+                } else {
+                    a.hostname.to_lowercase().cmp(&b.hostname.to_lowercase())
+                }
+            }
+            SortMode::LastSeen => {
+                let a_max_seen = a.interfaces.iter().map(|d| d.last_seen).max().unwrap_or(0);
+                let b_max_seen = b.interfaces.iter().map(|d| d.last_seen).max().unwrap_or(0);
+                let a_online = a
+                    .interfaces
+                    .iter()
+                    .any(|d| d.status == DeviceStatus::Online);
+                let b_online = b
+                    .interfaces
+                    .iter()
+                    .any(|d| d.status == DeviceStatus::Online);
+
+                b_max_seen.cmp(&a_max_seen).then(b_online.cmp(&a_online))
+            }
+            SortMode::Ip => a_primary.display_v4.cmp(&b_primary.display_v4),
+            SortMode::Ipv6 => a_primary.display_v6.cmp(&b_primary.display_v6),
+            SortMode::Online => {
+                let a_online = a
+                    .interfaces
+                    .iter()
+                    .any(|d| d.status == DeviceStatus::Online);
+                let b_online = b
+                    .interfaces
+                    .iter()
+                    .any(|d| d.status == DeviceStatus::Online);
+                let a_max_seen = a.interfaces.iter().map(|d| d.last_seen).max().unwrap_or(0);
+                let b_max_seen = b.interfaces.iter().map(|d| d.last_seen).max().unwrap_or(0);
+
+                b_online
+                    .cmp(&a_online)
+                    .then(b_max_seen.cmp(&a_max_seen))
+                    .then(a.hostname.cmp(&b.hostname))
             }
         }
-        SortMode::LastSeen => b.last_seen.cmp(&a.last_seen).then(b.status.cmp(&a.status)),
-        SortMode::Ip => a.display_v4.cmp(&b.display_v4),
-        SortMode::Ipv6 => a.display_v6.cmp(&b.display_v6),
-        SortMode::Online => b
-            .status
-            .cmp(&a.status)
-            .then(b.last_seen.cmp(&a.last_seen))
-            .then(a.hostname.cmp(&b.hostname)),
     });
+}
+
+#[component]
+fn GroupedDeviceRow(props: &GroupedRowProps) -> impl Into<AnyElement<'_>> {
+    let group = &props.group;
+    let ascii = props.ascii;
+    let interfaces = &group.interfaces;
+
+    if interfaces.len() == 1 {
+        Into::<AnyElement<'_>>::into(element! {
+            DeviceRow(device: interfaces[0].clone(), ascii: ascii)
+        })
+    } else {
+        let status = if interfaces.iter().any(|d| d.status == DeviceStatus::Online) {
+            DeviceStatus::Online
+        } else if interfaces.iter().any(|d| d.status == DeviceStatus::Stale) {
+            DeviceStatus::Stale
+        } else {
+            DeviceStatus::Offline
+        };
+
+        let status_color = match status {
+            DeviceStatus::Online => Color::Green,
+            DeviceStatus::Stale => Color::Yellow,
+            DeviceStatus::Offline => Color::DarkGrey,
+        };
+
+        let bullet = if ascii { "*" } else { "●" };
+        let last_seen_compact =
+            format_short_relative(interfaces.iter().map(|d| d.last_seen).max().unwrap_or(0));
+
+        let duid_str = group.duid.as_ref().map_or_else(String::new, |d| {
+            let s = d.to_string();
+            if s.len() > 10 {
+                format!(" [DUID: {}…]", &s[..10])
+            } else {
+                format!(" [DUID: {s}]")
+            }
+        });
+
+        let host_text = format!("{}{}", group.hostname, duid_str);
+
+        let h_pipe = if ascii { "|" } else { "├" };
+        let h_dash = if ascii { "-" } else { "─" };
+        let h_corner = if ascii { "`" } else { "└" };
+
+        Into::<AnyElement<'_>>::into(element! {
+            View(flex_direction: FlexDirection::Column) {
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: format!("{bullet} "), color: status_color)
+                    Text(content: format!("{:<23}", truncate(&host_text, 23)), weight: Weight::Bold)
+                    Text(content: format!("{:<20}", "—"), color: Color::DarkGrey)
+                    Text(content: format!("{:<18}", "—"), color: Color::DarkGrey)
+                    Text(content: format!("{:<31}", "—"), color: Color::DarkGrey)
+                    Text(content: format!("{:<10}", last_seen_compact), color: Color::DarkGrey)
+                }
+                #(interfaces.iter().enumerate().map(|(idx, dev)| {
+                    let h_sym = if idx == interfaces.len() - 1 { h_corner } else { h_pipe };
+                    let line_drawing = format!("  {h_sym}{h_dash} ");
+                    let child_bullet_str = format!("{bullet} ");
+                    let indent_spaces = " ".repeat(18);
+
+                    let child_status_color = match dev.status {
+                        DeviceStatus::Online => Color::Green,
+                        DeviceStatus::Stale => Color::Yellow,
+                        DeviceStatus::Offline => Color::DarkGrey,
+                    };
+                    let child_seen = format_short_relative(dev.last_seen);
+
+                    element! {
+                        View(flex_direction: FlexDirection::Row) {
+                            Text(content: line_drawing, color: Color::DarkGrey)
+                            Text(content: child_bullet_str, color: child_status_color)
+                            Text(content: indent_spaces)
+                            Text(content: format!("{:<20}", dev.mac), color: Color::Cyan)
+                            Text(content: format!("{:<18}", dev.display_v4), color: Color::Green)
+                            Text(content: format!("{:<31}", truncate(&dev.display_v6, 30)), color: Color::Yellow)
+                            Text(content: format!("{:<10}", child_seen), color: Color::DarkGrey)
+                        }
+                    }
+                }))
+            }
+        })
+    }
+}
+
+#[derive(Props, Clone, Default)]
+struct GroupedRowProps {
+    pub group: GroupedDevice,
+    pub ascii: bool,
 }
 
 #[derive(Props, Clone, Default)]
