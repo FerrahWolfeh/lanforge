@@ -1,5 +1,6 @@
 use crate::tui::app::TuiApp;
 use crate::tui::{theme, utils};
+use lanforge_api::api::LeaseKind;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -64,15 +65,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &mut TuiApp) {
     let mut rows = Vec::new();
     for lease in &filtered_leases {
         let kind_span = match lease.kind {
-            lanforge_api::api::LeaseKind::V4 => {
-                Span::styled("v4", Style::default().fg(theme::MOCHA_BLUE))
-            }
-            lanforge_api::api::LeaseKind::V6 => {
-                Span::styled("v6", Style::default().fg(theme::MOCHA_MAUVE))
-            }
-            lanforge_api::api::LeaseKind::V6Prefix => {
-                Span::styled("pfx", Style::default().fg(theme::MOCHA_TEAL))
-            }
+            LeaseKind::V4 => Span::styled("v4", Style::default().fg(theme::MOCHA_BLUE)),
+            LeaseKind::V6 => Span::styled("v6", Style::default().fg(theme::MOCHA_MAUVE)),
+            LeaseKind::V6Prefix => Span::styled("pfx", Style::default().fg(theme::MOCHA_TEAL)),
         };
 
         rows.push(Row::new(vec![
@@ -87,7 +82,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &mut TuiApp) {
                 Style::default().fg(theme::MAC),
             )),
             Cell::from(Span::styled(
-                lease.address.to_string(),
+                if lease.kind == LeaseKind::V6Prefix {
+                    format!("{}/64", lease.address)
+                } else {
+                    lease.address.to_string()
+                },
                 Style::default().fg(theme::IP),
             )),
             Cell::from(kind_span),

@@ -292,6 +292,30 @@ impl PostgresDatabase {
         let mut table = State::new();
         table.set_indexing_enabled(false);
 
+        // Delete expired leases/prefixes from the database on startup
+        let now_pg = PgTimestampTz::from(SystemTime::now());
+        exec!(
+            sqlx::query!(
+                "DELETE FROM dhcp.v4_leases WHERE expires <= $1",
+                now_pg as PgTimestampTz
+            ),
+            &self.pool
+        )?;
+        exec!(
+            sqlx::query!(
+                "DELETE FROM dhcp.v6_leases WHERE expires <= $1",
+                now_pg as PgTimestampTz
+            ),
+            &self.pool
+        )?;
+        exec!(
+            sqlx::query!(
+                "DELETE FROM net.v6_prefixes WHERE expires <= $1",
+                now_pg as PgTimestampTz
+            ),
+            &self.pool
+        )?;
+
         let device_rows = self.load_device_rows().await?;
         let v4_leases = self.load_v4_leases().await?;
         let v6_leases = self.load_v6_leases().await?;
@@ -331,35 +355,42 @@ impl PostgresDatabase {
         }
 
         // Leases and SLAAC
+        let now = SystemTime::now();
         for (mac, ip, expires) in v4_leases {
-            table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+            if expires > now {
+                table.apply_update(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
+            }
         }
         for (mac, iaid, ip, expires) in v6_leases {
-            let duid = table
-                .get_duid_by_mac(mac)
-                .cloned()
-                .unwrap_or_else(|| Duid::new(vec![]));
-            table.apply_update(DeviceUpdate::V6LeaseGranted {
-                mac: Some(mac),
-                duid,
-                iaid,
-                ip,
-                expires,
-            });
+            if expires > now {
+                let duid = table
+                    .get_duid_by_mac(mac)
+                    .cloned()
+                    .unwrap_or_else(|| Duid::new(vec![]));
+                table.apply_update(DeviceUpdate::V6LeaseGranted {
+                    mac: Some(mac),
+                    duid,
+                    iaid,
+                    ip,
+                    expires,
+                });
+            }
         }
         for (mac, iaid, prefix, len, expires) in v6_prefixes {
-            let duid = table
-                .get_duid_by_mac(mac)
-                .cloned()
-                .unwrap_or_else(|| Duid::new(vec![]));
-            table.apply_update(DeviceUpdate::V6PrefixAssigned {
-                mac: Some(mac),
-                duid,
-                iaid,
-                prefix,
-                len,
-                expires,
-            });
+            if expires > now {
+                let duid = table
+                    .get_duid_by_mac(mac)
+                    .cloned()
+                    .unwrap_or_else(|| Duid::new(vec![]));
+                table.apply_update(DeviceUpdate::V6PrefixAssigned {
+                    mac: Some(mac),
+                    duid,
+                    iaid,
+                    prefix,
+                    len,
+                    expires,
+                });
+            }
         }
         for (mac, ip, last_seen) in slaac_addrs {
             if let Some(dev_arc) = table.devices.get_mut(&mac) {

@@ -227,7 +227,7 @@ impl Device {
         ip: Ipv6Addr,
         expires: SystemTime,
     ) -> Option<NetworkChange> {
-        let mut changed = if self.duid.as_ref() == Some(duid) {
+        let mut changed = if duid.as_bytes().is_empty() || self.duid.as_ref() == Some(duid) {
             false
         } else {
             self.duid = Some(duid.clone());
@@ -275,7 +275,7 @@ impl Device {
         len: u8,
         expires: SystemTime,
     ) -> Option<NetworkChange> {
-        let mut changed = if self.duid.as_ref() == Some(duid) {
+        let mut changed = if duid.as_bytes().is_empty() || self.duid.as_ref() == Some(duid) {
             false
         } else {
             self.duid = Some(duid.clone());
@@ -652,22 +652,43 @@ impl Device {
         };
 
         for state in &self.v6 {
-            if let IPv6State::Slaac(ip, _) = state {
-                if is_ula(ip) {
-                    update_best(3, *ip);
-                } else if matches!(classify_ipv6(ip), IpClassification::Gua) {
-                    update_best(4, *ip);
+            match state {
+                IPv6State::Static(..) => {
+                    if let Some(ip) = state.ip_with_prefix(ula_prefix)
+                        && is_ula(&ip)
+                    {
+                        update_best(1, ip);
+                    }
+                    if let Some(ip) = state.ip_with_prefix(gua_prefix)
+                        && matches!(classify_ipv6(&ip), IpClassification::Gua)
+                    {
+                        update_best(2, ip);
+                    }
                 }
-            } else {
-                if let Some(ip) = state.ip_with_prefix(ula_prefix)
-                    && is_ula(&ip)
-                {
-                    update_best(1, ip);
+                IPv6State::Dynamic(lease) => {
+                    let ip = lease.ip;
+                    if is_ula(&ip) {
+                        update_best(3, ip);
+                    } else if matches!(classify_ipv6(&ip), IpClassification::Gua) {
+                        update_best(4, ip);
+                    }
                 }
-                if let Some(ip) = state.ip_with_prefix(gua_prefix)
-                    && matches!(classify_ipv6(&ip), IpClassification::Gua)
-                {
-                    update_best(2, ip);
+                IPv6State::Slaac(ip, _) => {
+                    if is_ula(ip) {
+                        update_best(5, *ip);
+                    } else if matches!(classify_ipv6(ip), IpClassification::Gua) {
+                        update_best(6, *ip);
+                    }
+                }
+                IPv6State::Discovery(ip, _) => {
+                    if is_ula(ip) {
+                        update_best(7, *ip);
+                    } else if matches!(classify_ipv6(ip), IpClassification::Gua) {
+                        update_best(8, *ip);
+                    }
+                }
+                IPv6State::LinkLocal(ip, _) => {
+                    update_best(9, *ip);
                 }
             }
         }

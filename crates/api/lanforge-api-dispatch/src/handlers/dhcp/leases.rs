@@ -119,6 +119,22 @@ impl ClientContext {
                     });
                 }
             }
+            for lease in &dev.v6_prefixes {
+                leases.push(LeaseEntry {
+                    mac: dev.mac,
+                    hostname: dev.display_hostname().to_string(),
+                    address: IpAddr::V6(lease.prefix),
+                    kind: LeaseKind::V6Prefix,
+                    expires: lease
+                        .expires
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs()),
+                    remaining_secs: lease
+                        .expires
+                        .duration_since(SystemTime::now())
+                        .map_or(0, |d| d.as_secs()),
+                });
+            }
         }
 
         Response::Leases(LeasesResponse { leases })

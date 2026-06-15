@@ -211,6 +211,7 @@ impl Dhcpv6Service {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_server(
         &self,
         pools: Vec<Dhcpv6Pool>,
@@ -257,6 +258,21 @@ impl Dhcpv6Service {
                 .collect();
             server.pool.reserve_statics(ula_ips);
         }
+
+        // Seed with active dynamic leases from context
+        let active_dynamic_ips: Vec<Ipv6Addr> = self.ctx.with_state(|state| {
+            state
+                .devices
+                .values()
+                .flat_map(|dev| {
+                    dev.v6.iter().filter_map(|s| match s {
+                        IPv6State::Dynamic(lease) => Some(lease.ip),
+                        _ => None,
+                    })
+                })
+                .collect()
+        });
+        server.pool.reserve_statics(active_dynamic_ips);
 
         // 2. Re-sync GUA from global state (honoring configured interface)
         if let Some(ifindex) = pnet::datalink::interfaces()

@@ -108,12 +108,27 @@ pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, a
             mac: l.mac,
             v4: None,
             v6: None,
+            v6_prefix: None,
             expires: l.expires,
         });
+        entry.expires = entry.expires.max(l.expires);
 
-        match l.address {
-            IpAddr::V4(ip) => entry.v4 = Some(ip),
-            IpAddr::V6(ip) => entry.v6 = Some(ip),
+        match l.kind {
+            LeaseKind::V4 => {
+                if let IpAddr::V4(ip) = l.address {
+                    entry.v4 = Some(ip);
+                }
+            }
+            LeaseKind::V6 => {
+                if let IpAddr::V6(ip) = l.address {
+                    entry.v6 = Some(ip);
+                }
+            }
+            LeaseKind::V6Prefix => {
+                if let IpAddr::V6(ip) = l.address {
+                    entry.v6_prefix = Some(ip);
+                }
+            }
         }
     }
 
@@ -133,7 +148,7 @@ pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, a
                 Text(content: format!("  {:<23}", "HOST"), color: Color::DarkGrey)
                 Text(content: format!("{:<20}", "MAC ADDRESS"), color: Color::DarkGrey)
                 Text(content: format!("{:<18}", "IPv4"), color: Color::DarkGrey)
-                Text(content: format!("{:<25}", "IPv6"), color: Color::DarkGrey)
+                Text(content: format!("{:<35}", "IPv6"), color: Color::DarkGrey)
                 Text(content: "EXPIRES", color: Color::DarkGrey)
             }
             // Separator
@@ -155,6 +170,7 @@ struct MergedLease {
     mac: MacAddr,
     v4: Option<Ipv4Addr>,
     v6: Option<Ipv6Addr>,
+    v6_prefix: Option<Ipv6Addr>,
     expires: u64,
 }
 
@@ -162,7 +178,12 @@ struct MergedLease {
 fn MergedLeaseRow(props: &MergedLeaseRowProps) -> impl Into<AnyElement<'_>> {
     let m = &props.lease;
     let v4_str = m.v4.map_or_else(|| "-".to_string(), |ip| ip.to_string());
-    let v6_str = m.v6.map_or_else(|| "-".to_string(), |ip| ip.to_string());
+    let v6_str = match (m.v6, m.v6_prefix) {
+        (Some(v6), Some(pfx)) => format!("{v6} / {pfx}/64"),
+        (Some(v6), None) => v6.to_string(),
+        (None, Some(pfx)) => format!("{pfx}/64"),
+        (None, None) => "-".to_string(),
+    };
     let expires_str = &m.expires;
 
     element! {
@@ -171,7 +192,7 @@ fn MergedLeaseRow(props: &MergedLeaseRowProps) -> impl Into<AnyElement<'_>> {
             Text(content: format!("{:<23}", m.hostname))
             Text(content: format!("{:<20}", m.mac), color: Color::Cyan)
             Text(content: format!("{:<18}", v4_str), color: Color::Green)
-            Text(content: format!("{:<25}", v6_str), color: Color::Yellow)
+            Text(content: format!("{:<35}", v6_str), color: Color::Yellow)
             Text(content: expires_str.to_string(), color: Color::DarkGrey)
         }
     }

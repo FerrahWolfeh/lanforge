@@ -689,26 +689,55 @@ fn test_primary_v6_priority() {
     let gua_prefix: Ipv6Addr = "2001:db8::".parse().unwrap();
     let ula_prefix: Ipv6Addr = "fd00::".parse().unwrap();
 
+    let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
+    let disc_gua: Ipv6Addr = "2001:db8::d15c".parse().unwrap();
+    let disc_ula: Ipv6Addr = "fd00::d15c".parse().unwrap();
     let slaac_gua: Ipv6Addr = "2001:db8::1".parse().unwrap();
     let slaac_ula: Ipv6Addr = "fd00::1".parse().unwrap();
     let lease_gua: Ipv6Addr = "2001:db8::beef".parse().unwrap();
     let lease_ula: Ipv6Addr = "fd00::beef".parse().unwrap();
+    let static_gua: Ipv6Addr = "2001:db8::cafe".parse().unwrap();
+    let static_ula: Ipv6Addr = "fd00::cafe".parse().unwrap();
 
-    // 4. SLAAC GUA
+    // 9. Link-Local
+    dev.v6
+        .push(IPv6State::LinkLocal(link_local, SystemTime::now()));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(link_local)
+    );
+
+    // 8. Discovery GUA > Link-Local
+    dev.v6
+        .push(IPv6State::Discovery(disc_gua, SystemTime::now()));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(disc_gua)
+    );
+
+    // 7. Discovery ULA > Discovery GUA
+    dev.v6
+        .push(IPv6State::Discovery(disc_ula, SystemTime::now()));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(disc_ula)
+    );
+
+    // 6. SLAAC GUA > Discovery ULA
     dev.v6.push(IPv6State::Slaac(slaac_gua, SystemTime::now()));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(slaac_gua)
     );
 
-    // 3. SLAAC ULA > SLAAC GUA
+    // 5. SLAAC ULA > SLAAC GUA
     dev.v6.push(IPv6State::Slaac(slaac_ula, SystemTime::now()));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(slaac_ula)
     );
 
-    // 2. GUA Lease > SLAAC ULA
+    // 4. Dynamic GUA > SLAAC ULA
     dev.v6.push(IPv6State::Dynamic(V6Lease {
         ip: lease_gua,
         iaid: 1,
@@ -720,7 +749,7 @@ fn test_primary_v6_priority() {
         Some(lease_gua)
     );
 
-    // 1. ULA Lease > GUA Lease
+    // 3. Dynamic ULA > Dynamic GUA
     dev.v6.push(IPv6State::Dynamic(V6Lease {
         ip: lease_ula,
         iaid: 2,
@@ -730,6 +759,26 @@ fn test_primary_v6_priority() {
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(lease_ula)
+    );
+
+    // 2. Static GUA > Dynamic ULA
+    dev.v6.push(IPv6State::Static(
+        Ipv6AddrOrSuffix::Full(static_gua),
+        SystemTime::now(),
+    ));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(static_gua)
+    );
+
+    // 1. Static ULA > Static GUA
+    dev.v6.push(IPv6State::Static(
+        Ipv6AddrOrSuffix::Full(static_ula),
+        SystemTime::now(),
+    ));
+    assert_eq!(
+        dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
+        Some(static_ula)
     );
 
     // Teste de Suffix
