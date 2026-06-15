@@ -177,12 +177,33 @@ impl Dhcpv6Server {
             })
             .or_else(|| mac_from_eui64_link_local(&peer));
 
-        // 1. Try to recover MAC from NDP cache or DUID index
+        // 1. Try to recover MAC from DNS IP index, raw NDP cache, or DUID index
         if mac.is_none() {
             mac = self.ctx.get_mac_by_ip(peer.into());
         }
         if mac.is_none() {
+            mac = self.ctx.get_mac_from_ndp_cache(&peer);
+        }
+        if mac.is_none() {
             mac = self.ctx.get_mac_by_duid(&client_duid);
+            // Prevent stale DUID-to-MAC fallback if the client has switched interfaces
+            // (e.g. WiFi -> Ethernet). If the resolved device has a link-local address
+            // that is different from the current packet peer IP, we reject the fallback.
+            if let Some(m) = mac
+                && let Some(device) = self.ctx.get_device(&m)
+            {
+                let has_other_ll = device.v6.iter().any(|state| {
+                    state
+                        .ip()
+                        .is_some_and(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80 && ip != peer)
+                });
+                if has_other_ll {
+                    debug!(
+                        "DHCPv6: Rejecting DUID-to-MAC fallback to {m} because peer IP {peer} does not match device's recorded link-local address."
+                    );
+                    mac = None;
+                }
+            }
         }
 
         // 2. Resolve identity

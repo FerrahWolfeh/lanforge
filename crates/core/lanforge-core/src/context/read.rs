@@ -114,6 +114,12 @@ impl LanforgeContext {
         self.read().get_mac_by_ip(ip)
     }
 
+    /// Helper to find a MAC address from the raw NDP cache.
+    #[must_use]
+    pub fn get_mac_from_ndp_cache(&self, ip: &Ipv6Addr) -> Option<MacAddr> {
+        self.read().get_mac_from_ndp_cache(ip)
+    }
+
     /// Produz um registro validado das configurações estáticas.
     #[must_use]
     pub fn get_static_registry(&self) -> StaticRegistry {
