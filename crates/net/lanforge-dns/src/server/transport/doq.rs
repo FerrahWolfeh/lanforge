@@ -118,21 +118,14 @@ async fn handle_doq_connection(
     ctx: LanforgeContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let peer = connection.remote_address();
-    let dns_ctx_any = ctx.get_dns_context().ok_or("DNS engine not ready")?;
-    let _ = dns_ctx_any
-        .downcast_ref::<DnsContext>()
-        .ok_or("Invalid DNS context")?;
+    let dns_ctx_arc = ctx
+        .get_service_state_ref::<DnsContext>("dns::context")
+        .ok_or("DNS engine not ready")?;
 
     loop {
         match connection.accept_bi().await {
             Ok((mut send, mut recv)) => {
-                // Actually dns_ctx is Arc-wrapped inside LanforgeContext anyway if we downcast properly.
-                // Wait, get_dns_context() returns Arc<dyn Any + Send + Sync>.
-                // So we can clone the Arc.
-                let dns_ctx_arc = dns_ctx_any
-                    .clone()
-                    .downcast::<DnsContext>()
-                    .map_err(|_| "Downcast failed")?;
+                let dns_ctx_arc = Arc::clone(&dns_ctx_arc);
 
                 tokio::spawn(async move {
                     let query_buf = match recv.read_to_end(4096).await {

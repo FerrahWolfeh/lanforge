@@ -51,7 +51,7 @@ impl DnsService {
     #[must_use]
     pub fn new(cfg: DnsConfig, ctx: LanforgeContext, db: Arc<LanforgeDb>) -> Self {
         let stats = Arc::new(DnsStats::new());
-        ctx.set_dns_stats(Arc::clone(&stats));
+        ctx.register_service_state("dns::stats", Arc::clone(&stats));
         let service = Self {
             cfg: Arc::new(cfg),
             stats,
@@ -187,7 +187,8 @@ impl AsyncService for DnsService {
 
         self.ctx.wait_for_db().await?;
         let dns_ctx = self.init_dns_context().await?;
-        self.ctx.set_dns_context(Arc::clone(&dns_ctx));
+        self.ctx
+            .register_service_state("dns::context", Arc::clone(&dns_ctx));
 
         let (tx, mut mpsc_rx) = tokio::sync::mpsc::channel(100);
         let dns_handle = lanforge_core::context::DnsHandle::new(tx);

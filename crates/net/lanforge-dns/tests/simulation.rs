@@ -267,8 +267,7 @@ async fn dns_simulation_cache_case_insensitive() {
         .unwrap();
 
     let hits_before = ctx
-        .get_dns_stats()
-        .and_then(|s| s.downcast::<DnsStats>().ok())
+        .get_service_state_ref::<DnsStats>("dns::stats")
         .map(|s| s.cache_hits.load(Ordering::Relaxed))
         .unwrap_or(0);
 
@@ -294,8 +293,7 @@ async fn dns_simulation_cache_case_insensitive() {
     assert!(!response.answers.is_empty());
 
     let hits_after = ctx
-        .get_dns_stats()
-        .and_then(|s| s.downcast::<DnsStats>().ok())
+        .get_service_state_ref::<DnsStats>("dns::stats")
         .map(|s| s.cache_hits.load(Ordering::Relaxed))
         .unwrap_or(0);
     assert!(

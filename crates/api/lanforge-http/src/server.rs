@@ -323,12 +323,11 @@ async fn handle_dns_query(
         return (StatusCode::BAD_REQUEST, "Empty query").into_response();
     }
 
-    let Some(dns_ctx_any) = state.ctx.get_dns_context() else {
+    let Some(dns_ctx) = state
+        .ctx
+        .get_service_state_ref::<DnsContext>("dns::context")
+    else {
         return (StatusCode::SERVICE_UNAVAILABLE, "DNS engine not ready").into_response();
-    };
-
-    let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid DNS context").into_response();
     };
 
     let src_ip: std::net::IpAddr = headers
@@ -354,7 +353,7 @@ async fn handle_dns_query(
         TransportProtocol::Https,
     );
 
-    match dns_ctx.pipeline.run(dns_ctx, req, &mut resp_buf).await {
+    match dns_ctx.pipeline.run(&dns_ctx, req, &mut resp_buf).await {
         Ok(()) => {
             if resp_buf.is_empty() {
                 StatusCode::NO_CONTENT.into_response()

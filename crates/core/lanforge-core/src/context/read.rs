@@ -152,10 +152,14 @@ impl LanforgeContext {
         (state.gua, state.ula)
     }
 
-    /// Returns the current DNS statistics.
+    /// Retrieves a registered shared service state or context by key.
     #[must_use]
-    pub fn get_dns_stats(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        self.inner.dns_stats.read().clone()
+    pub fn get_service_state_ref<T: std::any::Any + Send + Sync + 'static>(
+        &self,
+        key: &str,
+    ) -> Option<Arc<T>> {
+        let val = self.inner.shared_services.read().get(key)?.clone();
+        val.downcast::<T>().ok()
     }
 
     /// Returns the `DHCPv4` stats concretely.
@@ -168,12 +172,6 @@ impl LanforgeContext {
     #[must_use]
     pub fn dhcpv6_stats(&self) -> Arc<Dhcpv6Stats> {
         self.inner.dhcpv6_stats.clone()
-    }
-
-    /// Returns the shared DNS context, if set.
-    #[must_use]
-    pub fn get_dns_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        self.inner.dns_context.read().clone()
     }
 
     /// Retrieves a cached transient host by its IP.

@@ -527,14 +527,10 @@ impl ClientContext {
         }
 
         if dhcp_v4_dirty && let Ok(pools) = self.db.load_dhcp_v4_pools().await {
-            let _ = self
-                .ctx
-                .apply(lanforge_types::update::DeviceUpdate::UpdateDhcpV4Pools { pools });
+            self.ctx.update_dhcp_v4_pools(pools);
         }
         if dhcp_v6_dirty && let Ok(pools) = self.db.load_dhcp_v6_pools().await {
-            let _ = self
-                .ctx
-                .apply(lanforge_types::update::DeviceUpdate::UpdateDhcpV6Pools { pools });
+            self.ctx.update_dhcp_v6_pools(pools);
         }
         if ra_dirty
             && let (Ok(prefixes), Ok(rdnss), Ok(dnssl)) = (
@@ -543,13 +539,7 @@ impl ClientContext {
                 self.db.load_ra_dnssl().await,
             )
         {
-            let _ = self
-                .ctx
-                .apply(lanforge_types::update::DeviceUpdate::UpdateRaConfig {
-                    prefixes,
-                    rdnss,
-                    dnssl,
-                });
+            self.ctx.update_ra_config(prefixes, rdnss, dnssl);
         }
 
         Response::SystemConfigImport(SystemConfigImportResponse {

@@ -4,8 +4,11 @@ use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::update::DeviceUpdate;
 
+use crate::bus::{LanforgeEvent, SystemEvent};
 use crate::context::LanforgeContext;
 
 impl LanforgeContext {
@@ -32,14 +35,43 @@ impl LanforgeContext {
         self.inner.if_ready.store(ready, Ordering::SeqCst);
     }
 
-    /// Sets the shared DNS statistics.
-    pub fn set_dns_stats<T: Any + Send + Sync + 'static>(&self, stats: Arc<T>) {
-        *self.inner.dns_stats.write() = Some(stats as Arc<dyn Any + Send + Sync>);
+    /// Registers a shared service state or context.
+    pub fn register_service_state<T: Any + Send + Sync + 'static>(&self, key: &str, state: Arc<T>) {
+        self.inner
+            .shared_services
+            .write()
+            .insert(key.to_string(), state as Arc<dyn Any + Send + Sync>);
     }
 
-    /// Sets the shared DNS context.
-    pub fn set_dns_context<T: Any + Send + Sync + 'static>(&self, ctx: Arc<T>) {
-        *self.inner.dns_context.write() = Some(ctx as Arc<dyn Any + Send + Sync>);
+    /// Updates the configured `DHCPv4` pools and publishes the change event.
+    pub fn update_dhcp_v4_pools(&self, pools: Vec<Dhcpv4Pool>) {
+        *self.inner.dhcp_v4_pools.write() = pools;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
+    }
+
+    /// Updates the configured `DHCPv6` pools and publishes the change event.
+    pub fn update_dhcp_v6_pools(&self, pools: Vec<Dhcpv6Pool>) {
+        *self.inner.dhcp_v6_pools.write() = pools;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed));
+    }
+
+    /// Updates the configured RA prefix/DNS/domain search lists and publishes the change event.
+    pub fn update_ra_config(
+        &self,
+        prefixes: Vec<RAPrefix>,
+        rdnss: Vec<RdnssConfig>,
+        dnssl: Vec<DnsslConfig>,
+    ) {
+        *self.inner.ra_prefixes.write() = prefixes;
+        *self.inner.ra_rdnss.write() = rdnss;
+        *self.inner.ra_dnssl.write() = dnssl;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
     }
 
     /// Completely resets the in-memory state.

@@ -212,9 +212,7 @@ fn append_dhcp_metrics(
 }
 
 fn append_dns_metrics(out: &mut String, ctx: &LanforgeContext) {
-    if let Some(stats_any) = ctx.get_dns_stats()
-        && let Some(stats) = stats_any.downcast_ref::<DnsStats>()
-    {
+    if let Some(stats) = ctx.get_service_state_ref::<DnsStats>("dns::stats") {
         let snap = stats.snapshot();
         out.push_str("# HELP lanforge_dns_queries_total Total DNS queries received\n");
         out.push_str("# TYPE lanforge_dns_queries_total counter\n");
@@ -239,9 +237,7 @@ fn append_dns_metrics(out: &mut String, ctx: &LanforgeContext) {
         );
     }
 
-    if let Some(dns_ctx_any) = ctx.get_dns_context()
-        && let Some(dns_ctx) = dns_ctx_any.downcast_ref::<DnsContext>()
-    {
+    if let Some(dns_ctx) = ctx.get_service_state_ref::<DnsContext>("dns::context") {
         out.push_str("# HELP lanforge_dns_upstream_rtt_us Round-trip time to upstream resolver in microseconds\n");
         out.push_str("# TYPE lanforge_dns_upstream_rtt_us gauge\n");
         out.push_str(

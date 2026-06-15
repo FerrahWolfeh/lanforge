@@ -182,10 +182,18 @@ struct LanforgeContextInner {
     db_ready: AtomicBool,
     /// Network interface readiness flag.
     if_ready: AtomicBool,
-    /// Shared DNS statistics, updated by the DNS module.
-    dns_stats: RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
-    /// Shared DNS context for DoT/DoH, updated by the DNS module.
-    dns_context: RwLock<Option<Arc<dyn std::any::Any + Send + Sync>>>,
+    /// Generic registry for shared service states/contexts.
+    shared_services: RwLock<HashMap<String, Arc<dyn std::any::Any + Send + Sync>>>,
+    /// Configured `DHCPv4` pools.
+    dhcp_v4_pools: RwLock<Vec<Dhcpv4Pool>>,
+    /// Configured `DHCPv6` pools.
+    dhcp_v6_pools: RwLock<Vec<Dhcpv6Pool>>,
+    /// Configured RA prefixes.
+    ra_prefixes: RwLock<Vec<RAPrefix>>,
+    /// Configured RA RDNSS.
+    ra_rdnss: RwLock<Vec<RdnssConfig>>,
+    /// Configured RA DNSSL.
+    ra_dnssl: RwLock<Vec<DnsslConfig>>,
     /// Shared `DHCPv4` statistics.
     dhcpv4_stats: Arc<Dhcpv4Stats>,
     /// Shared `DHCPv6` statistics.
@@ -247,8 +255,12 @@ impl LanforgeContext {
             running: AtomicBool::new(true),
             db_ready: AtomicBool::new(false),
             if_ready: AtomicBool::new(false),
-            dns_stats: RwLock::new(None),
-            dns_context: RwLock::new(None),
+            shared_services: RwLock::new(HashMap::new()),
+            dhcp_v4_pools: RwLock::new(Vec::new()),
+            dhcp_v6_pools: RwLock::new(Vec::new()),
+            ra_prefixes: RwLock::new(Vec::new()),
+            ra_rdnss: RwLock::new(Vec::new()),
+            ra_dnssl: RwLock::new(Vec::new()),
             dhcpv4_stats: Arc::new(Dhcpv4Stats::new()),
             dhcpv6_stats: Arc::new(Dhcpv6Stats::new()),
             last_db_flush: RwLock::new(None),
@@ -393,27 +405,27 @@ impl LanforgeContext {
 
     #[must_use]
     pub fn get_dhcp_v4_pools(&self) -> Vec<Dhcpv4Pool> {
-        self.read().get_dhcp_v4_pools()
+        self.inner.dhcp_v4_pools.read().clone()
     }
 
     #[must_use]
     pub fn get_dhcp_v6_pools(&self) -> Vec<Dhcpv6Pool> {
-        self.read().get_dhcp_v6_pools()
+        self.inner.dhcp_v6_pools.read().clone()
     }
 
     #[must_use]
     pub fn get_ra_prefixes(&self) -> Vec<RAPrefix> {
-        self.read().get_ra_prefixes()
+        self.inner.ra_prefixes.read().clone()
     }
 
     #[must_use]
     pub fn get_ra_rdnss(&self) -> Vec<RdnssConfig> {
-        self.read().get_ra_rdnss()
+        self.inner.ra_rdnss.read().clone()
     }
 
     #[must_use]
     pub fn get_ra_dnssl(&self) -> Vec<DnsslConfig> {
-        self.read().get_ra_dnssl()
+        self.inner.ra_dnssl.read().clone()
     }
 
     /// Registers a decoupled status provider.

@@ -66,6 +66,13 @@ impl Bootstrapper {
 
         let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
+        ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
+        ctx.update_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
+        ctx.update_ra_config(
+            cfg.ra_toml.prefixes.clone(),
+            cfg.ra_toml.rdnss.clone(),
+            cfg.ra_toml.dnssl.clone(),
+        );
         ctx.set_status(cfg.to_system_status());
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 
@@ -234,11 +241,6 @@ impl Bootstrapper {
                 warn!("Failed to load reverse resolvers from database: {e}");
             }
         }
-        table.dhcp_v4_pools = cfg.dhcpv4_toml.pools.clone();
-        table.dhcp_v6_pools = cfg.dhcpv6_toml.pools.clone();
-        table.ra_prefixes = cfg.ra_toml.prefixes.clone();
-        table.ra_rdnss = cfg.ra_toml.rdnss.clone();
-        table.ra_dnssl = cfg.ra_toml.dnssl.clone();
 
         info!(
             "📦 Databases initialized (Main: {}, Logs: {})",

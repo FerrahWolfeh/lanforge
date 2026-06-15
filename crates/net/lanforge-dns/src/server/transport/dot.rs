@@ -112,11 +112,9 @@ async fn handle_dot_connection(
     peer: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut tls_stream = acceptor.accept(stream).await?;
-    let dns_ctx_any = ctx.get_dns_context().ok_or("DNS engine not ready")?;
-    let dns_ctx = dns_ctx_any
-        .clone()
-        .downcast::<DnsContext>()
-        .map_err(|_| "Downcast failed")?;
+    let dns_ctx = ctx
+        .get_service_state_ref::<DnsContext>("dns::context")
+        .ok_or("DNS engine not ready")?;
 
     loop {
         let mut len_buf = [0u8; 2];
