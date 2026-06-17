@@ -44,6 +44,8 @@ pub struct Dhcpv6Config {
     pub boot_file: Option<String>,
     /// Custom `DHCPv6` options (key = option number, value = hex string).
     pub options: HashMap<u16, String>,
+    /// NTP servers to announce to clients (Option 56).
+    pub ntp_servers: Vec<String>,
 }
 
 impl Default for Dhcpv6Config {
@@ -60,6 +62,10 @@ impl Default for Dhcpv6Config {
             search_domains: Vec::new(),
             boot_file: None,
             options: HashMap::new(),
+            ntp_servers: vec![
+                "time.cloudflare.com".to_string(),
+                "time.google.com".to_string(),
+            ],
         }
     }
 }

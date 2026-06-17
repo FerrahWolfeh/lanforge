@@ -142,6 +142,53 @@ impl Dhcpv6Server {
         (preferred, valid)
     }
 
+    fn get_effective_lifetimes(
+        &self,
+        client_duid: &Duid,
+        identity: Option<&DeviceIdentity>,
+    ) -> (u32, u32) {
+        let mac = identity
+            .map(|i| i.mac)
+            .or_else(|| self.ctx.get_mac_by_duid(client_duid));
+        let is_static = mac
+            .and_then(|m| self.ctx.get_device(&m))
+            .is_some_and(|d| d.is_static());
+        if is_static {
+            (u32::MAX, u32::MAX)
+        } else {
+            self.get_lifetimes()
+        }
+    }
+
+    fn add_ntp_options(&self, reply: &mut Message) {
+        if self.cfg.ntp_servers.is_empty() {
+            return;
+        }
+        let mut payload = Vec::new();
+        for server in &self.cfg.ntp_servers {
+            if let Ok(ip) = server.parse::<Ipv6Addr>() {
+                // Suboption 1: IPv6 address
+                payload.extend_from_slice(&1u16.to_be_bytes());
+                payload.extend_from_slice(&16u16.to_be_bytes());
+                payload.extend_from_slice(&ip.octets());
+            } else {
+                // Suboption 3: FQDN
+                if let Some(name_bytes) = encode_fqdn(server)
+                    && let Ok(len_u16) = u16::try_from(name_bytes.len())
+                {
+                    payload.extend_from_slice(&3u16.to_be_bytes());
+                    payload.extend_from_slice(&len_u16.to_be_bytes());
+                    payload.extend_from_slice(&name_bytes);
+                }
+            }
+        }
+        if !payload.is_empty() {
+            reply
+                .opts_mut()
+                .insert(DhcpOption::Unknown(UnknownOption::new(56.into(), payload)));
+        }
+    }
+
     /// Processes a decoded `DHCPv6` message and returns a response (if any).
     pub fn handle_packet<'a>(
         &mut self,
@@ -289,6 +336,7 @@ impl Dhcpv6Server {
         }
 
         self.add_dns_options(&mut reply);
+        self.add_ntp_options(&mut reply);
         self.add_boot_options(&mut reply, identity);
         self.add_custom_options(&mut reply);
         let mut ias = AssignedIAs::default();
@@ -349,7 +397,7 @@ impl Dhcpv6Server {
             return None;
         }
 
-        let (pref, valid) = self.get_lifetimes();
+        let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
         let action = if is_rapid_commit {
             "REPLY (RC)"
         } else {
@@ -381,8 +429,12 @@ impl Dhcpv6Server {
 
         reply.opts_mut().insert(DhcpOption::IANA(IANA {
             id: iana.id,
-            t1: pref / 2,
-            t2: pref * 4 / 5,
+            t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
+            t2: if pref == u32::MAX {
+                u32::MAX
+            } else {
+                pref.saturating_mul(4) / 5
+            },
             opts: ia_opts,
         }));
         Some(client_duid.clone())
@@ -399,7 +451,7 @@ impl Dhcpv6Server {
             self.pool
                 .allocate_prefix(&self.ctx, client_duid, iapd.id, None)
         {
-            let (pref, valid) = self.get_lifetimes();
+            let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
             info!("DHCPv6: Delegating prefix {prefix}/{len} to {identity:?}");
 
             let mut ia_opts = DhcpOptions::new();
@@ -413,8 +465,12 @@ impl Dhcpv6Server {
 
             reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
                 id: iapd.id,
-                t1: pref / 2,
-                t2: pref * 4 / 5,
+                t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
+                t2: if pref == u32::MAX {
+                    u32::MAX
+                } else {
+                    pref.saturating_mul(4) / 5
+                },
                 opts: ia_opts,
             }));
             Some(client_duid.clone())
@@ -482,7 +538,7 @@ impl Dhcpv6Server {
                 .allocate(&self.ctx, &client_duid, iana.id, mac, requested_ip);
 
             if !ips.is_empty() {
-                let (pref, valid) = self.get_lifetimes();
+                let (pref, valid) = self.get_effective_lifetimes(&client_duid, identity);
                 let mut ia_opts = DhcpOptions::new();
                 let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
 
@@ -505,8 +561,12 @@ impl Dhcpv6Server {
                 }
                 reply.opts_mut().insert(DhcpOption::IANA(IANA {
                     id: iana.id,
-                    t1: pref / 2,
-                    t2: pref * 4 / 5,
+                    t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
+                    t2: if pref == u32::MAX {
+                        u32::MAX
+                    } else {
+                        pref.saturating_mul(4) / 5
+                    },
                     opts: ia_opts,
                 }));
             }
@@ -516,7 +576,7 @@ impl Dhcpv6Server {
                 self.pool
                     .allocate_prefix(&self.ctx, &client_duid, iapd.id, None)
         {
-            let (pref, valid) = self.get_lifetimes();
+            let (pref, valid) = self.get_effective_lifetimes(&client_duid, identity);
             let mut ia_opts = DhcpOptions::new();
             ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
                 prefix_ip: prefix,
@@ -527,13 +587,18 @@ impl Dhcpv6Server {
             }));
             reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
                 id: iapd.id,
-                t1: pref / 2,
-                t2: pref * 4 / 5,
+                t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
+                t2: if pref == u32::MAX {
+                    u32::MAX
+                } else {
+                    pref.saturating_mul(4) / 5
+                },
                 opts: ia_opts,
             }));
         }
 
         self.add_dns_options(&mut reply);
+        self.add_ntp_options(&mut reply);
         self.add_boot_options(&mut reply, identity);
         let mut ias = AssignedIAs::default();
         if let Some(DhcpOption::IANA(iana)) = msg.opts().get(OptionCode::IANA) {
@@ -803,6 +868,7 @@ impl Dhcpv6Server {
     ) -> HandleResult<'a> {
         let mut reply = self.base_reply(msg, MessageType::Reply, client_duid);
         self.add_dns_options(&mut reply);
+        self.add_ntp_options(&mut reply);
         self.add_boot_options(&mut reply, None);
         self.add_custom_options(&mut reply);
         HandleResult::Reply(
@@ -1029,6 +1095,22 @@ fn encode_msg<'a>(msg: &Message, buf: &'a mut Vec<u8>) -> &'a [u8] {
     buf.as_slice()
 }
 
+fn encode_fqdn(fqdn: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    for label in fqdn.trim_end_matches('.').split('.') {
+        let b = label.as_bytes();
+        if b.is_empty() {
+            return None;
+        }
+        let len = b.len().min(63);
+        let len_u8 = u8::try_from(len).unwrap_or(0);
+        out.push(len_u8);
+        out.extend_from_slice(&b[..len]);
+    }
+    out.push(0u8); // domain terminator
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1039,7 +1121,7 @@ mod tests {
     };
     use lanforge_types::{
         device::{Device, Ipv6AddrOrSuffix, Origin},
-        network::dhcp::Dhcpv6Pool,
+        network::{Ipv6Suffix, dhcp::Dhcpv6Pool},
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState},
     };
     use std::{collections::HashMap, time::Duration};
@@ -1082,6 +1164,7 @@ mod tests {
             search_domains: Vec::new(),
             boot_file: None,
             options: HashMap::new(),
+            ntp_servers: Vec::new(),
         };
         let pool = Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, 64);
         let server_duid = Duid::new(vec![
@@ -1136,6 +1219,7 @@ mod tests {
             search_domains: Vec::new(),
             boot_file: None,
             options: HashMap::new(),
+            ntp_servers: Vec::new(),
         };
         let pool = Ipv6Pool::new(&Vec::new(), None, 64);
         let ctx = init_test_context();
@@ -1376,6 +1460,7 @@ mod tests {
             search_domains: Vec::new(),
             boot_file: None,
             options: HashMap::new(),
+            ntp_servers: Vec::new(),
         };
         let pool = Ipv6Pool::new(&Vec::new(), Some(ula), 48);
         let ctx = init_test_context();
@@ -1631,6 +1716,80 @@ mod tests {
         {
             assert_eq!(start_suffix, [0; 8]);
             assert_eq!(end_suffix, [0; 8]);
+        }
+    }
+
+    #[test]
+    fn test_dhcpv6_ntp_and_static_lease() {
+        let mut srv = dummy_server();
+        // Add some NTP servers to the config to test
+        srv.cfg.ntp_servers = vec![
+            "time.cloudflare.com".to_string(),
+            "2001:4860:4806:8::".to_string(),
+        ];
+
+        let client_duid = dummy_client_duid();
+        let mac = dummy_mac();
+        let identity = DeviceIdentity::new(mac, None, None);
+        let msg = build_solicit(true);
+        let mut resp_vec = Vec::with_capacity(1024);
+
+        let res = srv.handle_solicit(
+            &msg,
+            &client_duid,
+            Some(&identity),
+            peer_ip(),
+            &mut resp_vec,
+        );
+        if let HandleResult::Reply(bytes, _, _, _, _, _, _) = res {
+            let reply = decode_reply(bytes);
+            let ntp_opt = reply.opts().get(OptionCode::Unknown(56));
+            assert!(ntp_opt.is_some());
+        } else {
+            panic!("Expected Reply");
+        }
+
+        // Test static lease (infinite lifetime)
+        let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac,
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("static-v6".to_string()),
+                duid: FieldUpdate::Set(client_duid.clone()),
+                v4_static: FieldUpdate::NoChange,
+                v6_suffix: FieldUpdate::Set(Ipv6AddrOrSuffix::Suffix(Ipv6Suffix([
+                    0, 0, 0, 0, 0, 0, 0, 10,
+                ]))),
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            },
+        });
+
+        let mut resp_vec = Vec::with_capacity(1024);
+        let res = srv.handle_solicit(
+            &msg,
+            &client_duid,
+            Some(&identity),
+            peer_ip(),
+            &mut resp_vec,
+        );
+        if let HandleResult::Reply(bytes, _, _, _, _, _, _) = res {
+            let reply = decode_reply(bytes);
+            if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
+                assert_eq!(iana.t1, u32::MAX);
+                assert_eq!(iana.t2, u32::MAX);
+                if let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr) {
+                    assert_eq!(ia_addr.preferred_life, u32::MAX);
+                    assert_eq!(ia_addr.valid_life, u32::MAX);
+                } else {
+                    panic!("Missing IAAddr in IANA");
+                }
+            } else {
+                panic!("Missing IANA in Reply");
+            }
+        } else {
+            panic!("Expected Reply");
         }
     }
 }

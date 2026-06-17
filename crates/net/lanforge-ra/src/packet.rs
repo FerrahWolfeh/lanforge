@@ -44,7 +44,7 @@ pub const ICMPV6_TYPE_RA: u8 = 134;
 pub fn build_ra_packet(
     cfg: &RaConfig,
     mac: [u8; 6],
-    gua_prefix: Option<&Ipv6Addr>,
+    gua_prefix: Option<(&Ipv6Addr, u32, u32)>,
     deprecated_prefixes: &[(Ipv6Addr, u32)],
 ) -> Vec<u8> {
     let mut p = Vec::with_capacity(256);
@@ -89,12 +89,21 @@ pub fn build_ra_packet(
 
     // ── Option 3: Prefix Information (RFC 4861 §4.6.2) ────────────────────
     for pc in &cfg.prefixes {
-        let addr = match pc.source {
-            PrefixSource::Static | PrefixSource::Ula => pc.resolved_address(),
-            PrefixSource::AutoGua => gua_prefix.copied(),
+        let (addr, pc_eff) = match pc.source {
+            PrefixSource::Static | PrefixSource::Ula => (pc.resolved_address(), pc.clone()),
+            PrefixSource::AutoGua => {
+                if let Some((addr, preferred, valid)) = gua_prefix {
+                    let mut pc_mod = pc.clone();
+                    pc_mod.preferred_lifetime = PrefixLifetime::Secs(preferred);
+                    pc_mod.valid_lifetime = PrefixLifetime::Secs(valid);
+                    (Some(*addr), pc_mod)
+                } else {
+                    (None, pc.clone())
+                }
+            }
         };
         if let Some(addr) = addr {
-            push_prefix_option(&mut p, &addr, pc);
+            push_prefix_option(&mut p, &addr, &pc_eff);
         }
     }
 
@@ -440,7 +449,7 @@ mod tests {
         let mac = [0x11; 6];
         let gua: Ipv6Addr = "2001:db8::".parse().unwrap();
 
-        let pkt = build_ra_packet(&cfg, mac, Some(&gua), &[]);
+        let pkt = build_ra_packet(&cfg, mac, Some((&gua, 1800, 3600)), &[]);
 
         // Opção de prefixo (Type 3) deve aparecer exatamente duas vezes
         let prefix_count = pkt.windows(2).filter(|w| w[0] == 3 && w[1] == 4).count();

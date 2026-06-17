@@ -593,7 +593,10 @@ fn send_ra_internal(
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());
     let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, iface_index));
 
-    let mut pkt = build_ra_packet(cfg, mac, gua.as_ref(), &deprecated_list);
+    let gua_info = gua
+        .as_ref()
+        .map(|g| (g, if_ips.gua_preferred, if_ips.gua_valid));
+    let mut pkt = build_ra_packet(cfg, mac, gua_info, &deprecated_list);
 
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
     pkt[2] = (csum >> 8) as u8;
@@ -842,7 +845,12 @@ mod tests {
         };
         let mac = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
         let deprecated_list = vec![(old_gua, 7200)];
-        let pkt = build_ra_packet(&cfg, mac, Some(&new_gua), &deprecated_list);
+        let pkt = build_ra_packet(
+            &cfg,
+            mac,
+            Some((&new_gua, 7 * 24 * 3600, 30 * 24 * 3600)),
+            &deprecated_list,
+        );
 
         // Find prefix options in the packet
         let mut idx = 0;

@@ -36,9 +36,7 @@ pub mod tests;
 pub mod utils;
 
 use crate::ndp::config::MonitorConfig;
-use crate::ndp::utils::{
-    extract_neigh_info, get_ipv4_neighbors, get_ipv6_neighbors,
-};
+use crate::ndp::utils::{extract_neigh_info, get_ipv4_neighbors, get_ipv6_neighbors};
 use crate::ping::IcmpPinger;
 use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
@@ -87,7 +85,7 @@ pub struct DiscoveryService {
 impl DiscoveryService {
     /// Creates a new `DiscoveryService` for the given interface.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         cfg: MonitorConfig,
         handle: Handle,
         messages: NetlinkMessageStream,

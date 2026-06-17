@@ -51,6 +51,8 @@ pub struct Dhcpv4Config {
     pub boot_file: Option<String>,
     /// Custom DHCP options (key = option number, value = hex string).
     pub options: HashMap<u8, String>,
+    /// NTP servers announced to clients (Option 42).
+    pub ntp_servers: Vec<Ipv4Addr>,
 }
 
 impl Default for Dhcpv4Config {
@@ -72,6 +74,10 @@ impl Default for Dhcpv4Config {
             tftp_server: None,
             boot_file: None,
             options: HashMap::new(),
+            ntp_servers: vec![
+                Ipv4Addr::new(162, 159, 200, 1), // time.cloudflare.com
+                Ipv4Addr::new(216, 239, 35, 0),  // time.google.com
+            ],
         }
     }
 }

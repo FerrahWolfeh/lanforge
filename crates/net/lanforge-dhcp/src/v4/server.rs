@@ -390,7 +390,18 @@ impl DhcpServer {
         opts.insert(DhcpOption::ServerIdentifier(self.cfg.server_id));
 
         if msg_type != MessageType::Nak {
-            opts.insert(DhcpOption::AddressLeaseTime(self.cfg.lease_time));
+            let chaddr = request.chaddr();
+            let mac = MacAddr::from_slice(&chaddr[..6]).unwrap_or(MacAddr::ZERO);
+            let dev = self.ctx.get_device(&mac);
+            let is_static = dev.as_ref().is_some_and(|d| d.is_static());
+
+            let lease_time = if is_static {
+                u32::MAX
+            } else {
+                self.cfg.lease_time
+            };
+
+            opts.insert(DhcpOption::AddressLeaseTime(lease_time));
             opts.insert(DhcpOption::SubnetMask(self.cfg.subnet_mask));
             opts.insert(DhcpOption::Router(vec![self.cfg.router]));
             opts.insert(DhcpOption::DomainNameServer(self.cfg.dns.clone()));
@@ -410,11 +421,35 @@ impl DhcpServer {
                 opts.insert(DhcpOption::DomainSearch(names));
             }
 
-            let safe_lease_time = std::cmp::min(self.cfg.lease_time, MAX_LEASE_TIME);
+            let (t1, t2) = if is_static {
+                (u32::MAX, u32::MAX)
+            } else {
+                let safe_lease_time = std::cmp::min(self.cfg.lease_time, MAX_LEASE_TIME);
+                (safe_lease_time / 2, safe_lease_time.saturating_mul(7) / 8)
+            };
+            opts.insert(DhcpOption::Renewal(t1));
+            opts.insert(DhcpOption::Rebinding(t2));
 
-            // T1 = 50% of lease time, T2 = 87.5%
-            opts.insert(DhcpOption::Renewal(safe_lease_time / 2));
-            opts.insert(DhcpOption::Rebinding(safe_lease_time.saturating_mul(7) / 8));
+            // Dynamic MTU (Option 26)
+            if let Some(DhcpOption::ParameterRequestList(req_list)) =
+                request.opts().get(v4::OptionCode::ParameterRequestList)
+                && req_list.contains(&v4::OptionCode::InterfaceMtu)
+            {
+                let mtu = get_interface_mtu(&self.cfg.iface).unwrap_or(1500);
+                opts.insert(DhcpOption::InterfaceMtu(mtu));
+            }
+
+            // NTP Servers (Option 42)
+            if !self.cfg.ntp_servers.is_empty() {
+                let mut ntp_bytes = Vec::with_capacity(self.cfg.ntp_servers.len() * 4);
+                for ip in &self.cfg.ntp_servers {
+                    ntp_bytes.extend_from_slice(&ip.octets());
+                }
+                opts.insert(DhcpOption::Unknown(UnknownOption::new(
+                    42.into(),
+                    ntp_bytes,
+                )));
+            }
 
             // Hybrid PXE / HTTP Boot Support
             self.add_boot_options(request, opts);
@@ -540,6 +575,13 @@ impl DhcpServer {
     }
 }
 
+fn get_interface_mtu(iface: &str) -> Option<u16> {
+    let path = format!("/sys/class/net/{iface}/mtu");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +617,10 @@ mod tests {
             tftp_server: None,
             boot_file: None,
             options: HashMap::new(),
+            ntp_servers: vec![
+                Ipv4Addr::new(162, 159, 200, 1),
+                Ipv4Addr::new(216, 239, 35, 0),
+            ],
         }
     }
 
@@ -1070,6 +1116,86 @@ mod tests {
                 );
             }
             _ => panic!("Expected NAK for REQUEST when pool is exhausted"),
+        }
+    }
+
+    #[test]
+    fn test_dhcpv4_options_and_static_lease() {
+        let (mut srv, ctx) = dummy_server();
+        let mac = dummy_mac();
+
+        // 1. Check NTP default options are sent
+        let disc = build_raw_msg(MessageType::Discover, mac, None, None, None);
+        let res = srv.handle_packet(&disc, None);
+        if let HandleResult::Reply { packet, .. } = res {
+            let reply = decode_reply(&packet);
+            // Option 42 (NTP) should be present and contain our default NTP servers
+            let ntp_opt = reply.opts().get(42.into());
+            assert!(ntp_opt.is_some());
+            if let Some(DhcpOption::Unknown(opt)) = ntp_opt {
+                assert_eq!(opt.data().len(), 8); // Two IPv4 addresses = 8 bytes
+            }
+        } else {
+            panic!("Expected offer");
+        }
+
+        // 2. Check MTU option is sent if requested in Option 55
+        let mut msg = Message::default();
+        msg.set_opcode(Opcode::BootRequest).set_chaddr(&mac.0);
+        msg.opts_mut()
+            .insert(DhcpOption::MessageType(MessageType::Discover));
+        msg.opts_mut().insert(DhcpOption::ParameterRequestList(vec![
+            v4::OptionCode::InterfaceMtu,
+        ]));
+        let mut buf = Vec::new();
+        let mut enc = Encoder::new(&mut buf);
+        msg.encode(&mut enc).unwrap();
+
+        let res_mtu = srv.handle_packet(&buf, None);
+        if let HandleResult::Reply { packet, .. } = res_mtu {
+            let reply = decode_reply(&packet);
+            // Option 26 (Interface MTU) should be present
+            let mtu_opt = reply.opts().get(v4::OptionCode::InterfaceMtu);
+            assert!(mtu_opt.is_some());
+            if let Some(DhcpOption::InterfaceMtu(mtu)) = mtu_opt {
+                // Should default to 1500 if reading /sys/class/net/eth0/mtu fails
+                assert_eq!(*mtu, 1500);
+            }
+        } else {
+            panic!("Expected offer");
+        }
+
+        // 3. Check static lease receives infinite lifetime
+        // Make the device static in context
+        let static_ip = Ipv4Addr::new(192, 168, 1, 10);
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac,
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("static-host".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::Set(static_ip),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            },
+        });
+
+        // Request lease
+        let req = build_raw_msg(MessageType::Request, mac, Some(static_ip), None, None);
+        let device = ctx.get_device(&mac);
+        let res_static = srv.handle_packet(&req, device);
+        if let HandleResult::Reply { packet, .. } = res_static {
+            let reply = decode_reply(&packet);
+            let lease_time = reply.opts().get(v4::OptionCode::AddressLeaseTime);
+            assert_eq!(lease_time, Some(&DhcpOption::AddressLeaseTime(u32::MAX)));
+            let renewal = reply.opts().get(v4::OptionCode::Renewal);
+            assert_eq!(renewal, Some(&DhcpOption::Renewal(u32::MAX)));
+            let rebinding = reply.opts().get(v4::OptionCode::Rebinding);
+            assert_eq!(rebinding, Some(&DhcpOption::Rebinding(u32::MAX)));
+        } else {
+            panic!("Expected ack");
         }
     }
 }

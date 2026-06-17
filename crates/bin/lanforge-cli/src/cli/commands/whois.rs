@@ -34,6 +34,7 @@ impl Execute for WhoisArgs {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
     let dev = &resp.entry;
 
