@@ -490,6 +490,87 @@ impl Dhcpv6Server {
         }
     }
 
+    fn process_request_iana(
+        &mut self,
+        iana: &IANA,
+        client_duid: &Duid,
+        identity: Option<&DeviceIdentity>,
+        mac: Option<MacAddr>,
+        requested_ip: Option<Ipv6Addr>,
+        reply: &mut Message,
+    ) {
+        let ips = self
+            .pool
+            .allocate(&self.ctx, client_duid, iana.id, mac, requested_ip);
+
+        if !ips.is_empty() {
+            let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
+            let mut ia_opts = DhcpOptions::new();
+            let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
+
+            if let Some(id) = identity {
+                info!("DHCPv6: Assigning [{}] to {id}", ip_list.join(", "));
+            } else {
+                info!(
+                    "DHCPv6: Assigning [{}] to anonymous device",
+                    ip_list.join(", ")
+                );
+            }
+
+            for ip in &ips {
+                ia_opts.insert(DhcpOption::IAAddr(IAAddr {
+                    addr: *ip,
+                    preferred_life: pref,
+                    valid_life: valid,
+                    opts: DhcpOptions::new(),
+                }));
+            }
+            reply.opts_mut().insert(DhcpOption::IANA(IANA {
+                id: iana.id,
+                t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
+                t2: if pref == u32::MAX {
+                    u32::MAX
+                } else {
+                    pref.saturating_mul(4) / 5
+                },
+                opts: ia_opts,
+            }));
+        }
+    }
+
+    fn process_request_iapd(
+        &mut self,
+        iapd: &IAPD,
+        client_duid: &Duid,
+        identity: Option<&DeviceIdentity>,
+        reply: &mut Message,
+    ) {
+        if let Some((prefix, len)) =
+            self.pool
+                .allocate_prefix(&self.ctx, client_duid, iapd.id, None)
+        {
+            let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
+            let mut ia_opts = DhcpOptions::new();
+            ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
+                prefix_ip: prefix,
+                prefix_len: len,
+                preferred_lifetime: pref,
+                valid_lifetime: valid,
+                opts: DhcpOptions::new(),
+            }));
+            reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
+                id: iapd.id,
+                t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
+                t2: if pref == u32::MAX {
+                    u32::MAX
+                } else {
+                    pref.saturating_mul(4) / 5
+                },
+                opts: ia_opts,
+            }));
+        }
+    }
+
     fn handle_request<'a>(
         &mut self,
         msg: &Message,
@@ -533,68 +614,10 @@ impl Dhcpv6Server {
                 );
             }
 
-            let ips = self
-                .pool
-                .allocate(&self.ctx, &client_duid, iana.id, mac, requested_ip);
-
-            if !ips.is_empty() {
-                let (pref, valid) = self.get_effective_lifetimes(&client_duid, identity);
-                let mut ia_opts = DhcpOptions::new();
-                let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
-
-                if let Some(id) = identity {
-                    info!("DHCPv6: Assigning [{}] to {id}", ip_list.join(", "));
-                } else {
-                    info!(
-                        "DHCPv6: Assigning [{}] to anonymous device",
-                        ip_list.join(", ")
-                    );
-                }
-
-                for ip in &ips {
-                    ia_opts.insert(DhcpOption::IAAddr(IAAddr {
-                        addr: *ip,
-                        preferred_life: pref,
-                        valid_life: valid,
-                        opts: DhcpOptions::new(),
-                    }));
-                }
-                reply.opts_mut().insert(DhcpOption::IANA(IANA {
-                    id: iana.id,
-                    t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
-                    t2: if pref == u32::MAX {
-                        u32::MAX
-                    } else {
-                        pref.saturating_mul(4) / 5
-                    },
-                    opts: ia_opts,
-                }));
-            }
+            self.process_request_iana(iana, &client_duid, identity, mac, requested_ip, &mut reply);
         }
-        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD)
-            && let Some((prefix, len)) =
-                self.pool
-                    .allocate_prefix(&self.ctx, &client_duid, iapd.id, None)
-        {
-            let (pref, valid) = self.get_effective_lifetimes(&client_duid, identity);
-            let mut ia_opts = DhcpOptions::new();
-            ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
-                prefix_ip: prefix,
-                prefix_len: len,
-                preferred_lifetime: pref,
-                valid_lifetime: valid,
-                opts: DhcpOptions::new(),
-            }));
-            reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
-                id: iapd.id,
-                t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
-                t2: if pref == u32::MAX {
-                    u32::MAX
-                } else {
-                    pref.saturating_mul(4) / 5
-                },
-                opts: ia_opts,
-            }));
+        if let Some(DhcpOption::IAPD(iapd)) = msg.opts().get(OptionCode::IAPD) {
+            self.process_request_iapd(iapd, &client_duid, identity, &mut reply);
         }
 
         self.add_dns_options(&mut reply);

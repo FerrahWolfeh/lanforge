@@ -25,7 +25,7 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 
 # Third party
-dhcproto = "0.14.0"
+dhcproto = "0.15.0"
 pnet = "0.35.0"
 socket2 = "0.6.3"
 rand = "0.10.1"

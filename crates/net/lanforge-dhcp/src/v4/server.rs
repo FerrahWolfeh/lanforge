@@ -964,9 +964,7 @@ mod tests {
         // 3. UEFI HTTP Boot detection (arch 16)
         request
             .opts_mut()
-            .insert(DhcpOption::ClientSystemArchitecture(Architecture::Unknown(
-                16,
-            ))); // UEFI HTTP
+            .insert(DhcpOption::ClientSystemArchitecture(Architecture::from(16))); // UEFI HTTP
         let mut reply_opts = v4::DhcpOptions::new();
         srv.add_boot_options(&request, &mut reply_opts);
         assert!(
