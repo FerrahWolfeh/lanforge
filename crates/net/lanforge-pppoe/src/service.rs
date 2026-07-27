@@ -14,6 +14,8 @@ use lanforge_core::service::{AsyncService, ServiceControl};
 use std::time::Duration;
 use tracing::{info, warn};
 
+use lanforge_types::identifiers::MacAddr;
+
 #[lanforge_macros::lanforge_service(
     id = "pppoe",
     name = "PPPoE Client",
@@ -39,13 +41,13 @@ impl PppoeService {
         }
     }
 
-    fn get_interface_details(&self) -> Result<(u32, [u8; 6]), PppoeError> {
+    fn get_interface_details(&self) -> Result<(u32, MacAddr), PppoeError> {
         let ifaces = pnet::datalink::interfaces();
         for iface in ifaces {
             if iface.name == self.cfg.wan_iface
                 && let Some(mac) = iface.mac
             {
-                return Ok((iface.index, mac.octets()));
+                return Ok((iface.index, MacAddr(mac.octets())));
             }
         }
         Err(PppoeError::NegotiationFailed(format!(
@@ -62,9 +64,8 @@ impl PppoeService {
         let discovery = PppoeDiscovery::new(ifindex, mac);
         let disc_res = discovery.run().await?;
         info!(
-            ac_mac = %format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                disc_res.ac_mac[0], disc_res.ac_mac[1], disc_res.ac_mac[2],
-                disc_res.ac_mac[3], disc_res.ac_mac[4], disc_res.ac_mac[5]),
+            ac_mac = %disc_res.ac_mac,
+            ac_name = disc_res.ac_name.as_deref().unwrap_or("unknown"),
             session_id = disc_res.session_id,
             "PPPoE discovery complete"
         );
@@ -123,6 +124,10 @@ impl PppoeService {
                 .bus()
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp {
                     interface: kernel_session.interface_name.clone(),
+                    ac_mac: Some(disc_res.ac_mac),
+                    ac_name: disc_res.ac_name.clone(),
+                    session_id: disc_res.session_id,
+                    mru: lcp_res.mru,
                     ipv4: ipcp_res.local_ip,
                     ipv4_peer: ipcp_res.peer_ip,
                     dns: ipcp_res.dns,

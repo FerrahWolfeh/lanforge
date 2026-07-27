@@ -1,4 +1,5 @@
 use crate::error::PppoeError;
+use lanforge_types::identifiers::MacAddr;
 use nix::sys::socket::{AddressFamily, SockFlag, SockProtocol, SockType, socket};
 use rand::Rng;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -27,8 +28,8 @@ pub struct Tag {
 
 #[derive(Debug, Clone)]
 pub struct PppoeDiscoveryFrame {
-    pub dst_mac: [u8; 6],
-    pub src_mac: [u8; 6],
+    pub dst_mac: MacAddr,
+    pub src_mac: MacAddr,
     pub code: u8,
     pub session_id: u16,
     pub tags: Vec<Tag>,
@@ -47,8 +48,8 @@ impl PppoeDiscoveryFrame {
         }
 
         let mut packet = Vec::with_capacity(14 + 6 + payload.len());
-        packet.extend_from_slice(&self.dst_mac);
-        packet.extend_from_slice(&self.src_mac);
+        packet.extend_from_slice(&self.dst_mac.0);
+        packet.extend_from_slice(&self.src_mac.0);
         packet.extend_from_slice(&ETH_P_PPP_DISC.to_be_bytes());
         packet.push(0x11); // Ver: 1, Type: 1
         packet.push(self.code);
@@ -66,11 +67,8 @@ impl PppoeDiscoveryFrame {
             return None;
         }
 
-        let mut dst_mac = [0u8; 6];
-        dst_mac.copy_from_slice(&bytes[0..6]);
-
-        let mut src_mac = [0u8; 6];
-        src_mac.copy_from_slice(&bytes[6..12]);
+        let dst_mac = MacAddr(bytes[0..6].try_into().ok()?);
+        let src_mac = MacAddr(bytes[6..12].try_into().ok()?);
 
         let ethertype = u16::from_be_bytes([bytes[12], bytes[13]]);
         if ethertype != ETH_P_PPP_DISC {
@@ -121,18 +119,19 @@ impl PppoeDiscoveryFrame {
 
 #[derive(Debug)]
 pub struct DiscoveryResult {
-    pub ac_mac: [u8; 6],
+    pub ac_mac: MacAddr,
+    pub ac_name: Option<String>,
     pub session_id: u16,
 }
 
 pub struct PppoeDiscovery {
     ifindex: u32,
-    local_mac: [u8; 6],
+    local_mac: MacAddr,
 }
 
 impl PppoeDiscovery {
     #[must_use]
-    pub const fn new(ifindex: u32, local_mac: [u8; 6]) -> Self {
+    pub const fn new(ifindex: u32, local_mac: MacAddr) -> Self {
         Self { ifindex, local_mac }
     }
 
@@ -143,13 +142,18 @@ impl PppoeDiscovery {
         let host_uniq: [u8; 4] = rand::rng().random();
 
         // 1. Send PADI and wait for PADO
-        let (ac_mac, ac_cookie) = exchange_padi(&async_fd, self.local_mac, &host_uniq).await?;
+        let (ac_mac, ac_name, ac_cookie) =
+            exchange_padi(&async_fd, self.local_mac, &host_uniq).await?;
 
         // 2. Send PADR and wait for PADS
         let session_id =
             exchange_padr(&async_fd, self.local_mac, ac_mac, ac_cookie, &host_uniq).await?;
 
-        Ok(DiscoveryResult { ac_mac, session_id })
+        Ok(DiscoveryResult {
+            ac_mac,
+            ac_name,
+            session_id,
+        })
     }
 }
 
@@ -188,11 +192,11 @@ fn bind_discovery_socket(ifindex: u32) -> Result<OwnedFd, PppoeError> {
 
 async fn exchange_padi(
     async_fd: &AsyncFd<OwnedFd>,
-    local_mac: [u8; 6],
+    local_mac: MacAddr,
     host_uniq: &[u8; 4],
-) -> Result<([u8; 6], Option<Vec<u8>>), PppoeError> {
+) -> Result<(MacAddr, Option<String>, Option<Vec<u8>>), PppoeError> {
     let padi_frame = PppoeDiscoveryFrame {
-        dst_mac: [0xff; 6],
+        dst_mac: MacAddr([0xff; 6]),
         src_mac: local_mac,
         code: CODE_PADI,
         session_id: 0,
@@ -211,6 +215,7 @@ async fn exchange_padi(
     let padi_bytes = padi_frame.encode();
 
     let mut ac_mac = None;
+    let mut ac_name = None;
     let mut ac_cookie = None;
 
     for attempt in 0..3 {
@@ -242,6 +247,8 @@ async fn exchange_padi(
                             for tag in frame.tags {
                                 if tag.tag_type == TAG_AC_COOKIE {
                                     ac_cookie = Some(tag.value);
+                                } else if tag.tag_type == TAG_AC_NAME {
+                                    ac_name = String::from_utf8(tag.value).ok();
                                 }
                             }
                             debug!("Received valid PPPoE PADO frame");
@@ -258,13 +265,13 @@ async fn exchange_padi(
     }
 
     let ac_mac = ac_mac.ok_or(PppoeError::DiscoveryTimeout)?;
-    Ok((ac_mac, ac_cookie))
+    Ok((ac_mac, ac_name, ac_cookie))
 }
 
 async fn exchange_padr(
     async_fd: &AsyncFd<OwnedFd>,
-    local_mac: [u8; 6],
-    ac_mac: [u8; 6],
+    local_mac: MacAddr,
+    ac_mac: MacAddr,
     ac_cookie: Option<Vec<u8>>,
     host_uniq: &[u8; 4],
 ) -> Result<u16, PppoeError> {
@@ -339,8 +346,8 @@ async fn exchange_padr(
 
 pub fn send_padt(
     ifname: &str,
-    wan_mac: [u8; 6],
-    ac_mac: [u8; 6],
+    wan_mac: MacAddr,
+    ac_mac: MacAddr,
     session_id: u16,
 ) -> Result<(), PppoeError> {
     let frame = PppoeDiscoveryFrame {
@@ -371,7 +378,7 @@ pub fn send_padt(
     sll.sll_ifindex = ifindex.cast_signed();
     sll.sll_protocol = ETH_P_PPP_DISC.to_be();
     sll.sll_halen = 6;
-    sll.sll_addr[..6].copy_from_slice(&ac_mac);
+    sll.sll_addr[..6].copy_from_slice(&ac_mac.0);
 
     unsafe {
         libc::sendto(
@@ -394,8 +401,8 @@ mod tests {
     #[test]
     fn test_discovery_frame_encode_parse() {
         let frame = PppoeDiscoveryFrame {
-            dst_mac: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
-            src_mac: [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff],
+            dst_mac: MacAddr([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]),
+            src_mac: MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]),
             code: CODE_PADI,
             session_id: 0,
             tags: vec![

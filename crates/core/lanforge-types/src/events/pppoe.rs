@@ -1,3 +1,4 @@
+use crate::identifiers::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -5,6 +6,10 @@ use std::net::{IpAddr, Ipv4Addr};
 pub enum PppoeEvent {
     SessionUp {
         interface: String,
+        ac_mac: Option<MacAddr>,
+        ac_name: Option<String>,
+        session_id: u16,
+        mru: u16,
         ipv4: Option<Ipv4Addr>,
         ipv4_peer: Option<Ipv4Addr>,
         dns: Vec<IpAddr>,

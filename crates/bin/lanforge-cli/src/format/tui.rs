@@ -28,9 +28,20 @@ impl TuiFormat for LanforgeEvent {
 
 fn format_pppoe_event<'a>(event: &'a PppoeEvent, spans: &mut Vec<Span<'a>>) {
     match event {
-        PppoeEvent::SessionUp { interface, ipv4, .. } => {
-            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
-            spans.push(Span::raw(format!("Session UP on {interface} (IP: {ipv4:?})")));
+        PppoeEvent::SessionUp {
+            interface,
+            ac_name,
+            ipv4,
+            ..
+        } => {
+            spans.push(Span::styled(
+                " [PPPoE] ",
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ));
+            let ac_str = ac_name.as_deref().unwrap_or("AC");
+            spans.push(Span::raw(format!(
+                "Session UP on {interface} via {ac_str} (IP: {ipv4:?})"
+            )));
         }
         PppoeEvent::SessionDown { reason } => {
             spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));

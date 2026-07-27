@@ -1,4 +1,5 @@
 use crate::error::PppoeError;
+use lanforge_types::identifiers::MacAddr;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -27,7 +28,7 @@ pub struct PppoeSession {
 }
 
 impl PppoeSession {
-    pub fn connect(ifname: &str, ac_mac: [u8; 6], session_id: u16) -> Result<Self, PppoeError> {
+    pub fn connect(ifname: &str, ac_mac: MacAddr, session_id: u16) -> Result<Self, PppoeError> {
         let fd = socket(
             AddressFamily::Pppox,
             SockType::Stream,
@@ -48,7 +49,7 @@ impl PppoeSession {
             sa_protocol: PX_PROTO_OE,
             pppoe: PppoeAddr {
                 sid: session_id.to_be(),
-                remote: ac_mac,
+                remote: ac_mac.0,
                 dev: dev_bytes,
             },
         };

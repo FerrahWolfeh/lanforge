@@ -638,6 +638,16 @@ impl Config {
                     false
                 }
             },
+            pppoe_enabled: {
+                #[cfg(feature = "pppoe")]
+                {
+                    self.pppoe_toml.enabled
+                }
+                #[cfg(not(feature = "pppoe"))]
+                {
+                    false
+                }
+            },
         }
     }
 

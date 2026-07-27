@@ -1,5 +1,6 @@
 use crate::error::PppoeError;
 use crate::session::PppoeSession;
+use lanforge_types::identifiers::MacAddr;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use tracing::{debug, warn};
@@ -14,18 +15,18 @@ pub const IPCP_OPT_DNS2: u8 = 131;
 pub const IPV6CP_OPT_IFID: u8 = 1;
 
 #[must_use]
-pub fn mac_to_eui64_link_local(mac: [u8; 6]) -> Ipv6Addr {
+pub fn mac_to_eui64_link_local(mac: MacAddr) -> Ipv6Addr {
     let mut bytes = [0u8; 16];
     bytes[0] = 0xfe;
     bytes[1] = 0x80;
-    bytes[8] = mac[0] ^ 0x02;
-    bytes[9] = mac[1];
-    bytes[10] = mac[2];
+    bytes[8] = mac.0[0] ^ 0x02;
+    bytes[9] = mac.0[1];
+    bytes[10] = mac.0[2];
     bytes[11] = 0xff;
     bytes[12] = 0xfe;
-    bytes[13] = mac[3];
-    bytes[14] = mac[4];
-    bytes[15] = mac[5];
+    bytes[13] = mac.0[3];
+    bytes[14] = mac.0[4];
+    bytes[15] = mac.0[5];
     Ipv6Addr::from(bytes)
 }
 
@@ -39,7 +40,7 @@ pub struct IpcpNegotiated {
 
 pub async fn negotiate_ipcp(
     session: &PppoeSession,
-    local_mac: [u8; 6],
+    local_mac: MacAddr,
 ) -> Result<IpcpNegotiated, PppoeError> {
     let ipv4_res = negotiate_ipv4cp(session).await;
     let ipv6_res = negotiate_ipv6cp(session, local_mac).await;
@@ -307,18 +308,18 @@ pub fn ifid_to_link_local(ifid: [u8; 8]) -> Ipv6Addr {
 
 async fn negotiate_ipv6cp(
     session: &PppoeSession,
-    mac: [u8; 6],
+    mac: MacAddr,
 ) -> Result<(Ipv6Addr, Option<Ipv6Addr>), PppoeError> {
     // Generate EUI-64 Interface Identifier from MAC
     let mut local_ifid = [0u8; 8];
-    local_ifid[0] = mac[0] ^ 0x02; // Flip local/universal bit
-    local_ifid[1] = mac[1];
-    local_ifid[2] = mac[2];
+    local_ifid[0] = mac.0[0] ^ 0x02; // Flip local/universal bit
+    local_ifid[1] = mac.0[1];
+    local_ifid[2] = mac.0[2];
     local_ifid[3] = 0xff;
     local_ifid[4] = 0xfe;
-    local_ifid[5] = mac[3];
-    local_ifid[6] = mac[4];
-    local_ifid[7] = mac[5];
+    local_ifid[5] = mac.0[3];
+    local_ifid[6] = mac.0[4];
+    local_ifid[7] = mac.0[5];
 
     let mut req_id = 1u8;
 

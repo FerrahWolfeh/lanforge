@@ -27,6 +27,7 @@ impl CompiledCaps {
         compiled.push(Cap::Zstd);
         compiled.push(Cap::Sqlite);
         compiled.push(Cap::Postgresql);
+        compiled.push(Cap::Pppoe);
 
         // Enabled features (simulated/detected runtime configuration)
         enabled.push(Cap::Dns);

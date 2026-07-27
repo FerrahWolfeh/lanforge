@@ -31,6 +31,7 @@ pub struct SystemStatus {
     pub dns_port: u16,
     pub boot_dir: Option<String>,
     pub http_enabled: bool,
+    pub pppoe_enabled: bool,
 }
 
 /// Flat enum representing all sub-systems, protocols, and database backends.
@@ -53,6 +54,7 @@ pub enum Cap {
     Zstd,
     Sqlite,
     Postgresql,
+    Pppoe,
 }
 
 /// Server capabilities representing compiled feature flags and runtime enabled features.
