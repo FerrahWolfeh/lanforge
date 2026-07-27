@@ -73,6 +73,12 @@ fn map_err(e: sqlx::Error) -> DbError {
     DbError::Backend(e.to_string())
 }
 
+/// Helper function to strip `0x00` null bytes from string arguments before sending to PostgreSQL.
+#[inline]
+fn sanitize_pg_str(s: &str) -> String {
+    s.replace('\0', "")
+}
+
 /// PostgreSQL database client.
 pub struct PostgresDatabase {
     pool: PgPool,
@@ -740,6 +746,7 @@ async fn upsert_device_internal(
     });
 
     if v4_static.is_some() || v6_suffix.is_some() || device.boot_file.is_some() {
+        let sanitized_boot_file = device.boot_file.as_deref().map(sanitize_pg_str);
         exec!(
             sqlx::query!(
                 "INSERT INTO dhcp.static_devices (mac, v4_static, v6_suffix, boot_file)
@@ -751,7 +758,7 @@ async fn upsert_device_internal(
                 pg_mac as PgMacAddr,
                 v4_static as Option<PgInet>,
                 v6_suffix as Option<PgInet>,
-                device.boot_file.as_deref()
+                sanitized_boot_file.as_deref()
             ),
             &mut **tx
         )?;
@@ -774,6 +781,7 @@ async fn upsert_base_device_only_internal(
     device: &Device,
 ) -> Result<(), DbError> {
     let pg_mac = PgMacAddr::from(device.mac);
+    let sanitized_hostname = sanitize_pg_str(&device.hostname.name);
     let pg_hostname_origin = PgHostnameOrigin::from(device.hostname.origin);
     let pg_origin = PgDeviceOrigin::from(device.origin);
     let pg_managed_at = device.managed_at.map(PgTimestampTz::from);
@@ -787,7 +795,7 @@ async fn upsert_base_device_only_internal(
             duid = EXCLUDED.duid,
             origin = EXCLUDED.origin,
             managed_at = EXCLUDED.managed_at,
-            class = EXCLUDED.class", pg_mac as PgMacAddr, device.hostname.name, pg_hostname_origin as PgHostnameOrigin, device.duid.as_ref().map(|d| d.bytes.as_ref()), pg_origin as PgDeviceOrigin, pg_managed_at as Option<PgTimestampTz>, pg_class), &mut **tx)?;
+            class = EXCLUDED.class", pg_mac as PgMacAddr, sanitized_hostname, pg_hostname_origin as PgHostnameOrigin, device.duid.as_ref().map(|d| d.bytes.as_ref()), pg_origin as PgDeviceOrigin, pg_managed_at as Option<PgTimestampTz>, pg_class), &mut **tx)?;
 
     Ok(())
 }
@@ -1869,3 +1877,16 @@ impl DynamicConfigStore for PostgresDatabase {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_pg_str_removes_null_bytes() {
+        assert_eq!(sanitize_pg_str("device\0"), "device");
+        assert_eq!(sanitize_pg_str("my\0host\0name"), "myhostname");
+        assert_eq!(sanitize_pg_str("\0\0\0"), "");
+    }
+}
+

@@ -1098,6 +1098,8 @@ impl Dhcpv6Server {
                     .data
                     .iter()
                     .filter_map(|b| String::from_utf8(b.clone()).ok())
+                    .map(|s| s.replace('\0', "").trim().to_string())
+                    .filter(|s| !s.is_empty())
                     .collect();
                 if strings.is_empty() {
                     None

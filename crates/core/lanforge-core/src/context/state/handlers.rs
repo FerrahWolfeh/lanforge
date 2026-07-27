@@ -180,13 +180,13 @@ impl State {
         self.mutate_device(mac, |dev| dev.apply_arp_observation(ip, is_active))
     }
 
-    pub(crate) fn handle_hostname_hint_dhcp(&mut self, mac: MacAddr, hostname: String) -> EventVec {
+    pub(crate) fn handle_hostname_hint_dhcp(&mut self, mac: MacAddr, hostname: &str) -> EventVec {
         self.mutate_device(mac, |dev| {
             dev.apply_hostname_hint(hostname, HostnameOrigin::Dhcp)
         })
     }
 
-    pub(crate) fn handle_hostname_hint_mdns(&mut self, mac: MacAddr, hostname: String) -> EventVec {
+    pub(crate) fn handle_hostname_hint_mdns(&mut self, mac: MacAddr, hostname: &str) -> EventVec {
         self.mutate_device(mac, |dev| {
             dev.apply_hostname_hint(hostname, HostnameOrigin::Mdns)
         })
@@ -243,11 +243,12 @@ impl State {
             let mut result = AdminChange::CliHostUpdated;
 
             if let FieldUpdate::Set(h) = update.hostname {
+                let sanitized = Hostname::sanitize(&h);
                 dev.hostname = Hostname {
-                    name: h.clone(),
+                    name: sanitized.clone(),
                     origin: HostnameOrigin::Static,
                 };
-                result = AdminChange::HostnameChanged { hostname: h };
+                result = AdminChange::HostnameChanged { hostname: sanitized };
             }
             if let FieldUpdate::Set(d) = update.duid {
                 dev.duid = Some(d);
@@ -268,7 +269,12 @@ impl State {
                 result = AdminChange::V6SuffixChanged { suffix: None };
             }
             if let FieldUpdate::Set(bf) = update.boot_file {
-                dev.boot_file = Some(bf);
+                let sanitized = bf.replace('\0', "").trim().to_string();
+                dev.boot_file = if sanitized.is_empty() {
+                    None
+                } else {
+                    Some(sanitized)
+                };
             } else if update.boot_file == FieldUpdate::Clear {
                 dev.boot_file = None;
             }

@@ -40,6 +40,11 @@ pub struct Hostname {
 
 impl Hostname {
     #[must_use]
+    pub fn sanitize(name: &str) -> String {
+        name.replace('\0', "").trim().to_string()
+    }
+
+    #[must_use]
     pub fn display(&self) -> &str {
         if self.name.is_empty() {
             "?"
@@ -52,7 +57,7 @@ impl Hostname {
 impl From<String> for Hostname {
     fn from(name: String) -> Self {
         Self {
-            name,
+            name: Self::sanitize(&name),
             origin: HostnameOrigin::Static,
         }
     }
@@ -61,7 +66,7 @@ impl From<String> for Hostname {
 impl From<&str> for Hostname {
     fn from(name: &str) -> Self {
         Self {
-            name: name.to_string(),
+            name: Self::sanitize(name),
             origin: HostnameOrigin::Static,
         }
     }
@@ -78,3 +83,23 @@ impl fmt::Display for Hostname {
         write!(f, "{}", self.name)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_hostname_removes_null_bytes() {
+        assert_eq!(Hostname::sanitize("device\0"), "device");
+        assert_eq!(Hostname::sanitize("my\0host\0"), "myhost");
+        assert_eq!(Hostname::sanitize("\0\0\0"), "");
+        assert_eq!(Hostname::sanitize("  valid-host  \0"), "valid-host");
+    }
+
+    #[test]
+    fn test_from_str_sanitizes() {
+        let h = Hostname::from("test\0host");
+        assert_eq!(h.name, "testhost");
+    }
+}
+

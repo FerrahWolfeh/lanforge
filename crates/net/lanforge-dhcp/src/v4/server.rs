@@ -346,16 +346,29 @@ impl DhcpServer {
 
     fn get_hostname(msg: &Message) -> Option<String> {
         match msg.opts().get(v4::OptionCode::Hostname) {
-            Some(DhcpOption::Hostname(h)) => Some(h.clone()),
+            Some(DhcpOption::Hostname(h)) => {
+                let sanitized = h.replace('\0', "").trim().to_string();
+                if sanitized.is_empty() {
+                    None
+                } else {
+                    Some(sanitized)
+                }
+            }
             _ => None,
         }
     }
 
     fn get_vendor_class(msg: &Message) -> Option<String> {
-        match msg.opts().get(v4::OptionCode::ClassIdentifier) {
+        let raw = match msg.opts().get(v4::OptionCode::ClassIdentifier) {
             Some(DhcpOption::Unknown(u)) => String::from_utf8(u.data().to_vec()).ok(),
             Some(DhcpOption::ClassIdentifier(v)) => String::from_utf8(v.clone()).ok(),
             _ => None,
+        }?;
+        let sanitized = raw.replace('\0', "").trim().to_string();
+        if sanitized.is_empty() {
+            None
+        } else {
+            Some(sanitized)
         }
     }
 

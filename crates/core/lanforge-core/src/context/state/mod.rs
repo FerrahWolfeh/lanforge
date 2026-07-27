@@ -67,10 +67,10 @@ impl State {
                 self.handle_arp_seen(mac, ip, is_active)
             }
             DeviceUpdate::DhcpHostnameHint { mac, hostname } => {
-                self.handle_hostname_hint_dhcp(mac, hostname)
+                self.handle_hostname_hint_dhcp(mac, &hostname)
             }
             DeviceUpdate::MdnsHostnameHint { mac, hostname } => {
-                self.handle_hostname_hint_mdns(mac, hostname)
+                self.handle_hostname_hint_mdns(mac, &hostname)
             }
             DeviceUpdate::DuidAssociated { mac, duid, iaid } => {
                 self.handle_duid_associated(mac, duid, iaid)

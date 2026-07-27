@@ -430,9 +430,13 @@ impl Device {
 
     pub fn apply_hostname_hint(
         &mut self,
-        hostname: String,
+        hostname: &str,
         origin: HostnameOrigin,
     ) -> Option<NetworkChange> {
+        let hostname = Hostname::sanitize(hostname);
+        if hostname.is_empty() {
+            return None;
+        }
         if origin >= self.hostname.origin && self.hostname.name != hostname {
             self.hostname = Hostname {
                 name: hostname,
