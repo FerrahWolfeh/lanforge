@@ -548,5 +548,12 @@ fn render_watch_event(e: &TimedEvent, device_map: &HashMap<String, String>, verb
                 println!(" [{time_str}] {} {:?}", "DNS EVENT".bold().cyan(), other);
             }
         },
+        LanforgeEvent::Pppoe(pppoe_evt) => {
+            println!(
+                " [{time_str}] {} {:?}",
+                "PPPOE EVENT".bold().magenta(),
+                pppoe_evt
+            );
+        }
     }
 }

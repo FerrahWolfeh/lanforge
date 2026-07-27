@@ -33,6 +33,7 @@ lanforge-dhcp = { path = "crates/net/lanforge-dhcp" }
 lanforge-host = { path = "crates/net/lanforge-host" }
 lanforge-ra = { path = "crates/net/lanforge-ra" }
 lanforge-tftp = { path = "crates/net/lanforge-tftp" }
+lanforge-pppoe = { path = "crates/net/lanforge-pppoe" }
 lanforge-wol = { path = "crates/net/lanforge-wol" }
 lanforge-api-dispatch = { path = "crates/api/lanforge-api-dispatch" }
 

@@ -13,6 +13,8 @@ use lanforge_http::config::HttpConfig;
 use lanforge_ra::RaServiceConfig;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::config::TftpConfig;
+#[cfg(feature = "pppoe")]
+use lanforge_pppoe::config::PppoeConfig;
 #[cfg(feature = "uds")]
 use lanforge_uds::config::ApiConfig;
 use serde::{Deserialize, Serialize};
@@ -42,6 +44,8 @@ pub struct TomlConfig {
     pub http: HttpConfig,
     #[cfg(feature = "tftp")]
     pub tftp: TftpConfig,
+    #[cfg(feature = "pppoe")]
+    pub pppoe: PppoeConfig,
     #[serde(default)]
     pub devices: Vec<StaticDeviceCfg>,
 }
@@ -184,6 +188,8 @@ pub fn load_toml(path: &str) -> TomlConfig {
         http: load_section(&value, "http"),
         #[cfg(feature = "tftp")]
         tftp: load_section(&value, "tftp"),
+        #[cfg(feature = "pppoe")]
+        pppoe: load_section(&value, "pppoe"),
         devices: load_section(&value, "devices"),
     };
 

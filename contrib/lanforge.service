@@ -1,7 +1,8 @@
 [Unit]
 Description=lanforge — Unified IPv4/IPv6 Network Control Daemon
-After=network-online.target pihole-FTL.service
-Wants=network-online.target
+After=network.target postgresql.service
+Wants=network.target postgresql.service
+Before=network-online.target
 
 [Service]
 # CLI subcomando 'run' sobe todos os serviços habilitados
@@ -26,7 +27,7 @@ TimeoutStopSec=10s
 # Security Hardening
 # Protege o restante do sistema enquanto permite acesso aos caminhos necessários
 ReadOnlyPaths=/etc/lanforge
-ReadWritePaths=/run/lanforge /var/lib/lanforge /mnt/ram/dnsmasq
+ReadWritePaths=/run/lanforge /var/lib/lanforge
 NoNewPrivileges=yes
 
 RuntimeDirectory=lanforge

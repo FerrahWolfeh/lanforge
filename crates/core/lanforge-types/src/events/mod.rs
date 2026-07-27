@@ -5,6 +5,7 @@ use std::time::SystemTime;
 pub mod device;
 pub mod dns;
 pub mod network;
+pub mod pppoe;
 pub mod storage;
 pub mod system;
 
@@ -13,6 +14,7 @@ pub use self::device::{
 };
 pub use self::dns::DnsEvent;
 pub use self::network::NetworkEvent;
+pub use self::pppoe::PppoeEvent;
 pub use self::storage::StorageEvent;
 pub use self::system::SystemEvent;
 
@@ -77,6 +79,7 @@ impl TimedEvent {
                 DnsEvent::QueryResolved(_) => true,
                 _ => false,
             },
+            LanforgeEvent::Pppoe(_) => true,
         }
     }
 }
@@ -88,4 +91,5 @@ pub enum LanforgeEvent {
     System(SystemEvent),
     Storage(StorageEvent),
     Dns(DnsEvent),
+    Pppoe(PppoeEvent),
 }

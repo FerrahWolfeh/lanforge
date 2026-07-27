@@ -1,7 +1,7 @@
 use colored::Colorize;
 use lanforge_types::events::{
-    AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, NetworkEvent, StorageEvent,
-    SystemEvent,
+    AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, NetworkEvent, PppoeEvent,
+    StorageEvent, SystemEvent,
 };
 use lanforge_types::{identifiers::MacAddr, update::LeaseTarget};
 
@@ -15,6 +15,34 @@ impl CliFormat for LanforgeEvent {
             Self::Network(e) => format_network_event(now, e, ascii),
             Self::Storage(e) => format_storage_event(now, e, ascii),
             Self::System(e) => format_system_event(now, e, verbose, ascii),
+            Self::Pppoe(e) => format_pppoe_event(now, e, ascii),
+        }
+    }
+}
+
+fn format_pppoe_event(now: &str, event: &PppoeEvent, _ascii: bool) {
+    match event {
+        PppoeEvent::SessionUp { interface, ipv4, dns, .. } => {
+            let ip_str = ipv4.map_or_else(|| "none".to_string(), |ip| ip.to_string());
+            println!(
+                "[{now}] {} PPPoE Session UP on {} (IP: {}, DNS count: {})",
+                "PPPOE".magenta().bold(),
+                interface.cyan(),
+                ip_str.yellow(),
+                dns.len()
+            );
+        }
+        PppoeEvent::SessionDown { reason } => {
+            println!(
+                "[{now}] {} PPPoE Session DOWN ({reason})",
+                "PPPOE".red().bold()
+            );
+        }
+        PppoeEvent::Reconnecting { attempt, next_retry_secs } => {
+            println!(
+                "[{now}] {} PPPoE Reconnecting (attempt {attempt}, next retry in {next_retry_secs}s)",
+                "PPPOE".yellow().bold()
+            );
         }
     }
 }

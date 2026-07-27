@@ -11,7 +11,7 @@ use tokio::sync::broadcast::{self, Receiver};
 
 pub use lanforge_types::events::{
     AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, DnsEvent, EventVec,
-    NetworkChange, NetworkEvent, StorageEvent, SystemEvent,
+    NetworkChange, NetworkEvent, PppoeEvent, StorageEvent, SystemEvent,
 };
 
 pub struct EventBus {

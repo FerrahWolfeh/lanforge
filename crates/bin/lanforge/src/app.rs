@@ -30,6 +30,8 @@ use lanforge_http::HttpService;
 use lanforge_ra::RaService;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::TftpService;
+#[cfg(feature = "pppoe")]
+use lanforge_pppoe::PppoeService;
 #[cfg(feature = "uds")]
 use lanforge_uds::server::ControlService;
 
@@ -209,6 +211,12 @@ impl Daemon {
             async [ctx, cfg] if cfg.tftp_toml.enabled => TftpService::new(
                 ctx,
                 cfg.tftp_toml.clone(),
+            ),
+
+            #[cfg(feature = "pppoe")]
+            async [ctx, cfg] if cfg.pppoe_enabled => PppoeService::new(
+                cfg.pppoe_toml.clone(),
+                ctx,
             ),
         });
     }

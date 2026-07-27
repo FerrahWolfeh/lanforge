@@ -18,6 +18,7 @@ default = [
     "dns",
     "ra",
     "tftp",
+    "pppoe",
     "discovery",
     "http",
     "https",
@@ -34,6 +35,7 @@ dhcp = ["dep:lanforge-dhcp"]
 dns = ["dep:lanforge-dns"]
 ra = ["dep:lanforge-ra"]
 tftp = ["dep:lanforge-tftp"]
+pppoe = ["dep:lanforge-pppoe"]
 discovery = ["dep:lanforge-discovery"]
 http = ["dep:lanforge-http", "lanforge-http/server"]
 uds = ["dep:lanforge-uds"]
@@ -49,6 +51,7 @@ hotpath = [
     "lanforge-dns?/hotpath",
     "lanforge-dhcp?/hotpath",
     "lanforge-ra?/hotpath",
+    "lanforge-pppoe?/hotpath",
     "lanforge-discovery?/hotpath",
     "lanforge-host/hotpath",
     "lanforge-db/hotpath",
@@ -61,6 +64,7 @@ hotpath-alloc = [
     "lanforge-dns?/hotpath-alloc",
     "lanforge-dhcp?/hotpath-alloc",
     "lanforge-ra?/hotpath-alloc",
+    "lanforge-pppoe?/hotpath-alloc",
     "lanforge-discovery?/hotpath-alloc",
     "lanforge-host/hotpath-alloc",
     "lanforge-db/hotpath-alloc",
@@ -96,6 +100,7 @@ full = [
     "dns",
     "ra",
     "tftp",
+    "pppoe",
     "discovery",
     "http",
     "uds",
@@ -106,17 +111,18 @@ full = [
 ]
 
 profile-minimal = ["dns", "dhcp", "ra", "uds"]
-profile-soho = ["dns", "dhcp", "ra", "uds", "discovery", "http", "adblock"]
+profile-soho = ["dns", "dhcp", "ra", "tftp", "pppoe", "uds", "discovery", "http", "adblock"]
 profile-enterprise = [
     "dns",
     "dhcp",
     "ra",
+    "tftp",
+    "pppoe",
     "uds",
     "discovery",
     "http",
     "adblock",
     "dns-full",
-    "tftp",
     "postgres",
 ]
 
@@ -141,6 +147,7 @@ lanforge-discovery = { workspace = true, optional = true }
 lanforge-uds = { workspace = true, optional = true }
 lanforge-http = { workspace = true, optional = true }
 lanforge-tftp = { workspace = true, optional = true }
+lanforge-pppoe = { workspace = true, optional = true }
 
 
 # Async & runtime

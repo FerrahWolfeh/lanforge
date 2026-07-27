@@ -105,13 +105,17 @@ pub struct Config {
     #[cfg(feature = "discovery")]
     pub mdns_toml: MdnsConfig,
 
-    // API, HTTP & TFTP
+    // API, HTTP, TFTP & PPPoE
     #[cfg(feature = "uds")]
     pub api_toml: ApiConfig,
     #[cfg(feature = "http")]
     pub http_toml: HttpConfig,
     #[cfg(feature = "tftp")]
     pub tftp_toml: TftpConfig,
+    #[cfg(feature = "pppoe")]
+    pub pppoe_enabled: bool,
+    #[cfg(feature = "pppoe")]
+    pub pppoe_toml: lanforge_pppoe::config::PppoeConfig,
 
     // static devices
     pub devices: Vec<StaticDeviceCfg>,
@@ -156,6 +160,8 @@ impl Config {
         service_files.push(("http.toml", "http"));
         #[cfg(feature = "tftp")]
         service_files.push(("tftp.toml", "tftp"));
+        #[cfg(feature = "pppoe")]
+        service_files.push(("pppoe.toml", "pppoe"));
 
         for (filename, _) in service_files {
             let path = config_dir.join(filename);
@@ -179,6 +185,8 @@ impl Config {
                     "http.toml" => toml_cfg.http = extra.http,
                     #[cfg(feature = "tftp")]
                     "tftp.toml" => toml_cfg.tftp = extra.tftp,
+                    #[cfg(feature = "pppoe")]
+                    "pppoe.toml" => toml_cfg.pppoe = extra.pppoe,
                     _ => {}
                 }
             }
@@ -257,6 +265,10 @@ impl Config {
             http_toml: toml_cfg.http,
             #[cfg(feature = "tftp")]
             tftp_toml: toml_cfg.tftp,
+            #[cfg(feature = "pppoe")]
+            pppoe_enabled: toml_cfg.pppoe.enabled,
+            #[cfg(feature = "pppoe")]
+            pppoe_toml: toml_cfg.pppoe,
             devices: toml_cfg.devices,
             devices_file: cli.devices_file.clone(),
             config_path: cli.config.clone(),
@@ -734,6 +746,10 @@ impl Default for Config {
             http_toml: HttpConfig::default(),
             #[cfg(feature = "tftp")]
             tftp_toml: TftpConfig::default(),
+            #[cfg(feature = "pppoe")]
+            pppoe_enabled: false,
+            #[cfg(feature = "pppoe")]
+            pppoe_toml: lanforge_pppoe::config::PppoeConfig::default(),
             devices: Vec::new(),
             devices_file: None,
             config_path: "/etc/lanforge/lanforge.toml".to_string(),

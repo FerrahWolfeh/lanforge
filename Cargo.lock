@@ -2545,6 +2545,7 @@ dependencies = [
  "lanforge-dns",
  "lanforge-host",
  "lanforge-http",
+ "lanforge-pppoe",
  "lanforge-ra",
  "lanforge-tftp",
  "lanforge-types",
@@ -2893,6 +2894,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanforge-pppoe"
+version = "0.1.0"
+dependencies = [
+ "hotpath",
+ "lanforge-core",
+ "lanforge-macros",
+ "lanforge-types",
+ "libc",
+ "md-5 0.10.6",
+ "nix 0.30.1",
+ "pnet",
+ "rand 0.9.4",
+ "rtnetlink",
+ "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "lanforge-ra"
 version = "1.1.0"
 dependencies = [
@@ -3117,6 +3138,16 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
@@ -3299,6 +3330,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -5125,7 +5157,7 @@ dependencies = [
  "itoa",
  "log",
  "mac_address",
- "md-5",
+ "md-5 0.11.0",
  "memchr",
  "rand 0.10.2",
  "serde",

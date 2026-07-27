@@ -1,0 +1,40 @@
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum PppoeError {
+    #[error("ppp_generic interface device /dev/ppp is not available")]
+    DevPppUnavailable,
+
+    #[error("PPPoE discovery timed out or failed")]
+    DiscoveryTimeout,
+
+    #[error("PPPoE negotiation failed: {0}")]
+    NegotiationFailed(String),
+
+    #[error("PPP LCP negotiation failed: {0}")]
+    LcpFailed(String),
+
+    #[error("PPP Authentication failed: {0}")]
+    AuthFailed(String),
+
+    #[error("PPP IPCP negotiation failed: {0}")]
+    IpcpFailed(String),
+
+    #[error("PPP IPv6CP negotiation failed: {0}")]
+    Ipv6cpFailed(String),
+
+    #[error("Kernel PPP handoff failed: {0}")]
+    KernelHandoffFailed(String),
+
+    #[error("LCP Echo keepalive timeout")]
+    KeepAliveTimeout,
+
+    #[error("PPPoE session terminated remotely: {0}")]
+    Terminated(String),
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Nix error: {0}")]
+    Nix(#[from] nix::errno::Errno),
+}

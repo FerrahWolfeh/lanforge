@@ -1,13 +1,13 @@
 use crate::tui::theme;
 use lanforge_types::events::{
-    AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, NetworkEvent, StorageEvent,
-    SystemEvent,
+    AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, NetworkEvent, PppoeEvent,
+    StorageEvent, SystemEvent,
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryResult;
 use lanforge_types::update::LeaseTarget;
 use ratatui::{
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::Span,
 };
 
@@ -21,6 +21,24 @@ impl TuiFormat for LanforgeEvent {
             Self::Network(net_event) => format_network_event(net_event, spans),
             Self::System(sys_event) => format_system_event(sys_event, spans),
             Self::Storage(store_event) => format_storage_event(store_event, spans),
+            Self::Pppoe(pppoe_event) => format_pppoe_event(pppoe_event, spans),
+        }
+    }
+}
+
+fn format_pppoe_event<'a>(event: &'a PppoeEvent, spans: &mut Vec<Span<'a>>) {
+    match event {
+        PppoeEvent::SessionUp { interface, ipv4, .. } => {
+            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
+            spans.push(Span::raw(format!("Session UP on {interface} (IP: {ipv4:?})")));
+        }
+        PppoeEvent::SessionDown { reason } => {
+            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
+            spans.push(Span::raw(format!("Session DOWN: {reason}")));
+        }
+        PppoeEvent::Reconnecting { attempt, next_retry_secs } => {
+            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
+            spans.push(Span::raw(format!("Reconnecting attempt #{attempt} in {next_retry_secs}s")));
         }
     }
 }
