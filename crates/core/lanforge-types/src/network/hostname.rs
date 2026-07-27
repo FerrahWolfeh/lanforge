@@ -102,4 +102,3 @@ mod tests {
         assert_eq!(h.name, "testhost");
     }
 }
-

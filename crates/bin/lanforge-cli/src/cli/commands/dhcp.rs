@@ -264,7 +264,7 @@ fn PoolSection(props: &PoolSectionProps) -> impl Into<AnyElement<'_>> {
             }
             View(flex_direction: FlexDirection::Row, margin_top: 1) {
                 Text(content: format!("Used: {} / Total: {}", p.used, p.total), color: Color::White)
-                View(flex_grow: 1.0)
+                View(flex_grow: 1.0_f32)
                 Text(content: format!("Available: {}", p.available), color: Color::Cyan)
             }
         }
