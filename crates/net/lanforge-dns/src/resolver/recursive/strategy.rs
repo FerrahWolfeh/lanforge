@@ -29,6 +29,7 @@ pub struct UpstreamStrategy {
     pub mode: UpstreamMode,
     /// Upstreams grouped by protocol tier. Index 0 = tier 0 (TLS/QUIC), etc.
     tiers: parking_lot::RwLock<Vec<Vec<Arc<UpstreamManager>>>>,
+    fallback_upstreams: parking_lot::RwLock<Vec<Arc<UpstreamManager>>>,
     pub rr_index: AtomicUsize,
     in_flight: DashMap<CacheKey, InFlightTx>,
 }
@@ -50,6 +51,7 @@ impl UpstreamStrategy {
         Self {
             mode,
             tiers: parking_lot::RwLock::new(tiers),
+            fallback_upstreams: parking_lot::RwLock::new(Vec::new()),
             rr_index: AtomicUsize::new(0),
             in_flight: DashMap::new(),
         }
@@ -68,6 +70,11 @@ impl UpstreamStrategy {
         }
         *self.tiers.write() = tiers;
     }
+
+    pub fn replace_fallback_upstreams(&self, fallbacks: Vec<Arc<UpstreamManager>>) {
+        *self.fallback_upstreams.write() = fallbacks;
+    }
+
 
     /// Flat iterator of all upstreams.
     pub fn all_upstreams(&self) -> impl Iterator<Item = Arc<UpstreamManager>> {
@@ -162,6 +169,12 @@ impl UpstreamStrategy {
 
     async fn resolve_internal(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut last_err = DnsError::Refused;
+        if self.is_empty() {
+            let fallbacks = self.fallback_upstreams.read().clone();
+            if !fallbacks.is_empty() {
+                return self.resolve_sequential(&fallbacks, data).await;
+            }
+        }
         let tiers = self.tiers.read().clone();
         for tier in &tiers {
             if tier.is_empty() {
@@ -175,6 +188,7 @@ impl UpstreamStrategy {
         }
         Err(last_err)
     }
+
 
     async fn resolve_tier(
         &self,

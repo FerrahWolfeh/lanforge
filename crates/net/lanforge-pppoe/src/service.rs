@@ -11,8 +11,11 @@ use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse};
+use lanforge_types::update::DeviceUpdate;
 use std::time::Duration;
 use tracing::{info, warn};
+
 
 use lanforge_types::identifiers::MacAddr;
 
@@ -56,7 +59,9 @@ impl PppoeService {
         )))
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_session_flow(&mut self, ctrl: &ServiceControl) -> Result<(), PppoeError> {
+
         let (ifindex, mac) = self.get_interface_details()?;
 
         // 1. Discovery
@@ -91,7 +96,15 @@ impl PppoeService {
                 password: self.cfg.password.clone(),
                 auth: lcp_res.auth_method,
             };
-            authenticate(&session, &creds).await?;
+            if let Err(e) = authenticate(&session, &creds).await {
+                let _ = self
+                    .ctx
+                    .bus()
+                    .publish(LanforgeEvent::Pppoe(PppoeEvent::AuthFailed {
+                        reason: e.to_string(),
+                    }));
+                return Err(e);
+            }
             info!("Authentication successful");
 
             // 5. Negotiate IPCP / IPv6CP
@@ -117,6 +130,28 @@ impl PppoeService {
                 lcp_res.mru,
             )
             .await?;
+
+            // Update core State with connected PPPoE status
+            let pppoe_status = PppoeStatusResponse {
+                enabled: true,
+                state: PppoeSessionState::Connected,
+                interface: Some(kernel_session.interface_name.clone()),
+                wan_iface: Some(self.cfg.wan_iface.clone()),
+                local_ip: ipcp_res.local_ip,
+                peer_ip: ipcp_res.peer_ip,
+                ac_mac: Some(disc_res.ac_mac),
+                ac_name: disc_res.ac_name.clone(),
+                session_id: Some(disc_res.session_id),
+                mru: Some(lcp_res.mru),
+                dns_servers: ipcp_res.dns.clone(),
+                uptime_secs: Some(0),
+                reconnect_attempts: self.attempt,
+                last_error: None,
+            };
+            let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated {
+                status: Some(pppoe_status),
+            });
+
 
             // 7. Publish SessionUp event and signal service readiness
             let _ = self
@@ -170,6 +205,9 @@ impl PppoeService {
             Err(e) => e.to_string(),
         };
 
+        let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated { status: None });
+
+
         let _ = self
             .ctx
             .bus()
@@ -177,6 +215,7 @@ impl PppoeService {
 
         flow_res
     }
+
 }
 
 impl AsyncService for PppoeService {

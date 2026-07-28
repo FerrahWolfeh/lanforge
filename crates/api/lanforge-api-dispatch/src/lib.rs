@@ -638,7 +638,32 @@ impl LanforgeRpc for ClientContext {
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
+
+    async fn pppoe_status(&self) -> Result<Box<lanforge_types::system::PppoeStatusResponse>, RpcCallError> {
+        match self.handle_pppoe_status().await {
+            Response::PppoeStatus(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn pppoe_reconnect(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_pppoe_reconnect().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn pppoe_disconnect(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_pppoe_disconnect().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
 }
+
 
 // Helper to map errors (migrated from lanforge-uds/src/server.rs)
 impl ClientContext {

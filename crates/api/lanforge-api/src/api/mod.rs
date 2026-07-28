@@ -79,4 +79,7 @@ pub enum Response {
     DnsReverseResolvers(DnsReverseResolversResponse),
     /// List of transient hosts.
     TransientHosts(TransientHostsResponse),
+    /// PPPoE session status response.
+    PppoeStatus(Box<lanforge_types::system::PppoeStatusResponse>),
 }
+

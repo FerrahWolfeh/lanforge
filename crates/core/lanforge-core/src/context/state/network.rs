@@ -57,6 +57,9 @@ pub struct NetworkState {
         deserialize_with = "deserialize_int_map"
     )]
     pub v6_pools: HashMap<u32, DhcpPoolStats>,
+    /// Active `PPPoE` WAN state.
+    pub pppoe_status: Option<lanforge_types::system::PppoeStatusResponse>,
+
 }
 
 impl NetworkState {
@@ -64,8 +67,10 @@ impl NetworkState {
         self.interface_ips.clear();
         self.v4_pool = None;
         self.v6_pools.clear();
+        self.pppoe_status = None;
     }
 }
+
 
 /// Serializes a map with integer keys.
 ///

@@ -818,4 +818,17 @@ impl LanforgeClient {
     pub async fn transient_host_list(&self) -> Result<TransientHostsResponse> {
         dispatch!(self, get => "/devices/transient", transient_host_list())
     }
+
+    pub async fn pppoe_status(&self) -> Result<Box<lanforge_types::system::PppoeStatusResponse>> {
+        dispatch!(self, get_box => "/pppoe/status", pppoe_status())
+    }
+
+    pub async fn pppoe_reconnect(&self) -> Result<SimpleSuccess> {
+        dispatch!(self, post => "/pppoe/reconnect", serde_json::json!({}), pppoe_reconnect())
+    }
+
+    pub async fn pppoe_disconnect(&self) -> Result<SimpleSuccess> {
+        dispatch!(self, post => "/pppoe/disconnect", serde_json::json!({}), pppoe_disconnect())
+    }
 }
+

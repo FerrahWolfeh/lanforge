@@ -55,8 +55,30 @@ fn format_pppoe_event(now: &str, event: &PppoeEvent, _ascii: bool) {
                 "PPPOE".yellow().bold()
             );
         }
+        PppoeEvent::AuthFailed { reason } => {
+            println!(
+                "[{now}] {} PPPoE Authentication Failed ({reason})",
+                "PPPOE".red().bold()
+            );
+        }
+        PppoeEvent::KeepaliveWarning {
+            consecutive_failures,
+            max_failures,
+        } => {
+            println!(
+                "[{now}] {} LCP Echo Keepalive Warning ({consecutive_failures}/{max_failures} missed)",
+                "PPPOE".yellow().bold()
+            );
+        }
+        PppoeEvent::KeepaliveRestored => {
+            println!(
+                "[{now}] {} LCP Echo Keepalive Restored",
+                "PPPOE".green().bold()
+            );
+        }
     }
 }
+
 
 fn format_device_event(now: &str, event: &DeviceEvent, verbose: bool, _ascii: bool) {
     match event {

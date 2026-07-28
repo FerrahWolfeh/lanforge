@@ -1,7 +1,8 @@
 use crate::error::PppoeError;
 use crate::kernel::KernelSession;
 use crate::lcp::{LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
-use lanforge_core::bus::{LanforgeEvent, SystemEvent};
+use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
+
 use lanforge_core::context::LanforgeContext;
 use std::os::fd::OwnedFd;
 use std::time::Duration;
@@ -40,6 +41,7 @@ pub async fn run_keepalive(
         tokio::select! {
             _ = interval_timer.tick() => {
                 send_echo_request(
+                    ctx,
                     &async_chan_fd,
                     &mut req_id,
                     &mut consecutive_failures,
@@ -50,6 +52,7 @@ pub async fn run_keepalive(
 
             _ = async_chan_fd.readable() => {
                 if let Some(err) = process_readable_chan_fd(
+                    ctx,
                     &async_chan_fd,
                     &mut buf,
                     local_magic,
@@ -58,6 +61,7 @@ pub async fn run_keepalive(
                     return Err(err);
                 }
             }
+
 
             res = bus_rx.recv() => {
                 let Ok(event) = res else { continue; };
@@ -71,6 +75,7 @@ pub async fn run_keepalive(
 }
 
 async fn send_echo_request(
+    ctx: &LanforgeContext,
     async_chan_fd: &AsyncFd<OwnedFd>,
     req_id: &mut u8,
     consecutive_failures: &mut u32,
@@ -78,6 +83,12 @@ async fn send_echo_request(
     max_failures: u32,
 ) -> Result<(), PppoeError> {
     *consecutive_failures += 1;
+    if *consecutive_failures > 1 {
+        let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveWarning {
+            consecutive_failures: *consecutive_failures,
+            max_failures,
+        }));
+    }
     if *consecutive_failures > max_failures {
         warn!(
             failures = *consecutive_failures,
@@ -115,6 +126,7 @@ async fn send_echo_request(
 }
 
 async fn process_readable_chan_fd(
+    ctx: &LanforgeContext,
     async_chan_fd: &AsyncFd<OwnedFd>,
     buf: &mut [u8],
     local_magic: u32,
@@ -138,10 +150,11 @@ async fn process_readable_chan_fd(
         return Ok(Some(PppoeError::KeepAliveTimeout));
     }
 
-    handle_lcp_frame(async_chan_fd, &buf[..n], local_magic, consecutive_failures).await
+    handle_lcp_frame(ctx, async_chan_fd, &buf[..n], local_magic, consecutive_failures).await
 }
 
 async fn handle_lcp_frame(
+    ctx: &LanforgeContext,
     async_chan_fd: &AsyncFd<OwnedFd>,
     raw_buf: &[u8],
     local_magic: u32,
@@ -190,9 +203,13 @@ async fn handle_lcp_frame(
 
     match code {
         LCP_ECHO_REP => {
+            if *consecutive_failures > 0 {
+                let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveRestored));
+            }
             *consecutive_failures = 0;
             debug!(id, "Received LCP Echo-Reply from peer");
         }
+
         LCP_ECHO_REQ => {
             // RFC 1661 Sec 5.8: Respond to peer LCP Echo-Request with Echo-Reply
             let mut reply = Vec::with_capacity(2 + len);

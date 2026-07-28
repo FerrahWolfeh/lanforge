@@ -737,4 +737,13 @@ impl State {
         );
         EventVec::new()
     }
+
+    pub(crate) fn handle_pppoe_status_updated(
+        &mut self,
+        status: Option<lanforge_types::system::PppoeStatusResponse>,
+    ) -> EventVec {
+        self.interfaces.pppoe_status = status;
+        EventVec::new()
+    }
 }
+

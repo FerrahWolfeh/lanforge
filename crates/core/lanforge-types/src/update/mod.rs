@@ -197,4 +197,8 @@ pub enum DeviceUpdate {
         available: u32,
         utilization_percent: f32,
     },
+    PppoeStatusUpdated {
+        status: Option<crate::system::PppoeStatusResponse>,
+    },
 }
+

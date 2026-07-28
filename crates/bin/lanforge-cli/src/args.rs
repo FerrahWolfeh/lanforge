@@ -69,9 +69,10 @@ pub struct LanforgeArgs {
 use crate::cli::commands::tui::TuiArgs;
 use crate::cli::commands::{
     auth::AuthArgs, config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs,
-    dns::DnsArgs, host::HostArgs, lease::LeaseArgs, service::ServiceArgs, simple::ContextArgs,
-    simple::LoginArgs, simple::PurgeArgs, simple::ReloadArgs, simple::ShutdownArgs,
-    simple::WatchArgs, status::ServicesArgs, status::StatusArgs, whois::WhoisArgs, wol::WolArgs,
+    dns::DnsArgs, host::HostArgs, lease::LeaseArgs, pppoe::PppoeArgs, service::ServiceArgs,
+    simple::ContextArgs, simple::LoginArgs, simple::PurgeArgs, simple::ReloadArgs,
+    simple::ShutdownArgs, simple::WatchArgs, status::ServicesArgs, status::StatusArgs,
+    whois::WhoisArgs, wol::WolArgs,
 };
 
 use crate::cli::{Execute, LanforgeClient};
@@ -117,6 +118,9 @@ pub enum Command {
     Config(ConfigArgs),
     /// Manage daemon background services (start, stop, restart)
     Service(ServiceArgs),
+    /// `PPPoE` WAN session status and control
+    Pppoe(PppoeArgs),
+
     /// Interactive TUI dashboard
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
@@ -144,8 +148,10 @@ impl Execute for Command {
             Self::Dns(args) => args.execute(client).await,
             Self::Config(args) => args.execute(client).await,
             Self::Service(args) => args.execute(client).await,
+            Self::Pppoe(args) => args.execute(client).await,
             #[cfg(feature = "tui")]
             Self::Tui(args) => args.execute(client).await,
         }
     }
 }
+

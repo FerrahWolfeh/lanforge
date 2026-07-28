@@ -108,9 +108,13 @@ impl State {
             }
             DeviceUpdate::DhcpV4PoolUpdated { .. } => self.handle_dhcp_v4_pool_updated(&update),
             DeviceUpdate::DhcpV6PoolUpdated { .. } => self.handle_dhcp_v6_pool_updated(&update),
+            DeviceUpdate::PppoeStatusUpdated { status } => {
+                self.handle_pppoe_status_updated(status)
+            }
         }
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // State

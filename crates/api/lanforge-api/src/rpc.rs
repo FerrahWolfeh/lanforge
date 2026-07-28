@@ -15,9 +15,10 @@ use lanforge_types::{
         adblock::{AdblockUrlKind, BlockingMode, RewriteRule},
         upstream::UpstreamProtocol,
     },
-    system::ServiceAction,
+    system::{PppoeStatusResponse, ServiceAction},
     update::LeaseTarget,
 };
+
 use std::{
     future::Future,
     net::{Ipv4Addr, Ipv6Addr},
@@ -248,4 +249,14 @@ pub trait LanforgeRpc {
     fn transient_host_list(
         &self,
     ) -> impl Future<Output = Result<TransientHostsResponse, RpcCallError>> + Send;
+    fn pppoe_status(
+        &self,
+    ) -> impl Future<Output = Result<Box<PppoeStatusResponse>, RpcCallError>> + Send;
+    fn pppoe_reconnect(
+        &self,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn pppoe_disconnect(
+        &self,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
 }
+

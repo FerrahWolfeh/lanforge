@@ -1,7 +1,9 @@
+use crate::identifiers::MacAddr;
 use crate::network::{Ipv6Prefix, dns::upstream::UpstreamTarget};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::borrow::Cow;
+use std::net::{IpAddr, Ipv4Addr};
 
 /// Global system status and runtime configuration snapshot.
 ///
@@ -182,4 +184,34 @@ pub enum ServiceAction {
 pub enum RunResult {
     Shutdown,
     ConfigChanged,
+}
+
+/// Status of the `PPPoE` session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PppoeSessionState {
+    #[default]
+    Disconnected,
+    Authenticating,
+    Connected,
+    Reconnecting,
+}
+
+/// Status response payload for `PPPoE`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PppoeStatusResponse {
+    pub enabled: bool,
+    pub state: PppoeSessionState,
+    pub interface: Option<String>,
+    pub wan_iface: Option<String>,
+    pub local_ip: Option<Ipv4Addr>,
+    pub peer_ip: Option<Ipv4Addr>,
+    pub ac_mac: Option<MacAddr>,
+    pub ac_name: Option<String>,
+    pub session_id: Option<u16>,
+    pub mru: Option<u16>,
+    pub dns_servers: Vec<IpAddr>,
+    pub uptime_secs: Option<u64>,
+    pub reconnect_attempts: u32,
+    pub last_error: Option<String>,
 }

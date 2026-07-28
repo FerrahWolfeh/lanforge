@@ -6,7 +6,9 @@ pub mod dhcp;
 pub mod dns;
 pub mod host;
 pub mod lease;
+pub mod pppoe;
 pub mod service;
+
 pub mod simple;
 pub mod status;
 #[cfg(feature = "tui")]

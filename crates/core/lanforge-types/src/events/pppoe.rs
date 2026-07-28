@@ -22,4 +22,13 @@ pub enum PppoeEvent {
         attempt: u32,
         next_retry_secs: u64,
     },
+    AuthFailed {
+        reason: String,
+    },
+    KeepaliveWarning {
+        consecutive_failures: u32,
+        max_failures: u32,
+    },
+    KeepaliveRestored,
 }
+

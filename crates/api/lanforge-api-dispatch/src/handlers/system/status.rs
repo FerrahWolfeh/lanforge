@@ -56,6 +56,22 @@ impl ClientContext {
         Response::ServiceBanners(ServiceBannersResponse { banners })
     }
 
+    pub async fn handle_pppoe_status(&self) -> Response {
+        let pppoe_status = self.ctx.read().interfaces.pppoe_status.clone();
+        let status = pppoe_status.unwrap_or_else(|| lanforge_types::system::PppoeStatusResponse {
+            enabled: self
+                .ctx
+                .get_status()
+                .map(|s| s.pppoe_enabled)
+                .unwrap_or(false),
+            state: lanforge_types::system::PppoeSessionState::Disconnected,
+            ..Default::default()
+        });
+        Response::PppoeStatus(Box::new(status))
+    }
+
+
+
     #[must_use]
     pub fn gather_db_status(&self) -> DbStatus {
         let status = self.ctx.get_status().unwrap_or_default();

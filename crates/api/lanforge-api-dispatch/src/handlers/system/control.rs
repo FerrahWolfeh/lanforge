@@ -36,4 +36,31 @@ impl ClientContext {
             message: "Daemon shutdown initiated".to_string(),
         })
     }
+
+    pub async fn handle_pppoe_reconnect(&self) -> Response {
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+                id: "pppoe".to_string(),
+                action: ServiceAction::Restart,
+            }));
+        Response::Success(SimpleSuccess {
+            message: "PPPoE reconnection triggered".to_string(),
+        })
+    }
+
+    pub async fn handle_pppoe_disconnect(&self) -> Response {
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+                id: "pppoe".to_string(),
+                action: ServiceAction::Stop,
+            }));
+        Response::Success(SimpleSuccess {
+            message: "PPPoE disconnection triggered".to_string(),
+        })
+    }
 }
+

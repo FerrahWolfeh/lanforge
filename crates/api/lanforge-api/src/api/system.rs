@@ -380,3 +380,16 @@ impl HttpWrappedResponse for SystemConfigImportResponse {
         wrapper.data
     }
 }
+
+impl HttpWrappedResponse for lanforge_types::system::PppoeStatusResponse {
+    type Wrapper = HttpDataResponse<lanforge_types::system::PppoeStatusResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
