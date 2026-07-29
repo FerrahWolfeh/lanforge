@@ -1,7 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
-use lanforge_types::system::ServiceAction;
+use lanforge_types::{network::pppoe::PppoeConfig, system::ServiceAction};
 
 impl ClientContext {
     pub async fn handle_service_control(&self, id: String, action: ServiceAction) -> Response {
@@ -64,7 +64,7 @@ impl ClientContext {
     }
 
     pub async fn handle_pppoe_config(&self) -> Response {
-        use lanforge_db::DynamicConfigStore;
+        use lanforge_db::PppoeConfigStore;
         match self.db.load_pppoe_config().await {
             Ok(Some(cfg)) => Response::PppoeConfig(Box::new(cfg)),
             Ok(None) => Response::Error {
@@ -76,11 +76,8 @@ impl ClientContext {
         }
     }
 
-    pub async fn handle_update_pppoe_config(
-        &self,
-        cfg: lanforge_types::network::pppoe::PppoeConfig,
-    ) -> Response {
-        use lanforge_db::DynamicConfigStore;
+    pub async fn handle_update_pppoe_config(&self, cfg: PppoeConfig) -> Response {
+        use lanforge_db::PppoeConfigStore;
         if let Err(e) = self.db.save_pppoe_config(&cfg).await {
             return Response::Error {
                 error: format!("Failed to save PPPoE configuration: {e}"),
@@ -97,4 +94,3 @@ impl ClientContext {
         })
     }
 }
-

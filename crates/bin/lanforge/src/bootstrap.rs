@@ -4,9 +4,9 @@ use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_db::DynamicConfigStore;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
+use lanforge_db::{DhcpConfigStore, PppoeConfigStore, RaConfigStore};
 use lanforge_host::ifmon::AddressMonitor;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
@@ -209,103 +209,6 @@ impl Bootstrapper {
         ))
     }
 
-    #[cfg(feature = "dhcp")]
-    async fn load_dhcp4_pools<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
-        let v4_pools = db.load_dhcp_v4_pools().await?;
-        if v4_pools.is_empty() {
-            let mut seed = Vec::new();
-            for mut pool in cfg.dhcpv4_toml.get_effective_pools() {
-                if pool.lease_time.is_none() {
-                    pool.lease_time = Some(cfg.dhcpv4_toml.lease_time);
-                }
-                seed.push(pool);
-            }
-            db.save_dhcp_v4_pools(&seed).await?;
-            info!(
-                "Seeded {} DHCPv4 pools from TOML configuration into database",
-                seed.len()
-            );
-        }
-        cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools().await?;
-        Ok(())
-    }
-
-    #[cfg(feature = "dhcp")]
-    async fn load_dhcp6_pools<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
-        let v6_pools = db.load_dhcp_v6_pools().await?;
-        if v6_pools.is_empty() {
-            let mut seed = Vec::new();
-            for pool in &cfg.dhcpv6_toml.pools {
-                let mut p = pool.clone();
-                if p.lease_time.is_none() {
-                    p.lease_time = Some(cfg.dhcpv6_toml.lease_time);
-                }
-                seed.push(p);
-            }
-            db.save_dhcp_v6_pools(&seed).await?;
-            info!(
-                "Seeded {} DHCPv6 pools from TOML configuration into database",
-                seed.len()
-            );
-        }
-        cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools().await?;
-        Ok(())
-    }
-
-    #[cfg(feature = "ra")]
-    async fn load_ra_prefix<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
-        let ra_prefixes = db.load_ra_prefixes().await?;
-        if ra_prefixes.is_empty() {
-            db.save_ra_prefixes(&cfg.ra_toml.prefixes).await?;
-            info!(
-                "Seeded {} RA prefixes from TOML configuration into database",
-                cfg.ra_toml.prefixes.len()
-            );
-        }
-        cfg.ra_toml.prefixes = db.load_ra_prefixes().await?;
-        Ok(())
-    }
-
-    #[cfg(feature = "ra")]
-    async fn load_ra_rdnss<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
-        let ra_rdnss = db.load_ra_rdnss().await?;
-        if ra_rdnss.is_empty() {
-            db.save_ra_rdnss(&cfg.ra_toml.rdnss).await?;
-            info!(
-                "Seeded {} RA RDNSS options from TOML configuration into database",
-                cfg.ra_toml.rdnss.len()
-            );
-        }
-        cfg.ra_toml.rdnss = db.load_ra_rdnss().await?;
-        Ok(())
-    }
-
-    #[cfg(feature = "ra")]
-    async fn load_ra_dnssl<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
-        let ra_dnssl = db.load_ra_dnssl().await?;
-        if ra_dnssl.is_empty() {
-            db.save_ra_dnssl(&cfg.ra_toml.dnssl).await?;
-            info!(
-                "Seeded {} RA DNSSL options from TOML configuration into database",
-                cfg.ra_toml.dnssl.len()
-            );
-        }
-        cfg.ra_toml.dnssl = db.load_ra_dnssl().await?;
-        Ok(())
-    }
-
-    #[cfg(feature = "pppoe")]
-    async fn load_pppoe_config<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
-        let pppoe_cfg = db.load_pppoe_config().await?;
-        if let Some(loaded) = pppoe_cfg {
-            cfg.pppoe_toml = loaded;
-        } else {
-            db.save_pppoe_config(&cfg.pppoe_toml).await?;
-            info!("Seeded PPPoE configuration from TOML into database");
-        }
-        Ok(())
-    }
-
     #[cfg(feature = "dns")]
     async fn load_dns_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
         // Seed upstreams if empty in DB
@@ -370,44 +273,21 @@ impl Bootstrapper {
             }
 
             // Seed adblock config overrides from TOML on first run
-            db.set_adblock_config_value(
-                "enabled",
-                if cfg.dns_toml.adblock_enabled {
-                    "true"
-                } else {
-                    "false"
-                },
-            )
-            .await?;
-            db.set_adblock_config_value("blocking_mode", &cfg.dns_toml.blocking_mode.to_string())
-                .await?;
-            if let Some(ip) = cfg.dns_toml.blocking_ip_v4 {
-                db.set_adblock_config_value("blocking_ip_v4", &ip.to_string())
-                    .await?;
-            }
-            if let Some(ip) = cfg.dns_toml.blocking_ip_v6 {
-                db.set_adblock_config_value("blocking_ip_v6", &ip.to_string())
-                    .await?;
-            }
-            db.set_adblock_config_value(
-                "refresh_hours",
-                &cfg.dns_toml.adblock_refresh_hours.to_string(),
-            )
-            .await?;
-            db.set_adblock_config_value(
-                "refresh_at_night",
-                if cfg.dns_toml.adblock_refresh_at_night {
-                    "true"
-                } else {
-                    "false"
-                },
-            )
-            .await?;
+            let adblock_cfg = lanforge_types::network::dns::adblock::AdblockDbConfig {
+                enabled: cfg.dns_toml.adblock_enabled,
+                blocking_mode: cfg.dns_toml.blocking_mode,
+                blocking_ip_v4: cfg.dns_toml.blocking_ip_v4,
+                blocking_ip_v6: cfg.dns_toml.blocking_ip_v6,
+                refresh_hours: cfg.dns_toml.adblock_refresh_hours,
+                refresh_at_night: cfg.dns_toml.adblock_refresh_at_night,
+            };
+            db.save_adblock_config(&adblock_cfg).await?;
         }
 
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
         let db = LanforgeDb::open(&cfg.database).await.map_err(|e| {
             error!("❌ Erro fatal abrindo leases DB: {e}");
@@ -422,26 +302,79 @@ impl Bootstrapper {
         // 1. Check/seed/load DHCPv4 Pools
         #[cfg(feature = "dhcp")]
         {
-            Self::load_dhcp4_pools(&db, cfg).await?;
+            let mut seed_v4 = Vec::new();
+            for mut pool in cfg.dhcpv4_toml.get_effective_pools() {
+                if pool.lease_time.is_none() {
+                    pool.lease_time = Some(cfg.dhcpv4_toml.lease_time);
+                }
+                seed_v4.push(pool);
+            }
+            if db.seed_dhcp_v4_if_empty(&seed_v4).await? {
+                info!(
+                    "Seeded {} DHCPv4 pools from TOML configuration into database",
+                    seed_v4.len()
+                );
+            }
+            cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools().await?;
             cfg.dhcpv4_toml.range_start = None;
             cfg.dhcpv4_toml.range_end = None;
         }
 
         // 2. Check/seed/load DHCPv6 Pools
         #[cfg(feature = "dhcp")]
-        Self::load_dhcp6_pools(&db, cfg).await?;
+        {
+            let mut seed_v6 = Vec::new();
+            for pool in &cfg.dhcpv6_toml.pools {
+                let mut p = pool.clone();
+                if p.lease_time.is_none() {
+                    p.lease_time = Some(cfg.dhcpv6_toml.lease_time);
+                }
+                seed_v6.push(p);
+            }
+            if db.seed_dhcp_v6_if_empty(&seed_v6).await? {
+                info!(
+                    "Seeded {} DHCPv6 pools from TOML configuration into database",
+                    seed_v6.len()
+                );
+            }
+            cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools().await?;
+        }
 
         // 3. Check/seed/load RA Prefixes
         #[cfg(feature = "ra")]
-        Self::load_ra_prefix(&db, cfg).await?;
+        {
+            if db.seed_ra_prefixes_if_empty(&cfg.ra_toml.prefixes).await? {
+                info!(
+                    "Seeded {} RA prefixes from TOML configuration into database",
+                    cfg.ra_toml.prefixes.len()
+                );
+            }
+            cfg.ra_toml.prefixes = db.load_ra_prefixes().await?;
+        }
 
         // 4. Check/seed/load RA RDNSS
         #[cfg(feature = "ra")]
-        Self::load_ra_rdnss(&db, cfg).await?;
+        {
+            if db.seed_ra_rdnss_if_empty(&cfg.ra_toml.rdnss).await? {
+                info!(
+                    "Seeded {} RA RDNSS options from TOML configuration into database",
+                    cfg.ra_toml.rdnss.len()
+                );
+            }
+            cfg.ra_toml.rdnss = db.load_ra_rdnss().await?;
+        }
 
         // 5. Check/seed/load RA DNSSL
         #[cfg(feature = "ra")]
-        Self::load_ra_dnssl(&db, cfg).await?;
+        {
+            if db.seed_ra_dnssl_if_empty(&cfg.ra_toml.dnssl).await? {
+                info!(
+                    "Seeded {} RA DNSSL options from TOML configuration into database",
+                    cfg.ra_toml.dnssl.len()
+                );
+            }
+            cfg.ra_toml.dnssl = db.load_ra_dnssl().await?;
+        }
 
         // 6. Check/seed/load DNS Config
         #[cfg(feature = "dns")]
@@ -449,7 +382,14 @@ impl Bootstrapper {
 
         // 7. Check/seed/load PPPoE Config
         #[cfg(feature = "pppoe")]
-        Self::load_pppoe_config(&db, cfg).await?;
+        {
+            if db.seed_pppoe_if_empty(&cfg.pppoe_toml).await? {
+                info!("Seeded PPPoE configuration from TOML into database");
+            }
+            if let Some(loaded) = db.load_pppoe_config().await? {
+                cfg.pppoe_toml = loaded;
+            }
+        }
 
         let mut table = db.load_table().await.unwrap_or_else(|e| {
             warn!("Falha ao carregar DB ({e}), iniciando do zero");

@@ -44,8 +44,8 @@ use tracing::{debug, info};
 use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
 use lanforge_db_core::{
-    AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DnsStore, DnsUpstreamEntry,
-    DnsUpstreamStore, DynamicConfigStore,
+    AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DhcpConfigStore, DnsStore,
+    DnsUpstreamEntry, DnsUpstreamStore, PppoeConfigStore, RaConfigStore,
 };
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{
@@ -1559,7 +1559,7 @@ impl PostgresDatabase {
     }
 }
 
-impl DynamicConfigStore for PostgresDatabase {
+impl DhcpConfigStore for PostgresDatabase {
     async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError> {
         let rows = fetch_all!(
             sqlx::query!(
@@ -1682,7 +1682,9 @@ impl DynamicConfigStore for PostgresDatabase {
         tx.commit().await.map_err(map_err)?;
         Ok(())
     }
+}
 
+impl RaConfigStore for PostgresDatabase {
     async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError> {
         let rows = fetch_all!(
             sqlx::query!(
@@ -1877,7 +1879,9 @@ impl DynamicConfigStore for PostgresDatabase {
         tx.commit().await.map_err(map_err)?;
         Ok(())
     }
+}
 
+impl PppoeConfigStore for PostgresDatabase {
     async fn load_pppoe_config(&self) -> Result<Option<PppoeConfig>, DbError> {
         use sqlx::Row;
         let row = sqlx::query(
@@ -1894,7 +1898,8 @@ impl DynamicConfigStore for PostgresDatabase {
             let password: String = r.try_get("password").map_err(map_err)?;
             let auth_raw: String = r.try_get("auth").map_err(map_err)?;
             let mru: i32 = r.try_get("mru").map_err(map_err)?;
-            let lcp_echo_interval_secs: i64 = r.try_get("lcp_echo_interval_secs").map_err(map_err)?;
+            let lcp_echo_interval_secs: i64 =
+                r.try_get("lcp_echo_interval_secs").map_err(map_err)?;
             let lcp_echo_max_failures: i32 = r.try_get("lcp_echo_max_failures").map_err(map_err)?;
             let reconnect_delay_secs: i64 = r.try_get("reconnect_delay_secs").map_err(map_err)?;
 
@@ -1966,4 +1971,3 @@ mod tests {
         assert_eq!(sanitize_pg_str("\0\0\0"), "");
     }
 }
-

@@ -305,8 +305,8 @@ pub trait DnsUpstreamStore: Send + Sync {
     fn clear_dns_upstreams(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 }
 
-/// Handles dynamic DHCP pools and RA configurations.
-pub trait DynamicConfigStore: Send + Sync {
+/// Handles dynamic DHCP pools and configuration.
+pub trait DhcpConfigStore: Send + Sync {
     /// Loads dynamic DHCPv4 pools.
     fn load_dhcp_v4_pools(&self) -> impl Future<Output = Result<Vec<Dhcpv4Pool>, DbError>> + Send;
     /// Overwrites/saves dynamic DHCPv4 pools.
@@ -323,6 +323,41 @@ pub trait DynamicConfigStore: Send + Sync {
         pools: &[Dhcpv6Pool],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
+    /// Seeds DHCPv4 pools if empty in database. Returns `Ok(true)` if seeded.
+    fn seed_dhcp_v4_if_empty(
+        &self,
+        seed: &[Dhcpv4Pool],
+    ) -> impl Future<Output = Result<bool, DbError>> + Send {
+        async move {
+            let existing = self.load_dhcp_v4_pools().await?;
+            if existing.is_empty() && !seed.is_empty() {
+                self.save_dhcp_v4_pools(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+
+    /// Seeds DHCPv6 pools if empty in database. Returns `Ok(true)` if seeded.
+    fn seed_dhcp_v6_if_empty(
+        &self,
+        seed: &[Dhcpv6Pool],
+    ) -> impl Future<Output = Result<bool, DbError>> + Send {
+        async move {
+            let existing = self.load_dhcp_v6_pools().await?;
+            if existing.is_empty() && !seed.is_empty() {
+                self.save_dhcp_v6_pools(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+}
+
+/// Handles Router Advertisement (RA) prefix and options configuration.
+pub trait RaConfigStore: Send + Sync {
     /// Loads dynamic RA prefix configurations.
     fn load_ra_prefixes(&self) -> impl Future<Output = Result<Vec<RAPrefix>, DbError>> + Send;
     /// Overwrites/saves dynamic RA prefixes.
@@ -347,13 +382,82 @@ pub trait DynamicConfigStore: Send + Sync {
         dnssl: &[DnsslConfig],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
+    /// Seeds RA prefixes if empty in database. Returns `Ok(true)` if seeded.
+    fn seed_ra_prefixes_if_empty(
+        &self,
+        seed: &[RAPrefix],
+    ) -> impl Future<Output = Result<bool, DbError>> + Send {
+        async move {
+            let existing = self.load_ra_prefixes().await?;
+            if existing.is_empty() && !seed.is_empty() {
+                self.save_ra_prefixes(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+
+    /// Seeds RA RDNSS if empty in database. Returns `Ok(true)` if seeded.
+    fn seed_ra_rdnss_if_empty(
+        &self,
+        seed: &[RdnssConfig],
+    ) -> impl Future<Output = Result<bool, DbError>> + Send {
+        async move {
+            let existing = self.load_ra_rdnss().await?;
+            if existing.is_empty() && !seed.is_empty() {
+                self.save_ra_rdnss(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+
+    /// Seeds RA DNSSL if empty in database. Returns `Ok(true)` if seeded.
+    fn seed_ra_dnssl_if_empty(
+        &self,
+        seed: &[DnsslConfig],
+    ) -> impl Future<Output = Result<bool, DbError>> + Send {
+        async move {
+            let existing = self.load_ra_dnssl().await?;
+            if existing.is_empty() && !seed.is_empty() {
+                self.save_ra_dnssl(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+}
+
+/// Handles PPPoE configuration.
+pub trait PppoeConfigStore: Send + Sync {
     /// Loads dynamic PPPoE configuration.
-    fn load_pppoe_config(&self) -> impl Future<Output = Result<Option<PppoeConfig>, DbError>> + Send;
+    fn load_pppoe_config(
+        &self,
+    ) -> impl Future<Output = Result<Option<PppoeConfig>, DbError>> + Send;
     /// Saves dynamic PPPoE configuration.
     fn save_pppoe_config(
         &self,
         cfg: &PppoeConfig,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Seeds PPPoE configuration if not present in database. Returns `Ok(true)` if seeded.
+    fn seed_pppoe_if_empty(
+        &self,
+        seed: &PppoeConfig,
+    ) -> impl Future<Output = Result<bool, DbError>> + Send {
+        async move {
+            let existing = self.load_pppoe_config().await?;
+            if existing.is_none() {
+                self.save_pppoe_config(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
 }
 
 /// Helper macro to delegate database operations to the active backend (postgres/mock).

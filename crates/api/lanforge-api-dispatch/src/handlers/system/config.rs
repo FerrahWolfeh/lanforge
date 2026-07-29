@@ -3,7 +3,7 @@ use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
-use lanforge_db::DynamicConfigStore;
+use lanforge_db::{DhcpConfigStore, PppoeConfigStore, RaConfigStore};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::AdblockDbConfig;
 

@@ -6,8 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
 use lanforge_db_core::{
-    AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DnsStore, DnsUpstreamEntry,
-    DnsUpstreamStore, DynamicConfigStore, delegate_db_call,
+    AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DhcpConfigStore, DnsStore,
+    DnsUpstreamEntry, DnsUpstreamStore, PppoeConfigStore, RaConfigStore, delegate_db_call,
 };
 use lanforge_db_postgres::PostgresDatabase;
 use lanforge_types::auth::ApiScopes;
@@ -380,6 +380,13 @@ impl LanforgeDb {
         delegate_db_call!(self, load_adblock_config(), mock => Ok(mock.adblock_config.read().clone()))
     }
 
+    pub async fn save_adblock_config(&self, cfg: &AdblockDbConfig) -> Result<(), DbError> {
+        delegate_db_call!(self, save_adblock_config(cfg), mock => {
+            *mock.adblock_config.write() = cfg.clone();
+            Ok(())
+        })
+    }
+
     // Legacy adblock set config helper
     pub async fn set_adblock_config_value(&self, key: &str, value: &str) -> Result<(), DbError> {
         delegate_db_call!(self, set_adblock_config_value(key, value), mock => {
@@ -628,7 +635,7 @@ impl LanforgeDb {
     }
 }
 
-impl DynamicConfigStore for LanforgeDb {
+impl DhcpConfigStore for LanforgeDb {
     async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError> {
         delegate_db_call!(self, load_dhcp_v4_pools(), mock => Ok(mock.dhcp_v4_pools.read().clone()))
     }
@@ -650,7 +657,9 @@ impl DynamicConfigStore for LanforgeDb {
             Ok(())
         })
     }
+}
 
+impl RaConfigStore for LanforgeDb {
     async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError> {
         delegate_db_call!(self, load_ra_prefixes(), mock => Ok(mock.ra_prefixes.read().clone()))
     }
@@ -683,7 +692,9 @@ impl DynamicConfigStore for LanforgeDb {
             Ok(())
         })
     }
+}
 
+impl PppoeConfigStore for LanforgeDb {
     async fn load_pppoe_config(&self) -> Result<Option<PppoeConfig>, DbError> {
         delegate_db_call!(self, load_pppoe_config(), mock => Ok(mock.pppoe_config.read().clone()))
     }
