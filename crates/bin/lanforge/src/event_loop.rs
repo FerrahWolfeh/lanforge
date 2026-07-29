@@ -50,12 +50,12 @@ where
     let mut stale_timer = interval(stale_check_interval);
     stale_timer.tick().await;
 
-
-
+    let mut expected_sorted: Vec<_> = expected_services.iter().cloned().collect();
+    expected_sorted.sort();
     info!(
         "Event loop: expecting readiness from {} services: {:?}",
-        expected_services.len(),
-        expected_services
+        expected_sorted.len(),
+        expected_sorted
     );
 
     let mut loop_ctx = LoopContext {
@@ -97,6 +97,7 @@ where
                         }
                     }
                     if !missing.is_empty() {
+                        missing.sort();
                         warn!("⌛ Still waiting for {} services to be ready: {:?}", missing.len(), missing);
                     }
                 }
@@ -234,8 +235,6 @@ fn handle_wol_event<S: BuildHasher>(
 fn handle_db_reset<S: BuildHasher>(l_ctx: &LoopContext<'_, S>) {
     info!("Database reset confirmed. Performing state refresh...");
     l_ctx.ctx.reset();
-
-
 }
 
 struct LoopState {

@@ -195,6 +195,20 @@ impl Bootstrapper {
         ctx.set_if_ready(true);
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
 
+        let pppoe_enabled = {
+            #[cfg(feature = "pppoe")]
+            {
+                cfg.pppoe_enabled
+            }
+            #[cfg(not(feature = "pppoe"))]
+            {
+                false
+            }
+        };
+        if !pppoe_enabled {
+            ctx.set_pppoe_ready(true);
+        }
+
         // --- PHASE 4/5: Handover to Daemon ---
         Ok((
             BootstrapResult {

@@ -191,6 +191,7 @@ impl PppoeService {
                 }));
 
             // Signal supervisor that PPPoE WAN interface is UP and ready
+            self.ctx.set_pppoe_ready(true);
             ctrl.signal_ready();
 
             // Reset attempt counter on clean connection
@@ -230,6 +231,7 @@ impl PppoeService {
             Err(e) => e.to_string(),
         };
 
+        self.ctx.set_pppoe_ready(false);
         let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated { status: None });
 
 
@@ -256,6 +258,7 @@ impl AsyncService for PppoeService {
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
                     reason: "/dev/ppp device unavailable".into(),
                 }));
+            self.ctx.set_pppoe_ready(true);
             ctrl.signal_ready();
             return Ok(());
         }

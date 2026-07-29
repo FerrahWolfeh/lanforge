@@ -131,7 +131,7 @@ impl Daemon {
             }
         }
 
-        #[cfg(feature = "http")]
+        #[cfg(not(feature = "http"))]
         if cfg.http_toml.enabled {
             tracing::error!(
                 "❌ Feature 'http' (REST API / Metrics) is enabled in configuration but not compiled in the binary!"

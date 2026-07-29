@@ -53,7 +53,7 @@
 //! - **Interface Ready**: Network interfaces are configured
 //! - **Running**: System is operational (false = shutdown)
 
-use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
+use crate::bus::{EventBus, LanforgeEvent, PppoeEvent, SystemEvent, TimedEvent};
 use crate::context::state::State;
 use crate::error::CoreError;
 use crate::service::StatusProvider;
@@ -185,6 +185,8 @@ struct LanforgeContextInner {
     db_ready: AtomicBool,
     /// Network interface readiness flag.
     if_ready: AtomicBool,
+    /// `PPPoE` session readiness flag.
+    pppoe_ready: AtomicBool,
     /// Generic registry for shared service states/contexts.
     shared_services: RwLock<HashMap<String, Arc<dyn std::any::Any + Send + Sync>>>,
     /// Configured `DHCPv4` pools.
@@ -267,6 +269,7 @@ impl LanforgeContext {
             running: AtomicBool::new(true),
             db_ready: AtomicBool::new(false),
             if_ready: AtomicBool::new(false),
+            pppoe_ready: AtomicBool::new(false),
             shared_services: RwLock::new(HashMap::new()),
             dhcp_v4_pools: RwLock::new(Vec::new()),
             dhcp_v6_pools: RwLock::new(Vec::new()),
@@ -340,8 +343,6 @@ impl LanforgeContext {
     pub fn last_db_flush(&self) -> Option<SystemTime> {
         *self.inner.last_db_flush.read()
     }
-
-
 
     /// Access the global active API clients counter.
     #[must_use]
@@ -565,6 +566,18 @@ impl LanforgeContext {
         .await
     }
 
+    /// Blocks until the `PPPoE` session is established (or short-circuits if `PPPoE` is disabled/ready).
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
+    pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
+        self.wait_for_condition(Self::is_pppoe_ready, |event| {
+            matches!(event, LanforgeEvent::Pppoe(PppoeEvent::SessionUp { .. }))
+        })
+        .await
+    }
+
     /// Generic async wait helper. Blocks until `is_ready()` returns true
     /// or a matching event arrives on the bus.
     async fn wait_for_condition(
@@ -622,6 +635,14 @@ impl LanforgeContext {
     #[must_use]
     pub fn is_if_ready(&self) -> bool {
         self.inner.if_ready.load(Ordering::SeqCst)
+    }
+
+    /// Returns true if the `PPPoE` session is ready.
+    ///
+    /// This flag is set when `PPPoE` session is established or if `PPPoE` is disabled.
+    #[must_use]
+    pub fn is_pppoe_ready(&self) -> bool {
+        self.inner.pppoe_ready.load(Ordering::SeqCst)
     }
 }
 

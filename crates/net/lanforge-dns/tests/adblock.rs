@@ -60,6 +60,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     let ctrl = ServiceControl::new("dns-adblock-test", ctx.clone());
 
     ctx.set_db_ready(true);
+    ctx.set_pppoe_ready(true);
     let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {

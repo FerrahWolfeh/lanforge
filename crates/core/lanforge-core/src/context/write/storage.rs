@@ -20,12 +20,13 @@ impl LanforgeContext {
         self.inner.running.store(false, Ordering::SeqCst);
     }
 
-    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`) to `true`/`false`/`false`.
+    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`, `pppoe_ready`) to `true`/`false`/`false`/`false`.
     /// Used during soft-reboot.
     pub fn reset_lifecycle(&self) {
         self.inner.running.store(true, Ordering::SeqCst);
         self.inner.db_ready.store(false, Ordering::SeqCst);
         self.inner.if_ready.store(false, Ordering::SeqCst);
+        self.inner.pppoe_ready.store(false, Ordering::SeqCst);
     }
 
     /// Sets the database readiness state.
@@ -36,6 +37,11 @@ impl LanforgeContext {
     /// Sets the interface readiness state.
     pub fn set_if_ready(&self, ready: bool) {
         self.inner.if_ready.store(ready, Ordering::SeqCst);
+    }
+
+    /// Sets the `PPPoE` session readiness state.
+    pub fn set_pppoe_ready(&self, ready: bool) {
+        self.inner.pppoe_ready.store(ready, Ordering::SeqCst);
     }
 
     /// Registers a shared service state or context.

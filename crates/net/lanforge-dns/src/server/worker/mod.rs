@@ -125,6 +125,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     last_blocklist_hash = 0;
                     let _ = std::fs::remove_file(&hash_path);
                 } else {
+                    let _ = ctx.ctx.wait_for_pppoe().await;
                     info!(
                         "🛡️ Adblock: downloading {} blocklist sources...",
                         blocklist_urls.len()
