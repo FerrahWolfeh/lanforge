@@ -14,7 +14,6 @@
 //! | `parse_neighbor_msg()` | Parse a raw netlink neighbor message into a `NeighborEvent` |
 //! | `extract_neigh_info()` | Extract `NeighborEvent` from a full netlink broadcast message |
 
-
 use std::net::{IpAddr, Ipv6Addr};
 
 use futures::TryStreamExt;
@@ -57,7 +56,7 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
                 NeighbourAttribute::Destination(NeighbourAddress::Inet6(addr)) if addr == ip => {
                     found_ip = true;
                 }
-                NeighbourAttribute::LinkLocalAddress(b) => {
+                NeighbourAttribute::LinkLayerAddress(b) => {
                     found_mac = MacAddr::from_slice(b);
                 }
                 _ => {}
@@ -93,7 +92,7 @@ pub fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
             NeighbourAttribute::Destination(NeighbourAddress::Inet(addr)) => {
                 ip = Some(IpAddr::V4(addr));
             }
-            NeighbourAttribute::LinkLocalAddress(bytes) => {
+            NeighbourAttribute::LinkLayerAddress(bytes) => {
                 mac = MacAddr::from_slice(&bytes);
             }
             _ => {}
@@ -145,7 +144,7 @@ pub fn extract_neigh_info(msg: &NetlinkMessage<RouteNetlinkMessage>) -> Option<N
             NeighbourAttribute::Destination(NeighbourAddress::Inet(i)) => {
                 ip_addr = Some(IpAddr::V4(*i));
             }
-            NeighbourAttribute::LinkLocalAddress(m) => mac = MacAddr::from_slice(m),
+            NeighbourAttribute::LinkLayerAddress(m) => mac = MacAddr::from_slice(m),
             _ => {}
         }
     }
@@ -299,10 +298,8 @@ pub async fn probe_neighbor(
         .state(NeighbourState::Probe);
 
     if let Some(m) = mac {
-        req = req.link_local_address(m.as_bytes());
+        req = req.link_layer_address(m.as_bytes());
     }
 
     req.execute().await
 }
-
-

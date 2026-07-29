@@ -111,7 +111,17 @@ full = [
 ]
 
 profile-minimal = ["dns", "dhcp", "ra", "uds"]
-profile-soho = ["dns", "dhcp", "ra", "tftp", "pppoe", "uds", "discovery", "http", "adblock"]
+profile-soho = [
+    "dns",
+    "dhcp",
+    "ra",
+    "tftp",
+    "pppoe",
+    "uds",
+    "discovery",
+    "http",
+    "adblock",
+]
 profile-enterprise = [
     "dns",
     "dhcp",
@@ -170,9 +180,9 @@ serde = { workspace = true }
 toml = "1.1.2"
 
 # Networking / netlink
-netlink-sys = "0.8"
-rtnetlink = "0.20"
-pnet = "0.35.0"
+netlink-sys = { workspace = true }
+rtnetlink = { workspace = true }
+pnet = { workspace = true }
 
 # Observabilidade
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }

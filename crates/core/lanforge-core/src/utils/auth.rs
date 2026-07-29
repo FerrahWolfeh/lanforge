@@ -1,6 +1,6 @@
 use argon2::{
     Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 
 /// Hashes a plaintext password using Argon2id.
@@ -10,7 +10,7 @@ use argon2::{
 /// Panics if salt generation or password hashing fails.
 #[must_use]
 pub fn hash_password(password: &str) -> String {
-    let salt = SaltString::generate(&mut rand::thread_rng());
+    let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     argon2
         .hash_password(password.as_bytes(), &salt)

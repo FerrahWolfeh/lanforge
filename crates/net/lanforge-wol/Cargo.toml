@@ -12,9 +12,7 @@ lanforge-types = { workspace = true }
 # Workspace
 thiserror = { workspace = true }
 tracing = { workspace = true }
-
-# Third party
-socket2 = "0.6.3"
+socket2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

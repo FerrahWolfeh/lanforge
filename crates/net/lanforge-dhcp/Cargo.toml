@@ -12,6 +12,7 @@ lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 
 # Workspace
+hotpath = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "time",
@@ -23,15 +24,14 @@ tokio = { workspace = true, features = [
 serde = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
+socket2 = { workspace = true }
+rand = { workspace = true }
+pnet = { workspace = true }
+hex = { workspace = true }
 
 # Third party
 dhcproto = "0.15.0"
-pnet = "0.35.0"
-socket2 = "0.6.3"
-rand = "0.10.1"
-hex = "0.4.3"
 roaring = "0.11.3"
-hotpath = { workspace = true, optional = true }
 
 [features]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]

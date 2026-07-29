@@ -12,6 +12,7 @@ lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 
 # Workspace
+hotpath = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "time",
@@ -21,13 +22,10 @@ tokio = { workspace = true, features = [
     "sync",
 ] }
 tracing = { workspace = true }
-
-# Third party
-netlink-packet-core = "0.8.1"
-rtnetlink = "0.20.0"
-netlink-sys = "0.8.8"
-futures = "0.3.32"
-hotpath = { workspace = true, optional = true }
+rtnetlink = { workspace = true }
+netlink-packet-core = { workspace = true }
+netlink-sys = { workspace = true }
+futures = { workspace = true }
 
 [features]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]

@@ -17,11 +17,8 @@ tokio = { workspace = true, features = ["macros", "sync"] }
 serde = { workspace = true, features = ["rc"] }
 hotpath = { workspace = true, optional = true }
 smallvec = { workspace = true }
-
-# Third party
-argon2 = { version = "0.5.3" }
-rand = { version = "0.8.6" }
-parking_lot = { version = "0.12.5" }
+parking_lot = { workspace = true }
+argon2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "sync", "rt-multi-thread"] }

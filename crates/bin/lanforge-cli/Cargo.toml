@@ -47,7 +47,11 @@ reqwest = { workspace = true, features = [
 ], optional = true }
 clap = { workspace = true }
 rustls = { workspace = true }
-
+futures = { workspace = true, optional = true }
+postcard = { workspace = true }
+argon2 = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
 
 # Third party
 bytesize = "2.3.1"
@@ -56,7 +60,6 @@ colored = "3.1.1"
 inquire = "0.9.4"
 iocraft = "0.8.0"
 mac_oui = { version = "0.4.11", features = ["with-db"] }
-postcard.workspace = true
 zstd = { version = "0.13.3", optional = true }
 duration-str = "0.21.0"
 ratatui = { version = "0.30.1", features = ["crossterm"], optional = true }
@@ -67,14 +70,10 @@ tokio-tungstenite = { version = "0.30.0", features = [
     "rustls-tls-webpki-roots",
 ], optional = true }
 url = { version = "2.5.4", optional = true }
-futures = { version = "0.3.31", optional = true }
 http = { version = "1.2.0", optional = true }
 async-trait = "0.1.89"
 directories = "6.0.0"
 chacha20poly1305 = "0.11.0"
-argon2 = "0.5.3"
-hex = "0.4.3"
-rand = "0.9.4"
 
 [dev-dependencies]
 lanforge-core = { workspace = true, features = ["adblock"] }

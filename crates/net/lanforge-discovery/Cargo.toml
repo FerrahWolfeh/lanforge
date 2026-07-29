@@ -24,15 +24,13 @@ tokio = { workspace = true, features = [
 serde = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
-
-# Third party
-netlink-packet-core = "0.8.1"
-rtnetlink = "0.20.0"
-netlink-sys = "0.8.8"
-futures = "0.3.32"
-socket2 = "0.6.3"
-pnet = "0.35.0"
-libc = "0.2.186"
+rtnetlink = { workspace = true }
+libc = { workspace = true }
+socket2 = { workspace = true }
+netlink-packet-core = { workspace = true }
+netlink-sys = { workspace = true }
+futures = { workspace = true }
+pnet = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

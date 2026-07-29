@@ -540,9 +540,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.11.1"
+version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "bytesize"
@@ -2553,7 +2553,7 @@ dependencies = [
  "lanforge-wol",
  "netlink-sys",
  "pnet",
- "rtnetlink 0.20.0",
+ "rtnetlink",
  "rustls",
  "serde",
  "serde_json",
@@ -2633,7 +2633,7 @@ dependencies = [
  "lanforge-uds",
  "mac_oui",
  "postcard",
- "rand 0.9.4",
+ "rand 0.10.2",
  "ratatui",
  "reqwest",
  "rustls",
@@ -2659,7 +2659,6 @@ dependencies = [
  "lanforge-macros",
  "lanforge-types",
  "parking_lot",
- "rand 0.8.6",
  "serde",
  "smallvec",
  "thiserror 2.0.19",
@@ -2774,7 +2773,7 @@ dependencies = [
  "netlink-sys",
  "parking_lot",
  "pnet",
- "rtnetlink 0.20.0",
+ "rtnetlink",
  "serde",
  "socket2",
  "thiserror 2.0.19",
@@ -2786,7 +2785,6 @@ dependencies = [
 name = "lanforge-dns"
 version = "2.4.0"
 dependencies = [
- "async-trait",
  "base64 0.23.0",
  "bloomfilter",
  "bytes",
@@ -2842,7 +2840,7 @@ dependencies = [
  "lanforge-types",
  "netlink-packet-core",
  "netlink-sys",
- "rtnetlink 0.20.0",
+ "rtnetlink",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -2907,7 +2905,7 @@ dependencies = [
  "nix 0.31.3",
  "pnet",
  "rand 0.10.2",
- "rtnetlink 0.21.0",
+ "rtnetlink",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -3007,9 +3005,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
-version = "0.2.186"
+version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libm"
@@ -3258,18 +3256,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3463cbb78394cb0141e2c926b93fc2197e473394b761986eca3b9da2c63ae0f4"
 dependencies = [
  "paste",
-]
-
-[[package]]
-name = "netlink-packet-route"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ce3636fa715e988114552619582b530481fd5ef176a1e5c1bf024077c2c9445"
-dependencies = [
- "bitflags 2.13.0",
- "libc",
- "log",
- "netlink-packet-core",
 ]
 
 [[package]]
@@ -4525,24 +4511,6 @@ dependencies = [
 
 [[package]]
 name = "rtnetlink"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b960d5d873a75b5be9761b1e73b146f52dddcd27bac75263f40fba686d4d7b5"
-dependencies = [
- "futures-channel",
- "futures-util",
- "log",
- "netlink-packet-core",
- "netlink-packet-route 0.28.0",
- "netlink-proto",
- "netlink-sys",
- "nix 0.30.1",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "rtnetlink"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc19f84f710fa2f337617f9bc0400260a94224bde7bae28fd8879f3771ca5784"
@@ -4551,7 +4519,7 @@ dependencies = [
  "futures-util",
  "log",
  "netlink-packet-core",
- "netlink-packet-route 0.30.0",
+ "netlink-packet-route",
  "netlink-proto",
  "netlink-sys",
  "nix 0.30.1",
@@ -4605,9 +4573,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.42"
+version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c54fcab019b409d04215d3a17cb438fd7fbf192ee61461f20f4fe18704bc138"
+checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -5035,9 +5003,9 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.6.3"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -6098,9 +6066,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.23.1"
+version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
+checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
  "atomic",
  "getrandom 0.4.2",

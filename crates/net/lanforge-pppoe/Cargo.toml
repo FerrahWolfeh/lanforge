@@ -23,15 +23,15 @@ tokio = { workspace = true, features = [
 ] }
 serde = { workspace = true }
 tracing = { workspace = true }
+libc = { workspace = true }
+rtnetlink = { workspace = true }
+rand = { workspace = true }
+pnet = { workspace = true }
+hotpath = { workspace = true, optional = true }
 
 # Third party protocol / low level
-libc = "0.2"
 nix = { version = "0.31.3", features = ["socket", "ioctl", "net", "fs"] }
-pnet = "0.35.0"
 md-5 = "0.11.0"
-rand = "0.10.2"
-hotpath = { workspace = true, optional = true }
-rtnetlink = "0.21.0"
 nftables = "0.6.3"
 
 [features]

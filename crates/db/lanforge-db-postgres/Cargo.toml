@@ -24,11 +24,11 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+uuid = { workspace = true }
 
 # SQL & driver specific
 mac_address = "1.1"
 ipnetwork = "0.21"
-uuid = { version = "1.8", features = ["v4", "serde"] }
 sqlx = { version = "0.9.0", features = [
     "runtime-tokio",
     "tls-rustls-aws-lc-rs",

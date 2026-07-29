@@ -19,8 +19,8 @@ tracing = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
-rand = "0.10.1"
-hex = "0.4.3"
+rand = { workspace = true }
+hex = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

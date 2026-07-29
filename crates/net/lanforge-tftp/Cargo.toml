@@ -26,10 +26,9 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 futures = { workspace = true }
 smallvec = { workspace = true }
-
+bytes = { workspace = true }
 
 # Third party
-bytes = "1.11.1"
 smol_str = "0.3.6"
 
 

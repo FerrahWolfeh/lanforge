@@ -49,7 +49,7 @@ fn mock_neigh_msg(
     };
     let mut attributes = vec![NeighbourAttribute::Destination(addr)];
     if let Some(m) = mac {
-        attributes.push(NeighbourAttribute::LinkLocalAddress(m.to_vec()));
+        attributes.push(NeighbourAttribute::LinkLayerAddress(m.to_vec()));
     }
 
     let header = NeighbourHeader {
@@ -262,7 +262,7 @@ fn parse_neighbor_msg_only_active() {
     msg.header.family = AddressFamily::Inet6;
     msg.attributes = vec![
         NeighbourAttribute::Destination(NeighbourAddress::Inet6(ip)),
-        NeighbourAttribute::LinkLocalAddress(mac.to_vec()),
+        NeighbourAttribute::LinkLayerAddress(mac.to_vec()),
     ];
     let event = parse_neighbor_msg(msg).expect("deve parsear");
     if let NeighborEvent::Added { is_active, .. } = event {
@@ -286,5 +286,3 @@ fn extract_neigh_info_handles_delete() {
 
     assert_eq!(event, NeighborEvent::Deleted { ip, ifindex: 2 });
 }
-
-

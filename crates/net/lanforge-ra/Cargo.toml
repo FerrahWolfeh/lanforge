@@ -22,11 +22,9 @@ tokio = { workspace = true, features = [
 ] }
 serde = { workspace = true }
 tracing = { workspace = true }
-
-# Third party
-socket2 = "0.6.3"
-rand = "0.10.1"
-libc = "0.2.183"
+socket2 = { workspace = true }
+rand = { workspace = true }
+libc = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]
