@@ -131,6 +131,27 @@ impl PppoeService {
             )
             .await?;
 
+            // Apply nftables router performance tuning rules if enabled
+            if self.cfg.nftables.enabled {
+                let lan_ifaces: Vec<String> = pnet::datalink::interfaces()
+                    .into_iter()
+                    .filter(|i| {
+                        !i.is_loopback() && i.name != self.cfg.wan_iface && !i.name.starts_with("ppp")
+                    })
+                    .map(|i| i.name)
+                    .collect();
+
+                if let Err(e) = crate::nftables::apply_nftables_tuning(
+                    &self.cfg.nftables,
+                    &kernel_session.interface_name,
+                    &lan_ifaces,
+                )
+                .await
+                {
+                    warn!(error = %e, "Failed to apply nftables performance tuning rules");
+                }
+            }
+
             // Update core State with connected PPPoE status
             let pppoe_status = PppoeStatusResponse {
                 enabled: true,
@@ -192,6 +213,10 @@ impl PppoeService {
             .await
         }
         .await;
+
+        if self.cfg.nftables.enabled {
+            crate::nftables::cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
+        }
 
         let _ = discovery::send_padt(
             &self.cfg.wan_iface,

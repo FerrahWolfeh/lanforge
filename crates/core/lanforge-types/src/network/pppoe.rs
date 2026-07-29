@@ -33,6 +33,34 @@ impl std::str::FromStr for AuthMethod {
     }
 }
 
+/// Configuration for `nftables` performance tuning on the gateway interface.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct PppoeNftablesConfig {
+    pub enabled: bool,
+    pub table_name: String,
+    pub flow_offload: bool,
+    pub mss_clamping: bool,
+    pub bypass_dns: bool,
+    pub bypass_vowifi: bool,
+    pub custom_rules_file: Option<String>,
+}
+
+impl Default for PppoeNftablesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            table_name: "lanforge".into(),
+            flow_offload: true,
+            mss_clamping: true,
+            bypass_dns: true,
+            bypass_vowifi: true,
+            custom_rules_file: None,
+        }
+    }
+}
+
 /// Configuration structure for `PPPoE` service.
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
@@ -46,6 +74,7 @@ pub struct PppoeConfig {
     pub lcp_echo_interval_secs: u64,
     pub lcp_echo_max_failures: u32,
     pub reconnect_delay_secs: u64,
+    pub nftables: PppoeNftablesConfig,
 }
 
 impl Default for PppoeConfig {
@@ -60,6 +89,8 @@ impl Default for PppoeConfig {
             lcp_echo_interval_secs: 10,
             lcp_echo_max_failures: 3,
             reconnect_delay_secs: 10,
+            nftables: PppoeNftablesConfig::default(),
         }
     }
 }
+

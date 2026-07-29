@@ -8,3 +8,4 @@ test.db
 *.md
 .vscode/settings.json
 !docs/**/*.md
+_extra

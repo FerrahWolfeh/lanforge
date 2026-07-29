@@ -1,7 +1,6 @@
 use crate::config::AuthMethod;
 use crate::error::PppoeError;
 use crate::session::PppoeSession;
-use rand::Rng;
 use std::time::Duration;
 use tracing::debug;
 
@@ -119,7 +118,7 @@ pub async fn negotiate_lcp(
     desired_mru: u16,
     _desired_auth: AuthMethod,
 ) -> Result<LcpNegotiated, PppoeError> {
-    let local_magic: u32 = rand::rng().random();
+    let local_magic: u32 = rand::random();
     let mut req_id = 1u8;
 
     let mut my_ack_received = false;

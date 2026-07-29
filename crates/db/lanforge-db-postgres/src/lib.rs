@@ -1885,7 +1885,10 @@ impl PppoeConfigStore for PostgresDatabase {
     async fn load_pppoe_config(&self) -> Result<Option<PppoeConfig>, DbError> {
         use sqlx::Row;
         let row = sqlx::query(
-            "SELECT enabled, wan_iface, username, password, auth, mru, lcp_echo_interval_secs, lcp_echo_max_failures, reconnect_delay_secs FROM pppoe.config WHERE id = 1"
+            "SELECT enabled, wan_iface, username, password, auth, mru, lcp_echo_interval_secs, \
+             lcp_echo_max_failures, reconnect_delay_secs, nft_enabled, nft_table_name, \
+             nft_flow_offload, nft_mss_clamping, nft_bypass_dns, nft_bypass_vowifi, nft_custom_rules_file \
+             FROM pppoe.config WHERE id = 1"
         )
         .fetch_optional(&self.pool)
         .await
@@ -1903,6 +1906,14 @@ impl PppoeConfigStore for PostgresDatabase {
             let lcp_echo_max_failures: i32 = r.try_get("lcp_echo_max_failures").map_err(map_err)?;
             let reconnect_delay_secs: i64 = r.try_get("reconnect_delay_secs").map_err(map_err)?;
 
+            let nft_enabled: bool = r.try_get("nft_enabled").unwrap_or(true);
+            let nft_table_name: String = r.try_get("nft_table_name").unwrap_or_else(|_| "lanforge".into());
+            let nft_flow_offload: bool = r.try_get("nft_flow_offload").unwrap_or(true);
+            let nft_mss_clamping: bool = r.try_get("nft_mss_clamping").unwrap_or(true);
+            let nft_bypass_dns: bool = r.try_get("nft_bypass_dns").unwrap_or(true);
+            let nft_bypass_vowifi: bool = r.try_get("nft_bypass_vowifi").unwrap_or(true);
+            let nft_custom_rules_file: Option<String> = r.try_get("nft_custom_rules_file").ok().flatten();
+
             let auth = auth_raw
                 .parse::<lanforge_types::network::pppoe::AuthMethod>()
                 .unwrap_or(lanforge_types::network::pppoe::AuthMethod::ChapMd5);
@@ -1916,6 +1927,15 @@ impl PppoeConfigStore for PostgresDatabase {
                 lcp_echo_interval_secs: lcp_echo_interval_secs as u64,
                 lcp_echo_max_failures: lcp_echo_max_failures as u32,
                 reconnect_delay_secs: reconnect_delay_secs as u64,
+                nftables: lanforge_types::network::pppoe::PppoeNftablesConfig {
+                    enabled: nft_enabled,
+                    table_name: nft_table_name,
+                    flow_offload: nft_flow_offload,
+                    mss_clamping: nft_mss_clamping,
+                    bypass_dns: nft_bypass_dns,
+                    bypass_vowifi: nft_bypass_vowifi,
+                    custom_rules_file: nft_custom_rules_file,
+                },
             }))
         } else {
             Ok(None)
@@ -1930,8 +1950,11 @@ impl PppoeConfigStore for PostgresDatabase {
         let reconnect_delay = cfg.reconnect_delay_secs as i64;
 
         sqlx::query(
-            "INSERT INTO pppoe.config (id, enabled, wan_iface, username, password, auth, mru, lcp_echo_interval_secs, lcp_echo_max_failures, reconnect_delay_secs)
-             VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+            "INSERT INTO pppoe.config (id, enabled, wan_iface, username, password, auth, mru, \
+             lcp_echo_interval_secs, lcp_echo_max_failures, reconnect_delay_secs, \
+             nft_enabled, nft_table_name, nft_flow_offload, nft_mss_clamping, \
+             nft_bypass_dns, nft_bypass_vowifi, nft_custom_rules_file)
+             VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
              ON CONFLICT (id) DO UPDATE SET
                enabled = EXCLUDED.enabled,
                wan_iface = EXCLUDED.wan_iface,
@@ -1941,7 +1964,14 @@ impl PppoeConfigStore for PostgresDatabase {
                mru = EXCLUDED.mru,
                lcp_echo_interval_secs = EXCLUDED.lcp_echo_interval_secs,
                lcp_echo_max_failures = EXCLUDED.lcp_echo_max_failures,
-               reconnect_delay_secs = EXCLUDED.reconnect_delay_secs"
+               reconnect_delay_secs = EXCLUDED.reconnect_delay_secs,
+               nft_enabled = EXCLUDED.nft_enabled,
+               nft_table_name = EXCLUDED.nft_table_name,
+               nft_flow_offload = EXCLUDED.nft_flow_offload,
+               nft_mss_clamping = EXCLUDED.nft_mss_clamping,
+               nft_bypass_dns = EXCLUDED.nft_bypass_dns,
+               nft_bypass_vowifi = EXCLUDED.nft_bypass_vowifi,
+               nft_custom_rules_file = EXCLUDED.nft_custom_rules_file"
         )
         .bind(cfg.enabled)
         .bind(&cfg.wan_iface)
@@ -1952,12 +1982,20 @@ impl PppoeConfigStore for PostgresDatabase {
         .bind(echo_interval)
         .bind(echo_max_failures)
         .bind(reconnect_delay)
+        .bind(cfg.nftables.enabled)
+        .bind(&cfg.nftables.table_name)
+        .bind(cfg.nftables.flow_offload)
+        .bind(cfg.nftables.mss_clamping)
+        .bind(cfg.nftables.bypass_dns)
+        .bind(cfg.nftables.bypass_vowifi)
+        .bind(&cfg.nftables.custom_rules_file)
         .execute(&self.pool)
         .await
         .map_err(map_err)?;
 
         Ok(())
     }
+
 }
 
 #[cfg(test)]

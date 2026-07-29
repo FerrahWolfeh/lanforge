@@ -14,9 +14,11 @@ pub mod ipcp;
 pub mod keepalive;
 pub mod kernel;
 pub mod lcp;
+pub mod nftables;
 pub mod service;
 pub mod session;
 
 pub use config::{AuthMethod, PppoeConfig, PppoeCredentials};
 pub use error::PppoeError;
 pub use service::PppoeService;
+

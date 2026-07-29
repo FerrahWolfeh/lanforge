@@ -1,7 +1,6 @@
 use crate::error::PppoeError;
 use lanforge_types::identifiers::MacAddr;
 use nix::sys::socket::{AddressFamily, SockFlag, SockProtocol, SockType, socket};
-use rand::Rng;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
@@ -139,7 +138,7 @@ impl PppoeDiscovery {
     pub async fn run(&self) -> Result<DiscoveryResult, PppoeError> {
         let fd = bind_discovery_socket(self.ifindex)?;
         let async_fd = AsyncFd::new(fd)?;
-        let host_uniq: [u8; 4] = rand::rng().random();
+        let host_uniq: [u8; 4] = rand::random();
 
         // 1. Send PADI and wait for PADO
         let (ac_mac, ac_name, ac_cookie) =
