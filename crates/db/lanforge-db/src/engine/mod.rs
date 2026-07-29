@@ -17,6 +17,7 @@ use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 
@@ -48,6 +49,7 @@ pub struct MockDbState {
     pub ra_prefixes: RwLock<Vec<RAPrefix>>,
     pub ra_rdnss: RwLock<Vec<RdnssConfig>>,
     pub ra_dnssl: RwLock<Vec<DnsslConfig>>,
+    pub pppoe_config: RwLock<Option<PppoeConfig>>,
 }
 
 impl Default for MockDbState {
@@ -67,6 +69,7 @@ impl Default for MockDbState {
             ra_prefixes: RwLock::new(Vec::new()),
             ra_rdnss: RwLock::new(Vec::new()),
             ra_dnssl: RwLock::new(Vec::new()),
+            pppoe_config: RwLock::new(None),
         }
     }
 }
@@ -677,6 +680,17 @@ impl DynamicConfigStore for LanforgeDb {
     async fn save_ra_dnssl(&self, dnssl: &[DnsslConfig]) -> Result<(), DbError> {
         delegate_db_call!(self, save_ra_dnssl(dnssl), mock => {
             *mock.ra_dnssl.write() = dnssl.to_vec();
+            Ok(())
+        })
+    }
+
+    async fn load_pppoe_config(&self) -> Result<Option<PppoeConfig>, DbError> {
+        delegate_db_call!(self, load_pppoe_config(), mock => Ok(mock.pppoe_config.read().clone()))
+    }
+
+    async fn save_pppoe_config(&self, cfg: &PppoeConfig) -> Result<(), DbError> {
+        delegate_db_call!(self, save_pppoe_config(cfg), mock => {
+            *mock.pppoe_config.write() = Some(cfg.clone());
             Ok(())
         })
     }

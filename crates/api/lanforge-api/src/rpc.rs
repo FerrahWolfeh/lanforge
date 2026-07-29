@@ -10,10 +10,13 @@ use crate::api::{
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
     identifiers::MacAddr,
-    network::dns::{
-        DnsRecordType,
-        adblock::{AdblockUrlKind, BlockingMode, RewriteRule},
-        upstream::UpstreamProtocol,
+    network::{
+        dns::{
+            DnsRecordType,
+            adblock::{AdblockUrlKind, BlockingMode, RewriteRule},
+            upstream::UpstreamProtocol,
+        },
+        pppoe::PppoeConfig,
     },
     system::{PppoeStatusResponse, ServiceAction},
     update::LeaseTarget,
@@ -257,6 +260,13 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn pppoe_disconnect(
         &self,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn pppoe_config(
+        &self,
+    ) -> impl Future<Output = Result<PppoeConfig, RpcCallError>> + Send;
+    fn update_pppoe_config(
+        &self,
+        cfg: PppoeConfig,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
 }
 

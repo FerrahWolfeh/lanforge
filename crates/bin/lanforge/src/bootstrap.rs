@@ -294,6 +294,18 @@ impl Bootstrapper {
         Ok(())
     }
 
+    #[cfg(feature = "pppoe")]
+    async fn load_pppoe_config<D: DynamicConfigStore>(db: &D, cfg: &mut Config) -> Result<()> {
+        let pppoe_cfg = db.load_pppoe_config().await?;
+        if let Some(loaded) = pppoe_cfg {
+            cfg.pppoe_toml = loaded;
+        } else {
+            db.save_pppoe_config(&cfg.pppoe_toml).await?;
+            info!("Seeded PPPoE configuration from TOML into database");
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "dns")]
     async fn load_dns_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
         // Seed upstreams if empty in DB
@@ -434,6 +446,10 @@ impl Bootstrapper {
         // 6. Check/seed/load DNS Config
         #[cfg(feature = "dns")]
         Self::load_dns_config(&db, cfg).await?;
+
+        // 7. Check/seed/load PPPoE Config
+        #[cfg(feature = "pppoe")]
+        Self::load_pppoe_config(&db, cfg).await?;
 
         let mut table = db.load_table().await.unwrap_or_else(|e| {
             warn!("Falha ao carregar DB ({e}), iniciando do zero");

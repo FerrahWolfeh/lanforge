@@ -830,5 +830,16 @@ impl LanforgeClient {
     pub async fn pppoe_disconnect(&self) -> Result<SimpleSuccess> {
         dispatch!(self, post => "/pppoe/disconnect", serde_json::json!({}), pppoe_disconnect())
     }
+
+    pub async fn pppoe_config(&self) -> Result<lanforge_types::network::pppoe::PppoeConfig> {
+        dispatch!(self, get => "/pppoe/config", pppoe_config())
+    }
+
+    pub async fn update_pppoe_config(
+        &self,
+        cfg: lanforge_types::network::pppoe::PppoeConfig,
+    ) -> Result<SimpleSuccess> {
+        dispatch!(self, post => "/pppoe/config", cfg, update_pppoe_config(cfg))
+    }
 }
 

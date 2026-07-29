@@ -83,12 +83,13 @@ impl ClientContext {
             Err(_) => None,
         };
 
-        // 8. Dynamic Configs (pools, prefixes)
+        // 8. Dynamic Configs (pools, prefixes, pppoe)
         let dhcp_v4_pools = self.db.load_dhcp_v4_pools().await.ok();
         let dhcp_v6_pools = self.db.load_dhcp_v6_pools().await.ok();
         let ra_prefixes = self.db.load_ra_prefixes().await.ok();
         let ra_rdnss = self.db.load_ra_rdnss().await.ok();
         let ra_dnssl = self.db.load_ra_dnssl().await.ok();
+        let pppoe_config = self.db.load_pppoe_config().await.ok().flatten();
 
         Response::SystemConfig(Box::new(SystemConfigExport {
             hosts,
@@ -103,6 +104,7 @@ impl ClientContext {
             ra_prefixes,
             ra_rdnss,
             ra_dnssl,
+            pppoe_config,
             overwrite: false,
         }))
     }
@@ -121,6 +123,7 @@ impl ClientContext {
             ra_prefixes,
             ra_rdnss,
             ra_dnssl,
+            pppoe_config,
             overwrite,
         } = config;
 
@@ -529,6 +532,21 @@ impl ClientContext {
                 success: dnssl_success,
                 count: if dnssl_success { count } else { 0 },
                 error: dnssl_err,
+            });
+        }
+        if let Some(pppoe_cfg) = pppoe_config {
+            let mut pppoe_success = true;
+            let mut pppoe_err = None;
+            if let Err(e) = self.db.save_pppoe_config(&pppoe_cfg).await {
+                pppoe_success = false;
+                total_success = false;
+                pppoe_err = Some(e.to_string());
+            }
+            results.push(ImportResult {
+                section: ImportSection::PppoeConfig,
+                success: pppoe_success,
+                count: if pppoe_success { 1 } else { 0 },
+                error: pppoe_err,
             });
         }
 

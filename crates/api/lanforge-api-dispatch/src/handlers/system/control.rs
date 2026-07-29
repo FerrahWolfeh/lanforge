@@ -62,5 +62,39 @@ impl ClientContext {
             message: "PPPoE disconnection triggered".to_string(),
         })
     }
+
+    pub async fn handle_pppoe_config(&self) -> Response {
+        use lanforge_db::DynamicConfigStore;
+        match self.db.load_pppoe_config().await {
+            Ok(Some(cfg)) => Response::PppoeConfig(Box::new(cfg)),
+            Ok(None) => Response::Error {
+                error: "PPPoE configuration not found in database".to_string(),
+            },
+            Err(e) => Response::Error {
+                error: format!("Database error: {e}"),
+            },
+        }
+    }
+
+    pub async fn handle_update_pppoe_config(
+        &self,
+        cfg: lanforge_types::network::pppoe::PppoeConfig,
+    ) -> Response {
+        use lanforge_db::DynamicConfigStore;
+        if let Err(e) = self.db.save_pppoe_config(&cfg).await {
+            return Response::Error {
+                error: format!("Failed to save PPPoE configuration: {e}"),
+            };
+        }
+
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+
+        Response::Success(SimpleSuccess {
+            message: "PPPoE configuration updated successfully".to_string(),
+        })
+    }
 }
 

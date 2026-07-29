@@ -1,10 +1,10 @@
 use crate::cli::{Execute, LanforgeClient};
 use clap::Subcommand;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use iocraft::prelude::*;
+use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig};
 use lanforge_types::system::PppoeStatusResponse;
-
-
+use std::str::FromStr;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct PppoeArgs {
@@ -20,8 +20,42 @@ pub enum PppoeAction {
     Reconnect,
     /// Disconnect active `PPPoE` WAN session
     Disconnect,
+    /// View current stored `PPPoE` configuration
+    GetConfig,
+    /// Update `PPPoE` WAN configuration settings
+    SetConfig(PppoeSetConfigArgs),
 }
 
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct PppoeSetConfigArgs {
+    /// Enable or disable `PPPoE` service (true/false)
+    #[arg(long)]
+    pub enabled: Option<bool>,
+    /// Physical WAN interface name (e.g. eth1, end1)
+    #[arg(long)]
+    pub wan_iface: Option<String>,
+    /// `PPPoE` username provided by ISP
+    #[arg(short, long)]
+    pub username: Option<String>,
+    /// `PPPoE` password provided by ISP
+    #[arg(short, long)]
+    pub password: Option<String>,
+    /// Authentication protocol (none, pap, `chap_md5`)
+    #[arg(long)]
+    pub auth: Option<String>,
+    /// Maximum Receive Unit (MRU, default 1492)
+    #[arg(long)]
+    pub mru: Option<u16>,
+    /// LCP Echo-Request interval in seconds (default 10)
+    #[arg(long)]
+    pub lcp_echo_interval: Option<u64>,
+    /// Maximum LCP Echo failure count before reconnect (default 3)
+    #[arg(long)]
+    pub lcp_echo_max_failures: Option<u32>,
+    /// Delay between reconnection attempts in seconds (default 10)
+    #[arg(long)]
+    pub reconnect_delay: Option<u64>,
+}
 
 impl Execute for PppoeArgs {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
@@ -41,6 +75,62 @@ impl Execute for PppoeArgs {
             }
             PppoeAction::Disconnect => {
                 let resp = client.pppoe_disconnect().await?;
+                println!("✓ {}", resp.message);
+            }
+            PppoeAction::GetConfig => {
+                let cfg = client.pppoe_config().await?;
+                if client.json {
+                    println!("{}", serde_json::to_string_pretty(&cfg)?);
+                    return Ok(());
+                }
+                render_pppoe_config(&cfg, client.ascii);
+            }
+            PppoeAction::SetConfig(set_args) => {
+                let mut cfg = client.pppoe_config().await.unwrap_or_default();
+                let mut updated = set_args.enabled.is_some();
+                if let Some(enabled) = set_args.enabled {
+                    cfg.enabled = enabled;
+                }
+                if let Some(iface) = set_args.wan_iface {
+                    cfg.wan_iface = iface;
+                    updated = true;
+                }
+                if let Some(user) = set_args.username {
+                    cfg.username = user;
+                    updated = true;
+                }
+                if let Some(pass) = set_args.password {
+                    cfg.password = pass;
+                    updated = true;
+                }
+                if let Some(auth_str) = set_args.auth {
+                    cfg.auth = AuthMethod::from_str(&auth_str)
+                        .map_err(|e| eyre!("Invalid auth method: {e}"))?;
+                    updated = true;
+                }
+                if let Some(mru) = set_args.mru {
+                    cfg.mru = mru;
+                    updated = true;
+                }
+                if let Some(interval) = set_args.lcp_echo_interval {
+                    cfg.lcp_echo_interval_secs = interval;
+                    updated = true;
+                }
+                if let Some(max_fail) = set_args.lcp_echo_max_failures {
+                    cfg.lcp_echo_max_failures = max_fail;
+                    updated = true;
+                }
+                if let Some(delay) = set_args.reconnect_delay {
+                    cfg.reconnect_delay_secs = delay;
+                    updated = true;
+                }
+
+                if !updated {
+                    println!("ℹ No changes specified. Use --help to view configurable PPPoE options.");
+                    return Ok(());
+                }
+
+                let resp = client.update_pppoe_config(cfg).await?;
                 println!("✓ {}", resp.message);
             }
         }
@@ -113,6 +203,61 @@ fn render_pppoe_status(status: &PppoeStatusResponse, ascii: bool) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "ISP DNS (Fallback Only): ", color: Color::DarkGrey)
                 Text(content: dns_list)
+            }
+        }
+    }
+    .print();
+}
+
+fn render_pppoe_config(cfg: &PppoeConfig, ascii: bool) {
+    let enabled_str = if cfg.enabled { "Enabled" } else { "Disabled" };
+    let enabled_color = if cfg.enabled { Color::Green } else { Color::Red };
+    let masked_password = if cfg.password.is_empty() {
+        "<none>".to_string()
+    } else {
+        "*".repeat(cfg.password.len())
+    };
+
+    element! {
+        View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
+            View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+                Text(content: if ascii { "--- PPPoE CONFIGURATION ---" } else { "⚙️ PPPoE CONFIGURATION" }, weight: Weight::Bold)
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Service Enabled: ", weight: Weight::Bold)
+                Text(content: enabled_str, color: enabled_color, weight: Weight::Bold)
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "WAN Interface: ", color: Color::DarkGrey)
+                Text(content: cfg.wan_iface.clone())
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Username: ", color: Color::DarkGrey)
+                Text(content: if cfg.username.is_empty() { "<not configured>".to_string() } else { cfg.username.clone() })
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Password: ", color: Color::DarkGrey)
+                Text(content: masked_password)
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Auth Protocol: ", color: Color::DarkGrey)
+                Text(content: cfg.auth.to_string())
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "MRU: ", color: Color::DarkGrey)
+                Text(content: cfg.mru.to_string())
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "LCP Echo Interval: ", color: Color::DarkGrey)
+                Text(content: format!("{}s", cfg.lcp_echo_interval_secs))
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "LCP Echo Max Failures: ", color: Color::DarkGrey)
+                Text(content: cfg.lcp_echo_max_failures.to_string())
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Reconnect Delay: ", color: Color::DarkGrey)
+                Text(content: format!("{}s", cfg.reconnect_delay_secs))
             }
         }
     }

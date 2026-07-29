@@ -662,6 +662,25 @@ impl LanforgeRpc for ClientContext {
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
+
+    async fn pppoe_config(&self) -> Result<lanforge_types::network::pppoe::PppoeConfig, RpcCallError> {
+        match self.handle_pppoe_config().await {
+            Response::PppoeConfig(cfg) => Ok(*cfg),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn update_pppoe_config(
+        &self,
+        cfg: lanforge_types::network::pppoe::PppoeConfig,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_update_pppoe_config(cfg).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
 }
 
 

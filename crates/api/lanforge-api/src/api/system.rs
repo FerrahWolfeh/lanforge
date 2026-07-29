@@ -4,6 +4,7 @@ use super::common::{
     Capabilities, HttpDataResponse, HttpWrappedResponse, ServerCapabilities, ServiceBanner,
 };
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::system::ServiceState;
 use serde::{Deserialize, Serialize};
@@ -278,8 +279,21 @@ pub struct SystemConfigExport {
     pub ra_prefixes: Option<Vec<RAPrefix>>,
     pub ra_rdnss: Option<Vec<RdnssConfig>>,
     pub ra_dnssl: Option<Vec<DnsslConfig>>,
+    pub pppoe_config: Option<PppoeConfig>,
     #[serde(default)]
     pub overwrite: bool,
+}
+
+impl HttpWrappedResponse for PppoeConfig {
+    type Wrapper = HttpDataResponse<PppoeConfig>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
 }
 
 impl HttpWrappedResponse for StatusResponse {
@@ -333,6 +347,7 @@ pub enum ImportSection {
     RaPrefixes,
     RaRdnss,
     RaDnssl,
+    PppoeConfig,
 }
 
 impl ImportSection {
@@ -351,6 +366,7 @@ impl ImportSection {
             Self::RaPrefixes => "ra_prefixes",
             Self::RaRdnss => "ra_rdnss",
             Self::RaDnssl => "ra_dnssl",
+            Self::PppoeConfig => "pppoe_config",
         }
     }
 }

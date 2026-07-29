@@ -11,6 +11,7 @@ use lanforge_api::api::dns::{AllowlistEntry, DnsUpstreamConfig};
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -73,6 +74,7 @@ pub struct FileConfigExport {
     pub ra_prefixes: Option<Vec<RAPrefix>>,
     pub ra_rdnss: Option<Vec<RdnssConfig>>,
     pub ra_dnssl: Option<Vec<DnsslConfig>>,
+    pub pppoe_config: Option<PppoeConfig>,
     #[serde(default)]
     pub overwrite: bool,
 }
@@ -177,6 +179,7 @@ async fn execute_export(
         ra_prefixes: config.ra_prefixes,
         ra_rdnss: config.ra_rdnss,
         ra_dnssl: config.ra_dnssl,
+        pppoe_config: config.pppoe_config,
         overwrite: config.overwrite,
     };
 
@@ -233,6 +236,7 @@ async fn execute_import(
         ra_prefixes: file_export.ra_prefixes,
         ra_rdnss: file_export.ra_rdnss,
         ra_dnssl: file_export.ra_dnssl,
+        pppoe_config: file_export.pppoe_config,
         overwrite,
     };
 
@@ -267,9 +271,13 @@ async fn execute_import(
             lanforge_api::api::ImportSection::RaPrefixes => "RA prefixes",
             lanforge_api::api::ImportSection::RaRdnss => "RA RDNSS options",
             lanforge_api::api::ImportSection::RaDnssl => "RA DNSSL options",
+            lanforge_api::api::ImportSection::PppoeConfig => "PPPoE configuration",
         };
         if res.success {
-            if res.count > 0 || res.section == lanforge_api::api::ImportSection::DnsAdblockConfig {
+            if res.count > 0
+                || res.section == lanforge_api::api::ImportSection::DnsAdblockConfig
+                || res.section == lanforge_api::api::ImportSection::PppoeConfig
+            {
                 println!("  · Imported {} {}", res.count, name);
             }
         } else {

@@ -81,5 +81,7 @@ pub enum Response {
     TransientHosts(TransientHostsResponse),
     /// PPPoE session status response.
     PppoeStatus(Box<lanforge_types::system::PppoeStatusResponse>),
+    /// PPPoE configuration response.
+    PppoeConfig(Box<lanforge_types::network::pppoe::PppoeConfig>),
 }
 

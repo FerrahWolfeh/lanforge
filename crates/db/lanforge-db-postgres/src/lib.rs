@@ -4,6 +4,7 @@ pub mod dto;
 pub mod mapping;
 
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::pppoe::PppoeConfig;
 
 // Helper macros to reduce query boilerplate
 macro_rules! exec {
@@ -1874,6 +1875,82 @@ impl DynamicConfigStore for PostgresDatabase {
             }
         }
         tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_pppoe_config(&self) -> Result<Option<PppoeConfig>, DbError> {
+        use sqlx::Row;
+        let row = sqlx::query(
+            "SELECT enabled, wan_iface, username, password, auth, mru, lcp_echo_interval_secs, lcp_echo_max_failures, reconnect_delay_secs FROM pppoe.config WHERE id = 1"
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        if let Some(r) = row {
+            let enabled: bool = r.try_get("enabled").map_err(map_err)?;
+            let wan_iface: String = r.try_get("wan_iface").map_err(map_err)?;
+            let username: String = r.try_get("username").map_err(map_err)?;
+            let password: String = r.try_get("password").map_err(map_err)?;
+            let auth_raw: String = r.try_get("auth").map_err(map_err)?;
+            let mru: i32 = r.try_get("mru").map_err(map_err)?;
+            let lcp_echo_interval_secs: i64 = r.try_get("lcp_echo_interval_secs").map_err(map_err)?;
+            let lcp_echo_max_failures: i32 = r.try_get("lcp_echo_max_failures").map_err(map_err)?;
+            let reconnect_delay_secs: i64 = r.try_get("reconnect_delay_secs").map_err(map_err)?;
+
+            let auth = auth_raw
+                .parse::<lanforge_types::network::pppoe::AuthMethod>()
+                .unwrap_or(lanforge_types::network::pppoe::AuthMethod::ChapMd5);
+            Ok(Some(PppoeConfig {
+                enabled,
+                wan_iface,
+                username,
+                password,
+                auth,
+                mru: mru as u16,
+                lcp_echo_interval_secs: lcp_echo_interval_secs as u64,
+                lcp_echo_max_failures: lcp_echo_max_failures as u32,
+                reconnect_delay_secs: reconnect_delay_secs as u64,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn save_pppoe_config(&self, cfg: &PppoeConfig) -> Result<(), DbError> {
+        let auth_str = cfg.auth.to_string();
+        let mru = i32::from(cfg.mru);
+        let echo_interval = cfg.lcp_echo_interval_secs as i64;
+        let echo_max_failures = cfg.lcp_echo_max_failures as i32;
+        let reconnect_delay = cfg.reconnect_delay_secs as i64;
+
+        sqlx::query(
+            "INSERT INTO pppoe.config (id, enabled, wan_iface, username, password, auth, mru, lcp_echo_interval_secs, lcp_echo_max_failures, reconnect_delay_secs)
+             VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (id) DO UPDATE SET
+               enabled = EXCLUDED.enabled,
+               wan_iface = EXCLUDED.wan_iface,
+               username = EXCLUDED.username,
+               password = EXCLUDED.password,
+               auth = EXCLUDED.auth,
+               mru = EXCLUDED.mru,
+               lcp_echo_interval_secs = EXCLUDED.lcp_echo_interval_secs,
+               lcp_echo_max_failures = EXCLUDED.lcp_echo_max_failures,
+               reconnect_delay_secs = EXCLUDED.reconnect_delay_secs"
+        )
+        .bind(cfg.enabled)
+        .bind(&cfg.wan_iface)
+        .bind(&cfg.username)
+        .bind(&cfg.password)
+        .bind(&auth_str)
+        .bind(mru)
+        .bind(echo_interval)
+        .bind(echo_max_failures)
+        .bind(reconnect_delay)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+
         Ok(())
     }
 }

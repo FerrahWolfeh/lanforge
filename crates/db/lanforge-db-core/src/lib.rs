@@ -9,6 +9,7 @@ use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 
@@ -344,6 +345,14 @@ pub trait DynamicConfigStore: Send + Sync {
     fn save_ra_dnssl(
         &self,
         dnssl: &[DnsslConfig],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Loads dynamic PPPoE configuration.
+    fn load_pppoe_config(&self) -> impl Future<Output = Result<Option<PppoeConfig>, DbError>> + Send;
+    /// Saves dynamic PPPoE configuration.
+    fn save_pppoe_config(
+        &self,
+        cfg: &PppoeConfig,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 }
 
