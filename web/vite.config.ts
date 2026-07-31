@@ -1,19 +1,24 @@
 import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 
-export default defineConfig({
-	plugins: [
-		tailwindcss(),
-		sveltekit()
-	],
-	server: {
-		proxy: {
-			'/api': {
-				target: process.env.VITE_API_TARGET || 'http://127.0.0.1:8080',
-				changeOrigin: true,
-				ws: true
+export default defineConfig(({ mode }) => {
+	const env = loadEnv(mode, process.cwd(), '');
+	const target = env.VITE_API_TARGET || 'http://192.168.254.1:8096';
+
+	return {
+		plugins: [
+			tailwindcss(),
+			sveltekit()
+		],
+		server: {
+			proxy: {
+				'/api': {
+					target,
+					changeOrigin: true,
+					ws: true
+				}
 			}
 		}
-	}
+	};
 });
