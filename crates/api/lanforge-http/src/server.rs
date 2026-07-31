@@ -26,7 +26,11 @@ use lanforge_types::system::ServiceBanner;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, services::ServeDir};
+use tower_http::{
+    compression::CompressionLayer,
+    cors::CorsLayer,
+    services::{ServeDir, ServeFile},
+};
 use tracing::{error, info};
 
 use lanforge_core::context::LanforgeContext;
@@ -133,6 +137,7 @@ impl lanforge_core::service::StatusProvider for HttpService {
 }
 
 impl AsyncService for HttpService {
+    #[allow(clippy::too_many_lines)]
     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
 
@@ -160,6 +165,19 @@ impl AsyncService for HttpService {
         if let Some(boot_dir) = &cfg.boot_dir {
             info!("📂 Serving boot files from {}", boot_dir);
             app = app.nest_service("/boot", ServeDir::new(boot_dir));
+        }
+
+        if let Some(webui_dir) = &cfg.webui_dir {
+            info!("🌐 Serving WebUI from filesystem: {}", webui_dir);
+            let index_file = std::path::Path::new(webui_dir).join("index.html");
+            let serve_dir = ServeDir::new(webui_dir).fallback(ServeFile::new(index_file));
+            app = app.fallback_service(serve_dir);
+        } else {
+            #[cfg(feature = "webui")]
+            {
+                info!("🌐 Serving WebUI from embedded assets");
+                app = app.fallback(handle_embedded_webui);
+            }
         }
 
         #[cfg(feature = "doh")]
@@ -366,5 +384,35 @@ async fn handle_dns_query(
             }
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[cfg(feature = "webui")]
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../../../web/build"]
+struct WebUiAssets;
+
+#[cfg(feature = "webui")]
+async fn handle_embedded_webui(uri: axum::http::Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+    let path = if path.is_empty() { "index.html" } else { path };
+
+    match WebUiAssets::get(path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            (
+                [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
+                content.data,
+            )
+                .into_response()
+        }
+        None => match WebUiAssets::get("index.html") {
+            Some(content) => (
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                content.data,
+            )
+                .into_response(),
+            None => (StatusCode::NOT_FOUND, "WebUI index.html not found").into_response(),
+        },
     }
 }

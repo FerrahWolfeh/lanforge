@@ -30,6 +30,8 @@ pub struct HttpConfig {
     pub auth_password_hash: Option<String>,
     /// Directory for serving PXE/boot files.
     pub boot_dir: Option<String>,
+    /// Optional directory for serving `WebUI` static files (override embedded assets).
+    pub webui_dir: Option<String>,
 }
 
 impl Default for HttpConfig {
@@ -44,6 +46,7 @@ impl Default for HttpConfig {
             tls_key: None,
             auth_password_hash: None,
             boot_dir: None,
+            webui_dir: None,
         }
     }
 }
