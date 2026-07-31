@@ -9,6 +9,7 @@ use axum::{
     http::{Request, request::Parts},
 };
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use lanforge_types::auth::{ApiScope, ApiScopes};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,7 +31,7 @@ pub struct AuthenticatedUser {
     pub name: String,
     pub role: String,
     pub method: AuthMethod,
-    pub scopes: lanforge_types::auth::ApiScopes,
+    pub scopes: ApiScopes,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -61,11 +62,20 @@ impl AuthManager {
     }
 
     pub fn generate_token(&self, username: &str, role: &str) -> HttpResult<String> {
+        self.generate_token_with_ttl(username, role, 86400) // Default 24 hours
+    }
+
+    pub fn generate_token_with_ttl(
+        &self,
+        username: &str,
+        role: &str,
+        ttl_secs: u64,
+    ) -> HttpResult<String> {
         let expiration = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| HttpError::Time(e.to_string()))?
             .as_secs()
-            + 86400; // 24 hours
+            + ttl_secs;
 
         let claims = Claims {
             sub: username.to_string(),
@@ -84,6 +94,32 @@ impl AuthManager {
     }
 }
 
+pub fn extract_token_str(headers: &axum::http::HeaderMap) -> Option<&str> {
+    if let Some(auth_header) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        if let Some(stripped) = auth_header.strip_prefix("Bearer ") {
+            return Some(stripped);
+        }
+        if !auth_header.contains(' ') {
+            return Some(auth_header);
+        }
+    }
+    if let Some(cookie_header) = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+    {
+        for cookie in cookie_header.split(';') {
+            let cookie = cookie.trim();
+            if let Some(val) = cookie.strip_prefix("lanforge_session=") {
+                return Some(val);
+            }
+            if let Some(val) = cookie.strip_prefix("session=") {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+
 impl Default for AuthManager {
     fn default() -> Self {
         Self::new()
@@ -99,18 +135,9 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
-
-        let auth_header = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| HttpError::Auth("Missing Authorization header".into()))?;
-
-        if !auth_header.starts_with("Bearer ") {
-            return Err(HttpError::Auth("Invalid Authorization header".into()));
-        }
-
-        let token = &auth_header[7..];
+        let token = extract_token_str(&parts.headers).ok_or_else(|| {
+            HttpError::Auth("Missing Authorization header or session cookie".into())
+        })?;
 
         auth_manager
             .validate_token(token)
@@ -129,18 +156,9 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
         let db = Arc::<LanforgeDb>::from_ref(state);
-
-        let auth_header = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| HttpError::Auth("Missing Authorization header".into()))?;
-
-        if !auth_header.starts_with("Bearer ") {
-            return Err(HttpError::Auth("Invalid Authorization header".into()));
-        }
-
-        let token = &auth_header[7..];
+        let token = extract_token_str(&parts.headers).ok_or_else(|| {
+            HttpError::Auth("Missing Authorization header or session cookie".into())
+        })?;
 
         // 1. Try validating as API Token from DB
         match db.validate_api_token(token).await {
@@ -165,9 +183,7 @@ where
                 name: claims.sub,
                 role: claims.role,
                 method: AuthMethod::Jwt,
-                scopes: lanforge_types::auth::ApiScopes::from_slice(&[
-                    lanforge_types::auth::ApiScope::Admin,
-                ]),
+                scopes: ApiScopes::from_slice(&[ApiScope::Admin]),
             }),
             Err(_) => Err(HttpError::Auth("Invalid or expired token".into())),
         }
@@ -208,17 +224,8 @@ pub async fn middleware(
         return Ok(next.run(req).await);
     }
 
-    let auth_header = req
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| HttpError::Auth("Missing Authorization header".into()))?;
-
-    if !auth_header.starts_with("Bearer ") {
-        return Err(HttpError::Auth("Invalid Authorization header".into()));
-    }
-
-    let token = &auth_header[7..];
+    let token = extract_token_str(req.headers())
+        .ok_or_else(|| HttpError::Auth("Missing Authorization header or session cookie".into()))?;
 
     let user = match db.validate_api_token(token).await {
         Ok(Some((name, scopes))) => AuthenticatedUser {
@@ -232,9 +239,7 @@ pub async fn middleware(
                 name: claims.sub,
                 role: claims.role,
                 method: AuthMethod::Jwt,
-                scopes: lanforge_types::auth::ApiScopes::from_slice(&[
-                    lanforge_types::auth::ApiScope::Admin,
-                ]),
+                scopes: ApiScopes::from_slice(&[ApiScope::Admin]),
             },
             Err(_) => return Err(HttpError::Auth("Invalid or expired token".into())),
         },

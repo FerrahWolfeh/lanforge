@@ -359,6 +359,7 @@ Representations of database-backed user accounts and authorization roles.
 
 - **`UserRole`**: Enum values `admin`, `operator`, `viewer`.
 - **`UserInfo`**: User object metadata: `id` (i64), `username` (String), `role` (UserRole), `created_at` (i64), `updated_at` (i64), `last_login` (Option\<i64\>).
+- **`LoginRequest`**: `username` (Option\<String\>), `password` (Option\<String\>), `token` (Option\<String\>), `remember_me` (Option\<bool\>). When `remember_me` is `true`, session duration is extended to 30 days.
 
 ```json
 {

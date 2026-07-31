@@ -1,7 +1,10 @@
 use std::time::SystemTime;
 
-use crate::routes::create_client_ctx;
+use crate::error::HttpError;
 use crate::server::AppState;
+use crate::{auth::AuthenticatedUser, routes::create_client_ctx};
+use axum::extract::Request;
+use axum::http::{HeaderMap, HeaderValue, header};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -9,6 +12,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
+use lanforge_core::utils::auth::{hash_password, verify_password};
 use serde::Deserialize;
 
 use lanforge_db::UserStore;
@@ -23,6 +27,7 @@ pub struct LoginRequest {
     pub username: Option<String>,
     pub password: Option<String>,
     pub token: Option<String>,
+    pub remember_me: Option<bool>,
 }
 
 #[derive(serde::Serialize)]
@@ -107,6 +112,7 @@ async fn handle_validate(
     Json(serde_json::json!({ "data": { "valid": valid } }))
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn handle_login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
@@ -148,13 +154,11 @@ pub async fn handle_login(
                     .into_response());
             }
             Ok(None) => {
-                return Err(crate::error::HttpError::Auth(
-                    "Invalid API token".to_string(),
-                ));
+                return Err(HttpError::Auth("Invalid API token".to_string()));
             }
             Err(e) => {
                 tracing::error!("Database error during login token validation: {e}");
-                return Err(crate::error::HttpError::Internal("Auth DB error".into()));
+                return Err(HttpError::Internal("Auth DB error".into()));
             }
         }
     }
@@ -162,9 +166,7 @@ pub async fn handle_login(
     // 2. Database User Password Authentication
     let password = payload.password.unwrap_or_default();
     if password.is_empty() {
-        return Err(crate::error::HttpError::Auth(
-            "Password is required".to_string(),
-        ));
+        return Err(HttpError::Auth("Password is required".to_string()));
     }
 
     let now = SystemTime::now()
@@ -173,68 +175,78 @@ pub async fn handle_login(
         .as_secs()
         .cast_signed();
 
+    let ttl_secs = if payload.remember_me.unwrap_or(false) {
+        2_592_000 // 30 days
+    } else {
+        86_400 // 24 hours
+    };
+
+    let build_login_response = |token: String, user_name: String, method: &str| {
+        let cookie_header =
+            format!("session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl_secs}");
+        let mut headers = HeaderMap::new();
+        if let Ok(v) = HeaderValue::from_str(&cookie_header) {
+            headers.insert(header::SET_COOKIE, v);
+        }
+        (
+            StatusCode::OK,
+            headers,
+            Json(LoginResponse {
+                data: LoginResponseData {
+                    token,
+                    username: user_name,
+                    method: method.to_string(),
+                    auth_required,
+                },
+            }),
+        )
+            .into_response()
+    };
+
     if let Ok(Some(db_user)) = state.db.get_user_by_username(&username).await {
-        if lanforge_core::utils::auth::verify_password(&db_user.password_hash, &password) {
+        if verify_password(&db_user.password_hash, &password) {
             let _ = state
                 .db
                 .update_user_last_login(&db_user.username, now)
                 .await;
-            let session_token = state
-                .auth
-                .generate_token(&db_user.username, &db_user.role)?;
-            return Ok((
-                StatusCode::OK,
-                Json(LoginResponse {
-                    data: LoginResponseData {
-                        token: session_token,
-                        username: db_user.username,
-                        method: "password".to_string(),
-                        auth_required,
-                    },
-                }),
-            )
-                .into_response());
+            let session_token =
+                state
+                    .auth
+                    .generate_token_with_ttl(&db_user.username, &db_user.role, ttl_secs)?;
+            return Ok(build_login_response(
+                session_token,
+                db_user.username,
+                "password",
+            ));
         }
-        return Err(crate::error::HttpError::Auth(
-            "Invalid credentials".to_string(),
-        ));
+        return Err(HttpError::Auth("Invalid credentials".to_string()));
     }
 
     // 3. Bootstrapping / Fallback Admin seeding if no DB users exist
     if user_count == 0
         && let Some(hash) = &state.cfg.auth_password_hash
-        && lanforge_core::utils::auth::verify_password(hash, &password)
+        && verify_password(hash, &password)
     {
         let _ = state.db.create_user("admin", hash, "admin", now).await;
-        let session_token = state.auth.generate_token("admin", "admin")?;
-        return Ok((
-            StatusCode::OK,
-            Json(LoginResponse {
-                data: LoginResponseData {
-                    token: session_token,
-                    username: "admin".to_string(),
-                    method: "password".to_string(),
-                    auth_required,
-                },
-            }),
-        )
-            .into_response());
+        let session_token = state
+            .auth
+            .generate_token_with_ttl("admin", "admin", ttl_secs)?;
+        return Ok(build_login_response(
+            session_token,
+            "admin".to_string(),
+            "password",
+        ));
     }
 
-    Err(crate::error::HttpError::Auth(
-        "Invalid credentials".to_string(),
-    ))
+    Err(HttpError::Auth("Invalid credentials".to_string()))
 }
 
-async fn handle_status(
-    State(state): State<AppState>,
-    req: axum::extract::Request,
-) -> impl IntoResponse {
+async fn handle_status(State(state): State<AppState>, req: Request) -> impl IntoResponse {
     let user_count = state.db.count_users().await.unwrap_or(0);
     let auth_required = state.cfg.auth_password_hash.is_some() || user_count > 0;
     let authenticated = if let Some(token) = req
         .headers()
-        .get(axum::http::header::AUTHORIZATION)
+        .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
     {
@@ -254,9 +266,7 @@ async fn handle_status(
     })
 }
 
-async fn handle_me(
-    axum::Extension(user): axum::Extension<crate::auth::AuthenticatedUser>,
-) -> impl IntoResponse {
+async fn handle_me(axum::Extension(user): axum::Extension<AuthenticatedUser>) -> impl IntoResponse {
     Json(serde_json::json!({
         "data": {
             "username": user.name,
@@ -268,11 +278,11 @@ async fn handle_me(
 
 async fn handle_change_password(
     State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<crate::auth::AuthenticatedUser>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> crate::error::Result<impl IntoResponse> {
     if payload.new_password.len() < 8 {
-        return Err(crate::error::HttpError::Validation(
+        return Err(HttpError::Validation(
             "New password must be at least 8 characters long".to_string(),
         ));
     }
@@ -284,24 +294,22 @@ async fn handle_change_password(
 
     if let Ok(Some(db_user)) = state.db.get_user_by_username(&user.name).await {
         if let Some(old_pw) = &payload.old_password
-            && !lanforge_core::utils::auth::verify_password(&db_user.password_hash, old_pw)
+            && !verify_password(&db_user.password_hash, old_pw)
         {
-            return Err(crate::error::HttpError::Auth(
-                "Invalid current password".to_string(),
-            ));
+            return Err(HttpError::Auth("Invalid current password".to_string()));
         }
-        let new_hash = lanforge_core::utils::auth::hash_password(&payload.new_password);
+        let new_hash = hash_password(&payload.new_password);
         state
             .db
             .update_user_password(&user.name, &new_hash, now)
             .await
-            .map_err(|e| crate::error::HttpError::Internal(e.to_string()))?;
+            .map_err(|e| HttpError::Internal(e.to_string()))?;
         Ok((
             StatusCode::OK,
             Json(serde_json::json!({ "data": { "message": "Password updated successfully" } })),
         ))
     } else {
-        Err(crate::error::HttpError::NotFound(format!(
+        Err(HttpError::NotFound(format!(
             "User '{}' not found",
             user.name
         )))

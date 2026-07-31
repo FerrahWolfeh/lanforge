@@ -115,6 +115,7 @@ async fn test_handle_login() {
             username: None,
             password: Some("any_password".to_string()),
             token: None,
+            remember_me: None,
         }),
     )
     .await;
@@ -142,6 +143,7 @@ async fn test_handle_login() {
             username: Some("admin".to_string()),
             password: Some(password.to_string()),
             token: None,
+            remember_me: None,
         }),
     )
     .await;
@@ -154,6 +156,7 @@ async fn test_handle_login() {
             username: Some("admin".to_string()),
             password: Some("wrong_password".to_string()),
             token: None,
+            remember_me: None,
         }),
     )
     .await;

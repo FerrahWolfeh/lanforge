@@ -20,15 +20,20 @@ Port is configurable in `lanforge.toml`. Default: `9090`. TLS is required in pro
 
 All endpoints require a valid API token or session JWT except `POST /api/v1/auth/login`, `POST /api/v1/auth/validate`, and `GET /api/v1/auth/status`.
 
+Authentication credentials may be provided via header or HTTP-only session cookie:
+
 ```
 Authorization: Bearer <token>
+Cookie: session=<token>
 ```
 
 ### Endpoints
 
-- `GET /api/v1/auth/status` — Checks server authentication requirement (`auth_required`) and validates the current Bearer token if provided (`authenticated`).
-- `POST /api/v1/auth/login` — Authenticates via API Token (`ak_...`) or Username/Password. Returns a 24-hour signed JWT session token.
+- `GET /api/v1/auth/status` — Checks server authentication requirement (`auth_required`) and validates the current Bearer token/cookie if provided (`authenticated`).
+- `POST /api/v1/auth/login` — Authenticates via API Token (`ak_...`) or Username/Password. Supports `"remember_me": true` (extends JWT session duration from 24 hours to 30 days). Returns a signed JWT session token and issues a `Set-Cookie: session=<token>; Path=/; HttpOnly; SameSite=Lax` header.
 - `POST /api/v1/auth/validate` — Validates an existing API token or session JWT.
+- `GET /api/v1/auth/me` — Returns profile information for the authenticated user (`username`, `role`).
+- `POST /api/v1/auth/change-password` — Changes password for the authenticated user.
 
 **On missing or invalid token:** `401 Unauthorized`
 ```json
