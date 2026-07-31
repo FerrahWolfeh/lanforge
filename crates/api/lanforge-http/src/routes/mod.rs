@@ -6,6 +6,7 @@ pub mod dns;
 pub mod events;
 pub mod hosts;
 pub mod system;
+pub mod users;
 
 use crate::server::AppState;
 use axum::Router;
@@ -15,6 +16,7 @@ pub fn router() -> Router<AppState> {
     let v1 = Router::new()
         .merge(system::router())
         .nest("/auth", auth::router())
+        .nest("/users", users::router())
         .nest("/devices", devices::router())
         .nest("/dhcp", dhcp::router())
         .nest("/dns", dns::router())

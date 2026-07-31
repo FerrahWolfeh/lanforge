@@ -72,6 +72,18 @@ pub struct DnsUpstreamEntry {
     pub domain: Option<String>,
 }
 
+/// Domain representation of a user stored in the database.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct UserEntry {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: String,
+    pub role: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_login: Option<i64>,
+}
+
 /// Handles storage and retrieval of devices and DHCP/SLAAC leases.
 pub trait DeviceStore: Send + Sync {
     /// Upserts a full device state.
@@ -458,6 +470,62 @@ pub trait PppoeConfigStore: Send + Sync {
             }
         }
     }
+}
+
+/// Handles storage and administration of user accounts.
+pub trait UserStore: Send + Sync {
+    /// Creates a new user in the database.
+    fn create_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+        now: i64,
+    ) -> impl Future<Output = Result<UserEntry, DbError>> + Send;
+
+    /// Retrieves a user by username.
+    fn get_user_by_username(
+        &self,
+        username: &str,
+    ) -> impl Future<Output = Result<Option<UserEntry>, DbError>> + Send;
+
+    /// Retrieves a user by ID.
+    fn get_user_by_id(
+        &self,
+        id: i64,
+    ) -> impl Future<Output = Result<Option<UserEntry>, DbError>> + Send;
+
+    /// Loads all registered user accounts.
+    fn list_users(&self) -> impl Future<Output = Result<Vec<UserEntry>, DbError>> + Send;
+
+    /// Updates password hash for a user account.
+    fn update_user_password(
+        &self,
+        username: &str,
+        new_hash: &str,
+        now: i64,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Updates role for a user account.
+    fn update_user_role(
+        &self,
+        username: &str,
+        new_role: &str,
+        now: i64,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Updates last login timestamp for a user.
+    fn update_user_last_login(
+        &self,
+        username: &str,
+        now: i64,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Deletes a user by username.
+    fn delete_user(&self, username: &str) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Returns total count of user accounts in database.
+    fn count_users(&self) -> impl Future<Output = Result<i64, DbError>> + Send;
 }
 
 /// Helper macro to delegate database operations to the active backend (postgres/mock).

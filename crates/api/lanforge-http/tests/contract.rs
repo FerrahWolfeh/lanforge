@@ -116,7 +116,13 @@ impl TestApp {
         );
         let bytes = login_res.into_body().collect().await.unwrap().to_bytes();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
-        let token = body["token"].as_str().unwrap().to_string();
+        let token = body
+            .get("data")
+            .and_then(|d| d.get("token"))
+            .or_else(|| body.get("token"))
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
 
         Self {
             router,
@@ -279,7 +285,7 @@ async fn test_auth_middleware_contract() {
         "Correct password login should succeed"
     );
     assert!(
-        body["token"].is_string(),
+        body["data"]["token"].is_string() || body["token"].is_string(),
         "Login response should include token field"
     );
 

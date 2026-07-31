@@ -4,15 +4,20 @@ use lanforge_api::api::{
     AuthTokenResponse, DevicesResponse, DhcpPoolsResponse, DnsAdblockUrlsResponse,
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
     DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
-    DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse, LeasesResponse,
-    Response, RpcCallError, SimpleSuccess, StatusResponse, SystemConfigExport,
+    DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
+    LeasesResponse, Response, RpcCallError, SimpleSuccess, StatusResponse, SystemConfigExport,
     SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::pppoe::PppoeConfig;
+use lanforge_types::system::PppoeStatusResponse;
 use lanforge_types::update::LeaseTarget;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -103,7 +108,7 @@ impl LanforgeRpc for ClientContext {
         &self,
         _follow: bool,
         _n: Option<usize>,
-        _filter: Option<Vec<lanforge_api::api::EventKind>>,
+        _filter: Option<Vec<EventKind>>,
     ) -> Result<(), RpcCallError> {
         Ok(())
     }
@@ -137,7 +142,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn host_set(
         &self,
-        mac: lanforge_types::identifiers::MacAddr,
+        mac: MacAddr,
         field: String,
         value: String,
     ) -> Result<SimpleSuccess, RpcCallError> {
@@ -148,10 +153,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn host_remove(
-        &self,
-        mac: lanforge_types::identifiers::MacAddr,
-    ) -> Result<SimpleSuccess, RpcCallError> {
+    async fn host_remove(&self, mac: MacAddr) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_host_remove(mac).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -169,7 +171,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn lease_renew(
         &self,
-        mac: lanforge_types::identifiers::MacAddr,
+        mac: MacAddr,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_lease_renew(mac, target).await {
@@ -181,7 +183,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn lease_release(
         &self,
-        mac: lanforge_types::identifiers::MacAddr,
+        mac: MacAddr,
         target: Option<LeaseTarget>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_lease_release(mac, target).await {
@@ -223,10 +225,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn purge(
-        &self,
-        mac: lanforge_types::identifiers::MacAddr,
-    ) -> Result<SimpleSuccess, RpcCallError> {
+    async fn purge(&self, mac: MacAddr) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_purge(mac).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -280,7 +279,7 @@ impl LanforgeRpc for ClientContext {
     async fn dns_upstream_add(
         &self,
         addr: std::net::SocketAddr,
-        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_dns_upstream_add(addr, protocol, domain).await {
@@ -293,7 +292,7 @@ impl LanforgeRpc for ClientContext {
     async fn dns_upstream_remove(
         &self,
         addr: std::net::SocketAddr,
-        protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        protocol: UpstreamProtocol,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_dns_upstream_remove(addr, protocol).await {
             Response::Success(r) => Ok(r),
@@ -305,7 +304,7 @@ impl LanforgeRpc for ClientContext {
     async fn dns_query(
         &self,
         name: String,
-        record_type: Option<lanforge_types::network::dns::DnsRecordType>,
+        record_type: Option<DnsRecordType>,
     ) -> Result<DnsQueryResponse, RpcCallError> {
         match self.handle_dns_query(name, record_type).await {
             Response::DnsQuery(r) => Ok(r),
@@ -639,7 +638,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn pppoe_status(&self) -> Result<Box<lanforge_types::system::PppoeStatusResponse>, RpcCallError> {
+    async fn pppoe_status(&self) -> Result<Box<PppoeStatusResponse>, RpcCallError> {
         match self.handle_pppoe_status().await {
             Response::PppoeStatus(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -663,7 +662,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn pppoe_config(&self) -> Result<lanforge_types::network::pppoe::PppoeConfig, RpcCallError> {
+    async fn pppoe_config(&self) -> Result<PppoeConfig, RpcCallError> {
         match self.handle_pppoe_config().await {
             Response::PppoeConfig(cfg) => Ok(*cfg),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -671,18 +670,55 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn update_pppoe_config(
-        &self,
-        cfg: lanforge_types::network::pppoe::PppoeConfig,
-    ) -> Result<SimpleSuccess, RpcCallError> {
+    async fn update_pppoe_config(&self, cfg: PppoeConfig) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_update_pppoe_config(cfg).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
-}
 
+    async fn user_create(
+        &self,
+        username: String,
+        password: String,
+        role: Option<String>,
+    ) -> Result<lanforge_api::api::UserResponse, RpcCallError> {
+        match self.handle_user_create(username, password, role).await {
+            Response::User(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn user_list(&self) -> Result<lanforge_api::api::UserListResponse, RpcCallError> {
+        match self.handle_user_list().await {
+            Response::UserList(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn user_delete(&self, username: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_user_delete(username).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn user_passwd(
+        &self,
+        username: String,
+        new_password: String,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_user_passwd(username, new_password).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+}
 
 // Helper to map errors (migrated from lanforge-uds/src/server.rs)
 impl ClientContext {

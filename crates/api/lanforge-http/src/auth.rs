@@ -12,17 +12,23 @@ use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode}
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// JWT Claims (Legacy/Internal).
-#[derive(Debug, Serialize, Deserialize)]
+use lanforge_db::UserStore;
+use lanforge_db::engine::LanforgeDb;
+use std::sync::Arc;
+
+/// JWT Claims.
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String, // Subject (e.g., "admin")
-    pub exp: usize,  // Expiration
+    pub sub: String,  // Username
+    pub role: String, // User role ("admin", "operator", "viewer")
+    pub exp: usize,   // Expiration
 }
 
 /// Represents an authenticated user (either via JWT or API Token).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthenticatedUser {
     pub name: String,
+    pub role: String,
     pub method: AuthMethod,
     pub scopes: lanforge_types::auth::ApiScopes,
 }
@@ -42,16 +48,19 @@ pub struct AuthManager {
 impl AuthManager {
     #[must_use]
     pub fn new() -> Self {
-        // Generate a random 32-byte secret for this session.
-        // Tokens will not survive a daemon restart.
         let secret = rand::random::<[u8; 32]>();
+        Self::from_secret(&secret)
+    }
+
+    #[must_use]
+    pub fn from_secret(secret: &[u8]) -> Self {
         Self {
-            encoding_key: EncodingKey::from_secret(&secret),
-            decoding_key: DecodingKey::from_secret(&secret),
+            encoding_key: EncodingKey::from_secret(secret),
+            decoding_key: DecodingKey::from_secret(secret),
         }
     }
 
-    pub fn generate_token(&self, username: &str) -> HttpResult<String> {
+    pub fn generate_token(&self, username: &str, role: &str) -> HttpResult<String> {
         let expiration = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| HttpError::Time(e.to_string()))?
@@ -60,6 +69,7 @@ impl AuthManager {
 
         let claims = Claims {
             sub: username.to_string(),
+            role: role.to_string(),
             exp: usize::try_from(expiration)
                 .map_err(|_| HttpError::Time("Expiration timestamp too large".into()))?,
         };
@@ -90,7 +100,6 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
 
-        // Extract the token from the Authorization header
         let auth_header = parts
             .headers
             .get(AUTHORIZATION)
@@ -109,9 +118,6 @@ where
     }
 }
 
-use lanforge_db::engine::LanforgeDb;
-use std::sync::Arc;
-
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
@@ -124,7 +130,6 @@ where
         let auth_manager = AuthManager::from_ref(state);
         let db = Arc::<LanforgeDb>::from_ref(state);
 
-        // Extract the token from the Authorization header
         let auth_header = parts
             .headers
             .get(AUTHORIZATION)
@@ -142,11 +147,12 @@ where
             Ok(Some((name, scopes))) => {
                 return Ok(Self {
                     name,
+                    role: "admin".to_string(),
                     method: AuthMethod::ApiToken,
                     scopes,
                 });
             }
-            Ok(None) => {} // Continue to JWT
+            Ok(None) => {}
             Err(e) => {
                 tracing::error!("Database error during token validation: {e}");
                 return Err(HttpError::Internal("Auth database error".into()));
@@ -157,6 +163,7 @@ where
         match auth_manager.validate_token(token) {
             Ok(claims) => Ok(Self {
                 name: claims.sub,
+                role: claims.role,
                 method: AuthMethod::Jwt,
                 scopes: lanforge_types::auth::ApiScopes::from_slice(&[
                     lanforge_types::auth::ApiScope::Admin,
@@ -176,8 +183,9 @@ pub async fn middleware(
     mut req: Request<Body>,
     next: Next,
 ) -> HttpResult<AxumResponse> {
-    // If no password hash is set, authentication is globally disabled.
-    if cfg.auth_password_hash.is_none() {
+    let user_count = db.count_users().await.unwrap_or(0);
+    // If no password hash is set AND no DB users exist, authentication is globally disabled.
+    if cfg.auth_password_hash.is_none() && user_count == 0 {
         return Ok(next.run(req).await);
     }
 
@@ -192,11 +200,14 @@ pub async fn middleware(
         || path == "/auth/login"
         || path == "/api/v1/auth/login"
         || path == "/v1/auth/login"
+        || path == "/api/v1/auth/status"
+        || path == "/v1/auth/status"
+        || path == "/api/auth/status"
+        || path == "/auth/status"
     {
         return Ok(next.run(req).await);
     }
 
-    // Extract token
     let auth_header = req
         .headers()
         .get(AUTHORIZATION)
@@ -209,33 +220,30 @@ pub async fn middleware(
 
     let token = &auth_header[7..];
 
-    // Validate
     let user = match db.validate_api_token(token).await {
         Ok(Some((name, scopes))) => AuthenticatedUser {
             name,
+            role: "admin".to_string(),
             method: AuthMethod::ApiToken,
             scopes,
         },
-        Ok(None) => {
-            // Try JWT
-            match auth_manager.validate_token(token) {
-                Ok(claims) => AuthenticatedUser {
-                    name: claims.sub,
-                    method: AuthMethod::Jwt,
-                    scopes: lanforge_types::auth::ApiScopes::from_slice(&[
-                        lanforge_types::auth::ApiScope::Admin,
-                    ]),
-                },
-                Err(_) => return Err(HttpError::Auth("Invalid or expired token".into())),
-            }
-        }
+        Ok(None) => match auth_manager.validate_token(token) {
+            Ok(claims) => AuthenticatedUser {
+                name: claims.sub,
+                role: claims.role,
+                method: AuthMethod::Jwt,
+                scopes: lanforge_types::auth::ApiScopes::from_slice(&[
+                    lanforge_types::auth::ApiScope::Admin,
+                ]),
+            },
+            Err(_) => return Err(HttpError::Auth("Invalid or expired token".into())),
+        },
         Err(e) => {
             tracing::error!("Database error during token validation: {e}");
             return Err(HttpError::Internal("Auth database error".into()));
         }
     };
 
-    // Store user in extensions for handlers to use if needed
     req.extensions_mut().insert(user);
 
     Ok(next.run(req).await)

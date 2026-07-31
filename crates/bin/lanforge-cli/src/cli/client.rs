@@ -17,7 +17,8 @@ use lanforge_api::api::{
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse,
     ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
+    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
+    WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::{
@@ -90,6 +91,16 @@ macro_rules! dispatch {
         #[cfg(feature = "remote")]
         if $self.remote.is_some() {
             return $self.http_patch(&$path, &$body).await;
+        }
+        let mut rpc = $self.connect_rpc().await?;
+        rpc.$rpc_method($($rpc_arg),*)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("RPC Error: {e}"))
+    }};
+    ($self:expr, put => $path:expr, $body:expr, $rpc_method:ident($($rpc_arg:expr),*)) => {{
+        #[cfg(feature = "remote")]
+        if $self.remote.is_some() {
+            return $self.http_put(&$path, &$body).await;
         }
         let mut rpc = $self.connect_rpc().await?;
         rpc.$rpc_method($($rpc_arg),*)
@@ -329,6 +340,41 @@ impl LanforgeClient {
         Self::decode_bytes(&bytes)
     }
 
+    #[cfg(feature = "remote")]
+    async fn http_put<B: serde::Serialize + Send + Sync, T: HttpWrappedResponse>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let base = self.remote.as_ref().unwrap();
+        let url = format!("{base}/api/v1{path}");
+        let mut req = self.http_client.put(&url).json(body);
+        if let Some(t) = &self.token {
+            req = req.header("Authorization", format!("Bearer {t}"));
+        }
+        let resp = req.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let err_body: HttpErrorResponse =
+                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
+                    error: "Unknown API error".into(),
+                });
+            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
+        }
+        if status == reqwest::StatusCode::NO_CONTENT {
+            if let Ok(wrapper) =
+                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
+            {
+                return Ok(T::unwrap(wrapper));
+            }
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
+                return Ok(T::unwrap(wrapper));
+            }
+        }
+        let bytes = resp.bytes().await?;
+        Self::decode_bytes(&bytes)
+    }
+
     // --- System & Status ---
 
     pub async fn status(&self) -> Result<Box<StatusResponse>> {
@@ -536,6 +582,43 @@ impl LanforgeClient {
 
     pub async fn ak_renew(&self, id_or_name: String) -> Result<AuthTokenResponse> {
         dispatch!(self, post => format!("/auth/tokens/{id_or_name}/renew"), serde_json::json!({}), ak_renew(id_or_name))
+    }
+
+    // --- User Accounts ---
+
+    pub async fn user_list(&self) -> Result<UserListResponse> {
+        dispatch!(self, get => "/users", user_list())
+    }
+
+    pub async fn user_create(
+        &self,
+        username: String,
+        password: String,
+        role: Option<String>,
+    ) -> Result<UserResponse> {
+        dispatch!(
+            self,
+            post => "/users",
+            serde_json::json!({ "username": &username, "password": &password, "role": &role }),
+            user_create(username, password, role)
+        )
+    }
+
+    pub async fn user_delete(&self, username: String) -> Result<SimpleSuccess> {
+        dispatch!(self, delete => format!("/users/{username}"), user_delete(username))
+    }
+
+    pub async fn user_passwd(
+        &self,
+        username: String,
+        new_password: String,
+    ) -> Result<SimpleSuccess> {
+        dispatch!(
+            self,
+            put => format!("/users/{username}/password"),
+            serde_json::json!({ "password": &new_password }),
+            user_passwd(username, new_password)
+        )
     }
 
     #[cfg(feature = "remote")]
@@ -842,4 +925,3 @@ impl LanforgeClient {
         dispatch!(self, post => "/pppoe/config", cfg, update_pppoe_config(cfg))
     }
 }
-

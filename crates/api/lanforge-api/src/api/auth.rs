@@ -53,3 +53,37 @@ impl HttpWrappedResponse for AuthTokensResponse {
         wrapper.data
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UserResponse {
+    pub user: lanforge_types::auth::UserInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UserListResponse {
+    pub users: Vec<lanforge_types::auth::UserInfo>,
+}
+
+impl HttpWrappedResponse for UserResponse {
+    type Wrapper = HttpDataResponse<UserResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for UserListResponse {
+    type Wrapper = HttpDataResponse<UserListResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}

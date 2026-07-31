@@ -18,13 +18,17 @@ Port is configurable in `lanforge.toml`. Default: `9090`. TLS is required in pro
 
 ## Authentication
 
-All endpoints require a valid API token except `POST /api/v1/auth/validate`.
+All endpoints require a valid API token or session JWT except `POST /api/v1/auth/login`, `POST /api/v1/auth/validate`, and `GET /api/v1/auth/status`.
 
 ```
 Authorization: Bearer <token>
 ```
 
-Tokens are created locally via `ak_generate` (UDS-only) and validated via `ak_validate`. There is no login endpoint — the CLI `login` command calls `POST /api/v1/auth/validate` to confirm a token before storing it.
+### Endpoints
+
+- `GET /api/v1/auth/status` — Checks server authentication requirement (`auth_required`) and validates the current Bearer token if provided (`authenticated`).
+- `POST /api/v1/auth/login` — Authenticates via API Token (`ak_...`) or Username/Password. Returns a 24-hour signed JWT session token.
+- `POST /api/v1/auth/validate` — Validates an existing API token or session JWT.
 
 **On missing or invalid token:** `401 Unauthorized`
 ```json
@@ -323,10 +327,25 @@ Record type is inferred server-side. `rtype` may be passed explicitly to overrid
 
 ---
 
+### Users & Management
+
+| Method | Path | RPC | Description |
+|:-------|:-----|:----|:-----------|
+| `GET` | `/api/v1/users` | `user_list` | List all registered user accounts |
+| `POST` | `/api/v1/users` | `user_create` | Create a new user account |
+| `DELETE` | `/api/v1/users/{username}` | `user_delete` | Delete a user account |
+| `PUT` | `/api/v1/users/{username}/password` | `user_passwd` | Update user password |
+
+---
+
 ### Auth
 
 | Method | Path | RPC | Notes |
 |:-------|:-----|:----|:------|
+| `GET` | `/api/v1/auth/status` | — | Check auth requirement & token validity |
+| `POST` | `/api/v1/auth/login` | — | Password or API token authentication -> JWT |
+| `GET` | `/api/v1/auth/me` | — | Current user profile (`username`, `role`) |
+| `POST` | `/api/v1/auth/change-password` | — | Change current user password |
 | `GET` | `/api/v1/auth/tokens` | `ak_list` | Token metadata only, no secrets |
 | `POST` | `/api/v1/auth/tokens` | `ak_generate` | **403** — UDS-only |
 | `DELETE` | `/api/v1/auth/tokens/{id}` | `ak_delete` | **403** — UDS-only |
@@ -344,7 +363,7 @@ Record type is inferred server-side. `rtype` may be passed explicitly to overrid
 { "data": { "valid": true } }
 ```
 
-This is the only unauthenticated route. Used by the CLI `login` command to confirm a token before storing it.
+This route is unauthenticated alongside `/login` and `/status`. Used by CLI and WebUI to confirm token validity.
 
 ---
 

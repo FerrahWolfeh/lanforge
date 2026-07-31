@@ -8,6 +8,7 @@ pub mod host;
 pub mod lease;
 pub mod pppoe;
 pub mod service;
+pub mod user;
 
 pub mod simple;
 pub mod status;

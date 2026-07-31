@@ -288,7 +288,8 @@ impl IntoResponse for HttpError {
             Self::Jwt(e) => (StatusCode::UNAUTHORIZED, e.to_string()),
             Self::Core(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            Self::BadRequest(msg) | Self::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
+            Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 

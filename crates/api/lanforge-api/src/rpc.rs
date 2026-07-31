@@ -5,7 +5,8 @@ use crate::api::{
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
     ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
+    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
+    WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
@@ -255,18 +256,27 @@ pub trait LanforgeRpc {
     fn pppoe_status(
         &self,
     ) -> impl Future<Output = Result<Box<PppoeStatusResponse>, RpcCallError>> + Send;
-    fn pppoe_reconnect(
-        &self,
-    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
-    fn pppoe_disconnect(
-        &self,
-    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
-    fn pppoe_config(
-        &self,
-    ) -> impl Future<Output = Result<PppoeConfig, RpcCallError>> + Send;
+    fn pppoe_reconnect(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn pppoe_disconnect(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn pppoe_config(&self) -> impl Future<Output = Result<PppoeConfig, RpcCallError>> + Send;
     fn update_pppoe_config(
         &self,
         cfg: PppoeConfig,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn user_create(
+        &self,
+        username: String,
+        password: String,
+        role: Option<String>,
+    ) -> impl Future<Output = Result<UserResponse, RpcCallError>> + Send;
+    fn user_list(&self) -> impl Future<Output = Result<UserListResponse, RpcCallError>> + Send;
+    fn user_delete(
+        &self,
+        username: String,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn user_passwd(
+        &self,
+        username: String,
+        new_password: String,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
 }
-

@@ -62,5 +62,5 @@ pub mod worker;
 
 pub use lanforge_db_core::{
     AdblockStore, ApiTokenStore, DeviceStore, DhcpConfigStore, DnsStore, DnsUpstreamStore,
-    PppoeConfigStore, RaConfigStore,
+    PppoeConfigStore, RaConfigStore, UserStore,
 };

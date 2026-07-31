@@ -140,9 +140,20 @@ Endpoints that follow this pattern are marked **HybridStream**.
 
 ---
 
-### Auth (UDS Only)
+### Users & Management
 
-All endpoints in this section are restricted to local UDS connections. API key generation and management must originate from a local session to prevent external RPC-based attacks.
+| Method | Description | Input | Output |
+| :--- | :--- | :--- | :--- |
+| `user_create` | Creates a new user account with Argon2id password hash and specified role (`admin`, `operator`, `viewer`). | `username: String`, `password: String`, `role: Option<String>` | User response api type |
+| `user_list` | Lists all registered user accounts with role and last login. | No | User list response api type |
+| `user_delete` | Deletes a user account by username. | `username: String` | Empty on success, error on failure |
+| `user_passwd` | Updates password for a user account. | `username: String`, `new_password: String` | Empty on success, error on failure |
+
+---
+
+### Auth (UDS & HTTP)
+
+API key generation endpoints are restricted to local UDS connections or admin sessions. User authentication & token verification operates across both UDS and HTTP.
 
 | Method | Description | Input | Output |
 | :--- | :--- | :--- | :--- |
@@ -151,3 +162,4 @@ All endpoints in this section are restricted to local UDS connections. API key g
 | `ak_renew` | Regenerates an API token (deletes old, creates new). | API token ID or name | API token api type (new secret, shown once) |
 | `ak_list` | Lists all API tokens (metadata only — no secret keys). | No | List of API token api types |
 | `ak_validate` | Validates a provided API token. Used by the CLI `login` flow over HTTP. | API token string | Boolean (true if valid) |
+

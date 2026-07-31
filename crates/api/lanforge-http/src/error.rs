@@ -56,6 +56,14 @@ pub enum HttpError {
     #[error("Bad request: {0}")]
     BadRequest(String),
 
+    /// Resource not found.
+    #[error("Not found: {0}")]
+    NotFound(String),
+
+    /// Validation error.
+    #[error("Validation error: {0}")]
+    Validation(String),
+
     /// Generic catch-all error.
     #[error("Error: {0}")]
     Generic(String),

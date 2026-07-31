@@ -7,7 +7,8 @@ use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
 use lanforge_db_core::{
     AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DhcpConfigStore, DnsStore,
-    DnsUpstreamEntry, DnsUpstreamStore, PppoeConfigStore, RaConfigStore, delegate_db_call,
+    DnsUpstreamEntry, DnsUpstreamStore, PppoeConfigStore, RaConfigStore, UserEntry, UserStore,
+    delegate_db_call,
 };
 use lanforge_db_postgres::PostgresDatabase;
 use lanforge_types::auth::ApiScopes;
@@ -22,7 +23,9 @@ use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 
 pub mod types {
-    pub use lanforge_db_core::{ApiTokenEntry as ApiTokenRow, DnsUpstreamEntry as DnsUpstreamRow};
+    pub use lanforge_db_core::{
+        ApiTokenEntry as ApiTokenRow, DnsUpstreamEntry as DnsUpstreamRow, UserEntry as UserRow,
+    };
 }
 
 pub use lanforge_types::device::LeaseHistoryEntry;
@@ -50,6 +53,7 @@ pub struct MockDbState {
     pub ra_rdnss: RwLock<Vec<RdnssConfig>>,
     pub ra_dnssl: RwLock<Vec<DnsslConfig>>,
     pub pppoe_config: RwLock<Option<PppoeConfig>>,
+    pub users: RwLock<Vec<UserEntry>>,
 }
 
 impl Default for MockDbState {
@@ -70,6 +74,7 @@ impl Default for MockDbState {
             ra_rdnss: RwLock::new(Vec::new()),
             ra_dnssl: RwLock::new(Vec::new()),
             pppoe_config: RwLock::new(None),
+            users: RwLock::new(Vec::new()),
         }
     }
 }
@@ -704,5 +709,148 @@ impl PppoeConfigStore for LanforgeDb {
             *mock.pppoe_config.write() = Some(cfg.clone());
             Ok(())
         })
+    }
+}
+
+impl UserStore for LanforgeDb {
+    async fn create_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+        now: i64,
+    ) -> Result<UserEntry, DbError> {
+        delegate_db_call!(
+            self,
+            create_user(username, password_hash, role, now),
+            mock => {
+                let mut users = mock.users.write();
+                if users.iter().any(|u| u.username == username) {
+                    return Err(DbError::Validation(format!("User {username} already exists")));
+                }
+                let id = users.len() as i64 + 1;
+                let entry = UserEntry {
+                    id,
+                    username: username.to_string(),
+                    password_hash: password_hash.to_string(),
+                    role: role.to_string(),
+                    created_at: now,
+                    updated_at: now,
+                    last_login: None,
+                };
+                users.push(entry.clone());
+                Ok(entry)
+            }
+        )
+    }
+
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<UserEntry>, DbError> {
+        delegate_db_call!(
+            self,
+            get_user_by_username(username),
+            mock => {
+                Ok(mock.users.read().iter().find(|u| u.username == username).cloned())
+            }
+        )
+    }
+
+    async fn get_user_by_id(&self, id: i64) -> Result<Option<UserEntry>, DbError> {
+        delegate_db_call!(
+            self,
+            get_user_by_id(id),
+            mock => {
+                Ok(mock.users.read().iter().find(|u| u.id == id).cloned())
+            }
+        )
+    }
+
+    async fn list_users(&self) -> Result<Vec<UserEntry>, DbError> {
+        delegate_db_call!(
+            self,
+            list_users(),
+            mock => {
+                Ok(mock.users.read().clone())
+            }
+        )
+    }
+
+    async fn update_user_password(
+        &self,
+        username: &str,
+        new_hash: &str,
+        now: i64,
+    ) -> Result<(), DbError> {
+        delegate_db_call!(
+            self,
+            update_user_password(username, new_hash, now),
+            mock => {
+                let mut users = mock.users.write();
+                if let Some(user) = users.iter_mut().find(|u| u.username == username) {
+                    user.password_hash = new_hash.to_string();
+                    user.updated_at = now;
+                    Ok(())
+                } else {
+                    Err(DbError::NotFound(format!("User {username} not found")))
+                }
+            }
+        )
+    }
+
+    async fn update_user_role(
+        &self,
+        username: &str,
+        new_role: &str,
+        now: i64,
+    ) -> Result<(), DbError> {
+        delegate_db_call!(
+            self,
+            update_user_role(username, new_role, now),
+            mock => {
+                let mut users = mock.users.write();
+                if let Some(user) = users.iter_mut().find(|u| u.username == username) {
+                    user.role = new_role.to_string();
+                    user.updated_at = now;
+                    Ok(())
+                } else {
+                    Err(DbError::NotFound(format!("User {username} not found")))
+                }
+            }
+        )
+    }
+
+    async fn update_user_last_login(&self, username: &str, now: i64) -> Result<(), DbError> {
+        delegate_db_call!(
+            self,
+            update_user_last_login(username, now),
+            mock => {
+                let mut users = mock.users.write();
+                if let Some(user) = users.iter_mut().find(|u| u.username == username) {
+                    user.last_login = Some(now);
+                }
+                Ok(())
+            }
+        )
+    }
+
+    async fn delete_user(&self, username: &str) -> Result<(), DbError> {
+        delegate_db_call!(
+            self,
+            delete_user(username),
+            mock => {
+                let mut users = mock.users.write();
+                users.retain(|u| u.username != username);
+                Ok(())
+            }
+        )
+    }
+
+    async fn count_users(&self) -> Result<i64, DbError> {
+        delegate_db_call!(
+            self,
+            count_users(),
+            mock => {
+                Ok(mock.users.read().len() as i64)
+            }
+        )
     }
 }

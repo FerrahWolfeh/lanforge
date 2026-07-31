@@ -72,7 +72,7 @@ use crate::cli::commands::{
     dns::DnsArgs, host::HostArgs, lease::LeaseArgs, pppoe::PppoeArgs, service::ServiceArgs,
     simple::ContextArgs, simple::LoginArgs, simple::PurgeArgs, simple::ReloadArgs,
     simple::ShutdownArgs, simple::WatchArgs, status::ServicesArgs, status::StatusArgs,
-    whois::WhoisArgs, wol::WolArgs,
+    user::UserArgs, whois::WhoisArgs, wol::WolArgs,
 };
 
 use crate::cli::{Execute, LanforgeClient};
@@ -112,6 +112,8 @@ pub enum Command {
     Dhcp(DhcpArgs),
     /// Authentication management (tokens)
     Auth(AuthArgs),
+    /// User account management
+    User(UserArgs),
     /// DNS resolver statistics and diagnostics
     Dns(DnsArgs),
     /// System configuration import/export
@@ -145,6 +147,7 @@ impl Execute for Command {
             Self::Lease(args) => args.execute(client).await,
             Self::Dhcp(args) => args.execute(client).await,
             Self::Auth(args) => args.execute(client).await,
+            Self::User(args) => args.execute(client).await,
             Self::Dns(args) => args.execute(client).await,
             Self::Config(args) => args.execute(client).await,
             Self::Service(args) => args.execute(client).await,
@@ -154,4 +157,3 @@ impl Execute for Command {
         }
     }
 }
-

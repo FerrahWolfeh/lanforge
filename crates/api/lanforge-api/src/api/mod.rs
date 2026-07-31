@@ -83,5 +83,8 @@ pub enum Response {
     PppoeStatus(Box<lanforge_types::system::PppoeStatusResponse>),
     /// PPPoE configuration response.
     PppoeConfig(Box<lanforge_types::network::pppoe::PppoeConfig>),
+    /// User account details response.
+    User(UserResponse),
+    /// List of user accounts response.
+    UserList(UserListResponse),
 }
-

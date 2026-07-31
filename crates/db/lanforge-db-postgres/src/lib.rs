@@ -34,7 +34,7 @@ use lanforge_types::network::ra::{
     DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RdnssConfig,
 };
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -45,8 +45,9 @@ use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
 use lanforge_db_core::{
     AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DhcpConfigStore, DnsStore,
-    DnsUpstreamEntry, DnsUpstreamStore, PppoeConfigStore, RaConfigStore,
+    DnsUpstreamEntry, DnsUpstreamStore, PppoeConfigStore, RaConfigStore, UserEntry, UserStore,
 };
+
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{
     Device, IPv4State, IPv6State, Ipv6AddrOrSuffix, LeaseAction, LeaseHistoryEntry, LeaseKind,
@@ -1907,12 +1908,15 @@ impl PppoeConfigStore for PostgresDatabase {
             let reconnect_delay_secs: i64 = r.try_get("reconnect_delay_secs").map_err(map_err)?;
 
             let nft_enabled: bool = r.try_get("nft_enabled").unwrap_or(true);
-            let nft_table_name: String = r.try_get("nft_table_name").unwrap_or_else(|_| "lanforge".into());
+            let nft_table_name: String = r
+                .try_get("nft_table_name")
+                .unwrap_or_else(|_| "lanforge".into());
             let nft_flow_offload: bool = r.try_get("nft_flow_offload").unwrap_or(true);
             let nft_mss_clamping: bool = r.try_get("nft_mss_clamping").unwrap_or(true);
             let nft_bypass_dns: bool = r.try_get("nft_bypass_dns").unwrap_or(true);
             let nft_bypass_vowifi: bool = r.try_get("nft_bypass_vowifi").unwrap_or(true);
-            let nft_custom_rules_file: Option<String> = r.try_get("nft_custom_rules_file").ok().flatten();
+            let nft_custom_rules_file: Option<String> =
+                r.try_get("nft_custom_rules_file").ok().flatten();
 
             let auth = auth_raw
                 .parse::<lanforge_types::network::pppoe::AuthMethod>()
@@ -1971,7 +1975,7 @@ impl PppoeConfigStore for PostgresDatabase {
                nft_mss_clamping = EXCLUDED.nft_mss_clamping,
                nft_bypass_dns = EXCLUDED.nft_bypass_dns,
                nft_bypass_vowifi = EXCLUDED.nft_bypass_vowifi,
-               nft_custom_rules_file = EXCLUDED.nft_custom_rules_file"
+               nft_custom_rules_file = EXCLUDED.nft_custom_rules_file",
         )
         .bind(cfg.enabled)
         .bind(&cfg.wan_iface)
@@ -1995,7 +1999,192 @@ impl PppoeConfigStore for PostgresDatabase {
 
         Ok(())
     }
+}
 
+impl UserStore for PostgresDatabase {
+    async fn create_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+        now: i64,
+    ) -> Result<UserEntry, DbError> {
+        let row = sqlx::query(
+            "INSERT INTO auth.users (username, password_hash, role, created_at, updated_at) \
+             VALUES ($1, $2, $3::auth.user_role_t, to_timestamp($4), to_timestamp($4)) \
+             RETURNING id::BIGINT AS id, username, password_hash, role::text AS role, \
+                       EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at, \
+                       EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at, \
+                       EXTRACT(EPOCH FROM last_login)::BIGINT AS last_login",
+        )
+        .bind(username)
+        .bind(password_hash)
+        .bind(role)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(UserEntry {
+            id: row.try_get("id").map_err(map_err)?,
+            username: row.try_get("username").map_err(map_err)?,
+            password_hash: row.try_get("password_hash").map_err(map_err)?,
+            role: row.try_get("role").map_err(map_err)?,
+            created_at: row.try_get("created_at").map_err(map_err)?,
+            updated_at: row.try_get("updated_at").map_err(map_err)?,
+            last_login: row.try_get("last_login").map_err(map_err)?,
+        })
+    }
+
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<UserEntry>, DbError> {
+        let row = sqlx::query(
+            "SELECT id::BIGINT AS id, username, password_hash, role::text AS role, \
+                    EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at, \
+                    EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at, \
+                    EXTRACT(EPOCH FROM last_login)::BIGINT AS last_login \
+             FROM auth.users WHERE username = $1",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        row.map(|r| {
+            Ok(UserEntry {
+                id: r.try_get("id").map_err(map_err)?,
+                username: r.try_get("username").map_err(map_err)?,
+                password_hash: r.try_get("password_hash").map_err(map_err)?,
+                role: r.try_get("role").map_err(map_err)?,
+                created_at: r.try_get("created_at").map_err(map_err)?,
+                updated_at: r.try_get("updated_at").map_err(map_err)?,
+                last_login: r.try_get("last_login").map_err(map_err)?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn get_user_by_id(&self, id: i64) -> Result<Option<UserEntry>, DbError> {
+        let row = sqlx::query(
+            "SELECT id::BIGINT AS id, username, password_hash, role::text AS role, \
+                    EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at, \
+                    EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at, \
+                    EXTRACT(EPOCH FROM last_login)::BIGINT AS last_login \
+             FROM auth.users WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        row.map(|r| {
+            Ok(UserEntry {
+                id: r.try_get("id").map_err(map_err)?,
+                username: r.try_get("username").map_err(map_err)?,
+                password_hash: r.try_get("password_hash").map_err(map_err)?,
+                role: r.try_get("role").map_err(map_err)?,
+                created_at: r.try_get("created_at").map_err(map_err)?,
+                updated_at: r.try_get("updated_at").map_err(map_err)?,
+                last_login: r.try_get("last_login").map_err(map_err)?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn list_users(&self) -> Result<Vec<UserEntry>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id::BIGINT AS id, username, password_hash, role::text AS role, \
+                    EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at, \
+                    EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at, \
+                    EXTRACT(EPOCH FROM last_login)::BIGINT AS last_login \
+             FROM auth.users ORDER BY id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        rows.into_iter()
+            .map(|r| {
+                Ok(UserEntry {
+                    id: r.try_get("id").map_err(map_err)?,
+                    username: r.try_get("username").map_err(map_err)?,
+                    password_hash: r.try_get("password_hash").map_err(map_err)?,
+                    role: r.try_get("role").map_err(map_err)?,
+                    created_at: r.try_get("created_at").map_err(map_err)?,
+                    updated_at: r.try_get("updated_at").map_err(map_err)?,
+                    last_login: r.try_get("last_login").map_err(map_err)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn update_user_password(
+        &self,
+        username: &str,
+        new_hash: &str,
+        now: i64,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "UPDATE auth.users SET password_hash = $1, updated_at = to_timestamp($2) WHERE username = $3",
+        )
+        .bind(new_hash)
+        .bind(now)
+        .bind(username)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(())
+    }
+
+    async fn update_user_role(
+        &self,
+        username: &str,
+        new_role: &str,
+        now: i64,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "UPDATE auth.users SET role = $1::auth.user_role_t, updated_at = to_timestamp($2) WHERE username = $3",
+        )
+        .bind(new_role)
+        .bind(now)
+        .bind(username)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(())
+    }
+
+    async fn update_user_last_login(&self, username: &str, now: i64) -> Result<(), DbError> {
+        sqlx::query("UPDATE auth.users SET last_login = to_timestamp($1) WHERE username = $2")
+            .bind(now)
+            .bind(username)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+
+        Ok(())
+    }
+
+    async fn delete_user(&self, username: &str) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM auth.users WHERE username = $1")
+            .bind(username)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+
+        Ok(())
+    }
+
+    async fn count_users(&self) -> Result<i64, DbError> {
+        let row = sqlx::query("SELECT COUNT(*) FROM auth.users")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_err)?;
+
+        let count: i64 = row.try_get(0).map_err(map_err)?;
+        Ok(count)
+    }
 }
 
 #[cfg(test)]

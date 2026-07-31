@@ -7,7 +7,7 @@ async fn test_auth_manager_token_lifecycle() {
 
     // Generate
     let token = auth
-        .generate_token("admin")
+        .generate_token("admin", "admin")
         .expect("Token generation failed");
     assert!(!token.is_empty());
 
@@ -27,7 +27,8 @@ async fn test_auth_token_expiration() {
     let auth = AuthManager::new();
     // Since we can't easily mock time in jsonwebtoken without more effort,
     // we just verify that exp is set in the future.
-    let token = auth.generate_token("admin").unwrap();
+    let token = auth.generate_token("admin", "admin").unwrap();
+
     let claims = auth.validate_token(&token).unwrap();
 
     let now = usize::try_from(
@@ -111,11 +112,13 @@ async fn test_handle_login() {
     let res = handle_login(
         State(state_no_auth),
         Json(LoginRequest {
-            password: "any_password".to_string(),
+            username: None,
+            password: Some("any_password".to_string()),
+            token: None,
         }),
     )
     .await;
-    assert!(res.is_ok());
+    assert!(res.is_err());
 
     // 2. Test when auth is enabled
     let password = "my_secure_password";
@@ -136,7 +139,9 @@ async fn test_handle_login() {
     let res_correct = handle_login(
         State(state_with_auth.clone()),
         Json(LoginRequest {
-            password: password.to_string(),
+            username: Some("admin".to_string()),
+            password: Some(password.to_string()),
+            token: None,
         }),
     )
     .await;
@@ -146,7 +151,9 @@ async fn test_handle_login() {
     let res_incorrect = handle_login(
         State(state_with_auth),
         Json(LoginRequest {
-            password: "wrong_password".to_string(),
+            username: Some("admin".to_string()),
+            password: Some("wrong_password".to_string()),
+            token: None,
         }),
     )
     .await;

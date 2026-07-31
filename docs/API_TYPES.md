@@ -354,6 +354,24 @@ Representations of API authentication tokens.
 }
 ```
 
+### User Accounts & Auth Types
+Representations of database-backed user accounts and authorization roles.
+
+- **`UserRole`**: Enum values `admin`, `operator`, `viewer`.
+- **`UserInfo`**: User object metadata: `id` (i64), `username` (String), `role` (UserRole), `created_at` (i64), `updated_at` (i64), `last_login` (Option\<i64\>).
+
+```json
+{
+  "id": 1,
+  "username": "admin",
+  "role": "admin",
+  "created_at": 1715000000,
+  "updated_at": 1715000000,
+  "last_login": 1715003600
+}
+```
+
+
 ### UpstreamConfigPayload
 Payload for adding runtime DNS upstreams to the database.
 
