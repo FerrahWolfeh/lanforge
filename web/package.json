@@ -23,6 +23,7 @@
 		"@types/node": "^26.1.2",
 		"bits-ui": "^2.18.1",
 		"clsx": "^2.1.1",
+		"layerchart": "^2.0.4",
 		"mode-watcher": "^1.1.0",
 		"shadcn-svelte": "^1.4.2",
 		"svelte": "^5.56.1",

@@ -402,11 +402,23 @@ export interface ProtocolStatEntry {
 	percentage: number;
 }
 
+export interface QueryRateEntry {
+	timestamp: number;
+	count: number;
+	cached?: number;
+	forwarded?: number;
+	blocked?: number;
+}
+
 export interface DnsAnalyticsResponse {
 	top_domains: TopDomainEntry[];
 	top_clients: TopClientEntry[];
 	query_types: QueryTypeEntry[];
 	protocol_stats: ProtocolStatEntry[];
+	query_rate?: QueryRateEntry[];
+	blocked_query_rate?: QueryRateEntry[];
+	top_blocked_domains?: TopDomainEntry[];
+	top_blocked_clients?: TopClientEntry[];
 }
 
 export interface DnsQueryLogEntry {
@@ -420,11 +432,23 @@ export interface DnsQueryLogEntry {
 }
 
 export interface DnsUpstreamEntry {
-	url: string;
+	target?: string | { addr?: string; protocol?: string };
+	url?: string;
+	addr?: string;
 	protocol: string;
-	rtt_ms: number | null;
-	success_rate_pct: number;
-	status: 'healthy' | 'degraded' | 'unreachable';
+	domain?: string | null;
+	rtt_ewma_us?: number;
+	last_rtt_us?: number;
+	rtt_ms?: number | null;
+	latency_ms?: number | null;
+	success_rate_pct?: number;
+	status?: 'healthy' | 'degraded' | 'unreachable' | string;
+}
+
+export interface ReverseResolverEntry {
+	subnet: string | { addr: string; prefix_len: number };
+	resolver?: string | { addr?: string; protocol?: string };
+	resolver_uri?: string;
 }
 
 // ---------------------------------------------------------------------------

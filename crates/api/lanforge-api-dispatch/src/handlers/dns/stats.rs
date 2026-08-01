@@ -4,7 +4,8 @@ use lanforge_api::api::{
     QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
 };
 use lanforge_types::network::dns::{
-    DnsRecordType, DnsRequest, DnsResponse, upstream::UpstreamProtocol,
+    DnsRecordType, DnsRequest, DnsResponse,
+    upstream::{UpstreamProtocol, UpstreamTarget},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -122,7 +123,7 @@ impl ClientContext {
                 None => format!("{}://", proto_lower),
             };
             let full_str = format!("{}{}", prefix, row.addr);
-            if let Ok(target) = <lanforge_types::network::dns::upstream::UpstreamTarget as std::str::FromStr>::from_str(&full_str) {
+            if let Ok(target) = <UpstreamTarget as std::str::FromStr>::from_str(&full_str) {
                 upstreams.push(target);
             }
         }
@@ -138,17 +139,17 @@ impl ClientContext {
             .await
             .unwrap_or_default();
         let query_types = self.log_db.get_dns_query_types().await.unwrap_or_default();
-        let query_rate = self
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let since_secs = now_secs.saturating_sub(86400);
+        let detailed_rates = self
             .log_db
-            .get_dns_query_rate(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .saturating_sub(600),
-            )
+            .get_dns_query_rate_detailed(since_secs, 120)
             .await
             .unwrap_or_default();
+
         let top_clients = self
             .log_db
             .get_dns_top_clients(limit)
@@ -172,13 +173,7 @@ impl ClientContext {
             .unwrap_or_default();
         let blocked_query_rate = self
             .log_db
-            .get_dns_blocked_query_rate(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .saturating_sub(600),
-            )
+            .get_dns_blocked_query_rate(since_secs)
             .await
             .unwrap_or_default();
 
@@ -194,9 +189,17 @@ impl ClientContext {
                     count,
                 })
                 .collect(),
-            query_rate: query_rate
+            query_rate: detailed_rates
                 .into_iter()
-                .map(|(timestamp, count)| QueryRateEntry { timestamp, count })
+                .map(
+                    |(timestamp, total, cached, forwarded, blocked)| QueryRateEntry {
+                        timestamp,
+                        count: total,
+                        cached,
+                        forwarded,
+                        blocked,
+                    },
+                )
                 .collect(),
             top_clients: top_clients
                 .into_iter()
@@ -249,7 +252,13 @@ impl ClientContext {
                 .collect(),
             blocked_query_rate: blocked_query_rate
                 .into_iter()
-                .map(|(timestamp, count)| QueryRateEntry { timestamp, count })
+                .map(|(timestamp, count)| QueryRateEntry {
+                    timestamp,
+                    count,
+                    cached: 0,
+                    forwarded: 0,
+                    blocked: count,
+                })
                 .collect(),
         })
     }

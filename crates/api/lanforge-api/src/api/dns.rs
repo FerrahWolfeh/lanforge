@@ -32,6 +32,12 @@ pub struct QueryTypeEntry {
 pub struct QueryRateEntry {
     pub timestamp: u64,
     pub count: u64,
+    #[serde(default)]
+    pub cached: u64,
+    #[serde(default)]
+    pub forwarded: u64,
+    #[serde(default)]
+    pub blocked: u64,
 }
 
 /// A single entry in the protocol distribution list.

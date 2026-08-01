@@ -104,9 +104,9 @@ impl LogDb {
                     dns_queries.push(entry);
                 }
             }
-            // Limit to 20k capacity
-            if dns_queries.len() > 20000 {
-                dns_queries.drain(0..dns_queries.len() - 20000);
+            // Limit to 100k capacity
+            if dns_queries.len() > 100000 {
+                dns_queries.drain(0..dns_queries.len() - 100000);
             }
         }
 
@@ -120,9 +120,9 @@ impl LogDb {
                     dns_blocked.push(entry);
                 }
             }
-            // Limit to 10k capacity
-            if dns_blocked.len() > 10000 {
-                dns_blocked.drain(0..dns_blocked.len() - 10000);
+            // Limit to 50k capacity
+            if dns_blocked.len() > 50000 {
+                dns_blocked.drain(0..dns_blocked.len() - 50000);
             }
         }
 
@@ -205,8 +205,8 @@ impl LogDb {
             let mut blocked = self.dns_blocked.lock();
             blocked.push(entry.clone());
             let len = blocked.len();
-            if len > 10000 {
-                blocked.drain(0..len - 10000);
+            if len > 50000 {
+                blocked.drain(0..len - 50000);
             }
         }
 
@@ -238,8 +238,8 @@ impl LogDb {
             let mut queries = self.dns_queries.lock();
             queries.extend(entries.iter().cloned());
             let len = queries.len();
-            if len > 20000 {
-                queries.drain(0..len - 20000);
+            if len > 100000 {
+                queries.drain(0..len - 100000);
             }
         }
 
@@ -273,7 +273,7 @@ impl LogDb {
             last_prune.elapsed() >= Duration::from_secs(60)
         };
         if should_prune {
-            let cutoff = now_secs - (24 * 3600);
+            let cutoff = now_secs - (7 * 24 * 3600);
             self.prune_logs(cutoff).await?;
             *self.last_prune.lock() = Instant::now();
         }
@@ -428,6 +428,41 @@ impl LogDb {
             }
         }
         let mut vec: Vec<(u64, u64)> = buckets.into_iter().collect();
+        vec.sort_by_key(|a| a.0);
+        Ok(vec)
+    }
+
+    /// Retrieves detailed query rate timeline with disposition breakdown (timestamp, total, cached, forwarded, blocked).
+    pub async fn get_dns_query_rate_detailed(
+        &self,
+        since_secs: u64,
+        bucket_secs: u64,
+    ) -> Result<Vec<(u64, u64, u64, u64, u64)>, LogBufError> {
+        let queries = self.dns_queries.lock();
+        let bsize = if bucket_secs == 0 { 30 } else { bucket_secs };
+        let mut buckets: HashMap<u64, (u64, u64, u64, u64)> = HashMap::new();
+        for q in queries.iter() {
+            if q.timestamp >= since_secs {
+                let bucket = (q.timestamp / bsize) * bsize;
+                let entry = buckets.entry(bucket).or_insert((0, 0, 0, 0));
+                entry.0 += 1;
+                match q.result {
+                    QueryResult::Blocked | QueryResult::CachedBlock => {
+                        entry.3 += 1;
+                    }
+                    QueryResult::Cached => {
+                        entry.1 += 1;
+                    }
+                    _ => {
+                        entry.2 += 1;
+                    }
+                }
+            }
+        }
+        let mut vec: Vec<(u64, u64, u64, u64, u64)> = buckets
+            .into_iter()
+            .map(|(ts, (total, cached, fwd, blk))| (ts, total, cached, fwd, blk))
+            .collect();
         vec.sort_by_key(|a| a.0);
         Ok(vec)
     }

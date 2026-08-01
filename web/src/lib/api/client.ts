@@ -25,6 +25,7 @@ import type {
 	LeaseTarget,
 	LoginRequest,
 	LoginResponse,
+	ReverseResolverEntry,
 	RewriteRule,
 	StatusResponse,
 	UserInfo
@@ -159,6 +160,17 @@ export const dnsQueryLog = (params?: {
 	offset?: number;
 }) => get<{ entries: DnsQueryLogEntry[]; total: number }>('/dns/log', params);
 export const dnsUpstreams = () => get<DnsUpstreamEntry[]>('/dns/upstreams');
+export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?: string }) =>
+	post<void>('/dns/upstreams', entry);
+export const dnsUpstreamRemove = (entry: { addr: string; protocol: string }) =>
+	del<void>('/dns/upstreams', entry);
+
+export const dnsReverseResolverList = () =>
+	get<ReverseResolverEntry[]>('/dns/reverse-resolvers');
+export const dnsReverseResolverAdd = (subnet: string, resolver_uri: string) =>
+	post<void>('/dns/reverse-resolvers', { subnet, resolver_uri });
+export const dnsReverseResolverRemove = (subnet: string) =>
+	del<void>('/dns/reverse-resolvers', { subnet });
 
 // ---------------------------------------------------------------------------
 // DNS — cache
