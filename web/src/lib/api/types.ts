@@ -208,8 +208,85 @@ export function parseTimedEvent(raw: unknown, eventId?: string): SseEvent {
 	return { id, kind: kind as EventKind, data: payload, ts };
 }
 
-export function formatEventPayload(data: Record<string, unknown>): string {
+export function formatEventPayload(data: Record<string, unknown>, kind?: string): string {
 	if (!data || Object.keys(data).length === 0) return '—';
+
+	// 1. Network Activity
+	if (kind === 'NetworkActivity' || 'change' in data) {
+		const mac = (data.mac as string) || '';
+		const host = (data.hostname as string) || mac || 'Device';
+		const change = data.change;
+		if (typeof change === 'object' && change !== null) {
+			const keys = Object.keys(change);
+			if (keys.length > 0) {
+				const activityKind = keys[0];
+				const inner = (change as Record<string, Record<string, unknown>>)[activityKind];
+				if (activityKind === 'NdpActivity' && inner?.ip) {
+					return `${host} updated NDP address (${inner.ip})`;
+				}
+				if (activityKind === 'ArpActivity' && inner?.ip) {
+					return `${host} active on ARP (${inner.ip})`;
+				}
+				if (activityKind === 'DhcpActivity' && inner?.ip) {
+					return `${host} DHCP activity (${inner.ip})`;
+				}
+				if (activityKind === 'L2Activity') {
+					return `Layer 2 traffic detected from ${host}`;
+				}
+			}
+		}
+		return `Activity detected for ${host}`;
+	}
+
+	// 2. Neighbor Batch Summary
+	if (kind === 'NeighborBatchSummary' || ('total' in data && 'duration_ms' in data)) {
+		const total = Number(data.total ?? 0);
+		const newCount = Number(data.new ?? 0);
+		const duration = data.duration_ms ? ` in ${data.duration_ms}ms` : '';
+		if (newCount > 0) {
+			return `Discovered ${newCount} new device${newCount > 1 ? 's' : ''} (${total} total${duration})`;
+		}
+		return `Scanned ${total} neighbor${total === 1 ? '' : 's'} (${total} known${duration})`;
+	}
+
+	// 3. DHCP Lease Granted / Released
+	if (kind === 'DhcpLeaseGranted') {
+		const host = (data.hostname as string) || (data.mac as string) || 'client';
+		const ip = (data.ip as string) || '';
+		return `Lease granted to ${host}${ip ? ` (${ip})` : ''}`;
+	}
+	if (kind === 'DhcpLeaseReleased') {
+		const host = (data.hostname as string) || (data.ip as string) || (data.mac as string) || 'client';
+		return `Lease released for ${host}`;
+	}
+
+	// 4. Device Online / Offline
+	if (kind === 'DeviceOnline') {
+		const host = (data.hostname as string) || (data.mac as string) || 'Device';
+		return `${host} came online`;
+	}
+	if (kind === 'DeviceOffline') {
+		const host = (data.hostname as string) || (data.mac as string) || 'Device';
+		return `${host} went offline`;
+	}
+
+	// 5. Keepalive & Scans
+	if (kind === 'KeepaliveRestored') {
+		return 'Daemon connection keepalive restored';
+	}
+	if (kind === 'ScanCompleted') {
+		const dur = data.duration_ms ? ` (${data.duration_ms}ms)` : '';
+		return `Network ARP/NDP scan completed${dur}`;
+	}
+
+	// 6. DNS Blocked
+	if (kind === 'DnsBlocked') {
+		const domain = (data.domain as string) || '';
+		const client = (data.client as string) || '';
+		return `Blocked ${domain}${client ? ` for ${client}` : ''}`;
+	}
+
+	// General Fallback formatting
 	const parts: string[] = [];
 	for (const [k, v] of Object.entries(data)) {
 		if (v === null || v === undefined) continue;

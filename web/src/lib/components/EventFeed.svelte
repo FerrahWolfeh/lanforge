@@ -49,8 +49,11 @@
 		});
 	}
 
-	function formatPayload(data: Record<string, unknown>): string {
-		return formatEventPayload(data);
+	function formatPayload(
+		data: Record<string, unknown>,
+		kind?: string,
+	): string {
+		return formatEventPayload(data, kind);
 	}
 
 	const visibleEvents = $derived(
