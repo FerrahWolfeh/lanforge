@@ -299,13 +299,21 @@
 					<div class="flex justify-between py-0.5">
 						<dt class="text-muted-foreground">RSS</dt>
 						<dd class="font-medium">
-							{formatBytes(data.resources.rss_bytes)}
+							{formatBytes(
+								data.resources.memory_rss_bytes ??
+									data.resources.rss_bytes ??
+									0,
+							)}
 						</dd>
 					</div>
 					<div class="flex justify-between py-0.5">
 						<dt class="text-muted-foreground">VMS</dt>
 						<dd class="font-medium">
-							{formatBytes(data.resources.vms_bytes)}
+							{formatBytes(
+								data.resources.memory_vms_bytes ??
+									data.resources.vms_bytes ??
+									0,
+							)}
 						</dd>
 					</div>
 				</dl>

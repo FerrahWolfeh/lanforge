@@ -4,45 +4,60 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { eventFeed } from "$lib/stores/events.svelte";
-	import { status, dnsStats, leases, scan } from "$lib/api/client";
 	import {
-		normalizeServices,
+		status,
+		dnsStats,
+		leases,
+		listDevices,
+		hostList,
+		scan,
+	} from "$lib/api/client";
+	import {
 		formatEventPayload,
 		type StatusResponse,
 		type DnsStatsResponse,
 		type DhcpLease,
+		type DevicesResponse,
+		type HostConfigEntry,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import RadioIcon from "@lucide/svelte/icons/radio";
+	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
+	import ServerIcon from "@lucide/svelte/icons/server";
 
 	let statusData = $state<StatusResponse | null>(null);
 	let dnsData = $state<DnsStatsResponse | null>(null);
 	let leasesData = $state<DhcpLease[] | null>(null);
+	let devicesData = $state<DevicesResponse | null>(null);
+	let hostsData = $state<HostConfigEntry[] | null>(null);
 	let loadingData = $state(true);
 	let scanning = $state(false);
 
 	async function loadAll() {
 		loadingData = true;
 		try {
-			const [s, dns, ls] = await Promise.allSettled([
+			const [s, dns, ls, dev, hst] = await Promise.allSettled([
 				status(),
 				dnsStats(),
 				leases(),
+				listDevices(),
+				hostList(),
 			]);
 			if (s.status === "fulfilled") statusData = s.value;
 			if (dns.status === "fulfilled") dnsData = dns.value;
 			if (ls.status === "fulfilled")
 				leasesData = Array.isArray(ls.value) ? ls.value : [];
+			if (dev.status === "fulfilled") devicesData = dev.value;
+			if (hst.status === "fulfilled")
+				hostsData = Array.isArray(hst.value) ? hst.value : [];
 		} finally {
 			loadingData = false;
 		}
@@ -79,52 +94,71 @@
 		return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 	}
 
-	const serviceList = $derived(normalizeServices(statusData));
+	const recentEvents = $derived(eventFeed.events.slice(0, 12));
 
-	const recentEvents = $derived(eventFeed.events.slice(0, 10));
+	const rssBytes = $derived(
+		statusData?.resources?.memory_rss_bytes ??
+			statusData?.resources?.rss_bytes ??
+			0,
+	);
+	const vmsBytes = $derived(
+		statusData?.resources?.memory_vms_bytes ??
+			statusData?.resources?.vms_bytes ??
+			0,
+	);
 
-	const blockedPct = $derived.by(() => {
-		if (!dnsData || dnsData.total_requests === 0) return "0%";
-		const pct = (dnsData.blocked_queries / dnsData.total_requests) * 100;
-		return `${pct.toFixed(1)}%`;
+	const onlineDevicesCount = $derived.by(() => {
+		if (!devicesData) return 0;
+		if (devicesData.meta?.online !== undefined)
+			return devicesData.meta.online;
+		return devicesData.devices?.filter((d) => d.online).length ?? 0;
+	});
+
+	const totalDevicesCount = $derived.by(() => {
+		if (!devicesData) return 0;
+		if (devicesData.meta?.total !== undefined)
+			return devicesData.meta.total;
+		return devicesData.devices?.length ?? 0;
 	});
 
 	const statCards = $derived([
 		{
-			label: "Uptime",
-			value: statusData ? formatUptime(statusData.uptime_secs) : null,
-			subtext: statusData?.network?.lan_iface
-				? `Iface: ${statusData.network.lan_iface}`
-				: "System active",
-			icon: ZapIcon,
+			label: "Active Devices",
+			value: devicesData
+				? `${onlineDevicesCount} / ${totalDevicesCount}`
+				: null,
+			subtext: devicesData
+				? `${onlineDevicesCount} online on LAN`
+				: "LAN host activity",
+			icon: WifiIcon,
 			color: "text-emerald-400",
 			bgColor: "bg-emerald-500/10 border-emerald-500/20",
+		},
+		{
+			label: "DHCP Leases",
+			value: leasesData ? leasesData.length.toString() : null,
+			subtext: "Active IPv4/v6 leases",
+			icon: NetworkIcon,
+			color: "text-teal-400",
+			bgColor: "bg-teal-500/10 border-teal-500/20",
+		},
+		{
+			label: "Static Hosts",
+			value: hostsData ? hostsData.length.toString() : null,
+			subtext: "Configured static rules",
+			icon: ServerIcon,
+			color: "text-amber-400",
+			bgColor: "bg-amber-500/10 border-amber-500/20",
 		},
 		{
 			label: "DNS Queries",
 			value: dnsData ? dnsData.total_requests.toLocaleString() : null,
 			subtext: dnsData
 				? `${dnsData.cache_hits.toLocaleString()} cache hits`
-				: "Total queries",
+				: "Total requests",
 			icon: GlobeIcon,
 			color: "text-sky-400",
 			bgColor: "bg-sky-500/10 border-sky-500/20",
-		},
-		{
-			label: "Blocked",
-			value: dnsData ? dnsData.blocked_queries.toLocaleString() : null,
-			subtext: `${blockedPct} block rate`,
-			icon: ShieldIcon,
-			color: "text-rose-400",
-			bgColor: "bg-rose-500/10 border-rose-500/20",
-		},
-		{
-			label: "DHCP Leases",
-			value: leasesData ? leasesData.length.toString() : null,
-			subtext: "Active network leases",
-			icon: NetworkIcon,
-			color: "text-teal-400",
-			bgColor: "bg-teal-500/10 border-teal-500/20",
 		},
 	]);
 
@@ -156,6 +190,15 @@
 			timeStyle: "medium",
 		});
 	}
+
+	const routerSubsystems = [
+		"IPv6 RA",
+		"DHCPv4",
+		"DHCPv6",
+		"DNS",
+		"TFTP",
+		"PPPoE",
+	];
 </script>
 
 <svelte:head>
@@ -169,7 +212,9 @@
 			<h1 class="text-foreground text-2xl font-bold tracking-tight">
 				Dashboard
 			</h1>
-			<p class="text-muted-foreground text-sm">Network at a glance</p>
+			<p class="text-muted-foreground text-sm">
+				Router Orchestration Engine
+			</p>
 		</div>
 		<div class="flex items-center gap-2">
 			<Button
@@ -198,7 +243,7 @@
 		</div>
 	</div>
 
-	<!-- Top Stat Cards -->
+	<!-- Top Stat Cards (4 Core Router Metrics) -->
 	<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
 		{#each statCards as card (card.label)}
 			<Card.Root
@@ -245,35 +290,40 @@
 		{/each}
 	</div>
 
-	<!-- Main Grid: Recent Events, Services & Network Vitals -->
+	<!-- Main Grid: Live Events & Subsystems (2 Cols) + Network & System Vitals (1 Col) -->
 	<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-		<!-- Panel 1: Recent Events Feed -->
-		<Card.Root class="flex flex-col lg:col-span-1">
+		<!-- Left Main Panel: Live Events & Router Subsystems Stream -->
+		<Card.Root class="flex flex-col lg:col-span-2">
 			<Card.Header class="pb-3 border-b border-border/50">
-				<div class="flex items-center justify-between">
+				<div
+					class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+				>
 					<div class="flex items-center gap-2">
 						<ActivityIcon class="size-4 text-emerald-400" />
-						<Card.Title class="text-base">Recent Events</Card.Title>
+						<Card.Title class="text-base"
+							>Live Network Events</Card.Title
+						>
 					</div>
-					<div class="flex items-center gap-1.5">
-						<span
-							class={[
-								"size-2 rounded-full",
-								eventFeed.connected
-									? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)] animate-pulse"
-									: "bg-zinc-600",
-							].join(" ")}
-						></span>
-						<span class="text-muted-foreground text-xs">
-							{eventFeed.connected ? "Live" : "Disconnected"}
-						</span>
+
+					<!-- Subsystem Badges Bar -->
+					<div class="flex flex-wrap items-center gap-1.5">
+						{#each routerSubsystems as sub (sub)}
+							<div
+								class="flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[10px] font-mono text-muted-foreground"
+							>
+								<span
+									class="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
+								></span>
+								<span>{sub}</span>
+							</div>
+						{/each}
 					</div>
 				</div>
 			</Card.Header>
 			<Card.Content class="flex flex-1 flex-col gap-0 p-0">
 				{#if recentEvents.length === 0}
 					<div
-						class="text-muted-foreground flex flex-col items-center justify-center gap-2 py-14 text-sm"
+						class="text-muted-foreground flex flex-col items-center justify-center gap-2 py-16 text-sm"
 					>
 						<MonitorIcon class="size-8 opacity-30" />
 						<span>No live events received</span>
@@ -282,11 +332,11 @@
 					<div class="divide-border/50 divide-y overflow-hidden">
 						{#each recentEvents as ev (ev.id + ev.ts)}
 							<div
-								class="flex items-start gap-2.5 px-4 py-3 text-xs transition-colors hover:bg-muted/30"
+								class="flex items-start gap-3 px-5 py-3 text-xs transition-colors hover:bg-muted/30"
 							>
 								<span
 									class={[
-										"mt-0.5 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider shrink-0",
+										"mt-0.5 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider shrink-0",
 										kindBadgeClass(ev.kind),
 									].join(" ")}
 								>
@@ -313,96 +363,7 @@
 			</Card.Content>
 		</Card.Root>
 
-		<!-- Panel 2: Services Status -->
-		<Card.Root class="flex flex-col lg:col-span-1">
-			<Card.Header class="pb-3 border-b border-border/50">
-				<div class="flex items-center justify-between">
-					<div class="flex items-center gap-2">
-						<RadioIcon class="size-4 text-sky-400" />
-						<Card.Title class="text-base"
-							>Daemon Services</Card.Title
-						>
-					</div>
-					{#if serviceList.length > 0}
-						<Badge
-							variant="outline"
-							class="text-[10px] uppercase font-mono"
-						>
-							{serviceList.filter((s) => s.state === "active")
-								.length}/{serviceList.length} Online
-						</Badge>
-					{/if}
-				</div>
-			</Card.Header>
-			<Card.Content class="flex flex-1 flex-col p-0">
-				{#if loadingData}
-					<div class="flex flex-col gap-2 p-4">
-						{#each { length: 5 } as _, i (i)}
-							<div class="flex items-center justify-between">
-								<Skeleton class="h-4 w-28" />
-								<Skeleton class="h-5 w-16 rounded-full" />
-							</div>
-						{/each}
-					</div>
-				{:else if serviceList.length === 0}
-					<div
-						class="text-muted-foreground py-14 text-center text-sm"
-					>
-						No service status available
-					</div>
-				{:else}
-					<div class="divide-border/50 divide-y">
-						{#each serviceList as svc (svc.name)}
-							<div
-								class="flex items-center justify-between px-4 py-3 text-xs transition-colors hover:bg-muted/30"
-							>
-								<div class="flex items-center gap-2.5">
-									<span
-										class={[
-											"size-2 rounded-full shrink-0",
-											svc.state === "active"
-												? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
-												: svc.state === "starting"
-													? "bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.8)] animate-pulse"
-													: "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.8)]",
-										].join(" ")}
-									></span>
-									<div class="flex flex-col">
-										<span
-											class="text-foreground font-medium capitalize"
-										>
-											{svc.name.replace(/_/g, " ")}
-										</span>
-										{#if svc.uptime_secs > 0}
-											<span
-												class="text-muted-foreground text-[10px]"
-											>
-												up {formatUptime(
-													svc.uptime_secs,
-												)}
-											</span>
-										{/if}
-									</div>
-								</div>
-
-								<Badge
-									variant={svc.state === "active"
-										? "default"
-										: svc.state === "starting"
-											? "secondary"
-											: "destructive"}
-									class="capitalize text-[10px] px-2 py-0.5 font-medium"
-								>
-									{svc.state}
-								</Badge>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-
-		<!-- Panel 3: Network Vitals & Host Overview -->
+		<!-- Right Main Panel: Network Vitals & Host Overview -->
 		<Card.Root class="flex flex-col lg:col-span-1">
 			<Card.Header class="pb-3 border-b border-border/50">
 				<div class="flex items-center gap-2">
@@ -481,23 +442,34 @@
 						</div>
 					{/if}
 
-					<!-- Storage & Process Vitals -->
+					<!-- Database & Process Vitals -->
 					<div class="mt-auto grid grid-cols-2 gap-3">
 						<div
 							class="flex flex-col gap-1 rounded-lg border border-border/60 bg-muted/20 p-3"
 						>
 							<div
-								class="flex items-center gap-1.5 text-muted-foreground text-[11px] font-medium"
+								class="flex items-center justify-between text-muted-foreground text-[11px] font-medium"
 							>
-								<DatabaseIcon class="size-3.5 text-amber-400" />
-								<span>Database</span>
+								<div class="flex items-center gap-1.5">
+									<DatabaseIcon
+										class="size-3.5 text-amber-400"
+									/>
+									<span>Database</span>
+								</div>
+								<span
+									class="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
+								></span>
 							</div>
 							<span
-								class="font-mono font-semibold text-foreground"
+								class="font-mono text-xs font-semibold text-foreground"
 							>
-								{statusData?.db
-									? formatBytes(statusData.db.size_bytes)
-									: "—"}
+								PostgreSQL
+							</span>
+							<span class="text-muted-foreground text-[10px]">
+								{statusData?.db?.last_flush_secs_ago !==
+								undefined
+									? `Flushed ${statusData.db.last_flush_secs_ago}s ago`
+									: "Connected"}
 							</span>
 						</div>
 
@@ -505,19 +477,22 @@
 							class="flex flex-col gap-1 rounded-lg border border-border/60 bg-muted/20 p-3"
 						>
 							<div
-								class="flex items-center gap-1.5 text-muted-foreground text-[11px] font-medium"
+								class="flex items-center justify-between text-muted-foreground text-[11px] font-medium"
 							>
-								<CpuIcon class="size-3.5 text-indigo-400" />
-								<span>Process Memory</span>
+								<div class="flex items-center gap-1.5">
+									<CpuIcon class="size-3.5 text-indigo-400" />
+									<span>Process Memory</span>
+								</div>
 							</div>
 							<span
-								class="font-mono font-semibold text-foreground"
+								class="font-mono text-xs font-semibold text-foreground"
 							>
-								{statusData?.resources
-									? formatBytes(
-											statusData.resources.rss_bytes,
-										)
-									: "—"}
+								{rssBytes > 0 ? formatBytes(rssBytes) : "—"}
+							</span>
+							<span class="text-muted-foreground text-[10px]">
+								{vmsBytes > 0
+									? `VMS ${formatBytes(vmsBytes)}`
+									: "RSS Memory"}
 							</span>
 						</div>
 					</div>
