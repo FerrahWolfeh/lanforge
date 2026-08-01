@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -29,38 +30,72 @@ fn main() {
         println!("cargo:warning=Web directory not found at {web_dir_rel}");
     }
 
+    let is_cross_compile = env::var("TARGET").ok() != env::var("HOST").ok()
+        || env::var("CROSS_RUNNER").is_ok()
+        || env::var("LANFORGE_SKIP_WEB_BUILD")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+
     #[cfg(feature = "auto-build")]
     {
         if web_dir.exists() {
-            // Check if pnpm is installed
-            let pnpm_check = Command::new("pnpm").arg("--version").output();
+            if is_cross_compile && index_html.exists() {
+                println!(
+                    "cargo:warning=Cross-compilation detected or web build skipped; using existing web/build assets."
+                );
+            } else {
+                let mut build_success = false;
 
-            match pnpm_check {
-                Ok(output) if output.status.success() => {
+                // Try pnpm first
+                if Command::new("pnpm")
+                    .arg("--version")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
                     println!("cargo:warning=Building WebUI assets with pnpm...");
                     let status = Command::new("pnpm")
                         .args(["--prefix", web_dir_rel, "build"])
                         .status();
 
-                    match status {
-                        Ok(s) if s.success() => {
-                            println!("cargo:warning=WebUI built successfully.");
-                        }
-                        Ok(s) => {
-                            println!("cargo:warning=pnpm build exited with status: {s}");
-                        }
-                        Err(e) => {
-                            println!("cargo:warning=Failed to execute pnpm build: {e}");
-                        }
+                    if matches!(status, Ok(s) if s.success()) {
+                        println!("cargo:warning=WebUI built successfully with pnpm.");
+                        build_success = true;
+                    } else {
+                        println!("cargo:warning=pnpm build failed or returned non-zero status.");
                     }
                 }
-                _ => {
+
+                // Fallback to npm if pnpm was not found or failed
+                if !build_success
+                    && Command::new("npm")
+                        .arg("--version")
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false)
+                {
+                    println!("cargo:warning=Attempting WebUI build with npm...");
+                    let status = Command::new("npm")
+                        .args(["--prefix", web_dir_rel, "run", "build"])
+                        .status();
+
+                    if matches!(status, Ok(s) if s.success()) {
+                        println!("cargo:warning=WebUI built successfully with npm.");
+                        build_success = true;
+                    } else {
+                        println!("cargo:warning=npm build failed or returned non-zero status.");
+                    }
+                }
+
+                if !build_success {
                     if index_html.exists() {
                         println!(
-                            "cargo:warning=pnpm not found in PATH; using existing web/build static assets."
+                            "cargo:warning=WebUI build command failed; falling back to existing web/build assets."
                         );
                     } else {
-                        println!("cargo:warning=pnpm not found in PATH and web/build is missing.");
+                        println!(
+                            "cargo:warning=Could not build WebUI assets and web/build/index.html is missing."
+                        );
                     }
                 }
             }

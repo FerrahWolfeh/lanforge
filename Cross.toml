@@ -2,7 +2,10 @@
 dockerfile = "cross/Dockerfile"
 
 [target.aarch64-unknown-linux-gnu.env]
-passthrough = ["HOST_PKG_CONFIG_LIBDIR=/usr/lib/x86_64-linux-gnu/pkgconfig"]
+passthrough = [
+    "HOST_PKG_CONFIG_LIBDIR=/usr/lib/x86_64-linux-gnu/pkgconfig",
+    "PATH=/usr/local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+]
 
 [build]
 build-std = false
