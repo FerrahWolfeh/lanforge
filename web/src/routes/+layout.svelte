@@ -3,11 +3,9 @@
 	import favicon from "$lib/assets/favicon.svg";
 	import AppSidebar from "$lib/components/AppSidebar.svelte";
 	import Topbar from "$lib/components/Topbar.svelte";
-	import EventFeed from "$lib/components/EventFeed.svelte";
 	import * as Sidebar from "$lib/components/ui/sidebar";
 	import { Toaster } from "$lib/components/ui/sonner";
 	import { ModeWatcher } from "mode-watcher";
-	import { eventFeed } from "$lib/stores/events.svelte";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { status } from "$lib/api/client";
 	import { onMount } from "svelte";
@@ -19,11 +17,6 @@
 	const isLoginPage = $derived($page.url.pathname === "/login");
 
 	onMount(() => {
-		// Start the global SSE feed once mounted (client-side only)
-		if (auth.authenticated) {
-			eventFeed.connect();
-		}
-
 		// Poll daemon uptime every 30s
 		async function pollStatus() {
 			try {
@@ -39,7 +32,6 @@
 			const interval = setInterval(pollStatus, 30_000);
 			return () => {
 				clearInterval(interval);
-				eventFeed.disconnect();
 			};
 		}
 	});
@@ -64,7 +56,6 @@
 			</main>
 		</Sidebar.Inset>
 	</Sidebar.Provider>
-	<EventFeed />
 {/if}
 
 <Toaster richColors />

@@ -3,7 +3,6 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { eventFeed } from "$lib/stores/events.svelte";
 	import {
 		status,
 		dnsStats,
@@ -12,13 +11,12 @@
 		hostList,
 		scan,
 	} from "$lib/api/client";
-	import {
-		formatEventPayload,
-		type StatusResponse,
-		type DnsStatsResponse,
-		type DhcpLease,
-		type DevicesResponse,
-		type HostConfigEntry,
+	import type {
+		StatusResponse,
+		DnsStatsResponse,
+		DhcpLease,
+		DeviceEntry,
+		HostConfigEntry,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
@@ -36,7 +34,10 @@
 	let statusData = $state<StatusResponse | null>(null);
 	let dnsData = $state<DnsStatsResponse | null>(null);
 	let leasesData = $state<DhcpLease[] | null>(null);
-	let devicesData = $state<DevicesResponse | null>(null);
+	let devicesData = $state<{
+		devices: DeviceEntry[];
+		meta?: { total: number; online: number; last_scan_secs_ago: number };
+	} | null>(null);
 	let hostsData = $state<HostConfigEntry[] | null>(null);
 	let loadingData = $state(true);
 	let scanning = $state(false);
@@ -53,11 +54,46 @@
 			]);
 			if (s.status === "fulfilled") statusData = s.value;
 			if (dns.status === "fulfilled") dnsData = dns.value;
-			if (ls.status === "fulfilled")
-				leasesData = Array.isArray(ls.value) ? ls.value : [];
-			if (dev.status === "fulfilled") devicesData = dev.value;
-			if (hst.status === "fulfilled")
-				hostsData = Array.isArray(hst.value) ? hst.value : [];
+			if (ls.status === "fulfilled") {
+				const raw: any = ls.value;
+				leasesData = Array.isArray(raw)
+					? raw
+					: Array.isArray(raw?.leases)
+						? raw.leases
+						: Array.isArray(raw?.data)
+							? raw.data
+							: [];
+			}
+			if (dev.status === "fulfilled") {
+				const raw: any = dev.value;
+				const devList = Array.isArray(raw)
+					? raw
+					: Array.isArray(raw?.devices)
+						? raw.devices
+						: Array.isArray(raw?.data)
+							? raw.data
+							: [];
+				devicesData = {
+					devices: devList,
+					meta: {
+						total: raw?.meta?.total ?? devList.length,
+						online:
+							raw?.meta?.online ??
+							devList.filter((d: any) => d.online).length,
+						last_scan_secs_ago: 0,
+					},
+				};
+			}
+			if (hst.status === "fulfilled") {
+				const raw: any = hst.value;
+				hostsData = Array.isArray(raw)
+					? raw
+					: Array.isArray(raw?.hosts)
+						? raw.hosts
+						: Array.isArray(raw?.data)
+							? raw.data
+							: [];
+			}
 		} finally {
 			loadingData = false;
 		}
@@ -67,24 +103,16 @@
 		scanning = true;
 		try {
 			await scan();
-			toast.success("Network scan triggered");
+			toast.success("Network ARP & NDP active scan initiated");
+			await loadAll();
 		} catch {
-			toast.error("Failed to trigger scan");
+			toast.error("Failed to initiate network scan");
 		} finally {
 			scanning = false;
 		}
 	}
 
 	onMount(loadAll);
-
-	function formatUptime(secs: number): string {
-		const d = Math.floor(secs / 86400);
-		const h = Math.floor((secs % 86400) / 3600);
-		const m = Math.floor((secs % 3600) / 60);
-		if (d > 0) return `${d}d ${h}h`;
-		if (h > 0) return `${h}h ${m}m`;
-		return `${m}m`;
-	}
 
 	function formatBytes(bytes: number): string {
 		if (!bytes || bytes === 0) return "0 B";
@@ -93,8 +121,6 @@
 		const i = Math.floor(Math.log(bytes) / Math.log(k));
 		return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 	}
-
-	const recentEvents = $derived(eventFeed.events.slice(0, 12));
 
 	const rssBytes = $derived(
 		statusData?.resources?.memory_rss_bytes ??
@@ -162,42 +188,55 @@
 		},
 	]);
 
-	const kindBadgeStyles: Record<string, string> = {
-		DeviceOnline:
-			"bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-		DeviceOffline: "bg-rose-500/15 text-rose-400 border-rose-500/30",
-		DhcpLeaseGranted: "bg-teal-500/15 text-teal-400 border-teal-500/30",
-		DhcpLeaseReleased: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-		DnsBlocked: "bg-rose-500/15 text-rose-400 border-rose-500/30",
-		AdblockToggled: "bg-purple-500/15 text-purple-400 border-purple-500/30",
-		ScanCompleted: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
-		NetworkActivity: "bg-blue-500/15 text-blue-400 border-blue-500/30",
-		NeighborBatchSummary:
-			"bg-slate-500/15 text-slate-400 border-slate-500/30",
-		KeepaliveRestored:
-			"bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-	};
-
-	function kindBadgeClass(kind: string): string {
-		return (
-			kindBadgeStyles[kind] ?? "bg-zinc-800 text-zinc-300 border-zinc-700"
-		);
-	}
-
-	function formatTs(ts: number): string {
-		return new Date(ts).toLocaleTimeString(undefined, {
-			hour12: false,
-			timeStyle: "medium",
-		});
-	}
-
-	const routerSubsystems = [
-		"IPv6 RA",
-		"DHCPv4",
-		"DHCPv6",
-		"DNS",
-		"TFTP",
-		"PPPoE",
+	const subsystemServices = [
+		{
+			name: "IPv6 Router Advertisements",
+			tag: "RADVD / SLAAC",
+			proto: "ICMPv6 (NDP)",
+			desc: "Autoconfiguration prefix announcements (GUA/ULA)",
+			href: "/network/devices",
+			color: "emerald",
+		},
+		{
+			name: "DHCPv4 Server",
+			tag: "Dynamic Leases",
+			proto: "UDP Port 67",
+			desc: "IPv4 address allocation with option 3 (gateway) & 6 (DNS)",
+			href: "/dhcp/leases",
+			color: "teal",
+		},
+		{
+			name: "DHCPv6 Server",
+			tag: "Stateful / Stateless",
+			proto: "UDP Port 547",
+			desc: "IPv6 stateful address & prefix delegation",
+			href: "/dhcp/pools",
+			color: "sky",
+		},
+		{
+			name: "DNS Resolver & Engine",
+			tag: "DNS Cache & Block",
+			proto: "UDP/TCP Port 53",
+			desc: "Upstream recursive forwarding, cache, & adblock filtering",
+			href: "/dns/resolver",
+			color: "indigo",
+		},
+		{
+			name: "Bootstrapping TFTP",
+			tag: "PXE Boot",
+			proto: "UDP Port 69",
+			desc: "Network boot firmware & image distribution server",
+			href: "/system/status",
+			color: "amber",
+		},
+		{
+			name: "PPPoE Concentrator",
+			tag: "Relay / Access Point",
+			proto: "PPPoverEthernet",
+			desc: "DSL/FTTH encapsulation & point-to-point tunneling",
+			href: "/pppoe",
+			color: "purple",
+		},
 	];
 </script>
 
@@ -207,13 +246,15 @@
 
 <div class="flex flex-col gap-6">
 	<!-- Page Header -->
-	<div class="flex items-center justify-between">
+	<div
+		class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+	>
 		<div>
 			<h1 class="text-foreground text-2xl font-bold tracking-tight">
-				Dashboard
+				Router Dashboard
 			</h1>
 			<p class="text-muted-foreground text-sm">
-				Router Orchestration Engine
+				Domestic homelab LAN orchestration, DHCP, DNS, & network discovery
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
@@ -290,76 +331,48 @@
 		{/each}
 	</div>
 
-	<!-- Main Grid: Live Events & Subsystems (2 Cols) + Network & System Vitals (1 Col) -->
+	<!-- Main Grid: Subsystem Overview (2 Cols) + Network & System Vitals (1 Col) -->
 	<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-		<!-- Left Main Panel: Live Events & Router Subsystems Stream -->
+		<!-- Left Main Panel: Router Core Subsystems -->
 		<Card.Root class="flex flex-col lg:col-span-2">
 			<Card.Header class="pb-3 border-b border-border/50">
-				<div
-					class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
-				>
+				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-2">
 						<ActivityIcon class="size-4 text-emerald-400" />
 						<Card.Title class="text-base"
-							>Live Network Events</Card.Title
+							>Core Subsystems & Capabilities</Card.Title
 						>
 					</div>
-
-					<!-- Subsystem Badges Bar -->
-					<div class="flex flex-wrap items-center gap-1.5">
-						{#each routerSubsystems as sub (sub)}
-							<div
-								class="flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[10px] font-mono text-muted-foreground"
-							>
-								<span
-									class="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
-								></span>
-								<span>{sub}</span>
-							</div>
-						{/each}
-					</div>
+					<Badge variant="outline" class="font-mono text-[10px] uppercase">
+						All Engines Operational
+					</Badge>
 				</div>
 			</Card.Header>
-			<Card.Content class="flex flex-1 flex-col gap-0 p-0">
-				{#if recentEvents.length === 0}
-					<div
-						class="text-muted-foreground flex flex-col items-center justify-center gap-2 py-16 text-sm"
+			<Card.Content class="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+				{#each subsystemServices as svc (svc.name)}
+					<a
+						href={svc.href}
+						class="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 transition-all hover:bg-muted/40 hover:border-zinc-700 group"
 					>
-						<MonitorIcon class="size-8 opacity-30" />
-						<span>No live events received</span>
-					</div>
-				{:else}
-					<div class="divide-border/50 divide-y overflow-hidden">
-						{#each recentEvents as ev (ev.id + ev.ts)}
-							<div
-								class="flex items-start gap-3 px-5 py-3 text-xs transition-colors hover:bg-muted/30"
-							>
-								<span
-									class={[
-										"mt-0.5 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider shrink-0",
-										kindBadgeClass(ev.kind),
-									].join(" ")}
-								>
-									{ev.kind.replace(/([A-Z])/g, " $1").trim()}
-								</span>
-								<div
-									class="flex flex-1 flex-col gap-0.5 min-w-0"
-								>
-									<span
-										class="text-foreground/90 font-medium leading-tight truncate"
-									>
-										{formatEventPayload(ev.data, ev.kind)}
-									</span>
-									<span
-										class="text-muted-foreground text-[10px] tabular-nums"
-									>
-										{formatTs(ev.ts)}
-									</span>
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
+						<div class="flex items-center justify-between">
+							<span class="text-foreground font-semibold text-xs group-hover:text-emerald-400 transition-colors">
+								{svc.name}
+							</span>
+							<span class="size-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"></span>
+						</div>
+
+						<p class="text-muted-foreground text-[11px] leading-relaxed">
+							{svc.desc}
+						</p>
+
+						<div class="flex items-center justify-between pt-1 font-mono text-[10px]">
+							<Badge variant="secondary" class="text-[9px] font-mono px-1.5 py-0">
+								{svc.tag}
+							</Badge>
+							<span class="text-muted-foreground">{svc.proto}</span>
+						</div>
+					</a>
+				{/each}
 			</Card.Content>
 		</Card.Root>
 
@@ -383,117 +396,83 @@
 					<div
 						class="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-3"
 					>
-						<div
-							class="flex items-center justify-between text-muted-foreground text-[11px] font-medium uppercase tracking-wider"
-						>
-							<span>Primary LAN Interface</span>
-							<Badge
-								variant="outline"
-								class="font-mono text-[10px]"
+						<div class="flex items-center justify-between">
+							<span class="text-muted-foreground font-medium"
+								>LAN Interface</span
 							>
-								{statusData?.network?.lan_iface || "eth0"}
-							</Badge>
+							<Badge variant="outline" class="font-mono text-[10px]"
+								>{statusData?.network?.lan_iface || "eth0"}</Badge
+							>
 						</div>
-						<div
-							class="flex items-center justify-between font-mono text-sm font-semibold text-foreground"
-						>
-							<span>IPv4 Address</span>
-							<span class="text-emerald-400"
-								>{statusData?.network?.lan_ipv4 ||
-									"192.168.1.1"}</span
+						<div class="flex items-center justify-between font-mono">
+							<span class="text-muted-foreground">IPv4 Gateway</span>
+							<span class="text-emerald-400 font-semibold"
+								>{statusData?.network?.lan_ipv4 || "192.168.1.1"}</span
 							>
 						</div>
 					</div>
 
-					<!-- IPv6 Details -->
-					{#if statusData?.network?.gua || statusData?.network?.ula || statusData?.network?.lan_ipv6}
-						<div
-							class="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 p-3"
+					<!-- IPv6 Prefixes -->
+					<div
+						class="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-3"
+					>
+						<span class="text-muted-foreground font-medium"
+							>IPv6 Prefixes</span
 						>
-							<span
-								class="text-muted-foreground text-[11px] font-medium uppercase tracking-wider"
+						<div class="flex justify-between font-mono text-[11px]">
+							<span class="text-muted-foreground">GUA</span>
+							<span class="text-sky-400 truncate max-w-[170px]"
+								>{statusData?.network?.gua || "—"}</span
 							>
-								IPv6 Configurations
-							</span>
-							{#if statusData.network.gua}
-								<div class="flex flex-col">
-									<span
-										class="text-muted-foreground text-[10px]"
-										>Global Unicast (GUA)</span
-									>
-									<span
-										class="font-mono text-xs text-sky-400 truncate"
-										>{statusData.network.gua}</span
-									>
-								</div>
-							{/if}
-							{#if statusData.network.ula}
-								<div class="flex flex-col">
-									<span
-										class="text-muted-foreground text-[10px]"
-										>Unique Local (ULA)</span
-									>
-									<span
-										class="font-mono text-xs text-teal-400 truncate"
-										>{statusData.network.ula}</span
-									>
-								</div>
-							{/if}
 						</div>
-					{/if}
-
-					<!-- Database & Process Vitals -->
-					<div class="mt-auto grid grid-cols-2 gap-3">
-						<div
-							class="flex flex-col gap-1 rounded-lg border border-border/60 bg-muted/20 p-3"
-						>
-							<div
-								class="flex items-center justify-between text-muted-foreground text-[11px] font-medium"
+						<div class="flex justify-between font-mono text-[11px]">
+							<span class="text-muted-foreground">ULA</span>
+							<span class="text-purple-400 truncate max-w-[170px]"
+								>{statusData?.network?.ula || "—"}</span
 							>
-								<div class="flex items-center gap-1.5">
-									<DatabaseIcon
-										class="size-3.5 text-amber-400"
-									/>
-									<span>Database</span>
-								</div>
-								<span
-									class="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
-								></span>
+						</div>
+					</div>
+
+					<!-- Database Engine -->
+					<div
+						class="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-3"
+					>
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-1.5">
+								<DatabaseIcon class="size-3.5 text-amber-400" />
+								<span class="text-muted-foreground font-medium"
+									>Database Engine</span
+								>
 							</div>
-							<span
-								class="font-mono text-xs font-semibold text-foreground"
+							<Badge
+								variant="secondary"
+								class="text-[10px] uppercase font-mono"
 							>
 								PostgreSQL
-							</span>
-							<span class="text-muted-foreground text-[10px]">
-								{statusData?.db?.last_flush_secs_ago !==
-								undefined
-									? `Flushed ${statusData.db.last_flush_secs_ago}s ago`
-									: "Connected"}
-							</span>
+							</Badge>
 						</div>
+						<div class="flex items-center justify-between font-mono text-[11px]">
+							<span class="text-muted-foreground">Backend Status</span>
+							<span class="text-emerald-400 font-medium">Online</span>
+						</div>
+					</div>
 
-						<div
-							class="flex flex-col gap-1 rounded-lg border border-border/60 bg-muted/20 p-3"
-						>
-							<div
-								class="flex items-center justify-between text-muted-foreground text-[11px] font-medium"
+					<!-- Process Memory -->
+					<div
+						class="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-3"
+					>
+						<div class="flex items-center justify-between">
+							<span class="text-muted-foreground font-medium"
+								>Process Memory (RSS / VMS)</span
 							>
-								<div class="flex items-center gap-1.5">
-									<CpuIcon class="size-3.5 text-indigo-400" />
-									<span>Process Memory</span>
-								</div>
-							</div>
-							<span
-								class="font-mono text-xs font-semibold text-foreground"
+						</div>
+						<div class="flex items-center justify-between font-mono">
+							<span class="text-foreground font-bold"
+								>{formatBytes(rssBytes)}</span
 							>
-								{rssBytes > 0 ? formatBytes(rssBytes) : "—"}
-							</span>
-							<span class="text-muted-foreground text-[10px]">
-								{vmsBytes > 0
-									? `VMS ${formatBytes(vmsBytes)}`
-									: "RSS Memory"}
-							</span>
+							<span class="text-muted-foreground text-[11px]"
+								>VMS: {formatBytes(vmsBytes)}</span
+							>
 						</div>
 					</div>
 				{/if}

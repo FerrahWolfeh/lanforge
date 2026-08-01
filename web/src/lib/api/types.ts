@@ -341,8 +341,10 @@ export interface DevicesResponse {
 export interface HostConfigEntry {
 	mac: string;
 	hostname: string | null;
-	v4: string | null;
-	v6_suffix: string | null;
+	v4?: string | null;
+	v4_fixed?: string | null;
+	v6_suffix?: string | null;
+	origin?: string;
 }
 
 // ---------------------------------------------------------------------------

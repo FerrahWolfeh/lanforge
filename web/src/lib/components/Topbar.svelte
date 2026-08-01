@@ -4,7 +4,6 @@
 	import { Button } from "$lib/components/ui/button";
 	import * as Tooltip from "$lib/components/ui/tooltip";
 	import { auth } from "$lib/stores/auth.svelte";
-	import { eventFeed } from "$lib/stores/events.svelte";
 	import { goto } from "$app/navigation";
 	import SunIcon from "@lucide/svelte/icons/sun";
 	import MoonIcon from "@lucide/svelte/icons/moon";
@@ -14,7 +13,7 @@
 
 	let { uptime = $bindable(0) }: { uptime?: number } = $props();
 
-	const isDark = $derived(mode.current === 'dark');
+	const isDark = $derived(mode.current === "dark");
 
 	function formatUptime(secs: number): string {
 		if (secs < 60) return `${secs}s`;
@@ -39,7 +38,7 @@
 	<!-- Separator -->
 	<div class="bg-border h-5 w-px" aria-hidden="true"></div>
 
-	<!-- SSE connection indicator -->
+	<!-- Daemon Status Indicator -->
 	<Tooltip.Provider>
 		<Tooltip.Root>
 			<Tooltip.Trigger>
@@ -47,21 +46,21 @@
 					<span
 						class={[
 							"size-2 rounded-full",
-							eventFeed.connected
-								? "bg-green-500 shadow-[0_0_6px_theme(colors.green.500)]"
-								: "bg-muted-foreground",
+							uptime > 0
+								? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
+								: "bg-zinc-600",
 						].join(" ")}
 					></span>
 					<span class="text-muted-foreground hidden text-xs sm:block">
-						{eventFeed.connected ? "Live" : "Offline"}
+						{uptime > 0 ? "Live" : "Offline"}
 					</span>
 				</div>
 			</Tooltip.Trigger>
 			<Tooltip.Content>
 				<p class="text-xs">
-					{eventFeed.connected
-						? "Event stream connected"
-						: "Event stream disconnected"}
+					{uptime > 0
+						? "Daemon active & connected"
+						: "Daemon offline"}
 				</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
@@ -74,68 +73,42 @@
 		</span>
 	{/if}
 
-	<!-- Spacer -->
-	<div class="flex-1"></div>
-
-	<!-- Theme toggle -->
-	<Tooltip.Provider>
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				<Button
-					variant="ghost"
-					size="icon"
-					onclick={toggleMode}
-					class="size-8"
-				>
-					{#if isDark}
-						<SunIcon />
-					{:else}
-						<MoonIcon />
-					{/if}
-				</Button>
-			</Tooltip.Trigger>
-			<Tooltip.Content>
-				<p class="text-xs">Toggle theme</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
-	</Tooltip.Provider>
-
-	<!-- Auth indicator -->
-	{#if auth.authenticated}
-		<div class="flex items-center gap-2">
-			<div class="hidden flex-col items-end sm:flex">
-				<span class="text-foreground text-sm font-medium"
-					>{auth.user?.username ?? "—"}</span
-				>
-				<Badge
-					variant="secondary"
-					class="h-4 px-1.5 py-0 text-[10px] capitalize"
-				>
-					{auth.user?.role ?? "…"}
-				</Badge>
-			</div>
-			<Tooltip.Provider>
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Button
-							variant="ghost"
-							size="icon"
-							onclick={handleLogout}
-							class="size-8"
-						>
-							<LogOutIcon />
-						</Button>
-					</Tooltip.Trigger>
-					<Tooltip.Content>
-						<p class="text-xs">Sign out</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			</Tooltip.Provider>
-		</div>
-	{:else}
-		<Button variant="ghost" size="sm" href="/login">
-			<UserIcon data-icon="inline-start" />
-			Sign in
+	<!-- Right utilities -->
+	<div class="ml-auto flex items-center gap-2">
+		<!-- Dark mode toggle -->
+		<Button variant="ghost" size="icon" onclick={toggleMode}>
+			{#if isDark}
+				<SunIcon class="size-4" />
+			{:else}
+				<MoonIcon class="size-4" />
+			{/if}
+			<span class="sr-only">Toggle theme</span>
 		</Button>
-	{/if}
+
+		<!-- User badge / logout dropdown placeholder -->
+		<div class="flex items-center gap-2 pl-2">
+			<div
+				class="bg-primary/10 flex size-7 items-center justify-center rounded-full"
+			>
+				<UserIcon class="text-primary size-4" />
+			</div>
+			<div class="hidden flex-col sm:flex">
+				<span class="text-xs font-semibold leading-tight"
+					>{auth.user?.username ?? "ferrahwolfeh"}</span
+				>
+				<span class="text-muted-foreground text-[10px] uppercase"
+					>{auth.user?.role ?? "Admin"}</span
+				>
+			</div>
+
+			<Button
+				variant="ghost"
+				size="icon"
+				onclick={handleLogout}
+				title="Log out"
+			>
+				<LogOutIcon class="size-4" />
+			</Button>
+		</div>
+	</div>
 </header>

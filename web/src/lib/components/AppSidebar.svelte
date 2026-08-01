@@ -28,7 +28,7 @@
 		{
 			label: "Network",
 			items: [
-				{ label: "Devices", href: "/network", icon: MonitorIcon },
+				{ label: "Devices", href: "/network/devices", icon: MonitorIcon },
 				{
 					label: "Static Hosts",
 					href: "/network/hosts",
