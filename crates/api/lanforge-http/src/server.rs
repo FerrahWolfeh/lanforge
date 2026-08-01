@@ -389,31 +389,13 @@ async fn handle_dns_query(
 }
 
 #[cfg(feature = "webui")]
-#[derive(rust_embed::RustEmbed)]
-#[folder = "../../../web/build"]
-struct WebUiAssets;
-
-#[cfg(feature = "webui")]
 async fn handle_embedded_webui(uri: axum::http::Uri) -> impl IntoResponse {
-    let path = uri.path().trim_start_matches('/');
-    let path = if path.is_empty() { "index.html" } else { path };
-
-    match WebUiAssets::get(path) {
-        Some(content) => {
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            (
-                [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
-                content.data,
-            )
-                .into_response()
-        }
-        None => match WebUiAssets::get("index.html") {
-            Some(content) => (
-                [(axum::http::header::CONTENT_TYPE, "text/html")],
-                content.data,
-            )
-                .into_response(),
-            None => (StatusCode::NOT_FOUND, "WebUI index.html not found").into_response(),
-        },
+    match lanforge_webui::WebUiAssets::get_file_or_fallback(uri.path()) {
+        Some((mime, content)) => (
+            [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
+            content.data,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "WebUI index.html not found").into_response(),
     }
 }

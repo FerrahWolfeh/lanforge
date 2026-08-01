@@ -49,8 +49,7 @@ url = { version = "2.5.4", optional = true }
 async-trait = { version = "0.1.86", optional = true }
 base64 = { version = "0.23.0", optional = true }
 async-stream = { version = "0.3.6", optional = true }
-rust-embed = { version = "8.5.0", optional = true }
-mime_guess = { version = "2.0.5", optional = true }
+lanforge-webui = { workspace = true, optional = true }
 
 [features]
 default = ["server", "client"]
@@ -77,7 +76,7 @@ server = [
 ]
 client = ["dep:reqwest", "dep:url"]
 doh = ["server", "dep:base64"]
-webui = ["server", "dep:rust-embed", "dep:mime_guess"]
+webui = ["server", "dep:lanforge-webui"]
 adblock = [
     "lanforge-api-dispatch/adblock",
     "lanforge-db/adblock",
