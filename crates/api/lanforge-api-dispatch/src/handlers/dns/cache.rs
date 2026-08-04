@@ -3,7 +3,7 @@ use lanforge_api::api::{
     DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, Response, SimpleSuccess,
 };
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+use lanforge_types::network::dns::{DnsRecordType, DnsRequest, DnsResponse};
 
 impl ClientContext {
     pub async fn handle_dns_cache_flush(&self) -> Response {
@@ -20,10 +20,17 @@ impl ClientContext {
         &self,
         limit: Option<usize>,
         offset: Option<usize>,
+        q: Option<String>,
+        kind: Option<DnsRecordType>,
     ) -> Response {
         if let Some(handle) = self.ctx.dns_handle()
             && let Ok(DnsResponse::CacheDump(res)) = handle
-                .send_request(DnsRequest::CacheDump { limit, offset })
+                .send_request(DnsRequest::CacheDump {
+                    limit,
+                    offset,
+                    q,
+                    kind,
+                })
                 .await
         {
             return Response::DnsCache(DnsCacheResponse {

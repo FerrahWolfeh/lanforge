@@ -57,7 +57,6 @@ impl TimedEvent {
                 | NetworkEvent::InterfaceUpdated { .. }
                 | NetworkEvent::WolTriggered { .. }
                 | NetworkEvent::RsReceived { .. }
-
                 | NetworkEvent::LeaseRenewRequested { .. }
                 | NetworkEvent::LeaseReleaseRequested { .. } => true,
             },

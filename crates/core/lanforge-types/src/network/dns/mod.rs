@@ -617,6 +617,10 @@ pub enum DnsRequest {
     CacheDump {
         limit: Option<usize>,
         offset: Option<usize>,
+        #[serde(default)]
+        q: Option<String>,
+        #[serde(default)]
+        kind: Option<DnsRecordType>,
     },
     CacheStatsExt,
     Upstreams,

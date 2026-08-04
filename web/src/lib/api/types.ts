@@ -461,17 +461,22 @@ export interface ReverseResolverEntry {
 
 export interface DnsCacheEntry {
 	name: string;
-	rtype: DnsRecordType;
-	value: string;
-	ttl_secs: number;
+	kind: DnsRecordType;
+	data: string;
+	expires_in_secs: number;
 }
 
-export interface DnsCacheStatsResponse {
-	entries: number;
+export interface DnsCacheStatsExtResponse {
+	total_entries: number;
+	entries_by_type: Record<DnsRecordType, number>;
+	memory_usage_bytes: number;
+	average_ttl_secs: number;
+	min_ttl: number;
+	evictions: number;
 	capacity: number;
-	hit_rate_pct: number;
-	memory_bytes: number;
 }
+
+export type DnsCacheStatsResponse = DnsCacheStatsExtResponse;
 
 // ---------------------------------------------------------------------------
 // DNS — adblock

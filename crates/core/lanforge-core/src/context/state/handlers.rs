@@ -248,7 +248,9 @@ impl State {
                     name: sanitized.clone(),
                     origin: HostnameOrigin::Static,
                 };
-                result = AdminChange::HostnameChanged { hostname: sanitized };
+                result = AdminChange::HostnameChanged {
+                    hostname: sanitized,
+                };
             }
             if let FieldUpdate::Set(d) = update.duid {
                 dev.duid = Some(d);
@@ -746,4 +748,3 @@ impl State {
         EventVec::new()
     }
 }
-

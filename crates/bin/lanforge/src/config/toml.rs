@@ -9,12 +9,12 @@ use lanforge_discovery::{mdns::MdnsConfig, ndp::config::MonitorConfig};
 use lanforge_dns::config::DnsConfig;
 #[cfg(feature = "http")]
 use lanforge_http::config::HttpConfig;
+#[cfg(feature = "pppoe")]
+use lanforge_pppoe::config::PppoeConfig;
 #[cfg(feature = "ra")]
 use lanforge_ra::RaServiceConfig;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::config::TftpConfig;
-#[cfg(feature = "pppoe")]
-use lanforge_pppoe::config::PppoeConfig;
 #[cfg(feature = "uds")]
 use lanforge_uds::config::ApiConfig;
 use serde::{Deserialize, Serialize};

@@ -143,7 +143,7 @@ classDiagram
 | `dns_query` | `name: String`, `record_type: Option<String>` | `DnsQueryResponse` | Diagnostic DNS lookup through the resolver. Supports automatic PTR reverse lookup formatting when an IP address is provided. |
 | `dns_query_log` | `follow: bool`, `n: Option<usize>`, `client: Option<String>`, `offset: Option<usize>` | `HybridStream<DnsQueryLogEntry>` | **HybridStream.** DNS query history with optional client IP filter and pagination. |
 | `dns_upstreams` | None | `Vec<DnsUpstreamEntry>` | Health and performance stats for all configured upstream resolvers. |
-| `dns_cache_dump` | `limit: Option<usize>`, `offset: Option<usize>` | `DnsCacheResponse` | Dumps the current contents of the DNS cache with optional pagination. |
+| `dns_cache_dump` | `limit: Option<usize>`, `offset: Option<usize>`, `q: Option<String>`, `kind: Option<DnsRecordType>` | `DnsCacheResponse` | Dumps the current contents of the DNS cache with optional search filter and pagination. |
 | `dns_cache_flush` | None | `SimpleSuccess` | Clears the DNS cache. |
 | `dns_cache_stats_ext` | None | `DnsCacheStatsResponse` | In-depth cache statistics and memory usage. |
 | `dns_adblock_status` | None | `DnsAdblockStatusResponse` | Current adblocker state, list sizes, and active timer if any. |

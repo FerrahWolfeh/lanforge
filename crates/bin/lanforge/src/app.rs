@@ -26,12 +26,12 @@ use lanforge_dns::server::transport::dot::DotService;
 use lanforge_host::ifmon::AddressMonitor;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
+#[cfg(feature = "pppoe")]
+use lanforge_pppoe::PppoeService;
 #[cfg(feature = "ra")]
 use lanforge_ra::RaService;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::TftpService;
-#[cfg(feature = "pppoe")]
-use lanforge_pppoe::PppoeService;
 #[cfg(feature = "uds")]
 use lanforge_uds::server::ControlService;
 

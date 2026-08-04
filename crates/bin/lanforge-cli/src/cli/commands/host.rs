@@ -137,7 +137,9 @@ async fn execute_add(
         mac: final_mac.parse::<MacAddr>().map_err(|e| eyre!("{e}"))?,
         hostname: final_hostname,
         v4_fixed: final_v4.map(|s| s.parse::<Ipv4Addr>()).transpose()?,
-        v6_suffix: final_v6.map(|s| s.parse::<Ipv6AddrOrSuffix>().map_err(|e| eyre!("{e}"))).transpose()?,
+        v6_suffix: final_v6
+            .map(|s| s.parse::<Ipv6AddrOrSuffix>().map_err(|e| eyre!("{e}")))
+            .transpose()?,
         origin: Origin::Static,
     };
     let resp = client.host_add(entry).await?;

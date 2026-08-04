@@ -712,7 +712,8 @@ pub fn pg_enum_derive(input: TokenStream) -> TokenStream {
         }
     }
 
-    let pg_name = pg_name.expect("PgEnum requires a 'name' attribute (e.g., #[pg_enum(name = \"device_origin\")])");
+    let pg_name = pg_name
+        .expect("PgEnum requires a 'name' attribute (e.g., #[pg_enum(name = \"device_origin\")])");
 
     let mut encode_arms = Vec::new();
     let mut decode_arms = Vec::new();
@@ -784,19 +785,21 @@ fn extract_rpc_return_type(ty: &syn::Type) -> (bool, syn::Type, Option<syn::Type
         for bound in &impl_trait.bounds {
             if let syn::TypeParamBound::Trait(trait_bound) = bound
                 && let Some(last_seg) = trait_bound.path.segments.last()
-                    && last_seg.ident == "Future"
-                        && let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments {
-                            for arg in &args.args {
-                                if let syn::GenericArgument::AssocType(assoc_type) = arg
-                                    && assoc_type.ident == "Output" {
-                                        if let Some((inner, err)) = try_extract_result(&assoc_type.ty) {
-                                            return (true, inner, Some(err));
-                                        } else {
-                                            return (false, assoc_type.ty.clone(), None);
-                                        }
-                                    }
-                            }
+                && last_seg.ident == "Future"
+                && let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments
+            {
+                for arg in &args.args {
+                    if let syn::GenericArgument::AssocType(assoc_type) = arg
+                        && assoc_type.ident == "Output"
+                    {
+                        if let Some((inner, err)) = try_extract_result(&assoc_type.ty) {
+                            return (true, inner, Some(err));
+                        } else {
+                            return (false, assoc_type.ty.clone(), None);
                         }
+                    }
+                }
+            }
         }
     }
 
@@ -806,20 +809,23 @@ fn extract_rpc_return_type(ty: &syn::Type) -> (bool, syn::Type, Option<syn::Type
 fn try_extract_result(ty: &syn::Type) -> Option<(syn::Type, syn::Type)> {
     if let syn::Type::Path(type_path) = ty
         && let Some(last_seg) = type_path.path.segments.last()
-            && last_seg.ident == "Result"
-                && let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments {
-                    if args.args.len() >= 2 {
-                        let first = args.args.first()?;
-                        let second = args.args.iter().nth(1)?;
-                        if let (syn::GenericArgument::Type(inner), syn::GenericArgument::Type(err)) = (first, second) {
-                            return Some((inner.clone(), err.clone()));
-                        }
-                    } else if args.args.len() == 1 {
-                        let first = args.args.first()?;
-                        if let syn::GenericArgument::Type(inner) = first {
-                            return Some((inner.clone(), syn::parse_quote! { String }));
-                        }
-                    }
-                }
+        && last_seg.ident == "Result"
+        && let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments
+    {
+        if args.args.len() >= 2 {
+            let first = args.args.first()?;
+            let second = args.args.iter().nth(1)?;
+            if let (syn::GenericArgument::Type(inner), syn::GenericArgument::Type(err)) =
+                (first, second)
+            {
+                return Some((inner.clone(), err.clone()));
+            }
+        } else if args.args.len() == 1 {
+            let first = args.args.first()?;
+            if let syn::GenericArgument::Type(inner) = first {
+                return Some((inner.clone(), syn::parse_quote! { String }));
+            }
+        }
+    }
     None
 }

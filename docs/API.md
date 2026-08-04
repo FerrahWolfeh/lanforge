@@ -90,7 +90,7 @@ Endpoints that follow this pattern are marked **HybridStream**.
 | Method | Description | Input | Output |
 | :--- | :--- | :--- | :--- |
 | `dns_cache_flush` | Clears all entries from the DNS cache. | No | Empty on success, error on failure |
-| `dns_cache_dump` | Lists all current entries in the DNS cache. | Optional: `limit`, `offset` | List of DNS cache entry api types |
+| `dns_cache_dump` | Lists all current entries in the DNS cache with optional search and type filtering. | Optional: `limit`, `offset`, `q` (search query), `kind` (record type) | List of DNS cache entry api types |
 | `dns_cache_stats_ext` | Returns in-depth cache statistics and memory usage. | No | DNS cache stats api type |
 
 ---

@@ -717,6 +717,8 @@ impl LanforgeClient {
         &self,
         limit: Option<usize>,
         offset: Option<usize>,
+        query: Option<String>,
+        kind: Option<DnsRecordType>,
     ) -> Result<DnsCacheResponse> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
@@ -727,6 +729,12 @@ impl LanforgeClient {
             if let Some(o) = offset {
                 params.push(format!("offset={o}"));
             }
+            if let Some(ref q) = query {
+                params.push(format!("q={q}"));
+            }
+            if let Some(k) = kind {
+                params.push(format!("kind={k}"));
+            }
             let q = if params.is_empty() {
                 String::new()
             } else {
@@ -735,7 +743,7 @@ impl LanforgeClient {
             return self.http_get(&format!("/dns/cache{q}")).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_cache_dump(limit, offset)
+        rpc.dns_cache_dump(limit, offset, query, kind)
             .await
             .map_err(|e| eyre!("RPC Error: {e}"))
     }

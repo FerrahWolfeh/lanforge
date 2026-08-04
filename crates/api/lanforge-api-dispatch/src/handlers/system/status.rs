@@ -70,8 +70,6 @@ impl ClientContext {
         Response::PppoeStatus(Box::new(status))
     }
 
-
-
     #[must_use]
     pub fn gather_db_status(&self) -> DbStatus {
         let status = self.ctx.get_status().unwrap_or_default();

@@ -26,7 +26,6 @@ pub fn router() -> Router<AppState> {
         .route("/status", get(handle_status))
         .route("/service_banners", get(handle_service_banners))
         .route("/service/{id}/control", post(handle_service_control))
-
         .route("/reload", post(handle_reload))
         .route("/shutdown", post(handle_shutdown))
         .route("/context", get(handle_context_dump))
@@ -47,8 +46,6 @@ async fn handle_service_banners(State(state): State<AppState>) -> impl IntoRespo
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_service_banners().await, ServiceBanners)
 }
-
-
 
 async fn handle_reload(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);

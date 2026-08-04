@@ -233,7 +233,7 @@ When `follow=true`: upgrades to SSE. Server emits `limit` historical entries (ol
 
 | Method | Path | RPC | Description |
 |:-------|:-----|:----|:-----------|
-| `GET` | `/api/v1/dns/cache` | `dns_cache_dump` | **Paginated.** Current cache entries |
+| `GET` | `/api/v1/dns/cache` | `dns_cache_dump` | **Paginated.** Current cache entries. Query params: `limit`, `offset`, `q` (search), `kind` (record type) |
 | `DELETE` | `/api/v1/dns/cache` | `dns_cache_flush` | Clear the DNS cache |
 | `GET` | `/api/v1/dns/cache/stats` | `dns_cache_stats_ext` | In-depth cache stats and memory usage |
 

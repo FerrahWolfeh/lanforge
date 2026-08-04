@@ -99,6 +99,8 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
         .send_request(DnsRequest::CacheDump {
             limit: None,
             offset: None,
+            q: None,
+            kind: None,
         })
         .await
         .unwrap();
@@ -124,6 +126,8 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
         .send_request(DnsRequest::CacheDump {
             limit: None,
             offset: None,
+            q: None,
+            kind: None,
         })
         .await
         .unwrap();
@@ -149,6 +153,8 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
         .send_request(DnsRequest::CacheDump {
             limit: None,
             offset: None,
+            q: None,
+            kind: None,
         })
         .await
         .unwrap();
@@ -164,6 +170,8 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
         .send_request(DnsRequest::CacheDump {
             limit: None,
             offset: None,
+            q: None,
+            kind: None,
         })
         .await
         .unwrap();

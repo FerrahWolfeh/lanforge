@@ -79,7 +79,6 @@ fn format_pppoe_event(now: &str, event: &PppoeEvent, _ascii: bool) {
     }
 }
 
-
 fn format_device_event(now: &str, event: &DeviceEvent, verbose: bool, _ascii: bool) {
     match event {
         DeviceEvent::Discovered { mac, hostname } => {

@@ -46,10 +46,7 @@ impl ClientContext {
 
         Response::Devices(DevicesResponse {
             devices: paginated,
-            meta: DevicesMeta {
-                total,
-                online,
-            },
+            meta: DevicesMeta { total, online },
         })
     }
 

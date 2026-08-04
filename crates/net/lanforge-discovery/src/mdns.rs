@@ -250,7 +250,6 @@ fn handle_command(cmd: &MdnsCommand, socket_v4: &UdpSocket, socket_v6: &UdpSocke
     }
 }
 
-
 fn setup_multicast_socket_v4() -> Result<UdpSocket, NetworkError> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))

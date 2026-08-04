@@ -248,7 +248,7 @@ impl Execute for DnsCacheArgs {
             DnsCacheAction::Dump { limit, offset } => {
                 render_output!(
                     client,
-                    client.dns_cache_dump(limit, offset).await?,
+                    client.dns_cache_dump(limit, offset, None, None).await?,
                     render_dns_cache
                 )
             }

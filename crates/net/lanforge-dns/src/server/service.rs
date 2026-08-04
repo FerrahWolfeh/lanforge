@@ -383,12 +383,29 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
         DnsRequest::UpstreamRemove { .. } => {
             DnsResponse::UpstreamRemove(Err("Mutations handled via context/api dispatcher".into()))
         }
-        DnsRequest::CacheDump { limit, offset } => {
+        DnsRequest::CacheDump {
+            limit,
+            offset,
+            q,
+            kind,
+        } => {
+            let q_lower = q.as_deref().map(|s| s.to_lowercase());
             let mut entries = Vec::new();
-            for (name, kind, data, expires_in_secs) in dns_ctx.cache.dump() {
+            for (name, k, data, expires_in_secs) in dns_ctx.cache.dump() {
+                if let Some(target_kind) = kind
+                    && k != target_kind
+                {
+                    continue;
+                }
+                if let Some(query) = &q_lower
+                    && !name.to_lowercase().contains(query)
+                    && !data.to_lowercase().contains(query)
+                {
+                    continue;
+                }
                 entries.push(DnsCacheEntry {
                     name,
-                    kind,
+                    kind: k,
                     data,
                     expires_in_secs,
                 });

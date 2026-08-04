@@ -75,7 +75,6 @@ impl UpstreamStrategy {
         *self.fallback_upstreams.write() = fallbacks;
     }
 
-
     /// Flat iterator of all upstreams.
     pub fn all_upstreams(&self) -> impl Iterator<Item = Arc<UpstreamManager>> {
         let tiers = self.tiers.read().clone();
@@ -188,7 +187,6 @@ impl UpstreamStrategy {
         }
         Err(last_err)
     }
-
 
     async fn resolve_tier(
         &self,

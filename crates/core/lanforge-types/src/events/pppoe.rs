@@ -31,4 +31,3 @@ pub enum PppoeEvent {
     },
     KeepaliveRestored,
 }
-

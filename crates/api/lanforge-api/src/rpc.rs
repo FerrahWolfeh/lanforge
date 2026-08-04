@@ -132,6 +132,8 @@ pub trait LanforgeRpc {
         &self,
         limit: Option<usize>,
         offset: Option<usize>,
+        q: Option<String>,
+        kind: Option<DnsRecordType>,
     ) -> impl Future<Output = Result<DnsCacheResponse, RpcCallError>> + Send;
     fn dns_cache_stats_ext(
         &self,

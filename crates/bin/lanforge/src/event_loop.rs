@@ -168,7 +168,6 @@ fn handle_bus_event<S: BuildHasher>(
             info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
             l_ctx.state.current_gua = gua;
             l_ctx.state.current_ula = ula;
-
         }
         LanforgeEvent::System(SystemEvent::ReloadConfig) => {
             info!("ReloadConfig: Initiating soft-reboot...");

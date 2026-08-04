@@ -11,5 +11,6 @@ pub use transient::{TransientHost, TransientOrigin};
 
 // Re-exports for backward compatibility
 pub use crate::network::{
-    Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, Ipv6Suffix, classify_ip, classify_ipv6,
+    Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, Ipv6Suffix, classify_ip,
+    classify_ipv6,
 };

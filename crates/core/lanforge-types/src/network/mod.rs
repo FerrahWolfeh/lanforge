@@ -1,9 +1,9 @@
 pub mod dhcp;
 pub mod dns;
-pub mod pppoe;
 mod hostname;
 mod ip;
 mod neighbor;
+pub mod pppoe;
 pub mod ra;
 pub mod subnet;
 

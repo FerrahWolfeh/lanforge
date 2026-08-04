@@ -8,7 +8,6 @@ use lanforge_types::system::ServiceAction;
 #[derive(Debug, Clone)]
 pub enum PendingAction {
     // System
-
     Reload,
     Shutdown,
     DnsCacheFlush,
@@ -105,7 +104,6 @@ impl PendingAction {
     #[must_use]
     pub const fn title(&self) -> &'static str {
         match self {
-
             Self::Reload => "Reload Daemon",
             Self::Shutdown => "Shutdown Daemon",
             Self::DnsCacheFlush => "Flush DNS Cache",
@@ -139,33 +137,80 @@ impl PendingAction {
     #[must_use]
     pub fn description(&self) -> String {
         match self {
-
             Self::Reload => "Reload configuration files and restart local services.".to_string(),
-            Self::Shutdown => "Stop the Lanforge daemon. DNS/DHCP services will become inactive.".to_string(),
-            Self::DnsCacheFlush => "Clear all cached DNS queries from the local resolver.".to_string(),
-            Self::Wol { hostname, mac } => format!("Send a Wake-on-LAN magic packet to {hostname} ({mac})."),
-            Self::Purge { hostname, mac } => format!("Remove {hostname} ({mac}) from local cache and persistence database completely."),
-            Self::AdblockToggle { enable: true } => "Enable network-wide ad blocking resolver rules.".to_string(),
-            Self::AdblockToggle { enable: false } => "Disable ad blocking. Unblocked domains will resolve immediately.".to_string(),
-            Self::AdblockTimedDisable { duration_secs } => format!("Disable ad blocking for the next {duration_secs} seconds."),
-            Self::AdblockReload => "Reload all adblock blocklists and allowlists from sources and disk.".to_string(),
-            Self::AdblockAllow { domain } => format!("Add {domain} to the allowlist (takes precedence over blocklists)."),
-            Self::AdblockUnallow { domain } => format!("Remove {domain} from the allowed domains list."),
+            Self::Shutdown => {
+                "Stop the Lanforge daemon. DNS/DHCP services will become inactive.".to_string()
+            }
+            Self::DnsCacheFlush => {
+                "Clear all cached DNS queries from the local resolver.".to_string()
+            }
+            Self::Wol { hostname, mac } => {
+                format!("Send a Wake-on-LAN magic packet to {hostname} ({mac}).")
+            }
+            Self::Purge { hostname, mac } => format!(
+                "Remove {hostname} ({mac}) from local cache and persistence database completely."
+            ),
+            Self::AdblockToggle { enable: true } => {
+                "Enable network-wide ad blocking resolver rules.".to_string()
+            }
+            Self::AdblockToggle { enable: false } => {
+                "Disable ad blocking. Unblocked domains will resolve immediately.".to_string()
+            }
+            Self::AdblockTimedDisable { duration_secs } => {
+                format!("Disable ad blocking for the next {duration_secs} seconds.")
+            }
+            Self::AdblockReload => {
+                "Reload all adblock blocklists and allowlists from sources and disk.".to_string()
+            }
+            Self::AdblockAllow { domain } => {
+                format!("Add {domain} to the allowlist (takes precedence over blocklists).")
+            }
+            Self::AdblockUnallow { domain } => {
+                format!("Remove {domain} from the allowed domains list.")
+            }
             Self::AdblockBlock { domain } => format!("Add {domain} to the custom blocklist."),
-            Self::LeaseRenew { hostname, mac } => format!("Force the daemon to extend/renew the DHCP lease for {hostname} ({mac})."),
-            Self::LeaseRelease { hostname, mac } => format!("Release the active DHCP lease for {hostname} ({mac}). The device may lose connectivity."),
-            Self::DnsRewriteAdd { rule } => format!("Add DNS rewrite rule for {} to resolve as {}.", rule.domain, rule.answer),
-            Self::DnsRewriteRemove { domain, .. } => format!("Remove DNS rewrite rule for {domain}."),
-            Self::HostAdd { entry } => format!("Save static host configuration for {} ({}).", entry.hostname, entry.mac),
-            Self::HostRemove { mac, hostname } => format!("Remove static host configuration for {hostname} ({mac}). The device will return to dynamic configuration state."),
-            Self::DnsUpstreamAdd { target } => format!("Add DNS upstream resolver {} using protocol {}.", target.addr, target.protocol),
-            Self::DnsUpstreamRemove { target } => format!("Remove DNS upstream resolver {} using protocol {}?", target.addr, target.protocol),
-            Self::AdblockSourceAdd { url, .. } => format!("Add adblock blocklist source URL: {url}."),
-            Self::AdblockSourceRemove { url } => format!("Remove adblock blocklist source URL: {url}?"),
+            Self::LeaseRenew { hostname, mac } => {
+                format!("Force the daemon to extend/renew the DHCP lease for {hostname} ({mac}).")
+            }
+            Self::LeaseRelease { hostname, mac } => format!(
+                "Release the active DHCP lease for {hostname} ({mac}). The device may lose connectivity."
+            ),
+            Self::DnsRewriteAdd { rule } => format!(
+                "Add DNS rewrite rule for {} to resolve as {}.",
+                rule.domain, rule.answer
+            ),
+            Self::DnsRewriteRemove { domain, .. } => {
+                format!("Remove DNS rewrite rule for {domain}.")
+            }
+            Self::HostAdd { entry } => format!(
+                "Save static host configuration for {} ({}).",
+                entry.hostname, entry.mac
+            ),
+            Self::HostRemove { mac, hostname } => format!(
+                "Remove static host configuration for {hostname} ({mac}). The device will return to dynamic configuration state."
+            ),
+            Self::DnsUpstreamAdd { target } => format!(
+                "Add DNS upstream resolver {} using protocol {}.",
+                target.addr, target.protocol
+            ),
+            Self::DnsUpstreamRemove { target } => format!(
+                "Remove DNS upstream resolver {} using protocol {}?",
+                target.addr, target.protocol
+            ),
+            Self::AdblockSourceAdd { url, .. } => {
+                format!("Add adblock blocklist source URL: {url}.")
+            }
+            Self::AdblockSourceRemove { url } => {
+                format!("Remove adblock blocklist source URL: {url}?")
+            }
             Self::ServiceControl { id, name, action } => match action {
                 ServiceAction::Start => format!("Start background service {name} ({id})."),
-                ServiceAction::Stop => format!("Stop background service {name} ({id}). This will release resources and may affect connected devices."),
-                ServiceAction::Restart => format!("Restart background service {name} ({id}). This will re-initialize the service."),
+                ServiceAction::Stop => format!(
+                    "Stop background service {name} ({id}). This will release resources and may affect connected devices."
+                ),
+                ServiceAction::Restart => format!(
+                    "Restart background service {name} ({id}). This will re-initialize the service."
+                ),
             },
         }
     }

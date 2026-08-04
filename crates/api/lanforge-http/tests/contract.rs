@@ -611,8 +611,8 @@ async fn test_dns_upstreams_contract() {
     let upstreams = &body["data"]["upstreams"];
     assert_eq!(
         upstreams.as_array().map(|a| a.len()),
-        Some(0),
-        "should have 0 upstreams (since DNS service is not running in test context)"
+        Some(1),
+        "should have 1 upstream after addition"
     );
 
     let remove_path = "/api/v1/dns/upstreams?addr=9.9.9.9%3A53&protocol=udp";

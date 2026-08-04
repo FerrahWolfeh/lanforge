@@ -326,8 +326,10 @@ impl LanforgeRpc for ClientContext {
         &self,
         limit: Option<usize>,
         offset: Option<usize>,
+        q: Option<String>,
+        kind: Option<DnsRecordType>,
     ) -> Result<DnsCacheResponse, RpcCallError> {
-        match self.handle_dns_cache_dump(limit, offset).await {
+        match self.handle_dns_cache_dump(limit, offset, q, kind).await {
             Response::DnsCache(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

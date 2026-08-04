@@ -38,8 +38,13 @@ impl FromStr for Ipv6Suffix {
         if s.is_empty() {
             return Err("Empty IPv6 suffix".to_string());
         }
-        let full_s = if s.contains("::") { s.to_string() } else { format!("::{s}") };
-        let ip = full_s.parse::<Ipv6Addr>()
+        let full_s = if s.contains("::") {
+            s.to_string()
+        } else {
+            format!("::{s}")
+        };
+        let ip = full_s
+            .parse::<Ipv6Addr>()
             .map_err(|_| format!("Invalid IPv6 suffix: {s}"))?;
         let segs = ip.segments();
         if segs[0] != 0 || segs[1] != 0 || segs[2] != 0 || segs[3] != 0 {

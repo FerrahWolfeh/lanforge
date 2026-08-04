@@ -180,8 +180,12 @@ export const dnsReverseResolverRemove = (subnet: string) =>
 // DNS — cache
 // ---------------------------------------------------------------------------
 
-export const dnsCacheDump = (params?: { limit?: number; offset?: number }) =>
-	get<{ entries: DnsCacheEntry[]; total: number }>('/dns/cache', params);
+export const dnsCacheDump = (params?: {
+	limit?: number;
+	offset?: number;
+	q?: string;
+	kind?: string;
+}) => get<{ entries: DnsCacheEntry[]; total: number }>('/dns/cache', params);
 export const dnsCacheFlush = () => del<void>('/dns/cache');
 export const dnsCacheStatsExt = () => get<DnsCacheStatsResponse>('/dns/cache/stats');
 

@@ -49,6 +49,8 @@ pub struct DnsLogQuery {
 pub struct CacheQuery {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    pub q: Option<String>,
+    pub kind: Option<DnsRecordType>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,7 +218,7 @@ async fn handle_dns_cache_dump(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_cache_dump(params.limit, params.offset).await,
+        ctx.handle_dns_cache_dump(params.limit, params.offset, params.q, params.kind).await,
         DnsCache,
         res => res.entries, lanforge_api::api::CacheMeta {
             total: res.total,

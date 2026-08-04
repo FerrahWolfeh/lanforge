@@ -84,10 +84,12 @@ async fn send_echo_request(
 ) -> Result<(), PppoeError> {
     *consecutive_failures += 1;
     if *consecutive_failures > 1 {
-        let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveWarning {
-            consecutive_failures: *consecutive_failures,
-            max_failures,
-        }));
+        let _ = ctx
+            .bus()
+            .publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveWarning {
+                consecutive_failures: *consecutive_failures,
+                max_failures,
+            }));
     }
     if *consecutive_failures > max_failures {
         warn!(
@@ -150,7 +152,14 @@ async fn process_readable_chan_fd(
         return Ok(Some(PppoeError::KeepAliveTimeout));
     }
 
-    handle_lcp_frame(ctx, async_chan_fd, &buf[..n], local_magic, consecutive_failures).await
+    handle_lcp_frame(
+        ctx,
+        async_chan_fd,
+        &buf[..n],
+        local_magic,
+        consecutive_failures,
+    )
+    .await
 }
 
 async fn handle_lcp_frame(
@@ -204,7 +213,9 @@ async fn handle_lcp_frame(
     match code {
         LCP_ECHO_REP => {
             if *consecutive_failures > 0 {
-                let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveRestored));
+                let _ = ctx
+                    .bus()
+                    .publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveRestored));
             }
             *consecutive_failures = 0;
             debug!(id, "Received LCP Echo-Reply from peer");

@@ -59,27 +59,26 @@ impl ClientContext {
         if let Ok(rows) = self.db.load_dns_upstreams().await
             && !rows.is_empty()
         {
-            let mapped: Vec<lanforge_types::network::dns::UpstreamHealthSnapshot> = rows
-                .into_iter()
-                .filter_map(|r| {
-                    let target: std::net::SocketAddr = r.addr.parse().ok()?;
-                    let protocol = r
-                        .protocol
-                        .parse()
-                        .unwrap_or(lanforge_types::network::dns::upstream::UpstreamProtocol::Udp);
-                    Some(lanforge_types::network::dns::UpstreamHealthSnapshot {
-                        target,
-                        protocol,
-                        rtt_ewma_us: 1200,
-                        last_rtt_us: 1200,
-                        total_queries: 0,
-                        total_successes: 0,
-                        total_failures: 0,
-                        status: "Healthy".into(),
-                        last_success_secs_ago: Some(0),
+            let mapped: Vec<lanforge_types::network::dns::UpstreamHealthSnapshot> =
+                rows.into_iter()
+                    .filter_map(|r| {
+                        let target: std::net::SocketAddr = r.addr.parse().ok()?;
+                        let protocol = r.protocol.parse().unwrap_or(
+                            lanforge_types::network::dns::upstream::UpstreamProtocol::Udp,
+                        );
+                        Some(lanforge_types::network::dns::UpstreamHealthSnapshot {
+                            target,
+                            protocol,
+                            rtt_ewma_us: 1200,
+                            last_rtt_us: 1200,
+                            total_queries: 0,
+                            total_successes: 0,
+                            total_failures: 0,
+                            status: "Healthy".into(),
+                            last_success_secs_ago: Some(0),
+                        })
                     })
-                })
-                .collect();
+                    .collect();
             if !mapped.is_empty() {
                 return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: mapped });
             }

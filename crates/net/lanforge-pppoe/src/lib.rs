@@ -21,4 +21,3 @@ pub mod session;
 pub use config::{AuthMethod, PppoeConfig, PppoeCredentials};
 pub use error::PppoeError;
 pub use service::PppoeService;
-

@@ -36,7 +36,9 @@ fn format_pppoe_event<'a>(event: &'a PppoeEvent, spans: &mut Vec<Span<'a>>) {
         } => {
             spans.push(Span::styled(
                 " [PPPoE] ",
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             ));
             let ac_str = ac_name.as_deref().unwrap_or("AC");
             spans.push(Span::raw(format!(
@@ -44,28 +46,58 @@ fn format_pppoe_event<'a>(event: &'a PppoeEvent, spans: &mut Vec<Span<'a>>) {
             )));
         }
         PppoeEvent::SessionDown { reason } => {
-            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                " [PPPoE] ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
             spans.push(Span::raw(format!("Session DOWN: {reason}")));
         }
-        PppoeEvent::Reconnecting { attempt, next_retry_secs } => {
-            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
-            spans.push(Span::raw(format!("Reconnecting attempt #{attempt} in {next_retry_secs}s")));
+        PppoeEvent::Reconnecting {
+            attempt,
+            next_retry_secs,
+        } => {
+            spans.push(Span::styled(
+                " [PPPoE] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(format!(
+                "Reconnecting attempt #{attempt} in {next_retry_secs}s"
+            )));
         }
         PppoeEvent::AuthFailed { reason } => {
-            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                " [PPPoE] ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
             spans.push(Span::raw(format!("Auth Failed: {reason}")));
         }
-        PppoeEvent::KeepaliveWarning { consecutive_failures, max_failures } => {
-            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
-            spans.push(Span::raw(format!("Keepalive Warning: {consecutive_failures}/{max_failures} missed")));
+        PppoeEvent::KeepaliveWarning {
+            consecutive_failures,
+            max_failures,
+        } => {
+            spans.push(Span::styled(
+                " [PPPoE] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(format!(
+                "Keepalive Warning: {consecutive_failures}/{max_failures} missed"
+            )));
         }
         PppoeEvent::KeepaliveRestored => {
-            spans.push(Span::styled(" [PPPoE] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                " [PPPoE] ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ));
             spans.push(Span::raw("Keepalive Restored".to_string()));
         }
     }
 }
-
 
 fn format_device_event<'a>(event: &'a DeviceEvent, spans: &mut Vec<Span<'a>>) {
     match event {

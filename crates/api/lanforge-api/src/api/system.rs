@@ -408,4 +408,3 @@ impl HttpWrappedResponse for lanforge_types::system::PppoeStatusResponse {
         wrapper.data
     }
 }
-
