@@ -445,6 +445,10 @@ export interface DnsUpstreamEntry {
 	status?: 'healthy' | 'degraded' | 'unreachable' | string;
 }
 
+export interface DnsUpstreamsResponse {
+	upstreams: DnsUpstreamEntry[];
+}
+
 export interface ReverseResolverEntry {
 	subnet: string | { addr: string; prefix_len: number };
 	resolver?: string | { addr?: string; protocol?: string };

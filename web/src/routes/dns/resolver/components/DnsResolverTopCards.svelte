@@ -38,14 +38,21 @@
 	});
 
 	const upstreamStats = $derived.by(() => {
-		const total = upstreams.length;
+		const list: DnsUpstreamEntry[] = Array.isArray(upstreams)
+			? upstreams
+			: upstreams &&
+				  typeof upstreams === "object" &&
+				  Array.isArray((upstreams as any).upstreams)
+				? (upstreams as any).upstreams
+				: [];
+		const total = list.length;
 		if (total === 0) {
 			return {
 				display: "2 / 2",
 				subtitle: "System default resolvers (1.1.1.1, 8.8.8.8)",
 			};
 		}
-		const healthy = upstreams.filter(
+		const healthy = list.filter(
 			(u) =>
 				!u.status ||
 				u.status.toLowerCase() === "healthy" ||
@@ -192,7 +199,10 @@
 					>
 						{upstreamStats.display}
 					</span>
-					<span class="text-muted-foreground text-xs font-medium truncate" title={upstreamStats.subtitle}>
+					<span
+						class="text-muted-foreground text-xs font-medium truncate"
+						title={upstreamStats.subtitle}
+					>
 						{upstreamStats.subtitle}
 					</span>
 				</div>

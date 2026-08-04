@@ -64,7 +64,20 @@
 			]);
 
 			if (sRes.status === "fulfilled") statsData = sRes.value;
-			if (uRes.status === "fulfilled") upstreams = uRes.value ?? [];
+			if (uRes.status === "fulfilled") {
+				const val = uRes.value;
+				if (Array.isArray(val)) {
+					upstreams = val;
+				} else if (
+					val &&
+					typeof val === "object" &&
+					Array.isArray((val as any).upstreams)
+				) {
+					upstreams = (val as any).upstreams;
+				} else {
+					upstreams = [];
+				}
+			}
 			if (rRes.status === "fulfilled")
 				reverseResolvers = rRes.value ?? [];
 			if (aRes.status === "fulfilled") analyticsData = aRes.value;

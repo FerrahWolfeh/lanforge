@@ -54,7 +54,14 @@
 	}
 
 	const displayUpstreams = $derived.by(() => {
-		if (upstreams.length > 0) return upstreams;
+		const list: DnsUpstreamEntry[] = Array.isArray(upstreams)
+			? upstreams
+			: upstreams &&
+				  typeof upstreams === "object" &&
+				  Array.isArray((upstreams as any).upstreams)
+				? (upstreams as any).upstreams
+				: [];
+		if (list.length > 0) return list;
 		return [
 			{
 				target: "1.1.1.1:53",
@@ -109,9 +116,15 @@
 			</div>
 		{:else}
 			{#if upstreams.length === 0}
-				<div class="bg-indigo-500/10 border-b border-indigo-500/20 px-4 py-2 text-[11px] font-mono text-indigo-300 flex items-center justify-between">
+				<div
+					class="bg-indigo-500/10 border-b border-indigo-500/20 px-4 py-2 text-[11px] font-mono text-indigo-300 flex items-center justify-between"
+				>
 					<span>Default system DNS resolvers active</span>
-					<Badge variant="outline" class="text-[9px] uppercase border-indigo-500/30 text-indigo-300">System Fallback</Badge>
+					<Badge
+						variant="outline"
+						class="text-[9px] uppercase border-indigo-500/30 text-indigo-300"
+						>System Fallback</Badge
+					>
 				</div>
 			{/if}
 			<div class="max-h-[380px] overflow-auto">

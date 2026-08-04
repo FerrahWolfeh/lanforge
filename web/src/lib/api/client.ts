@@ -21,6 +21,7 @@ import type {
 	DnsQueryLogEntry,
 	DnsStatsResponse,
 	DnsUpstreamEntry,
+	DnsUpstreamsResponse,
 	HostConfigEntry,
 	LeaseTarget,
 	LoginRequest,
@@ -162,7 +163,7 @@ export const dnsQueryLog = (params?: {
 	limit?: number;
 	offset?: number;
 }) => get<{ entries: DnsQueryLogEntry[]; total: number }>('/dns/log', params);
-export const dnsUpstreams = () => get<DnsUpstreamEntry[]>('/dns/upstreams');
+export const dnsUpstreams = () => get<DnsUpstreamsResponse | DnsUpstreamEntry[]>('/dns/upstreams');
 export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?: string }) =>
 	post<void>('/dns/upstreams', entry);
 export const dnsUpstreamRemove = (entry: { addr: string; protocol: string }) =>
