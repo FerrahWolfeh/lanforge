@@ -16,7 +16,6 @@ use lanforge_types::update::DeviceUpdate;
 use std::time::Duration;
 use tracing::{info, warn};
 
-
 use lanforge_types::identifiers::MacAddr;
 
 #[lanforge_macros::lanforge_service(
@@ -61,12 +60,16 @@ impl PppoeService {
 
     #[allow(clippy::too_many_lines)]
     async fn run_session_flow(&mut self, ctrl: &ServiceControl) -> Result<(), PppoeError> {
-
         let (ifindex, mac) = self.get_interface_details()?;
 
         // 1. Discovery
         info!("Starting PPPoE discovery on {}", self.cfg.wan_iface);
-        let discovery = PppoeDiscovery::new(ifindex, mac);
+        let discovery = PppoeDiscovery::new(
+            ifindex,
+            mac,
+            self.cfg.discovery_padi_retries,
+            self.cfg.discovery_padi_timeout_secs,
+        );
         let disc_res = discovery.run().await?;
         info!(
             ac_mac = %disc_res.ac_mac,
@@ -136,7 +139,9 @@ impl PppoeService {
                 let lan_ifaces: Vec<String> = pnet::datalink::interfaces()
                     .into_iter()
                     .filter(|i| {
-                        !i.is_loopback() && i.name != self.cfg.wan_iface && !i.name.starts_with("ppp")
+                        !i.is_loopback()
+                            && i.name != self.cfg.wan_iface
+                            && !i.name.starts_with("ppp")
                     })
                     .map(|i| i.name)
                     .collect();
@@ -172,7 +177,6 @@ impl PppoeService {
             let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated {
                 status: Some(pppoe_status),
             });
-
 
             // 7. Publish SessionUp event and signal service readiness
             let _ = self
@@ -219,12 +223,16 @@ impl PppoeService {
             crate::nftables::cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
         }
 
-        let _ = discovery::send_padt(
-            &self.cfg.wan_iface,
-            mac,
-            disc_res.ac_mac,
-            disc_res.session_id,
-        );
+        if self.cfg.send_padt_on_shutdown {
+            let _ = discovery::send_padt(
+                &self.cfg.wan_iface,
+                mac,
+                disc_res.ac_mac,
+                disc_res.session_id,
+            );
+        } else {
+            info!("Skipping PPPoE PADT frame on shutdown (send_padt_on_shutdown = false)");
+        }
 
         let reason = match &flow_res {
             Ok(()) => "Graceful shutdown".to_string(),
@@ -232,8 +240,9 @@ impl PppoeService {
         };
 
         self.ctx.set_pppoe_ready(false);
-        let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated { status: None });
-
+        let _ = self
+            .ctx
+            .apply(DeviceUpdate::PppoeStatusUpdated { status: None });
 
         let _ = self
             .ctx
@@ -242,7 +251,6 @@ impl PppoeService {
 
         flow_res
     }
-
 }
 
 impl AsyncService for PppoeService {

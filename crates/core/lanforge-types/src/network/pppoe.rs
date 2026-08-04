@@ -74,6 +74,9 @@ pub struct PppoeConfig {
     pub lcp_echo_interval_secs: u64,
     pub lcp_echo_max_failures: u32,
     pub reconnect_delay_secs: u64,
+    pub send_padt_on_shutdown: bool,
+    pub discovery_padi_retries: u32,
+    pub discovery_padi_timeout_secs: u64,
     pub nftables: PppoeNftablesConfig,
 }
 
@@ -89,8 +92,10 @@ impl Default for PppoeConfig {
             lcp_echo_interval_secs: 10,
             lcp_echo_max_failures: 3,
             reconnect_delay_secs: 10,
+            send_padt_on_shutdown: true,
+            discovery_padi_retries: 5,
+            discovery_padi_timeout_secs: 3,
             nftables: PppoeNftablesConfig::default(),
         }
     }
 }
-

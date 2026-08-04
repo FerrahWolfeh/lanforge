@@ -24,6 +24,14 @@ pub enum PppoeAction {
     GetConfig,
     /// Update `PPPoE` WAN configuration settings
     SetConfig(PppoeSetConfigArgs),
+    /// Toggle sending PADT frame on service shutdown (true/false)
+    TogglePadt(PppoeTogglePadtArgs),
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct PppoeTogglePadtArgs {
+    /// Enable or disable sending PADT frame on shutdown (true/false). Toggles current state if omitted.
+    pub enabled: Option<bool>,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -55,9 +63,19 @@ pub struct PppoeSetConfigArgs {
     /// Delay between reconnection attempts in seconds (default 10)
     #[arg(long)]
     pub reconnect_delay: Option<u64>,
+    /// Send PADT frame on service shutdown (default true, set false for debug/fast-reconnect)
+    #[arg(long)]
+    pub send_padt_on_shutdown: Option<bool>,
+    /// Number of PADI retries during discovery (default 5)
+    #[arg(long)]
+    pub discovery_padi_retries: Option<u32>,
+    /// Timeout per PADI retry in seconds (default 3)
+    #[arg(long)]
+    pub discovery_padi_timeout: Option<u64>,
 }
 
 impl Execute for PppoeArgs {
+    #[allow(clippy::too_many_lines)]
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         let action = self.action.unwrap_or(PppoeAction::Status);
         match action {
@@ -84,6 +102,20 @@ impl Execute for PppoeArgs {
                     return Ok(());
                 }
                 render_pppoe_config(&cfg, client.ascii);
+            }
+            PppoeAction::TogglePadt(args) => {
+                let mut cfg = client.pppoe_config().await.unwrap_or_default();
+                let new_state = args.enabled.unwrap_or(!cfg.send_padt_on_shutdown);
+                cfg.send_padt_on_shutdown = new_state;
+                let _resp = client.update_pppoe_config(cfg).await?;
+                println!(
+                    "✓ {}",
+                    if new_state {
+                        "PADT frame on shutdown is now ENABLED"
+                    } else {
+                        "PADT frame on shutdown is now DISABLED (debug/fast-reconnect mode)"
+                    }
+                );
             }
             PppoeAction::SetConfig(set_args) => {
                 let mut cfg = client.pppoe_config().await.unwrap_or_default();
@@ -124,9 +156,23 @@ impl Execute for PppoeArgs {
                     cfg.reconnect_delay_secs = delay;
                     updated = true;
                 }
+                if let Some(padt) = set_args.send_padt_on_shutdown {
+                    cfg.send_padt_on_shutdown = padt;
+                    updated = true;
+                }
+                if let Some(retries) = set_args.discovery_padi_retries {
+                    cfg.discovery_padi_retries = retries;
+                    updated = true;
+                }
+                if let Some(timeout) = set_args.discovery_padi_timeout {
+                    cfg.discovery_padi_timeout_secs = timeout;
+                    updated = true;
+                }
 
                 if !updated {
-                    println!("ℹ No changes specified. Use --help to view configurable PPPoE options.");
+                    println!(
+                        "ℹ No changes specified. Use --help to view configurable PPPoE options."
+                    );
                     return Ok(());
                 }
 
@@ -149,12 +195,22 @@ fn render_pppoe_status(status: &PppoeStatusResponse, ascii: bool) {
 
     let iface = status.interface.as_deref().unwrap_or("N/A");
     let wan_iface = status.wan_iface.as_deref().unwrap_or("N/A");
-    let local_ip = status.local_ip.map_or_else(|| "N/A".to_string(), |ip| ip.to_string());
-    let peer_ip = status.peer_ip.map_or_else(|| "N/A".to_string(), |ip| ip.to_string());
-    let ac_mac = status.ac_mac.map_or_else(|| "N/A".to_string(), |m| m.to_string());
+    let local_ip = status
+        .local_ip
+        .map_or_else(|| "N/A".to_string(), |ip| ip.to_string());
+    let peer_ip = status
+        .peer_ip
+        .map_or_else(|| "N/A".to_string(), |ip| ip.to_string());
+    let ac_mac = status
+        .ac_mac
+        .map_or_else(|| "N/A".to_string(), |m| m.to_string());
     let ac_name = status.ac_name.as_deref().unwrap_or("unknown");
-    let session_id = status.session_id.map_or_else(|| "N/A".to_string(), |id| id.to_string());
-    let mru = status.mru.map_or_else(|| "N/A".to_string(), |m| m.to_string());
+    let session_id = status
+        .session_id
+        .map_or_else(|| "N/A".to_string(), |id| id.to_string());
+    let mru = status
+        .mru
+        .map_or_else(|| "N/A".to_string(), |m| m.to_string());
 
     let dns_list = if status.dns_servers.is_empty() {
         "None (Fallback inactive)".to_string()
@@ -211,11 +267,20 @@ fn render_pppoe_status(status: &PppoeStatusResponse, ascii: bool) {
 
 fn render_pppoe_config(cfg: &PppoeConfig, ascii: bool) {
     let enabled_str = if cfg.enabled { "Enabled" } else { "Disabled" };
-    let enabled_color = if cfg.enabled { Color::Green } else { Color::Red };
+    let enabled_color = if cfg.enabled {
+        Color::Green
+    } else {
+        Color::Red
+    };
     let masked_password = if cfg.password.is_empty() {
         "<none>".to_string()
     } else {
         "*".repeat(cfg.password.len())
+    };
+    let padt_str = if cfg.send_padt_on_shutdown {
+        "Yes"
+    } else {
+        "No (Debug/Fast-Reconnect)"
     };
 
     element! {
@@ -258,6 +323,14 @@ fn render_pppoe_config(cfg: &PppoeConfig, ascii: bool) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Reconnect Delay: ", color: Color::DarkGrey)
                 Text(content: format!("{}s", cfg.reconnect_delay_secs))
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Send PADT on Shutdown: ", color: Color::DarkGrey)
+                Text(content: padt_str.to_string())
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Discovery PADI Retries: ", color: Color::DarkGrey)
+                Text(content: format!("{} retries (timeout {}s)", cfg.discovery_padi_retries, cfg.discovery_padi_timeout_secs))
             }
         }
     }

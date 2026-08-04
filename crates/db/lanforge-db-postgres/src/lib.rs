@@ -4,7 +4,7 @@ pub mod dto;
 pub mod mapping;
 
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::pppoe::PppoeConfig;
+use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig, PppoeNftablesConfig};
 
 // Helper macros to reduce query boilerplate
 macro_rules! exec {
@@ -1918,9 +1918,19 @@ impl PppoeConfigStore for PostgresDatabase {
             let nft_custom_rules_file: Option<String> =
                 r.try_get("nft_custom_rules_file").ok().flatten();
 
+            let send_padt_on_shutdown: bool = r.try_get("send_padt_on_shutdown").unwrap_or(true);
+            let discovery_padi_retries: u32 = r
+                .try_get("discovery_padi_retries")
+                .map(|v: i32| u32::try_from(v).unwrap_or(5))
+                .unwrap_or(5);
+            let discovery_padi_timeout_secs: u64 = r
+                .try_get("discovery_padi_timeout_secs")
+                .map(|v: i64| u64::try_from(v).unwrap_or(3))
+                .unwrap_or(3);
+
             let auth = auth_raw
-                .parse::<lanforge_types::network::pppoe::AuthMethod>()
-                .unwrap_or(lanforge_types::network::pppoe::AuthMethod::ChapMd5);
+                .parse::<AuthMethod>()
+                .unwrap_or(AuthMethod::ChapMd5);
             Ok(Some(PppoeConfig {
                 enabled,
                 wan_iface,
@@ -1931,7 +1941,10 @@ impl PppoeConfigStore for PostgresDatabase {
                 lcp_echo_interval_secs: lcp_echo_interval_secs as u64,
                 lcp_echo_max_failures: lcp_echo_max_failures as u32,
                 reconnect_delay_secs: reconnect_delay_secs as u64,
-                nftables: lanforge_types::network::pppoe::PppoeNftablesConfig {
+                send_padt_on_shutdown,
+                discovery_padi_retries,
+                discovery_padi_timeout_secs,
+                nftables: PppoeNftablesConfig {
                     enabled: nft_enabled,
                     table_name: nft_table_name,
                     flow_offload: nft_flow_offload,
@@ -1952,13 +1965,16 @@ impl PppoeConfigStore for PostgresDatabase {
         let echo_interval = cfg.lcp_echo_interval_secs as i64;
         let echo_max_failures = cfg.lcp_echo_max_failures as i32;
         let reconnect_delay = cfg.reconnect_delay_secs as i64;
+        let padi_retries = cfg.discovery_padi_retries as i32;
+        let padi_timeout = cfg.discovery_padi_timeout_secs as i64;
 
         sqlx::query(
             "INSERT INTO pppoe.config (id, enabled, wan_iface, username, password, auth, mru, \
              lcp_echo_interval_secs, lcp_echo_max_failures, reconnect_delay_secs, \
+             send_padt_on_shutdown, discovery_padi_retries, discovery_padi_timeout_secs, \
              nft_enabled, nft_table_name, nft_flow_offload, nft_mss_clamping, \
              nft_bypass_dns, nft_bypass_vowifi, nft_custom_rules_file)
-             VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+             VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
              ON CONFLICT (id) DO UPDATE SET
                enabled = EXCLUDED.enabled,
                wan_iface = EXCLUDED.wan_iface,
@@ -1969,6 +1985,9 @@ impl PppoeConfigStore for PostgresDatabase {
                lcp_echo_interval_secs = EXCLUDED.lcp_echo_interval_secs,
                lcp_echo_max_failures = EXCLUDED.lcp_echo_max_failures,
                reconnect_delay_secs = EXCLUDED.reconnect_delay_secs,
+               send_padt_on_shutdown = EXCLUDED.send_padt_on_shutdown,
+               discovery_padi_retries = EXCLUDED.discovery_padi_retries,
+               discovery_padi_timeout_secs = EXCLUDED.discovery_padi_timeout_secs,
                nft_enabled = EXCLUDED.nft_enabled,
                nft_table_name = EXCLUDED.nft_table_name,
                nft_flow_offload = EXCLUDED.nft_flow_offload,
@@ -1986,6 +2005,9 @@ impl PppoeConfigStore for PostgresDatabase {
         .bind(echo_interval)
         .bind(echo_max_failures)
         .bind(reconnect_delay)
+        .bind(cfg.send_padt_on_shutdown)
+        .bind(padi_retries)
+        .bind(padi_timeout)
         .bind(cfg.nftables.enabled)
         .bind(&cfg.nftables.table_name)
         .bind(cfg.nftables.flow_offload)

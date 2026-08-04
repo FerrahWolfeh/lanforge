@@ -126,12 +126,24 @@ pub struct DiscoveryResult {
 pub struct PppoeDiscovery {
     ifindex: u32,
     local_mac: MacAddr,
+    padi_retries: u32,
+    padi_timeout_secs: u64,
 }
 
 impl PppoeDiscovery {
     #[must_use]
-    pub const fn new(ifindex: u32, local_mac: MacAddr) -> Self {
-        Self { ifindex, local_mac }
+    pub const fn new(
+        ifindex: u32,
+        local_mac: MacAddr,
+        padi_retries: u32,
+        padi_timeout_secs: u64,
+    ) -> Self {
+        Self {
+            ifindex,
+            local_mac,
+            padi_retries,
+            padi_timeout_secs,
+        }
     }
 
     #[allow(clippy::similar_names)]
@@ -141,8 +153,14 @@ impl PppoeDiscovery {
         let host_uniq: [u8; 4] = rand::random();
 
         // 1. Send PADI and wait for PADO
-        let (ac_mac, ac_name, ac_cookie) =
-            exchange_padi(&async_fd, self.local_mac, &host_uniq).await?;
+        let (ac_mac, ac_name, ac_cookie) = exchange_padi(
+            &async_fd,
+            self.local_mac,
+            &host_uniq,
+            self.padi_retries,
+            self.padi_timeout_secs,
+        )
+        .await?;
 
         // 2. Send PADR and wait for PADS
         let session_id =
@@ -193,6 +211,8 @@ async fn exchange_padi(
     async_fd: &AsyncFd<OwnedFd>,
     local_mac: MacAddr,
     host_uniq: &[u8; 4],
+    padi_retries: u32,
+    padi_timeout_secs: u64,
 ) -> Result<(MacAddr, Option<String>, Option<Vec<u8>>), PppoeError> {
     let padi_frame = PppoeDiscoveryFrame {
         dst_mac: MacAddr([0xff; 6]),
@@ -217,14 +237,14 @@ async fn exchange_padi(
     let mut ac_name = None;
     let mut ac_cookie = None;
 
-    for attempt in 0..3 {
+    for attempt in 0..padi_retries {
         debug!(attempt, "Sending PPPoE PADI frame...");
         let guard = async_fd.writable().await?;
         let _ = nix::unistd::write(async_fd.get_ref(), &padi_bytes);
         drop(guard);
 
         // Wait for PADO
-        let timeout = Duration::from_secs(3);
+        let timeout = Duration::from_secs(padi_timeout_secs);
         let start = tokio::time::Instant::now();
 
         while start.elapsed() < timeout {
