@@ -150,8 +150,11 @@ export const hostImport = (entries: HostConfigEntry[]) => post<void>('/hosts/imp
 // ---------------------------------------------------------------------------
 
 export const dnsStats = () => get<DnsStatsResponse>('/dns/stats');
-export const dnsAnalytics = (limit?: number) =>
-	get<DnsAnalyticsResponse>('/dns/analytics', limit !== undefined ? { limit } : undefined);
+export const dnsAnalytics = (limit?: number, client?: string) =>
+	get<DnsAnalyticsResponse>('/dns/analytics', {
+		...(limit !== undefined && { limit }),
+		...(client && { client })
+	});
 export const dnsQuery = (name: string, type?: string) =>
 	get<unknown>('/dns/query', { name, type });
 export const dnsQueryLog = (params?: {

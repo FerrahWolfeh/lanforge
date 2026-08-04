@@ -402,6 +402,27 @@ impl LogDb {
         Ok(vec)
     }
 
+    /// Retrieves top DNS domains filtered for a specific client (by IP or MAC).
+    pub async fn get_dns_top_domains_for_client(
+        &self,
+        client: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, LogBufError> {
+        let queries = self.dns_queries.lock();
+        let mut counts = HashMap::new();
+        for q in queries.iter() {
+            if q.src_ip.to_string() == client
+                || q.src_mac.as_ref().map(|m| m.to_string()).as_deref() == Some(client)
+            {
+                *counts.entry(q.domain.to_string()).or_insert(0u64) += 1;
+            }
+        }
+        let mut vec: Vec<(String, u64)> = counts.into_iter().collect();
+        vec.sort_by_key(|b| std::cmp::Reverse(b.1));
+        vec.truncate(limit);
+        Ok(vec)
+    }
+
     /// Retrieves query counts by type.
     pub async fn get_dns_query_types(&self) -> Result<Vec<(u16, u64)>, LogBufError> {
         let queries = self.dns_queries.lock();

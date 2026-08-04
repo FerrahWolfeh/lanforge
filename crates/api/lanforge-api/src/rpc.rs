@@ -106,6 +106,7 @@ pub trait LanforgeRpc {
     fn dns_analytics(
         &self,
         limit: Option<usize>,
+        client: Option<String>,
     ) -> impl Future<Output = Result<DnsAnalyticsResponse, RpcCallError>> + Send;
     fn dns_upstreams(
         &self,

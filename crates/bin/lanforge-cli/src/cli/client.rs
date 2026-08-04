@@ -658,9 +658,24 @@ impl LanforgeClient {
         dispatch!(self, get => "/dns/stats", dns_stats())
     }
 
-    pub async fn dns_analytics(&self, limit: Option<usize>) -> Result<DnsAnalyticsResponse> {
-        let q = limit.map_or_else(String::new, |l| format!("?limit={l}"));
-        dispatch!(self, get => format!("/dns/analytics{q}"), dns_analytics(limit))
+    pub async fn dns_analytics(
+        &self,
+        limit: Option<usize>,
+        client: Option<String>,
+    ) -> Result<DnsAnalyticsResponse> {
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+        if let Some(ref c) = client {
+            params.push(format!("client={c}"));
+        }
+        let q = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        };
+        dispatch!(self, get => format!("/dns/analytics{q}"), dns_analytics(limit, client))
     }
 
     pub async fn dns_upstreams(&self) -> Result<DnsUpstreamsResponse> {

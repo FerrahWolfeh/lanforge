@@ -934,7 +934,7 @@ fn fetch_dns_data(client: &Arc<LanforgeClient>, tx: &mpsc::Sender<AppEvent>) {
         let client = client.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            if let Ok(s) = client.dns_analytics(Some(10)).await {
+            if let Ok(s) = client.dns_analytics(Some(10), None).await {
                 let _ = tx.send(AppEvent::DnsAnalyticsUpdate(Box::new(s))).await;
             }
         });

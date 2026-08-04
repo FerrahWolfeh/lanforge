@@ -260,8 +260,9 @@ impl LanforgeRpc for ClientContext {
     async fn dns_analytics(
         &self,
         limit: Option<usize>,
+        client: Option<String>,
     ) -> Result<DnsAnalyticsResponse, RpcCallError> {
-        match self.handle_dns_analytics(limit).await {
+        match self.handle_dns_analytics(limit, client).await {
             Response::DnsAnalytics(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

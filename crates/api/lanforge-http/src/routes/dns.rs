@@ -27,6 +27,7 @@ use std::{
 #[derive(Debug, Deserialize)]
 pub struct AnalyticsQuery {
     pub limit: Option<usize>,
+    pub client: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,7 +172,10 @@ async fn handle_dns_analytics(
     Query(params): Query<AnalyticsQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_analytics(params.limit).await, DnsAnalytics)
+    crate::http_response!(
+        ctx.handle_dns_analytics(params.limit, params.client).await,
+        DnsAnalytics
+    )
 }
 
 async fn handle_dns_upstreams(State(state): State<AppState>) -> impl IntoResponse {

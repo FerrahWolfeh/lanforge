@@ -762,7 +762,7 @@ impl Execute for DnsArgs {
             DnsAction::Stats => render_output!(client, client.dns_stats().await?, render_dns_stats),
             DnsAction::Analytics { limit } => render_output!(
                 client,
-                client.dns_analytics(limit).await?,
+                client.dns_analytics(limit, None).await?,
                 render_dns_analytics
             ),
             DnsAction::Upstreams(args) => args.execute(client).await,
