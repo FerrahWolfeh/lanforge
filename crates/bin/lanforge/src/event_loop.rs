@@ -4,6 +4,8 @@ use crate::config::Config;
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_db::RaConfigStore;
+use lanforge_db::engine::LanforgeDb;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_wol::wol::send_wol_magic_packet;
 
@@ -61,6 +63,7 @@ where
     let mut loop_ctx = LoopContext {
         ctx: &ctx,
         cfg: &cfg,
+        db: &bootstrap.db,
         state: &mut state,
         target_ifindex,
         ready_services: HashSet::with_hasher(expected_services.hasher().clone()),
@@ -127,6 +130,7 @@ where
 struct LoopContext<'a, S> {
     ctx: &'a LanforgeContext,
     cfg: &'a Arc<Config>,
+    db: &'a Arc<LanforgeDb>,
     state: &'a mut LoopState,
     target_ifindex: u32,
     expected_services: HashSet<String, S>,
@@ -168,6 +172,13 @@ fn handle_bus_event<S: BuildHasher>(
             info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
             l_ctx.state.current_gua = gua;
             l_ctx.state.current_ula = ula;
+            let db = l_ctx.db.clone();
+            let new_gua = gua;
+            tokio::spawn(async move {
+                if let Err(e) = db.save_last_gua_prefix(new_gua).await {
+                    warn!("Failed to persist last_gua_prefix to DB: {e}");
+                }
+            });
         }
         LanforgeEvent::System(SystemEvent::ReloadConfig) => {
             info!("ReloadConfig: Initiating soft-reboot...");

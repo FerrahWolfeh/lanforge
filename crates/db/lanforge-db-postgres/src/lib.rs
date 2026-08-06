@@ -1880,6 +1880,39 @@ impl RaConfigStore for PostgresDatabase {
         tx.commit().await.map_err(map_err)?;
         Ok(())
     }
+
+    async fn load_last_gua_prefix(&self) -> Result<Option<Ipv6Addr>, DbError> {
+        use sqlx::Row;
+        let row = sqlx::query("SELECT last_gua FROM ra.state WHERE id = 1")
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_err)?;
+
+        let pg_inet: Option<PgInet> = match row {
+            Some(r) => r.try_get("last_gua").ok().flatten(),
+            None => None,
+        };
+
+        Ok(pg_inet.and_then(|pg| match pg.0.ip() {
+            IpAddr::V6(v6) => Some(v6),
+            _ => None,
+        }))
+    }
+
+    async fn save_last_gua_prefix(&self, prefix: Option<Ipv6Addr>) -> Result<(), DbError> {
+        let pg_gua = prefix.map(|v6| PgInet::from(IpAddr::V6(v6)));
+        sqlx::query(
+            "INSERT INTO ra.state (id, last_gua, updated_at) \
+             VALUES (1, $1, NOW()) \
+             ON CONFLICT (id) DO UPDATE SET last_gua = EXCLUDED.last_gua, updated_at = NOW()",
+        )
+        .bind(pg_gua)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(())
+    }
 }
 
 impl PppoeConfigStore for PostgresDatabase {

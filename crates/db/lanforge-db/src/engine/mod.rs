@@ -52,6 +52,7 @@ pub struct MockDbState {
     pub ra_prefixes: RwLock<Vec<RAPrefix>>,
     pub ra_rdnss: RwLock<Vec<RdnssConfig>>,
     pub ra_dnssl: RwLock<Vec<DnsslConfig>>,
+    pub last_gua_prefix: RwLock<Option<std::net::Ipv6Addr>>,
     pub pppoe_config: RwLock<Option<PppoeConfig>>,
     pub users: RwLock<Vec<UserEntry>>,
 }
@@ -73,6 +74,7 @@ impl Default for MockDbState {
             ra_prefixes: RwLock::new(Vec::new()),
             ra_rdnss: RwLock::new(Vec::new()),
             ra_dnssl: RwLock::new(Vec::new()),
+            last_gua_prefix: RwLock::new(None),
             pppoe_config: RwLock::new(None),
             users: RwLock::new(Vec::new()),
         }
@@ -694,6 +696,17 @@ impl RaConfigStore for LanforgeDb {
     async fn save_ra_dnssl(&self, dnssl: &[DnsslConfig]) -> Result<(), DbError> {
         delegate_db_call!(self, save_ra_dnssl(dnssl), mock => {
             *mock.ra_dnssl.write() = dnssl.to_vec();
+            Ok(())
+        })
+    }
+
+    async fn load_last_gua_prefix(&self) -> Result<Option<std::net::Ipv6Addr>, DbError> {
+        delegate_db_call!(self, load_last_gua_prefix(), mock => Ok(*mock.last_gua_prefix.read()))
+    }
+
+    async fn save_last_gua_prefix(&self, prefix: Option<std::net::Ipv6Addr>) -> Result<(), DbError> {
+        delegate_db_call!(self, save_last_gua_prefix(prefix), mock => {
+            *mock.last_gua_prefix.write() = prefix;
             Ok(())
         })
     }

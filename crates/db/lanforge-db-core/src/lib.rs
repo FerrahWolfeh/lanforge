@@ -394,6 +394,16 @@ pub trait RaConfigStore: Send + Sync {
         dnssl: &[DnsslConfig],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
+    /// Loads the last active GUA prefix from state.
+    fn load_last_gua_prefix(
+        &self,
+    ) -> impl Future<Output = Result<Option<std::net::Ipv6Addr>, DbError>> + Send;
+    /// Saves the last active GUA prefix to state.
+    fn save_last_gua_prefix(
+        &self,
+        prefix: Option<std::net::Ipv6Addr>,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
     /// Seeds RA prefixes if empty in database. Returns `Ok(true)` if seeded.
     fn seed_ra_prefixes_if_empty(
         &self,

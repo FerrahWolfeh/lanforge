@@ -209,6 +209,11 @@ impl Bootstrapper {
             ctx.set_pppoe_ready(true);
         }
 
+        if let Ok(Some(stored_gua)) = db.load_last_gua_prefix().await {
+            info!("Bootstrapper: Restored stored GUA prefix from DB: {stored_gua}");
+            let _ = ctx.signal_gua_change(target_ifindex, stored_gua, 7200, 7200);
+        }
+
         // --- PHASE 4/5: Handover to Daemon ---
         Ok((
             BootstrapResult {
