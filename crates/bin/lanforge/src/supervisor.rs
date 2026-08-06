@@ -42,6 +42,10 @@ where
     let mut consecutive_failures: u32 = 0;
 
     loop {
+        if !ctx.is_running() {
+            return;
+        }
+
         let mut service = factory();
         let meta = service.meta();
         let id = meta.id;
@@ -84,6 +88,9 @@ where
 }
 
 async fn wait_if_inactive(ctx: &LanforgeContext, id: &str) -> Option<bool> {
+    if !ctx.is_running() {
+        return None;
+    }
     if ctx.get_service_state(id) != ServiceState::Inactive {
         return Some(false);
     }
@@ -561,6 +568,7 @@ mod tests {
 
         // Actually, I'll just wait a bit and then send shutdown.
         tokio::time::sleep(Duration::from_millis(100)).await;
+        ctx.terminate();
         let _ = ctx
             .bus()
             .publish(LanforgeEvent::System(SystemEvent::Shutdown));

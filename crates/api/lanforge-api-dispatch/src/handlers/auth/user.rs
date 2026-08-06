@@ -1,7 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess, UserListResponse, UserResponse};
 use lanforge_core::utils::auth::hash_password;
-use lanforge_db::UserStore;
 use lanforge_types::auth::{UserInfo, UserRole};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};

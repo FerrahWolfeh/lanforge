@@ -15,8 +15,6 @@ use axum::{
 use lanforge_core::utils::auth::{hash_password, verify_password};
 use serde::Deserialize;
 
-use lanforge_db::UserStore;
-
 #[derive(Debug, Deserialize)]
 pub struct ValidateRequest {
     pub token: String,
@@ -105,7 +103,12 @@ async fn handle_validate(
     State(state): State<AppState>,
     Json(payload): Json<ValidateRequest>,
 ) -> impl IntoResponse {
-    let valid = match state.db.validate_api_token(&payload.token).await {
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .cast_signed();
+    let valid = match state.db.validate_api_token(&payload.token, now).await {
         Ok(Some(_)) => true,
         _ => state.auth.validate_token(&payload.token).is_ok(),
     };
@@ -137,7 +140,12 @@ pub async fn handle_login(
     });
 
     if let Some(token_str) = candidate_token {
-        match state.db.validate_api_token(&token_str).await {
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .cast_signed();
+        match state.db.validate_api_token(&token_str, now).await {
             Ok(Some((name, _scopes))) => {
                 let session_token = state.auth.generate_token(&name, "admin")?;
                 return Ok((
@@ -250,7 +258,12 @@ async fn handle_status(State(state): State<AppState>, req: Request) -> impl Into
         .and_then(|v| v.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
     {
-        match state.db.validate_api_token(token).await {
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .cast_signed();
+        match state.db.validate_api_token(token, now).await {
             Ok(Some(_)) => true,
             _ => state.auth.validate_token(token).is_ok(),
         }

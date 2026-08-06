@@ -3,6 +3,8 @@
 pub mod dto;
 pub mod mapping;
 
+use async_trait::async_trait;
+
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig, PppoeNftablesConfig};
 
@@ -432,9 +434,23 @@ impl PostgresDatabase {
         table.set_indexing_enabled(true);
         Ok(table)
     }
+
+    pub async fn load_all_devices(&self) -> Result<Vec<Device>, DbError> {
+        let state = self.load_table().await?;
+        Ok(state
+            .devices()
+            .into_iter()
+            .map(|d| d.as_ref().clone())
+            .collect())
+    }
 }
 
+#[async_trait]
 impl DeviceStore for PostgresDatabase {
+    async fn load_all_devices(&self) -> Result<Vec<Device>, DbError> {
+        self.load_all_devices().await
+    }
+
     async fn upsert_device(&self, device: &Device) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         upsert_device_internal(&mut tx, device).await?;
@@ -802,6 +818,7 @@ async fn upsert_base_device_only_internal(
     Ok(())
 }
 
+#[async_trait]
 impl DnsStore for PostgresDatabase {
     async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
         let rows = fetch_all!(
@@ -967,6 +984,7 @@ impl DnsStore for PostgresDatabase {
     }
 }
 
+#[async_trait]
 impl AdblockStore for PostgresDatabase {
     async fn load_adblock_config(&self) -> Result<AdblockDbConfig, DbError> {
         let row = fetch_one!(
@@ -1013,6 +1031,66 @@ impl AdblockStore for PostgresDatabase {
             &self.pool
         )?;
         Ok(())
+    }
+
+    async fn set_adblock_config_value(&self, key: &str, value: &str) -> Result<(), DbError> {
+        use std::str::FromStr;
+        let mut cfg = self.load_adblock_config().await?;
+        match key {
+            "enabled" => cfg.enabled = value == "true",
+            "blocking_mode" => {
+                if let Ok(m) = lanforge_types::network::dns::adblock::BlockingMode::from_str(value)
+                {
+                    cfg.blocking_mode = m;
+                }
+            }
+            "blocking_ip_v4" => {
+                if value.is_empty() || value == "none" || value == "null" {
+                    cfg.blocking_ip_v4 = None;
+                } else if let Ok(ip) = value.parse() {
+                    cfg.blocking_ip_v4 = Some(ip);
+                }
+            }
+            "blocking_ip_v6" => {
+                if value.is_empty() || value == "null" || value == "none" {
+                    cfg.blocking_ip_v6 = None;
+                } else if let Ok(ip) = value.parse() {
+                    cfg.blocking_ip_v6 = Some(ip);
+                }
+            }
+            "refresh_hours" => {
+                if let Ok(h) = value.parse() {
+                    cfg.refresh_hours = h;
+                }
+            }
+            "refresh_at_night" => cfg.refresh_at_night = value == "true",
+            _ => {}
+        }
+        self.save_adblock_config(&cfg).await
+    }
+
+    async fn load_adblock_urls(&self) -> Result<Vec<(i64, String, AdblockUrlKind)>, DbError> {
+        let sources = self.load_adblock_sources().await?;
+        Ok(sources
+            .into_iter()
+            .map(|(id, url, kind, _)| (id, url, kind))
+            .collect())
+    }
+
+    async fn add_adblock_url(&self, url: &str, kind: AdblockUrlKind) -> Result<(), DbError> {
+        self.add_adblock_source(url, kind).await.map(|_| ())
+    }
+
+    async fn remove_adblock_url(&self, url: &str) -> Result<(), DbError> {
+        exec!(
+            sqlx::query!("DELETE FROM dns.adblock_urls WHERE url = $1", url),
+            &self.pool
+        )?;
+        Ok(())
+    }
+
+    async fn clear_adblock_urls(&self) -> Result<(), DbError> {
+        self.clear_adblock_sources().await
     }
 
     async fn load_adblock_sources(
@@ -1149,6 +1227,7 @@ impl AdblockStore for PostgresDatabase {
     }
 }
 
+#[async_trait]
 impl ApiTokenStore for PostgresDatabase {
     async fn store_api_token(
         &self,
@@ -1336,6 +1415,7 @@ impl ApiTokenStore for PostgresDatabase {
     }
 }
 
+#[async_trait]
 impl DnsUpstreamStore for PostgresDatabase {
     async fn load_dns_upstreams(&self) -> Result<Vec<DnsUpstreamEntry>, DbError> {
         let rows = fetch_all!(
@@ -1560,6 +1640,7 @@ impl PostgresDatabase {
     }
 }
 
+#[async_trait]
 impl DhcpConfigStore for PostgresDatabase {
     async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError> {
         let rows = fetch_all!(
@@ -1685,6 +1766,7 @@ impl DhcpConfigStore for PostgresDatabase {
     }
 }
 
+#[async_trait]
 impl RaConfigStore for PostgresDatabase {
     async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError> {
         let rows = fetch_all!(
@@ -1915,6 +1997,7 @@ impl RaConfigStore for PostgresDatabase {
     }
 }
 
+#[async_trait]
 impl PppoeConfigStore for PostgresDatabase {
     async fn load_pppoe_config(&self) -> Result<Option<PppoeConfig>, DbError> {
         use sqlx::Row;
@@ -2056,6 +2139,7 @@ impl PppoeConfigStore for PostgresDatabase {
     }
 }
 
+#[async_trait]
 impl UserStore for PostgresDatabase {
     async fn create_user(
         &self,

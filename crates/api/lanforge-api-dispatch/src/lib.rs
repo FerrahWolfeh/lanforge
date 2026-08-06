@@ -10,8 +10,7 @@ use lanforge_api::api::{
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
-use lanforge_db::engine::LanforgeDb;
-use lanforge_db::log_engine::LogDb;
+use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
@@ -36,9 +35,9 @@ pub struct ClientContext {
     /// Lanforge Context.
     pub ctx: LanforgeContext,
     /// Shared lease database.
-    pub db: Arc<LanforgeDb>,
+    pub db: Arc<dyn DatabaseStore>,
     /// Shared log database.
-    pub log_db: Arc<LogDb>,
+    pub log_db: Arc<dyn LogStore>,
     /// Active client counter.
     pub active_clients: Arc<AtomicUsize>,
 }

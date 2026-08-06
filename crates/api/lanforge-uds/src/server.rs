@@ -6,12 +6,10 @@ use tokio::sync::Mutex;
 
 use crate::config::ApiConfig;
 use crate::error::UdsError;
-use futures::StreamExt;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_db::engine::LanforgeDb;
-use lanforge_db::log_engine::LogDb;
+use lanforge_db_core::{DatabaseStore, LogStore};
 use std::fs::{self, Permissions};
 use std::io::ErrorKind;
 use std::net::Ipv6Addr;
@@ -38,8 +36,8 @@ use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
 pub struct ControlService {
     cfg: Arc<ApiConfig>,
     ctx: LanforgeContext,
-    db: Arc<LanforgeDb>,
-    log_db: Arc<LogDb>,
+    db: Arc<dyn DatabaseStore>,
+    log_db: Arc<dyn LogStore>,
 }
 
 impl ControlService {
@@ -47,8 +45,8 @@ impl ControlService {
     pub fn new(
         cfg: Arc<ApiConfig>,
         ctx: LanforgeContext,
-        db: Arc<LanforgeDb>,
-        log_db: Arc<LogDb>,
+        db: Arc<dyn DatabaseStore>,
+        log_db: Arc<dyn LogStore>,
     ) -> Self {
         let service = Self {
             cfg,
@@ -327,14 +325,13 @@ where
     R: AsyncRead + Unpin,
 {
     let n_lines = n.unwrap_or(100);
-    let mut history = ctx.log_db.stream_history(n_lines);
+    let history = ctx.log_db.get_history(n_lines).await?;
 
     {
         let mut writer_lock = writer.lock().await;
         let mut buf_lock = buf.lock().await;
         write_rpc_response(&mut *writer_lock, &RpcResponse::Log(()), &mut buf_lock).await?;
-        while let Some(res) = history.next().await {
-            let event = res?;
+        for event in history {
             if let Some(ref filters) = filter
                 && !filters.iter().any(|f| f.matches(&event.event))
             {

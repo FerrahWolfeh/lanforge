@@ -138,7 +138,7 @@ pub fn render_whois(resp: &WhoisResponse, ascii: bool) {
                             Text(content: "ACTION", color: Color::DarkGrey)
                         }
                     }
-                    Text(content: hline.repeat(70), color: Color::DarkGrey)   
+                    Text(content: hline.repeat(70), color: Color::DarkGrey)
                     #(resp.history.iter().map(|h| element! {
                         HistoryRow(history: h.clone())
                     }))

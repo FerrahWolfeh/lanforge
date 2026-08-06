@@ -64,7 +64,6 @@ impl ClientContext {
     }
 
     pub async fn handle_pppoe_config(&self) -> Response {
-        use lanforge_db::PppoeConfigStore;
         match self.db.load_pppoe_config().await {
             Ok(Some(cfg)) => Response::PppoeConfig(Box::new(cfg)),
             Ok(None) => Response::Error {
@@ -77,7 +76,6 @@ impl ClientContext {
     }
 
     pub async fn handle_update_pppoe_config(&self, cfg: PppoeConfig) -> Response {
-        use lanforge_db::PppoeConfigStore;
         if let Err(e) = self.db.save_pppoe_config(&cfg).await {
             return Response::Error {
                 error: format!("Failed to save PPPoE configuration: {e}"),

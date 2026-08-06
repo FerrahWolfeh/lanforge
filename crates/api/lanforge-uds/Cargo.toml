@@ -10,7 +10,7 @@ authors.workspace = true
 lanforge-api = { workspace = true }
 lanforge-api-dispatch = { workspace = true }
 lanforge-core = { workspace = true }
-lanforge-db = { workspace = true }
+lanforge-db-core = { workspace = true }
 lanforge-dns = { workspace = true }
 lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
@@ -28,13 +28,16 @@ hotpath = { workspace = true, optional = true }
 adblock = [
     "lanforge-api-dispatch/adblock",
     "lanforge-core/adblock",
-    "lanforge-db/adblock",
+    "lanforge-db-core/adblock",
     "lanforge-dns/adblock",
 ]
 hotpath = [
     "dep:hotpath",
     "lanforge-api-dispatch/hotpath",
     "lanforge-core/hotpath",
-    "lanforge-db/hotpath",
+    "lanforge-db-core/hotpath",
     "lanforge-dns/hotpath",
 ]
+
+[dev-dependencies]
+lanforge-db = { workspace = true }

@@ -345,7 +345,7 @@ pub fn command_dispatch_derive(input: TokenStream) -> TokenStream {
             } else if let Some(a) = apply_update {
                 let a_ident = Ident::new(&a, ident.span());
                 let msg = success_msg.unwrap_or_else(|| format!("{} update applied", ident));
-                
+
                 let fields = match &v.fields {
                     Fields::Named(f) => {
                         let f_mappings = f.named.iter().map(|f| {

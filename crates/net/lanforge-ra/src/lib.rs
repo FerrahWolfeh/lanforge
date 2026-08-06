@@ -162,7 +162,11 @@ impl RaState {
         self.unicast_rl.insert(dst, Instant::now());
     }
 
-    pub(crate) fn update_prefix_and_deprecate(&mut self, current: Option<Ipv6Addr>, is_gua: bool) -> bool {
+    pub(crate) fn update_prefix_and_deprecate(
+        &mut self,
+        current: Option<Ipv6Addr>,
+        is_gua: bool,
+    ) -> bool {
         let last = if is_gua { self.last_gua } else { self.last_ula };
         if current == last {
             false

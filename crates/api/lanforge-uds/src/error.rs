@@ -1,5 +1,4 @@
-use lanforge_db::error::LanforgeDbError;
-use lanforge_db::log_engine::LogBufError;
+use lanforge_db_core::DbError;
 use thiserror::Error;
 
 /// Errors that can occur during API operations.
@@ -15,11 +14,7 @@ pub enum UdsError {
 
     /// Error during database operations.
     #[error("Database error: {0}")]
-    Database(#[from] LanforgeDbError),
-
-    /// Error during transient log buffer operations.
-    #[error("Log buffer error: {0}")]
-    LogBuf(#[from] LogBufError),
+    Database(#[from] DbError),
 }
 
 /// A specialized Result type for API operations.

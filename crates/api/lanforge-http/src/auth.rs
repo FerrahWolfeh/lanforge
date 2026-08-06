@@ -13,8 +13,7 @@ use lanforge_types::auth::{ApiScope, ApiScopes};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lanforge_db::UserStore;
-use lanforge_db::engine::LanforgeDb;
+use lanforge_db_core::DatabaseStore;
 use std::sync::Arc;
 
 /// JWT Claims.
@@ -149,19 +148,25 @@ impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
     AuthManager: FromRef<S>,
-    Arc<LanforgeDb>: FromRef<S>,
+    Arc<dyn DatabaseStore>: FromRef<S>,
 {
     type Rejection = HttpError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
-        let db = Arc::<LanforgeDb>::from_ref(state);
+        let db = Arc::<dyn DatabaseStore>::from_ref(state);
         let token = extract_token_str(&parts.headers).ok_or_else(|| {
             HttpError::Auth("Missing Authorization header or session cookie".into())
         })?;
 
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .cast_signed();
+
         // 1. Try validating as API Token from DB
-        match db.validate_api_token(token).await {
+        match db.validate_api_token(token, now).await {
             Ok(Some((name, scopes))) => {
                 return Ok(Self {
                     name,
@@ -194,7 +199,7 @@ use crate::config::HttpConfig;
 
 pub async fn middleware(
     State(cfg): State<Arc<HttpConfig>>,
-    State(db): State<Arc<LanforgeDb>>,
+    State(db): State<Arc<dyn DatabaseStore>>,
     State(auth_manager): State<AuthManager>,
     mut req: Request<Body>,
     next: Next,
@@ -227,7 +232,13 @@ pub async fn middleware(
     let token = extract_token_str(req.headers())
         .ok_or_else(|| HttpError::Auth("Missing Authorization header or session cookie".into()))?;
 
-    let user = match db.validate_api_token(token).await {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .cast_signed();
+
+    let user = match db.validate_api_token(token, now).await {
         Ok(Some((name, scopes))) => AuthenticatedUser {
             name,
             role: "admin".to_string(),

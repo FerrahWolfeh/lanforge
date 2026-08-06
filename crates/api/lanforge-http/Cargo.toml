@@ -10,7 +10,7 @@ authors.workspace = true
 lanforge-core = { workspace = true, optional = true }
 lanforge-api = { workspace = true }
 lanforge-api-dispatch = { workspace = true, optional = true }
-lanforge-db = { workspace = true, optional = true }
+lanforge-db-core = { workspace = true, optional = true }
 lanforge-dns = { workspace = true, optional = true }
 lanforge-dns-wire = { workspace = true, optional = true }
 lanforge-macros = { workspace = true, optional = true }
@@ -61,7 +61,7 @@ server = [
     "dep:axum-server",
     "dep:futures",
     "dep:rustls",
-    "dep:lanforge-db",
+    "dep:lanforge-db-core",
     "dep:lanforge-dns",
     "dep:lanforge-api-dispatch",
     "dep:lanforge-dns-wire",
@@ -79,13 +79,13 @@ doh = ["server", "dep:base64"]
 webui = ["server", "dep:lanforge-webui"]
 adblock = [
     "lanforge-api-dispatch/adblock",
-    "lanforge-db/adblock",
+    "lanforge-db-core/adblock",
     "lanforge-dns/adblock",
 ]
 hotpath = [
     "lanforge-core/hotpath",
     "lanforge-api-dispatch/hotpath",
-    "lanforge-db/hotpath",
+    "lanforge-db-core/hotpath",
     "lanforge-dns/hotpath",
 ]
 
@@ -94,3 +94,4 @@ tower = { version = "0.5.2", features = ["util"] }
 http-body-util = "0.1.2"
 tokio = { workspace = true, features = ["full", "test-util"] }
 reqwest = { workspace = true, features = ["json"] }
+lanforge-db = { workspace = true }

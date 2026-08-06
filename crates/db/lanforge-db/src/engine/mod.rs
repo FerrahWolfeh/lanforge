@@ -1,5 +1,6 @@
 //! `LanforgeDb` facade for PostgreSQL.
 
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -180,6 +181,13 @@ impl LanforgeDb {
                 state.insert_device(*mac, device.clone());
             }
             Ok(state)
+        })
+    }
+
+    pub async fn load_all_devices(&self) -> Result<Vec<Device>, DbError> {
+        delegate_db_call!(self, load_all_devices(), mock => {
+            let dev_map = mock.devices.read();
+            Ok(dev_map.values().cloned().collect())
         })
     }
 
@@ -642,6 +650,258 @@ impl LanforgeDb {
     }
 }
 
+#[async_trait]
+impl DeviceStore for LanforgeDb {
+    async fn load_all_devices(&self) -> Result<Vec<Device>, DbError> {
+        self.load_all_devices().await
+    }
+
+    async fn upsert_device(&self, device: &Device) -> Result<(), DbError> {
+        self.upsert_device(device).await
+    }
+
+    async fn upsert_base_device_only(&self, device: &Device) -> Result<(), DbError> {
+        self.upsert_base_device_only(device).await
+    }
+
+    async fn delete_devices(&self, macs: &[MacAddr]) -> Result<(), DbError> {
+        self.delete_devices(macs).await
+    }
+
+    async fn find_mac_by_hostname(&self, hostname: &str) -> Result<Option<MacAddr>, DbError> {
+        self.find_mac_by_hostname(hostname).await
+    }
+
+    async fn remove_device(&self, mac: MacAddr) -> Result<(), DbError> {
+        self.remove_device(mac).await
+    }
+
+    async fn vacuum(&self) -> Result<(), DbError> {
+        self.vacuum().await
+    }
+
+    async fn prune_zombies(&self) -> Result<usize, DbError> {
+        self.prune_zombies().await
+    }
+
+    async fn reset(&self) -> Result<(), DbError> {
+        self.reset().await
+    }
+
+    async fn record_lease_event(
+        &self,
+        mac: MacAddr,
+        ip: &str,
+        lease_type: &str,
+        action: LeaseAction,
+    ) -> Result<(), DbError> {
+        self.record_lease_event(mac, ip, lease_type, action).await
+    }
+
+    async fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>, DbError> {
+        self.get_lease_history(mac).await
+    }
+}
+
+#[async_trait]
+impl DnsStore for LanforgeDb {
+    async fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
+        self.load_dns_rewrites().await
+    }
+
+    async fn upsert_dns_rewrite(
+        &self,
+        domain: &str,
+        rtype: DnsRecordType,
+        answer: &str,
+    ) -> Result<(), DbError> {
+        self.upsert_dns_rewrite(domain, rtype, answer).await
+    }
+
+    async fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), DbError> {
+        self.delete_dns_rewrite_by_id(id).await
+    }
+
+    async fn clear_dns_rewrites(&self) -> Result<(), DbError> {
+        self.clear_dns_rewrites().await
+    }
+
+    async fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, DbError> {
+        self.load_dns_allowlist().await
+    }
+
+    async fn add_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
+        self.add_dns_allowlist(domain).await
+    }
+
+    async fn remove_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
+        self.remove_dns_allowlist(domain).await
+    }
+
+    async fn clear_dns_allowlist(&self) -> Result<(), DbError> {
+        self.clear_dns_allowlist().await
+    }
+
+    async fn load_dns_reverse_resolvers(&self) -> Result<Vec<DnsReverseResolver>, DbError> {
+        self.load_dns_reverse_resolvers().await
+    }
+
+    async fn add_dns_reverse_resolver(
+        &self,
+        subnet: &IpSubnet,
+        resolver: &UpstreamTarget,
+    ) -> Result<(), DbError> {
+        self.add_dns_reverse_resolver(subnet, resolver).await
+    }
+
+    async fn remove_dns_reverse_resolver(&self, subnet: &IpSubnet) -> Result<(), DbError> {
+        self.remove_dns_reverse_resolver(subnet).await
+    }
+
+    async fn clear_dns_reverse_resolvers(&self) -> Result<(), DbError> {
+        self.clear_dns_reverse_resolvers().await
+    }
+}
+
+#[async_trait]
+impl AdblockStore for LanforgeDb {
+    async fn load_adblock_config(&self) -> Result<AdblockDbConfig, DbError> {
+        self.load_adblock_config().await
+    }
+
+    async fn save_adblock_config(&self, cfg: &AdblockDbConfig) -> Result<(), DbError> {
+        self.save_adblock_config(cfg).await
+    }
+
+    async fn set_adblock_config_value(&self, key: &str, value: &str) -> Result<(), DbError> {
+        self.set_adblock_config_value(key, value).await
+    }
+
+    async fn load_adblock_urls(&self) -> Result<Vec<(i64, String, AdblockUrlKind)>, DbError> {
+        self.load_adblock_urls().await
+    }
+
+    async fn add_adblock_url(&self, url: &str, kind: AdblockUrlKind) -> Result<(), DbError> {
+        self.add_adblock_url(url, kind).await
+    }
+
+    async fn remove_adblock_url(&self, url: &str) -> Result<(), DbError> {
+        self.remove_adblock_url(url).await
+    }
+
+    async fn clear_adblock_urls(&self) -> Result<(), DbError> {
+        self.clear_adblock_urls().await
+    }
+
+    async fn load_adblock_sources(
+        &self,
+    ) -> Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError> {
+        self.load_adblock_sources().await
+    }
+
+    async fn add_adblock_source(&self, url: &str, kind: AdblockUrlKind) -> Result<i64, DbError> {
+        self.add_adblock_source(url, kind).await
+    }
+
+    async fn remove_adblock_source(&self, id: i64) -> Result<(), DbError> {
+        self.remove_adblock_source(id).await
+    }
+
+    async fn update_adblock_source_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
+        self.update_adblock_source_status(id, enabled).await
+    }
+
+    async fn clear_adblock_sources(&self) -> Result<(), DbError> {
+        self.clear_adblock_sources().await
+    }
+
+    async fn load_adblock_rules(&self) -> Result<Vec<(i64, String, String, bool)>, DbError> {
+        self.load_adblock_rules().await
+    }
+
+    async fn add_adblock_rule(&self, domain: &str, action: &str) -> Result<i64, DbError> {
+        self.add_adblock_rule(domain, action).await
+    }
+
+    async fn remove_adblock_rule(&self, id: i64) -> Result<(), DbError> {
+        self.remove_adblock_rule(id).await
+    }
+
+    async fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
+        self.update_adblock_rule_status(id, enabled).await
+    }
+
+    async fn clear_adblock_rules(&self) -> Result<(), DbError> {
+        self.clear_adblock_rules().await
+    }
+}
+
+#[async_trait]
+impl ApiTokenStore for LanforgeDb {
+    async fn store_api_token(
+        &self,
+        token: &str,
+        name: &str,
+        scopes: &ApiScopes,
+        expires_at: Option<i64>,
+        _now: i64,
+    ) -> Result<i64, DbError> {
+        self.store_api_token(token, name, scopes, expires_at).await
+    }
+
+    async fn validate_api_token(
+        &self,
+        token: &str,
+        _now: i64,
+    ) -> Result<Option<(String, ApiScopes)>, DbError> {
+        self.validate_api_token(token).await
+    }
+
+    async fn delete_api_token(&self, token: &str) -> Result<(), DbError> {
+        self.delete_api_token(token).await
+    }
+
+    async fn delete_api_token_by_id_or_name(&self, id_or_name: &str) -> Result<(), DbError> {
+        self.delete_api_token_by_id_or_name(id_or_name).await
+    }
+
+    async fn load_api_tokens(&self) -> Result<Vec<ApiTokenEntry>, DbError> {
+        self.load_api_tokens().await
+    }
+
+    async fn get_api_token_info(
+        &self,
+        id_or_name: &str,
+    ) -> Result<Option<(String, ApiScopes, Option<i64>)>, DbError> {
+        self.get_api_token_info(id_or_name).await
+    }
+}
+
+#[async_trait]
+impl DnsUpstreamStore for LanforgeDb {
+    async fn load_dns_upstreams(&self) -> Result<Vec<DnsUpstreamEntry>, DbError> {
+        self.load_dns_upstreams().await
+    }
+
+    async fn add_dns_upstream(
+        &self,
+        addr: &str,
+        protocol: &str,
+        domain: Option<&str>,
+    ) -> Result<i64, DbError> {
+        self.add_dns_upstream(addr, protocol, domain).await
+    }
+
+    async fn remove_dns_upstream(&self, addr: &str, protocol: &str) -> Result<(), DbError> {
+        self.remove_dns_upstream(addr, protocol).await
+    }
+
+    async fn clear_dns_upstreams(&self) -> Result<(), DbError> {
+        self.clear_dns_upstreams().await
+    }
+}
+
+#[async_trait]
 impl DhcpConfigStore for LanforgeDb {
     async fn load_dhcp_v4_pools(&self) -> Result<Vec<Dhcpv4Pool>, DbError> {
         delegate_db_call!(self, load_dhcp_v4_pools(), mock => Ok(mock.dhcp_v4_pools.read().clone()))
@@ -666,6 +926,7 @@ impl DhcpConfigStore for LanforgeDb {
     }
 }
 
+#[async_trait]
 impl RaConfigStore for LanforgeDb {
     async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError> {
         delegate_db_call!(self, load_ra_prefixes(), mock => Ok(mock.ra_prefixes.read().clone()))
@@ -704,7 +965,10 @@ impl RaConfigStore for LanforgeDb {
         delegate_db_call!(self, load_last_gua_prefix(), mock => Ok(*mock.last_gua_prefix.read()))
     }
 
-    async fn save_last_gua_prefix(&self, prefix: Option<std::net::Ipv6Addr>) -> Result<(), DbError> {
+    async fn save_last_gua_prefix(
+        &self,
+        prefix: Option<std::net::Ipv6Addr>,
+    ) -> Result<(), DbError> {
         delegate_db_call!(self, save_last_gua_prefix(prefix), mock => {
             *mock.last_gua_prefix.write() = prefix;
             Ok(())
@@ -712,6 +976,7 @@ impl RaConfigStore for LanforgeDb {
     }
 }
 
+#[async_trait]
 impl PppoeConfigStore for LanforgeDb {
     async fn load_pppoe_config(&self) -> Result<Option<PppoeConfig>, DbError> {
         delegate_db_call!(self, load_pppoe_config(), mock => Ok(mock.pppoe_config.read().clone()))
@@ -725,6 +990,7 @@ impl PppoeConfigStore for LanforgeDb {
     }
 }
 
+#[async_trait]
 impl UserStore for LanforgeDb {
     async fn create_user(
         &self,

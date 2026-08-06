@@ -19,7 +19,7 @@ use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     error::CoreError,
 };
-use lanforge_db::{engine::LanforgeDb, log_engine::LogDb};
+use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_dns::server::transport::tls as tls_utils;
 use lanforge_macros::lanforge_service;
 use lanforge_types::system::ServiceBanner;
@@ -43,8 +43,8 @@ use crate::config::HttpConfig;
 pub struct AppState {
     pub cfg: Arc<HttpConfig>,
     pub ctx: LanforgeContext,
-    pub db: Arc<LanforgeDb>,
-    pub log_db: Arc<LogDb>,
+    pub db: Arc<dyn DatabaseStore>,
+    pub log_db: Arc<dyn LogStore>,
     pub auth: Arc<AuthManager>,
     pub start_time: Instant,
 }
@@ -61,7 +61,7 @@ impl axum::extract::FromRef<AppState> for Arc<HttpConfig> {
     }
 }
 
-impl axum::extract::FromRef<AppState> for Arc<LanforgeDb> {
+impl axum::extract::FromRef<AppState> for Arc<dyn DatabaseStore> {
     fn from_ref(state: &AppState) -> Self {
         state.db.clone()
     }
@@ -83,8 +83,8 @@ impl axum::extract::FromRef<AppState> for Arc<LanforgeDb> {
 pub struct HttpService {
     cfg: Arc<HttpConfig>,
     ctx: LanforgeContext,
-    db: Arc<LanforgeDb>,
-    log_db: Arc<LogDb>,
+    db: Arc<dyn DatabaseStore>,
+    log_db: Arc<dyn LogStore>,
 }
 
 impl HttpService {
@@ -92,8 +92,8 @@ impl HttpService {
     pub fn new(
         cfg: Arc<HttpConfig>,
         ctx: LanforgeContext,
-        db: Arc<LanforgeDb>,
-        log_db: Arc<LogDb>,
+        db: Arc<dyn DatabaseStore>,
+        log_db: Arc<dyn LogStore>,
     ) -> Self {
         ctx.register_status_provider(Arc::new(Self {
             cfg: cfg.clone(),

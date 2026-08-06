@@ -1,7 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess, WhoisResponse};
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
-use lanforge_db::engine::LeaseHistoryEntry;
+use lanforge_types::device::LeaseHistoryEntry;
 use lanforge_types::{identifiers::MacAddr, update::DeviceUpdate};
 use std::net::IpAddr;
 

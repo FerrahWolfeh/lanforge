@@ -599,3 +599,171 @@ impl LogDb {
         Ok(result)
     }
 }
+
+#[async_trait::async_trait]
+impl lanforge_db_core::LogStore for LogDb {
+    async fn record_log(&self, timed_event: &TimedEvent) -> Result<(), lanforge_db_core::DbError> {
+        self.record_log(timed_event)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn record_logs_batch(
+        &self,
+        events: &[TimedEvent],
+        json_buf: &mut String,
+    ) -> Result<(), lanforge_db_core::DbError> {
+        self.record_logs_batch(events, json_buf)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn record_dns_block(
+        &self,
+        timed_event: &TimedEvent,
+        src_ip: IpAddr,
+        domain: &str,
+        src_mac: Option<String>,
+    ) -> Result<(), lanforge_db_core::DbError> {
+        self.record_dns_block(timed_event, src_ip, domain, src_mac)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn record_dns_queries_batch(
+        &self,
+        entries: &[QueryLogEntry],
+    ) -> Result<(), lanforge_db_core::DbError> {
+        self.record_dns_queries_batch(entries)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn record_dns_query(
+        &self,
+        entry: &QueryLogEntry,
+    ) -> Result<(), lanforge_db_core::DbError> {
+        self.record_dns_query(entry)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn clear_logs(&self) -> Result<(), lanforge_db_core::DbError> {
+        self.clear_logs()
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn prune_logs(&self, before: i64) -> Result<(), lanforge_db_core::DbError> {
+        self.prune_logs(before)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_history(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<TimedEvent>, lanforge_db_core::DbError> {
+        self.get_history(limit)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_query_history(
+        &self,
+        limit: usize,
+        offset: Option<usize>,
+    ) -> Result<(Vec<QueryLogEntry>, usize), lanforge_db_core::DbError> {
+        self.get_dns_query_history(limit, offset)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_top_domains(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_top_domains(limit)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_top_domains_for_client(
+        &self,
+        client: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_top_domains_for_client(client, limit)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_query_types(&self) -> Result<Vec<(u16, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_query_types()
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_query_rate(
+        &self,
+        since_secs: u64,
+    ) -> Result<Vec<(u64, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_query_rate(since_secs)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_query_rate_detailed(
+        &self,
+        since_secs: u64,
+        bucket_secs: u64,
+    ) -> Result<Vec<(u64, u64, u64, u64, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_query_rate_detailed(since_secs, bucket_secs)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_top_clients(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_top_clients(limit)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_protocol_stats(
+        &self,
+    ) -> Result<Vec<(String, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_protocol_stats()
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_top_blocked_domains(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_top_blocked_domains(limit)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_top_blocked_clients(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_top_blocked_clients(limit)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+
+    async fn get_dns_blocked_query_rate(
+        &self,
+        since_secs: u64,
+    ) -> Result<Vec<(u64, u64)>, lanforge_db_core::DbError> {
+        self.get_dns_blocked_query_rate(since_secs)
+            .await
+            .map_err(|e| lanforge_db_core::DbError::Generic(e.to_string()))
+    }
+}

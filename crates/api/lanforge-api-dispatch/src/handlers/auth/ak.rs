@@ -19,9 +19,14 @@ impl ClientContext {
             lanforge_types::auth::ApiScopes::from_slice(&[lanforge_types::auth::ApiScope::Admin])
         });
 
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
         match self
             .db
-            .store_api_token(&token, &name, &scopes, expires_at)
+            .store_api_token(&token, &name, &scopes, expires_at, now)
             .await
         {
             Ok(id) => Response::AuthToken(AuthTokenResponse {

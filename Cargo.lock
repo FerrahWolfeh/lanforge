@@ -2592,6 +2592,7 @@ dependencies = [
  "lanforge-api",
  "lanforge-core",
  "lanforge-db",
+ "lanforge-db-core",
  "lanforge-dhcp",
  "lanforge-dns",
  "lanforge-dns-wire",
@@ -2670,6 +2671,7 @@ dependencies = [
 name = "lanforge-db"
 version = "0.12.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "futures",
  "hotpath",
@@ -2692,6 +2694,7 @@ dependencies = [
 name = "lanforge-db-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "lanforge-types",
  "serde",
@@ -2704,9 +2707,11 @@ dependencies = [
 name = "lanforge-db-logbuf"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "futures",
  "lanforge-core",
+ "lanforge-db-core",
  "lanforge-types",
  "parking_lot",
  "serde",
@@ -2720,6 +2725,7 @@ dependencies = [
 name = "lanforge-db-postgres"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "futures",
  "ipnetwork 0.21.1",
@@ -2864,6 +2870,7 @@ dependencies = [
  "lanforge-api-dispatch",
  "lanforge-core",
  "lanforge-db",
+ "lanforge-db-core",
  "lanforge-dhcp",
  "lanforge-dns",
  "lanforge-dns-wire",
@@ -2968,6 +2975,7 @@ dependencies = [
  "lanforge-api-dispatch",
  "lanforge-core",
  "lanforge-db",
+ "lanforge-db-core",
  "lanforge-dns",
  "lanforge-macros",
  "lanforge-types",

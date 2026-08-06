@@ -3,7 +3,6 @@ use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
-use lanforge_db::{DhcpConfigStore, PppoeConfigStore, RaConfigStore};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::AdblockDbConfig;
 
@@ -418,12 +417,16 @@ impl ClientContext {
             let mut imported_tokens = 0;
             let mut tokens_success = true;
             let mut tokens_err = None;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
             for t in tokens {
                 let scopes: lanforge_types::auth::ApiScopes =
                     t.scopes.split(',').filter_map(|s| s.parse().ok()).collect();
                 if let Err(e) = self
                     .db
-                    .store_api_token(&t.token, &t.name, &scopes, t.expires_at)
+                    .store_api_token(&t.token, &t.name, &scopes, t.expires_at, now)
                     .await
                 {
                     tokens_success = false;

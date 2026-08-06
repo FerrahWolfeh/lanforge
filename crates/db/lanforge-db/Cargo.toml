@@ -31,6 +31,7 @@ lanforge-db-logbuf = { path = "../lanforge-db-logbuf" }
 lanforge-db-postgres = { path = "../lanforge-db-postgres", optional = true }
 
 # Workspace
+async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 serde = { workspace = true }

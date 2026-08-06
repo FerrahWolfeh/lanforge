@@ -476,8 +476,8 @@ async fn test_static_host_deletion_should_purge_all_leases() {
 
     // 4. Verify device is purged from memory and database
     assert!(client_ctx.ctx.get_device(&mac).is_none());
-    let db_state = client_ctx.db.load_table().await.unwrap();
-    assert!(db_state.get_device(&mac).is_none());
+    let db_devices = client_ctx.db.load_all_devices().await.unwrap();
+    assert!(!db_devices.iter().any(|d| d.mac == mac));
 }
 
 #[tokio::test]
