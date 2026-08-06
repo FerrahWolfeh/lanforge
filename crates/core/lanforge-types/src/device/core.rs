@@ -727,8 +727,17 @@ impl Device {
                         push_unique(IpAddr::V6(ip));
                     }
                 }
-            } else if let Some(ip) = state.ip() {
-                push_unique(IpAddr::V6(ip));
+            } else if let Some(v6) = state.ip() {
+                // If it's a GUA address and gua_prefix is known, check if its prefix matches gua_prefix
+                if (v6.segments()[0] & 0xe000) == 0x2000
+                    && let Some(cur_gua) = gua_prefix
+                {
+                    if v6.segments()[..4] == cur_gua.segments()[..4] {
+                        push_unique(IpAddr::V6(v6));
+                    }
+                } else {
+                    push_unique(IpAddr::V6(v6));
+                }
             }
         }
         addrs.sort_by_key(|ip| classify_ip(ip).score());

@@ -167,8 +167,13 @@ impl RaState {
         if current != last {
             if let Some(old) = last {
                 let now = Instant::now();
-                let deprecation_end = now + Duration::from_hours(2);
-                let valid_end = now + Duration::from_hours(2);
+                let (deprecation_end, valid_end) = if is_gua {
+                    // RFC 9096: Set valid_lifetime = 0 for obsolete GUA prefix upon prefix change,
+                    // and announce preferred=0 / valid=0 for 60s to ensure all LAN hosts purge it.
+                    (now + Duration::from_mins(1), now)
+                } else {
+                    (now + Duration::from_hours(2), now + Duration::from_hours(2))
+                };
                 if !self.deprecated_prefixes.iter().any(|(ip, _, _)| *ip == old) {
                     self.deprecated_prefixes
                         .push((old, deprecation_end, valid_end));

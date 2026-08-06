@@ -86,12 +86,14 @@ impl Daemon {
                     let new_cfg = Arc::new(Config::load());
                     self.bootstrap.cfg = new_cfg.clone();
 
-                    // 5. Re-synchronize static devices from new config into existing state (Deprecated)
-                    // let mut state = self.ctx.write();
-                    // crate::bootstrap::Bootstrapper::reload_static_devices_into_state(
-                    //     &mut state, &new_cfg,
-                    // );
-                    // drop(state);
+                    let _ = self
+                        .ctx
+                        .bus()
+                        .publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
+
+                    if !new_cfg.pppoe_enabled {
+                        self.ctx.set_pppoe_ready(true);
+                    }
 
                     info!("Daemon: Soft-reboot complete. Restarting services...");
                 }

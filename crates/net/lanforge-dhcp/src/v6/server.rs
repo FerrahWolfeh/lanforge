@@ -525,6 +525,21 @@ impl Dhcpv6Server {
                     opts: DhcpOptions::new(),
                 }));
             }
+
+            // RFC 8415 §18.2.3: Return preferred=0 and valid=0 for any requested IAAddr no longer valid for this link
+            for opt in iana.opts.iter() {
+                if let DhcpOption::IAAddr(requested) = opt
+                    && !ips.contains(&requested.addr)
+                {
+                    ia_opts.insert(DhcpOption::IAAddr(IAAddr {
+                        addr: requested.addr,
+                        preferred_life: 0,
+                        valid_life: 0,
+                        opts: DhcpOptions::new(),
+                    }));
+                }
+            }
+
             reply.opts_mut().insert(DhcpOption::IANA(IANA {
                 id: iana.id,
                 t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },

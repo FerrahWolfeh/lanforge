@@ -20,12 +20,12 @@ impl LanforgeContext {
         self.inner.running.store(false, Ordering::SeqCst);
     }
 
-    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`, `pppoe_ready`) to `true`/`false`/`false`/`false`.
+    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`, `pppoe_ready`) to `true`/`false`/`true`/`false`.
     /// Used during soft-reboot.
     pub fn reset_lifecycle(&self) {
         self.inner.running.store(true, Ordering::SeqCst);
         self.inner.db_ready.store(false, Ordering::SeqCst);
-        self.inner.if_ready.store(false, Ordering::SeqCst);
+        self.inner.if_ready.store(true, Ordering::SeqCst);
         self.inner.pppoe_ready.store(false, Ordering::SeqCst);
     }
 
