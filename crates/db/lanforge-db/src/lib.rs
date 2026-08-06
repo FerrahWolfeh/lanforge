@@ -60,6 +60,7 @@ pub mod log_engine;
 mod tests;
 pub mod worker;
 
+pub use engine::LanforgeDb;
 pub use lanforge_db_core::{
     AdblockStore, ApiTokenStore, DeviceStore, DhcpConfigStore, DnsStore, DnsUpstreamStore,
     PppoeConfigStore, RaConfigStore, UserStore,

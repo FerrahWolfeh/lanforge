@@ -12,7 +12,6 @@ lanforge-core = { workspace = true }
 lanforge-db-core = { workspace = true }
 
 # Workspace
-async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 serde = { workspace = true }

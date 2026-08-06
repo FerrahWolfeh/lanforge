@@ -6,6 +6,9 @@ edition.workspace = true
 authors.workspace = true
 
 [features]
+default = ["tls-ring"]
+tls-ring = ["sqlx/tls-rustls-ring"]
+tls-aws-lc = ["sqlx/tls-rustls-aws-lc-rs"]
 hotpath = ["lanforge-core/hotpath"]
 hotpath-alloc = ["lanforge-core/hotpath-alloc"]
 
@@ -17,7 +20,6 @@ lanforge-db-core = { path = "../lanforge-db-core" }
 lanforge-core = { workspace = true }
 
 # Workspace
-async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 serde = { workspace = true }
@@ -30,9 +32,8 @@ uuid = { workspace = true }
 # SQL & driver specific
 mac_address = "1.1"
 ipnetwork = "0.21"
-sqlx = { version = "0.9.0", features = [
+sqlx = { version = "0.9.0", default-features = false, features = [
     "runtime-tokio",
-    "tls-rustls-aws-lc-rs",
     "macros",
     "chrono",
     "uuid",

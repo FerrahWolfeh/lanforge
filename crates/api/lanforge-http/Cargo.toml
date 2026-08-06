@@ -46,7 +46,6 @@ axum-server = { version = "0.8.0", optional = true, features = [
     "tls-rustls-no-provider",
 ] }
 url = { version = "2.5.4", optional = true }
-async-trait = { version = "0.1.86", optional = true }
 base64 = { version = "0.23.0", optional = true }
 async-stream = { version = "0.3.6", optional = true }
 lanforge-webui = { workspace = true, optional = true }
@@ -70,7 +69,6 @@ server = [
     "dep:lanforge-types",
     "dep:lanforge-dhcp",
     "dep:chrono",
-    "dep:async-trait",
     "dep:rand",
     "dep:async-stream",
 ]

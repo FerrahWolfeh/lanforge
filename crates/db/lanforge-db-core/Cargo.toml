@@ -14,7 +14,6 @@ hotpath = []
 lanforge-types = { workspace = true }
 
 # Workspace
-async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 serde = { workspace = true }

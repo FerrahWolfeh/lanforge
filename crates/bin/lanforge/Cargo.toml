@@ -94,7 +94,11 @@ adblock = [
     "lanforge-uds?/adblock",
     "lanforge-http?/adblock",
 ]
-zstd = []
+# Crypto features
+aws-lc = [
+    "lanforge-dns?/aws-lc",
+    "lanforge-db/aws-lc",
+]
 
 # Meta-features / Build Profiles
 full = [

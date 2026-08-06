@@ -2610,7 +2610,6 @@ name = "lanforge-cli"
 version = "2.0.3"
 dependencies = [
  "argon2",
- "async-trait",
  "bytesize",
  "chacha20poly1305",
  "chrono",
@@ -2671,7 +2670,6 @@ dependencies = [
 name = "lanforge-db"
 version = "0.12.0"
 dependencies = [
- "async-trait",
  "chrono",
  "futures",
  "hotpath",
@@ -2694,7 +2692,6 @@ dependencies = [
 name = "lanforge-db-core"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "chrono",
  "lanforge-types",
  "serde",
@@ -2707,7 +2704,6 @@ dependencies = [
 name = "lanforge-db-logbuf"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "chrono",
  "futures",
  "lanforge-core",
@@ -2725,7 +2721,6 @@ dependencies = [
 name = "lanforge-db-postgres"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "chrono",
  "futures",
  "ipnetwork 0.21.1",
@@ -2858,7 +2853,6 @@ version = "0.7.0"
 dependencies = [
  "argon2",
  "async-stream",
- "async-trait",
  "axum",
  "axum-server",
  "base64 0.23.0",
@@ -4632,6 +4626,7 @@ dependencies = [
  "aws-lc-rs",
  "log",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
