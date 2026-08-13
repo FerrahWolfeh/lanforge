@@ -5,6 +5,7 @@
 	import * as Empty from "$lib/components/ui/empty";
 	import * as Field from "$lib/components/ui/field";
 	import * as Tooltip from "$lib/components/ui/tooltip";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
@@ -29,6 +30,10 @@
 	import InfoIcon from "@lucide/svelte/icons/info";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import PlusCircleIcon from "@lucide/svelte/icons/plus-circle";
+	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import CopyIcon from "@lucide/svelte/icons/copy";
+	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
+	import CheckIcon from "@lucide/svelte/icons/check";
 
 	let devices = $state<DeviceEntry[]>([]);
 	let meta = $state<{ total: number; online: number } | null>(null);
@@ -471,132 +476,109 @@
 											{formatLastSeen(dev.last_seen)}
 										</Table.Cell>
 
-										<!-- Actions with Shadcn Tooltips -->
+										<!-- Actions Dropdown Menu -->
 										<Table.Cell
 											class="text-right font-sans"
 										>
-											<div
-												class="flex items-center justify-end gap-1"
-											>
-												<!-- Promote Tooltip -->
-												<Tooltip.Root>
-													<Tooltip.Trigger>
-														{#snippet child({
-															props,
-														})}
-															<Button
-																variant="ghost"
-																size="icon-sm"
-																{...props}
-																onclick={() =>
-																	openPromoteModal(
-																		dev,
-																	)}
-															>
-																<PlusCircleIcon
-																	data-icon="inline-start"
-																	class="text-amber-400"
-																/>
-															</Button>
-														{/snippet}
-													</Tooltip.Trigger>
-													<Tooltip.Content>
-														<p>
-															Promote to static
-															host rule
-														</p>
-													</Tooltip.Content>
-												</Tooltip.Root>
-
-												<!-- Details Tooltip -->
-												<Tooltip.Root>
-													<Tooltip.Trigger>
-														{#snippet child({
-															props,
-														})}
-															<Button
-																variant="ghost"
-																size="icon-sm"
-																{...props}
-																onclick={() =>
-																	openDetails(
-																		dev,
-																	)}
-															>
-																<InfoIcon
-																	data-icon="inline-start"
-																	class="text-sky-400"
-																/>
-															</Button>
-														{/snippet}
-													</Tooltip.Trigger>
-													<Tooltip.Content>
-														<p>
-															View device details
-															(Whois)
-														</p>
-													</Tooltip.Content>
-												</Tooltip.Root>
-
-												<!-- WOL Tooltip -->
-												<Tooltip.Root>
-													<Tooltip.Trigger>
-														{#snippet child({
-															props,
-														})}
-															<Button
-																variant="ghost"
-																size="icon-sm"
-																{...props}
-																onclick={() =>
-																	handleWol(
-																		dev.mac,
-																	)}
-															>
-																<SendIcon
-																	data-icon="inline-start"
-																	class="text-emerald-400"
-																/>
-															</Button>
-														{/snippet}
-													</Tooltip.Trigger>
-													<Tooltip.Content>
-														<p>
-															Send Wake-on-LAN
-															magic packet
-														</p>
-													</Tooltip.Content>
-												</Tooltip.Root>
-
-												<!-- Purge Tooltip -->
-												<Tooltip.Root>
-													<Tooltip.Trigger>
-														{#snippet child({
-															props,
-														})}
-															<Button
-																variant="ghost"
-																size="icon-sm"
-																{...props}
-																onclick={() =>
-																	handlePurge(
-																		dev.mac,
-																	)}
-															>
-																<Trash2Icon
-																	data-icon="inline-start"
-																	class="text-rose-400"
-																/>
-															</Button>
-														{/snippet}
-													</Tooltip.Trigger>
-													<Tooltip.Content>
-														<p>
-															Purge device record
-														</p>
-													</Tooltip.Content>
-												</Tooltip.Root>
-											</div>
+											<DropdownMenu.Root>
+												<DropdownMenu.Trigger
+													class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+												>
+													<MoreHorizontalIcon
+														class="h-4 w-4"
+													/>
+												</DropdownMenu.Trigger>
+												<DropdownMenu.Content
+													align="end"
+													class="w-48 text-xs"
+												>
+													<DropdownMenu.Item
+														onclick={() =>
+															openDetails(dev)}
+														class="gap-2"
+													>
+														<SearchIcon
+															class="h-3.5 w-3.5 text-sky-400"
+														/>
+														Inspect Details (Whois)
+													</DropdownMenu.Item>
+													<DropdownMenu.Item
+														onclick={() =>
+															handleWol(dev.mac)}
+														class="gap-2"
+													>
+														<ZapIcon
+															class="h-3.5 w-3.5 text-emerald-400"
+														/>
+														Send Wake-on-LAN
+													</DropdownMenu.Item>
+													<DropdownMenu.Item
+														onclick={() =>
+															openPromoteModal(
+																dev,
+															)}
+														class="gap-2"
+													>
+														<BookmarkIcon
+															class="h-3.5 w-3.5 text-amber-400"
+														/>
+														Promote to Static Host
+													</DropdownMenu.Item>
+													<DropdownMenu.Separator />
+													<DropdownMenu.Item
+														onclick={() => {
+															navigator.clipboard.writeText(
+																dev.mac,
+															);
+															toast.success(
+																`Copied MAC ${dev.mac}`,
+															);
+														}}
+														class="gap-2"
+													>
+														<CopyIcon
+															class="h-3.5 w-3.5 text-muted-foreground"
+														/>
+														Copy MAC Address
+													</DropdownMenu.Item>
+													{#if dev.display_v4 || dev.v4?.ip}
+														<DropdownMenu.Item
+															onclick={() => {
+																const ip =
+																	dev.display_v4 ||
+																	dev.v4
+																		?.ip ||
+																	"";
+																navigator.clipboard.writeText(
+																	ip,
+																);
+																toast.success(
+																	`Copied IP ${ip}`,
+																);
+															}}
+															class="gap-2"
+														>
+															<CopyIcon
+																class="h-3.5 w-3.5 text-muted-foreground"
+															/>
+															Copy IPv4 Address
+														</DropdownMenu.Item>
+													{/if}
+													<DropdownMenu.Separator />
+													<DropdownMenu.Item
+														onclick={() =>
+															handlePurge(
+																dev.mac,
+															)}
+														class="gap-2 text-rose-500"
+													>
+														<Trash2Icon
+															class="h-3.5 w-3.5"
+														/>
+														Purge Endpoint
+													</DropdownMenu.Item>
+												</DropdownMenu.Content>
+											</DropdownMenu.Root>
 										</Table.Cell>
 									</Table.Row>
 								{/each}

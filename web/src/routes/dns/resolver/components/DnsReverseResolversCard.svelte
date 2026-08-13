@@ -2,12 +2,16 @@
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import * as Tooltip from "$lib/components/ui/tooltip";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import * as Empty from "$lib/components/ui/empty";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
+	import { toast } from "svelte-sonner";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
+	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import CopyIcon from "@lucide/svelte/icons/copy";
 	import type { ReverseResolverEntry } from "$lib/api/types";
 
 	let {
@@ -102,27 +106,67 @@
 									{formatResolverUri(r)}
 								</Table.Cell>
 								<Table.Cell class="text-right font-sans">
-									<Tooltip.Root>
-										<Tooltip.Trigger>
-											{#snippet child({ props })}
-												<Button
-													variant="ghost"
-													size="icon-sm"
-													{...props}
-													onclick={() =>
-														onRemoveReverse(r)}
-												>
-													<Trash2Icon
-														data-icon="inline-start"
-														class="text-rose-400"
-													/>
-												</Button>
-											{/snippet}
-										</Tooltip.Trigger>
-										<Tooltip.Content>
-											<p>Delete PTR resolver rule</p>
-										</Tooltip.Content>
-									</Tooltip.Root>
+									<DropdownMenu.Root>
+										<DropdownMenu.Trigger
+											class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+										>
+											<MoreHorizontalIcon
+												class="h-4 w-4"
+											/>
+										</DropdownMenu.Trigger>
+										<DropdownMenu.Content
+											align="end"
+											class="w-44 text-xs"
+										>
+											<DropdownMenu.Item
+												onclick={() => {
+													const subnet =
+														formatSubnet(r);
+													navigator.clipboard.writeText(
+														subnet,
+													);
+													toast.success(
+														`Copied subnet ${subnet}`,
+													);
+												}}
+												class="gap-2"
+											>
+												<CopyIcon
+													class="h-3.5 w-3.5 text-muted-foreground"
+												/>
+												Copy Subnet
+											</DropdownMenu.Item>
+											<DropdownMenu.Item
+												onclick={() => {
+													const uri =
+														formatResolverUri(r);
+													navigator.clipboard.writeText(
+														uri,
+													);
+													toast.success(
+														`Copied resolver URI ${uri}`,
+													);
+												}}
+												class="gap-2"
+											>
+												<CopyIcon
+													class="h-3.5 w-3.5 text-muted-foreground"
+												/>
+												Copy Resolver URI
+											</DropdownMenu.Item>
+											<DropdownMenu.Separator />
+											<DropdownMenu.Item
+												onclick={() =>
+													onRemoveReverse(r)}
+												class="gap-2 text-rose-500"
+											>
+												<Trash2Icon
+													class="h-3.5 w-3.5"
+												/>
+												Remove PTR Resolver
+											</DropdownMenu.Item>
+										</DropdownMenu.Content>
+									</DropdownMenu.Root>
 								</Table.Cell>
 							</Table.Row>
 						{/each}

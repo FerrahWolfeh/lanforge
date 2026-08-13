@@ -5,6 +5,7 @@
 	import * as Empty from "$lib/components/ui/empty";
 	import * as Field from "$lib/components/ui/field";
 	import * as Tooltip from "$lib/components/ui/tooltip";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
@@ -13,6 +14,8 @@
 		hostList,
 		hostAdd,
 		hostRemove,
+		hostExport,
+		hostImport,
 		listDevices,
 	} from "$lib/api/client";
 	import type { HostConfigEntry, DeviceEntry } from "$lib/api/types";
@@ -26,6 +29,8 @@
 	import PencilIcon from "@lucide/svelte/icons/pencil";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import CheckIcon from "@lucide/svelte/icons/check";
+	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import CopyIcon from "@lucide/svelte/icons/copy";
 
 	let hosts = $state<HostConfigEntry[]>([]);
 	let discoveredDevices = $state<DeviceEntry[]>([]);
@@ -337,73 +342,86 @@
 											</Badge>
 										</Table.Cell>
 
-										<!-- Actions with Shadcn Tooltips -->
+										<!-- Actions Dropdown Menu -->
 										<Table.Cell
 											class="text-right font-sans"
 										>
-											<div
-												class="flex items-center justify-end gap-1"
-											>
-												<!-- Edit Rule Tooltip -->
-												<Tooltip.Root>
-													<Tooltip.Trigger>
-														{#snippet child({
-															props,
-														})}
-															<Button
-																variant="ghost"
-																size="icon-sm"
-																{...props}
-																onclick={() =>
-																	openEditModal(
-																		host,
-																	)}
-															>
-																<PencilIcon
-																	data-icon="inline-start"
-																	class="text-amber-400"
-																/>
-															</Button>
-														{/snippet}
-													</Tooltip.Trigger>
-													<Tooltip.Content>
-														<p>
-															Edit static host
-															rule
-														</p>
-													</Tooltip.Content>
-												</Tooltip.Root>
-
-												<!-- Delete Rule Tooltip -->
-												<Tooltip.Root>
-													<Tooltip.Trigger>
-														{#snippet child({
-															props,
-														})}
-															<Button
-																variant="ghost"
-																size="icon-sm"
-																{...props}
-																onclick={() =>
-																	handleRemoveHost(
-																		host.mac,
-																	)}
-															>
-																<Trash2Icon
-																	data-icon="inline-start"
-																	class="text-rose-400"
-																/>
-															</Button>
-														{/snippet}
-													</Tooltip.Trigger>
-													<Tooltip.Content>
-														<p>
-															Delete static host
-															rule
-														</p>
-													</Tooltip.Content>
-												</Tooltip.Root>
-											</div>
+											<DropdownMenu.Root>
+												<DropdownMenu.Trigger
+													class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+												>
+													<MoreHorizontalIcon
+														class="h-4 w-4"
+													/>
+												</DropdownMenu.Trigger>
+												<DropdownMenu.Content
+													align="end"
+													class="w-48 text-xs"
+												>
+													<DropdownMenu.Item
+														onclick={() =>
+															openEditModal(host)}
+														class="gap-2"
+													>
+														<PencilIcon
+															class="h-3.5 w-3.5 text-amber-400"
+														/>
+														Edit Host Assignment
+													</DropdownMenu.Item>
+													<DropdownMenu.Separator />
+													<DropdownMenu.Item
+														onclick={() => {
+															navigator.clipboard.writeText(
+																host.mac,
+															);
+															toast.success(
+																`Copied MAC ${host.mac}`,
+															);
+														}}
+														class="gap-2"
+													>
+														<CopyIcon
+															class="h-3.5 w-3.5 text-muted-foreground"
+														/>
+														Copy MAC Address
+													</DropdownMenu.Item>
+													{#if host.v4_fixed || host.v4}
+														<DropdownMenu.Item
+															onclick={() => {
+																const ip =
+																	host.v4_fixed ||
+																	host.v4 ||
+																	"";
+																navigator.clipboard.writeText(
+																	ip,
+																);
+																toast.success(
+																	`Copied Fixed IPv4 ${ip}`,
+																);
+															}}
+															class="gap-2"
+														>
+															<CopyIcon
+																class="h-3.5 w-3.5 text-muted-foreground"
+															/>
+															Copy Fixed IPv4
+														</DropdownMenu.Item>
+													{/if}
+													<DropdownMenu.Separator />
+													<DropdownMenu.Item
+														onclick={() =>
+															handleRemoveHost(
+																host.mac,
+															)}
+														class="gap-2 text-rose-500"
+													>
+														<Trash2Icon
+															class="h-3.5 w-3.5"
+														/>
+														Delete Static Host
+													</DropdownMenu.Item>
+												</DropdownMenu.Content>
+											</DropdownMenu.Root>
 										</Table.Cell>
 									</Table.Row>
 								{/each}

@@ -2,15 +2,20 @@
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import * as Tooltip from "$lib/components/ui/tooltip";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import * as Empty from "$lib/components/ui/empty";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
+	import { toast } from "svelte-sonner";
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import ZapIcon from "@lucide/svelte/icons/zap";
+	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import SearchIcon from "@lucide/svelte/icons/search";
+	import CopyIcon from "@lucide/svelte/icons/copy";
 	import type { DnsUpstreamEntry } from "$lib/api/types";
 
 	let {
@@ -180,27 +185,58 @@
 									</div>
 								</Table.Cell>
 								<Table.Cell class="text-right font-sans">
-									<Tooltip.Root>
-										<Tooltip.Trigger>
-											{#snippet child({ props })}
-												<Button
-													variant="ghost"
-													size="icon-sm"
-													{...props}
-													onclick={() =>
-														onRemoveUpstream(item)}
-												>
-													<Trash2Icon
-														data-icon="inline-start"
-														class="text-rose-400"
-													/>
-												</Button>
-											{/snippet}
-										</Tooltip.Trigger>
-										<Tooltip.Content>
-											<p>Delete upstream server</p>
-										</Tooltip.Content>
-									</Tooltip.Root>
+									<DropdownMenu.Root>
+										<DropdownMenu.Trigger
+											class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+										>
+											<MoreHorizontalIcon
+												class="h-4 w-4"
+											/>
+										</DropdownMenu.Trigger>
+										<DropdownMenu.Content
+											align="end"
+											class="w-44 text-xs"
+										>
+											<DropdownMenu.Item
+												onclick={onOpenDigModal}
+												class="gap-2"
+											>
+												<SearchIcon
+													class="h-3.5 w-3.5 text-sky-400"
+												/>
+												Test Resolution (Dig)
+											</DropdownMenu.Item>
+											<DropdownMenu.Item
+												onclick={() => {
+													const addr =
+														getUpstreamAddr(item);
+													navigator.clipboard.writeText(
+														addr,
+													);
+													toast.success(
+														`Copied upstream address ${addr}`,
+													);
+												}}
+												class="gap-2"
+											>
+												<CopyIcon
+													class="h-3.5 w-3.5 text-muted-foreground"
+												/>
+												Copy Address
+											</DropdownMenu.Item>
+											<DropdownMenu.Separator />
+											<DropdownMenu.Item
+												onclick={() =>
+													onRemoveUpstream(item)}
+												class="gap-2 text-rose-500"
+											>
+												<Trash2Icon
+													class="h-3.5 w-3.5"
+												/>
+												Remove Upstream
+											</DropdownMenu.Item>
+										</DropdownMenu.Content>
+									</DropdownMenu.Root>
 								</Table.Cell>
 							</Table.Row>
 						{/each}
