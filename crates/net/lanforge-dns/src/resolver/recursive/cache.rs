@@ -188,9 +188,15 @@ impl DnsCache {
 
                 let mut msg_decoder = WireDecoder::new(&value.data);
                 let data = if let Some(msg) = msg_decoder.decode_message() {
-                    msg.answers
-                        .first()
-                        .map_or_else(|| "no-data".to_string(), |r| format!("{:?}", r.rdata))
+                    if msg.answers.is_empty() {
+                        "no-data".to_string()
+                    } else if msg.answers.len() == 1 {
+                        msg.answers[0].rdata.to_string()
+                    } else {
+                        let formatted: Vec<String> =
+                            msg.answers.iter().map(|r| r.rdata.to_string()).collect();
+                        formatted.join(", ")
+                    }
                 } else {
                     "wire-error".to_string()
                 };

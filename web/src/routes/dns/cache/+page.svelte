@@ -50,15 +50,22 @@
 
 	async function loadEntries() {
 		try {
-			const res = await dnsCacheDump({
+			const res: any = await dnsCacheDump({
 				limit,
 				offset,
 				q: searchQuery.trim() || undefined,
 				kind: selectedType || undefined,
 			});
 			if (res) {
-				entries = res.entries ?? [];
-				total = res.total ?? 0;
+				const list: DnsCacheEntry[] = Array.isArray(res)
+					? res
+					: Array.isArray(res.entries)
+						? res.entries
+						: Array.isArray(res.data)
+							? res.data
+							: [];
+				entries = list;
+				total = res.total ?? res.meta?.total ?? list.length;
 			}
 		} catch {
 			toast.error("Failed to load DNS cache entries");
@@ -193,6 +200,9 @@
 		onSearchChange={handleSearchInput}
 		onTypeChange={handleTypeSelect}
 		onPageChange={handlePageChange}
+		onAddRewrite={(domain, target) => {
+			toast.info(`Creating rewrite rule for ${domain}`);
+		}}
 	/>
 </div>
 

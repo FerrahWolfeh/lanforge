@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Input } from "$lib/components/ui/input";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
@@ -12,8 +13,15 @@
 	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import EyeIcon from "@lucide/svelte/icons/eye";
+	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
+	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
+	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import { toast } from "svelte-sonner";
+	import { dnsBlock, dnsAllow } from "$lib/api/client";
 	import type { DnsCacheEntry, DnsRecordType } from "$lib/api/types";
+	import DnsCacheRecordDialog from "./DnsCacheRecordDialog.svelte";
 
 	let {
 		loading = false,
@@ -26,6 +34,7 @@
 		onSearchChange = (q: string) => {},
 		onTypeChange = (type: string) => {},
 		onPageChange = (newOffset: number) => {},
+		onAddRewrite = (domain: string, target: string) => {},
 	}: {
 		loading?: boolean;
 		entries?: DnsCacheEntry[];
@@ -37,9 +46,12 @@
 		onSearchChange?: (q: string) => void;
 		onTypeChange?: (type: string) => void;
 		onPageChange?: (newOffset: number) => void;
+		onAddRewrite?: (domain: string, target: string) => void;
 	} = $props();
 
 	let copiedItem = $state<string | null>(null);
+	let selectedRecord = $state<DnsCacheEntry | null>(null);
+	let dialogOpen = $state(false);
 
 	const RECORD_TYPES: DnsRecordType[] = [
 		"A",
@@ -69,6 +81,20 @@
 		SVCB: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 border-fuchsia-500/20",
 	};
 
+	function cleanDomain(raw: string): string {
+		if (!raw) return "";
+		return raw.trim().replace(/\.$/, "");
+	}
+
+	function cleanData(raw: string): string {
+		if (!raw) return "—";
+		return raw
+			.replace(/^"|"$/g, "")
+			.replace(/^(A|AAAA|CNAME|PTR|NS)\((.*)\)$/, "$2")
+			.trim()
+			.replace(/\.$/, "");
+	}
+
 	function formatTtl(secs: number): string {
 		if (secs <= 0) return "Expiring...";
 		const m = Math.floor(secs / 60);
@@ -90,16 +116,43 @@
 		}
 	}
 
+	function inspectRecord(entry: DnsCacheEntry) {
+		selectedRecord = entry;
+		dialogOpen = true;
+	}
+
+	async function handleQuickBlock(domain: string) {
+		const target = cleanDomain(domain);
+		try {
+			await dnsBlock(target);
+			toast.success(`Added ${target} to adblock black list`);
+		} catch (err: any) {
+			toast.error(err?.message ?? "Failed to block domain");
+		}
+	}
+
+	async function handleQuickAllow(domain: string) {
+		const target = cleanDomain(domain);
+		try {
+			await dnsAllow(target);
+			toast.success(`Added ${target} to allowlist`);
+		} catch (err: any) {
+			toast.error(err?.message ?? "Failed to allow domain");
+		}
+	}
+
 	const currentPage = $derived(Math.floor(offset / limit) + 1);
 	const totalPages = $derived(Math.max(1, Math.ceil(total / limit)));
 	const startItem = $derived(total === 0 ? 0 : offset + 1);
 	const endItem = $derived(Math.min(offset + limit, total));
 </script>
 
-<Card.Root>
-	<Card.Header class="pb-3">
+<Card.Root
+	class="flex flex-col h-[calc(100vh-250px)] min-h-[480px] max-h-[750px] overflow-hidden border shadow-sm"
+>
+	<Card.Header class="pb-3 shrink-0 border-b bg-card">
 		<div
-			class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+			class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
 		>
 			<div>
 				<Card.Title
@@ -157,131 +210,155 @@
 		</div>
 	</Card.Header>
 
-	<Card.Content class="p-0">
-		<div class="overflow-x-auto">
-			<Table.Root>
-				<Table.Header class="bg-muted/30">
-					<Table.Row>
-						<Table.Head class="w-[280px]">Domain Name</Table.Head>
-						<Table.Head class="w-[90px]">Type</Table.Head>
-						<Table.Head>Resolved Value / Target</Table.Head>
-						<Table.Head class="w-[120px] text-right"
-							>TTL / Expires</Table.Head
-						>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#if loading}
-						{#each Array(5) as _}
-							<Table.Row>
-								<Table.Cell
-									><Skeleton class="h-4 w-48" /></Table.Cell
-								>
-								<Table.Cell
-									><Skeleton
-										class="h-5 w-12 rounded-full"
-									/></Table.Cell
-								>
-								<Table.Cell
-									><Skeleton class="h-4 w-64" /></Table.Cell
-								>
-								<Table.Cell class="text-right"
-									><Skeleton
-										class="h-4 w-16 ml-auto"
-									/></Table.Cell
-								>
-							</Table.Row>
-						{/each}
-					{:else if entries.length === 0}
+	<!-- Table Body with Fixed Scroll Container -->
+	<Card.Content class="p-0 flex-1 min-h-0 overflow-y-auto relative">
+		<Table.Root>
+			<Table.Header
+				class="sticky top-0 z-10 bg-card/95 backdrop-blur-md border-b shadow-xs"
+			>
+				<Table.Row class="hover:bg-transparent">
+					<Table.Head class="w-[280px]">Domain Name</Table.Head>
+					<Table.Head class="w-[90px]">Type</Table.Head>
+					<Table.Head>Resolved Value / Target</Table.Head>
+					<Table.Head class="w-[120px] text-right"
+						>TTL / Expires</Table.Head
+					>
+					<Table.Head class="w-[60px] text-right">Actions</Table.Head>
+				</Table.Row>
+			</Table.Header>
+			<Table.Body>
+				{#if loading}
+					{#each Array(6) as _}
 						<Table.Row>
 							<Table.Cell
-								colspan={4}
-								class="h-32 text-center text-muted-foreground text-sm"
+								><Skeleton class="h-4 w-48" /></Table.Cell
 							>
-								{#if searchQuery || selectedType}
-									No cached records match the active filter.
-								{:else}
-									DNS cache is currently empty.
-								{/if}
-							</Table.Cell>
+							<Table.Cell
+								><Skeleton
+									class="h-5 w-12 rounded-full"
+								/></Table.Cell
+							>
+							<Table.Cell
+								><Skeleton class="h-4 w-64" /></Table.Cell
+							>
+							<Table.Cell class="text-right"
+								><Skeleton
+									class="h-4 w-16 ml-auto"
+								/></Table.Cell
+							>
+							<Table.Cell
+								><Skeleton
+									class="h-4 w-6 ml-auto"
+								/></Table.Cell
+							>
 						</Table.Row>
-					{:else}
-						{#each entries as entry (entry.name + entry.kind + entry.data)}
-							{@const style =
-								typeVariants[entry.kind] ||
-								"bg-secondary text-secondary-foreground border-border"}
-							{@const isExpiringSoon = entry.expires_in_secs < 30}
-							<Table.Row
-								class="hover:bg-muted/40 transition-colors"
-							>
-								<!-- Domain Name -->
-								<Table.Cell class="font-medium text-xs">
-									<div
-										class="flex items-center gap-1.5 group"
+					{/each}
+				{:else if entries.length === 0}
+					<Table.Row>
+						<Table.Cell
+							colspan={5}
+							class="h-48 text-center text-muted-foreground text-sm"
+						>
+							{#if searchQuery || selectedType}
+								No cached records match the active filter.
+							{:else}
+								DNS cache is currently empty.
+							{/if}
+						</Table.Cell>
+					</Table.Row>
+				{:else}
+					{#each entries as entry (entry.name + entry.kind + entry.data)}
+						{@const domainClean = cleanDomain(entry.name)}
+						{@const dataClean = cleanData(entry.data)}
+						{@const style =
+							typeVariants[entry.kind] ||
+							"bg-secondary text-secondary-foreground border-border"}
+						{@const isExpiringSoon = entry.expires_in_secs < 30}
+						<Table.Row
+							class="hover:bg-muted/50 transition-colors cursor-pointer group"
+							onclick={() => inspectRecord(entry)}
+						>
+							<!-- Domain Name -->
+							<Table.Cell class="font-medium text-xs">
+								<div class="flex items-center gap-1.5">
+									<span
+										class="truncate max-w-[240px] font-mono text-foreground font-medium"
+										title={domainClean}
 									>
-										<span
-											class="truncate max-w-[240px]"
-											title={entry.name}
-										>
-											{entry.name}
-										</span>
-										<button
-											type="button"
-											onclick={() =>
-												copyToClipboard(
-													entry.name,
-													"domain name",
-												)}
-											class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded"
-											title="Copy domain"
-										>
-											{#if copiedItem === entry.name}
-												<CheckIcon
-													class="h-3.5 w-3.5 text-emerald-500"
-												/>
-											{:else}
-												<CopyIcon
-													class="h-3.5 w-3.5 text-muted-foreground"
-												/>
-											{/if}
-										</button>
-									</div>
-								</Table.Cell>
-
-								<!-- Type Badge -->
-								<Table.Cell>
-									<Badge
-										variant="outline"
-										class="px-2 py-0.5 text-[11px] font-mono border font-semibold {style}"
+										{domainClean}
+									</span>
+									<button
+										type="button"
+										onclick={(e) => {
+											e.stopPropagation();
+											copyToClipboard(
+												domainClean,
+												"domain name",
+											);
+										}}
+										class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded"
+										title="Copy domain"
 									>
-										{entry.kind}
-									</Badge>
-								</Table.Cell>
+										{#if copiedItem === domainClean}
+											<CheckIcon
+												class="h-3.5 w-3.5 text-emerald-500"
+											/>
+										{:else}
+											<CopyIcon
+												class="h-3.5 w-3.5 text-muted-foreground"
+											/>
+										{/if}
+									</button>
+								</div>
+							</Table.Cell>
 
-								<!-- Value / Target -->
-								<Table.Cell
-									class="font-mono text-xs text-muted-foreground"
+							<!-- Type Badge -->
+							<Table.Cell>
+								<Badge
+									variant="outline"
+									class="px-2 py-0.5 text-[11px] font-mono border font-semibold {style}"
 								>
-									<div
-										class="flex items-center gap-1.5 group"
-									>
+									{entry.kind}
+								</Badge>
+							</Table.Cell>
+
+							<!-- Value / Target -->
+							<Table.Cell
+								class="font-mono text-xs text-muted-foreground"
+							>
+								<div class="flex items-center gap-1.5">
+									{#if dataClean === "no-data"}
 										<span
-											class="truncate max-w-[380px]"
-											title={entry.data}
+											class="inline-flex items-center gap-1 text-muted-foreground/70 italic text-[11px]"
 										>
-											{entry.data}
+											no-data
+										</span>
+									{:else if dataClean === "wire-error"}
+										<span
+											class="inline-flex items-center gap-1 text-rose-500/80 font-medium text-[11px]"
+										>
+											wire-error
+										</span>
+									{:else}
+										<span
+											class="truncate max-w-[380px] text-foreground/90 font-mono"
+											title={dataClean}
+										>
+											{dataClean}
 										</span>
 										<button
 											type="button"
-											onclick={() =>
+											onclick={(e) => {
+												e.stopPropagation();
 												copyToClipboard(
-													entry.data,
+													dataClean,
 													"answer value",
-												)}
+												);
+											}}
 											class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded"
 											title="Copy resolved value"
 										>
-											{#if copiedItem === entry.data}
+											{#if copiedItem === dataClean}
 												<CheckIcon
 													class="h-3.5 w-3.5 text-emerald-500"
 												/>
@@ -291,58 +368,152 @@
 												/>
 											{/if}
 										</button>
-									</div>
-								</Table.Cell>
+									{/if}
+								</div>
+							</Table.Cell>
 
-								<!-- TTL Expiration -->
-								<Table.Cell
-									class="text-right font-mono text-xs"
+							<!-- TTL Expiration -->
+							<Table.Cell class="text-right font-mono text-xs">
+								<span
+									class={isExpiringSoon
+										? "text-amber-500 font-semibold"
+										: "text-muted-foreground"}
 								>
-									<span
-										class={isExpiringSoon
-											? "text-amber-600 dark:text-amber-400 font-semibold"
-											: "text-muted-foreground"}
-									>
-										{formatTtl(entry.expires_in_secs)}
-									</span>
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					{/if}
-				</Table.Body>
-			</Table.Root>
-		</div>
+									{formatTtl(entry.expires_in_secs)}
+								</span>
+							</Table.Cell>
 
-		<!-- Pagination Footer -->
-		{#if total > limit}
-			<div class="flex items-center justify-between px-4 py-3 border-t">
-				<p class="text-xs text-muted-foreground">
-					Page {currentPage} of {totalPages}
-				</p>
-				<div class="flex items-center gap-1">
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={offset === 0 || loading}
-						onclick={() =>
-							onPageChange(Math.max(0, offset - limit))}
-						class="h-8 gap-1 px-2.5 text-xs"
-					>
-						<ChevronLeftIcon class="h-3.5 w-3.5" />
-						Previous
-					</Button>
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={offset + limit >= total || loading}
-						onclick={() => onPageChange(offset + limit)}
-						class="h-8 gap-1 px-2.5 text-xs"
-					>
-						Next
-						<ChevronRightIcon class="h-3.5 w-3.5" />
-					</Button>
-				</div>
-			</div>
-		{/if}
+							<!-- Row Action Menu -->
+							<Table.Cell
+								class="text-right"
+								onclick={(e) => e.stopPropagation()}
+							>
+								<DropdownMenu.Root>
+									<DropdownMenu.Trigger
+										class="h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+									>
+										<MoreHorizontalIcon class="h-4 w-4" />
+									</DropdownMenu.Trigger>
+									<DropdownMenu.Content
+										align="end"
+										class="w-44 text-xs"
+									>
+										<DropdownMenu.Item
+											onclick={() => inspectRecord(entry)}
+											class="gap-2"
+										>
+											<EyeIcon
+												class="h-3.5 w-3.5 text-primary"
+											/>
+											Inspect Record
+										</DropdownMenu.Item>
+										<DropdownMenu.Item
+											onclick={() =>
+												copyToClipboard(
+													domainClean,
+													"domain name",
+												)}
+											class="gap-2"
+										>
+											<CopyIcon
+												class="h-3.5 w-3.5 text-muted-foreground"
+											/>
+											Copy Domain
+										</DropdownMenu.Item>
+										<DropdownMenu.Item
+											onclick={() =>
+												copyToClipboard(
+													dataClean,
+													"answer value",
+												)}
+											class="gap-2"
+										>
+											<CopyIcon
+												class="h-3.5 w-3.5 text-muted-foreground"
+											/>
+											Copy Resolved Target
+										</DropdownMenu.Item>
+										<DropdownMenu.Separator />
+										<DropdownMenu.Item
+											onclick={() =>
+												handleQuickBlock(domainClean)}
+											class="gap-2 text-rose-500"
+										>
+											<ShieldAlertIcon
+												class="h-3.5 w-3.5"
+											/>
+											Block Domain
+										</DropdownMenu.Item>
+										<DropdownMenu.Item
+											onclick={() =>
+												handleQuickAllow(domainClean)}
+											class="gap-2 text-emerald-500"
+										>
+											<ShieldCheckIcon
+												class="h-3.5 w-3.5"
+											/>
+											Allow Domain
+										</DropdownMenu.Item>
+										<DropdownMenu.Item
+											onclick={() =>
+												onAddRewrite(
+													domainClean,
+													dataClean !== "no-data"
+														? dataClean
+														: "",
+												)}
+											class="gap-2"
+										>
+											<ArrowRightLeftIcon
+												class="h-3.5 w-3.5 text-amber-500"
+											/>
+											Create Rewrite
+										</DropdownMenu.Item>
+									</DropdownMenu.Content>
+								</DropdownMenu.Root>
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				{/if}
+			</Table.Body>
+		</Table.Root>
 	</Card.Content>
+
+	<!-- Fixed Pinned Pagination Footer -->
+	<div
+		class="flex items-center justify-between px-4 py-2.5 border-t bg-card shrink-0 z-10"
+	>
+		<p class="text-xs text-muted-foreground">
+			Page {currentPage} of {totalPages}
+		</p>
+		<div class="flex items-center gap-1">
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={offset === 0 || loading}
+				onclick={() => onPageChange(Math.max(0, offset - limit))}
+				class="h-8 gap-1 px-2.5 text-xs"
+			>
+				<ChevronLeftIcon class="h-3.5 w-3.5" />
+				Previous
+			</Button>
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={offset + limit >= total || loading}
+				onclick={() => onPageChange(offset + limit)}
+				class="h-8 gap-1 px-2.5 text-xs"
+			>
+				Next
+				<ChevronRightIcon class="h-3.5 w-3.5" />
+			</Button>
+		</div>
+	</div>
 </Card.Root>
+
+<!-- Inspection Dialog -->
+<DnsCacheRecordDialog
+	bind:open={dialogOpen}
+	entry={selectedRecord}
+	onAddRewrite={(domain, target) => onAddRewrite(domain, target)}
+/>

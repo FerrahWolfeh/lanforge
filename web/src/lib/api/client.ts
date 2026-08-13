@@ -82,6 +82,36 @@ async function request<T>(
 	return ('data' in json ? json.data : json) as T;
 }
 
+async function requestRaw<T>(
+	method: string,
+	path: string,
+	body?: unknown,
+	extraHeaders?: Record<string, string>
+): Promise<T> {
+	const token = getToken();
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+		...extraHeaders
+	};
+	if (token) headers['Authorization'] = `Bearer ${token}`;
+
+	const res = await fetch(`/api/v1${path}`, {
+		method,
+		headers,
+		body: body !== undefined ? JSON.stringify(body) : undefined
+	});
+
+	if (res.status === 204) return undefined as T;
+
+	const json = await res.json();
+
+	if (!res.ok) {
+		throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
+	}
+
+	return json as T;
+}
+
 const get = <T>(path: string, params?: Record<string, string | number | boolean | undefined>) => {
 	const url = new URL(path, 'http://x');
 	if (params) {
@@ -90,6 +120,19 @@ const get = <T>(path: string, params?: Record<string, string | number | boolean 
 		}
 	}
 	return request<T>('GET', url.pathname + url.search);
+};
+
+const getRaw = <T>(
+	path: string,
+	params?: Record<string, string | number | boolean | undefined>
+) => {
+	const url = new URL(path, 'http://x');
+	if (params) {
+		for (const [k, v] of Object.entries(params)) {
+			if (v !== undefined) url.searchParams.set(k, String(v));
+		}
+	}
+	return requestRaw<T>('GET', url.pathname + url.search);
 };
 const post = <T>(path: string, body?: unknown) => request<T>('POST', path, body);
 const put = <T>(path: string, body?: unknown) => request<T>('PUT', path, body);
@@ -158,11 +201,28 @@ export const dnsAnalytics = (limit?: number, client?: string) =>
 	});
 export const dnsQuery = (name: string, type?: string) =>
 	get<unknown>('/dns/query', { name, type });
-export const dnsQueryLog = (params?: {
+export const dnsQueryLog = async (params?: {
 	client?: string;
 	limit?: number;
 	offset?: number;
-}) => get<{ entries: DnsQueryLogEntry[]; total: number }>('/dns/log', params);
+}): Promise<{ entries: DnsQueryLogEntry[]; total: number }> => {
+	const res = await getRaw<any>('/dns/log', params);
+	if (!res) return { entries: [], total: 0 };
+	const list: DnsQueryLogEntry[] = Array.isArray(res)
+		? res
+		: Array.isArray(res.data)
+			? res.data
+			: Array.isArray(res.entries)
+				? res.entries
+				: [];
+	const totalCount =
+		typeof res.meta?.total === 'number'
+			? res.meta.total
+			: typeof res.total === 'number'
+				? res.total
+				: list.length;
+	return { entries: list, total: totalCount };
+};
 export const dnsUpstreams = () => get<DnsUpstreamsResponse | DnsUpstreamEntry[]>('/dns/upstreams');
 export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?: string }) =>
 	post<void>('/dns/upstreams', entry);
@@ -180,12 +240,29 @@ export const dnsReverseResolverRemove = (subnet: string) =>
 // DNS — cache
 // ---------------------------------------------------------------------------
 
-export const dnsCacheDump = (params?: {
+export const dnsCacheDump = async (params?: {
 	limit?: number;
 	offset?: number;
 	q?: string;
 	kind?: string;
-}) => get<{ entries: DnsCacheEntry[]; total: number }>('/dns/cache', params);
+}): Promise<{ entries: DnsCacheEntry[]; total: number }> => {
+	const res = await getRaw<any>('/dns/cache', params);
+	if (!res) return { entries: [], total: 0 };
+	const list: DnsCacheEntry[] = Array.isArray(res)
+		? res
+		: Array.isArray(res.data)
+			? res.data
+			: Array.isArray(res.entries)
+				? res.entries
+				: [];
+	const totalCount =
+		typeof res.meta?.total === 'number'
+			? res.meta.total
+			: typeof res.total === 'number'
+				? res.total
+				: list.length;
+	return { entries: list, total: totalCount };
+};
 export const dnsCacheFlush = () => del<void>('/dns/cache');
 export const dnsCacheStatsExt = () => get<DnsCacheStatsResponse>('/dns/cache/stats');
 
