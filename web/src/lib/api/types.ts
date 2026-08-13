@@ -424,11 +424,14 @@ export interface DnsAnalyticsResponse {
 export interface DnsQueryLogEntry {
 	timestamp: number;
 	src_ip: string;
+	src_mac?: string | null;
+	src_hostname?: string | null;
 	domain: string;
 	qtype: DnsRecordType;
 	result: string;
 	upstream_us: number;
 	cached: boolean;
+	answer?: string | null;
 }
 
 export interface DnsUpstreamEntry {

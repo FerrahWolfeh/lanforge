@@ -206,7 +206,7 @@ export const dnsQueryLog = async (params?: {
 	limit?: number;
 	offset?: number;
 }): Promise<{ entries: DnsQueryLogEntry[]; total: number }> => {
-	const res = await getRaw<any>('/dns/log', params);
+	const res = await getRaw<any>('/dns/logs', params);
 	if (!res) return { entries: [], total: 0 };
 	const list: DnsQueryLogEntry[] = Array.isArray(res)
 		? res
@@ -352,7 +352,7 @@ export function eventsUrl(params?: { filter?: string; initial?: number }): strin
  * Build the URL for the DNS log SSE stream.
  */
 export function dnsLogSseUrl(params?: { client?: string; limit?: number }): string {
-	const url = new URL('/api/v1/dns/log', window.location.origin);
+	const url = new URL('/api/v1/dns/logs', window.location.origin);
 	url.searchParams.set('follow', 'true');
 	if (params?.client) url.searchParams.set('client', params.client);
 	if (params?.limit) url.searchParams.set('limit', String(params.limit));
