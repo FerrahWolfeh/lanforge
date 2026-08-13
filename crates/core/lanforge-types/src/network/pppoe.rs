@@ -44,6 +44,7 @@ pub struct PppoeNftablesConfig {
     pub mss_clamping: bool,
     pub bypass_dns: bool,
     pub bypass_vowifi: bool,
+    pub masquerade: bool,
     pub custom_rules_file: Option<String>,
 }
 
@@ -56,6 +57,7 @@ impl Default for PppoeNftablesConfig {
             mss_clamping: true,
             bypass_dns: true,
             bypass_vowifi: true,
+            masquerade: true,
             custom_rules_file: None,
         }
     }
@@ -69,6 +71,8 @@ pub struct PppoeConfig {
     pub wan_iface: String,
     pub username: String,
     pub password: String,
+    pub service_name: Option<String>,
+    pub ac_name: Option<String>,
     pub auth: AuthMethod,
     pub mru: u16,
     pub lcp_echo_interval_secs: u64,
@@ -87,6 +91,8 @@ impl Default for PppoeConfig {
             wan_iface: "eth1".into(),
             username: String::new(),
             password: String::new(),
+            service_name: None,
+            ac_name: None,
             auth: AuthMethod::ChapMd5,
             mru: 1492,
             lcp_echo_interval_secs: 20,

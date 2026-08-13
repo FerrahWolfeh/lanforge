@@ -221,6 +221,43 @@ fn build_ruleset(
         ]));
     }
 
+    // 5. Postrouting NAT chain (if masquerade is enabled)
+    if cfg.masquerade && !ppp_iface.is_empty() {
+        let nat_chain_name = "postrouting";
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone().into(),
+            name: nat_chain_name.into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::NAT),
+            hook: Some(NfHook::Postrouting),
+            prio: Some(100),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        batch.add(NfListObject::Rule(Rule {
+            family: NfFamily::INet,
+            table: table.into(),
+            chain: nat_chain_name.into(),
+            expr: vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::Oifname,
+                    })),
+                    right: Expression::String(ppp_iface.to_string().into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Masquerade(None),
+            ]
+            .into(),
+            handle: None,
+            index: None,
+            comment: None,
+        }));
+    }
+
     batch.to_nftables()
 }
 
@@ -349,6 +386,9 @@ mod tests {
         // MSS clamping
         assert!(json.contains("\"maxseg\""));
         assert!(json.contains("mtu"));
+        // NAT masquerade
+        assert!(json.contains("\"postrouting\""));
+        assert!(json.contains("\"masquerade\""));
     }
 
     #[test]
@@ -364,6 +404,8 @@ mod tests {
         assert!(!json.contains("\"@f\""));
         // MSS clamping still present
         assert!(json.contains("\"maxseg\""));
+        // NAT masquerade still present
+        assert!(json.contains("\"masquerade\""));
     }
 
     #[test]
@@ -374,6 +416,7 @@ mod tests {
             mss_clamping: false,
             bypass_dns: false,
             bypass_vowifi: false,
+            masquerade: false,
             ..PppoeNftablesConfig::default()
         };
         let ruleset = build_ruleset(&cfg, "ppp0", &[]);
@@ -386,6 +429,7 @@ mod tests {
         assert!(!json.contains("\"esp\""));
         assert!(!json.contains("\"@f\""));
         assert!(!json.contains("\"maxseg\""));
+        assert!(!json.contains("\"masquerade\""));
     }
 
     #[test]

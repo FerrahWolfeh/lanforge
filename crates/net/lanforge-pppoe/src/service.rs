@@ -69,6 +69,8 @@ impl PppoeService {
             mac,
             self.cfg.discovery_padi_retries,
             self.cfg.discovery_padi_timeout_secs,
+            self.cfg.service_name.clone(),
+            self.cfg.ac_name.clone(),
         );
         let disc_res = discovery.run().await?;
         info!(

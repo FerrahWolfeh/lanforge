@@ -128,6 +128,8 @@ pub struct PppoeDiscovery {
     local_mac: MacAddr,
     padi_retries: u32,
     padi_timeout_secs: u64,
+    service_name: Option<String>,
+    ac_name: Option<String>,
 }
 
 impl PppoeDiscovery {
@@ -137,12 +139,16 @@ impl PppoeDiscovery {
         local_mac: MacAddr,
         padi_retries: u32,
         padi_timeout_secs: u64,
+        service_name: Option<String>,
+        ac_name: Option<String>,
     ) -> Self {
         Self {
             ifindex,
             local_mac,
             padi_retries,
             padi_timeout_secs,
+            service_name,
+            ac_name,
         }
     }
 
@@ -159,12 +165,21 @@ impl PppoeDiscovery {
             &host_uniq,
             self.padi_retries,
             self.padi_timeout_secs,
+            self.service_name.as_deref(),
+            self.ac_name.as_deref(),
         )
         .await?;
 
         // 2. Send PADR and wait for PADS
-        let session_id =
-            exchange_padr(&async_fd, self.local_mac, ac_mac, ac_cookie, &host_uniq).await?;
+        let session_id = exchange_padr(
+            &async_fd,
+            self.local_mac,
+            ac_mac,
+            ac_cookie,
+            &host_uniq,
+            self.service_name.as_deref(),
+        )
+        .await?;
 
         Ok(DiscoveryResult {
             ac_mac,
@@ -207,13 +222,17 @@ fn bind_discovery_socket(ifindex: u32) -> Result<OwnedFd, PppoeError> {
     Ok(fd)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exchange_padi(
     async_fd: &AsyncFd<OwnedFd>,
     local_mac: MacAddr,
     host_uniq: &[u8; 4],
     padi_retries: u32,
     padi_timeout_secs: u64,
+    service_name: Option<&str>,
+    ac_name_filter: Option<&str>,
 ) -> Result<(MacAddr, Option<String>, Option<Vec<u8>>), PppoeError> {
+    let service_name_bytes = service_name.map_or_else(Vec::new, |s| s.as_bytes().to_vec());
     let padi_frame = PppoeDiscoveryFrame {
         dst_mac: MacAddr([0xff; 6]),
         src_mac: local_mac,
@@ -222,7 +241,7 @@ async fn exchange_padi(
         tags: vec![
             Tag {
                 tag_type: TAG_SERVICE_NAME,
-                value: Vec::new(),
+                value: service_name_bytes,
             },
             Tag {
                 tag_type: TAG_HOST_UNIQ,
@@ -250,7 +269,7 @@ async fn exchange_padi(
         while start.elapsed() < timeout {
             let remaining = timeout.saturating_sub(start.elapsed());
             if let Ok(Ok(mut guard)) = tokio::time::timeout(remaining, async_fd.readable()).await {
-                let mut buf = [0u8; 1500];
+                let mut buf = [0u8; 2048];
                 if let Ok(n) = nix::unistd::read(async_fd.get_ref(), &mut buf) {
                     guard.clear_ready();
                     if let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
@@ -262,14 +281,30 @@ async fn exchange_padi(
                             .iter()
                             .any(|t| t.tag_type == TAG_HOST_UNIQ && t.value == host_uniq);
                         if matches_uniq {
-                            ac_mac = Some(frame.src_mac);
-                            for tag in frame.tags {
+                            let mut frame_ac_name = None;
+                            let mut frame_ac_cookie = None;
+                            for tag in &frame.tags {
                                 if tag.tag_type == TAG_AC_COOKIE {
-                                    ac_cookie = Some(tag.value);
+                                    frame_ac_cookie = Some(tag.value.clone());
                                 } else if tag.tag_type == TAG_AC_NAME {
-                                    ac_name = String::from_utf8(tag.value).ok();
+                                    frame_ac_name = String::from_utf8(tag.value.clone()).ok();
                                 }
                             }
+
+                            if let Some(filter) = ac_name_filter
+                                && frame_ac_name.as_deref() != Some(filter)
+                            {
+                                debug!(
+                                    expected = filter,
+                                    actual = ?frame_ac_name,
+                                    "Ignoring PADO from non-matching Access Concentrator"
+                                );
+                                continue;
+                            }
+
+                            ac_mac = Some(frame.src_mac);
+                            ac_name = frame_ac_name;
+                            ac_cookie = frame_ac_cookie;
                             debug!("Received valid PPPoE PADO frame");
                             break;
                         }
@@ -293,11 +328,13 @@ async fn exchange_padr(
     ac_mac: MacAddr,
     ac_cookie: Option<Vec<u8>>,
     host_uniq: &[u8; 4],
+    service_name: Option<&str>,
 ) -> Result<u16, PppoeError> {
+    let service_name_bytes = service_name.map_or_else(Vec::new, |s| s.as_bytes().to_vec());
     let mut padr_tags = vec![
         Tag {
             tag_type: TAG_SERVICE_NAME,
-            value: Vec::new(),
+            value: service_name_bytes,
         },
         Tag {
             tag_type: TAG_HOST_UNIQ,
@@ -335,7 +372,7 @@ async fn exchange_padr(
         while start.elapsed() < timeout {
             let remaining = timeout.saturating_sub(start.elapsed());
             if let Ok(Ok(mut guard)) = tokio::time::timeout(remaining, async_fd.readable()).await {
-                let mut buf = [0u8; 1500];
+                let mut buf = [0u8; 2048];
                 if let Ok(n) = nix::unistd::read(async_fd.get_ref(), &mut buf) {
                     guard.clear_ready();
                     if let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])

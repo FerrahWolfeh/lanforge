@@ -436,10 +436,7 @@ impl PostgresDatabase {
 
     pub async fn load_all_devices(&self) -> Result<Vec<Device>, DbError> {
         let state = self.load_table().await?;
-        Ok(state
-            .devices()
-            .map(|d| d.as_ref().clone())
-            .collect())
+        Ok(state.devices().map(|d| d.as_ref().clone()).collect())
     }
 }
 
@@ -457,7 +454,10 @@ impl DeviceStore for PostgresDatabase {
         })
     }
 
-    fn upsert_base_device_only<'a>(&'a self, device: &'a Device) -> BoxFuture<'a, Result<(), DbError>> {
+    fn upsert_base_device_only<'a>(
+        &'a self,
+        device: &'a Device,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let mut tx = self.pool.begin().await.map_err(map_err)?;
             upsert_base_device_only_internal(&mut tx, device).await?;
@@ -488,7 +488,10 @@ impl DeviceStore for PostgresDatabase {
         })
     }
 
-    fn find_mac_by_hostname<'a>(&'a self, hostname: &'a str) -> BoxFuture<'a, Result<Option<MacAddr>, DbError>> {
+    fn find_mac_by_hostname<'a>(
+        &'a self,
+        hostname: &'a str,
+    ) -> BoxFuture<'a, Result<Option<MacAddr>, DbError>> {
         Box::pin(async move {
             let row = fetch_optional!(
                 sqlx::query!(
@@ -595,7 +598,10 @@ impl DeviceStore for PostgresDatabase {
         })
     }
 
-    fn get_lease_history(&self, mac: MacAddr) -> BoxFuture<'_, Result<Vec<LeaseHistoryEntry>, DbError>> {
+    fn get_lease_history(
+        &self,
+        mac: MacAddr,
+    ) -> BoxFuture<'_, Result<Vec<LeaseHistoryEntry>, DbError>> {
         Box::pin(async move {
             let pg_mac = PgMacAddr::from(mac);
             let rows = fetch_all!(
@@ -901,12 +907,13 @@ impl DnsStore for PostgresDatabase {
     fn load_dns_allowlist(&self) -> BoxFuture<'_, Result<Vec<(i64, String)>, DbError>> {
         Box::pin(async move {
             let rows = fetch_all!(
-                sqlx::query!(
-                    "SELECT id, domain FROM dns.allowlist ORDER BY domain"
-                ),
+                sqlx::query!("SELECT id, domain FROM dns.allowlist ORDER BY domain"),
                 &self.pool
             )?;
-            Ok(rows.into_iter().map(|r| (i64::from(r.id), r.domain)).collect())
+            Ok(rows
+                .into_iter()
+                .map(|r| (i64::from(r.id), r.domain))
+                .collect())
         })
     }
 
@@ -928,7 +935,10 @@ impl DnsStore for PostgresDatabase {
         Box::pin(async move {
             let sanitized_domain = sanitize_pg_str(domain);
             exec!(
-                sqlx::query!("DELETE FROM dns.allowlist WHERE domain = $1", sanitized_domain),
+                sqlx::query!(
+                    "DELETE FROM dns.allowlist WHERE domain = $1",
+                    sanitized_domain
+                ),
                 &self.pool
             )?;
             Ok(())
@@ -942,7 +952,9 @@ impl DnsStore for PostgresDatabase {
         })
     }
 
-    fn load_dns_reverse_resolvers(&self) -> BoxFuture<'_, Result<Vec<DnsReverseResolver>, DbError>> {
+    fn load_dns_reverse_resolvers(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<DnsReverseResolver>, DbError>> {
         Box::pin(async move {
             let rows = fetch_all!(
                 sqlx::query_as!(
@@ -955,7 +967,10 @@ impl DnsStore for PostgresDatabase {
                 &self.pool
             )?;
 
-            Ok(rows.into_iter().filter_map(ReverseResolverDto::into_resolver).collect())
+            Ok(rows
+                .into_iter()
+                .filter_map(ReverseResolverDto::into_resolver)
+                .collect())
         })
     }
 
@@ -981,7 +996,10 @@ impl DnsStore for PostgresDatabase {
         })
     }
 
-    fn remove_dns_reverse_resolver<'a>(&'a self, subnet: &'a IpSubnet) -> BoxFuture<'a, Result<(), DbError>> {
+    fn remove_dns_reverse_resolver<'a>(
+        &'a self,
+        subnet: &'a IpSubnet,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let pg_subnet = PgCidr::from(*subnet);
             exec!(
@@ -1030,7 +1048,10 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn save_adblock_config<'a>(&'a self, cfg: &'a AdblockDbConfig) -> BoxFuture<'a, Result<(), DbError>> {
+    fn save_adblock_config<'a>(
+        &'a self,
+        cfg: &'a AdblockDbConfig,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let pg_ip_v4 = cfg.blocking_ip_v4.map(PgInet::from);
             let pg_ip_v6 = cfg.blocking_ip_v6.map(PgInet::from);
@@ -1059,14 +1080,19 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn set_adblock_config_value<'a>(&'a self, key: &'a str, value: &'a str) -> BoxFuture<'a, Result<(), DbError>> {
+    fn set_adblock_config_value<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             use std::str::FromStr;
             let mut cfg = self.load_adblock_config().await?;
             match key {
                 "enabled" => cfg.enabled = value == "true",
                 "blocking_mode" => {
-                    if let Ok(m) = lanforge_types::network::dns::adblock::BlockingMode::from_str(value)
+                    if let Ok(m) =
+                        lanforge_types::network::dns::adblock::BlockingMode::from_str(value)
                     {
                         cfg.blocking_mode = m;
                     }
@@ -1097,7 +1123,9 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn load_adblock_urls(&self) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>> {
+    fn load_adblock_urls(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>> {
         Box::pin(async move {
             let sources = self.load_adblock_sources().await?;
             Ok(sources
@@ -1107,7 +1135,11 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn add_adblock_url<'a>(&'a self, url: &'a str, kind: AdblockUrlKind) -> BoxFuture<'a, Result<(), DbError>> {
+    fn add_adblock_url<'a>(
+        &'a self,
+        url: &'a str,
+        kind: AdblockUrlKind,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.add_adblock_source(url, kind).await.map(|_| ()) })
     }
 
@@ -1146,7 +1178,11 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn add_adblock_source<'a>(&'a self, url: &'a str, kind: AdblockUrlKind) -> BoxFuture<'a, Result<i64, DbError>> {
+    fn add_adblock_source<'a>(
+        &'a self,
+        url: &'a str,
+        kind: AdblockUrlKind,
+    ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
             let kind_str = kind.to_string();
             let row = fetch_one!(
@@ -1179,7 +1215,11 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn update_adblock_source_status(&self, id: i64, enabled: bool) -> BoxFuture<'_, Result<(), DbError>> {
+    fn update_adblock_source_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> BoxFuture<'_, Result<(), DbError>> {
         Box::pin(async move {
             let id_i32 = id as i32;
             exec!(
@@ -1203,7 +1243,9 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn load_adblock_rules(&self) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>> {
+    fn load_adblock_rules(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>> {
         Box::pin(async move {
             let rows = fetch_all!(
                 sqlx::query_as!(
@@ -1222,7 +1264,11 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn add_adblock_rule<'a>(&'a self, domain: &'a str, action: &'a str) -> BoxFuture<'a, Result<i64, DbError>> {
+    fn add_adblock_rule<'a>(
+        &'a self,
+        domain: &'a str,
+        action: &'a str,
+    ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
             let row = fetch_one!(
                 sqlx::query!(
@@ -1254,7 +1300,11 @@ impl AdblockStore for PostgresDatabase {
         })
     }
 
-    fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> BoxFuture<'_, Result<(), DbError>> {
+    fn update_adblock_rule_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> BoxFuture<'_, Result<(), DbError>> {
         Box::pin(async move {
             let id_i32 = id as i32;
             exec!(
@@ -1382,7 +1432,10 @@ impl ApiTokenStore for PostgresDatabase {
         })
     }
 
-    fn delete_api_token_by_id_or_name<'a>(&'a self, id_or_name: &'a str) -> BoxFuture<'a, Result<(), DbError>> {
+    fn delete_api_token_by_id_or_name<'a>(
+        &'a self,
+        id_or_name: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             if let Ok(id) = id_or_name.parse::<i32>() {
                 exec!(
@@ -1522,7 +1575,11 @@ impl DnsUpstreamStore for PostgresDatabase {
         })
     }
 
-    fn remove_dns_upstream<'a>(&'a self, addr: &'a str, protocol: &'a str) -> BoxFuture<'a, Result<(), DbError>> {
+    fn remove_dns_upstream<'a>(
+        &'a self,
+        addr: &'a str,
+        protocol: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             exec!(
                 sqlx::query!(
@@ -1757,7 +1814,10 @@ impl DhcpConfigStore for PostgresDatabase {
         })
     }
 
-    fn save_dhcp_v4_pools<'a>(&'a self, pools: &'a [Dhcpv4Pool]) -> BoxFuture<'a, Result<(), DbError>> {
+    fn save_dhcp_v4_pools<'a>(
+        &'a self,
+        pools: &'a [Dhcpv4Pool],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let mut tx = self.pool.begin().await.map_err(map_err)?;
             exec!(sqlx::query!("DELETE FROM dhcp.v4_pools"), &mut *tx)?;
@@ -1816,7 +1876,10 @@ impl DhcpConfigStore for PostgresDatabase {
         })
     }
 
-    fn save_dhcp_v6_pools<'a>(&'a self, pools: &'a [Dhcpv6Pool]) -> BoxFuture<'a, Result<(), DbError>> {
+    fn save_dhcp_v6_pools<'a>(
+        &'a self,
+        pools: &'a [Dhcpv6Pool],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let mut tx = self.pool.begin().await.map_err(map_err)?;
             exec!(sqlx::query!("DELETE FROM dhcp.v6_pools"), &mut *tx)?;
@@ -1893,7 +1956,10 @@ impl RaConfigStore for PostgresDatabase {
         })
     }
 
-    fn save_ra_prefixes<'a>(&'a self, prefixes: &'a [RAPrefix]) -> BoxFuture<'a, Result<(), DbError>> {
+    fn save_ra_prefixes<'a>(
+        &'a self,
+        prefixes: &'a [RAPrefix],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let mut tx = self.pool.begin().await.map_err(map_err)?;
             exec!(sqlx::query!("DELETE FROM ra.prefixes"), &mut *tx)?;
@@ -2112,8 +2178,10 @@ impl PppoeConfigStore for PostgresDatabase {
                 let mru: i32 = r.try_get("mru").map_err(map_err)?;
                 let lcp_echo_interval_secs: i64 =
                     r.try_get("lcp_echo_interval_secs").map_err(map_err)?;
-                let lcp_echo_max_failures: i32 = r.try_get("lcp_echo_max_failures").map_err(map_err)?;
-                let reconnect_delay_secs: i64 = r.try_get("reconnect_delay_secs").map_err(map_err)?;
+                let lcp_echo_max_failures: i32 =
+                    r.try_get("lcp_echo_max_failures").map_err(map_err)?;
+                let reconnect_delay_secs: i64 =
+                    r.try_get("reconnect_delay_secs").map_err(map_err)?;
 
                 let nft_enabled: bool = r.try_get("nft_enabled").unwrap_or(true);
                 let nft_table_name: String = r
@@ -2123,10 +2191,15 @@ impl PppoeConfigStore for PostgresDatabase {
                 let nft_mss_clamping: bool = r.try_get("nft_mss_clamping").unwrap_or(true);
                 let nft_bypass_dns: bool = r.try_get("nft_bypass_dns").unwrap_or(true);
                 let nft_bypass_vowifi: bool = r.try_get("nft_bypass_vowifi").unwrap_or(true);
+                let nft_masquerade: bool = r.try_get("nft_masquerade").unwrap_or(true);
                 let nft_custom_rules_file: Option<String> =
                     r.try_get("nft_custom_rules_file").ok().flatten();
 
-                let send_padt_on_shutdown: bool = r.try_get("send_padt_on_shutdown").unwrap_or(true);
+                let service_name: Option<String> = r.try_get("service_name").ok().flatten();
+                let ac_name: Option<String> = r.try_get("ac_name").ok().flatten();
+
+                let send_padt_on_shutdown: bool =
+                    r.try_get("send_padt_on_shutdown").unwrap_or(true);
                 let discovery_padi_retries: u32 = r
                     .try_get("discovery_padi_retries")
                     .map(|v: i32| u32::try_from(v).unwrap_or(5))
@@ -2144,6 +2217,8 @@ impl PppoeConfigStore for PostgresDatabase {
                     wan_iface,
                     username,
                     password,
+                    service_name,
+                    ac_name,
                     auth,
                     mru: mru as u16,
                     lcp_echo_interval_secs: lcp_echo_interval_secs as u64,
@@ -2159,6 +2234,7 @@ impl PppoeConfigStore for PostgresDatabase {
                         mss_clamping: nft_mss_clamping,
                         bypass_dns: nft_bypass_dns,
                         bypass_vowifi: nft_bypass_vowifi,
+                        masquerade: nft_masquerade,
                         custom_rules_file: nft_custom_rules_file,
                     },
                 }))
@@ -2271,7 +2347,10 @@ impl UserStore for PostgresDatabase {
         })
     }
 
-    fn get_user_by_username<'a>(&'a self, username: &'a str) -> BoxFuture<'a, Result<Option<UserEntry>, DbError>> {
+    fn get_user_by_username<'a>(
+        &'a self,
+        username: &'a str,
+    ) -> BoxFuture<'a, Result<Option<UserEntry>, DbError>> {
         Box::pin(async move {
             let row = sqlx::query(
                 "SELECT id::BIGINT AS id, username, password_hash, role::text AS role, \
@@ -2400,7 +2479,11 @@ impl UserStore for PostgresDatabase {
         })
     }
 
-    fn update_user_last_login<'a>(&'a self, username: &'a str, now: i64) -> BoxFuture<'a, Result<(), DbError>> {
+    fn update_user_last_login<'a>(
+        &'a self,
+        username: &'a str,
+        now: i64,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             sqlx::query("UPDATE auth.users SET last_login = to_timestamp($1) WHERE username = $2")
                 .bind(now)

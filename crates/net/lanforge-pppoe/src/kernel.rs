@@ -245,8 +245,9 @@ async fn add_ipv4_default_route(ifindex: u32, peer: Ipv4Addr) {
                 .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
                 .gateway(peer)
                 .output_interface(ifindex)
+                .priority(100)
                 .build();
-            let result = handle.route().add(route).execute().await;
+            let result = handle.route().add(route).replace().execute().await;
             if let Err(e) = result
                 && !e.to_string().contains("File exists")
             {
