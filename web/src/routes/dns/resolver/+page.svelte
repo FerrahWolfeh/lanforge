@@ -78,8 +78,20 @@
 					upstreams = [];
 				}
 			}
-			if (rRes.status === "fulfilled")
-				reverseResolvers = rRes.value ?? [];
+			if (rRes.status === "fulfilled") {
+				const val = rRes.value;
+				if (Array.isArray(val)) {
+					reverseResolvers = val;
+				} else if (
+					val &&
+					typeof val === "object" &&
+					Array.isArray((val as any).resolvers)
+				) {
+					reverseResolvers = (val as any).resolvers;
+				} else {
+					reverseResolvers = [];
+				}
+			}
 			if (aRes.status === "fulfilled") analyticsData = aRes.value;
 		} catch (err: any) {
 			toast.error("Failed to load DNS resolver data");

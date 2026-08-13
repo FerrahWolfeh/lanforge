@@ -229,8 +229,14 @@ export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?:
 export const dnsUpstreamRemove = (entry: { addr: string; protocol: string }) =>
 	del<void>('/dns/upstreams', entry);
 
-export const dnsReverseResolverList = () =>
-	get<ReverseResolverEntry[]>('/dns/reverse-resolvers');
+export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> => {
+	const res = await get<any>('/dns/reverse-resolvers');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.resolvers)) return res.resolvers;
+	if (Array.isArray(res.data)) return res.data;
+	return [];
+};
 export const dnsReverseResolverAdd = (subnet: string, resolver_uri: string) =>
 	post<void>('/dns/reverse-resolvers', { subnet, resolver_uri });
 export const dnsReverseResolverRemove = (subnet: string) =>

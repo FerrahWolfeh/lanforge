@@ -26,21 +26,33 @@
 		onRemoveReverse?: (item: ReverseResolverEntry) => void;
 	} = $props();
 
-	function formatSubnet(subnet: any): string {
-		if (typeof subnet === "string") return subnet;
-		if (subnet && typeof subnet === "object") {
-			if (subnet.net && subnet.prefix !== undefined) {
-				return `${subnet.net}/${subnet.prefix}`;
-			}
-			if (subnet.cidr) return subnet.cidr;
-			if (subnet.ip && subnet.mask) return `${subnet.ip}/${subnet.mask}`;
+	function formatSubnet(s: any): string {
+		if (!s) return "";
+		if (typeof s === "string") return s;
+		if (typeof s === "object") {
+			if (s.subnet) return formatSubnet(s.subnet);
+			if (s.net && s.prefix !== undefined) return `${s.net}/${s.prefix}`;
+			if (s.cidr) return s.cidr;
+			if (s.ip && s.mask) return `${s.ip}/${s.mask}`;
+			if (s.addr && s.prefix_len !== undefined)
+				return `${s.addr}/${s.prefix_len}`;
 		}
-		return String(subnet ?? "192.168.1.0/24");
+		return String(s);
 	}
 
 	function formatResolverUri(r: ReverseResolverEntry): string {
-		if (r.resolver) return String(r.resolver);
-		return "192.168.1.1:53";
+		if (!r) return "—";
+		if (typeof r.resolver === "string") return r.resolver;
+		if (typeof r.resolver_uri === "string") return r.resolver_uri;
+		if (r.resolver && typeof r.resolver === "object") {
+			const res = r.resolver as any;
+			if (res.target) return String(res.target);
+			if (res.addr)
+				return res.protocol
+					? `${res.protocol}://${res.addr}`
+					: String(res.addr);
+		}
+		return "—";
 	}
 </script>
 
