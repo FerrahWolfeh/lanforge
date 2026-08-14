@@ -44,14 +44,59 @@ use std::net::Ipv4Addr;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Dhcpv4Pool {
+    /// Optional descriptive name for this scope.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Start of the dynamic IP range (inclusive).
     pub range_start: Ipv4Addr,
     /// End of the dynamic IP range (inclusive).
     pub range_end: Ipv4Addr,
+    /// Subnet mask override for this pool.
+    #[serde(default)]
+    pub subnet_mask: Option<Ipv4Addr>,
+    /// Gateway / Router (Option 3) override for this pool.
+    #[serde(default)]
+    pub router: Option<Ipv4Addr>,
+    /// DNS servers (Option 6) override for this pool.
+    #[serde(default)]
+    pub dns_servers: Vec<Ipv4Addr>,
+    /// Domain name (Option 15) override for this pool.
+    #[serde(default)]
+    pub domain_name: Option<String>,
+    /// Domain search list (Option 119) override for this pool.
+    #[serde(default)]
+    pub search_domains: Vec<String>,
+    /// NTP time servers (Option 42) override for this pool.
+    #[serde(default)]
+    pub ntp_servers: Vec<Ipv4Addr>,
     /// Custom lease time for this pool in seconds.
-    ///
-    /// If `None`, the global or service-default lease time is used.
+    #[serde(default)]
     pub lease_time: Option<u32>,
+    /// Boot file name (Option 67) override.
+    #[serde(default)]
+    pub boot_file: Option<String>,
+    /// TFTP next-server (Option 66 / siaddr) override.
+    #[serde(default)]
+    pub tftp_server: Option<String>,
+}
+
+impl Default for Dhcpv4Pool {
+    fn default() -> Self {
+        Self {
+            name: None,
+            range_start: Ipv4Addr::UNSPECIFIED,
+            range_end: Ipv4Addr::UNSPECIFIED,
+            subnet_mask: None,
+            router: None,
+            dns_servers: Vec::new(),
+            domain_name: None,
+            search_domains: Vec::new(),
+            ntp_servers: Vec::new(),
+            lease_time: None,
+            boot_file: None,
+            tftp_server: None,
+        }
+    }
 }
 
 /// Configuration for a single `DHCPv6` address pool.
@@ -59,38 +104,27 @@ pub struct Dhcpv4Pool {
 /// In IPv6 networks, `DHCPv6` can be operated in stateful mode to allocate addresses dynamically from
 /// a pool (analogous to `DHCPv4`). Unlike `DHCPv4`, the pool ranges can be defined relative to the active
 /// prefix using suffix boundaries, allowing the pool to shift dynamically when the prefix changes.
-///
-/// # Example (Suffix-based range)
-///
-/// ```
-/// # use std::str::FromStr;
-/// # use lanforge_types::network::Ipv6AddrOrSuffix;
-/// # use lanforge_types::network::dhcp::Dhcpv6Pool;
-/// let pool = Dhcpv6Pool {
-///     range_start: Some(Ipv6AddrOrSuffix::from_str("::1000").unwrap()),
-///     range_end: Some(Ipv6AddrOrSuffix::from_str("::2000").unwrap()),
-///     address: None,
-///     lease_time: Some(43200), // 12 hours
-/// };
-/// ```
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct Dhcpv6Pool {
+    /// Optional descriptive name for this scope.
+    pub name: Option<String>,
     /// Lower bound suffix or full address for the pool range (inclusive).
-    ///
-    /// If a suffix is specified, it is resolved against the active network prefix.
     pub range_start: Option<Ipv6AddrOrSuffix>,
     /// Upper bound suffix or full address for the pool range (inclusive).
-    ///
-    /// If a suffix is specified, it is resolved against the active network prefix.
     pub range_end: Option<Ipv6AddrOrSuffix>,
     /// Static CIDR address or prefix (alternative to range-based pools).
-    ///
-    /// E.g., `"2001:db8:1::/64"`.
     pub address: Option<String>,
+    /// DNS recursive servers (Option 23) override for this pool.
+    pub dns_servers: Vec<std::net::Ipv6Addr>,
+    /// Domain search list (Option 24) override for this pool.
+    pub search_domains: Vec<String>,
+    /// NTP time servers (Option 56) override for this pool.
+    pub ntp_servers: Vec<String>,
     /// Custom lease time for this pool in seconds.
-    ///
-    /// If `None`, the global or service-default lease time is used.
     pub lease_time: Option<u32>,
+    /// Boot file URL (Option 59) override.
+    pub boot_file: Option<String>,
 }
 
 /// Scope options and parameters for `DHCPv4` service.

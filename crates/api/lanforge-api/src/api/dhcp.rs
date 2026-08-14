@@ -76,11 +76,13 @@ pub struct DhcpOptionsResponse {
     pub options: DhcpOptionsConfig,
 }
 
-/// Configured pool list response.
+/// Configured pool list response with active IPv6 runtime prefixes.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DhcpPoolsConfigResponse {
     pub v4_pools: Vec<Dhcpv4Pool>,
     pub v6_pools: Vec<Dhcpv6Pool>,
+    pub active_ula_prefix: Option<String>,
+    pub active_gua_prefix: Option<String>,
 }
 
 impl HttpWrappedResponse for LeasesResponse {

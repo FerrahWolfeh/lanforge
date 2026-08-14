@@ -384,21 +384,37 @@ export interface DhcpPoolsResponse {
 }
 
 export interface Dhcpv4PoolConfig {
+	name?: string | null;
 	range_start: string;
 	range_end: string;
-	lease_time: number | null;
+	subnet_mask?: string | null;
+	router?: string | null;
+	dns_servers?: string[];
+	domain_name?: string | null;
+	search_domains?: string[];
+	ntp_servers?: string[];
+	lease_time?: number | null;
+	boot_file?: string | null;
+	tftp_server?: string | null;
 }
 
 export interface Dhcpv6PoolConfig {
-	range_start: string | null;
-	range_end: string | null;
-	address: string | null;
-	lease_time: number | null;
+	name?: string | null;
+	range_start?: string | null;
+	range_end?: string | null;
+	address?: string | null;
+	dns_servers?: string[];
+	search_domains?: string[];
+	ntp_servers?: string[];
+	lease_time?: number | null;
+	boot_file?: string | null;
 }
 
 export interface DhcpPoolsConfigResponse {
 	v4_pools: Dhcpv4PoolConfig[];
 	v6_pools: Dhcpv6PoolConfig[];
+	active_ula_prefix?: string | null;
+	active_gua_prefix?: string | null;
 }
 
 export interface Dhcpv4Options {

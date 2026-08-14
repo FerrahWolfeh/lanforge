@@ -515,6 +515,7 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
         range_start: "192.168.1.50".parse().unwrap(),
         range_end: "192.168.1.150".parse().unwrap(),
         lease_time: Some(Duration::from_hours(24).as_secs() as u32),
+        ..Default::default()
     }]);
 
     let mut v6_pool = Ipv6Pool::new(
@@ -523,6 +524,7 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
             range_start: None,
             range_end: None,
             lease_time: Some(Duration::from_hours(24).as_secs() as u32),
+            ..Default::default()
         }],
         Some("fd00::".parse().unwrap()),
         64,

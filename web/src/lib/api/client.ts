@@ -358,7 +358,9 @@ export const dhcpPoolsConfigGet = async (): Promise<DhcpPoolsConfigResponse> => 
 	const data = res?.data ?? res;
 	return {
 		v4_pools: Array.isArray(data?.v4_pools) ? data.v4_pools : [],
-		v6_pools: Array.isArray(data?.v6_pools) ? data.v6_pools : []
+		v6_pools: Array.isArray(data?.v6_pools) ? data.v6_pools : [],
+		active_ula_prefix: data?.active_ula_prefix ?? null,
+		active_gua_prefix: data?.active_gua_prefix ?? null,
 	};
 };
 

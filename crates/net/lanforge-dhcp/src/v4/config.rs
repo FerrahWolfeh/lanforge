@@ -91,7 +91,7 @@ impl Dhcpv4Config {
             pools.push(Dhcpv4Pool {
                 range_start: start,
                 range_end: end,
-                lease_time: None,
+                ..Default::default()
             });
         }
         pools

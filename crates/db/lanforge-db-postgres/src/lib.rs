@@ -1770,20 +1770,22 @@ impl PostgresDatabase {
 impl DhcpConfigStore for PostgresDatabase {
     fn load_dhcp_v4_pools(&self) -> BoxFuture<'_, Result<Vec<Dhcpv4Pool>, DbError>> {
         Box::pin(async move {
-            let rows = fetch_all!(
-                sqlx::query!(
-                    "SELECT 
-                    range_start as \"range_start!: PgInet\", 
-                    range_end as \"range_end!: PgInet\", 
-                    lease_time 
-                 FROM dhcp.v4_pools"
-                ),
-                &self.pool
-            )?;
+            let rows: Vec<(PgInet, PgInet, i32, Option<serde_json::Value>)> = sqlx::query_as(
+                "SELECT range_start, range_end, lease_time, config FROM dhcp.v4_pools",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_err)?;
 
             let mut pools = Vec::new();
-            for row in rows {
-                let start = match row.range_start.0.ip() {
+            for (start_inet, end_inet, lease_time_raw, config_opt) in rows {
+                if let Some(cfg_val) = config_opt
+                    && let Ok(pool) = serde_json::from_value::<Dhcpv4Pool>(cfg_val)
+                {
+                    pools.push(pool);
+                    continue;
+                }
+                let start = match start_inet.0.ip() {
                     IpAddr::V4(ip) => ip,
                     _ => {
                         return Err(DbError::Internal(
@@ -1791,7 +1793,7 @@ impl DhcpConfigStore for PostgresDatabase {
                         ));
                     }
                 };
-                let end = match row.range_end.0.ip() {
+                let end = match end_inet.0.ip() {
                     IpAddr::V4(ip) => ip,
                     _ => {
                         return Err(DbError::Internal(
@@ -1799,15 +1801,24 @@ impl DhcpConfigStore for PostgresDatabase {
                         ));
                     }
                 };
-                let lease_time = if row.lease_time == 0 {
+                let lease_time = if lease_time_raw == 0 {
                     None
                 } else {
-                    Some(row.lease_time as u32)
+                    Some(lease_time_raw as u32)
                 };
                 pools.push(Dhcpv4Pool {
+                    name: None,
                     range_start: start,
                     range_end: end,
+                    subnet_mask: None,
+                    router: None,
+                    dns_servers: Vec::new(),
+                    domain_name: None,
+                    search_domains: Vec::new(),
+                    ntp_servers: Vec::new(),
                     lease_time,
+                    boot_file: None,
+                    tftp_server: None,
                 });
             }
             Ok(pools)
@@ -1820,22 +1831,28 @@ impl DhcpConfigStore for PostgresDatabase {
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let mut tx = self.pool.begin().await.map_err(map_err)?;
-            exec!(sqlx::query!("DELETE FROM dhcp.v4_pools"), &mut *tx)?;
+            sqlx::query("DELETE FROM dhcp.v4_pools")
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
 
             for pool in pools {
                 let pg_start = PgInet::from(pool.range_start);
                 let pg_end = PgInet::from(pool.range_end);
                 let lease_time = pool.lease_time.unwrap_or(0) as i32;
-                exec!(
-                    sqlx::query!(
-                        "INSERT INTO dhcp.v4_pools (range_start, range_end, lease_time) 
-                     VALUES ($1, $2, $3)",
-                        pg_start as PgInet,
-                        pg_end as PgInet,
-                        lease_time
-                    ),
-                    &mut *tx
-                )?;
+                let cfg_json =
+                    serde_json::to_value(pool).map_err(|e| DbError::Internal(e.to_string()))?;
+                sqlx::query(
+                    "INSERT INTO dhcp.v4_pools (range_start, range_end, lease_time, config) 
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(pg_start)
+                .bind(pg_end)
+                .bind(lease_time)
+                .bind(cfg_json)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
             }
             tx.commit().await.map_err(map_err)?;
             Ok(())
@@ -1844,32 +1861,45 @@ impl DhcpConfigStore for PostgresDatabase {
 
     fn load_dhcp_v6_pools(&self) -> BoxFuture<'_, Result<Vec<Dhcpv6Pool>, DbError>> {
         Box::pin(async move {
-            let rows = fetch_all!(
-                sqlx::query!(
-                    "SELECT 
-                    range_start, 
-                    range_end, 
-                    address, 
-                    lease_time 
-                 FROM dhcp.v6_pools"
-                ),
-                &self.pool
-            )?;
+            type V6PoolRow = (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                i32,
+                Option<serde_json::Value>,
+            );
+            let rows: Vec<V6PoolRow> = sqlx::query_as(
+                "SELECT range_start, range_end, address, lease_time, config FROM dhcp.v6_pools",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_err)?;
 
             let mut pools = Vec::new();
-            for row in rows {
-                let range_start = row.range_start.as_deref().and_then(Ipv6AddrOrSuffix::parse);
-                let range_end = row.range_end.as_deref().and_then(Ipv6AddrOrSuffix::parse);
-                let lease_time = if row.lease_time == 0 {
+            for (start_raw, end_raw, addr_raw, lease_raw, config_opt) in rows {
+                if let Some(cfg_val) = config_opt
+                    && let Ok(pool) = serde_json::from_value::<Dhcpv6Pool>(cfg_val)
+                {
+                    pools.push(pool);
+                    continue;
+                }
+                let range_start = start_raw.as_deref().and_then(Ipv6AddrOrSuffix::parse);
+                let range_end = end_raw.as_deref().and_then(Ipv6AddrOrSuffix::parse);
+                let lease_time = if lease_raw == 0 {
                     None
                 } else {
-                    Some(row.lease_time as u32)
+                    Some(lease_raw as u32)
                 };
                 pools.push(Dhcpv6Pool {
+                    name: None,
                     range_start,
                     range_end,
-                    address: row.address,
+                    address: addr_raw,
+                    dns_servers: Vec::new(),
+                    search_domains: Vec::new(),
+                    ntp_servers: Vec::new(),
                     lease_time,
+                    boot_file: None,
                 });
             }
             Ok(pools)
@@ -1882,23 +1912,29 @@ impl DhcpConfigStore for PostgresDatabase {
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let mut tx = self.pool.begin().await.map_err(map_err)?;
-            exec!(sqlx::query!("DELETE FROM dhcp.v6_pools"), &mut *tx)?;
+            sqlx::query("DELETE FROM dhcp.v6_pools")
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
 
             for pool in pools {
                 let start_str = pool.range_start.map(|x| x.to_string());
                 let end_str = pool.range_end.map(|x| x.to_string());
                 let lease_time = pool.lease_time.unwrap_or(0) as i32;
-                exec!(
-                    sqlx::query!(
-                        "INSERT INTO dhcp.v6_pools (range_start, range_end, address, lease_time) 
-                     VALUES ($1, $2, $3, $4)",
-                        start_str,
-                        end_str,
-                        pool.address,
-                        lease_time
-                    ),
-                    &mut *tx
-                )?;
+                let cfg_json =
+                    serde_json::to_value(pool).map_err(|e| DbError::Internal(e.to_string()))?;
+                sqlx::query(
+                    "INSERT INTO dhcp.v6_pools (range_start, range_end, address, lease_time, config) 
+                     VALUES ($1, $2, $3, $4, $5)"
+                )
+                .bind(start_str)
+                .bind(end_str)
+                .bind(pool.address.clone())
+                .bind(lease_time)
+                .bind(cfg_json)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
             }
             tx.commit().await.map_err(map_err)?;
             Ok(())

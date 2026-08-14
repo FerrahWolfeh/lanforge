@@ -336,11 +336,17 @@ impl Bootstrapper {
                 seed_v4.push(pool);
             }
             if seed_v4.is_empty() {
-                // If clean install (no pools configured in TOML), seed a sensible default pool
+                use std::net::Ipv4Addr;
+
                 seed_v4.push(Dhcpv4Pool {
-                    range_start: std::net::Ipv4Addr::new(192, 168, 0, 100),
-                    range_end: std::net::Ipv4Addr::new(192, 168, 0, 240),
+                    name: Some("Primary LAN Scope".to_string()),
+                    range_start: Ipv4Addr::new(192, 168, 0, 100),
+                    range_end: Ipv4Addr::new(192, 168, 0, 240),
                     lease_time: Some(cfg.dhcpv4_toml.lease_time),
+                    router: Some(cfg.dhcpv4_toml.router),
+                    subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
+                    dns_servers: cfg.dhcpv4_toml.dns.clone(),
+                    ..Default::default()
                 });
             }
             if db.seed_dhcp_v4_if_empty(&seed_v4).await? {
