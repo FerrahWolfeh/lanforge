@@ -20,7 +20,7 @@
 	} from "$lib/api/client";
 	import type { HostConfigEntry, DeviceEntry } from "$lib/api/types";
 	import { toast } from "svelte-sonner";
-	import { onMount } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 	import SearchIcon from "@lucide/svelte/icons/search";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import PlusIcon from "@lucide/svelte/icons/plus";
@@ -31,6 +31,7 @@
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import CopyIcon from "@lucide/svelte/icons/copy";
+	import DeviceCombobox from "$lib/components/DeviceCombobox.svelte";
 
 	let hosts = $state<HostConfigEntry[]>([]);
 	let discoveredDevices = $state<DeviceEntry[]>([]);
@@ -41,12 +42,13 @@
 	let dialogOpen = $state(false);
 	let isEditing = $state(false);
 	let submitting = $state(false);
-	let showDeviceSuggestions = $state(false);
 
 	let formMac = $state("");
 	let formHostname = $state("");
 	let formV4 = $state("");
 	let formV6Suffix = $state("");
+
+	onMount(loadHostsAndDevices);
 
 	async function loadHostsAndDevices() {
 		loading = true;
@@ -88,7 +90,6 @@
 		formV4 = "";
 		formV6Suffix = "";
 		isEditing = false;
-		showDeviceSuggestions = false;
 	}
 
 	function openAddModal() {
@@ -111,7 +112,6 @@
 		if (dev.hostname) formHostname = dev.hostname;
 		const v4 = dev.display_v4 || dev.v4?.ip;
 		if (v4) formV4 = v4;
-		showDeviceSuggestions = false;
 		toast.info(`Selected ${dev.hostname || dev.mac}`);
 	}
 
@@ -155,8 +155,6 @@
 			toast.error(`Failed to remove static host rule for ${mac}`);
 		}
 	}
-
-	onMount(loadHostsAndDevices);
 
 	const filteredHosts = $derived.by(() => {
 		if (!searchQuery.trim()) return hosts;
@@ -452,98 +450,16 @@
 		<form onsubmit={handleSaveHost} class="py-2">
 			<Field.FieldGroup class="gap-4">
 				<!-- Target MAC Address with Discovered LAN Autocomplete -->
-				<Field.Field class="relative">
-					<div class="flex items-center justify-between">
-						<Field.FieldLabel for="mac"
-							>MAC Address *</Field.FieldLabel
-						>
-						{#if !isEditing && discoveredDevices.length > 0}
-							<button
-								type="button"
-								class="text-muted-foreground hover:text-emerald-400 text-[11px] font-medium flex items-center gap-1 transition-colors"
-								onclick={() =>
-									(showDeviceSuggestions =
-										!showDeviceSuggestions)}
-							>
-								<WifiIcon class="size-3" />
-								<span
-									>{showDeviceSuggestions ? "Hide" : "Pick"} Discovered
-									({discoveredDevices.length})</span
-								>
-							</button>
-						{/if}
-					</div>
-
-					<Input
+				<Field.Field>
+					<Field.FieldLabel for="mac">MAC Address *</Field.FieldLabel>
+					<DeviceCombobox
 						id="mac"
-						placeholder="e.g. AA:BB:CC:DD:EE:FF"
-						class={[
-							"font-mono text-xs",
-							isEditing ? "bg-muted/40 cursor-not-allowed" : "",
-						].join(" ")}
 						bind:value={formMac}
+						devices={discoveredDevices}
 						readonly={isEditing}
-						onfocus={() => {
-							if (!isEditing && discoveredDevices.length > 0)
-								showDeviceSuggestions = true;
-						}}
-						required
+						placeholder="Search device or enter MAC address (e.g. AA:BB:CC:DD:EE:FF)..."
+						onselect={(dev) => selectDiscoveredDevice(dev)}
 					/>
-
-					<!-- Discovered Devices Autocomplete Dropdown -->
-					{#if !isEditing && showDeviceSuggestions && matchingDiscoveredDevices.length > 0}
-						<div
-							class="absolute top-full left-0 right-0 z-50 mt-1 flex flex-col rounded-lg border border-border bg-card p-1 shadow-xl max-h-48 overflow-auto text-xs"
-						>
-							<div
-								class="flex items-center justify-between px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold border-b border-border/40"
-							>
-								<span>Select Discovered Device</span>
-								<button
-									type="button"
-									class="hover:text-foreground"
-									onclick={() =>
-										(showDeviceSuggestions = false)}
-								>
-									✕
-								</button>
-							</div>
-							{#each matchingDiscoveredDevices as dev (dev.mac)}
-								<button
-									type="button"
-									class="flex items-center justify-between gap-2 px-2 py-1.5 text-left rounded-md hover:bg-muted/60 transition-colors font-mono"
-									onclick={() => selectDiscoveredDevice(dev)}
-								>
-									<div class="flex flex-col">
-										<span
-											class="font-sans font-semibold text-foreground"
-										>
-											{dev.hostname || "Unassigned"}
-										</span>
-										<span
-											class="text-muted-foreground text-[10px]"
-										>
-											{dev.mac}
-										</span>
-									</div>
-									<div class="flex items-center gap-2">
-										{#if dev.display_v4 || dev.v4?.ip}
-											<span
-												class="text-emerald-400 font-mono text-[10px]"
-											>
-												{dev.display_v4 || dev.v4?.ip}
-											</span>
-										{/if}
-										{#if formMac === dev.mac}
-											<CheckIcon
-												class="size-3.5 text-emerald-400"
-											/>
-										{/if}
-									</div>
-								</button>
-							{/each}
-						</div>
-					{/if}
 				</Field.Field>
 
 				<!-- Hostname -->

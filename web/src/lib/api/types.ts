@@ -511,8 +511,47 @@ export interface RewriteRule {
 	id: number | null;
 	domain: string;
 	rtype: DnsRecordType;
-	answer: string;
+	answer: string | Record<string, unknown>;
 	resolved_ips: string[] | null;
+}
+
+export function formatRewriteAnswer(ans: unknown): string {
+	if (!ans) return "";
+	if (typeof ans === "string") return ans.trim();
+	if (typeof ans === "object" && ans !== null) {
+		const obj = ans as Record<string, any>;
+		if (typeof obj.a === "string") return obj.a;
+		if (typeof obj.aaaa === "string") return obj.aaaa;
+		if (typeof obj.cname === "string") return obj.cname;
+		if (obj.device) {
+			const dev = obj.device;
+			const id = typeof dev === "string"
+				? dev
+				: typeof dev.identifier === "string"
+					? dev.identifier
+					: typeof dev.identifier === "object" && dev.identifier
+						? (dev.identifier.hostname ?? dev.identifier.mac ?? dev.identifier.duid ?? JSON.stringify(dev.identifier))
+						: String(dev);
+			const fb = dev.fallback ? `|${formatRewriteAnswer(dev.fallback)}` : "";
+			return `dev:${id}${fb}`;
+		}
+		if (obj.service) {
+			const s = obj.service;
+			const svc = s.service ?? "_http";
+			const proto = s.protocol ?? "_tcp";
+			const dev = typeof s.device === "string" ? s.device : JSON.stringify(s.device ?? "");
+			const port = s.port ?? 80;
+			return `srv:${svc}:${proto}:${dev}:${port}`;
+		}
+		// Single key serde enum fallback e.g. { Cname: "dev:raspie" }
+		const keys = Object.keys(obj);
+		if (keys.length === 1) {
+			const val = obj[keys[0]];
+			if (typeof val === "string") return val;
+			return formatRewriteAnswer(val);
+		}
+	}
+	return String(ans);
 }
 
 // ---------------------------------------------------------------------------

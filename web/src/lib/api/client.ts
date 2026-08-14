@@ -295,11 +295,25 @@ export const dnsAdblockUrlRemove = (entry: DnsAdblockUrlEntry) =>
 // DNS — rewrites
 // ---------------------------------------------------------------------------
 
-export const dnsRewriteList = () => get<RewriteRule[]>('/dns/rewrites');
+export const dnsRewriteList = async (): Promise<RewriteRule[]> => {
+	const res = await get<any>('/dns/rewrites');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.rewrites)) return res.rewrites;
+	if (Array.isArray(res.data)) return res.data;
+	return [];
+};
 export const dnsRewriteAdd = (rule: Omit<RewriteRule, 'id'>) => post<void>('/dns/rewrites', rule);
 export const dnsRewriteRemove = (id: number) => del<void>(`/dns/rewrites/${id}`);
 export const dnsRewriteClear = () => del<void>('/dns/rewrites');
-export const dnsRewriteExport = () => get<RewriteRule[]>('/dns/rewrites/export');
+export const dnsRewriteExport = async (): Promise<RewriteRule[]> => {
+	const res = await get<any>('/dns/rewrites/export');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.rewrites)) return res.rewrites;
+	if (Array.isArray(res.data)) return res.data;
+	return [];
+};
 export const dnsRewriteImport = (rules: RewriteRule[]) => post<void>('/dns/rewrites/import', rules);
 
 // ---------------------------------------------------------------------------
