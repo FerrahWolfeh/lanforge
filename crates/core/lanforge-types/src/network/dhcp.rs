@@ -40,6 +40,7 @@ use std::net::Ipv4Addr;
 ///     range_start: Ipv4Addr::new(192, 168, 1, 100),
 ///     range_end: Ipv4Addr::new(192, 168, 1, 200),
 ///     lease_time: Some(86400), // 24 hours
+///     ..Default::default()
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
