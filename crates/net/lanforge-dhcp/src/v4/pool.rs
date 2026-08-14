@@ -302,7 +302,7 @@ mod tests {
             IpPool::new(vec![Dhcpv4Pool {
                 range_start: Ipv4Addr::new(192, 168, 0, 100),
                 range_end: Ipv4Addr::new(192, 168, 0, 105),
-                lease_time: None,
+                ..Default::default()
             }]),
             ctx,
         )
@@ -412,7 +412,7 @@ mod tests {
         let mut p = IpPool::new(vec![Dhcpv4Pool {
             range_start: Ipv4Addr::new(192, 168, 1, 100),
             range_end: Ipv4Addr::new(192, 168, 1, 100),
-            lease_time: None,
+            ..Default::default()
         }]);
         let ip = Ipv4Addr::new(192, 168, 1, 100);
 

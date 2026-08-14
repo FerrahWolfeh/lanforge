@@ -248,6 +248,17 @@ impl RaService {
                     .get(&iface_index)
                     .and_then(|i| i.mac)
             })
+            .or_else(|| {
+                std::fs::read_to_string(format!("/sys/class/net/{}/address", self.cfg.iface))
+                    .ok()
+                    .and_then(|s| lanforge_types::identifiers::MacAddr::parse(s.trim()))
+            })
+            .or_else(|| {
+                self.ctx
+                    .get_interface_state(iface_index)
+                    .link_local
+                    .and_then(|ll| lanforge_core::utils::mac_from_eui64_link_local(&ll))
+            })
             .ok_or_else(|| {
                 CoreError::Generic(format!(
                     "MAC address for interface index {iface_index} is not resolved"

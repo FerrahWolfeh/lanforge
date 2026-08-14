@@ -1197,8 +1197,7 @@ mod tests {
             pools: vec![Dhcpv6Pool {
                 range_start: Some(Ipv6AddrOrSuffix::Full(start)),
                 range_end: Some(Ipv6AddrOrSuffix::Full(end)),
-                address: None,
-                lease_time: None,
+                ..Default::default()
             }],
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
@@ -1743,8 +1742,7 @@ mod tests {
         let cfg = Dhcpv6Pool {
             range_start: Some(Ipv6AddrOrSuffix::Full("fd00::200".parse().unwrap())),
             range_end: Some(Ipv6AddrOrSuffix::Full("fd00::100".parse().unwrap())),
-            address: None,
-            lease_time: None,
+            ..Default::default()
         };
         let range = PoolRange::from_config(&cfg);
         // Should fallback to empty Floating range

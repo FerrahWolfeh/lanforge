@@ -398,13 +398,36 @@ impl State {
         ifindex: u32,
         state: &InterfaceState,
     ) -> EventVec {
+        let mut merged = state.clone();
+        if let Some(old) = self.interfaces.interface_ips.get(&ifindex) {
+            if merged.mac.is_none() {
+                merged.mac = old.mac;
+            }
+            if merged.link_local.is_none() {
+                merged.link_local = old.link_local;
+            }
+            if merged.v4.is_none() {
+                merged.v4 = old.v4;
+            }
+            if merged.ula.is_none() {
+                merged.ula = old.ula;
+            }
+            if merged.gua.is_none() {
+                merged.gua = old.gua;
+                merged.gua_preferred = old.gua_preferred;
+                merged.gua_valid = old.gua_valid;
+            }
+        }
+
         let old_state = self.interfaces.interface_ips.get(&ifindex);
         let prefix_changed = old_state.map_or_else(
-            || state.gua.is_some() || state.ula.is_some(),
-            |old| old.gua != state.gua || old.ula != state.ula,
+            || merged.gua.is_some() || merged.ula.is_some(),
+            |old| old.gua != merged.gua || old.ula != merged.ula,
         );
 
-        self.interfaces.interface_ips.insert(ifindex, state.clone());
+        self.interfaces
+            .interface_ips
+            .insert(ifindex, merged.clone());
         let mut events: EventVec = vec![LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
             ifindex,
         })]
@@ -412,10 +435,10 @@ impl State {
 
         if prefix_changed {
             events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged {
-                gua: state.gua,
-                ula: state.ula,
-                preferred: state.gua_preferred,
-                valid: state.gua_valid,
+                gua: merged.gua,
+                ula: merged.ula,
+                preferred: merged.gua_preferred,
+                valid: merged.gua_valid,
             }));
         }
 

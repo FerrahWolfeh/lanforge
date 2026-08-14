@@ -73,12 +73,6 @@ impl LanforgeContext {
         *self.inner.dhcp_options.write() = options;
         let _ = self
             .bus_ref()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed));
-        let _ = self
-            .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigTftpChanged));
         let _ = self
             .bus_ref()

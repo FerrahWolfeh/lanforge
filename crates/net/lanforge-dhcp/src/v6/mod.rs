@@ -204,8 +204,19 @@ impl Dhcpv6Service {
             };
             if matches!(
                 timed_event.event,
-                LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed)
+                LanforgeEvent::System(
+                    SystemEvent::ConfigDhcpV6Changed | SystemEvent::ConfigDhcpOptionsChanged
+                )
             ) {
+                // Absorb any immediately consecutive config change events
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                while let Ok(Some(ev)) =
+                    tokio::time::timeout(Duration::from_millis(10), handle.next_event()).await
+                {
+                    if matches!(ev.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                        return Ok(RunResult::Shutdown);
+                    }
+                }
                 return Ok(RunResult::ConfigChanged);
             }
         }
@@ -231,6 +242,24 @@ impl Dhcpv6Service {
                     .interface_ips
                     .get(&target_ifindex)
                     .and_then(|i| i.mac)
+            })
+            .or_else(|| {
+                std::fs::read_to_string(format!("/sys/class/net/{}/address", current_cfg.iface))
+                    .ok()
+                    .and_then(|s| MacAddr::parse(s.trim()))
+            })
+            .or_else(|| {
+                self.ctx
+                    .get_interface_state(target_ifindex)
+                    .link_local
+                    .and_then(|ll| lanforge_core::utils::mac_from_eui64_link_local(&ll))
+            })
+            .or_else(|| {
+                pnet::datalink::interfaces()
+                    .into_iter()
+                    .find(|i| i.index == target_ifindex || i.name == current_cfg.iface)
+                    .and_then(|i| i.mac)
+                    .and_then(|m| MacAddr::from_slice(&m.octets()))
             })
             .ok_or_else(|| {
                 CoreError::Generic(format!(
@@ -323,8 +352,19 @@ impl Dhcpv6Service {
                     };
                     if matches!(
                         timed_event.event,
-                        LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed)
+                        LanforgeEvent::System(
+                            SystemEvent::ConfigDhcpV6Changed | SystemEvent::ConfigDhcpOptionsChanged
+                        )
                     ) {
+                        // Absorb any immediately consecutive config change events
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        while let Ok(Some(ev)) =
+                            tokio::time::timeout(Duration::from_millis(10), handle.next_event()).await
+                        {
+                            if matches!(ev.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                                return Ok(RunResult::Shutdown);
+                            }
+                        }
                         return Ok(RunResult::ConfigChanged);
                     }
                     self.handle_bus_event(&timed_event, &mut server, &transport);
