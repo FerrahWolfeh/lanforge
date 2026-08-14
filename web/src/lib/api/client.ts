@@ -12,7 +12,12 @@ import type {
 	DeviceEntry,
 	DevicesResponse,
 	DhcpLease,
+	DhcpOptionsConfig,
+	DhcpPoolEntry,
+	DhcpPoolsConfigResponse,
 	DhcpPoolsResponse,
+	Dhcpv4PoolConfig,
+	Dhcpv6PoolConfig,
 	DnsAdblockStatusResponse,
 	DnsAdblockUrlEntry,
 	DnsAnalyticsResponse,
@@ -338,6 +343,27 @@ export const dhcpPools = async (): Promise<DhcpPoolsResponse> => {
 		v6_pools: Array.isArray(data.v6_pools) ? data.v6_pools : []
 	};
 };
+
+export const dhcpOptionsGet = async (): Promise<DhcpOptionsConfig> => {
+	const res = await get<any>('/dhcp/options');
+	const data = res?.data ?? res;
+	return data?.options ?? data;
+};
+
+export const dhcpOptionsUpdate = (options: DhcpOptionsConfig) =>
+	put<void>('/dhcp/options', options);
+
+export const dhcpPoolsConfigGet = async (): Promise<DhcpPoolsConfigResponse> => {
+	const res = await get<any>('/dhcp/pools/config');
+	const data = res?.data ?? res;
+	return {
+		v4_pools: Array.isArray(data?.v4_pools) ? data.v4_pools : [],
+		v6_pools: Array.isArray(data?.v6_pools) ? data.v6_pools : []
+	};
+};
+
+export const dhcpPoolsConfigUpdate = (v4_pools: Dhcpv4PoolConfig[], v6_pools: Dhcpv6PoolConfig[]) =>
+	put<void>('/dhcp/pools/config', { v4_pools, v6_pools });
 
 export const leaseRenew = (mac: string, target?: LeaseTarget) =>
 	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/renew`, target !== undefined ? { target } : {});

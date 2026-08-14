@@ -4,7 +4,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
@@ -66,6 +66,23 @@ impl LanforgeContext {
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed));
+    }
+
+    /// Updates the configured DHCP & TFTP options and broadcasts config change events.
+    pub fn update_dhcp_options(&self, options: DhcpOptionsConfig) {
+        *self.inner.dhcp_options.write() = options;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed));
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigTftpChanged));
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpOptionsChanged));
     }
 
     /// Updates the configured RA prefix/DNS/domain search lists and publishes the change event.

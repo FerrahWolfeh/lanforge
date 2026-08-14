@@ -17,4 +17,6 @@ pub enum SystemEvent {
     ConfigDhcpV4Changed,
     ConfigDhcpV6Changed,
     ConfigRaChanged,
+    ConfigTftpChanged,
+    ConfigDhcpOptionsChanged,
 }

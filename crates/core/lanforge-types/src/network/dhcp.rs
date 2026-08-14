@@ -92,3 +92,105 @@ pub struct Dhcpv6Pool {
     /// If `None`, the global or service-default lease time is used.
     pub lease_time: Option<u32>,
 }
+
+/// Scope options and parameters for `DHCPv4` service.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Dhcpv4Options {
+    pub enabled: bool,
+    pub lease_time: u32,
+    pub router: Option<Ipv4Addr>,
+    pub subnet_mask: Option<Ipv4Addr>,
+    pub dns_servers: Vec<Ipv4Addr>,
+    pub domain_name: Option<String>,
+    pub search_domains: Vec<String>,
+    pub ntp_servers: Vec<Ipv4Addr>,
+    pub tftp_server: Option<String>,
+    pub boot_file: Option<String>,
+    pub raw_options: std::collections::HashMap<u8, String>,
+}
+
+impl Default for Dhcpv4Options {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            lease_time: 86400,
+            router: Some(Ipv4Addr::new(192, 168, 0, 1)),
+            subnet_mask: Some(Ipv4Addr::new(255, 255, 255, 0)),
+            dns_servers: vec![Ipv4Addr::new(192, 168, 0, 1)],
+            domain_name: None,
+            search_domains: Vec::new(),
+            ntp_servers: vec![
+                Ipv4Addr::new(162, 159, 200, 1),
+                Ipv4Addr::new(216, 239, 35, 0),
+            ],
+            tftp_server: None,
+            boot_file: None,
+            raw_options: std::collections::HashMap::new(),
+        }
+    }
+}
+
+/// Scope options and parameters for `DHCPv6` service.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Dhcpv6Options {
+    pub enabled: bool,
+    pub lease_time: u32,
+    pub dns_servers: Vec<std::net::Ipv6Addr>,
+    pub search_domains: Vec<String>,
+    pub ntp_servers: Vec<String>,
+    pub boot_file: Option<String>,
+    pub raw_options: std::collections::HashMap<u16, String>,
+}
+
+impl Default for Dhcpv6Options {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            lease_time: 86400,
+            dns_servers: Vec::new(),
+            search_domains: Vec::new(),
+            ntp_servers: vec![
+                "time.cloudflare.com".to_string(),
+                "time.google.com".to_string(),
+            ],
+            boot_file: None,
+            raw_options: std::collections::HashMap::new(),
+        }
+    }
+}
+
+/// Parameters for the TFTP / PXE service.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TftpOptions {
+    pub enabled: bool,
+    pub listen_addr: String,
+    pub root_dir: String,
+    pub block_size: u16,
+    pub timeout: u64,
+    pub max_retries: u8,
+}
+
+impl Default for TftpOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_addr: "0.0.0.0:69".to_string(),
+            root_dir: "/var/lib/lanforge/tftp".to_string(),
+            block_size: 512,
+            timeout: 5,
+            max_retries: 3,
+        }
+    }
+}
+
+/// Aggregate DHCP & TFTP options configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct DhcpOptionsConfig {
+    pub v4: Dhcpv4Options,
+    pub v6: Dhcpv6Options,
+    pub tftp: TftpOptions,
+}

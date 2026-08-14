@@ -383,6 +383,67 @@ export interface DhcpPoolsResponse {
 	v6_pools: DhcpPoolEntry[];
 }
 
+export interface Dhcpv4PoolConfig {
+	range_start: string;
+	range_end: string;
+	lease_time: number | null;
+}
+
+export interface Dhcpv6PoolConfig {
+	range_start: string | null;
+	range_end: string | null;
+	address: string | null;
+	lease_time: number | null;
+}
+
+export interface DhcpPoolsConfigResponse {
+	v4_pools: Dhcpv4PoolConfig[];
+	v6_pools: Dhcpv6PoolConfig[];
+}
+
+export interface Dhcpv4Options {
+	enabled: boolean;
+	lease_time: number;
+	router: string | null;
+	subnet_mask: string | null;
+	dns_servers: string[];
+	domain_name: string | null;
+	search_domains: string[];
+	ntp_servers: string[];
+	tftp_server: string | null;
+	boot_file: string | null;
+	raw_options: Record<number, string>;
+}
+
+export interface Dhcpv6Options {
+	enabled: boolean;
+	lease_time: number;
+	dns_servers: string[];
+	search_domains: string[];
+	ntp_servers: string[];
+	boot_file: string | null;
+	raw_options: Record<number, string>;
+}
+
+export interface TftpOptions {
+	enabled: boolean;
+	listen_addr: string;
+	root_dir: string;
+	block_size: number;
+	timeout: number;
+	max_retries: number;
+}
+
+export interface DhcpOptionsConfig {
+	v4: Dhcpv4Options;
+	v6: Dhcpv6Options;
+	tftp: TftpOptions;
+}
+
+export interface DhcpOptionsResponse {
+	options: DhcpOptionsConfig;
+}
+
 export interface LeasesResponse {
 	leases: LeaseEntry[];
 }

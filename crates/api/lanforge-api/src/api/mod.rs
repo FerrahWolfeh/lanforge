@@ -1,4 +1,6 @@
-use lanforge_types::events::TimedEvent;
+use lanforge_types::{
+    events::TimedEvent, network::pppoe::PppoeConfig, system::PppoeStatusResponse,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -80,11 +82,15 @@ pub enum Response {
     /// List of transient hosts.
     TransientHosts(TransientHostsResponse),
     /// PPPoE session status response.
-    PppoeStatus(Box<lanforge_types::system::PppoeStatusResponse>),
+    PppoeStatus(Box<PppoeStatusResponse>),
     /// PPPoE configuration response.
-    PppoeConfig(Box<lanforge_types::network::pppoe::PppoeConfig>),
+    PppoeConfig(Box<PppoeConfig>),
     /// User account details response.
     User(UserResponse),
     /// List of user accounts response.
     UserList(UserListResponse),
+    /// Configured DHCP & TFTP options response.
+    DhcpOptions(Box<DhcpOptionsResponse>),
+    /// Configured DHCP pools configuration response.
+    DhcpPoolsConfig(DhcpPoolsConfigResponse),
 }

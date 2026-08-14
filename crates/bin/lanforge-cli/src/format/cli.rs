@@ -449,12 +449,16 @@ fn format_system_event(now: &str, event: &SystemEvent, verbose: bool, _ascii: bo
         }
         SystemEvent::ConfigDhcpV4Changed
         | SystemEvent::ConfigDhcpV6Changed
-        | SystemEvent::ConfigRaChanged => {
+        | SystemEvent::ConfigRaChanged
+        | SystemEvent::ConfigTftpChanged
+        | SystemEvent::ConfigDhcpOptionsChanged => {
             if verbose {
                 let service = match event {
                     SystemEvent::ConfigDhcpV4Changed => "DHCPv4",
                     SystemEvent::ConfigDhcpV6Changed => "DHCPv6",
                     SystemEvent::ConfigRaChanged => "RA",
+                    SystemEvent::ConfigTftpChanged => "TFTP",
+                    SystemEvent::ConfigDhcpOptionsChanged => "DHCP Options",
                     _ => unreachable!(),
                 };
                 println!(

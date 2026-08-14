@@ -3,7 +3,7 @@
 pub mod dto;
 pub mod mapping;
 
-use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig, PppoeNftablesConfig};
 
 // Helper macros to reduce query boilerplate
@@ -1901,6 +1901,44 @@ impl DhcpConfigStore for PostgresDatabase {
                 )?;
             }
             tx.commit().await.map_err(map_err)?;
+            Ok(())
+        })
+    }
+
+    fn load_dhcp_options(&self) -> BoxFuture<'_, Result<Option<DhcpOptionsConfig>, DbError>> {
+        Box::pin(async move {
+            let row: Option<(serde_json::Value,)> =
+                sqlx::query_as("SELECT config FROM dhcp.options WHERE id = 1")
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(map_err)?;
+
+            let Some((val,)) = row else {
+                return Ok(None);
+            };
+            let opts: DhcpOptionsConfig = serde_json::from_value(val).map_err(|e| {
+                DbError::Internal(format!("Failed to parse dhcp.options JSON: {e}"))
+            })?;
+            Ok(Some(opts))
+        })
+    }
+
+    fn save_dhcp_options<'a>(
+        &'a self,
+        options: &'a DhcpOptionsConfig,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
+        Box::pin(async move {
+            let val = serde_json::to_value(options)
+                .map_err(|e| DbError::Internal(format!("Failed to serialize dhcp.options: {e}")))?;
+            sqlx::query(
+                "INSERT INTO dhcp.options (id, config, updated_at) 
+                 VALUES (1, $1, NOW()) 
+                 ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()",
+            )
+            .bind(val)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
             Ok(())
         })
     }

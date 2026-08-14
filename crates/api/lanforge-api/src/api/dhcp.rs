@@ -68,6 +68,21 @@ pub struct DhcpPoolEntry {
     pub utilization_percent: f32,
 }
 
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
+
+/// Aggregate DHCP & TFTP options response.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DhcpOptionsResponse {
+    pub options: DhcpOptionsConfig,
+}
+
+/// Configured pool list response.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DhcpPoolsConfigResponse {
+    pub v4_pools: Vec<Dhcpv4Pool>,
+    pub v6_pools: Vec<Dhcpv6Pool>,
+}
+
 impl HttpWrappedResponse for LeasesResponse {
     type Wrapper = HttpDataResponse<LeasesResponse>;
 
@@ -82,6 +97,30 @@ impl HttpWrappedResponse for LeasesResponse {
 
 impl HttpWrappedResponse for DhcpPoolsResponse {
     type Wrapper = HttpDataResponse<DhcpPoolsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DhcpOptionsResponse {
+    type Wrapper = HttpDataResponse<DhcpOptionsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DhcpPoolsConfigResponse {
+    type Wrapper = HttpDataResponse<DhcpPoolsConfigResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

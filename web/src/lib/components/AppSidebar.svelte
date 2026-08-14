@@ -17,6 +17,7 @@
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
 	import LockIcon from "@lucide/svelte/icons/lock";
 	import KeyIcon from "@lucide/svelte/icons/key";
+	import SlidersIcon from "@lucide/svelte/icons/sliders";
 
 	const navGroups = [
 		{
@@ -28,7 +29,11 @@
 		{
 			label: "Network",
 			items: [
-				{ label: "Devices", href: "/network/devices", icon: MonitorIcon },
+				{
+					label: "Devices",
+					href: "/network/devices",
+					icon: MonitorIcon,
+				},
 				{
 					label: "Static Hosts",
 					href: "/network/hosts",
@@ -44,7 +49,7 @@
 				{ label: "Cache", href: "/dns/cache", icon: DatabaseIcon },
 				{ label: "Adblock", href: "/dns/adblock", icon: ShieldIcon },
 				{
-					label: "Rewrites",
+					label: "Custom Rewrites",
 					href: "/dns/rewrites",
 					icon: RotateCcwIcon,
 				},
@@ -55,6 +60,11 @@
 			items: [
 				{ label: "Leases", href: "/dhcp/leases", icon: NetworkIcon },
 				{ label: "Pools", href: "/dhcp/pools", icon: ActivityIcon },
+				{
+					label: "Options & Scopes",
+					href: "/dhcp/options",
+					icon: SlidersIcon,
+				},
 			],
 		},
 		{

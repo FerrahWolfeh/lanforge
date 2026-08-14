@@ -10,6 +10,10 @@ use lanforge_db::{DhcpConfigStore, PppoeConfigStore, RaConfigStore};
 use lanforge_host::ifmon::AddressMonitor;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
+#[cfg(feature = "dhcp")]
+use lanforge_types::network::dhcp::{
+    DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, TftpOptions,
+};
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
@@ -118,6 +122,9 @@ impl Bootstrapper {
         {
             ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
             ctx.update_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
+            if let Ok(Some(opts)) = db.load_dhcp_options().await {
+                ctx.update_dhcp_options(opts);
+            }
         }
         #[cfg(feature = "ra")]
         ctx.update_ra_config(
@@ -328,9 +335,17 @@ impl Bootstrapper {
                 }
                 seed_v4.push(pool);
             }
+            if seed_v4.is_empty() {
+                // If clean install (no pools configured in TOML), seed a sensible default pool
+                seed_v4.push(Dhcpv4Pool {
+                    range_start: std::net::Ipv4Addr::new(192, 168, 0, 100),
+                    range_end: std::net::Ipv4Addr::new(192, 168, 0, 240),
+                    lease_time: Some(cfg.dhcpv4_toml.lease_time),
+                });
+            }
             if db.seed_dhcp_v4_if_empty(&seed_v4).await? {
                 info!(
-                    "Seeded {} DHCPv4 pools from TOML configuration into database",
+                    "Seeded {} DHCPv4 pools from configuration into database",
                     seed_v4.len()
                 );
             }
@@ -357,6 +372,50 @@ impl Bootstrapper {
                 );
             }
             cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools().await?;
+        }
+
+        // 2b. Check/seed DHCP & TFTP Options
+        #[cfg(feature = "dhcp")]
+        {
+            let seed_opts = DhcpOptionsConfig {
+                v4: Dhcpv4Options {
+                    enabled: cfg.dhcpv4_toml.enabled,
+                    lease_time: cfg.dhcpv4_toml.lease_time,
+                    router: Some(cfg.dhcpv4_toml.router),
+                    subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
+                    dns_servers: cfg.dhcpv4_toml.dns.clone(),
+                    domain_name: cfg.dhcpv4_toml.domain_name.clone(),
+                    search_domains: cfg.dhcpv4_toml.search_domains.clone(),
+                    ntp_servers: cfg.dhcpv4_toml.ntp_servers.clone(),
+                    tftp_server: cfg.dhcpv4_toml.tftp_server.clone(),
+                    boot_file: cfg.dhcpv4_toml.boot_file.clone(),
+                    raw_options: cfg.dhcpv4_toml.options.clone(),
+                },
+                v6: Dhcpv6Options {
+                    enabled: cfg.dhcpv6_toml.enabled,
+                    lease_time: cfg.dhcpv6_toml.lease_time,
+                    dns_servers: cfg.dhcpv6_toml.dns_servers.clone(),
+                    search_domains: cfg.dhcpv6_toml.search_domains.clone(),
+                    ntp_servers: cfg.dhcpv6_toml.ntp_servers.clone(),
+                    boot_file: cfg.dhcpv6_toml.boot_file.clone(),
+                    raw_options: cfg.dhcpv6_toml.options.clone(),
+                },
+                #[cfg(feature = "tftp")]
+                tftp: TftpOptions {
+                    enabled: cfg.tftp_toml.enabled,
+                    listen_addr: cfg.tftp_toml.listen_addr.clone(),
+                    root_dir: cfg.tftp_toml.root_dir.to_string_lossy().to_string(),
+                    block_size: cfg.tftp_toml.block_size,
+                    timeout: cfg.tftp_toml.timeout,
+                    max_retries: cfg.tftp_toml.max_retries,
+                },
+                #[cfg(not(feature = "tftp"))]
+                tftp: TftpOptions::default(),
+            };
+
+            if db.seed_dhcp_options_if_empty(&seed_opts).await? {
+                info!("Seeded DHCP & TFTP scope options from configuration into database");
+            }
         }
 
         // 3. Check/seed/load RA Prefixes

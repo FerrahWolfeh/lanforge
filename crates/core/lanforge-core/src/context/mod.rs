@@ -60,7 +60,7 @@ use crate::service::StatusProvider;
 use lanforge_types::device::Device;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
@@ -193,6 +193,8 @@ struct LanforgeContextInner {
     dhcp_v4_pools: RwLock<Vec<Dhcpv4Pool>>,
     /// Configured `DHCPv6` pools.
     dhcp_v6_pools: RwLock<Vec<Dhcpv6Pool>>,
+    /// Configured DHCP and TFTP scope options.
+    dhcp_options: RwLock<DhcpOptionsConfig>,
     /// Configured RA prefixes.
     ra_prefixes: RwLock<Vec<RAPrefix>>,
     /// Configured RA RDNSS.
@@ -273,6 +275,7 @@ impl LanforgeContext {
             shared_services: RwLock::new(HashMap::new()),
             dhcp_v4_pools: RwLock::new(Vec::new()),
             dhcp_v6_pools: RwLock::new(Vec::new()),
+            dhcp_options: RwLock::new(DhcpOptionsConfig::default()),
             ra_prefixes: RwLock::new(Vec::new()),
             ra_rdnss: RwLock::new(Vec::new()),
             ra_dnssl: RwLock::new(Vec::new()),
@@ -420,6 +423,11 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_dhcp_v6_pools(&self) -> Vec<Dhcpv6Pool> {
         self.inner.dhcp_v6_pools.read().clone()
+    }
+
+    #[must_use]
+    pub fn get_dhcp_options(&self) -> DhcpOptionsConfig {
+        self.inner.dhcp_options.read().clone()
     }
 
     #[must_use]

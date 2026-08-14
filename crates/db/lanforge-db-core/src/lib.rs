@@ -10,7 +10,7 @@ use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
@@ -98,13 +98,19 @@ pub trait DeviceStore: Send + Sync {
     fn upsert_device<'a>(&'a self, device: &'a Device) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Upserts only the base device fields (like hostname and origin) avoiding child updates.
-    fn upsert_base_device_only<'a>(&'a self, device: &'a Device) -> BoxFuture<'a, Result<(), DbError>>;
+    fn upsert_base_device_only<'a>(
+        &'a self,
+        device: &'a Device,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Deletes devices by their MAC addresses.
     fn delete_devices<'a>(&'a self, macs: &'a [MacAddr]) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Look up a device MAC address by host name.
-    fn find_mac_by_hostname<'a>(&'a self, hostname: &'a str) -> BoxFuture<'a, Result<Option<MacAddr>, DbError>>;
+    fn find_mac_by_hostname<'a>(
+        &'a self,
+        hostname: &'a str,
+    ) -> BoxFuture<'a, Result<Option<MacAddr>, DbError>>;
 
     /// Removes a device by its MAC address.
     fn remove_device(&self, mac: MacAddr) -> BoxFuture<'_, Result<(), DbError>>;
@@ -128,7 +134,10 @@ pub trait DeviceStore: Send + Sync {
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Retrieves up to 100 recent lease history entries for a MAC address.
-    fn get_lease_history(&self, mac: MacAddr) -> BoxFuture<'_, Result<Vec<LeaseHistoryEntry>, DbError>>;
+    fn get_lease_history(
+        &self,
+        mac: MacAddr,
+    ) -> BoxFuture<'_, Result<Vec<LeaseHistoryEntry>, DbError>>;
 }
 
 /// Handles local DNS rewrites, allowlists, and reverse resolvers.
@@ -163,7 +172,8 @@ pub trait DnsStore: Send + Sync {
     fn clear_dns_allowlist(&self) -> BoxFuture<'_, Result<(), DbError>>;
 
     /// Loads all registered dynamic PTR/reverse DNS resolvers.
-    fn load_dns_reverse_resolvers(&self) -> BoxFuture<'_, Result<Vec<DnsReverseResolver>, DbError>>;
+    fn load_dns_reverse_resolvers(&self)
+    -> BoxFuture<'_, Result<Vec<DnsReverseResolver>, DbError>>;
 
     /// Adds a new reverse resolver rule for a subnet.
     fn add_dns_reverse_resolver<'a>(
@@ -173,7 +183,10 @@ pub trait DnsStore: Send + Sync {
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Removes a reverse resolver rule for a subnet.
-    fn remove_dns_reverse_resolver<'a>(&'a self, subnet: &'a IpSubnet) -> BoxFuture<'a, Result<(), DbError>>;
+    fn remove_dns_reverse_resolver<'a>(
+        &'a self,
+        subnet: &'a IpSubnet,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Clears all registered reverse resolvers.
     fn clear_dns_reverse_resolvers(&self) -> BoxFuture<'_, Result<(), DbError>>;
@@ -185,16 +198,29 @@ pub trait AdblockStore: Send + Sync {
     fn load_adblock_config(&self) -> BoxFuture<'_, Result<AdblockDbConfig, DbError>>;
 
     /// Saves global adblock config values.
-    fn save_adblock_config<'a>(&'a self, cfg: &'a AdblockDbConfig) -> BoxFuture<'a, Result<(), DbError>>;
+    fn save_adblock_config<'a>(
+        &'a self,
+        cfg: &'a AdblockDbConfig,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Sets a key-value adblock configuration.
-    fn set_adblock_config_value<'a>(&'a self, key: &'a str, value: &'a str) -> BoxFuture<'a, Result<(), DbError>>;
+    fn set_adblock_config_value<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Loads all adblock filter subscription URLs.
-    fn load_adblock_urls(&self) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>>;
+    fn load_adblock_urls(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>>;
 
     /// Adds a new adblock filter source URL.
-    fn add_adblock_url<'a>(&'a self, url: &'a str, kind: AdblockUrlKind) -> BoxFuture<'a, Result<(), DbError>>;
+    fn add_adblock_url<'a>(
+        &'a self,
+        url: &'a str,
+        kind: AdblockUrlKind,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Removes an adblock filter source URL by URL string.
     fn remove_adblock_url<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<(), DbError>>;
@@ -208,28 +234,46 @@ pub trait AdblockStore: Send + Sync {
     ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError>>;
 
     /// Adds a new adblock filter source URL.
-    fn add_adblock_source<'a>(&'a self, url: &'a str, kind: AdblockUrlKind) -> BoxFuture<'a, Result<i64, DbError>>;
+    fn add_adblock_source<'a>(
+        &'a self,
+        url: &'a str,
+        kind: AdblockUrlKind,
+    ) -> BoxFuture<'a, Result<i64, DbError>>;
 
     /// Removes an adblock filter source URL by ID.
     fn remove_adblock_source(&self, id: i64) -> BoxFuture<'_, Result<(), DbError>>;
 
     /// Enables or disables an adblock filter source URL.
-    fn update_adblock_source_status(&self, id: i64, enabled: bool) -> BoxFuture<'_, Result<(), DbError>>;
+    fn update_adblock_source_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> BoxFuture<'_, Result<(), DbError>>;
 
     /// Clears all adblock filter source URLs.
     fn clear_adblock_sources(&self) -> BoxFuture<'_, Result<(), DbError>>;
 
     /// Loads custom adblock user rules.
-    fn load_adblock_rules(&self) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>>;
+    fn load_adblock_rules(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>>;
 
     /// Adds a custom adblock user rule (domain and action like block/allow).
-    fn add_adblock_rule<'a>(&'a self, domain: &'a str, action: &'a str) -> BoxFuture<'a, Result<i64, DbError>>;
+    fn add_adblock_rule<'a>(
+        &'a self,
+        domain: &'a str,
+        action: &'a str,
+    ) -> BoxFuture<'a, Result<i64, DbError>>;
 
     /// Removes a custom adblock user rule by ID.
     fn remove_adblock_rule(&self, id: i64) -> BoxFuture<'_, Result<(), DbError>>;
 
     /// Enables or disables a custom user rule.
-    fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> BoxFuture<'_, Result<(), DbError>>;
+    fn update_adblock_rule_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> BoxFuture<'_, Result<(), DbError>>;
 
     /// Clears all custom user adblock rules.
     fn clear_adblock_rules(&self) -> BoxFuture<'_, Result<(), DbError>>;
@@ -258,7 +302,10 @@ pub trait ApiTokenStore: Send + Sync {
     fn delete_api_token<'a>(&'a self, token: &'a str) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Deletes a token by database ID or custom name.
-    fn delete_api_token_by_id_or_name<'a>(&'a self, id_or_name: &'a str) -> BoxFuture<'a, Result<(), DbError>>;
+    fn delete_api_token_by_id_or_name<'a>(
+        &'a self,
+        id_or_name: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Loads all registered API tokens.
     fn load_api_tokens(&self) -> BoxFuture<'_, Result<Vec<ApiTokenEntry>, DbError>>;
@@ -284,7 +331,11 @@ pub trait DnsUpstreamStore: Send + Sync {
     ) -> BoxFuture<'a, Result<i64, DbError>>;
 
     /// Removes an upstream DNS server.
-    fn remove_dns_upstream<'a>(&'a self, addr: &'a str, protocol: &'a str) -> BoxFuture<'a, Result<(), DbError>>;
+    fn remove_dns_upstream<'a>(
+        &'a self,
+        addr: &'a str,
+        protocol: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Clears all registered DNS upstream servers.
     fn clear_dns_upstreams(&self) -> BoxFuture<'_, Result<(), DbError>>;
@@ -296,16 +347,50 @@ pub trait DhcpConfigStore: Send + Sync {
     fn load_dhcp_v4_pools(&self) -> BoxFuture<'_, Result<Vec<Dhcpv4Pool>, DbError>>;
 
     /// Overwrites/saves dynamic DHCPv4 pools.
-    fn save_dhcp_v4_pools<'a>(&'a self, pools: &'a [Dhcpv4Pool]) -> BoxFuture<'a, Result<(), DbError>>;
+    fn save_dhcp_v4_pools<'a>(
+        &'a self,
+        pools: &'a [Dhcpv4Pool],
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Loads dynamic DHCPv6 pools.
     fn load_dhcp_v6_pools(&self) -> BoxFuture<'_, Result<Vec<Dhcpv6Pool>, DbError>>;
 
     /// Overwrites/saves dynamic DHCPv6 pools.
-    fn save_dhcp_v6_pools<'a>(&'a self, pools: &'a [Dhcpv6Pool]) -> BoxFuture<'a, Result<(), DbError>>;
+    fn save_dhcp_v6_pools<'a>(
+        &'a self,
+        pools: &'a [Dhcpv6Pool],
+    ) -> BoxFuture<'a, Result<(), DbError>>;
+
+    /// Loads configured DHCP & TFTP options.
+    fn load_dhcp_options(&self) -> BoxFuture<'_, Result<Option<DhcpOptionsConfig>, DbError>>;
+
+    /// Saves configured DHCP & TFTP options.
+    fn save_dhcp_options<'a>(
+        &'a self,
+        options: &'a DhcpOptionsConfig,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
+
+    /// Seeds DHCP & TFTP options if not set in database.
+    fn seed_dhcp_options_if_empty<'a>(
+        &'a self,
+        seed: &'a DhcpOptionsConfig,
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
+        Box::pin(async move {
+            let existing = self.load_dhcp_options().await?;
+            if existing.is_none() {
+                self.save_dhcp_options(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+    }
 
     /// Seeds DHCPv4 pools if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_dhcp_v4_if_empty<'a>(&'a self, seed: &'a [Dhcpv4Pool]) -> BoxFuture<'a, Result<bool, DbError>> {
+    fn seed_dhcp_v4_if_empty<'a>(
+        &'a self,
+        seed: &'a [Dhcpv4Pool],
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
         Box::pin(async move {
             let existing = self.load_dhcp_v4_pools().await?;
             if existing.is_empty() && !seed.is_empty() {
@@ -318,7 +403,10 @@ pub trait DhcpConfigStore: Send + Sync {
     }
 
     /// Seeds DHCPv6 pools if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_dhcp_v6_if_empty<'a>(&'a self, seed: &'a [Dhcpv6Pool]) -> BoxFuture<'a, Result<bool, DbError>> {
+    fn seed_dhcp_v6_if_empty<'a>(
+        &'a self,
+        seed: &'a [Dhcpv6Pool],
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
         Box::pin(async move {
             let existing = self.load_dhcp_v6_pools().await?;
             if existing.is_empty() && !seed.is_empty() {
@@ -337,7 +425,10 @@ pub trait RaConfigStore: Send + Sync {
     fn load_ra_prefixes(&self) -> BoxFuture<'_, Result<Vec<RAPrefix>, DbError>>;
 
     /// Overwrites/saves dynamic RA prefixes.
-    fn save_ra_prefixes<'a>(&'a self, prefixes: &'a [RAPrefix]) -> BoxFuture<'a, Result<(), DbError>>;
+    fn save_ra_prefixes<'a>(
+        &'a self,
+        prefixes: &'a [RAPrefix],
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Loads dynamic RA RDNSS options.
     fn load_ra_rdnss(&self) -> BoxFuture<'_, Result<Vec<RdnssConfig>, DbError>>;
@@ -355,10 +446,16 @@ pub trait RaConfigStore: Send + Sync {
     fn load_last_gua_prefix(&self) -> BoxFuture<'_, Result<Option<std::net::Ipv6Addr>, DbError>>;
 
     /// Saves the last active GUA prefix to state.
-    fn save_last_gua_prefix(&self, prefix: Option<std::net::Ipv6Addr>) -> BoxFuture<'_, Result<(), DbError>>;
+    fn save_last_gua_prefix(
+        &self,
+        prefix: Option<std::net::Ipv6Addr>,
+    ) -> BoxFuture<'_, Result<(), DbError>>;
 
     /// Seeds RA prefixes if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_ra_prefixes_if_empty<'a>(&'a self, seed: &'a [RAPrefix]) -> BoxFuture<'a, Result<bool, DbError>> {
+    fn seed_ra_prefixes_if_empty<'a>(
+        &'a self,
+        seed: &'a [RAPrefix],
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
         Box::pin(async move {
             let existing = self.load_ra_prefixes().await?;
             if existing.is_empty() && !seed.is_empty() {
@@ -371,7 +468,10 @@ pub trait RaConfigStore: Send + Sync {
     }
 
     /// Seeds RA RDNSS if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_ra_rdnss_if_empty<'a>(&'a self, seed: &'a [RdnssConfig]) -> BoxFuture<'a, Result<bool, DbError>> {
+    fn seed_ra_rdnss_if_empty<'a>(
+        &'a self,
+        seed: &'a [RdnssConfig],
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
         Box::pin(async move {
             let existing = self.load_ra_rdnss().await?;
             if existing.is_empty() && !seed.is_empty() {
@@ -384,7 +484,10 @@ pub trait RaConfigStore: Send + Sync {
     }
 
     /// Seeds RA DNSSL if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_ra_dnssl_if_empty<'a>(&'a self, seed: &'a [DnsslConfig]) -> BoxFuture<'a, Result<bool, DbError>> {
+    fn seed_ra_dnssl_if_empty<'a>(
+        &'a self,
+        seed: &'a [DnsslConfig],
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
         Box::pin(async move {
             let existing = self.load_ra_dnssl().await?;
             if existing.is_empty() && !seed.is_empty() {
@@ -406,7 +509,10 @@ pub trait PppoeConfigStore: Send + Sync {
     fn save_pppoe_config<'a>(&'a self, cfg: &'a PppoeConfig) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Seeds PPPoE configuration if not present in database. Returns `Ok(true)` if seeded.
-    fn seed_pppoe_if_empty<'a>(&'a self, seed: &'a PppoeConfig) -> BoxFuture<'a, Result<bool, DbError>> {
+    fn seed_pppoe_if_empty<'a>(
+        &'a self,
+        seed: &'a PppoeConfig,
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
         Box::pin(async move {
             let existing = self.load_pppoe_config().await?;
             if existing.is_none() {
@@ -431,7 +537,10 @@ pub trait UserStore: Send + Sync {
     ) -> BoxFuture<'a, Result<UserEntry, DbError>>;
 
     /// Retrieves a user by username.
-    fn get_user_by_username<'a>(&'a self, username: &'a str) -> BoxFuture<'a, Result<Option<UserEntry>, DbError>>;
+    fn get_user_by_username<'a>(
+        &'a self,
+        username: &'a str,
+    ) -> BoxFuture<'a, Result<Option<UserEntry>, DbError>>;
 
     /// Retrieves a user by ID.
     fn get_user_by_id(&self, id: i64) -> BoxFuture<'_, Result<Option<UserEntry>, DbError>>;
@@ -456,7 +565,11 @@ pub trait UserStore: Send + Sync {
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Updates last login timestamp for a user.
-    fn update_user_last_login<'a>(&'a self, username: &'a str, now: i64) -> BoxFuture<'a, Result<(), DbError>>;
+    fn update_user_last_login<'a>(
+        &'a self,
+        username: &'a str,
+        now: i64,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Deletes a user by username.
     fn delete_user<'a>(&'a self, username: &'a str) -> BoxFuture<'a, Result<(), DbError>>;
@@ -487,10 +600,16 @@ pub trait LogStore: Send + Sync {
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Records a batch of resolved DNS queries.
-    fn record_dns_queries_batch<'a>(&'a self, entries: &'a [QueryLogEntry]) -> BoxFuture<'a, Result<(), DbError>>;
+    fn record_dns_queries_batch<'a>(
+        &'a self,
+        entries: &'a [QueryLogEntry],
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Records a single resolved DNS query.
-    fn record_dns_query<'a>(&'a self, entry: &'a QueryLogEntry) -> BoxFuture<'a, Result<(), DbError>>;
+    fn record_dns_query<'a>(
+        &'a self,
+        entry: &'a QueryLogEntry,
+    ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Wipes all logged system events.
     fn clear_logs(&self) -> BoxFuture<'_, Result<(), DbError>>;
@@ -509,7 +628,10 @@ pub trait LogStore: Send + Sync {
     ) -> BoxFuture<'_, Result<(Vec<QueryLogEntry>, usize), DbError>>;
 
     /// Retrieves top domains by query count.
-    fn get_dns_top_domains(&self, limit: usize) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
+    fn get_dns_top_domains(
+        &self,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
 
     /// Retrieves top DNS domains filtered for a client.
     fn get_dns_top_domains_for_client<'a>(
@@ -522,7 +644,10 @@ pub trait LogStore: Send + Sync {
     fn get_dns_query_types(&self) -> BoxFuture<'_, Result<Vec<(u16, u64)>, DbError>>;
 
     /// Retrieves query rate timeline.
-    fn get_dns_query_rate(&self, since_secs: u64) -> BoxFuture<'_, Result<Vec<(u64, u64)>, DbError>>;
+    fn get_dns_query_rate(
+        &self,
+        since_secs: u64,
+    ) -> BoxFuture<'_, Result<Vec<(u64, u64)>, DbError>>;
 
     /// Retrieves detailed query rate timeline with disposition breakdown.
     fn get_dns_query_rate_detailed(
@@ -532,19 +657,31 @@ pub trait LogStore: Send + Sync {
     ) -> BoxFuture<'_, Result<Vec<(u64, u64, u64, u64, u64)>, DbError>>;
 
     /// Retrieves top clients by query count.
-    fn get_dns_top_clients(&self, limit: usize) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
+    fn get_dns_top_clients(
+        &self,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
 
     /// Retrieves query counts by protocol.
     fn get_dns_protocol_stats(&self) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
 
     /// Retrieves top blocked domains by query count.
-    fn get_dns_top_blocked_domains(&self, limit: usize) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
+    fn get_dns_top_blocked_domains(
+        &self,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
 
     /// Retrieves top blocked clients by query count.
-    fn get_dns_top_blocked_clients(&self, limit: usize) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
+    fn get_dns_top_blocked_clients(
+        &self,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
 
     /// Retrieves blocked query rate timeline.
-    fn get_dns_blocked_query_rate(&self, since_secs: u64) -> BoxFuture<'_, Result<Vec<(u64, u64)>, DbError>>;
+    fn get_dns_blocked_query_rate(
+        &self,
+        since_secs: u64,
+    ) -> BoxFuture<'_, Result<Vec<(u64, u64)>, DbError>>;
 }
 
 /// Composite supertrait combining all persistence store traits into a single backend interface.

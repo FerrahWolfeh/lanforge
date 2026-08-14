@@ -14,7 +14,7 @@ use lanforge_db_postgres::PostgresDatabase;
 use lanforge_types::auth::ApiScopes;
 use lanforge_types::device::{Device, LeaseAction};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
@@ -49,6 +49,7 @@ pub struct MockDbState {
     pub lease_history: RwLock<Vec<(MacAddr, LeaseHistoryEntry)>>,
     pub dhcp_v4_pools: RwLock<Vec<Dhcpv4Pool>>,
     pub dhcp_v6_pools: RwLock<Vec<Dhcpv6Pool>>,
+    pub dhcp_options: RwLock<Option<DhcpOptionsConfig>>,
     pub ra_prefixes: RwLock<Vec<RAPrefix>>,
     pub ra_rdnss: RwLock<Vec<RdnssConfig>>,
     pub ra_dnssl: RwLock<Vec<DnsslConfig>>,
@@ -71,6 +72,7 @@ impl Default for MockDbState {
             lease_history: RwLock::new(Vec::new()),
             dhcp_v4_pools: RwLock::new(Vec::new()),
             dhcp_v6_pools: RwLock::new(Vec::new()),
+            dhcp_options: RwLock::new(None),
             ra_prefixes: RwLock::new(Vec::new()),
             ra_rdnss: RwLock::new(Vec::new()),
             ra_dnssl: RwLock::new(Vec::new()),
@@ -490,7 +492,11 @@ impl LanforgeDb {
         })
     }
 
-    pub async fn add_adblock_source(&self, url: &str, kind: AdblockUrlKind) -> Result<i64, DbError> {
+    pub async fn add_adblock_source(
+        &self,
+        url: &str,
+        kind: AdblockUrlKind,
+    ) -> Result<i64, DbError> {
         delegate_db_call!(self, add_adblock_source(url, kind), mock => {
             let mut urls = mock.adblock_urls.write();
             let id = urls.len() as i64 + 1;
@@ -507,7 +513,11 @@ impl LanforgeDb {
         })
     }
 
-    pub async fn update_adblock_source_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
+    pub async fn update_adblock_source_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> Result<(), DbError> {
         delegate_db_call!(self, update_adblock_source_status(id, enabled), mock => {
             Ok(())
         })
@@ -727,6 +737,17 @@ impl LanforgeDb {
         })
     }
 
+    pub async fn load_dhcp_options(&self) -> Result<Option<DhcpOptionsConfig>, DbError> {
+        delegate_db_call!(self, load_dhcp_options(), mock => Ok(mock.dhcp_options.read().clone()))
+    }
+
+    pub async fn save_dhcp_options(&self, options: &DhcpOptionsConfig) -> Result<(), DbError> {
+        delegate_db_call!(self, save_dhcp_options(options), mock => {
+            *mock.dhcp_options.write() = Some(options.clone());
+            Ok(())
+        })
+    }
+
     // --- RaConfigStore ---
 
     pub async fn load_ra_prefixes(&self) -> Result<Vec<RAPrefix>, DbError> {
@@ -942,7 +963,10 @@ impl DeviceStore for LanforgeDb {
         Box::pin(async move { self.upsert_device(device).await })
     }
 
-    fn upsert_base_device_only<'a>(&'a self, device: &'a Device) -> BoxFuture<'a, Result<(), DbError>> {
+    fn upsert_base_device_only<'a>(
+        &'a self,
+        device: &'a Device,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.upsert_base_device_only(device).await })
     }
 
@@ -950,7 +974,10 @@ impl DeviceStore for LanforgeDb {
         Box::pin(async move { self.delete_devices(macs).await })
     }
 
-    fn find_mac_by_hostname<'a>(&'a self, hostname: &'a str) -> BoxFuture<'a, Result<Option<MacAddr>, DbError>> {
+    fn find_mac_by_hostname<'a>(
+        &'a self,
+        hostname: &'a str,
+    ) -> BoxFuture<'a, Result<Option<MacAddr>, DbError>> {
         Box::pin(async move { self.find_mac_by_hostname(hostname).await })
     }
 
@@ -980,7 +1007,10 @@ impl DeviceStore for LanforgeDb {
         Box::pin(async move { self.record_lease_event(mac, ip, lease_type, action).await })
     }
 
-    fn get_lease_history(&self, mac: MacAddr) -> BoxFuture<'_, Result<Vec<LeaseHistoryEntry>, DbError>> {
+    fn get_lease_history(
+        &self,
+        mac: MacAddr,
+    ) -> BoxFuture<'_, Result<Vec<LeaseHistoryEntry>, DbError>> {
         Box::pin(async move { self.get_lease_history(mac).await })
     }
 }
@@ -1023,7 +1053,9 @@ impl DnsStore for LanforgeDb {
         Box::pin(async move { self.clear_dns_allowlist().await })
     }
 
-    fn load_dns_reverse_resolvers(&self) -> BoxFuture<'_, Result<Vec<DnsReverseResolver>, DbError>> {
+    fn load_dns_reverse_resolvers(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<DnsReverseResolver>, DbError>> {
         Box::pin(async move { self.load_dns_reverse_resolvers().await })
     }
 
@@ -1035,7 +1067,10 @@ impl DnsStore for LanforgeDb {
         Box::pin(async move { self.add_dns_reverse_resolver(subnet, resolver).await })
     }
 
-    fn remove_dns_reverse_resolver<'a>(&'a self, subnet: &'a IpSubnet) -> BoxFuture<'a, Result<(), DbError>> {
+    fn remove_dns_reverse_resolver<'a>(
+        &'a self,
+        subnet: &'a IpSubnet,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.remove_dns_reverse_resolver(subnet).await })
     }
 
@@ -1049,19 +1084,32 @@ impl AdblockStore for LanforgeDb {
         Box::pin(async move { self.load_adblock_config().await })
     }
 
-    fn save_adblock_config<'a>(&'a self, cfg: &'a AdblockDbConfig) -> BoxFuture<'a, Result<(), DbError>> {
+    fn save_adblock_config<'a>(
+        &'a self,
+        cfg: &'a AdblockDbConfig,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.save_adblock_config(cfg).await })
     }
 
-    fn set_adblock_config_value<'a>(&'a self, key: &'a str, value: &'a str) -> BoxFuture<'a, Result<(), DbError>> {
+    fn set_adblock_config_value<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.set_adblock_config_value(key, value).await })
     }
 
-    fn load_adblock_urls(&self) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>> {
+    fn load_adblock_urls(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>> {
         Box::pin(async move { self.load_adblock_urls().await })
     }
 
-    fn add_adblock_url<'a>(&'a self, url: &'a str, kind: AdblockUrlKind) -> BoxFuture<'a, Result<(), DbError>> {
+    fn add_adblock_url<'a>(
+        &'a self,
+        url: &'a str,
+        kind: AdblockUrlKind,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.add_adblock_url(url, kind).await })
     }
 
@@ -1079,7 +1127,11 @@ impl AdblockStore for LanforgeDb {
         Box::pin(async move { self.load_adblock_sources().await })
     }
 
-    fn add_adblock_source<'a>(&'a self, url: &'a str, kind: AdblockUrlKind) -> BoxFuture<'a, Result<i64, DbError>> {
+    fn add_adblock_source<'a>(
+        &'a self,
+        url: &'a str,
+        kind: AdblockUrlKind,
+    ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move { self.add_adblock_source(url, kind).await })
     }
 
@@ -1087,7 +1139,11 @@ impl AdblockStore for LanforgeDb {
         Box::pin(async move { self.remove_adblock_source(id).await })
     }
 
-    fn update_adblock_source_status(&self, id: i64, enabled: bool) -> BoxFuture<'_, Result<(), DbError>> {
+    fn update_adblock_source_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> BoxFuture<'_, Result<(), DbError>> {
         Box::pin(async move { self.update_adblock_source_status(id, enabled).await })
     }
 
@@ -1095,11 +1151,17 @@ impl AdblockStore for LanforgeDb {
         Box::pin(async move { self.clear_adblock_sources().await })
     }
 
-    fn load_adblock_rules(&self) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>> {
+    fn load_adblock_rules(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>> {
         Box::pin(async move { self.load_adblock_rules().await })
     }
 
-    fn add_adblock_rule<'a>(&'a self, domain: &'a str, action: &'a str) -> BoxFuture<'a, Result<i64, DbError>> {
+    fn add_adblock_rule<'a>(
+        &'a self,
+        domain: &'a str,
+        action: &'a str,
+    ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move { self.add_adblock_rule(domain, action).await })
     }
 
@@ -1107,7 +1169,11 @@ impl AdblockStore for LanforgeDb {
         Box::pin(async move { self.remove_adblock_rule(id).await })
     }
 
-    fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> BoxFuture<'_, Result<(), DbError>> {
+    fn update_adblock_rule_status(
+        &self,
+        id: i64,
+        enabled: bool,
+    ) -> BoxFuture<'_, Result<(), DbError>> {
         Box::pin(async move { self.update_adblock_rule_status(id, enabled).await })
     }
 
@@ -1125,7 +1191,10 @@ impl ApiTokenStore for LanforgeDb {
         expires_at: Option<i64>,
         now: i64,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
-        Box::pin(async move { self.store_api_token(token, name, scopes, expires_at, now).await })
+        Box::pin(async move {
+            self.store_api_token(token, name, scopes, expires_at, now)
+                .await
+        })
     }
 
     fn validate_api_token<'a>(
@@ -1140,7 +1209,10 @@ impl ApiTokenStore for LanforgeDb {
         Box::pin(async move { self.delete_api_token(token).await })
     }
 
-    fn delete_api_token_by_id_or_name<'a>(&'a self, id_or_name: &'a str) -> BoxFuture<'a, Result<(), DbError>> {
+    fn delete_api_token_by_id_or_name<'a>(
+        &'a self,
+        id_or_name: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.delete_api_token_by_id_or_name(id_or_name).await })
     }
 
@@ -1170,7 +1242,11 @@ impl DnsUpstreamStore for LanforgeDb {
         Box::pin(async move { self.add_dns_upstream(addr, protocol, domain).await })
     }
 
-    fn remove_dns_upstream<'a>(&'a self, addr: &'a str, protocol: &'a str) -> BoxFuture<'a, Result<(), DbError>> {
+    fn remove_dns_upstream<'a>(
+        &'a self,
+        addr: &'a str,
+        protocol: &'a str,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.remove_dns_upstream(addr, protocol).await })
     }
 
@@ -1184,7 +1260,10 @@ impl DhcpConfigStore for LanforgeDb {
         Box::pin(async move { self.load_dhcp_v4_pools().await })
     }
 
-    fn save_dhcp_v4_pools<'a>(&'a self, pools: &'a [Dhcpv4Pool]) -> BoxFuture<'a, Result<(), DbError>> {
+    fn save_dhcp_v4_pools<'a>(
+        &'a self,
+        pools: &'a [Dhcpv4Pool],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.save_dhcp_v4_pools(pools).await })
     }
 
@@ -1192,8 +1271,22 @@ impl DhcpConfigStore for LanforgeDb {
         Box::pin(async move { self.load_dhcp_v6_pools().await })
     }
 
-    fn save_dhcp_v6_pools<'a>(&'a self, pools: &'a [Dhcpv6Pool]) -> BoxFuture<'a, Result<(), DbError>> {
+    fn save_dhcp_v6_pools<'a>(
+        &'a self,
+        pools: &'a [Dhcpv6Pool],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.save_dhcp_v6_pools(pools).await })
+    }
+
+    fn load_dhcp_options(&self) -> BoxFuture<'_, Result<Option<DhcpOptionsConfig>, DbError>> {
+        Box::pin(async move { self.load_dhcp_options().await })
+    }
+
+    fn save_dhcp_options<'a>(
+        &'a self,
+        options: &'a DhcpOptionsConfig,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
+        Box::pin(async move { self.save_dhcp_options(options).await })
     }
 }
 
@@ -1202,7 +1295,10 @@ impl RaConfigStore for LanforgeDb {
         Box::pin(async move { self.load_ra_prefixes().await })
     }
 
-    fn save_ra_prefixes<'a>(&'a self, prefixes: &'a [RAPrefix]) -> BoxFuture<'a, Result<(), DbError>> {
+    fn save_ra_prefixes<'a>(
+        &'a self,
+        prefixes: &'a [RAPrefix],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.save_ra_prefixes(prefixes).await })
     }
 
@@ -1255,7 +1351,10 @@ impl UserStore for LanforgeDb {
         Box::pin(async move { self.create_user(username, password_hash, role, now).await })
     }
 
-    fn get_user_by_username<'a>(&'a self, username: &'a str) -> BoxFuture<'a, Result<Option<UserEntry>, DbError>> {
+    fn get_user_by_username<'a>(
+        &'a self,
+        username: &'a str,
+    ) -> BoxFuture<'a, Result<Option<UserEntry>, DbError>> {
         Box::pin(async move { self.get_user_by_username(username).await })
     }
 
@@ -1285,7 +1384,11 @@ impl UserStore for LanforgeDb {
         Box::pin(async move { self.update_user_role(username, new_role, now).await })
     }
 
-    fn update_user_last_login<'a>(&'a self, username: &'a str, now: i64) -> BoxFuture<'a, Result<(), DbError>> {
+    fn update_user_last_login<'a>(
+        &'a self,
+        username: &'a str,
+        now: i64,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move { self.update_user_last_login(username, now).await })
     }
 
