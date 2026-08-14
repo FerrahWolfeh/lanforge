@@ -215,7 +215,7 @@ impl Dhcpv6Service {
     async fn run_server(
         &self,
         pools: Vec<Dhcpv6Pool>,
-        _ctrl: &ServiceControl,
+        ctrl: &ServiceControl,
     ) -> Result<RunResult, CoreError> {
         let mut current_cfg = self.config.clone();
         current_cfg.pools = pools;
@@ -298,6 +298,8 @@ impl Dhcpv6Service {
 
         // Setup transport socket
         let transport = io::Dhcpv6Transport::new(&current_cfg.iface, current_cfg.port)?;
+        ctrl.signal_ready();
+        self.publish_pool_stats(&server);
 
         let mut buf = [0u8; 2048];
         let mut handle = self.ctx.service_handle();

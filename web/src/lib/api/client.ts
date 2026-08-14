@@ -12,7 +12,7 @@ import type {
 	DeviceEntry,
 	DevicesResponse,
 	DhcpLease,
-	DhcpPoolStats,
+	DhcpPoolsResponse,
 	DnsAdblockStatusResponse,
 	DnsAdblockUrlEntry,
 	DnsAnalyticsResponse,
@@ -320,12 +320,30 @@ export const dnsRewriteImport = (rules: RewriteRule[]) => post<void>('/dns/rewri
 // DHCP
 // ---------------------------------------------------------------------------
 
-export const leases = () => get<DhcpLease[]>('/dhcp/leases');
-export const dhcpPools = () => get<DhcpPoolStats[]>('/dhcp/pools');
+export const leases = async (): Promise<DhcpLease[]> => {
+	const res = await get<any>('/dhcp/leases');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.leases)) return res.leases;
+	if (Array.isArray(res.data)) return res.data;
+	return [];
+};
+
+export const dhcpPools = async (): Promise<DhcpPoolsResponse> => {
+	const res = await get<any>('/dhcp/pools');
+	if (!res) return { v4_pools: [], v6_pools: [] };
+	const data = res.data ?? res;
+	return {
+		v4_pools: Array.isArray(data.v4_pools) ? data.v4_pools : [],
+		v6_pools: Array.isArray(data.v6_pools) ? data.v6_pools : []
+	};
+};
+
 export const leaseRenew = (mac: string, target?: LeaseTarget) =>
-	post<void>(`/dhcp/leases/${mac}/renew`, target ? { target } : undefined);
+	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/renew`, target !== undefined ? { target } : {});
+
 export const leaseRelease = (mac: string, target?: LeaseTarget) =>
-	post<void>(`/dhcp/leases/${mac}/release`, target ? { target } : undefined);
+	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/release`, target !== undefined ? { target } : {});
 
 // ---------------------------------------------------------------------------
 // Database

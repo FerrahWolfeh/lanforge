@@ -110,8 +110,10 @@ pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, a
             v6: None,
             v6_prefix: None,
             expires: l.expires,
+            remaining_secs: l.remaining_secs,
         });
         entry.expires = entry.expires.max(l.expires);
+        entry.remaining_secs = entry.remaining_secs.max(l.remaining_secs);
 
         match l.kind {
             LeaseKind::V4 => {
@@ -158,7 +160,7 @@ pub fn render_dhcp_leases(resp: &LeasesResponse, v4_only: bool, v6_only: bool, a
                     Text(content: "IPv6", color: Color::DarkGrey)
                 }
                 View(width: 15) {
-                    Text(content: "EXPIRES", color: Color::DarkGrey)
+                    Text(content: "REMAINING", color: Color::DarkGrey)
                 }
             }
             // Separator
@@ -182,6 +184,7 @@ struct MergedLease {
     v6: Option<Ipv6Addr>,
     v6_prefix: Option<Ipv6Addr>,
     expires: u64,
+    remaining_secs: u64,
 }
 
 #[component]
@@ -194,7 +197,7 @@ fn MergedLeaseRow(props: &MergedLeaseRowProps) -> impl Into<AnyElement<'_>> {
         (None, Some(pfx)) => format!("{pfx}/64"),
         (None, None) => "-".to_string(),
     };
-    let expires_str = &m.expires;
+    let rem_str = crate::tui::utils::format_remaining_secs(m.remaining_secs.cast_signed());
 
     element! {
         View(flex_direction: FlexDirection::Row) {
@@ -211,7 +214,7 @@ fn MergedLeaseRow(props: &MergedLeaseRowProps) -> impl Into<AnyElement<'_>> {
                 Text(content: format!("{}", v6_str), color: Color::Yellow)
             }
             View(width: 15) {
-                Text(content: expires_str.to_string(), color: Color::DarkGrey)
+                Text(content: rem_str, color: Color::DarkGrey)
             }
         }
     }

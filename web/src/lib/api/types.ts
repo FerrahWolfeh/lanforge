@@ -33,7 +33,6 @@ export type EventKind =
 	| 'ConfigReloaded'
 	| string; // open-ended — daemon may emit new kinds
 
-export type LeaseTarget = 'V4' | 'V6' | 'Both';
 export type UserRole = 'admin' | 'operator' | 'viewer';
 
 export type ServiceState = 'active' | 'starting' | 'offline' | 'error' | string;
@@ -347,25 +346,45 @@ export interface HostConfigEntry {
 	origin?: string;
 }
 
-// ---------------------------------------------------------------------------
-// DHCP
-// ---------------------------------------------------------------------------
+export type LeaseKind = 'v4' | 'v6' | 'v6_prefix';
 
-export interface DhcpLease {
+export type LeaseTarget =
+	| 'V4'
+	| { V6: { iaid: number } }
+	| { V6Prefix: { iaid: number } };
+
+export interface LeaseEntry {
 	mac: string;
-	ip: string;
-	hostname: string | null;
-	expires: string;
-	version: 'V4' | 'V6';
+	hostname: string;
+	address: string;
+	kind: LeaseKind;
+	expires: number;
+	remaining_secs: number;
 }
 
-export interface DhcpPoolStats {
-	name: string;
-	start: string;
-	end: string;
+export type DhcpLease = LeaseEntry;
+
+export type DhcpPoolType = 'v4' | 'v6';
+
+export interface DhcpPoolEntry {
+	pool_type: DhcpPoolType;
+	range_start: string | null;
+	range_end: string | null;
+	prefix: string | null;
+	prefix_len: number | null;
 	total: number;
-	active: number;
-	free: number;
+	used: number;
+	available: number;
+	utilization_percent: number;
+}
+
+export interface DhcpPoolsResponse {
+	v4_pools: DhcpPoolEntry[];
+	v6_pools: DhcpPoolEntry[];
+}
+
+export interface LeasesResponse {
+	leases: LeaseEntry[];
 }
 
 // ---------------------------------------------------------------------------

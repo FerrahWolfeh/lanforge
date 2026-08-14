@@ -219,7 +219,7 @@ impl Dhcpv4Service {
     async fn run_server(
         &self,
         pools: Vec<Dhcpv4Pool>,
-        _ctrl: &ServiceControl,
+        ctrl: &ServiceControl,
     ) -> Result<RunResult, CoreError> {
         let mut current_cfg = self.cfg.clone();
         current_cfg.pools = pools;
@@ -244,6 +244,26 @@ impl Dhcpv4Service {
         server.pool.reserve_statics(active_dynamic_ips);
 
         let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
+        ctrl.signal_ready();
+
+        let (total, used, available, util_pct) = server.pool.stats();
+        let range_start = current_cfg
+            .range_start
+            .or_else(|| current_cfg.pools.first().map(|p| p.range_start))
+            .unwrap_or(Ipv4Addr::UNSPECIFIED);
+        let range_end = current_cfg
+            .range_end
+            .or_else(|| current_cfg.pools.first().map(|p| p.range_end))
+            .unwrap_or(Ipv4Addr::UNSPECIFIED);
+        let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated {
+            range_start,
+            range_end,
+            subnet_mask: current_cfg.subnet_mask,
+            total,
+            used,
+            available,
+            utilization_percent: util_pct,
+        });
 
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle();
