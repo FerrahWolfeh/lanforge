@@ -141,7 +141,6 @@ fn make_test_client(socket_path: String) -> LanforgeClient {
         remote: None,
         #[cfg(feature = "remote")]
         token: None,
-        no_compress: false,
         json: true, // Output raw JSON to avoid complex terminal drawing/printing in tests
         no_color: true,
         ascii: true,

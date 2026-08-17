@@ -17,7 +17,6 @@ path = "src/main.rs"
 default = ["remote", "tui", "ring"]
 ring = ["rustls/ring", "lanforge-http?/ring", "hyper-rustls?/ring"]
 aws-lc = ["rustls/aws-lc-rs", "lanforge-http?/aws-lc", "hyper-rustls?/aws-lc-rs"]
-zstd = ["dep:zstd"]
 remote = [
     "dep:lanforge-http",
     "dep:hyper",
@@ -67,7 +66,6 @@ colored = "3.1.1"
 inquire = "0.9.4"
 iocraft = "0.8.0"
 mac_oui = { version = "0.4.11", features = ["with-db"] }
-zstd = { version = "0.13.3", optional = true }
 duration-str = "0.21.0"
 ratatui = { version = "0.30.1", features = ["crossterm"], optional = true }
 crossterm = { version = "0.29.0", optional = true }

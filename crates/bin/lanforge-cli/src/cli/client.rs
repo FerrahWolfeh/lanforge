@@ -124,7 +124,6 @@ pub struct LanforgeClient {
     pub remote: Option<String>,
     #[cfg(feature = "remote")]
     pub token: Option<String>,
-    pub no_compress: bool,
     pub json: bool,
     pub no_color: bool,
     pub ascii: bool,
@@ -275,7 +274,6 @@ impl LanforgeClient {
             remote,
             #[cfg(feature = "remote")]
             token,
-            no_compress: args.no_compress,
             json: args.json,
             no_color: args.no_color,
             ascii: args.ascii,

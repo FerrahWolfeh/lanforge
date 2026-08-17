@@ -27,15 +27,12 @@ impl fmt::Display for Encoding {
 pub enum Compression {
     /// No compression.
     None,
-    /// Zstd compression.
-    Zstd,
 }
 
 impl fmt::Display for Compression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::None => write!(f, "none"),
-            Self::Zstd => write!(f, "zstd"),
         }
     }
 }

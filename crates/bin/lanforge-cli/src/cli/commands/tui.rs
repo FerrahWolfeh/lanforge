@@ -16,7 +16,6 @@ impl Execute for TuiArgs {
                 remote: client.remote.clone(),
                 #[cfg(feature = "remote")]
                 token: client.token.clone(),
-                no_compress: client.no_compress,
                 json: client.json,
                 no_color: client.no_color,
                 ascii: client.ascii,

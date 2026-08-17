@@ -107,7 +107,6 @@ impl Execute for LoginArgs {
             remote: Some(url.clone()),
             #[cfg(feature = "remote")]
             token: Some(secret.clone()),
-            no_compress: false,
             json: false,
             no_color: false,
             ascii: false,

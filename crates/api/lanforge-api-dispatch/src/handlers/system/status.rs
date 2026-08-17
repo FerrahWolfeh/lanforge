@@ -133,16 +133,7 @@ impl ClientContext {
     pub fn gather_capabilities() -> Capabilities {
         Capabilities {
             encodings: vec![Encoding::Json, Encoding::Postcard],
-            compression: {
-                #[cfg(feature = "zstd")]
-                {
-                    vec![Compression::None, Compression::Zstd]
-                }
-                #[cfg(not(feature = "zstd"))]
-                {
-                    vec![Compression::None]
-                }
-            },
+            compression: vec![Compression::None],
         }
     }
 

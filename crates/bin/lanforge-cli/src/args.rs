@@ -44,10 +44,6 @@ pub struct LanforgeArgs {
     #[arg(long, env = "LANFORGE_TOKEN", global = true)]
     pub token: Option<String>,
 
-    /// Disable response compression.
-    #[arg(long, global = true)]
-    pub no_compress: bool,
-
     /// Output raw API JSON. No formatting, no colors.
     #[arg(long, global = true)]
     pub json: bool,
