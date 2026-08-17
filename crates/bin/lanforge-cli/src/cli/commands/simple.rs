@@ -9,8 +9,6 @@ use lanforge_api::rpc::{LanforgeRpcError, RpcResponse};
 use lanforge_types::device::DeviceStatus;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
-#[cfg(feature = "remote")]
-use reqwest::Client;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct ReloadArgs {}
@@ -115,12 +113,7 @@ impl Execute for LoginArgs {
             ascii: false,
             yes: false,
             #[cfg(feature = "remote")]
-            http_client: {
-                crate::cli::client::init_crypto();
-                Client::builder()
-                    .danger_accept_invalid_certs(true)
-                    .build()?
-            },
+            http_client: crate::cli::client::create_http_client(),
         };
 
         #[cfg(feature = "remote")]
@@ -206,13 +199,9 @@ impl Execute for WatchArgs {
             use futures::StreamExt;
 
             let url = format!("{base}/api/v1/events?follow=true&n=50&filter=dhcp,dns");
-            let mut req = client.http_client.get(&url);
-            if let Some(t) = &client.token {
-                req = req.header("Authorization", format!("Bearer {t}"));
-            }
-            let mut resp = req.send().await?.bytes_stream();
+            let mut stream = client.http_stream_url(&url).await?;
             println!("Watching for remote events... (Ctrl+C to stop)");
-            while let Some(chunk) = resp.next().await {
+            while let Some(chunk) = stream.next().await {
                 if let Ok(bytes) = chunk {
                     let s = String::from_utf8_lossy(&bytes);
                     for line in s.lines() {

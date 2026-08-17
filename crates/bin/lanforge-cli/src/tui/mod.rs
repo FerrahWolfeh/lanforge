@@ -739,12 +739,7 @@ async fn run_event_stream(client: Arc<LanforgeClient>, tx: mpsc::Sender<AppEvent
         if let Some(remote_url) = &client.remote {
             use futures::StreamExt;
             let url = format!("{remote_url}/api/v1/events?follow=true&n=50");
-            let mut req = client.http_client.get(&url);
-            if let Some(t) = &client.token {
-                req = req.header("Authorization", format!("Bearer {t}"));
-            }
-            if let Ok(resp) = req.send().await {
-                let mut stream = resp.bytes_stream();
+            if let Ok(mut stream) = client.http_stream_url(&url).await {
                 while let Some(chunk) = stream.next().await {
                     if let Ok(bytes) = chunk {
                         let s = String::from_utf8_lossy(&bytes);
@@ -796,12 +791,7 @@ async fn run_dns_log_stream(client: Arc<LanforgeClient>, tx: mpsc::Sender<AppEve
             use futures::StreamExt;
 
             let url = format!("{remote_url}/api/v1/dns/logs?follow=true");
-            let mut req = client.http_client.get(&url);
-            if let Some(t) = &client.token {
-                req = req.header("Authorization", format!("Bearer {t}"));
-            }
-            if let Ok(resp) = req.send().await {
-                let mut stream = resp.bytes_stream();
+            if let Ok(mut stream) = client.http_stream_url(&url).await {
                 while let Some(chunk) = stream.next().await {
                     if let Ok(bytes) = chunk {
                         let s = String::from_utf8_lossy(&bytes);

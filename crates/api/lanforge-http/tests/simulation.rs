@@ -61,13 +61,13 @@ async fn test_http_simulation_basic() {
         }
     }
 
-    lanforge_http::remote::init_crypto();
-    let client = reqwest::Client::new();
-    let res = client
-        .get(format!("http://127.0.0.1:{port}/api/v1/status"))
-        .send()
-        .await
-        .expect("Failed to send request");
+    let client = lanforge_http::remote::default_http_client();
+    let uri: hyper::Uri = format!("http://127.0.0.1:{port}/api/v1/status").parse().unwrap();
+    let req = hyper::Request::builder()
+        .uri(uri)
+        .body(http_body_util::Full::default())
+        .unwrap();
+    let res = client.request(req).await.expect("Failed to send request");
 
     assert_eq!(res.status(), 200);
 }

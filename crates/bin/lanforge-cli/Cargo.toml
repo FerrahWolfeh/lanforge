@@ -15,12 +15,16 @@ path = "src/main.rs"
 
 [features]
 default = ["remote", "tui", "ring"]
-ring = ["rustls/ring", "lanforge-http?/ring"]
-aws-lc = ["rustls/aws-lc-rs", "lanforge-http?/aws-lc"]
+ring = ["rustls/ring", "lanforge-http?/ring", "hyper-rustls?/ring"]
+aws-lc = ["rustls/aws-lc-rs", "lanforge-http?/aws-lc", "hyper-rustls?/aws-lc-rs"]
 zstd = ["dep:zstd"]
 remote = [
     "dep:lanforge-http",
-    "dep:reqwest",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:hyper-rustls",
+    "dep:http-body-util",
+    "dep:rustls-pki-types",
     "dep:tokio-tungstenite",
     "dep:url",
     "dep:futures",
@@ -42,13 +46,15 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-reqwest = { workspace = true, features = [
-    "json",
-    "stream",
-], optional = true }
+bytes = { workspace = true }
 clap = { workspace = true }
 rustls = { workspace = true }
 futures = { workspace = true, optional = true }
+hyper = { workspace = true, features = ["client", "http1", "http2"], optional = true }
+hyper-util = { workspace = true, features = ["client-legacy", "tokio"], optional = true }
+hyper-rustls = { workspace = true, features = ["http1", "http2", "webpki-roots"], optional = true }
+http-body-util = { workspace = true, optional = true }
+rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
 postcard = { workspace = true }
 argon2 = { workspace = true }
 rand = { workspace = true }

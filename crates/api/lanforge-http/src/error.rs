@@ -24,7 +24,7 @@ pub enum HttpError {
     /// HTTP client error (remote-side).
     #[cfg(feature = "client")]
     #[error("HTTP client error: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(String),
 
     /// URL parse error (remote-side).
     #[cfg(feature = "client")]

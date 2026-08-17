@@ -1,13 +1,9 @@
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
+
 use color_eyre::eyre::{Context, Result, eyre};
 #[cfg(feature = "remote")]
 use directories::ProjectDirs;
-use lanforge_types::auth::ApiScopes;
-use lanforge_types::network::DnsRecordType;
-use lanforge_types::network::dns::adblock::AdblockUrlKind;
-use lanforge_types::network::dns::upstream::UpstreamProtocol;
-use lanforge_types::system::ServiceAction;
-#[cfg(feature = "remote")]
-use reqwest::Client;
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
@@ -21,14 +17,105 @@ use lanforge_api::api::{
     WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
+use lanforge_types::auth::ApiScopes;
+use lanforge_types::network::DnsRecordType;
+use lanforge_types::network::dns::adblock::AdblockUrlKind;
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::system::ServiceAction;
 use lanforge_types::{
     identifiers::MacAddr,
     network::dns::adblock::{BlockingMode, RewriteRule},
     update::LeaseTarget,
 };
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+
+#[cfg(feature = "remote")]
+use bytes::Bytes;
+#[cfg(feature = "remote")]
+use http_body_util::{BodyExt, Full};
+#[cfg(feature = "remote")]
+use hyper::{Method, Request, StatusCode, Uri};
+#[cfg(feature = "remote")]
+use hyper_rustls::HttpsConnectorBuilder;
+#[cfg(feature = "remote")]
+use hyper_util::client::legacy::Client;
+#[cfg(feature = "remote")]
+use hyper_util::client::legacy::connect::HttpConnector;
+#[cfg(feature = "remote")]
+use hyper_util::rt::TokioExecutor;
 
 use crate::args::LanforgeArgs;
+
+#[cfg(feature = "remote")]
+pub type HttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
+
+#[cfg(feature = "remote")]
+#[derive(Debug)]
+struct NoCertificateVerification;
+
+#[cfg(feature = "remote")]
+impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls_pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls_pki_types::CertificateDer<'_>],
+        _server_name: &rustls_pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls_pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls_pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls_pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        #[cfg(feature = "ring")]
+        return rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes();
+        #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
+        return rustls::crypto::aws_lc_rs::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes();
+        #[cfg(not(any(feature = "ring", feature = "aws-lc")))]
+        return vec![];
+    }
+}
+
+#[cfg(feature = "remote")]
+#[must_use]
+pub fn create_http_client() -> HttpClient {
+    init_crypto();
+
+    let tls_config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
+        .with_no_client_auth();
+
+    let https = HttpsConnectorBuilder::new()
+        .with_tls_config(tls_config)
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+
+    Client::builder(TokioExecutor::new()).build(https)
+}
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct LanforgeClient {
@@ -43,7 +130,7 @@ pub struct LanforgeClient {
     pub ascii: bool,
     pub yes: bool,
     #[cfg(feature = "remote")]
-    pub http_client: Client,
+    pub http_client: HttpClient,
 }
 
 macro_rules! dispatch {
@@ -176,11 +263,7 @@ impl LanforgeClient {
         }
 
         #[cfg(feature = "remote")]
-        init_crypto();
-        #[cfg(feature = "remote")]
-        let http_client = Client::builder()
-            .danger_accept_invalid_certs(true)
-            .build()?;
+        let http_client = create_http_client();
 
         if args.no_color {
             colored::control::set_override(false);
@@ -219,23 +302,63 @@ impl LanforgeClient {
     }
 
     #[cfg(feature = "remote")]
-    async fn http_get<T: HttpWrappedResponse>(&self, path: &str) -> Result<T> {
+    async fn send_request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Bytes>,
+    ) -> Result<(StatusCode, Bytes)> {
         let base = self.remote.as_ref().unwrap();
         let url = format!("{base}/api/v1{path}");
-        let mut req = self.http_client.get(&url);
+        let uri: Uri = url
+            .parse()
+            .map_err(|e| eyre!("Invalid URL '{url}': {e}"))?;
+
+        let mut builder = Request::builder().method(method).uri(uri);
+
         if let Some(t) = &self.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
+            builder = builder.header("Authorization", format!("Bearer {t}"));
         }
-        let resp = req.send().await?;
+
+        if body.is_some() {
+            builder = builder.header("Content-Type", "application/json");
+        }
+
+        let body_payload = body.map_or_else(Full::default, Full::new);
+
+        let req = builder
+            .body(body_payload)
+            .map_err(|e| eyre!("Failed to build request: {e}"))?;
+
+        let resp = self
+            .http_client
+            .request(req)
+            .await
+            .map_err(|e| eyre!("HTTP request failed: {e}"))?;
+
         let status = resp.status();
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| eyre!("Failed to read response body: {e}"))?
+            .to_bytes();
+
         if !status.is_success() {
             let err_body: HttpErrorResponse =
-                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
-                    error: "Unknown API error".into(),
+                serde_json::from_slice(&bytes).unwrap_or_else(|_| HttpErrorResponse {
+                    error: String::from_utf8_lossy(&bytes).to_string(),
                 });
             color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
         }
-        if status == reqwest::StatusCode::NO_CONTENT {
+
+        Ok((status, bytes))
+    }
+
+    #[cfg(feature = "remote")]
+    async fn http_get<T: HttpWrappedResponse>(&self, path: &str) -> Result<T> {
+        let (status, bytes) = self.send_request(Method::GET, path, None).await?;
+        if status == StatusCode::NO_CONTENT {
             if let Ok(wrapper) =
                 serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
             {
@@ -245,7 +368,6 @@ impl LanforgeClient {
                 return Ok(T::unwrap(wrapper));
             }
         }
-        let bytes = resp.bytes().await?;
         Self::decode_bytes(&bytes)
     }
 
@@ -255,22 +377,11 @@ impl LanforgeClient {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let base = self.remote.as_ref().unwrap();
-        let url = format!("{base}/api/v1{path}");
-        let mut req = self.http_client.post(&url).json(body);
-        if let Some(t) = &self.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        let resp = req.send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let err_body: HttpErrorResponse =
-                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
-                    error: "Unknown API error".into(),
-                });
-            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
-        }
-        if status == reqwest::StatusCode::NO_CONTENT {
+        let body_bytes = Bytes::from(serde_json::to_vec(body)?);
+        let (status, bytes) = self
+            .send_request(Method::POST, path, Some(body_bytes))
+            .await?;
+        if status == StatusCode::NO_CONTENT {
             if let Ok(wrapper) =
                 serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
             {
@@ -280,28 +391,13 @@ impl LanforgeClient {
                 return Ok(T::unwrap(wrapper));
             }
         }
-        let bytes = resp.bytes().await?;
         Self::decode_bytes(&bytes)
     }
 
     #[cfg(feature = "remote")]
     async fn http_delete<T: HttpWrappedResponse>(&self, path: &str) -> Result<T> {
-        let base = self.remote.as_ref().unwrap();
-        let url = format!("{base}/api/v1{path}");
-        let mut req = self.http_client.delete(&url);
-        if let Some(t) = &self.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        let resp = req.send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let err_body: HttpErrorResponse =
-                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
-                    error: "Unknown API error".into(),
-                });
-            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
-        }
-        if status == reqwest::StatusCode::NO_CONTENT {
+        let (status, bytes) = self.send_request(Method::DELETE, path, None).await?;
+        if status == StatusCode::NO_CONTENT {
             if let Ok(wrapper) =
                 serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
             {
@@ -311,7 +407,6 @@ impl LanforgeClient {
                 return Ok(T::unwrap(wrapper));
             }
         }
-        let bytes = resp.bytes().await?;
         Self::decode_bytes(&bytes)
     }
 
@@ -321,22 +416,11 @@ impl LanforgeClient {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let base = self.remote.as_ref().unwrap();
-        let url = format!("{base}/api/v1{path}");
-        let mut req = self.http_client.patch(&url).json(body);
-        if let Some(t) = &self.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        let resp = req.send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let err_body: HttpErrorResponse =
-                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
-                    error: "Unknown API error".into(),
-                });
-            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
-        }
-        if status == reqwest::StatusCode::NO_CONTENT {
+        let body_bytes = Bytes::from(serde_json::to_vec(body)?);
+        let (status, bytes) = self
+            .send_request(Method::PATCH, path, Some(body_bytes))
+            .await?;
+        if status == StatusCode::NO_CONTENT {
             if let Ok(wrapper) =
                 serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
             {
@@ -346,7 +430,6 @@ impl LanforgeClient {
                 return Ok(T::unwrap(wrapper));
             }
         }
-        let bytes = resp.bytes().await?;
         Self::decode_bytes(&bytes)
     }
 
@@ -356,22 +439,11 @@ impl LanforgeClient {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let base = self.remote.as_ref().unwrap();
-        let url = format!("{base}/api/v1{path}");
-        let mut req = self.http_client.put(&url).json(body);
-        if let Some(t) = &self.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        let resp = req.send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let err_body: HttpErrorResponse =
-                resp.json().await.unwrap_or_else(|_| HttpErrorResponse {
-                    error: "Unknown API error".into(),
-                });
-            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
-        }
-        if status == reqwest::StatusCode::NO_CONTENT {
+        let body_bytes = Bytes::from(serde_json::to_vec(body)?);
+        let (status, bytes) = self
+            .send_request(Method::PUT, path, Some(body_bytes))
+            .await?;
+        if status == StatusCode::NO_CONTENT {
             if let Ok(wrapper) =
                 serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
             {
@@ -381,8 +453,48 @@ impl LanforgeClient {
                 return Ok(T::unwrap(wrapper));
             }
         }
-        let bytes = resp.bytes().await?;
         Self::decode_bytes(&bytes)
+    }
+
+    #[cfg(feature = "remote")]
+    pub async fn http_stream_url(
+        &self,
+        full_url: &str,
+    ) -> Result<futures::stream::BoxStream<'static, std::result::Result<Bytes, color_eyre::Report>>> {
+        use futures::StreamExt;
+        use http_body_util::BodyExt;
+        let uri: Uri = full_url
+            .parse()
+            .map_err(|e| eyre!("Invalid URL '{full_url}': {e}"))?;
+
+        let mut builder = Request::builder().method(Method::GET).uri(uri);
+        if let Some(t) = &self.token {
+            builder = builder.header("Authorization", format!("Bearer {t}"));
+        }
+        let req = builder
+            .body(Full::default())
+            .map_err(|e| eyre!("Failed to build request: {e}"))?;
+        let resp = self
+            .http_client
+            .request(req)
+            .await
+            .map_err(|e| eyre!("HTTP stream request failed: {e}"))?;
+
+        let body = resp.into_body();
+        let stream = futures::stream::unfold(body, |mut body| async move {
+            match body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        Some((Ok(data), body))
+                    } else {
+                        Some((Ok(Bytes::new()), body))
+                    }
+                }
+                Some(Err(e)) => Some((Err(eyre!("HTTP stream frame error: {e}")), body)),
+                None => None,
+            }
+        });
+        Ok(stream.boxed())
     }
 
     // --- System & Status ---
@@ -633,19 +745,14 @@ impl LanforgeClient {
 
     #[cfg(feature = "remote")]
     pub async fn ak_validate(&self, token: &str) -> Result<SimpleSuccess> {
-        let base = self.remote.as_ref().unwrap();
-        let url = format!("{base}/api/v1/auth/validate");
-        let resp = self
-            .http_client
-            .post(&url)
-            .json(&serde_json::json!({ "token": token }))
-            .send()
+        let body_bytes = Bytes::from(serde_json::to_vec(&serde_json::json!({ "token": token }))?);
+        let (status, bytes) = self
+            .send_request(Method::POST, "/auth/validate", Some(body_bytes))
             .await?;
-        let status = resp.status();
         if !status.is_success() {
             color_eyre::eyre::bail!("Invalid token ({status})");
         }
-        let body: serde_json::Value = resp.json().await?;
+        let body: serde_json::Value = serde_json::from_slice(&bytes)?;
         if let Some(valid) = body
             .get("data")
             .and_then(|d| d.get("valid"))

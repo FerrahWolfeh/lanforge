@@ -334,13 +334,9 @@ async fn execute_log(
         }
         let q = format!("?{}", params.join("&"));
         let url = format!("{base}/api/v1/dns/logs{q}");
-        let mut req = client.http_client.get(&url);
-        if let Some(t) = &client.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        let mut resp = req.send().await?.bytes_stream();
+        let mut stream = client.http_stream_url(&url).await?;
         println!("Watching for remote DNS logs... (Ctrl+C to stop)");
-        while let Some(chunk) = resp.next().await {
+        while let Some(chunk) = stream.next().await {
             if let Ok(bytes) = chunk {
                 let s = String::from_utf8_lossy(&bytes);
                 for line in s.lines() {
