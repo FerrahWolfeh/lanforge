@@ -1,20 +1,25 @@
-use crate::error::{HttpError, Result as HttpResult};
-use axum::extract::State;
-use axum::http::header::AUTHORIZATION;
-use axum::middleware::Next;
-use axum::response::Response as AxumResponse;
-use axum::{
-    body::Body,
-    extract::{FromRef, FromRequestParts},
-    http::{Request, request::Parts},
-};
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use lanforge_types::auth::{ApiScope, ApiScopes};
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use axum::{
+    body::Body,
+    extract::{FromRef, FromRequestParts, State},
+    http::{
+        Method, Request,
+        header::{AUTHORIZATION, COOKIE},
+        request::Parts,
+    },
+    middleware::Next,
+    response::Response as AxumResponse,
+};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use lanforge_db_core::DatabaseStore;
-use std::sync::Arc;
+use lanforge_types::auth::{ApiScope, ApiScopes};
+use serde::{Deserialize, Serialize};
+use tracing::error;
+
+use crate::config::HttpConfig;
+use crate::error::{HttpError, Result as HttpResult};
 
 /// JWT Claims.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -102,10 +107,7 @@ pub fn extract_token_str(headers: &axum::http::HeaderMap) -> Option<&str> {
             return Some(auth_header);
         }
     }
-    if let Some(cookie_header) = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(cookie_header) = headers.get(COOKIE).and_then(|v| v.to_str().ok()) {
         for cookie in cookie_header.split(';') {
             let cookie = cookie.trim();
             if let Some(val) = cookie.strip_prefix("lanforge_session=") {
@@ -177,7 +179,7 @@ where
             }
             Ok(None) => {}
             Err(e) => {
-                tracing::error!("Database error during token validation: {e}");
+                error!("Database error during token validation: {e}");
                 return Err(HttpError::Internal("Auth database error".into()));
             }
         }
@@ -195,7 +197,22 @@ where
     }
 }
 
-use crate::config::HttpConfig;
+#[inline]
+fn is_public_auth_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/auth/login"
+            | "/api/v1/auth/login"
+            | "/api/auth/status"
+            | "/api/v1/auth/status"
+            | "/api/v1/auth/validate"
+            | "/auth/login"
+            | "/v1/auth/login"
+            | "/auth/status"
+            | "/v1/auth/status"
+            | "/v1/auth/validate"
+    )
+}
 
 pub async fn middleware(
     State(cfg): State<Arc<HttpConfig>>,
@@ -204,28 +221,16 @@ pub async fn middleware(
     mut req: Request<Body>,
     next: Next,
 ) -> HttpResult<AxumResponse> {
-    let user_count = db.count_users().await.unwrap_or(0);
     // If no password hash is set AND no DB users exist, authentication is globally disabled.
-    if cfg.auth_password_hash.is_none() && user_count == 0 {
+    if cfg.auth_password_hash.is_none() && db.count_users().await.unwrap_or(0) == 0 {
         return Ok(next.run(req).await);
     }
 
-    if req.method() == axum::http::Method::OPTIONS {
+    if req.method() == Method::OPTIONS {
         return Ok(next.run(req).await);
     }
 
-    let path = req.uri().path();
-    if path == "/api/v1/auth/validate"
-        || path == "/v1/auth/validate"
-        || path == "/api/auth/login"
-        || path == "/auth/login"
-        || path == "/api/v1/auth/login"
-        || path == "/v1/auth/login"
-        || path == "/api/v1/auth/status"
-        || path == "/v1/auth/status"
-        || path == "/api/auth/status"
-        || path == "/auth/status"
-    {
+    if is_public_auth_path(req.uri().path()) {
         return Ok(next.run(req).await);
     }
 
@@ -255,7 +260,7 @@ pub async fn middleware(
             Err(_) => return Err(HttpError::Auth("Invalid or expired token".into())),
         },
         Err(e) => {
-            tracing::error!("Database error during token validation: {e}");
+            error!("Database error during token validation: {e}");
             return Err(HttpError::Internal("Auth database error".into()));
         }
     };

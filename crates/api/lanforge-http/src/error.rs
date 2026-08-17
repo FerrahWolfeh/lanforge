@@ -1,3 +1,9 @@
+#[cfg(feature = "server")]
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response as AxumResponse},
+};
 use thiserror::Error;
 
 /// Unified error type for the `lanforge-http` crate.
@@ -71,3 +77,30 @@ pub enum HttpError {
 
 /// A specialized Result type for `lanforge-http`.
 pub type Result<T> = std::result::Result<T, HttpError>;
+
+#[cfg(feature = "server")]
+impl IntoResponse for HttpError {
+    fn into_response(self) -> AxumResponse {
+        let (status, message) = match self {
+            Self::Auth(msg) => (StatusCode::UNAUTHORIZED, msg),
+            Self::Rpc { status, message } => {
+                let code =
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                (code, message)
+            }
+            Self::Jwt(e) => (StatusCode::UNAUTHORIZED, e.to_string()),
+            Self::Core(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            Self::BadRequest(msg) | Self::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
+            Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+        };
+
+        let body = Json(serde_json::json!({
+            "error": message,
+            "status": status.as_u16()
+        }));
+
+        (status, body).into_response()
+    }
+}

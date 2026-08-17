@@ -1,11 +1,12 @@
+use std::fmt::Write;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use lanforge_core::context::{EventCounters, LanforgeContext};
 use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::DnsStats;
 use lanforge_types::device::{Device, Origin};
 use lanforge_types::system::SystemStatus;
-use std::fmt::Write;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 /// Generates a Prometheus-formatted metrics string.
 #[must_use]

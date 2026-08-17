@@ -1,13 +1,13 @@
-use crate::routes::create_client_ctx;
-use crate::server::AppState;
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, put},
 };
 use serde::Deserialize;
+
+use crate::routes::create_client_ctx;
+use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
@@ -50,20 +50,7 @@ async fn handle_delete_user(
     Path(username): Path<String>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    let res = ctx.handle_user_delete(username).await;
-    match res {
-        lanforge_api::api::Response::Success(s) => (StatusCode::OK, Json(s)).into_response(),
-        lanforge_api::api::Response::Error { error } => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Internal server error" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_user_delete(username).await, Success)
 }
 
 async fn handle_reset_password(
@@ -72,18 +59,5 @@ async fn handle_reset_password(
     Json(payload): Json<ResetPasswordRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    let res = ctx.handle_user_passwd(username, payload.password).await;
-    match res {
-        lanforge_api::api::Response::Success(s) => (StatusCode::OK, Json(s)).into_response(),
-        lanforge_api::api::Response::Error { error } => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Internal server error" })),
-        )
-            .into_response(),
-    }
+    crate::http_response!(ctx.handle_user_passwd(username, payload.password).await, Success)
 }

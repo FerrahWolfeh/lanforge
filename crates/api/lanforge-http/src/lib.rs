@@ -7,6 +7,8 @@ pub mod error;
 
 #[cfg(feature = "server")]
 pub mod auth;
+#[cfg(all(feature = "server", feature = "doh"))]
+pub mod doh;
 #[cfg(feature = "server")]
 pub mod metrics;
 #[cfg(feature = "client")]

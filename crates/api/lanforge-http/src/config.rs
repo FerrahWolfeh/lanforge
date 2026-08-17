@@ -38,7 +38,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            listen: "0.0.0.0:9090".parse().unwrap(),
+            listen: SocketAddr::from(([0, 0, 0, 0], 9090)),
             https_enabled: false,
             allow_plaintext_http: false,
             doh_enabled: false,

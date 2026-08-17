@@ -1,14 +1,16 @@
-use crate::routes::create_client_ctx;
-use crate::server::AppState;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     response::IntoResponse,
     routing::{get, post},
 };
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::update::LeaseTarget;
 use serde::Deserialize;
+
+use crate::routes::create_client_ctx;
+use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct LeasesQuery {
@@ -84,7 +86,7 @@ async fn handle_leases(
 
 async fn handle_renew(
     State(state): State<AppState>,
-    Path(mac): Path<lanforge_types::identifiers::MacAddr>,
+    Path(mac): Path<MacAddr>,
     Json(payload): Json<LeaseActionRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
@@ -93,7 +95,7 @@ async fn handle_renew(
 
 async fn handle_release(
     State(state): State<AppState>,
-    Path(mac): Path<lanforge_types::identifiers::MacAddr>,
+    Path(mac): Path<MacAddr>,
     Json(payload): Json<LeaseActionRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);

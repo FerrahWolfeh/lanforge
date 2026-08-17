@@ -1,5 +1,3 @@
-use crate::routes::create_client_ctx;
-use crate::server::AppState;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -7,6 +5,17 @@ use axum::{
     routing::{delete, get, post},
 };
 use lanforge_api::api::HostConfigEntry;
+use lanforge_types::identifiers::MacAddr;
+use serde::Deserialize;
+
+use crate::routes::create_client_ctx;
+use crate::server::AppState;
+
+#[derive(Debug, Deserialize)]
+pub struct HostSetPayload {
+    pub field: String,
+    pub value: String,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -29,15 +38,9 @@ async fn handle_add_host(
     crate::http_response!(ctx.handle_host_add(payload).await, Success => NoContent)
 }
 
-#[derive(serde::Deserialize)]
-pub struct HostSetPayload {
-    pub field: String,
-    pub value: String,
-}
-
 async fn handle_set_host(
     State(state): State<AppState>,
-    Path(mac): Path<lanforge_types::identifiers::MacAddr>,
+    Path(mac): Path<MacAddr>,
     Json(payload): Json<HostSetPayload>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
@@ -46,7 +49,7 @@ async fn handle_set_host(
 
 async fn handle_remove_host(
     State(state): State<AppState>,
-    Path(mac): Path<lanforge_types::identifiers::MacAddr>,
+    Path(mac): Path<MacAddr>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_host_remove(mac).await, Success => NoContent)

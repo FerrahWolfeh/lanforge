@@ -28,16 +28,6 @@ pub fn default_http_client() -> HttpClient {
     Client::builder(TokioExecutor::new()).build(https)
 }
 
-#[cfg(feature = "server")]
-#[inline]
-pub fn init_crypto() {
-    #[cfg(feature = "ring")]
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-}
-
-#[cfg(not(feature = "server"))]
 #[inline]
 pub fn init_crypto() {
     #[cfg(feature = "ring")]

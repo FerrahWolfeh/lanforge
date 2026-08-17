@@ -1,14 +1,16 @@
-use crate::routes::create_client_ctx;
-use crate::server::AppState;
 use axum::{
-    Router,
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
-use lanforge_api::api::{HttpErrorResponse, HttpPaginatedResponse, Response, group_devices};
+use lanforge_api::api::{HttpPaginatedResponse, Response, group_devices};
+use lanforge_types::identifiers::MacAddr;
 use serde::Deserialize;
+
+use crate::routes::{create_client_ctx, invalid_response_to_http, response_error_to_http};
+use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct DeviceListQuery {
@@ -48,42 +50,22 @@ async fn handle_list_devices(
 
     match res {
         Response::Devices(devices_resp) => {
-            if params.grouped.unwrap_or(false) {
-                let grouped_list = group_devices(&devices_resp.devices);
-                (
-                    StatusCode::OK,
-                    axum::Json(HttpPaginatedResponse {
-                        data: grouped_list,
-                        meta: devices_resp.meta,
-                    }),
-                )
-                    .into_response()
+            let data = if params.grouped.unwrap_or(false) {
+                serde_json::to_value(group_devices(&devices_resp.devices)).unwrap_or_default()
             } else {
-                (
-                    StatusCode::OK,
-                    axum::Json(HttpPaginatedResponse {
-                        data: devices_resp.devices,
-                        meta: devices_resp.meta,
-                    }),
-                )
-                    .into_response()
-            }
-        }
-        Response::Error { error } => {
-            let status = if error.contains("not found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
+                serde_json::to_value(devices_resp.devices).unwrap_or_default()
             };
-            (status, axum::Json(HttpErrorResponse { error })).into_response()
+            (
+                StatusCode::OK,
+                Json(HttpPaginatedResponse {
+                    data,
+                    meta: devices_resp.meta,
+                }),
+            )
+                .into_response()
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(HttpErrorResponse {
-                error: "Invalid response type".into(),
-            }),
-        )
-            .into_response(),
+        Response::Error { error } => response_error_to_http(error),
+        _ => invalid_response_to_http(),
     }
 }
 
@@ -100,12 +82,12 @@ async fn handle_whois(
     Path(target): Path<String>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_whois(target.clone()).await, Whois)
+    crate::http_response!(ctx.handle_whois(target).await, Whois)
 }
 
 async fn handle_purge(
     State(state): State<AppState>,
-    Path(target): Path<lanforge_types::identifiers::MacAddr>,
+    Path(target): Path<MacAddr>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_purge(target).await, Success => NoContent)

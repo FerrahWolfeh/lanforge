@@ -1,12 +1,15 @@
-use crate::server::AppState;
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     routing::{get, post},
 };
 use lanforge_api::api::SystemConfigExport;
+use lanforge_types::system::ServiceAction;
 use serde::Deserialize;
+
+use crate::routes::create_client_ctx;
+use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ContextDumpQuery {
@@ -18,7 +21,7 @@ pub struct ContextDumpQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct ServiceControlPayload {
-    pub action: lanforge_types::system::ServiceAction,
+    pub action: ServiceAction,
 }
 
 pub fn router() -> Router<AppState> {
@@ -34,8 +37,6 @@ pub fn router() -> Router<AppState> {
             get(handle_export_config).post(handle_import_config),
         )
 }
-
-use crate::routes::create_client_ctx;
 
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
@@ -87,7 +88,7 @@ async fn handle_import_config(
 
 async fn handle_service_control(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path(id): Path<String>,
     Json(payload): Json<ServiceControlPayload>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);

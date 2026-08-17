@@ -1,19 +1,23 @@
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::error::HttpError;
-use crate::server::AppState;
-use crate::{auth::AuthenticatedUser, routes::create_client_ctx};
-use axum::extract::Request;
-use axum::http::{HeaderMap, HeaderValue, header};
 use axum::{
-    Json, Router,
-    extract::{Path, State},
-    http::StatusCode,
+    Extension, Json, Router,
+    extract::{Path, Request, State},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::SET_COOKIE,
+    },
     response::IntoResponse,
     routing::{delete, get, post},
 };
 use lanforge_core::utils::auth::{hash_password, verify_password};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use tracing::error;
+
+use crate::auth::{AuthenticatedUser, extract_token_str};
+use crate::error::{HttpError, Result as HttpResult};
+use crate::routes::create_client_ctx;
+use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ValidateRequest {
@@ -28,7 +32,7 @@ pub struct LoginRequest {
     pub remember_me: Option<bool>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 pub struct LoginResponseData {
     pub token: String,
     pub username: String,
@@ -36,18 +40,18 @@ pub struct LoginResponseData {
     pub auth_required: bool,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 pub struct LoginResponse {
     pub data: LoginResponseData,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 pub struct AuthStatusData {
     pub auth_required: bool,
     pub authenticated: bool,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 pub struct AuthStatusResponse {
     pub data: AuthStatusData,
 }
@@ -104,7 +108,7 @@ async fn handle_validate(
     Json(payload): Json<ValidateRequest>,
 ) -> impl IntoResponse {
     let now = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
         .cast_signed();
@@ -119,9 +123,9 @@ async fn handle_validate(
 pub async fn handle_login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> crate::error::Result<impl IntoResponse> {
-    let user_count = state.db.count_users().await.unwrap_or(0);
-    let auth_required = state.cfg.auth_password_hash.is_some() || user_count > 0;
+) -> HttpResult<impl IntoResponse> {
+    let auth_required =
+        state.cfg.auth_password_hash.is_some() || state.db.count_users().await.unwrap_or(0) > 0;
     let username = payload
         .username
         .unwrap_or_else(|| "admin".to_string())
@@ -141,7 +145,7 @@ pub async fn handle_login(
 
     if let Some(token_str) = candidate_token {
         let now = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
             .cast_signed();
@@ -165,7 +169,7 @@ pub async fn handle_login(
                 return Err(HttpError::Auth("Invalid API token".to_string()));
             }
             Err(e) => {
-                tracing::error!("Database error during login token validation: {e}");
+                error!("Database error during login token validation: {e}");
                 return Err(HttpError::Internal("Auth DB error".into()));
             }
         }
@@ -178,7 +182,7 @@ pub async fn handle_login(
     }
 
     let now = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
         .cast_signed();
@@ -194,7 +198,7 @@ pub async fn handle_login(
             format!("session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl_secs}");
         let mut headers = HeaderMap::new();
         if let Ok(v) = HeaderValue::from_str(&cookie_header) {
-            headers.insert(header::SET_COOKIE, v);
+            headers.insert(SET_COOKIE, v);
         }
         (
             StatusCode::OK,
@@ -231,6 +235,7 @@ pub async fn handle_login(
     }
 
     // 3. Bootstrapping / Fallback Admin seeding if no DB users exist
+    let user_count = state.db.count_users().await.unwrap_or(0);
     if user_count == 0
         && let Some(hash) = &state.cfg.auth_password_hash
         && verify_password(hash, &password)
@@ -250,16 +255,11 @@ pub async fn handle_login(
 }
 
 async fn handle_status(State(state): State<AppState>, req: Request) -> impl IntoResponse {
-    let user_count = state.db.count_users().await.unwrap_or(0);
-    let auth_required = state.cfg.auth_password_hash.is_some() || user_count > 0;
-    let authenticated = if let Some(token) = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-    {
+    let auth_required =
+        state.cfg.auth_password_hash.is_some() || state.db.count_users().await.unwrap_or(0) > 0;
+    let authenticated = if let Some(token) = extract_token_str(req.headers()) {
         let now = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
             .cast_signed();
@@ -279,7 +279,7 @@ async fn handle_status(State(state): State<AppState>, req: Request) -> impl Into
     })
 }
 
-async fn handle_me(axum::Extension(user): axum::Extension<AuthenticatedUser>) -> impl IntoResponse {
+async fn handle_me(Extension(user): Extension<AuthenticatedUser>) -> impl IntoResponse {
     Json(serde_json::json!({
         "data": {
             "username": user.name,
@@ -291,16 +291,16 @@ async fn handle_me(axum::Extension(user): axum::Extension<AuthenticatedUser>) ->
 
 async fn handle_change_password(
     State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ChangePasswordRequest>,
-) -> crate::error::Result<impl IntoResponse> {
+) -> HttpResult<impl IntoResponse> {
     if payload.new_password.len() < 8 {
         return Err(HttpError::Validation(
             "New password must be at least 8 characters long".to_string(),
         ));
     }
     let now = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
         .cast_signed();
