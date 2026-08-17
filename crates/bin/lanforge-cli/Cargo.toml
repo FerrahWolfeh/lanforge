@@ -14,7 +14,9 @@ name = "lanforge"
 path = "src/main.rs"
 
 [features]
-default = ["remote", "tui"]
+default = ["remote", "tui", "ring"]
+ring = ["rustls/ring", "lanforge-http?/ring"]
+aws-lc = ["rustls/aws-lc-rs", "lanforge-http?/aws-lc"]
 zstd = ["dep:zstd"]
 remote = [
     "dep:lanforge-http",
@@ -42,7 +44,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true, features = [
     "json",
-    "rustls",
     "stream",
 ], optional = true }
 clap = { workspace = true }

@@ -11,9 +11,7 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
 
     // Initialize Crypto Provider (Rustls 0.23+ requirement)
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .ok(); // Ignore if already installed
+    lanforge_cli::cli::client::init_crypto();
 
     let cli = Cli::parse();
 

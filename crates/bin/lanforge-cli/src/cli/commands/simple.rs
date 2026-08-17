@@ -115,9 +115,12 @@ impl Execute for LoginArgs {
             ascii: false,
             yes: false,
             #[cfg(feature = "remote")]
-            http_client: Client::builder()
-                .danger_accept_invalid_certs(true)
-                .build()?,
+            http_client: {
+                crate::cli::client::init_crypto();
+                Client::builder()
+                    .danger_accept_invalid_certs(true)
+                    .build()?
+            },
         };
 
         #[cfg(feature = "remote")]

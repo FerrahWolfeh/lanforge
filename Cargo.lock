@@ -4372,7 +4372,6 @@ dependencies = [
  "mime",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",

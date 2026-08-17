@@ -6,9 +6,10 @@ edition.workspace = true
 authors.workspace = true
 
 [features]
-default = ["postgres"]
+default = ["postgres", "ring"]
 postgres = ["dep:lanforge-db-postgres"]
-aws-lc = ["lanforge-db-postgres?/tls-aws-lc"]
+ring = ["lanforge-db-postgres?/ring"]
+aws-lc = ["lanforge-db-postgres?/aws-lc"]
 adblock = ["lanforge-core/adblock"]
 hotpath = [
     "dep:hotpath",

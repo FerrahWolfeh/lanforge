@@ -51,7 +51,15 @@ async-stream = { version = "0.3.6", optional = true }
 lanforge-webui = { workspace = true, optional = true }
 
 [features]
-default = ["server", "client"]
+default = ["server", "client", "ring"]
+ring = [
+    "rustls?/ring",
+    "lanforge-dns?/ring",
+]
+aws-lc = [
+    "rustls?/aws-lc-rs",
+    "lanforge-dns?/aws-lc",
+]
 server = [
     "dep:axum",
     "dep:tower-http",

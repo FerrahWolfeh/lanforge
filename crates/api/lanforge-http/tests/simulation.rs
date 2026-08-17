@@ -61,6 +61,7 @@ async fn test_http_simulation_basic() {
         }
     }
 
+    lanforge_http::remote::init_crypto();
     let client = reqwest::Client::new();
     let res = client
         .get(format!("http://127.0.0.1:{port}/api/v1/status"))

@@ -29,6 +29,7 @@ default = [
     "adblock",
     "doh-server",
     "webui",
+    "ring",
 ]
 
 # Service Features
@@ -95,9 +96,17 @@ adblock = [
     "lanforge-http?/adblock",
 ]
 # Crypto features
+ring = [
+    "rustls/ring",
+    "lanforge-dns?/ring",
+    "lanforge-db/ring",
+    "lanforge-http?/ring",
+]
 aws-lc = [
+    "rustls/aws-lc-rs",
     "lanforge-dns?/aws-lc",
     "lanforge-db/aws-lc",
+    "lanforge-http?/aws-lc",
 ]
 
 # Meta-features / Build Profiles

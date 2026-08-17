@@ -6,6 +6,19 @@ use tracing::info;
 
 use crate::error::{HttpError, Result};
 
+#[cfg(feature = "server")]
+#[inline]
+pub fn init_crypto() {
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
+#[cfg(not(feature = "server"))]
+#[inline]
+pub fn init_crypto() {}
+
 pub struct RemoteClient {
     base_url: String,
     token: Option<String>,
@@ -15,6 +28,7 @@ pub struct RemoteClient {
 impl RemoteClient {
     #[must_use]
     pub fn new(base_url: String, token: Option<String>) -> Self {
+        init_crypto();
         Self {
             base_url,
             token,

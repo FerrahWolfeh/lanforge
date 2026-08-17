@@ -6,7 +6,9 @@ edition.workspace = true
 authors.workspace = true
 
 [features]
-default = ["tls-ring"]
+default = ["ring"]
+ring = ["sqlx/tls-rustls-ring", "tls-ring"]
+aws-lc = ["sqlx/tls-rustls-aws-lc-rs", "tls-aws-lc"]
 tls-ring = ["sqlx/tls-rustls-ring"]
 tls-aws-lc = ["sqlx/tls-rustls-aws-lc-rs"]
 hotpath = ["lanforge-core/hotpath"]

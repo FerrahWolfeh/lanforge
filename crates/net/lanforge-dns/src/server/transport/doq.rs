@@ -1,5 +1,5 @@
 use lanforge_types::network::dns::TransportProtocol;
-use lanforge_types::system::{ServiceBanner, ServiceState};
+use lanforge_types::system::ServiceBanner;
 use quinn::{Endpoint, ServerConfig, TransportConfig};
 use std::sync::Arc;
 use std::time::Duration;

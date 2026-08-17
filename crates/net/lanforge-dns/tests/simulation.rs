@@ -26,9 +26,10 @@ fn init_crypto() {
     use std::sync::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .expect("Failed to install rustls crypto provider");
+        #[cfg(feature = "ring")]
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     });
 }
 

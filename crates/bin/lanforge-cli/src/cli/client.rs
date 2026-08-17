@@ -109,6 +109,14 @@ macro_rules! dispatch {
     }};
 }
 
+#[inline]
+pub fn init_crypto() {
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 impl LanforgeClient {
     pub fn from_args(args: &LanforgeArgs) -> Result<Self> {
         #[cfg(feature = "remote")]
@@ -167,6 +175,8 @@ impl LanforgeClient {
             }
         }
 
+        #[cfg(feature = "remote")]
+        init_crypto();
         #[cfg(feature = "remote")]
         let http_client = Client::builder()
             .danger_accept_invalid_certs(true)

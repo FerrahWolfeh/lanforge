@@ -33,9 +33,10 @@ fn main() -> Result<()> {
 
 async fn async_main() -> Result<()> {
     // 0. Initialize Crypto Provider (Rustls 0.23+ requirement)
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .ok(); // Ignore if already installed
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // 1. Setup Logging
     tracing_subscriber::fmt()
