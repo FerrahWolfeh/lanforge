@@ -28,6 +28,7 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut retries = quote! { 0 };
     let mut base_backoff = quote! { 1 };
     let mut max_backoff = quote! { 60 };
+    let mut shutdown_timeout = quote! { 3 };
     let mut stack = quote! { 512 };
     let mut multi_threaded = quote! { false };
     let mut describe = None;
@@ -47,6 +48,10 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                 base_backoff = quote! { #val };
             } else if nv.path.is_ident("max_backoff") {
                 max_backoff = quote! { #val };
+            } else if nv.path.is_ident("shutdown_timeout")
+                || nv.path.is_ident("shutdown_timeout_secs")
+            {
+                shutdown_timeout = quote! { #val };
             } else if nv.path.is_ident("stack") {
                 stack = quote! { #val };
             } else if nv.path.is_ident("multi_threaded") {
@@ -89,6 +94,7 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                     max_retries: #retries as u32,
                     base_backoff: std::time::Duration::from_secs(#base_backoff as u64),
                     max_backoff: std::time::Duration::from_secs(#max_backoff as u64),
+                    shutdown_timeout: std::time::Duration::from_secs(#shutdown_timeout as u64),
                     stack_kb: #stack as usize,
                     multi_threaded: #multi_threaded,
                 }

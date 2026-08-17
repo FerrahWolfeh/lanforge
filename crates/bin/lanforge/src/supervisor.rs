@@ -33,7 +33,15 @@ const MINIMUM_HEALTHY_UPTIME: Duration = Duration::from_millis(5);
 #[cfg(not(test))]
 const MINIMUM_HEALTHY_UPTIME: Duration = Duration::from_secs(5);
 
+enum ServiceRunOutcome {
+    Shutdown,
+    Control(ServiceAction),
+    BusClosed,
+    Exited(Result<(), CoreError>),
+}
+
 /// Executa uma task supervisionada que implementa `AsyncService`.
+#[allow(clippy::too_many_lines)]
 pub async fn supervise_async<S, F>(ctx: &LanforgeContext, factory: F)
 where
     S: AsyncService,
@@ -68,18 +76,87 @@ where
         let ctrl = ServiceControl::new(meta.id, ctx.clone());
         let mut bus_rx = ctx.bus().subscribe();
 
-        tokio::select! {
-            shutdown_or_control = next_control_event(&mut bus_rx, id) => {
-                if let Some(failures) = handle_control_signal(shutdown_or_control.as_ref(), &mut service, ctx, consecutive_failures) {
-                    consecutive_failures = failures;
-                } else {
-                    return;
+        let outcome = {
+            let run_fut = service.run(ctrl);
+            tokio::pin!(run_fut);
+
+            tokio::select! {
+                shutdown_or_control = next_control_event(&mut bus_rx, id) => {
+                    match shutdown_or_control {
+                        Some(SystemEvent::Shutdown) => {
+                            info!(
+                                "▪ {} shutdown initiated, awaiting cooperative termination (timeout: {:.1}s)",
+                                description,
+                                meta.shutdown_timeout.as_secs_f64()
+                            );
+                            match tokio::time::timeout(meta.shutdown_timeout, &mut run_fut).await {
+                                Ok(res) => {
+                                    debug!("▪ {} completed graceful shutdown: {:?}", description, res);
+                                }
+                                Err(_) => {
+                                    warn!(
+                                        "⚠️ {} exceeded shutdown timeout of {:.1}s — forcing abort",
+                                        description,
+                                        meta.shutdown_timeout.as_secs_f64()
+                                    );
+                                }
+                            }
+                            ServiceRunOutcome::Shutdown
+                        }
+                        Some(SystemEvent::ServiceControl { action, .. }) => {
+                            info!("▪ {} control action requested: {:?}", description, action);
+                            ServiceRunOutcome::Control(action)
+                        }
+                        None | Some(_) => ServiceRunOutcome::BusClosed,
+                    }
+                }
+                res = &mut run_fut => {
+                    ServiceRunOutcome::Exited(res)
                 }
             }
-            res = service.run(ctrl) => {
-                let Some(backoff_needed) = evaluate_service_exit(res, ctx, id, &description, start, &mut consecutive_failures) else { return };
+        };
+
+        match outcome {
+            ServiceRunOutcome::Shutdown => {
+                if let Err(e) = service.on_shutdown() {
+                    error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
+                }
+                ctx.set_service_state(id, ServiceState::Inactive);
+                ctx.clear_service_start(id);
+                return;
+            }
+            ServiceRunOutcome::Control(action) => {
+                if let Err(e) = service.on_shutdown() {
+                    error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
+                }
+                match action {
+                    ServiceAction::Stop => {
+                        ctx.set_service_state(id, ServiceState::Inactive);
+                        ctx.clear_service_start(id);
+                        consecutive_failures = 0;
+                    }
+                    ServiceAction::Restart => {
+                        ctx.set_service_state(id, ServiceState::Starting);
+                        consecutive_failures = 0;
+                    }
+                    ServiceAction::Start => {
+                        // Already started/starting, ignore
+                    }
+                }
+            }
+            ServiceRunOutcome::BusClosed => return,
+            ServiceRunOutcome::Exited(res) => {
+                let Some(backoff_needed) = evaluate_service_exit(res, ctx, id, &description, start, &mut consecutive_failures) else {
+                    if let Err(e) = service.on_shutdown() {
+                        error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
+                    }
+                    return;
+                };
 
                 if backoff_needed && handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx).await.is_none() {
+                    if let Err(e) = service.on_shutdown() {
+                        error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
+                    }
                     return;
                 }
             }
@@ -134,55 +211,6 @@ async fn next_control_event(bus_rx: &mut Receiver<TimedEvent>, id: &str) -> Opti
             Err(RecvError::Lagged(_)) => {}
             Err(_) => return None,
         }
-    }
-}
-
-fn handle_control_signal<S>(
-    event: Option<&SystemEvent>,
-    service: &mut S,
-    ctx: &LanforgeContext,
-    consecutive_failures: u32,
-) -> Option<u32>
-where
-    S: AsyncService,
-{
-    let meta = service.meta();
-    let id = meta.id;
-    let description = service.describe();
-    let name = meta.display_name;
-
-    match event {
-        Some(SystemEvent::Shutdown) => {
-            info!("▪ {} shutting down", description);
-            if let Err(e) = service.on_shutdown() {
-                error!("Error during async service '{}' shutdown: {e}", name);
-            }
-            ctx.set_service_state(id, ServiceState::Inactive);
-            ctx.clear_service_start(id);
-            None
-        }
-        Some(SystemEvent::ServiceControl { action, .. }) => {
-            info!("▪ {} control action requested: {:?}", description, action);
-            if let Err(e) = service.on_shutdown() {
-                error!("Error during async service '{}' shutdown: {e}", name);
-            }
-            match action {
-                ServiceAction::Stop => {
-                    ctx.set_service_state(id, ServiceState::Inactive);
-                    ctx.clear_service_start(id);
-                    Some(0)
-                }
-                ServiceAction::Restart => {
-                    ctx.set_service_state(id, ServiceState::Starting);
-                    Some(0)
-                }
-                ServiceAction::Start => {
-                    // Already started/starting, ignore
-                    Some(consecutive_failures)
-                }
-            }
-        }
-        _ => Some(consecutive_failures),
     }
 }
 
@@ -360,6 +388,7 @@ mod tests {
                 max_retries: 3,
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
+                shutdown_timeout: Duration::from_millis(100),
                 stack_kb: 0,
                 multi_threaded: false,
             }
@@ -399,6 +428,7 @@ mod tests {
                 max_retries: 3,
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
+                shutdown_timeout: Duration::from_millis(100),
                 stack_kb: 1,
                 multi_threaded: false,
             }
@@ -481,6 +511,7 @@ mod tests {
                 max_retries: 0, // infinite
                 base_backoff: Duration::from_millis(5),
                 max_backoff: Duration::from_millis(20),
+                shutdown_timeout: Duration::from_millis(100),
                 stack_kb: 0,
                 multi_threaded: false,
             }
@@ -531,6 +562,7 @@ mod tests {
                 max_retries: 3,
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
+                shutdown_timeout: Duration::from_millis(100),
                 stack_kb: 0,
                 multi_threaded: false,
             }
@@ -559,14 +591,6 @@ mod tests {
             .await;
         });
 
-        // Wait for it to "succeed" once (it takes 100ms, which is > 5ms in test-speed or we adjust MINIMUM_HEALTHY_UPTIME in test if needed)
-        // Wait, MINIMUM_HEALTHY_UPTIME is 5s. In tests, we can't wait 5s easily without slowing down CI.
-        // I should probably make MINIMUM_HEALTHY_UPTIME configurable or use a smaller value for tests?
-        // Actually, the current supervisor code uses Duration::from_secs(5).
-        // Let's use a mock or just accept a long test if needed, OR I can modify the supervisor to allow setting the threshold.
-        // For now, let's see if I can use a smaller value or if I should change the constant to be feature-gated.
-
-        // Actually, I'll just wait a bit and then send shutdown.
         tokio::time::sleep(Duration::from_millis(100)).await;
         ctx.terminate();
         let _ = ctx
@@ -587,6 +611,7 @@ mod tests {
                 max_retries: 0,
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
+                shutdown_timeout: Duration::from_millis(100),
                 stack_kb: 0,
                 multi_threaded: false,
             }
@@ -676,6 +701,7 @@ mod tests {
                 max_retries: 0,
                 base_backoff: Duration::from_millis(5),
                 max_backoff: Duration::from_millis(20),
+                shutdown_timeout: Duration::from_millis(100),
                 stack_kb: 0,
                 multi_threaded: false,
             }
@@ -686,6 +712,147 @@ mod tests {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             ctrl.signal_ready();
             // Wait infinitely until dropped/cancelled
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_cooperative_shutdown_waits_for_cleanup() {
+        let ctx = init_test_context();
+        let bus = ctx.bus();
+        let cleanup_completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cleanup_clone = cleanup_completed.clone();
+
+        let ctx_clone = ctx.clone();
+        let handle = tokio::spawn(async move {
+            let ctx_service = ctx_clone.clone();
+            supervise_async(&ctx_clone, move || {
+                CleanupService {
+                    ctx: ctx_service.clone(),
+                    cleanup_completed: cleanup_clone.clone(),
+                }
+            })
+            .await;
+        });
+
+        // Wait for service to be online
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(ctx.get_service_state("cleanup-test"), ServiceState::Online);
+
+        // Signal shutdown
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+
+        // Await supervisor task
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("Supervisor should finish cleanly")
+            .expect("Supervisor panicked");
+
+        assert!(
+            cleanup_completed.load(Ordering::Relaxed),
+            "Service should have finished its async cleanup before supervisor terminated"
+        );
+        assert_eq!(
+            ctx.get_service_state("cleanup-test"),
+            ServiceState::Inactive
+        );
+    }
+
+    struct CleanupService {
+        ctx: LanforgeContext,
+        cleanup_completed: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl LanforgeService for CleanupService {
+        fn meta(&self) -> ServiceMeta {
+            ServiceMeta {
+                id: "cleanup-test",
+                display_name: "Cleanup Test Service",
+                critical: false,
+                max_retries: 0,
+                base_backoff: Duration::from_millis(5),
+                max_backoff: Duration::from_millis(20),
+                shutdown_timeout: Duration::from_secs(1),
+                stack_kb: 0,
+                multi_threaded: false,
+            }
+        }
+    }
+    impl lanforge_core::service::AsyncService for CleanupService {
+        async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+            ctrl.signal_ready();
+            let mut rx = self.ctx.bus().subscribe();
+            while let Ok(event) = rx.recv().await {
+                if matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                    // Simulate async cleanup (e.g. PADT frame or DB flush)
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    self.cleanup_completed.store(true, Ordering::Relaxed);
+                    return Ok(());
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_shutdown_timeout_forces_abort() {
+        let ctx = init_test_context();
+        let bus = ctx.bus();
+
+        let ctx_clone = ctx.clone();
+        let handle = tokio::spawn(async move {
+            supervise_async(&ctx_clone, move || {
+                HangingService
+            })
+            .await;
+        });
+
+        // Wait for service to be online
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(ctx.get_service_state("hanging-test"), ServiceState::Online);
+
+        let start = Instant::now();
+        // Signal shutdown
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+
+        // Await supervisor task
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("Supervisor should finish cleanly")
+            .expect("Supervisor panicked");
+
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(30),
+            "Supervisor should have waited for shutdown_timeout, took {:?}",
+            elapsed
+        );
+        assert_eq!(
+            ctx.get_service_state("hanging-test"),
+            ServiceState::Inactive
+        );
+    }
+
+    struct HangingService;
+    impl LanforgeService for HangingService {
+        fn meta(&self) -> ServiceMeta {
+            ServiceMeta {
+                id: "hanging-test",
+                display_name: "Hanging Test Service",
+                critical: false,
+                max_retries: 0,
+                base_backoff: Duration::from_millis(5),
+                max_backoff: Duration::from_millis(20),
+                shutdown_timeout: Duration::from_millis(50),
+                stack_kb: 0,
+                multi_threaded: false,
+            }
+        }
+    }
+    impl lanforge_core::service::AsyncService for HangingService {
+        async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+            ctrl.signal_ready();
+            // Hanging future that never observes shutdown
             std::future::pending::<()>().await;
             Ok(())
         }

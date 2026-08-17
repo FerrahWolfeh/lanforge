@@ -38,7 +38,7 @@ pub mod utils;
 use crate::ndp::config::MonitorConfig;
 use crate::ndp::utils::{extract_neigh_info, get_ipv4_neighbors, get_ipv6_neighbors};
 use crate::ping::IcmpPinger;
-use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent};
+use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl};
@@ -367,12 +367,14 @@ impl AsyncService for DiscoveryService {
                         }
                         break; // Channel closed
                     };
+                    if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                        break;
+                    }
                     lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, ula, .. }) => {
                             current_gua = *gua;
                             current_ula = *ula;
                         }
-
                     });
                 }
             }

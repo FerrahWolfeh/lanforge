@@ -35,6 +35,7 @@
 //!             max_retries: 3,
 //!             base_backoff: Duration::from_secs(1),
 //!             max_backoff: Duration::from_secs(30),
+//!             shutdown_timeout: Duration::from_secs(3),
 //!             stack_kb: 0,
 //!             multi_threaded: false,
 //!         }
@@ -60,19 +61,20 @@ use std::time::Duration;
 /// Supervision metadata for a service.
 ///
 /// Services declare this via `LanforgeService::meta()` instead of
-/// the caller passing 6 loose parameters to `supervise_async/supervise_sync`.
+/// the caller passing loose parameters to `supervise_async`.
 ///
 /// # Fields
 ///
-/// | Field           | Description                                      | Example             |
-/// |-----------------|--------------------------------------------------|---------------------|
-/// | `id`            | Stable identifier for readiness tracking         | "ra", "dhcpv4", "db"|
-/// | `display_name`  | Human-readable name for OS thread (shows in htop)| "RA Server"         |
-/// | `critical`      | If true, system exits when retries exhausted     | `true` for DB       |
-/// | `max_retries`   | Max restarts before giving up (0 = unlimited)    | 3                   |
-/// | `base_backoff`  | Initial backoff on failure (doubles per retry)   | 1 second            |
-/// | `max_backoff`   | Maximum backoff cap                              | 30 seconds          |
-/// | `multi_threaded`| If true, uses a multi-thread tokio runtime       | `true` for DNS      |
+/// | Field              | Description                                      | Example             |
+/// |--------------------|--------------------------------------------------|---------------------|
+/// | `id`               | Stable identifier for readiness tracking         | "ra", "dhcpv4", "db"|
+/// | `display_name`     | Human-readable name for OS thread (shows in htop)| "RA Server"         |
+/// | `critical`         | If true, system exits when retries exhausted     | `true` for DB       |
+/// | `max_retries`      | Max restarts before giving up (0 = unlimited)    | 3                   |
+/// | `base_backoff`     | Initial backoff on failure (doubles per retry)   | 1 second            |
+/// | `max_backoff`      | Maximum backoff cap                              | 30 seconds          |
+/// | `shutdown_timeout` | Max grace period for async cleanup on shutdown   | 3 seconds           |
+/// | `multi_threaded`   | If true, uses a multi-thread tokio runtime       | `true` for DNS      |
 ///
 /// # Backoff Strategy
 ///
@@ -97,6 +99,7 @@ use std::time::Duration;
 ///     max_retries: 0,  // Unlimited
 ///     base_backoff: Duration::from_secs(2),
 ///     max_backoff: Duration::from_secs(60),
+///     shutdown_timeout: Duration::from_secs(3),
 ///     stack_kb: 0,
 ///     multi_threaded: false,
 /// };
@@ -121,6 +124,10 @@ pub struct ServiceMeta {
 
     /// Maximum backoff cap.
     pub max_backoff: Duration,
+
+    /// Maximum duration to wait for the service's async `run` loop to complete
+    /// its cooperative shutdown and resource cleanup before forcibly aborting.
+    pub shutdown_timeout: Duration,
 
     /// **DEPRECATED**: Stack size for the service's dedicated OS thread, in KiB.
     /// This is no longer used since all services are now async.
@@ -158,10 +165,20 @@ pub trait LanforgeService: Send + Sync {
         self.meta().display_name.to_string()
     }
 
-    /// Called when the system is shutting down or the service should deinitialize.
+    /// Called when the service is stopping or the daemon is terminating.
     ///
-    /// This is where the service should perform final logging, cleanup resources,
-    /// or commit any pending state before being dropped.
+    /// # Synchronous in-memory cleanup only
+    ///
+    /// This method is strictly for instantaneous in-memory cleanup, logging,
+    /// or dropping local resources. **Do NOT perform blocking or async I/O here**
+    /// (such as network calls, disk writes, or database flushes).
+    ///
+    /// Any asynchronous or I/O-bound cleanup (such as sending `PPPoE` PADT packets,
+    /// flushing database batches, or draining network sockets) **MUST** be performed
+    /// cooperatively inside the [`AsyncService::run`] loop upon observing
+    /// [`SystemEvent::Shutdown`](crate::bus::SystemEvent::Shutdown) or `!ctx.is_running()`.
+    /// The supervisor guarantees that [`AsyncService::run`] will be polled cooperatively
+    /// with a safety timeout ([`ServiceMeta::shutdown_timeout`]) before the service is terminated.
     ///
     /// # Errors
     /// Returns `CoreError` if the shutdown procedure fails.
@@ -205,6 +222,7 @@ pub trait LanforgeService: Send + Sync {
 ///             max_retries: 5,
 ///             base_backoff: Duration::from_secs(1),
 ///             max_backoff: Duration::from_secs(10),
+///             shutdown_timeout: Duration::from_secs(3),
 ///             stack_kb: 0,
 ///             multi_threaded: false,
 ///         }

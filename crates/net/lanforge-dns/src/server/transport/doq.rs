@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 
+use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
@@ -104,8 +105,14 @@ impl AsyncService for DoqService {
                         });
                     }
                 }
-                _ = rx.recv() => {
-                    if !self.ctx.is_running() { break; }
+                res = rx.recv() => {
+                    if let Ok(timed) = res {
+                        if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !self.ctx.is_running() {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
                 }
             }
         }

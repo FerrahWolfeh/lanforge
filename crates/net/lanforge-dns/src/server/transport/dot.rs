@@ -8,6 +8,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info};
 
+use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
@@ -96,8 +97,14 @@ impl AsyncService for DotService {
                         Err(e) => { error!("DoT accept error: {}", e); }
                     }
                 }
-                _ = rx.recv() => {
-                    if !self.ctx.is_running() { break; }
+                res = rx.recv() => {
+                    if let Ok(timed) = res {
+                        if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !self.ctx.is_running() {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
                 }
             }
         }
