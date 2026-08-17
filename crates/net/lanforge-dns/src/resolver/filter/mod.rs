@@ -1,24 +1,33 @@
-use crate::error::DnsError;
-use crate::resolver::builder::ResponseBuilder;
-use crate::server::DnsContext;
-use dashmap::DashMap;
-use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
-use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::BlockingMode;
-use parking_lot::RwLock;
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use bytes::Bytes;
+use dashmap::DashMap;
+use http_body_util::{BodyExt, Full};
+use hyper::header::LOCATION;
+use hyper::{Method, Request, Uri};
+use hyper_rustls::HttpsConnectorBuilder;
+use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioExecutor;
+use parking_lot::RwLock;
 use tracing::{error, info, trace};
 
-pub mod blocklist;
+use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
+use lanforge_types::network::dns::DnsRecordType;
+use lanforge_types::network::dns::adblock::BlockingMode;
 
+use crate::error::DnsError;
+use crate::resolver::builder::ResponseBuilder;
+use crate::server::DnsContext;
+
+pub mod blocklist;
 pub use blocklist::DiskBlocklist;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
@@ -211,9 +220,19 @@ impl AdBlocker {
         self.allowlist.read().len()
     }
 
-    pub fn load_from_urls(&self, name: &str, urls: &[String]) -> Result<HashSet<String>, DnsError> {
+    pub async fn load_from_urls(&self, name: &str, urls: &[String]) -> Result<HashSet<String>, DnsError> {
         let mut new_list = HashSet::new();
-        let agent = ureq::Agent::new_with_defaults();
+        let https = HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .build();
+
+        let client = Client::builder(TokioExecutor::new())
+            .pool_idle_timeout(Duration::from_secs(30))
+            .build(https);
+
         let mut total_domains = 0;
         let mut successful_urls = 0;
 
@@ -235,22 +254,11 @@ impl AdBlocker {
                 )));
             }
             trace!("AdBlocker: fetching {}", url);
-            match agent.get(url).call() {
-                Ok(resp) => {
-                    if !resp.status().is_success() {
-                        error!(
-                            "❌ AdBlocker: source {} returned status {}",
-                            url,
-                            resp.status()
-                        );
-                        continue;
-                    }
+            match fetch_url(&client, url.clone()).await {
+                Ok(body_bytes) => {
                     let mut line_count = 0;
-                    let buf_reader = BufReader::new(resp.into_body().into_reader());
-                    for line in buf_reader.lines() {
-                        let Ok(line) = line else {
-                            continue;
-                        };
+                    let text = String::from_utf8_lossy(&body_bytes);
+                    for line in text.lines() {
                         let domain = line.trim();
                         if domain.is_empty() || domain.starts_with('#') {
                             continue;
@@ -288,6 +296,65 @@ impl AdBlocker {
         );
         Ok(new_list)
     }
+}
+
+async fn fetch_url(
+    client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
+    mut target_url: String,
+) -> Result<Bytes, DnsError> {
+    for _ in 0..5 {
+        let uri: Uri = target_url
+            .parse()
+            .map_err(|e| DnsError::Generic(format!("Invalid URL: {e}")))?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(uri.clone())
+            .header("User-Agent", "lanforge-dns")
+            .body(Full::default())
+            .map_err(|e| DnsError::Generic(e.to_string()))?;
+
+        let resp = client
+            .request(req)
+            .await
+            .map_err(|e| DnsError::Generic(format!("HTTP request error: {e}")))?;
+        let status = resp.status();
+
+        if status.is_redirection() {
+            if let Some(loc) = resp.headers().get(LOCATION) {
+                let loc_str = loc
+                    .to_str()
+                    .map_err(|e| DnsError::Generic(format!("Invalid redirect location: {e}")))?;
+                if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
+                    target_url = loc_str.to_string();
+                } else if loc_str.starts_with('/') {
+                    let authority = uri.authority().map_or("", |a| a.as_str());
+                    let scheme = uri.scheme_str().unwrap_or("https");
+                    target_url = format!("{scheme}://{authority}{loc_str}");
+                } else {
+                    target_url = loc_str.to_string();
+                }
+                continue;
+            }
+            return Err(DnsError::Generic("Redirect without Location header".to_string()));
+        }
+
+        if !status.is_success() {
+            return Err(DnsError::Generic(format!("HTTP status {status}")));
+        }
+
+        let body_bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| DnsError::Generic(format!("Failed to read body: {e}")))?;
+        return Ok(body_bytes.to_bytes());
+    }
+
+    Err(DnsError::Generic("Too many redirects".to_string()))
+}
+
+impl AdBlocker {
 
     pub fn apply_adblock_wire(
         &self,

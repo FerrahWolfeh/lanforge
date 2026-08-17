@@ -130,7 +130,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         "🛡️ Adblock: downloading {} blocklist sources...",
                         blocklist_urls.len()
                     );
-                    match filter.load_from_urls("blocklist", &blocklist_urls) {
+                    match filter.load_from_urls("blocklist", &blocklist_urls).await {
                         Ok(new_list) => {
                             if new_list.is_empty() && !blocklist_urls.is_empty() {
                                 error!(
@@ -186,7 +186,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         "🛡️ Adblock: downloading {} allowlist sources...",
                         allowlist_urls.len()
                     );
-                    match filter.load_from_urls("allowlist", &allowlist_urls) {
+                    match filter.load_from_urls("allowlist", &allowlist_urls).await {
                         Ok(new_allow) => filter.replace_allowlist(new_allow),
                         Err(e) => error!("❌ Adblock: failed to download allowlist sources: {e}"),
                     }
