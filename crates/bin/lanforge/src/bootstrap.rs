@@ -7,7 +7,7 @@ use lanforge_core::context::state::State;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
 use lanforge_db::{DhcpConfigStore, PppoeConfigStore, RaConfigStore};
-use lanforge_host::ifmon::AddressMonitor;
+use lanforge_discovery::refresh_interface;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "dhcp")]
@@ -574,18 +574,11 @@ impl Bootstrapper {
 
     async fn perform_initial_scan(
         handle: &rtnetlink::Handle,
-        messages: &NetlinkMessages,
+        _messages: &NetlinkMessages,
         target_ifindex: u32,
         ctx: &LanforgeContext,
     ) -> Result<InterfaceState> {
-        let ifmon_init = AddressMonitor::new(
-            handle.clone(),
-            messages.subscribe(),
-            target_ifindex,
-            ctx.clone(),
-        );
-        ifmon_init
-            .initial_scan()
+        refresh_interface(handle, target_ifindex, ctx)
             .await
             .map_err(|e| anyhow::anyhow!("Initial interface scan failed: {e}"))
     }

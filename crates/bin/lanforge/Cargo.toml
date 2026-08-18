@@ -38,7 +38,7 @@ dns = ["dep:lanforge-dns"]
 ra = ["dep:lanforge-ra"]
 tftp = ["dep:lanforge-tftp"]
 pppoe = ["dep:lanforge-pppoe"]
-discovery = ["dep:lanforge-discovery"]
+discovery = []
 http = ["dep:lanforge-http", "lanforge-http/server"]
 uds = ["dep:lanforge-uds"]
 webui = ["http", "lanforge-http/webui"]
@@ -55,8 +55,7 @@ hotpath = [
     "lanforge-dhcp?/hotpath",
     "lanforge-ra?/hotpath",
     "lanforge-pppoe?/hotpath",
-    "lanforge-discovery?/hotpath",
-    "lanforge-host/hotpath",
+    "lanforge-discovery/hotpath",
     "lanforge-db/hotpath",
 ]
 hotpath-mcp = ["hotpath", "hotpath/hotpath-mcp"]
@@ -68,8 +67,7 @@ hotpath-alloc = [
     "lanforge-dhcp?/hotpath-alloc",
     "lanforge-ra?/hotpath-alloc",
     "lanforge-pppoe?/hotpath-alloc",
-    "lanforge-discovery?/hotpath-alloc",
-    "lanforge-host/hotpath-alloc",
+    "lanforge-discovery/hotpath-alloc",
     "lanforge-db/hotpath-alloc",
 ]
 jemalloc = ["dep:tikv-jemallocator"]
@@ -164,14 +162,13 @@ lanforge-core = { workspace = true }
 
 # === L2 (Specialized Services - Required) ===
 lanforge-db = { workspace = true }
-lanforge-host = { workspace = true }
+lanforge-discovery = { workspace = true }
 lanforge-wol = { workspace = true }
 
 # === L2 (Specialized Services - Optional / Feature Gated) ===
 lanforge-dns = { workspace = true, optional = true }
 lanforge-dhcp = { workspace = true, optional = true }
 lanforge-ra = { workspace = true, optional = true }
-lanforge-discovery = { workspace = true, optional = true }
 lanforge-uds = { workspace = true, optional = true }
 lanforge-http = { workspace = true, optional = true }
 lanforge-tftp = { workspace = true, optional = true }

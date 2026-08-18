@@ -23,7 +23,6 @@ use lanforge_dns::server::service::DnsService;
 use lanforge_dns::server::transport::doq::DoqService;
 #[cfg(all(feature = "dns", feature = "dns-dot"))]
 use lanforge_dns::server::transport::dot::DotService;
-use lanforge_host::ifmon::AddressMonitor;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
 #[cfg(feature = "pppoe")]
@@ -177,9 +176,7 @@ impl Daemon {
             #[cfg(feature = "discovery")]
             async [ctx, cfg] if cfg.mdns_toml.enabled => MdnsProber::new(cfg.mdns_toml.clone(), ctx),
 
-            // 2. Network Monitoring (Interface, Neighbors)
-            async [ctx, rt_handle, messages] => AddressMonitor::new(rt_handle, messages.subscribe(), target_ifindex, ctx),
-
+            // 2. Network Discovery & Interface Monitoring
             #[cfg(feature = "discovery")]
             async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => DiscoveryService::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), target_ifindex, ctx),
 

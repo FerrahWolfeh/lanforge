@@ -2501,7 +2501,6 @@ dependencies = [
  "lanforge-dhcp",
  "lanforge-discovery",
  "lanforge-dns",
- "lanforge-host",
  "lanforge-http",
  "lanforge-pppoe",
  "lanforge-ra",
@@ -2789,23 +2788,6 @@ version = "1.0.0"
 dependencies = [
  "hotpath",
  "lanforge-types",
-]
-
-[[package]]
-name = "lanforge-host"
-version = "1.0.0"
-dependencies = [
- "futures",
- "hotpath",
- "lanforge-core",
- "lanforge-macros",
- "lanforge-types",
- "netlink-packet-core",
- "netlink-sys",
- "rtnetlink",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
 ]
 
 [[package]]

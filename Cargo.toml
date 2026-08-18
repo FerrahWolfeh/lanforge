@@ -32,7 +32,6 @@ lanforge-discovery = { path = "crates/net/lanforge-discovery" }
 lanforge-dns = { path = "crates/net/lanforge-dns" }
 lanforge-dns-wire = { path = "crates/net/lanforge-dns-wire" }
 lanforge-dhcp = { path = "crates/net/lanforge-dhcp" }
-lanforge-host = { path = "crates/net/lanforge-host" }
 lanforge-ra = { path = "crates/net/lanforge-ra" }
 lanforge-tftp = { path = "crates/net/lanforge-tftp" }
 lanforge-pppoe = { path = "crates/net/lanforge-pppoe" }

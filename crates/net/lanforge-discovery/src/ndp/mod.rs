@@ -45,7 +45,7 @@ use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
 use lanforge_types::update::DeviceUpdate;
-use netlink_packet_core::NetlinkMessage;
+use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_sys::SocketAddr;
 use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
@@ -364,7 +364,31 @@ impl AsyncService for DiscoveryService {
                         }
                         break;
                     };
-                    // A. Handle Neighbor Events
+                    // A. Handle Interface Address Events
+                    if let NetlinkPayload::InnerMessage(
+                        RouteNetlinkMessage::NewAddress(addr) | RouteNetlinkMessage::DelAddress(addr),
+                    ) = &msg.payload
+                        && addr.header.index == self.target_ifindex
+                    {
+                        debug!(
+                            "DiscoveryService: Address event on ifindex {}, refreshing interface...",
+                            addr.header.index
+                        );
+                        if let Err(e) = crate::interface::refresh_interface(
+                            &self.handle,
+                            self.target_ifindex,
+                            ctx,
+                        )
+                        .await
+                        {
+                            warn!(
+                                "DiscoveryService: Failed to refresh interface {}: {e}",
+                                addr.header.index
+                            );
+                        }
+                    }
+
+                    // B. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg)
                         && event.ifindex() == self.target_ifindex {
                             if let NeighborEvent::Added { mac, ip, is_active, .. } = event {
