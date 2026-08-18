@@ -27,6 +27,8 @@ impl LanforgeContext {
         self.inner.db_ready.store(false, Ordering::SeqCst);
         self.inner.if_ready.store(true, Ordering::SeqCst);
         self.inner.pppoe_ready.store(false, Ordering::SeqCst);
+        self.inner.service_states.write().clear();
+        self.inner.service_starts.write().clear();
     }
 
     /// Sets the database readiness state.
