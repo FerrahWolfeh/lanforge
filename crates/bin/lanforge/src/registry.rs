@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crate::supervisor::supervise_async;
@@ -39,6 +40,8 @@ impl ServiceRegistry {
         let id = meta.id.to_string();
         let name = meta.display_name.to_string();
         self.ids.insert(id);
+
+        ctx.register_status_provider(Arc::new(service));
 
         debug!("Spawning async service thread: {}", name);
 

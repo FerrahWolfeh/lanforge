@@ -4,8 +4,8 @@ use crate::config::TftpConfig;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
-use lanforge_types::system::ServiceBanner;
+use lanforge_core::service::AsyncService;
+use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -31,28 +31,31 @@ pub enum TftpError {
 )]
 #[derive(Clone)]
 pub struct TftpService {
-    ctx: LanforgeContext,
+    _ctx: LanforgeContext,
     cfg: TftpConfig,
+    bound_addr: Arc<RwLock<Option<String>>>,
 }
 
 impl TftpService {
     #[must_use]
     pub fn new(ctx: LanforgeContext, cfg: TftpConfig) -> Self {
-        ctx.register_status_provider(Arc::new(Self {
-            ctx: ctx.clone(),
-            cfg: cfg.clone(),
-        }));
-        Self { ctx, cfg }
+        Self {
+            _ctx: ctx,
+            cfg,
+            bound_addr: Arc::new(RwLock::new(None)),
+        }
     }
 }
 
-impl StatusProvider for TftpService {
-    fn banner(&self) -> ServiceBanner {
-        let stats = vec![
-            (
-                std::borrow::Cow::Borrowed("listen"),
-                self.cfg.listen_addr.clone(),
-            ),
+impl AsyncService for TftpService {
+    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let listen = self
+            .bound_addr
+            .read()
+            .clone()
+            .unwrap_or_else(|| self.cfg.listen_addr.clone());
+        vec![
+            (std::borrow::Cow::Borrowed("listen"), listen),
             (
                 std::borrow::Cow::Borrowed("root_dir"),
                 self.cfg.root_dir.to_string_lossy().to_string(),
@@ -61,19 +64,10 @@ impl StatusProvider for TftpService {
                 std::borrow::Cow::Borrowed("block_size"),
                 self.cfg.block_size.to_string(),
             ),
-        ];
-        ServiceBanner {
-            id: "tftp".to_string(),
-            name: "TFTP Server".to_string(),
-            state: self.ctx.get_service_state("tftp"),
-            uptime_secs: self.ctx.get_service_uptime("tftp"),
-            stats,
-        }
+        ]
     }
-}
 
-impl AsyncService for TftpService {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let socket = UdpSocket::bind(&self.cfg.listen_addr).await.map_err(|e| {
             CoreError::Generic(format!(
                 "Failed to bind TFTP to {}: {}",
@@ -83,14 +77,13 @@ impl AsyncService for TftpService {
 
         let local_addr = socket.local_addr().map_err(CoreError::Io)?;
         self.cfg.listen_addr = local_addr.to_string();
-        self.ctx.register_status_provider(Arc::new(self.clone()));
+        *self.bound_addr.write() = Some(local_addr.to_string());
 
         info!("🚀 TFTP Server listening on {}", self.cfg.listen_addr);
-        ctrl.signal_ready();
 
         let mut buf = [0u8; 1024];
         let socket = Arc::new(socket);
-        let mut bus_rx = self.ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe();
 
         loop {
             tokio::select! {

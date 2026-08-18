@@ -35,39 +35,34 @@ pub mod server;
 use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::{AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent};
-use lanforge_core::context::{LanforgeContext, ServiceHandle};
+use lanforge_core::error::CoreError;
+use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_macros::lanforge_service;
 use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
-use lanforge_types::system::{RunResult, ServiceBanner};
+use lanforge_types::system::RunResult;
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
 use std::net::Ipv4Addr;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
 
-use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
-
+pub use config::Dhcpv4Config;
 use crate::traits::DhcpPool;
-use crate::v4::config::Dhcpv4Config;
-use crate::v4::io::Dhcpv4Transport;
+use io::Dhcpv4Transport;
+use lanforge_core::context::{LanforgeContext, ServiceHandle};
 
+/// `DHCPv4` Server Service.
 #[lanforge_service(
     id = "dhcpv4",
     name = "DHCPv4 Server",
     critical = true,
     retries = 0,
     base_backoff = 2,
-    max_backoff = 30,
-    describe = format!(
-        "DHCPv4 on {} ({} pools, lease {}s)",
-        self.cfg.iface, self.cfg.get_effective_pools().len(), self.cfg.lease_time
-    )
+    max_backoff = 30
 )]
 #[derive(Clone)]
 pub struct Dhcpv4Service {
@@ -77,18 +72,18 @@ pub struct Dhcpv4Service {
 
 impl Dhcpv4Service {
     #[must_use]
-    pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
-        ctx.register_status_provider(Arc::new(Self {
-            cfg: cfg.clone(),
-            ctx: ctx.clone(),
-        }));
+    pub const fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
 }
 
-impl StatusProvider for Dhcpv4Service {
-    fn banner(&self) -> ServiceBanner {
-        let (active_leases, pool_total, pool_available) = self.ctx.with_state(|state| {
+impl AsyncService for Dhcpv4Service {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Database, ServiceDependency::Interfaces]
+    }
+
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let (active_leases, pool_total, pool_available) = ctx.with_state(|state| {
             let leases = u32::try_from(
                 state
                     .devices
@@ -104,8 +99,8 @@ impl StatusProvider for Dhcpv4Service {
                 .map_or((0, 0), |p| (p.total, p.available));
             (leases, total, avail)
         });
-        let v4_stats = self.ctx.dhcpv4_stats().snapshot();
-        let stats = vec![
+        let v4_stats = ctx.dhcpv4_stats().snapshot();
+        vec![
             (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
             (
                 std::borrow::Cow::Borrowed("lease_time"),
@@ -159,27 +154,12 @@ impl StatusProvider for Dhcpv4Service {
                 std::borrow::Cow::Borrowed("informs"),
                 v4_stats.informs.to_string(),
             ),
-        ];
-        ServiceBanner {
-            id: "dhcpv4".to_string(),
-            name: "DHCPv4 Server".to_string(),
-            state: self.ctx.get_service_state("dhcpv4"),
-            uptime_secs: self.ctx.get_service_uptime("dhcpv4"),
-            stats,
-        }
+        ]
     }
-}
 
-impl AsyncService for Dhcpv4Service {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        info!("DHCPv4: Waiting for dependencies (DB and Interfaces)...");
-        self.ctx.wait_for_db().await?;
-        self.ctx.wait_for_interfaces().await?;
-
-        ctrl.signal_ready();
-
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         loop {
-            let pools = self.ctx.get_dhcp_v4_pools();
+            let pools = ctx.get_dhcp_v4_pools();
 
             if pools.is_empty() {
                 warn!("⚠️ DHCPv4 enabled but no pools configured — server will remain idle");
@@ -189,7 +169,7 @@ impl AsyncService for Dhcpv4Service {
                 }
             }
 
-            match self.run_server(pools, &ctrl).await? {
+            match self.run_server(pools).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}
             }
@@ -219,7 +199,6 @@ impl Dhcpv4Service {
     async fn run_server(
         &self,
         pools: Vec<Dhcpv4Pool>,
-        ctrl: &ServiceControl,
     ) -> Result<RunResult, CoreError> {
         let mut current_cfg = self.cfg.clone();
         current_cfg.pools = pools;
@@ -244,7 +223,6 @@ impl Dhcpv4Service {
         server.pool.reserve_statics(active_dynamic_ips);
 
         let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
-        ctrl.signal_ready();
 
         let (total, used, available, util_pct) = server.pool.stats();
         let range_start = current_cfg

@@ -1,7 +1,7 @@
-use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
+use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::AsyncService;
 use lanforge_tftp::TftpService;
 use lanforge_tftp::config::TftpConfig;
 use std::net::SocketAddr;
@@ -42,32 +42,25 @@ async fn test_tftp_path_traversal_prevention() {
     };
 
     let mut service = TftpService::new(ctx.clone(), cfg);
-    let ctrl = ServiceControl::new("tftp-test", ctx.clone());
+    ctx.register_status_provider(Arc::new(service.clone()));
+    let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
-        service.run(ctrl).await.expect("TFTP service failed to run");
+        service.serve(&ctx_service).await.expect("TFTP service failed to run");
     });
 
-    // Wait for ServiceReady and get local port
-    let tftp_addr = loop {
-        let event = rx.recv().await.expect("Bus closed");
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "tftp-test"
-        {
-            // Retrieve actual bound port from status providers
-            let providers = ctx.status_providers();
-            let provider = providers.iter().find(|p| p.banner().id == "tftp").unwrap();
-            let banner = provider.banner();
-            let listen = banner
-                .stats
-                .iter()
-                .find(|(k, _)| k == "listen")
-                .unwrap()
-                .1
-                .clone();
-            break listen.parse::<SocketAddr>().unwrap();
-        }
-    };
+    // Wait for service to bind and register port
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let banners = ctx.service_banners();
+    let banner = banners.iter().find(|b| b.id == "tftp").unwrap();
+    let listen = banner
+        .stats
+        .iter()
+        .find(|(k, _)| k == "listen")
+        .unwrap()
+        .1
+        .clone();
+    let tftp_addr = listen.parse::<SocketAddr>().unwrap();
     println!("Bound TFTP address: {tftp_addr:?}");
 
     // 3. Setup client UDP socket

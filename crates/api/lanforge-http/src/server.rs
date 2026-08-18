@@ -17,12 +17,11 @@ use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     context::LanforgeContext,
     error::CoreError,
-    service::{AsyncService, ServiceControl, StatusProvider},
+    service::{AsyncService, ServiceDependency},
 };
 use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_dns::server::transport::tls as tls_utils;
 use lanforge_macros::lanforge_service;
-use lanforge_types::system::ServiceBanner;
 #[cfg(feature = "webui")]
 use lanforge_webui::WebUiAssets;
 use tokio::net::TcpListener;
@@ -89,18 +88,12 @@ pub struct HttpService {
 
 impl HttpService {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         cfg: Arc<HttpConfig>,
         ctx: LanforgeContext,
         db: Arc<dyn DatabaseStore>,
         log_db: Arc<dyn LogStore>,
     ) -> Self {
-        ctx.register_status_provider(Arc::new(Self {
-            cfg: cfg.clone(),
-            ctx: ctx.clone(),
-            db: db.clone(),
-            log_db: log_db.clone(),
-        }));
         Self {
             cfg,
             ctx,
@@ -110,9 +103,13 @@ impl HttpService {
     }
 }
 
-impl StatusProvider for HttpService {
-    fn banner(&self) -> ServiceBanner {
-        let stats = vec![
+impl AsyncService for HttpService {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Database]
+    }
+
+    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
+        vec![
             (Cow::Borrowed("listen"), self.cfg.listen.to_string()),
             (
                 Cow::Borrowed("https_enabled"),
@@ -122,20 +119,15 @@ impl StatusProvider for HttpService {
                 Cow::Borrowed("doh_enabled"),
                 self.cfg.doh_enabled.to_string(),
             ),
-        ];
-        ServiceBanner {
-            id: "http".to_string(),
-            name: "HTTP API".to_string(),
-            state: self.ctx.get_service_state("http"),
-            uptime_secs: self.ctx.get_service_uptime("http"),
-            stats,
-        }
+            (
+                Cow::Borrowed("auth_enabled"),
+                self.cfg.auth_password_hash.is_some().to_string(),
+            ),
+        ]
     }
-}
 
-impl AsyncService for HttpService {
     #[allow(clippy::too_many_lines)]
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
         let addr = cfg.listen;
 
@@ -214,7 +206,7 @@ impl AsyncService for HttpService {
             None
         };
 
-        let ctx_shutdown = self.ctx.clone();
+        let ctx_shutdown = ctx.clone();
         let shutdown_signal = async move {
             let mut rx = ctx_shutdown.bus().subscribe();
             while let Ok(event) = rx.recv().await {
@@ -226,8 +218,6 @@ impl AsyncService for HttpService {
                 }
             }
         };
-
-        ctrl.signal_ready();
 
         if let Some(tls_config) = maybe_tls_config {
             info!("🚀 HTTPS API listening on https://{addr}");

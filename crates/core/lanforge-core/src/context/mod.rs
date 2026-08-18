@@ -56,7 +56,7 @@
 use crate::bus::{EventBus, LanforgeEvent, PppoeEvent, SystemEvent, TimedEvent};
 use crate::context::state::State;
 use crate::error::CoreError;
-use crate::service::StatusProvider;
+use crate::service::{ServiceDependency, StatusProvider};
 use lanforge_types::device::Device;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
@@ -65,9 +65,9 @@ use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::system::{ServiceState, SystemStatus};
+use lanforge_types::system::{ServiceBanner, ServiceState, SystemStatus};
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
@@ -225,7 +225,7 @@ struct LanforgeContextInner {
     /// Global counter for active API clients (Control UDS, HTTP, etc.).
     pub active_clients: Arc<AtomicUsize>,
     /// Decoupled status providers.
-    status_providers: RwLock<Vec<Arc<dyn StatusProvider>>>,
+    status_providers: RwLock<BTreeMap<String, Arc<dyn StatusProvider>>>,
     /// Decoupled DNS handle.
     dns_handle: RwLock<Option<DnsHandle>>,
     /// Dynamic service states.
@@ -291,7 +291,7 @@ impl LanforgeContext {
 
             status: RwLock::new(None),
             active_clients: Arc::new(AtomicUsize::new(0)),
-            status_providers: RwLock::new(Vec::new()),
+            status_providers: RwLock::new(BTreeMap::new()),
             dns_handle: RwLock::new(None),
             service_states: RwLock::new(HashMap::new()),
             service_starts: RwLock::new(HashMap::new()),
@@ -472,19 +472,29 @@ impl LanforgeContext {
 
     /// Registers a decoupled status provider.
     pub fn register_status_provider(&self, provider: Arc<dyn StatusProvider>) {
-        let mut list = self.inner.status_providers.write();
-        let name = provider.banner().name;
-        if let Some(pos) = list.iter().position(|p| p.banner().name == name) {
-            list[pos] = provider;
-        } else {
-            list.push(provider);
-        }
+        let banner = provider.banner(self);
+        self.inner
+            .status_providers
+            .write()
+            .insert(banner.id, provider);
+    }
+
+    /// Returns a list of all registered service status banners.
+    #[must_use]
+    pub fn service_banners(&self) -> Vec<ServiceBanner> {
+        let providers = self.inner.status_providers.read();
+        providers.values().map(|p| p.banner(self)).collect()
     }
 
     /// Returns a list of all registered status providers.
     #[must_use]
     pub fn status_providers(&self) -> Vec<Arc<dyn StatusProvider>> {
-        self.inner.status_providers.read().clone()
+        self.inner
+            .status_providers
+            .read()
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Sets the decoupled DNS handle.
@@ -586,6 +596,19 @@ impl LanforgeContext {
         .await
     }
 
+    /// Blocks until the specified dependency is satisfied.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreError::Shutdown` if the system shuts down before the dependency is ready.
+    pub async fn wait_for_dependency(&self, dep: ServiceDependency) -> Result<(), CoreError> {
+        match dep {
+            ServiceDependency::Database => self.wait_for_db().await,
+            ServiceDependency::Interfaces => self.wait_for_interfaces().await,
+            ServiceDependency::PppoeWan => self.wait_for_pppoe().await,
+        }
+    }
+
     /// Generic async wait helper. Blocks until `is_ready()` returns true
     /// or a matching event arrives on the bus.
     async fn wait_for_condition(
@@ -593,6 +616,9 @@ impl LanforgeContext {
         is_ready: impl Fn(&Self) -> bool,
         event_matches: impl Fn(&LanforgeEvent) -> bool,
     ) -> Result<(), CoreError> {
+        if !self.is_running() {
+            return Err(CoreError::Shutdown);
+        }
         if is_ready(self) {
             return Ok(());
         }
@@ -610,13 +636,13 @@ impl LanforgeContext {
                             LanforgeEvent::System(SystemEvent::Shutdown)
                         )
                     {
-                        return Ok(());
+                        return Err(CoreError::Shutdown);
                     }
                     if event_matches(&timed_event.event) {
                         return Ok(());
                     }
                 }
-                Err(_) => return Ok(()),
+                Err(_) => return Err(CoreError::Shutdown),
             }
         }
     }

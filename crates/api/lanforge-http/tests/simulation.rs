@@ -44,11 +44,13 @@ async fn test_http_simulation_basic() {
 
     let mut service = HttpService::new(cfg, ctx.clone(), db, log_db);
     let ctrl = ServiceControl::new("http", ctx.clone());
+    let ctx_service = ctx.clone();
 
     let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.run(ctrl).await.expect("Service failed");
+        ctrl.signal_ready();
+        service.serve(&ctx_service).await.expect("Service failed");
     });
 
     // Wait for ServiceReady event

@@ -91,11 +91,13 @@ async fn test_full_db_reset_chain() {
             .expect("Failed to open LogDB"),
     );
 
-    let mut db_worker = DbWorker::new(cfg.database.clone(), ctx_db, db.clone(), log_db.clone());
+    let mut db_worker = DbWorker::new(cfg.database.clone(), ctx_db.clone(), db.clone(), log_db.clone());
     let ctrl = ServiceControl::new("db", ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
-        let _ = db_worker.run(ctrl).await;
+        let _ = db_worker.init(&ctx_db).await;
+        ctrl.signal_ready();
+        let _ = db_worker.serve(&ctx_db).await;
     });
 
     // Wait for DB ready

@@ -122,9 +122,11 @@ async fn start_test_daemon(socket_path: String) -> LanforgeContext {
 
     let mut service = ControlService::new(cfg, ctx.clone(), db, log_db);
     let ctrl = ServiceControl::new("control", ctx.clone());
+    let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
-        let _ = service.run(ctrl).await;
+        ctrl.signal_ready();
+        let _ = service.serve(&ctx_service).await;
     });
 
     // Give it a moment to start and bind

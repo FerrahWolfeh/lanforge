@@ -59,13 +59,13 @@ use lanforge_types::network::ra::{
     DnsslConfig, ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, RAPrefix, RdnssConfig,
 };
-use lanforge_types::system::{RunResult, ServiceBanner};
+use lanforge_types::system::RunResult;
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::NetworkError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
+use lanforge_core::service::{AsyncService, ServiceDependency};
 use rand::RngExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
@@ -74,7 +74,6 @@ use std::mem::{MaybeUninit, size_of};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
 use std::ptr::{from_mut, from_ref};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::unix::{AsyncFd, AsyncFdReadyGuard};
 use tracing::{debug, info, warn};
@@ -213,11 +212,7 @@ pub struct RaService {
 
 impl RaService {
     #[must_use]
-    pub fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
-        ctx.register_status_provider(Arc::new(Self {
-            cfg: cfg.clone(),
-            ctx: ctx.clone(),
-        }));
+    pub const fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
         Self { cfg, ctx }
     }
 
@@ -295,7 +290,6 @@ impl RaService {
         prefixes: Vec<RAPrefix>,
         rdnss: Vec<RdnssConfig>,
         dnssl: Vec<DnsslConfig>,
-        _ctrl: &ServiceControl,
     ) -> Result<RunResult, CoreError> {
         let mut current_cfg = self.cfg.clone();
         current_cfg.prefixes = prefixes;
@@ -391,12 +385,21 @@ impl RaService {
     }
 }
 
-impl StatusProvider for RaService {
-    fn banner(&self) -> ServiceBanner {
-        let stats = vec![
-            (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
+impl AsyncService for RaService {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Database, ServiceDependency::Interfaces]
+    }
+
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));
+        let prefixes = ctx.get_ra_prefixes();
+        vec![
             (
-                std::borrow::Cow::Borrowed("max_interval"),
+                std::borrow::Cow::Borrowed("iface"),
+                self.cfg.iface.clone(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("max_interval_secs"),
                 self.cfg.max_interval.as_secs().to_string(),
             ),
             (
@@ -407,28 +410,26 @@ impl StatusProvider for RaService {
                 std::borrow::Cow::Borrowed("other_config"),
                 self.cfg.other_config.to_string(),
             ),
-        ];
-        ServiceBanner {
-            id: "ra".to_string(),
-            name: "RA Server".to_string(),
-            state: self.ctx.get_service_state("ra"),
-            uptime_secs: self.ctx.get_service_uptime("ra"),
-            stats,
-        }
+            (
+                std::borrow::Cow::Borrowed("prefixes_count"),
+                prefixes.len().to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("gua_prefix"),
+                if_state.gua.map_or_else(|| "none".to_string(), |g| g.to_string()),
+            ),
+            (
+                std::borrow::Cow::Borrowed("ula_prefix"),
+                if_state.ula.map_or_else(|| "none".to_string(), |u| u.to_string()),
+            ),
+        ]
     }
-}
 
-impl AsyncService for RaService {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        info!("RA: Waiting for dependencies (DB)...");
-        self.ctx.wait_for_db().await?;
-
-        ctrl.signal_ready();
-
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         loop {
-            let prefixes = self.ctx.get_ra_prefixes();
-            let rdnss = self.ctx.get_ra_rdnss();
-            let dnssl = self.ctx.get_ra_dnssl();
+            let prefixes = ctx.get_ra_prefixes();
+            let rdnss = ctx.get_ra_rdnss();
+            let dnssl = ctx.get_ra_dnssl();
 
             if prefixes.is_empty() {
                 warn!("⚠️ RA enabled but no prefixes configured — server will remain idle");
@@ -438,7 +439,7 @@ impl AsyncService for RaService {
                 }
             }
 
-            match self.run_server(prefixes, rdnss, dnssl, &ctrl).await? {
+            match self.run_server(prefixes, rdnss, dnssl).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}
             }
@@ -744,6 +745,7 @@ mod tests {
     };
 
     use super::*;
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]

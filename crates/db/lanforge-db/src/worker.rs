@@ -27,7 +27,7 @@ use tracing::{debug, error, info, warn};
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::AsyncService;
 use std::collections::HashSet;
 
 use crate::config::DatabaseConfig;
@@ -217,23 +217,62 @@ impl DbWorker {
 }
 
 impl AsyncService for DbWorker {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let metrics = ctx.db_metrics();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_flush_ts = metrics.last_flush_ts.load(Ordering::Relaxed);
+        let last_flush_ago = if last_flush_ts > 0 && now >= last_flush_ts {
+            format!("{}s ago", now - last_flush_ts)
+        } else {
+            "—".to_string()
+        };
+        let error_str = if metrics.last_error.load(Ordering::Relaxed) {
+            "error".to_string()
+        } else {
+            "ok".to_string()
+        };
+
+        vec![
+            (
+                std::borrow::Cow::Borrowed("flush_count"),
+                metrics.flush_count.load(Ordering::Relaxed).to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("devices_written"),
+                metrics.devices_written.load(Ordering::Relaxed).to_string(),
+            ),
+            (std::borrow::Cow::Borrowed("last_flush"), last_flush_ago),
+            (
+                std::borrow::Cow::Borrowed("log_buffer"),
+                self.log_buffer.len().to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("dns_log_buffer"),
+                self.dns_log_buffer.len().to_string(),
+            ),
+            (std::borrow::Cow::Borrowed("status"), error_str),
+        ]
+    }
+
+    async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        info!("Database worker initialized");
+        ctx.set_db_ready(true);
+        let _ = ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::DbReady));
+        Ok(())
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let db = self.db.clone();
         let log_db = self.log_db.clone();
 
-        let mut bus_rx = self.ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
         let mut last_prune = tokio::time::Instant::now();
-
-        info!("Database worker started");
-        self.ctx.set_db_ready(true);
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::DbReady));
-
-        // Explicitly signal readiness to the event loop
-        ctrl.signal_ready();
 
         loop {
             tokio::select! {
@@ -326,8 +365,7 @@ impl AsyncService for DbWorker {
                         }
                         #[cfg(feature = "adblock")]
                         LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, domain }) => {
-                            let src_mac = self
-                                .ctx
+                            let src_mac = ctx
                                 .read()
                                 .get_mac_by_ip(*src_addr)
                                 .map(|m| m.to_string());
@@ -342,7 +380,7 @@ impl AsyncService for DbWorker {
                             self.dns_log_buffer.push(entry.clone());
                             if self.dns_log_buffer.len() >= 100 {
                                 if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer).await {
-                                    error!("Immediate DNS log flush error: {e}");
+                                    error!("Immediate DNS query log flush error: {e}");
                                 } else {
                                     self.dns_log_buffer.clear();
                                 }
@@ -355,18 +393,11 @@ impl AsyncService for DbWorker {
                     }
                 }
 
-                // Periodic flush & auto-pruning
+                // Periodic flush
                 _ = flush_interval.tick() => {
                     self.flush_batch(&db, &log_db).await;
 
-                    if last_prune.elapsed() >= Duration::from_secs(3600) {
-                        let cutoff = (SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64) - (24 * 3600);
-                        if let Err(e) = log_db.prune_logs(cutoff).await {
-                            error!("Background log prune failed: {e}");
-                        }
+                    if last_prune.elapsed() >= Duration::from_secs(600) {
                         if let Err(e) = db.prune_zombies().await {
                             error!("Background db prune failed: {e}");
                         }
@@ -376,6 +407,14 @@ impl AsyncService for DbWorker {
             }
         }
 
+        Ok(())
+    }
+
+    async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
+        info!("Database worker flushing pending state and logs on cleanup...");
+        let db = self.db.clone();
+        let log_db = self.log_db.clone();
+        self.flush_batch(&db, &log_db).await;
         Ok(())
     }
 }

@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::AsyncService;
 use pnet::datalink::interfaces;
 use std::fmt::Write;
 use std::io::ErrorKind;
@@ -88,17 +88,32 @@ enum MdnsCommand {
 pub struct MdnsProber {
     cfg: MdnsConfig,
     tx: Sender<MdnsCommand>,
-    ctx: LanforgeContext,
+    _ctx: LanforgeContext,
 }
 
 impl AsyncService for MdnsProber {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    fn dependencies(&self) -> &'static [lanforge_core::service::ServiceDependency] {
+        &[lanforge_core::service::ServiceDependency::Interfaces]
+    }
+
+    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        vec![
+            (
+                std::borrow::Cow::Borrowed("enabled"),
+                self.cfg.enabled.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("probe_interval_secs"),
+                self.cfg.probe_interval.to_string(),
+            ),
+        ]
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
 
-        ctrl.signal_ready();
-
-        if let Err(e) = run_mdns_worker(self.cfg.clone(), self.ctx.clone(), rx, tx).await {
+        if let Err(e) = run_mdns_worker(self.cfg.clone(), ctx.clone(), rx, tx).await {
             error!("mDNS worker fatal error: {e}");
             return Err(CoreError::Generic(e.to_string()));
         }
@@ -111,7 +126,7 @@ impl MdnsProber {
     #[must_use]
     pub fn new(cfg: MdnsConfig, ctx: LanforgeContext) -> Self {
         let (tx, _) = mpsc::channel(32);
-        Self { cfg, tx, ctx }
+        Self { cfg, tx, _ctx: ctx }
     }
 
     /// Requests a full mDNS broadcast probe across all interfaces.

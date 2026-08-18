@@ -1,7 +1,6 @@
 use lanforge_api::api::EventKind;
 use lanforge_api::rpc::{LanforgeRpcDispatcher, RpcRequest, RpcResponse};
 use lanforge_api_dispatch::ClientContext;
-use lanforge_types::system::ServiceBanner;
 use tokio::sync::Mutex;
 
 use crate::config::ApiConfig;
@@ -21,7 +20,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, s
 use tokio::net::{TcpListener, UnixListener};
 use tracing::{debug, error, info, warn};
 
-use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
+use lanforge_core::service::{AsyncService, ServiceDependency};
 
 #[lanforge_macros::lanforge_service(
     id = "control",
@@ -42,20 +41,18 @@ pub struct ControlService {
 
 impl ControlService {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         cfg: Arc<ApiConfig>,
         ctx: LanforgeContext,
         db: Arc<dyn DatabaseStore>,
         log_db: Arc<dyn LogStore>,
     ) -> Self {
-        let service = Self {
+        Self {
             cfg,
-            ctx: ctx.clone(),
+            ctx,
             db,
             log_db,
-        };
-        ctx.register_status_provider(Arc::new(service.clone()));
-        service
+        }
     }
 
     fn setup_unix_listener(path: &str) -> Result<UnixListener, CoreError> {
@@ -116,19 +113,41 @@ impl ControlService {
 }
 
 impl AsyncService for ControlService {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Database]
+    }
+
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let mut stats = vec![
+            (
+                std::borrow::Cow::Borrowed("socket_path"),
+                self.cfg.socket_path.clone(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("active_clients"),
+                ctx.active_clients()
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .to_string(),
+            ),
+        ];
+        if let Some(p) = self.cfg.tcp_port {
+            stats.push((std::borrow::Cow::Borrowed("tcp_port"), p.to_string()));
+        }
+        stats
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
         let listener = Self::setup_unix_listener(&cfg.socket_path)?;
-        ctrl.signal_ready();
 
-        let mut bus_rx = self.ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe();
         let mut current_gua: Option<Ipv6Addr> = None;
         let startup_time = Instant::now();
 
         let tcp_listener = self.setup_tcp_listener(cfg.tcp_port).await;
 
         loop {
-            if !self.ctx.is_running() {
+            if !ctx.is_running() {
                 break;
             }
             tokio::select! {
@@ -449,23 +468,4 @@ where
     writer.write_all(buf).await?;
     writer.flush().await?;
     Ok(())
-}
-
-impl StatusProvider for ControlService {
-    fn banner(&self) -> ServiceBanner {
-        let mut stats = vec![(
-            std::borrow::Cow::Borrowed("socket_path"),
-            self.cfg.socket_path.clone(),
-        )];
-        if let Some(p) = self.cfg.tcp_port {
-            stats.push((std::borrow::Cow::Borrowed("tcp_port"), p.to_string()));
-        }
-        ServiceBanner {
-            id: "control".to_string(),
-            name: "Control API".to_string(),
-            state: self.ctx.get_service_state("control"),
-            uptime_secs: self.ctx.get_service_uptime("control"),
-            stats,
-        }
-    }
 }

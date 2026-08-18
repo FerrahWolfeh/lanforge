@@ -1,5 +1,4 @@
 use lanforge_types::network::dns::TransportProtocol;
-use lanforge_types::system::ServiceBanner;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +10,7 @@ use tracing::{debug, error, info};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
+use lanforge_core::service::{AsyncService, ServiceDependency};
 
 use crate::config::DnsConfig;
 use crate::pipeline::DnsPipelineRequest;
@@ -28,36 +27,31 @@ use lanforge_dns_wire::{WireHeader, WireQuestion};
 #[derive(Clone)]
 pub struct DotService {
     cfg: Arc<DnsConfig>,
-    ctx: LanforgeContext,
+    _ctx: LanforgeContext,
 }
 
 impl DotService {
     #[must_use]
-    pub fn new(cfg: Arc<DnsConfig>, ctx: LanforgeContext) -> Self {
-        let service = Self {
-            cfg: cfg.clone(),
-            ctx: ctx.clone(),
-        };
-        ctx.register_status_provider(Arc::new(service.clone()));
-        service
-    }
-}
-
-impl StatusProvider for DotService {
-    fn banner(&self) -> ServiceBanner {
-        let port = self.cfg.dot_listen.map_or(853, |a| a.port());
-        ServiceBanner {
-            id: "dot".to_string(),
-            name: "DNS over TLS".to_string(),
-            state: self.ctx.get_service_state("dot"),
-            uptime_secs: self.ctx.get_service_uptime("dot"),
-            stats: vec![(std::borrow::Cow::Borrowed("port"), port.to_string())],
-        }
+    pub const fn new(cfg: Arc<DnsConfig>, ctx: LanforgeContext) -> Self {
+        Self { cfg, _ctx: ctx }
     }
 }
 
 impl AsyncService for DotService {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Database]
+    }
+
+    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let port = self.cfg.dot_listen.map_or(853, |a| a.port());
+        let listen = self.cfg.dot_listen.map_or("disabled".to_string(), |a| a.to_string());
+        vec![
+            (std::borrow::Cow::Borrowed("port"), port.to_string()),
+            (std::borrow::Cow::Borrowed("listen"), listen),
+        ]
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let Some(addr_str) = &self.cfg.dot_listen else {
             return Ok(());
         };
@@ -78,18 +72,17 @@ impl AsyncService for DotService {
             .map_err(|e| CoreError::Generic(format!("DoT bind error: {e}")))?;
 
         info!("🚀 DoT listening on tls://{}", addr_str);
-        ctrl.signal_ready();
 
-        let mut rx = self.ctx.bus().subscribe();
+        let mut rx = ctx.bus().subscribe();
         loop {
             tokio::select! {
                 res = listener.accept() => {
                     match res {
                         Ok((stream, peer)) => {
                             let acceptor = acceptor.clone();
-                            let ctx = self.ctx.clone();
+                            let ctx_conn = ctx.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_dot_connection(stream, acceptor, ctx, peer).await {
+                                if let Err(e) = handle_dot_connection(stream, acceptor, ctx_conn, peer).await {
                                     debug!("DoT connection from {} closed with error: {}", peer, e);
                                 }
                             });
@@ -99,7 +92,7 @@ impl AsyncService for DotService {
                 }
                 res = rx.recv() => {
                     if let Ok(timed) = res {
-                        if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !self.ctx.is_running() {
+                        if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !ctx.is_running() {
                             break;
                         }
                     } else {

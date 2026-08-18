@@ -43,11 +43,13 @@ async fn dns_uds_simulation_basic() {
     // 2. Spawn UDS server control service
     let mut service = ControlService::new(cfg, ctx.clone(), db, log_db);
     let ctrl = ServiceControl::new("control", ctx.clone());
+    let ctx_service = ctx.clone();
 
     let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.run(ctrl).await.expect("Control API service failed");
+        ctrl.signal_ready();
+        service.serve(&ctx_service).await.expect("Control API service failed");
     });
 
     // Wait for ServiceReady

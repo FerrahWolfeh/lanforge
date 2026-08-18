@@ -1,8 +1,8 @@
 mod common;
-use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, SystemEvent};
+use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::AsyncService;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
@@ -57,25 +57,16 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
 
     // 3. Start DNS Service
     let mut service = DnsService::new(cfg, ctx.clone());
-    let ctrl = ServiceControl::new("dns-adblock-test", ctx.clone());
-
+    let ctx_service = ctx.clone();
     ctx.set_db_ready(true);
     ctx.set_pppoe_ready(true);
-    let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.run(ctrl).await.expect("Service failed");
+        service.serve(&ctx_service).await.expect("Service failed");
     });
 
-    // Wait for ServiceReady
-    loop {
-        let event = rx.recv().await.expect("Bus closed");
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "dns-adblock-test"
-        {
-            break;
-        }
-    }
+    // Wait for service to bind socket
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 4. Test: If disabled, it should do nothing (queries are not blocked)
     let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();

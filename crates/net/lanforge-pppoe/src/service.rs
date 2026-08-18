@@ -10,7 +10,7 @@ use crate::session::PppoeSession;
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse};
 use lanforge_types::update::DeviceUpdate;
 use std::time::Duration;
@@ -59,7 +59,7 @@ impl PppoeService {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn run_session_flow(&mut self, ctrl: &ServiceControl) -> Result<(), PppoeError> {
+    async fn run_session_flow(&mut self) -> Result<(), PppoeError> {
         let (ifindex, mac) = self.get_interface_details()?;
 
         // 1. Discovery
@@ -198,7 +198,6 @@ impl PppoeService {
 
             // Signal supervisor that PPPoE WAN interface is UP and ready
             self.ctx.set_pppoe_ready(true);
-            ctrl.signal_ready();
 
             // Reset attempt counter on clean connection
             self.attempt = 0;
@@ -256,31 +255,69 @@ impl PppoeService {
 }
 
 impl AsyncService for PppoeService {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Interfaces]
+    }
+
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let (state_str, local_ip, ppp_iface) = ctx.with_state(|state| {
+            state.interfaces.pppoe_status.as_ref().map_or_else(
+                || {
+                    (
+                        "disconnected".to_string(),
+                        "none".to_string(),
+                        "none".to_string(),
+                    )
+                },
+                |p| (
+                    format!("{:?}", p.state),
+                    p.local_ip.map_or_else(|| "none".to_string(), |ip| ip.to_string()),
+                    p.interface.clone().unwrap_or_else(|| "none".to_string()),
+                ),
+            )
+        });
+        vec![
+            (
+                std::borrow::Cow::Borrowed("wan_iface"),
+                self.cfg.wan_iface.clone(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("username"),
+                self.cfg.username.clone(),
+            ),
+            (std::borrow::Cow::Borrowed("state"), state_str),
+            (std::borrow::Cow::Borrowed("local_ip"), local_ip),
+            (std::borrow::Cow::Borrowed("ppp_interface"), ppp_iface),
+            (
+                std::borrow::Cow::Borrowed("reconnect_attempts"),
+                self.attempt.to_string(),
+            ),
+        ]
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         if !std::path::Path::new("/dev/ppp").exists() {
             warn!(
                 service = "PPPoE",
                 "/dev/ppp device unavailable (ppp_generic kernel module missing). Disabling PPPoE service."
             );
-            let _ = self
-                .ctx
+            let _ = ctx
                 .bus()
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
                     reason: "/dev/ppp device unavailable".into(),
                 }));
-            self.ctx.set_pppoe_ready(true);
-            ctrl.signal_ready();
+            ctx.set_pppoe_ready(true);
             return Ok(());
         }
 
-        let mut bus_rx = self.ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe();
 
         loop {
-            if !self.ctx.is_running() {
+            if !ctx.is_running() {
                 break;
             }
 
-            match self.run_session_flow(&ctrl).await {
+            match self.run_session_flow().await {
                 Ok(()) => {
                     info!("PPPoE service session finished cleanly");
                     break;
@@ -295,7 +332,7 @@ impl AsyncService for PppoeService {
                     );
 
                     let _ =
-                        self.ctx
+                        ctx
                             .bus()
                             .publish(LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
                                 attempt: self.attempt,
@@ -316,6 +353,11 @@ impl AsyncService for PppoeService {
             }
         }
 
+        Ok(())
+    }
+
+    async fn cleanup(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        ctx.set_pppoe_ready(false);
         Ok(())
     }
 }

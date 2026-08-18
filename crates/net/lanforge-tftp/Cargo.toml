@@ -30,6 +30,7 @@ bytes = { workspace = true }
 
 # Third party
 smol_str = "0.3.6"
+parking_lot.workspace = true
 
 
 [lints.clippy]

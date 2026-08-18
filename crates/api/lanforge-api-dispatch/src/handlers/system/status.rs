@@ -25,12 +25,7 @@ impl ClientContext {
             devices: DevicesStats::default(),
             capabilities: Self::gather_capabilities(),
             server_caps: CompiledCaps::detect(),
-            service_banners: self
-                .ctx
-                .status_providers()
-                .iter()
-                .map(|p| p.banner())
-                .collect(),
+            service_banners: self.ctx.service_banners(),
         };
 
         let devices = self.ctx.all_devices();
@@ -47,12 +42,7 @@ impl ClientContext {
     }
 
     pub async fn handle_service_banners(&self) -> Response {
-        let banners = self
-            .ctx
-            .status_providers()
-            .iter()
-            .map(|p| p.banner())
-            .collect();
+        let banners = self.ctx.service_banners();
         Response::ServiceBanners(ServiceBannersResponse { banners })
     }
 
@@ -222,8 +212,7 @@ impl ClientContext {
         status.services.dns.port = sys_status.dns_port;
 
         // Populate DoT/DoQ/DoH subservice statuses from service banners
-        for provider in self.ctx.status_providers().iter() {
-            let banner = provider.banner();
+        for banner in self.ctx.service_banners() {
             match banner.name.as_str() {
                 "DNS over TLS" => {
                     let port = banner

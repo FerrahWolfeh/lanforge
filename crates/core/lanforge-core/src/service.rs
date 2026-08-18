@@ -12,15 +12,17 @@
 //!
 //! # Service Lifecycle
 //!
-//! 1. **Initialization**: Service declares its [`ServiceMeta`]
-//! 2. **Execution**: `run()` method is called by the service registry
-//! 3. **Supervision**: Failures trigger exponential backoff restarts
-//! 4. **Shutdown**: `on_shutdown()` is called for cleanup
+//! 1. **Dependencies**: Declares required services via [`AsyncService::dependencies`].
+//! 2. **Initialization**: [`init()`](AsyncService::init) binds resources before readiness.
+//! 3. **Readiness**: Supervisor signals online and readiness automatically.
+//! 4. **Execution**: [`serve()`](AsyncService::serve) runs the main event/packet loop.
+//! 5. **Cleanup**: [`cleanup()`](AsyncService::cleanup) performs cooperative teardown.
 //!
 //! # Example
 //!
 //! ```rust
-//! use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta, ServiceControl};
+//! use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta, ServiceDependency};
+//! use lanforge_core::context::LanforgeContext;
 //! use lanforge_core::error::CoreError;
 //! use std::time::Duration;
 //!
@@ -43,8 +45,11 @@
 //! }
 //!
 //! impl AsyncService for MyService {
-//!     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-//!         ctrl.signal_ready();
+//!     fn dependencies(&self) -> &'static [ServiceDependency] {
+//!         &[ServiceDependency::Database]
+//!     }
+//!
+//!     async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
 //!         // Service main loop
 //!         Ok(())
 //!     }
@@ -53,6 +58,7 @@
 
 use crate::bus::{LanforgeEvent, SystemEvent};
 use crate::error::CoreError;
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -139,22 +145,21 @@ pub struct ServiceMeta {
     pub multi_threaded: bool,
 }
 
+/// Prerequisites that must be satisfied before a service starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ServiceDependency {
+    /// Wait for database worker to be ready (`LanforgeContext::is_db_ready()`).
+    Database,
+    /// Wait for network interface discovery to complete (`LanforgeContext::is_if_ready()`).
+    Interfaces,
+    /// Wait for `PPPoE` WAN connection to be up (`LanforgeContext::is_pppoe_ready()`).
+    PppoeWan,
+}
+
 /// Core trait defining a service within the Lanforge system.
 ///
 /// A service is a component that provides identity and responds to
 /// external signals from the global event bus.
-///
-/// # Implementing
-///
-/// All services must:
-/// 1. Implement [`meta()`](LanforgeService::meta) to declare supervision config
-/// 2. Optionally override [`describe()`](LanforgeService::describe) for logging
-/// 3. Optionally override [`on_shutdown()`](LanforgeService::on_shutdown) for cleanup
-/// 4. Implement [`AsyncService`] for execution
-///
-/// # Thread Safety
-///
-/// Services must be `Send + Sync` as they may be accessed from multiple threads.
 pub trait LanforgeService: Send + Sync {
     /// Returns the service's supervision metadata.
     fn meta(&self) -> ServiceMeta;
@@ -166,22 +171,11 @@ pub trait LanforgeService: Send + Sync {
     }
 
     /// Called when the service is stopping or the daemon is terminating.
-    ///
-    /// # Synchronous in-memory cleanup only
-    ///
-    /// This method is strictly for instantaneous in-memory cleanup, logging,
-    /// or dropping local resources. **Do NOT perform blocking or async I/O here**
-    /// (such as network calls, disk writes, or database flushes).
-    ///
-    /// Any asynchronous or I/O-bound cleanup (such as sending `PPPoE` PADT packets,
-    /// flushing database batches, or draining network sockets) **MUST** be performed
-    /// cooperatively inside the [`AsyncService::run`] loop upon observing
-    /// [`SystemEvent::Shutdown`](crate::bus::SystemEvent::Shutdown) or `!ctx.is_running()`.
-    /// The supervisor guarantees that [`AsyncService::run`] will be polled cooperatively
-    /// with a safety timeout ([`ServiceMeta::shutdown_timeout`]) before the service is terminated.
+    /// Synchronous in-memory cleanup only. Async cleanup must be in [`AsyncService::cleanup`].
     ///
     /// # Errors
-    /// Returns `CoreError` if the shutdown procedure fails.
+    ///
+    /// Returns a [`CoreError`] if in-memory shutdown operations fail.
     fn on_shutdown(&mut self) -> Result<(), CoreError> {
         Ok(())
     }
@@ -189,71 +183,59 @@ pub trait LanforgeService: Send + Sync {
 
 /// A service that executes within a Tokio asynchronous task.
 ///
-/// This trait desugars the `run` method to ensure the resulting Future is `Send`,
-/// which is required for spawning the service in a multi-threaded Tokio runtime.
+/// # Lifecycle Stages
 ///
-/// # Guidelines
-///
-/// Services implementing this trait should:
-/// 1. Use the [`LanforgeContext`] to access the [`EventBus`](crate::bus::EventBus) and global state
-/// 2. Listen for the `LanforgeEvent::System(SystemEvent::Shutdown)` signal on the bus to exit `run`
-/// 3. Prefer native async I/O (`tokio::net`) over synchronous blocking calls
-/// 4. Handle errors gracefully — unrecoverable errors should return `Err(CoreError)`
-///
-/// # Example
-///
-/// ```rust
-/// use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta, ServiceControl};
-/// use lanforge_core::context::LanforgeContext;
-/// use lanforge_core::error::CoreError;
-/// use lanforge_core::bus::{LanforgeEvent, SystemEvent};
-/// use std::time::Duration;
-///
-/// struct MyAsyncService {
-///     ctx: LanforgeContext,
-/// }
-///
-/// impl LanforgeService for MyAsyncService {
-///     fn meta(&self) -> ServiceMeta {
-///         ServiceMeta {
-///             id: "my-async",
-///             display_name: "My Async Service",
-///             critical: false,
-///             max_retries: 5,
-///             base_backoff: Duration::from_secs(1),
-///             max_backoff: Duration::from_secs(10),
-///             shutdown_timeout: Duration::from_secs(3),
-///             stack_kb: 0,
-///             multi_threaded: false,
-///         }
-///     }
-/// }
-///
-/// impl AsyncService for MyAsyncService {
-///     async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-///         ctrl.signal_ready();
-///         let mut rx = self.ctx.bus().subscribe();
-///         loop {
-///             match rx.recv().await {
-///                 Ok(timed) => {
-///                     if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-///                         break;
-///                     }
-///                     // Handle events...
-///                 }
-///                 Err(_) => break, // Bus closed
-///             }
-///         }
-///         Ok(())
-///     }
-/// }
-/// ```
+/// 1. **Dependencies**: Handled automatically by supervisor via [`AsyncService::dependencies`].
+/// 2. **Initialization**: [`init()`](AsyncService::init) binds sockets and allocates resources.
+/// 3. **Readiness**: Supervisor automatically marks service `Online` and signals `ServiceReady`.
+/// 4. **Execution**: [`serve()`](AsyncService::serve) runs the main event / packet processing loop.
+/// 5. **Cleanup**: [`cleanup()`](AsyncService::cleanup) performs asynchronous cooperative shutdown.
 pub trait AsyncService: LanforgeService {
-    /// Runs the service's main loop asynchronously.
-    ///
-    /// # Errors
-    /// Returns `CoreError` if the service execution fails and cannot be recovered.
-    fn run(&mut self, ctrl: ServiceControl) -> impl Future<Output = Result<(), CoreError>> + Send;
+    /// Declares service prerequisites (e.g. Database, Interfaces, `PppoeWan`).
+    /// The supervisor automatically waits for all declared dependencies before calling `init()`.
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[]
+    }
+
+    /// Returns service-specific key-value statistics and metrics for the status banner.
+    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
+        Vec::new()
+    }
+
+    /// Generates the complete service status banner containing health, uptime, and metrics.
+    fn banner(&self, ctx: &LanforgeContext) -> ServiceBanner {
+        let meta = self.meta();
+        ServiceBanner {
+            id: meta.id.to_string(),
+            name: meta.display_name.to_string(),
+            state: ctx.get_service_state(meta.id),
+            uptime_secs: ctx.get_service_uptime(meta.id),
+            stats: self.stats(ctx),
+        }
+    }
+
+    /// Resource acquisition phase (port binding, netlink sockets, cache initialization).
+    /// Executed before readiness is signaled. If this fails, the supervisor applies backoff.
+    fn init(
+        &mut self,
+        _ctx: &LanforgeContext,
+    ) -> impl Future<Output = Result<(), CoreError>> + Send {
+        async { Ok(()) }
+    }
+
+    /// Main execution loop. Only called after `init()` succeeds and readiness is signaled.
+    fn serve(
+        &mut self,
+        ctx: &LanforgeContext,
+    ) -> impl Future<Output = Result<(), CoreError>> + Send;
+
+    /// Cooperative async cleanup on shutdown (e.g. sending `PPPoE` PADT frame, flushing DB batch).
+    fn cleanup(
+        &mut self,
+        _ctx: &LanforgeContext,
+    ) -> impl Future<Output = Result<(), CoreError>> + Send {
+        async { Ok(()) }
+    }
 }
 
 use crate::context::LanforgeContext;
@@ -303,5 +285,11 @@ use lanforge_types::system::{ServiceBanner, ServiceState};
 /// Trait implemented by decoupled services to provide dynamic status and metrics.
 pub trait StatusProvider: Send + Sync {
     /// Returns the service's current banner containing health, uptime, and metrics.
-    fn banner(&self) -> ServiceBanner;
+    fn banner(&self, ctx: &LanforgeContext) -> ServiceBanner;
+}
+
+impl<T: AsyncService> StatusProvider for T {
+    fn banner(&self, ctx: &LanforgeContext) -> ServiceBanner {
+        <T as AsyncService>::banner(self, ctx)
+    }
 }

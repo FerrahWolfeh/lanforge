@@ -23,7 +23,7 @@ use futures::stream::TryStreamExt;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::AsyncService;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
@@ -168,13 +168,53 @@ impl AddressMonitor {
 }
 
 impl AsyncService for AddressMonitor {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        let mut bus_rx = self.ctx.bus().subscribe();
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let (v4_str, ll_str, gua_str, mac_str) = ctx.with_state(|state| {
+            let if_state = state.interfaces.interface_ips.get(&self.target_ifindex);
+            let v4 = if_state
+                .and_then(|s| s.v4)
+                .map_or_else(|| "—".to_string(), |(ip, prefix)| format!("{ip}/{prefix}"));
+            let ll = if_state
+                .and_then(|s| s.link_local)
+                .map_or_else(|| "—".to_string(), |ip| ip.to_string());
+            let gua = if_state
+                .and_then(|s| s.gua)
+                .map_or_else(|| "—".to_string(), |ip| ip.to_string());
+            let mac = if_state
+                .and_then(|s| s.mac)
+                .map_or_else(|| "—".to_string(), |mac| mac.to_string());
+            (v4, ll, gua, mac)
+        });
 
-        ctrl.signal_ready();
+        vec![
+            (
+                std::borrow::Cow::Borrowed("target_ifindex"),
+                self.target_ifindex.to_string(),
+            ),
+            (std::borrow::Cow::Borrowed("ipv4"), v4_str),
+            (std::borrow::Cow::Borrowed("link_local"), ll_str),
+            (std::borrow::Cow::Borrowed("gua"), gua_str),
+            (std::borrow::Cow::Borrowed("mac"), mac_str),
+        ]
+    }
+
+    async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        self.initial_scan()
+            .await
+            .map_err(|e| CoreError::Generic(e.to_string()))?;
+
+        ctx.set_if_ready(true);
+        let _ = ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
+        Ok(())
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        let mut bus_rx = ctx.bus().subscribe();
 
         loop {
-            if !self.ctx.is_running() {
+            if !ctx.is_running() {
                 break;
             }
 

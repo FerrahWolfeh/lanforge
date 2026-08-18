@@ -41,7 +41,7 @@ use crate::ping::IcmpPinger;
 use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
 use lanforge_types::update::DeviceUpdate;
@@ -130,15 +130,78 @@ impl DiscoveryService {
 }
 
 impl AsyncService for DiscoveryService {
-    #[allow(clippy::too_many_lines)]
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-        // 0. Wait for Interface Ready (Sanity check)
-        // This ensures the initial_scan has completed and ctx is seeded with prefixes.
-        self.ctx.wait_for_interfaces().await?;
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Interfaces]
+    }
 
-        // 0.5. Spin up the integrated ICMP active pinger helper if enabled
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let (total_devices, active_devices) = ctx.with_state(|state| {
+            let total = state.devices.len();
+            let active = state
+                .devices
+                .values()
+                .filter(|d| d.status == lanforge_types::device::DeviceStatus::Online)
+                .count();
+            (total, active)
+        });
+        vec![
+            (
+                std::borrow::Cow::Borrowed("target_ifindex"),
+                self.target_ifindex.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("ping_enabled"),
+                self.cfg.ping_enabled.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("ping_interval_secs"),
+                self.cfg.ping_interval_secs.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("total_devices"),
+                total_devices.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("active_devices"),
+                active_devices.to_string(),
+            ),
+        ]
+    }
+
+    async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        let if_state = ctx.get_interface_state(self.target_ifindex);
+        let current_gua = if_state.gua;
+        let current_ula = if_state.ula;
+
+        debug!("DiscoveryService: Performing initial neighbor bootstrap...");
+        let mut bootstrap_events = Vec::new();
+
+        match get_ipv4_neighbors(&self.handle, Some(self.target_ifindex)).await {
+            Ok(evs) => bootstrap_events.extend(evs),
+            Err(e) => error!("DiscoveryService: Failed to dump IPv4 neighbors: {e}"),
+        }
+
+        match get_ipv6_neighbors(&self.handle, "", Some(self.target_ifindex)).await {
+            Ok(evs) => bootstrap_events.extend(evs),
+            Err(e) => error!("DiscoveryService: Failed to dump IPv6 neighbors: {e}"),
+        }
+
+        for event in bootstrap_events {
+            if let Some(update) =
+                event.to_device_update(current_gua.as_ref(), current_ula.as_ref())
+            {
+                let _ = ctx.apply(update);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        // Spin up the integrated ICMP active pinger helper if enabled
         let pinger = if self.cfg.ping_enabled {
-            match IcmpPinger::new(self.ctx.clone()) {
+            match IcmpPinger::new(ctx.clone()) {
                 Ok(p) => {
                     info!("DiscoveryService: Integrated active ICMP pinger initialized.");
                     Some(Arc::new(p))
@@ -155,7 +218,7 @@ impl AsyncService for DiscoveryService {
         if let Some(pinger_ref) = &pinger {
             // A. Spawn periodic ICMP active ping sweep task
             let pinger_sweep = pinger_ref.clone();
-            let ctx_sweep = self.ctx.clone();
+            let ctx_sweep = ctx.clone();
             let ping_interval = self.cfg.ping_interval_secs;
             tokio::spawn(async move {
                 let mut sweep_timer = interval(Duration::from_secs(ping_interval));
@@ -218,7 +281,7 @@ impl AsyncService for DiscoveryService {
 
             // B. Spawn EventBus subscriber for JIT offline verification pings
             let pinger_jit = pinger_ref.clone();
-            let ctx_jit = self.ctx.clone();
+            let ctx_jit = ctx.clone();
             tokio::spawn(async move {
                 let mut bus_rx = ctx_jit.bus().subscribe();
                 let mut seq_counter = 0u16;
@@ -278,46 +341,18 @@ impl AsyncService for DiscoveryService {
             });
         }
 
-        let mut bus_rx = self.ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe();
 
         // Initialize prefixes from current context state
-        let if_state = self.ctx.get_interface_state(self.target_ifindex);
+        let if_state = ctx.get_interface_state(self.target_ifindex);
         let mut current_gua: Option<Ipv6Addr> = if_state.gua;
         let mut current_ula: Option<Ipv6Addr> = if_state.ula;
-
-        // 1. Initial Neighbor Scan (Bootstrap)
-        // We perform a simple dump of the kernel's neighbor table for the interface.
-        // This is "gentle" because it just sends individual Added events for existing entries.
-        {
-            debug!("DiscoveryService: Performing initial neighbor bootstrap...");
-            let mut bootstrap_events = Vec::new();
-
-            match get_ipv4_neighbors(&self.handle, Some(self.target_ifindex)).await {
-                Ok(evs) => bootstrap_events.extend(evs),
-                Err(e) => error!("DiscoveryService: Failed to dump IPv4 neighbors: {e}"),
-            }
-
-            match get_ipv6_neighbors(&self.handle, "", Some(self.target_ifindex)).await {
-                Ok(evs) => bootstrap_events.extend(evs),
-                Err(e) => error!("DiscoveryService: Failed to dump IPv6 neighbors: {e}"),
-            }
-
-            for event in bootstrap_events {
-                if let Some(update) =
-                    event.to_device_update(current_gua.as_ref(), current_ula.as_ref())
-                {
-                    let _ = self.ctx.apply(update);
-                }
-            }
-        }
-
-        ctrl.signal_ready();
 
         let mut pending_batch = Vec::with_capacity(50);
         let mut flush_timer = interval(Duration::from_millis(self.cfg.batch_interval_ms));
 
         loop {
-            if !self.ctx.is_running() {
+            if !ctx.is_running() {
                 break;
             }
             tokio::select! {
@@ -346,7 +381,7 @@ impl AsyncService for DiscoveryService {
                                     self.flush_neighbor_batch(batch);
                                 }
                                 if let Some(update) = event.to_device_update(current_gua.as_ref(), current_ula.as_ref()) {
-                                    let _ = self.ctx.apply(update);
+                                    let _ = ctx.apply(update);
                                 }
                             }
                         }

@@ -52,11 +52,10 @@ use lanforge_types::device::IPv6State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::Dhcpv6Pool;
-use lanforge_types::system::{RunResult, ServiceBanner};
+use lanforge_types::system::RunResult;
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
@@ -72,7 +71,7 @@ use dhcproto::v6::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
+use lanforge_core::service::{AsyncService, ServiceDependency};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 ///
@@ -101,18 +100,18 @@ pub struct Dhcpv6Service {
 
 impl Dhcpv6Service {
     #[must_use]
-    pub fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
-        ctx.register_status_provider(Arc::new(Self {
-            config: config.clone(),
-            ctx: ctx.clone(),
-        }));
+    pub const fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
         Self { config, ctx }
     }
 }
 
-impl StatusProvider for Dhcpv6Service {
-    fn banner(&self) -> ServiceBanner {
-        let (active_leases, pool_total, pool_available) = self.ctx.with_state(|state| {
+impl AsyncService for Dhcpv6Service {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Database, ServiceDependency::Interfaces]
+    }
+
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
+        let (active_leases, pool_total, pool_available) = ctx.with_state(|state| {
             let leases = u32::try_from(
                 state
                     .devices
@@ -129,8 +128,8 @@ impl StatusProvider for Dhcpv6Service {
             }
             (leases, total, avail)
         });
-        let v6_stats = self.ctx.dhcpv6_stats().snapshot();
-        let stats = vec![
+        let v6_stats = ctx.dhcpv6_stats().snapshot();
+        vec![
             (Cow::Borrowed("iface"), self.config.iface.clone()),
             (Cow::Borrowed("port"), self.config.port.to_string()),
             (Cow::Borrowed("leases_active"), active_leases.to_string()),
@@ -148,33 +147,17 @@ impl StatusProvider for Dhcpv6Service {
                 Cow::Borrowed("info_requests"),
                 v6_stats.info_requests.to_string(),
             ),
-        ];
-        ServiceBanner {
-            id: "dhcpv6".to_string(),
-            name: "DHCPv6 Server".to_string(),
-            state: self.ctx.get_service_state("dhcpv6"),
-            uptime_secs: self.ctx.get_service_uptime("dhcpv6"),
-            stats,
-        }
+        ]
     }
-}
 
-impl AsyncService for Dhcpv6Service {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         if !self.config.enabled {
             info!("DHCPv6 is disabled in config.");
             return Ok(());
         }
 
-        // 1. Wait for DB and Interface Ready
-        info!("DHCPv6: Waiting for dependencies (DB and Interfaces)...");
-        self.ctx.wait_for_db().await?;
-        self.ctx.wait_for_interfaces().await?;
-
-        ctrl.signal_ready();
-
         loop {
-            let pools = self.ctx.get_dhcp_v6_pools();
+            let pools = ctx.get_dhcp_v6_pools();
 
             if pools.is_empty() {
                 warn!("⚠️ DHCPv6 enabled but no pools configured — server will remain idle");
@@ -184,7 +167,7 @@ impl AsyncService for Dhcpv6Service {
                 }
             }
 
-            match self.run_server(pools, &ctrl).await? {
+            match self.run_server(pools).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}
             }
@@ -226,7 +209,6 @@ impl Dhcpv6Service {
     async fn run_server(
         &self,
         pools: Vec<Dhcpv6Pool>,
-        ctrl: &ServiceControl,
     ) -> Result<RunResult, CoreError> {
         let mut current_cfg = self.config.clone();
         current_cfg.pools = pools;
@@ -327,7 +309,6 @@ impl Dhcpv6Service {
 
         // Setup transport socket
         let transport = io::Dhcpv6Transport::new(&current_cfg.iface, current_cfg.port)?;
-        ctrl.signal_ready();
         self.publish_pool_stats(&server);
 
         let mut buf = [0u8; 2048];

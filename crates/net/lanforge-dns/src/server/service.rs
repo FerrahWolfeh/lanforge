@@ -12,13 +12,12 @@ use crate::server::DnsContext;
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceControl, StatusProvider};
+use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::{
     DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsMessage, DnsQuestion,
     DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
 };
-use lanforge_types::system::ServiceBanner;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -50,13 +49,11 @@ impl DnsService {
     pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
         let stats = Arc::new(DnsStats::new());
         ctx.register_service_state("dns::stats", Arc::clone(&stats));
-        let service = Self {
+        Self {
             cfg: Arc::new(cfg),
             stats,
-            ctx: ctx.clone(),
-        };
-        ctx.register_status_provider(Arc::new(service.clone()));
-        service
+            ctx,
+        }
     }
 
     #[must_use]
@@ -165,20 +162,80 @@ impl DnsService {
 }
 
 impl AsyncService for DnsService {
-    async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Database]
+    }
+
+    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let snap = self.stats.snapshot();
+        let total = snap.requests_total;
+        let hits = snap.cache_hits;
+        let hit_rate = if total > 0 {
+            (hits as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        #[cfg(feature = "adblock")]
+        let blocked = snap.blocked_queries;
+        #[cfg(not(feature = "adblock"))]
+        let blocked = 0u64;
+
+        vec![
+            (
+                std::borrow::Cow::Borrowed("listen"),
+                self.cfg.listen.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("upstream_mode"),
+                format!("{:?}", self.cfg.upstream_mode),
+            ),
+            (
+                std::borrow::Cow::Borrowed("requests_total"),
+                total.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("cache_hits"),
+                hits.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("cache_misses"),
+                snap.cache_misses.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("blocked_queries"),
+                blocked.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("resolved_total"),
+                snap.resolved_total.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("upstream_errors"),
+                snap.upstream_errors.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("cache_entries"),
+                snap.cache_entries.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("cache_hit_rate"),
+                format!("{hit_rate:.1}%"),
+            ),
+        ]
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
             return Ok(());
         }
 
-        self.ctx.wait_for_db().await?;
         let dns_ctx = self.init_dns_context().await?;
-        self.ctx
-            .register_service_state("dns::context", Arc::clone(&dns_ctx));
+        ctx.register_service_state("dns::context", Arc::clone(&dns_ctx));
 
         let (tx, mut mpsc_rx) = tokio::sync::mpsc::channel(100);
         let dns_handle = lanforge_core::context::DnsHandle::new(tx);
-        self.ctx.set_dns_handle(dns_handle);
+        ctx.set_dns_handle(dns_handle);
 
         let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         info!("Starting DNS service with {} UDP handlers", parallelism);
@@ -189,8 +246,6 @@ impl AsyncService for DnsService {
                 .await
                 .map_err(CoreError::Io)?,
         );
-
-        ctrl.signal_ready();
 
         for _ in 0..parallelism {
             workers.push(crate::server::worker::udp::spawn_udp_worker(
@@ -217,7 +272,7 @@ impl AsyncService for DnsService {
 
         let cache_worker = crate::server::worker::spawn_cache_handler(Arc::clone(&dns_ctx));
 
-        let mut bus_rx = self.ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe();
 
         let mpsc_worker = {
             let dns_ctx = Arc::clone(&dns_ctx);
@@ -230,7 +285,7 @@ impl AsyncService for DnsService {
         };
 
         loop {
-            if !self.ctx.is_running() {
+            if !ctx.is_running() {
                 break;
             }
             tokio::select! {
@@ -241,7 +296,7 @@ impl AsyncService for DnsService {
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged) => {
                                 info!("🔄 DNS: Reloading upstreams...");
                                 let mut upstreams = Vec::new();
-                                let ctx_upstreams = self.ctx.get_dns_upstreams();
+                                let ctx_upstreams = ctx.get_dns_upstreams();
                                 for target in ctx_upstreams {
                                     match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
                                         Ok(mgr) => upstreams.push(mgr),
@@ -325,32 +380,6 @@ impl AsyncService for DnsService {
         }
 
         Ok(())
-    }
-}
-
-impl StatusProvider for DnsService {
-    fn banner(&self) -> ServiceBanner {
-        let stats = vec![
-            (
-                std::borrow::Cow::Borrowed("cache_hits"),
-                self.stats.cache_hits.load(Ordering::Relaxed).to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("requests_total"),
-                self.stats
-                    .requests_total
-                    .load(Ordering::Relaxed)
-                    .to_string(),
-            ),
-        ];
-
-        ServiceBanner {
-            id: "dns".to_string(),
-            name: "DNS Server".to_string(),
-            state: self.ctx.get_service_state("dns"),
-            uptime_secs: self.ctx.get_service_uptime("dns"),
-            stats,
-        }
     }
 }
 

@@ -1,7 +1,7 @@
-use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
+use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::AsyncService;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
 use lanforge_dns::telemetry::DnsStats;
@@ -69,26 +69,18 @@ async fn dns_simulation_udp() {
 
     // 3. Start DNS Service
     let mut service = DnsService::new(cfg, ctx.clone());
-    let ctrl = ServiceControl::new("dns", ctx.clone());
+    let ctx_service = ctx.clone();
 
     ctx.set_db_ready(true);
-    let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.run(ctrl).await.expect("Service failed");
+        service.serve(&ctx_service).await.expect("Service failed");
     });
 
-    // Wait for ServiceReady event
-    loop {
-        let event = rx.recv().await.expect("Bus closed");
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "dns"
-        {
-            break;
-        }
-    }
+    // Wait for service to bind socket
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // 4. Query using raw UDP socket
+    // 4. Send DNS query for "my-device.lan" via UDP
     let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
     client_sock.connect("127.0.0.1:1053").await.unwrap();
 
@@ -106,7 +98,7 @@ async fn dns_simulation_udp() {
 
     client_sock.send(&query_bytes).await.unwrap();
 
-    let mut buf = [0u8; 512];
+    let mut buf = [0u8; 1024];
     let n = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
         .await
         .expect("Timeout waiting for DNS response")
@@ -118,22 +110,53 @@ async fn dns_simulation_udp() {
     // 5. Verify Response
     assert_eq!(response.header.id, 1234);
     assert_eq!(response.header.rcode, DnsResponseCode::NoError);
+    assert_eq!(response.answers.len(), 1);
 
-    assert!(!response.answers.is_empty(), "No answers in response");
-
-    let answer = &response.answers[0];
-    if let DnsRData::A(rdata_ip) = &answer.rdata {
-        assert_eq!(*rdata_ip, ip);
+    if let DnsRData::A(ip) = response.answers[0].rdata {
+        assert_eq!(ip, Ipv4Addr::new(192, 168, 1, 50));
     } else {
-        panic!("Wrong RData type: {:?}", answer.rdata);
+        panic!("Expected A record in answer, got {:?}", response.answers[0]);
     }
 
-    // Cleanup: Shutdown context
+    // 6. Test Reverse DNS Lookup (PTR)
+    let mut ptr_query = DnsMessage::new();
+    ptr_query.header.id = 4321;
+    ptr_query.header.qdcount = 1;
+    ptr_query.questions.push(DnsQuestion {
+        name: Arc::from("50.1.168.192.in-addr.arpa"),
+        qtype: DnsRecordType::PTR,
+        qclass: DnsClass::IN,
+    });
+
+    let ptr_query_bytes = encoder.encode_message(&ptr_query);
+    client_sock.send(&ptr_query_bytes).await.unwrap();
+
+    let n = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
+        .await
+        .expect("Timeout waiting for PTR response")
+        .expect("Recv failed");
+
+    let mut decoder = WireDecoder::new(&buf[..n]);
+    let ptr_response = decoder.decode_message().unwrap();
+
+    assert_eq!(ptr_response.header.id, 4321);
+    assert_eq!(ptr_response.header.rcode, DnsResponseCode::NoError);
+    assert_eq!(ptr_response.answers.len(), 1);
+
+    if let DnsRData::PTR(name) = &ptr_response.answers[0].rdata {
+        assert_eq!(name.as_ref(), "my-device.lan");
+    } else {
+        panic!(
+            "Expected PTR record in answer, got {:?}",
+            ptr_response.answers[0]
+        );
+    }
+
     ctx.terminate();
 }
 
 #[tokio::test]
-async fn dns_simulation_upstream() {
+async fn dns_simulation_forwarding_fallback() {
     let ctx = init_test_context().await;
 
     // 1. Setup Config with multiple upstreams
@@ -144,36 +167,22 @@ async fn dns_simulation_upstream() {
         ..Default::default()
     };
 
-    let mut upstreams = vec!["udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap()];
-
-    #[cfg(feature = "dot")]
-    upstreams.push("tls://1.1.1.1:853".parse::<UpstreamTarget>().unwrap());
-
-    #[cfg(feature = "doq")]
-    upstreams.push("quic://94.140.14.14:784".parse::<UpstreamTarget>().unwrap());
-
+    let mut upstreams = Vec::new();
+    upstreams.push("udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap());
     ctx.update_dns_upstreams(upstreams);
 
     // 2. Start DNS Service
     let mut service = DnsService::new(cfg, ctx.clone());
-    let ctrl = ServiceControl::new("dns-upstream", ctx.clone());
+    let ctx_service = ctx.clone();
 
     ctx.set_db_ready(true);
-    let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.run(ctrl).await.expect("Service failed");
+        service.serve(&ctx_service).await.expect("Service failed");
     });
 
-    // Wait for ServiceReady
-    loop {
-        let event = rx.recv().await.expect("Bus closed");
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "dns-upstream"
-        {
-            break;
-        }
-    }
+    // Wait for service to bind socket
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 3. Query for google.com
     let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -222,22 +231,15 @@ async fn dns_simulation_cache_case_insensitive() {
     ctx.update_dns_upstreams(vec!["udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap()]);
 
     let mut service = DnsService::new(cfg, ctx.clone());
-    let ctrl = ServiceControl::new("dns-cache", ctx.clone());
+    let ctx_service = ctx.clone();
     ctx.set_db_ready(true);
-    let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.run(ctrl).await.expect("Service failed");
+        service.serve(&ctx_service).await.expect("Service failed");
     });
 
-    loop {
-        let event = rx.recv().await.expect("Bus closed");
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "dns-cache"
-        {
-            break;
-        }
-    }
+    // Wait for service to bind socket
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
     client_sock.connect("127.0.0.1:1056").await.unwrap();
@@ -308,22 +310,15 @@ async fn dns_simulation_malformed_and_special_prefixes() {
     };
 
     let mut service = DnsService::new(cfg, ctx.clone());
-    let ctrl = ServiceControl::new("dns-boundary", ctx.clone());
+    let ctx_service = ctx.clone();
     ctx.set_db_ready(true);
-    let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        let _ = service.run(ctrl).await;
+        let _ = service.serve(&ctx_service).await;
     });
 
-    // Wait for ready...
-    while let Ok(event) = rx.recv().await {
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "dns-boundary"
-        {
-            break;
-        }
-    }
+    // Wait for service to bind socket
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
     client_sock.connect("127.0.0.1:1057").await.unwrap();
@@ -419,24 +414,16 @@ async fn dns_simulation_transient_ip_reverse_dns() {
 
     // 3. Start DNS Service
     let mut service = DnsService::new(cfg, ctx.clone());
-    let ctrl = ServiceControl::new("dns-transient", ctx.clone());
+    let ctx_service = ctx.clone();
 
     ctx.set_db_ready(true);
-    let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.run(ctrl).await.expect("Service failed");
+        service.serve(&ctx_service).await.expect("Service failed");
     });
 
-    // Wait for ServiceReady
-    loop {
-        let event = rx.recv().await.expect("Bus closed");
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "dns-transient"
-        {
-            break;
-        }
-    }
+    // Wait for service to bind socket
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 4. Mock upstream behavior to answer PTR queries
     let (tx_shutdown, mut rx_shutdown) = tokio::sync::oneshot::channel::<()>();

@@ -76,11 +76,53 @@ where
         let ctrl = ServiceControl::new(meta.id, ctx.clone());
         let mut bus_rx = ctx.bus().subscribe();
 
+        // 1. Dependency Resolution Phase
+        let mut deps_satisfied = true;
+        for dep in service.dependencies() {
+            if let Err(e) = ctx.wait_for_dependency(*dep).await {
+                if matches!(e, CoreError::Shutdown) || !ctx.is_running() {
+                    ctx.set_service_state(id, ServiceState::Inactive);
+                    ctx.clear_service_start(id);
+                    return;
+                }
+                warn!("⚠️ {} failed waiting for dependency {:?}: {e}", description, dep);
+                deps_satisfied = false;
+                break;
+            }
+        }
+        if !deps_satisfied {
+            ctx.set_service_state(id, ServiceState::Error);
+            if handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx).await.is_none() {
+                return;
+            }
+            continue;
+        }
+
+        // 2. Resource Initialization Phase
+        if let Err(err) = service.init(ctx).await {
+            let Some(backoff_needed) = evaluate_service_exit(Err(err), ctx, id, &description, start, &mut consecutive_failures) else {
+                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
+                let _ = service.on_shutdown();
+                return;
+            };
+            if backoff_needed && handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx).await.is_none() {
+                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
+                let _ = service.on_shutdown();
+                return;
+            }
+            continue;
+        }
+
+        // 3. Automatic Readiness Signal
+        ctrl.signal_ready();
+
+        // 4. Serve Phase
         let outcome = {
-            let run_fut = service.run(ctrl);
-            tokio::pin!(run_fut);
+            let serve_fut = service.serve(ctx);
+            tokio::pin!(serve_fut);
 
             tokio::select! {
+                biased;
                 shutdown_or_control = next_control_event(&mut bus_rx, id) => {
                     match shutdown_or_control {
                         Some(SystemEvent::Shutdown) => {
@@ -89,7 +131,7 @@ where
                                 description,
                                 meta.shutdown_timeout.as_secs_f64()
                             );
-                            match tokio::time::timeout(meta.shutdown_timeout, &mut run_fut).await {
+                            match tokio::time::timeout(meta.shutdown_timeout, &mut serve_fut).await {
                                 Ok(res) => {
                                     debug!("▪ {} completed graceful shutdown: {:?}", description, res);
                                 }
@@ -110,14 +152,16 @@ where
                         None | Some(_) => ServiceRunOutcome::BusClosed,
                     }
                 }
-                res = &mut run_fut => {
+                res = &mut serve_fut => {
                     ServiceRunOutcome::Exited(res)
                 }
             }
         };
 
+        // 5. Cooperative Cleanup & Shutdown Hook
         match outcome {
             ServiceRunOutcome::Shutdown => {
+                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
                 if let Err(e) = service.on_shutdown() {
                     error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
                 }
@@ -126,6 +170,7 @@ where
                 return;
             }
             ServiceRunOutcome::Control(action) => {
+                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
                 if let Err(e) = service.on_shutdown() {
                     error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
                 }
@@ -144,8 +189,13 @@ where
                     }
                 }
             }
-            ServiceRunOutcome::BusClosed => return,
+            ServiceRunOutcome::BusClosed => {
+                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
+                let _ = service.on_shutdown();
+                return;
+            }
             ServiceRunOutcome::Exited(res) => {
+                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
                 let Some(backoff_needed) = evaluate_service_exit(res, ctx, id, &description, start, &mut consecutive_failures) else {
                     if let Err(e) = service.on_shutdown() {
                         error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
@@ -345,7 +395,6 @@ mod tests {
     use lanforge_core::context::state::State;
     use lanforge_core::error::CoreError;
     use lanforge_core::service::LanforgeService;
-    use lanforge_core::service::ServiceControl;
     use lanforge_core::service::ServiceMeta;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -395,7 +444,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for TestAsyncService {
-        async fn run(&mut self, _ctrl: ServiceControl) -> Result<(), CoreError> {
+        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             Err(CoreError::Generic("always fails".into()))
         }
@@ -435,7 +484,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for TestResetService {
-        async fn run(&mut self, _ctrl: ServiceControl) -> Result<(), CoreError> {
+        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
             let n = self.attempts.fetch_add(1, Ordering::Relaxed);
             if n == 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -521,11 +570,10 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for RefService {
-        async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             // Simulate work then failure
             tokio::time::sleep(Duration::from_millis(2)).await;
-            ctrl.signal_ready();
             Err(CoreError::Generic("simulated error".into()))
         }
     }
@@ -569,7 +617,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for RapidOkService {
-        async fn run(&mut self, _ctrl: ServiceControl) -> Result<(), CoreError> {
+        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             Ok(()) // Rapid exit with success
         }
@@ -618,7 +666,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for HealthyOkService {
-        async fn run(&mut self, _ctrl: ServiceControl) -> Result<(), CoreError> {
+        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             // Simulate "healthy" work
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -708,9 +756,8 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for ControlTestService {
-        async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
+        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
-            ctrl.signal_ready();
             // Wait infinitely until dropped/cancelled
             std::future::pending::<()>().await;
             Ok(())
@@ -726,10 +773,8 @@ mod tests {
 
         let ctx_clone = ctx.clone();
         let handle = tokio::spawn(async move {
-            let ctx_service = ctx_clone.clone();
             supervise_async(&ctx_clone, move || {
                 CleanupService {
-                    ctx: ctx_service.clone(),
                     cleanup_completed: cleanup_clone.clone(),
                 }
             })
@@ -741,6 +786,7 @@ mod tests {
         assert_eq!(ctx.get_service_state("cleanup-test"), ServiceState::Online);
 
         // Signal shutdown
+        ctx.terminate();
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
 
         // Await supervisor task
@@ -760,7 +806,6 @@ mod tests {
     }
 
     struct CleanupService {
-        ctx: LanforgeContext,
         cleanup_completed: Arc<std::sync::atomic::AtomicBool>,
     }
     impl LanforgeService for CleanupService {
@@ -779,17 +824,20 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for CleanupService {
-        async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-            ctrl.signal_ready();
-            let mut rx = self.ctx.bus().subscribe();
+        async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+            let mut rx = ctx.bus().subscribe();
             while let Ok(event) = rx.recv().await {
                 if matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-                    // Simulate async cleanup (e.g. PADT frame or DB flush)
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    self.cleanup_completed.store(true, Ordering::Relaxed);
-                    return Ok(());
+                    break;
                 }
             }
+            Ok(())
+        }
+
+        async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
+            // Simulate async cleanup (e.g. PADT frame or DB flush)
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.cleanup_completed.store(true, Ordering::Relaxed);
             Ok(())
         }
     }
@@ -850,8 +898,7 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for HangingService {
-        async fn run(&mut self, ctrl: ServiceControl) -> Result<(), CoreError> {
-            ctrl.signal_ready();
+        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
             // Hanging future that never observes shutdown
             std::future::pending::<()>().await;
             Ok(())
