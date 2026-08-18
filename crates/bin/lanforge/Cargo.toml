@@ -193,6 +193,7 @@ rustls = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 toml = "1.1.2"
+rand = { workspace = true }
 
 # Networking / netlink
 netlink-sys = { workspace = true }

@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
-    /// Connection URL (e.g., "<sqlite:///var/lib/lanforge/lanforge.db>").
+    /// Connection URL (e.g., "<postgres://lanforge:lanforge@localhost:5432/lanforge>").
     pub url: String,
 
-    /// Transient log database URL (e.g., "<sqlite:///tmp/lanforge-logs.db>").
+    /// Transient log database URL / file path (e.g., "/tmp/lanforge-logs.jsonl").
     pub log_url: String,
 
     /// How often to flush in-memory state to the persistent database (seconds).
@@ -25,8 +25,9 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: "sqlite:///var/lib/lanforge/lanforge.db".to_string(),
-            log_url: "sqlite:///tmp/lanforge-logs.db".to_string(),
+            url: std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "postgres://lanforge:lanforge@localhost:5432/lanforge".to_string()),
+            log_url: "/tmp/lanforge-logs.jsonl".to_string(),
             flush_interval: 60,
             max_connections: 10,
             min_connections: 2,

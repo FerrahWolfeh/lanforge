@@ -83,8 +83,8 @@ pub struct SystemCfg {
 impl Default for SystemCfg {
     fn default() -> Self {
         Self {
-            iface: "end0".into(),
-            target_prefix: "fd97:f00d:cafe:3731".into(),
+            iface: String::new(),
+            target_prefix: String::new(),
             debounce_secs: 2,
             search_domains: Vec::new(),
             tls_cert: None,
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let default_cfg = TomlConfig::default();
-        assert_eq!(default_cfg.system.iface, "end0");
+        assert_eq!(default_cfg.system.iface, "");
         #[cfg(feature = "ra")]
         assert!(!default_cfg.ra.enabled);
         #[cfg(feature = "dns")]
@@ -260,7 +260,7 @@ mod tests {
     fn test_parse_empty_toml() {
         let content = "";
         let cfg: TomlConfig = toml::from_str(content).unwrap_or_default();
-        assert_eq!(cfg.system.iface, "end0"); // should fallback to default values
+        assert_eq!(cfg.system.iface, ""); // should fallback to default values
     }
 
     #[test]

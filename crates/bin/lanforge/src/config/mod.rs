@@ -1,29 +1,13 @@
-//! lanforge configuration — Unified management of CLI, TOML, and Environment.
+//! Lanforge configuration — Unified management of CLI, TOML, and Environment.
 //!
-//! The configuration system uses three layers in order of precedence:
-//! 1. **Default**: Fixed values in code (fail-safe).
-//! 2. **TOML**: Main source located at `/etc/lanforge/lanforge.toml`.
-//! 3. **CLI/Env**: Manual overrides passed via command line or `LANFORGE_*` variables.
-//!
-//! ## Configuration Flow
-//!
-//! ```text
-//!    [ CliArgs ]       [ TomlConfig ]      [ Default ]
-//!         │                  │                  │
-//!         ▼                  ▼                  ▼
-//!    ┌──────────────────────────────────────────────┐
-//!    │            Merge (Config::load())            │
-//!    └──────────────────┬───────────────────────────┘
-//!                       │
-//!         ┌─────────────┼─────────────┐
-//!         │             │             │
-//!         ▼             ▼             ▼
-//!    [ RaConfig ] [ DhcpConfig ] [ DnsConfig ] ...
-//!         │             │             │
-//!    (Services started with specialized config)
-//! ```
+//! The configuration system uses a clean layered pipeline:
+//! 1. **Default**: Router-first fail-safe baseline values.
+//! 2. **Auto-Detect**: Hardware-aware LAN interface detection & RFC 4193 ULA generation.
+//! 3. **TOML**: Declarative files located at `/etc/lanforge/lanforge.toml` and modular configs.
+//! 4. **CLI/Env**: Operational overrides passed via command line or environment variables.
 
 pub mod args;
+pub mod auto_detect;
 pub mod toml;
 
 pub use args::CliArgs;
@@ -43,10 +27,6 @@ use lanforge_ra::{RaConfig, RaServiceConfig};
 #[cfg(feature = "tftp")]
 use lanforge_tftp::config::TftpConfig;
 use lanforge_types::device::Ipv6AddrOrSuffix;
-#[cfg(feature = "dns")]
-use lanforge_types::network::dns::adblock::BlockingMode;
-#[cfg(feature = "dns")]
-use lanforge_types::network::dns::upstream::UpstreamEntry;
 #[cfg(feature = "ra")]
 use lanforge_types::network::ra::{DnsslConfig, PrefixSource, RAPrefix};
 use lanforge_types::system::SystemStatus;
@@ -60,14 +40,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::toml::SystemCfg;
 
-// ---------------------------------------------------------------------------
-// Config unificada (resultado do merge TOML + CLI overrides)
-// ---------------------------------------------------------------------------
-
 /// Consolidated and final system configuration.
-///
-/// Created via `Config::load()`, this struct contains all parameters
-/// needed to initialize the lanforge subsystems.
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Config {
@@ -117,7 +90,7 @@ pub struct Config {
     #[cfg(feature = "pppoe")]
     pub pppoe_toml: lanforge_pppoe::config::PppoeConfig,
 
-    // static devices
+    // Static devices
     pub devices: Vec<StaticDeviceCfg>,
     pub devices_file: Option<String>,
 
@@ -125,13 +98,55 @@ pub struct Config {
 }
 
 impl Config {
-    /// Load config: parse CLI args, read TOML, merge with CLI overrides.
+    /// Load config: parse CLI args, read TOML, run auto-detection, and apply CLI overrides.
     #[must_use]
     pub fn load() -> Self {
         let cli = CliArgs::parse();
 
         let mut toml_cfg = load_toml(&cli.config);
         Self::load_modular_configs(&cli.config, &mut toml_cfg);
+
+        // 1. Resolve LAN interface with hardware-aware auto-detection
+        let wan_iface = {
+            #[cfg(feature = "pppoe")]
+            {
+                Some(toml_cfg.pppoe.wan_iface.as_str())
+            }
+            #[cfg(not(feature = "pppoe"))]
+            {
+                None
+            }
+        };
+
+        let configured_iface = cli
+            .iface_lan
+            .as_deref()
+            .or(Some(toml_cfg.system.iface.as_str()));
+        toml_cfg.system.iface = auto_detect::detect_lan_interface(configured_iface, wan_iface);
+
+        // 2. Resolve IPv6 SLAAC target prefix with RFC 4193 ULA generator
+        if toml_cfg.system.target_prefix.is_empty()
+            || toml_cfg.system.target_prefix == "fd97:f00d:cafe:3731"
+        {
+            if let Some(ref cli_prefix) = cli.target_prefix {
+                toml_cfg.system.target_prefix.clone_from(cli_prefix);
+            } else {
+                toml_cfg.system.target_prefix =
+                    auto_detect::generate_rfc4193_ula().to_addr().to_string();
+            }
+        }
+
+        // 3. Resolve DHCP defaults if pools are unconfigured
+        #[cfg(feature = "dhcp")]
+        {
+            let dhcp_defaults = auto_detect::derive_dhcp_defaults(&toml_cfg.system.iface);
+            if toml_cfg.dhcp.v4.pools.is_empty() && toml_cfg.dhcp.v4.range_start.is_none() {
+                toml_cfg.dhcp.v4.router = dhcp_defaults.router;
+                toml_cfg.dhcp.v4.server_id = dhcp_defaults.router;
+                toml_cfg.dhcp.v4.subnet_mask = dhcp_defaults.subnet_mask;
+                toml_cfg.dhcp.v4.dns = vec![dhcp_defaults.router];
+            }
+        }
 
         let search_domains = Self::resolve_search_domains(&toml_cfg);
 
@@ -229,6 +244,12 @@ impl Config {
                 if let Some(ref iface) = cli.iface_lan {
                     s.iface.clone_from(iface);
                 }
+                if let Some(ref target_prefix) = cli.target_prefix {
+                    s.target_prefix.clone_from(target_prefix);
+                }
+                if let Some(debounce) = cli.debounce_secs {
+                    s.debounce_secs = debounce;
+                }
                 s
             },
             database: {
@@ -236,33 +257,50 @@ impl Config {
                 if let Some(ref url) = cli.db_url {
                     db.url.clone_from(url);
                 }
+                if let Some(ref log_url) = cli.log_db_url {
+                    db.log_url.clone_from(log_url);
+                }
                 db
             },
             #[cfg(feature = "ra")]
-            ra_enabled: cli.ra_enabled.unwrap_or(toml_cfg.ra.enabled),
+            ra_enabled: toml_cfg.ra.enabled,
             #[cfg(feature = "ra")]
-            ra_toml: Self::merge_ra_overrides(toml_cfg.ra, cli),
+            ra_toml: toml_cfg.ra,
             #[cfg(feature = "dhcp")]
-            dhcpv4_enabled: cli.dhcpv4_enabled.unwrap_or(toml_cfg.dhcp.v4.enabled),
+            dhcpv4_enabled: toml_cfg.dhcp.v4.enabled,
             #[cfg(feature = "dhcp")]
-            dhcpv4_toml: Self::merge_dhcpv4_overrides(toml_cfg.dhcp.v4, cli),
+            dhcpv4_toml: toml_cfg.dhcp.v4,
             #[cfg(feature = "dhcp")]
-            dhcpv6_enabled: cli.dhcpv6_enabled.unwrap_or(toml_cfg.dhcp.v6.enabled),
+            dhcpv6_enabled: toml_cfg.dhcp.v6.enabled,
             #[cfg(feature = "dhcp")]
             dhcpv6_toml: toml_cfg.dhcp.v6,
             #[cfg(feature = "dns")]
-            dns_enabled: cli.dns_enabled.unwrap_or(toml_cfg.dns.enabled),
+            dns_enabled: toml_cfg.dns.enabled,
             #[cfg(feature = "dns")]
-            dns_toml: Self::merge_dns_overrides(toml_cfg.dns, cli),
+            dns_toml: toml_cfg.dns,
             search_domains,
             #[cfg(feature = "discovery")]
             monitor_toml: toml_cfg.monitor,
             #[cfg(feature = "discovery")]
             mdns_toml: toml_cfg.mdns,
             #[cfg(feature = "uds")]
-            api_toml: toml_cfg.api,
+            api_toml: {
+                let mut api = toml_cfg.api;
+                if let Some(ref socket) = cli.control_socket {
+                    api.socket_path.clone_from(socket);
+                }
+                api
+            },
             #[cfg(feature = "http")]
-            http_toml: toml_cfg.http,
+            http_toml: {
+                let mut http = toml_cfg.http;
+                if let Some(ref listen_str) = cli.http_listen
+                    && let Ok(addr) = listen_str.parse()
+                {
+                    http.listen = addr;
+                }
+                http
+            },
             #[cfg(feature = "tftp")]
             tftp_toml: toml_cfg.tftp,
             #[cfg(feature = "pppoe")]
@@ -328,12 +366,10 @@ impl Config {
     pub fn to_dhcpv4_config(&self) -> Dhcpv4Config {
         let mut cfg = self.dhcpv4_toml.clone();
 
-        // Injected fields
         cfg.enabled = self.dhcpv4_enabled;
         cfg.iface.clone_from(&self.system.iface);
-        cfg.server_id = cfg.router; // Use router IP as server ID by default
+        cfg.server_id = cfg.router;
 
-        // Option 15 & 119
         if cfg.domain_name.is_none() {
             cfg.domain_name = self.search_domains.first().cloned();
         }
@@ -348,11 +384,9 @@ impl Config {
     pub fn to_dhcpv6_config(&self) -> Dhcpv6Config {
         let mut cfg = self.dhcpv6_toml.clone();
 
-        // Injected fields
         cfg.enabled = self.dhcpv6_enabled;
         cfg.iface.clone_from(&self.system.iface);
 
-        // Prefix detection
         let mut prefix_detected = None;
         #[cfg(feature = "ra")]
         {
@@ -371,7 +405,6 @@ impl Config {
             cfg.ula_prefix_len = 64;
         }
 
-        // DNS Servers
         if cfg.dns_servers.is_empty() {
             cfg.dns_servers = {
                 #[cfg(feature = "dns")]
@@ -412,10 +445,8 @@ impl Config {
     pub fn to_dns_config(&self) -> DnsConfig {
         let mut cfg = self.dns_toml.clone();
 
-        // Overrides
         cfg.enabled = self.dns_enabled;
 
-        // TLS Inheritance
         if cfg.tls_cert.is_none() {
             cfg.tls_cert.clone_from(&self.system.tls_cert);
         }
@@ -423,14 +454,12 @@ impl Config {
             cfg.tls_key.clone_from(&self.system.tls_key);
         }
 
-        // Search labels
         cfg.multi_search_labels = self
             .search_domains
             .iter()
             .map(|d| d.split('.').map(|s| s.as_bytes().to_vec()).collect())
             .collect();
 
-        // Prefix detection (if not explicitly set in DNS config)
         if cfg.ula_prefix.is_none() {
             #[cfg(feature = "ra")]
             {
@@ -458,13 +487,11 @@ impl Config {
     pub fn to_http_config(&self) -> HttpConfig {
         let mut cfg = self.http_toml.clone();
 
-        // Resolve password hash from dedicated file, falling back to TOML
         cfg.auth_password_hash = std::fs::read_to_string(self.get_password_hash_path())
             .map(|s| s.trim().to_string())
             .ok()
             .or_else(|| self.http_toml.auth_password_hash.clone());
 
-        // Inherit TLS from system if not set in HTTP
         if cfg.tls_cert.is_none() {
             cfg.tls_cert.clone_from(&self.system.tls_cert);
         }
@@ -491,24 +518,8 @@ impl Config {
     #[must_use]
     pub fn to_system_status(&self) -> SystemStatus {
         SystemStatus {
-            db_path: if self.database.url.starts_with("sqlite://") {
-                self.database
-                    .url
-                    .strip_prefix("sqlite://")
-                    .unwrap_or(&self.database.url)
-                    .to_string()
-            } else {
-                sanitize_db_url(&self.database.url)
-            },
-            log_db_path: if self.database.log_url.starts_with("sqlite://") {
-                self.database
-                    .log_url
-                    .strip_prefix("sqlite://")
-                    .unwrap_or(&self.database.log_url)
-                    .to_string()
-            } else {
-                sanitize_db_url(&self.database.log_url)
-            },
+            db_path: sanitize_db_url(&self.database.url),
+            log_db_path: sanitize_db_url(&self.database.log_url),
             lan_iface: self.system.iface.clone(),
             ula_prefix: if self.system.target_prefix.starts_with("fe80") {
                 None
@@ -649,78 +660,6 @@ impl Config {
                 }
             },
         }
-    }
-
-    #[cfg(feature = "ra")]
-    const fn merge_ra_overrides(mut r: RaServiceConfig, cli: &CliArgs) -> RaServiceConfig {
-        if let Some(managed) = cli.ra_managed {
-            r.managed = Some(managed);
-        }
-        if let Some(other) = cli.ra_other_config {
-            r.other_config = Some(other);
-        }
-        if let Some(max_interval) = cli.ra_max_interval {
-            r.max_interval = max_interval;
-        }
-        r
-    }
-
-    #[cfg(feature = "dhcp")]
-    const fn merge_dhcpv4_overrides(mut d: Dhcpv4Config, cli: &CliArgs) -> Dhcpv4Config {
-        if let Some(start) = cli.dhcpv4_range_start {
-            d.range_start = Some(start);
-        }
-        if let Some(end) = cli.dhcpv4_range_end {
-            d.range_end = Some(end);
-        }
-        if let Some(lt) = cli.dhcpv4_lease_time {
-            d.lease_time = lt;
-        }
-        d
-    }
-
-    #[cfg(feature = "dns")]
-    fn merge_dns_overrides(mut d: DnsConfig, cli: &CliArgs) -> DnsConfig {
-        if let Some(listen) = &cli.dns_listen
-            && let Ok(addr) = listen.parse()
-        {
-            d.listen = addr;
-        }
-        if let Some(upstream) = &cli.dns_upstream
-            && let Ok(target) = upstream.parse()
-        {
-            d.upstreams = vec![UpstreamEntry { target }];
-        }
-        if let Some(port) = cli.dns_port {
-            d.listen.set_port(port);
-        }
-        if let Some(dot_listen) = &cli.dns_dot_listen
-            && let Ok(addr) = dot_listen.parse()
-        {
-            d.dot_listen = Some(addr);
-        }
-        if let Some(cert) = &cli.dns_tls_cert {
-            d.tls_cert = Some(cert.clone());
-        }
-        if let Some(key) = &cli.dns_tls_key {
-            d.tls_key = Some(key.clone());
-        }
-        #[cfg(feature = "adblock")]
-        if let Some(adblock) = cli.dns_adblock_enabled {
-            d.adblock_enabled = adblock;
-        }
-        if let Some(mode_str) = &cli.dns_blocking_mode
-            && let Ok(mode) = mode_str.parse::<BlockingMode>()
-        {
-            d.blocking_mode = mode;
-        }
-        if let Some(ttl) = cli.dns_ttl {
-            d.ttl = ttl;
-        }
-        if let Some(threshold) = cli.dns_last_seen {
-            d.last_seen_threshold_days = threshold;
-        }
-        d
     }
 }
 

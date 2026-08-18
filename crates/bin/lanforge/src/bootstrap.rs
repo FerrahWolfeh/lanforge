@@ -134,6 +134,23 @@ impl Bootstrapper {
         );
         ctx.set_status(cfg.to_system_status());
 
+        let host_ip = {
+            let interfaces = pnet::datalink::interfaces();
+            interfaces
+                .iter()
+                .find(|i| i.name == cfg.system.iface)
+                .and_then(|i| i.ips.iter().find(|ip| ip.is_ipv4()))
+                .map_or_else(|| "localhost".to_string(), |ip| ip.ip().to_string())
+        };
+
+        info!("┌─────────────────────────────────────────────────────────────┐");
+        info!("│  ⚡ Lanforge — Router & Network Orchestrator                 │");
+        info!("├─────────────────────────────────────────────────────────────┤");
+        info!("│  LAN Interface:  {:<42} │", cfg.system.iface);
+        info!("│  Web Console:    http://{}:9090{:>20} │", host_ip, " ");
+        info!("│  First-Run:      Open http://{}:9090/setup to configure    │", host_ip);
+        info!("└─────────────────────────────────────────────────────────────┘");
+
         // Load DNS settings from database into context
         #[cfg(feature = "dns")]
         {
@@ -340,8 +357,8 @@ impl Bootstrapper {
 
                 seed_v4.push(Dhcpv4Pool {
                     name: Some("Primary LAN Scope".to_string()),
-                    range_start: Ipv4Addr::new(192, 168, 0, 100),
-                    range_end: Ipv4Addr::new(192, 168, 0, 240),
+                    range_start: Ipv4Addr::new(192, 168, 1, 100),
+                    range_end: Ipv4Addr::new(192, 168, 1, 240),
                     lease_time: Some(cfg.dhcpv4_toml.lease_time),
                     router: Some(cfg.dhcpv4_toml.router),
                     subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
@@ -545,11 +562,20 @@ impl Bootstrapper {
 
     fn find_target_interface(cfg: &Config) -> Result<u32> {
         let interfaces = interfaces();
-        interfaces
-            .iter()
-            .find(|iface| iface.name == cfg.system.iface)
-            .map(|iface| iface.index)
-            .ok_or_else(|| anyhow::anyhow!("Interface '{}' not found", cfg.system.iface))
+        if let Some(iface) = interfaces.iter().find(|iface| iface.name == cfg.system.iface) {
+            return Ok(iface.index);
+        }
+
+        if let Some(fallback) = interfaces.iter().find(|i| !i.is_loopback()) {
+            warn!(
+                target = %cfg.system.iface,
+                fallback = %fallback.name,
+                "Target interface not found, falling back to active interface"
+            );
+            return Ok(fallback.index);
+        }
+
+        anyhow::bail!("No usable network interface found on system")
     }
 
     fn init_netlink() -> Result<(rtnetlink::Handle, NetlinkRawReceiver)> {

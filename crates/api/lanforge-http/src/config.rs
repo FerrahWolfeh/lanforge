@@ -37,10 +37,10 @@ pub struct HttpConfig {
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             listen: SocketAddr::from(([0, 0, 0, 0], 9090)),
             https_enabled: false,
-            allow_plaintext_http: false,
+            allow_plaintext_http: true,
             doh_enabled: false,
             tls_cert: None,
             tls_key: None,
