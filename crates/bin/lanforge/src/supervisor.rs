@@ -872,8 +872,7 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(
             elapsed >= Duration::from_millis(30),
-            "Supervisor should have waited for shutdown_timeout, took {:?}",
-            elapsed
+            "Supervisor should have waited for shutdown_timeout, took {elapsed:?}"
         );
         assert_eq!(
             ctx.get_service_state("hanging-test"),

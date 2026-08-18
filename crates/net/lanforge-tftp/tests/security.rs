@@ -30,7 +30,6 @@ async fn test_tftp_path_traversal_prevention() {
     // 2. Start the service
     let bus = Arc::new(EventBus::new());
     let ctx = LanforgeContext::new(bus, State::new(), None);
-    let mut rx = ctx.bus().subscribe();
 
     let cfg = TftpConfig {
         enabled: true,

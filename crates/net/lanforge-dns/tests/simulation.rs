@@ -167,8 +167,7 @@ async fn dns_simulation_forwarding_fallback() {
         ..Default::default()
     };
 
-    let mut upstreams = Vec::new();
-    upstreams.push("udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap());
+    let upstreams = vec!["udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap()];
     ctx.update_dns_upstreams(upstreams);
 
     // 2. Start DNS Service
