@@ -10,8 +10,6 @@ use anyhow::Result;
 use lanforge::app::Daemon;
 use lanforge::bootstrap::Bootstrapper;
 use tokio::runtime::Builder;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 #[cfg(all(feature = "jemalloc", not(feature = "hotpath-alloc")))]
@@ -41,7 +39,12 @@ async fn async_main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // 1. Setup Logging
-    init_logging();
+    tracing_subscriber::fmt()
+        .without_time()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
 
     // 1.1 Setup Profiling
     #[cfg(feature = "hotpath")]
@@ -57,26 +60,4 @@ async fn async_main() -> Result<()> {
     // 3. Initialize and run Daemon
     let daemon = Daemon::new(bootstrap, ctx);
     daemon.run().await
-}
-
-fn init_logging() {
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let is_systemd = std::env::var_os("JOURNAL_STREAM").is_some()
-        || std::env::var_os("INVOCATION_ID").is_some();
-
-    if is_systemd && let Ok(journal_layer) = tracing_journald::layer() {
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(journal_layer)
-            .init();
-        return;
-    }
-
-    // Default / Interactive terminal / Container fallback
-    tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(true)
-        .with_env_filter(env_filter)
-        .init();
 }
