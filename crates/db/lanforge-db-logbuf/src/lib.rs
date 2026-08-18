@@ -52,6 +52,20 @@ pub struct LogDb {
 }
 
 impl LogDb {
+    /// Opens an in-memory log buffer without file persistence.
+    #[must_use]
+    pub fn open_in_memory() -> Self {
+        Self {
+            events_path: None,
+            dns_path: None,
+            blocked_path: None,
+            system_logs: Mutex::new(Vec::new()),
+            dns_queries: Mutex::new(Vec::new()),
+            dns_blocked: Mutex::new(Vec::new()),
+            last_prune: Mutex::new(Instant::now()),
+        }
+    }
+
     /// Opens the log buffer database.
     pub async fn open(url: &str) -> Result<Self, LogBufError> {
         let is_memory = url.contains(":memory:") || url.is_empty();

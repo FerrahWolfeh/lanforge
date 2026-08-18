@@ -30,7 +30,7 @@ use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
 
@@ -332,15 +332,23 @@ impl Bootstrapper {
 
     #[allow(clippy::too_many_lines)]
     async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
-        let db = LanforgeDb::open(&cfg.database).await.map_err(|e| {
-            error!("Database: Fatal error opening main database: {e}");
-            e
-        })?;
+        let db = match LanforgeDb::open(&cfg.database).await {
+            Ok(db) => db,
+            Err(e) => {
+                warn!(
+                    "Database: Persistent database unavailable ({e}), running in pure in-memory state mode"
+                );
+                LanforgeDb::open_in_memory().await?
+            }
+        };
 
-        let log_db = LogDb::open(&cfg.database.log_url).await.map_err(|e| {
-            error!("Database: Fatal error opening logs database: {e}");
-            e
-        })?;
+        let log_db = match LogDb::open(&cfg.database.log_url).await {
+            Ok(ldb) => ldb,
+            Err(e) => {
+                warn!("Database: Log file unavailable ({e}), running in in-memory log buffer");
+                LogDb::open_in_memory()
+            }
+        };
 
         // 1. Check/seed/load DHCPv4 Pools
         #[cfg(feature = "dhcp")]

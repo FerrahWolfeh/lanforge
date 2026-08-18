@@ -22,6 +22,21 @@ pub struct DatabaseConfig {
     pub min_connections: u32,
 }
 
+impl DatabaseConfig {
+    /// Returns true if an in-memory database mode was requested or specified.
+    #[must_use]
+    pub fn is_in_memory(&self) -> bool {
+        let u = self.url.trim().to_lowercase();
+        u.is_empty()
+            || u == "memory"
+            || u == "none"
+            || u == "mock"
+            || u.starts_with("mock:")
+            || u.starts_with("sqlite:")
+            || u.contains(":memory:")
+    }
+}
+
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {

@@ -95,10 +95,7 @@ pub struct LanforgeDb {
 impl LanforgeDb {
     /// Opens the PostgreSQL database pool.
     pub async fn open(cfg: &crate::config::DatabaseConfig) -> Result<Self, DbError> {
-        if cfg.url.starts_with("sqlite:")
-            || cfg.url.starts_with("mock:")
-            || cfg.url.contains(":memory:")
-        {
+        if cfg.is_in_memory() {
             return Ok(Self {
                 inner: DbEngine::Mock(Arc::new(MockDbState::default())),
             });
