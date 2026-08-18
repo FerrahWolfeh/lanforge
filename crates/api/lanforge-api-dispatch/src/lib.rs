@@ -5,8 +5,9 @@ use lanforge_api::api::{
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
     DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
     DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
-    LeasesResponse, Response, RpcCallError, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
+    LeasesResponse, Response, RpcCallError, SetupPayload, SetupResponse, SetupStatusResponse,
+    SimpleSuccess, StatusResponse, SystemConfigExport, SystemConfigImportResponse,
+    TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
@@ -716,6 +717,22 @@ impl LanforgeRpc for ClientContext {
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_user_passwd(username, new_password).await {
             Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn system_setup_status(&self) -> Result<SetupStatusResponse, RpcCallError> {
+        match self.handle_setup_status().await {
+            Response::SetupStatus(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn system_setup(&self, payload: SetupPayload) -> Result<SetupResponse, RpcCallError> {
+        match self.handle_setup(payload).await {
+            Response::Setup(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

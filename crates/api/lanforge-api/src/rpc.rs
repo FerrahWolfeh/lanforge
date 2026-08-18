@@ -4,9 +4,9 @@ use crate::api::{
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
-    ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
-    WhoisResponse,
+    ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
+    StatusResponse, SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse,
+    UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
@@ -282,4 +282,11 @@ pub trait LanforgeRpc {
         username: String,
         new_password: String,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn system_setup_status(
+        &self,
+    ) -> impl Future<Output = Result<SetupStatusResponse, RpcCallError>> + Send;
+    fn system_setup(
+        &self,
+        payload: SetupPayload,
+    ) -> impl Future<Output = Result<SetupResponse, RpcCallError>> + Send;
 }

@@ -89,8 +89,12 @@ pub enum Response {
     User(UserResponse),
     /// List of user accounts response.
     UserList(UserListResponse),
-    /// Configured DHCP & TFTP options response.
+    /// Configured DHCP options response.
     DhcpOptions(Box<DhcpOptionsResponse>),
     /// Configured DHCP pools configuration response.
     DhcpPoolsConfig(DhcpPoolsConfigResponse),
+    /// Setup status response.
+    SetupStatus(SetupStatusResponse),
+    /// Setup completion response.
+    Setup(SetupResponse),
 }

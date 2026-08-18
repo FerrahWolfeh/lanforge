@@ -21,6 +21,7 @@ chrono = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
+pnet = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

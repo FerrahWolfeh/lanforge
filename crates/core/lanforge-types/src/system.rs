@@ -215,3 +215,67 @@ pub struct PppoeStatusResponse {
     pub reconnect_attempts: u32,
     pub last_error: Option<String>,
 }
+
+/// Discovered network interface information for setup and topology display.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkInterfaceInfo {
+    pub name: String,
+    pub mac: Option<MacAddr>,
+    pub is_physical: bool,
+    pub is_up: bool,
+    pub carrier_up: bool,
+    pub ips: Vec<String>,
+    pub bus_type: String,
+}
+
+/// Setup status and environment discovery for the first-run onboarding wizard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupStatusResponse {
+    pub first_run: bool,
+    pub detected_lan_iface: String,
+    pub detected_gateway: Option<Ipv4Addr>,
+    pub detected_ula_prefix: String,
+    pub interfaces: Vec<NetworkInterfaceInfo>,
+}
+
+/// WAN uplink configuration for initial setup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum SetupWanConfig {
+    Pppoe {
+        interface: String,
+        username: String,
+        password: String,
+        #[serde(default)]
+        vlan_id: Option<u16>,
+        #[serde(default)]
+        mtu: Option<u16>,
+    },
+    SystemGateway {
+        gateway_ip: Ipv4Addr,
+    },
+}
+
+/// Consolidated payload submitted by the initial setup wizard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupPayload {
+    pub admin_username: String,
+    pub admin_password: String,
+    pub lan_iface: String,
+    pub lan_ip: Ipv4Addr,
+    pub domain_name: String,
+    pub dhcp_enabled: bool,
+    pub dhcp_pool_start: Ipv4Addr,
+    pub dhcp_pool_end: Ipv4Addr,
+    pub adblock_enabled: bool,
+    pub wan: Option<SetupWanConfig>,
+}
+
+/// Response returned after successfully applying the initial setup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupResponse {
+    pub success: bool,
+    pub token: String,
+    pub username: String,
+    pub message: String,
+}
