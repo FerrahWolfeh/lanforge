@@ -206,8 +206,9 @@ fn generate_bootstrap_toml(payload: &SetupPayload) -> String {
     out.push_str(&format!("iface = \"{}\"\n", payload.lan_iface));
     out.push_str(&format!("search_domains = [\"{}\"]\n\n", payload.domain_name));
 
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "memory".to_string());
     out.push_str("[database]\n");
-    out.push_str("url = \"postgres://lanforge:lanforge@localhost:5432/lanforge\"\n");
+    out.push_str(&format!("url = \"{db_url}\"\n"));
     out.push_str("log_url = \"/tmp/lanforge-logs.jsonl\"\n\n");
 
     out.push_str("[dhcp.v4]\n");
