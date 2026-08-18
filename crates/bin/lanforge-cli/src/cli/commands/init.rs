@@ -27,6 +27,8 @@ impl Execute for InitArgs {
         let admin_username = "admin".to_string();
         let admin_password = Password::new("Create administrator password (min 8 chars):")
             .with_display_mode(PasswordDisplayMode::Masked)
+            .with_custom_confirmation_message("Confirm administrator password:")
+            .with_custom_confirmation_error_message("Passwords do not match, please try again.")
             .with_validator(|input: &str| {
                 if input.len() < 8 {
                     Ok(inquire::validator::Validation::Invalid(
@@ -37,14 +39,6 @@ impl Execute for InitArgs {
                 }
             })
             .prompt()?;
-
-        let confirm_password = Password::new("Confirm administrator password:")
-            .with_display_mode(PasswordDisplayMode::Masked)
-            .prompt()?;
-
-        if admin_password != confirm_password {
-            return Err(eyre!("Passwords do not match"));
-        }
 
         // 3. Internet / Uplink Connection Mode
         let uplink_modes = vec![
