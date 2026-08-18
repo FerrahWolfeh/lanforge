@@ -29,7 +29,7 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut base_backoff = quote! { 1 };
     let mut max_backoff = quote! { 60 };
     let mut shutdown_timeout = quote! { 3 };
-    let mut stack = quote! { 512 };
+    let mut stack = quote! { 0 };
     let mut multi_threaded = quote! { false };
     let mut describe = None;
 

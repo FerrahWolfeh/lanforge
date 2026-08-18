@@ -73,6 +73,8 @@ impl FromRef<AppState> for Arc<dyn DatabaseStore> {
     retries = 3,
     base_backoff = 5,
     max_backoff = 60,
+    stack = 4096,
+    multi_threaded = true,
     describe = format!(
         "HTTP API on {}",
         self.cfg.listen
