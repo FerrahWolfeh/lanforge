@@ -2,10 +2,11 @@ use crate::app::sd_notify_ready;
 use crate::config::Config;
 
 use anyhow::Result;
-use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent};
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::system::ServiceState;
 use lanforge_wol::wol::send_wol_magic_packet;
 
 use std::collections::HashSet;
@@ -13,7 +14,7 @@ use std::hash::BuildHasher;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::{Receiver, error::RecvError};
 use tokio::time::{Duration, interval};
 use tracing::{debug, error, info, warn};
 
@@ -31,6 +32,9 @@ pub enum LoopResult {
 pub async fn run_event_loop<S>(
     bootstrap: BootstrapResult,
     ctx: LanforgeContext,
+    mut sys_rx: Receiver<TimedEvent>,
+    mut net_rx: Receiver<TimedEvent>,
+    mut sto_rx: Receiver<TimedEvent>,
     expected_services: HashSet<String, S>,
 ) -> Result<LoopResult>
 where
@@ -50,10 +54,6 @@ where
     let mut stale_timer = interval(stale_check_interval);
     stale_timer.tick().await;
 
-    let mut sys_rx = ctx.bus().subscribe_system();
-    let mut net_rx = ctx.bus().subscribe_network();
-    let mut sto_rx = ctx.bus().subscribe_storage();
-
     let mut expected_sorted: Vec<_> = expected_services.iter().cloned().collect();
     expected_sorted.sort();
     info!(
@@ -72,6 +72,30 @@ where
         expected_services,
         system_ready_sent: false,
     };
+
+    // Pre-seed any services that already signaled ready in context before subscription
+    for s in &loop_ctx.expected_services {
+        if ctx.get_service_state(s) == ServiceState::Online && loop_ctx.ready_services.insert(s.clone()) {
+            info!(
+                "▸ Service '{}' already online ({}/{})",
+                s,
+                loop_ctx.ready_services.len(),
+                loop_ctx.expected_services.len()
+            );
+        }
+    }
+
+    if !loop_ctx.system_ready_sent
+        && loop_ctx.ready_services.len() >= loop_ctx.expected_services.len()
+    {
+        info!("✅ All internal services ready. System fully operational.");
+        let _ = loop_ctx
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::SystemReady));
+        sd_notify_ready();
+        loop_ctx.system_ready_sent = true;
+    }
 
     let mut status_timer = interval(Duration::from_secs(10));
     status_timer.tick().await; // skip first tick
