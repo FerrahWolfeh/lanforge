@@ -112,6 +112,7 @@ export interface ResourceUsage {
 }
 
 export interface ServiceBanner {
+	id?: string;
 	name: string;
 	state: ServiceState;
 	uptime_secs: number;

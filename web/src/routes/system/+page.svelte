@@ -18,6 +18,11 @@
 	import XCircleIcon from "@lucide/svelte/icons/x-circle";
 	import LoaderIcon from "@lucide/svelte/icons/loader";
 
+	import ServerIcon from "@lucide/svelte/icons/server";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import RadioIcon from "@lucide/svelte/icons/radio";
+	import FolderIcon from "@lucide/svelte/icons/folder";
+
 	let data = $state<StatusResponse | null>(null);
 	let loading = $state(true);
 	let reloading = $state(false);
@@ -77,16 +82,45 @@
 
 	const serviceList = $derived(normalizeServices(data));
 
+	function serviceIcon(name: string, id?: string) {
+		const key = (id || name || "").toLowerCase();
+		if (key.includes("dns") || key.includes("dot") || key.includes("doq")) return GlobeIcon;
+		if (key.includes("dhcp")) return ServerIcon;
+		if (key.includes("ra") || key.includes("router")) return NetworkIcon;
+		if (key.includes("db") || key.includes("database")) return HardDriveIcon;
+		if (key.includes("tftp")) return FolderIcon;
+		if (key.includes("pppoe")) return ZapIcon;
+		if (key.includes("discovery") || key.includes("mdns") || key.includes("ifmon") || key.includes("neighbor")) return RadioIcon;
+		return CpuIcon;
+	}
+
 	function stateIcon(state: string) {
-		if (state === "active") return CheckCircleIcon;
-		if (state === "starting") return LoaderIcon;
+		const s = (state || "").toLowerCase();
+		if (s === "online" || s === "active") return CheckCircleIcon;
+		if (s === "starting") return LoaderIcon;
 		return XCircleIcon;
 	}
 
 	function stateColor(state: string) {
-		if (state === "active") return "text-green-400";
-		if (state === "starting") return "text-yellow-400";
-		return "text-red-400";
+		const s = (state || "").toLowerCase();
+		if (s === "online" || s === "active") return "text-emerald-500";
+		if (s === "starting") return "text-amber-500";
+		if (s === "inactive" || s === "offline") return "text-muted-foreground";
+		return "text-destructive";
+	}
+
+	function stateBadgeVariant(state: string): "default" | "secondary" | "outline" | "destructive" {
+		const s = (state || "").toLowerCase();
+		if (s === "online" || s === "active") return "default";
+		if (s === "starting") return "secondary";
+		if (s === "inactive" || s === "offline") return "outline";
+		return "destructive";
+	}
+
+	function formatMetricKey(key: string): string {
+		return key
+			.replace(/_/g, " ")
+			.replace(/\b\w/g, (c) => c.toUpperCase());
 	}
 </script>
 
@@ -322,18 +356,31 @@
 	</Card.Root>
 
 	<!-- Services -->
-	<Card.Root class="md:col-span-2">
-		<Card.Header class="pb-2">
-			<Card.Title class="text-sm font-medium">Services</Card.Title>
+	<Card.Root class="md:col-span-2 xl:col-span-3">
+		<Card.Header class="pb-3">
+			<div class="flex items-center justify-between">
+				<div>
+					<Card.Title class="text-base font-semibold">Decoupled Subsystem Services</Card.Title>
+					<Card.Description class="text-xs">
+						Supervised background daemons, transports, and telemetry banners
+					</Card.Description>
+				</div>
+				{#if !loading && serviceList.length > 0}
+					{@const onlineCount = serviceList.filter(s => s.state.toLowerCase() === "online" || s.state.toLowerCase() === "active").length}
+					<Badge variant="outline" class="font-mono text-xs">
+						{onlineCount} / {serviceList.length} Online
+					</Badge>
+				{/if}
+			</div>
 		</Card.Header>
 		<Card.Content class="p-0">
 			{#if loading}
 				<div class="flex flex-col divide-y divide-border">
-					{#each { length: 4 } as _, i (i)}
+					{#each { length: 6 } as _, i (i)}
 						<div class="flex items-center gap-3 px-5 py-3">
-							<Skeleton class="size-4 rounded-full" />
-							<Skeleton class="h-4 w-24" />
-							<Skeleton class="ml-auto h-4 w-16" />
+							<Skeleton class="size-5 rounded-full" />
+							<Skeleton class="h-4 w-32" />
+							<Skeleton class="ml-auto h-4 w-24" />
 						</div>
 					{/each}
 				</div>
@@ -344,42 +391,50 @@
 			{:else}
 				<div class="divide-border divide-y">
 					{#each serviceList as svc (svc.name)}
-						{@const Icon = stateIcon(svc.state)}
-						<div class="flex items-center gap-3 px-5 py-3">
-							<Icon
-								class={[
-									"size-4 flex-shrink-0",
-									stateColor(svc.state),
-									svc.state === "starting"
-										? "animate-spin"
-										: "",
-								].join(" ")}
-							/>
-							<div class="flex flex-1 flex-col">
-								<span
-									class="text-foreground text-sm font-medium capitalize"
-								>
-									{svc.name.replace(/_/g, " ")}
-								</span>
-								<span class="text-muted-foreground text-xs">
-									{#if svc.uptime_secs > 0}
-										up {formatUptime(svc.uptime_secs)}
-									{:else}
-										—
-									{/if}
-								</span>
+						{@const SvcIcon = serviceIcon(svc.name, svc.id)}
+						{@const StatusIcon = stateIcon(svc.state)}
+						<div class="flex flex-col gap-2.5 px-5 py-3.5 transition-colors hover:bg-muted/30">
+							<div class="flex flex-wrap items-center justify-between gap-2">
+								<div class="flex items-center gap-2.5">
+									<div class="bg-muted flex size-8 items-center justify-center rounded-md border">
+										<SvcIcon class="size-4 text-foreground" />
+									</div>
+									<div class="flex flex-col">
+										<div class="flex items-center gap-2">
+											<span class="text-foreground text-sm font-semibold capitalize">
+												{svc.name.replace(/_/g, " ")}
+											</span>
+											{#if svc.id}
+												<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono text-[10px]">
+													{svc.id}
+												</span>
+											{/if}
+										</div>
+										<span class="text-muted-foreground text-xs">
+											{#if svc.uptime_secs > 0}
+												Uptime: {formatUptime(svc.uptime_secs)}
+											{:else}
+												Stopped / Offline
+											{/if}
+										</span>
+									</div>
+								</div>
+								<Badge variant={stateBadgeVariant(svc.state)} class="capitalize text-xs gap-1.5">
+									<StatusIcon class={["size-3.5", stateColor(svc.state), svc.state === "starting" ? "animate-spin" : ""].join(" ")} />
+									{svc.state}
+								</Badge>
 							</div>
-							<div class="flex flex-wrap justify-end gap-2">
-								{#each Object.entries(svc.stats) as [k, v] (k)}
-									<span class="text-muted-foreground text-xs">
-										{k.replace(/_/g, " ")}:
-										<span
-											class="text-foreground font-medium"
-											>{v}</span
-										>
-									</span>
-								{/each}
-							</div>
+
+							{#if Object.keys(svc.stats).length > 0}
+								<div class="flex flex-wrap gap-1.5 pt-1">
+									{#each Object.entries(svc.stats) as [k, v] (k)}
+										<div class="bg-muted/40 border-border flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs">
+											<span class="text-muted-foreground text-[11px]">{formatMetricKey(k)}:</span>
+											<span class="font-mono text-[11px] font-medium text-foreground">{v}</span>
+										</div>
+									{/each}
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>

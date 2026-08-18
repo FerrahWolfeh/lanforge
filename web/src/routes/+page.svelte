@@ -11,12 +11,14 @@
 		hostList,
 		scan,
 	} from "$lib/api/client";
-	import type {
-		StatusResponse,
-		DnsStatsResponse,
-		DhcpLease,
-		DeviceEntry,
-		HostConfigEntry,
+	import {
+		normalizeServices,
+		type StatusResponse,
+		type DnsStatsResponse,
+		type DhcpLease,
+		type DeviceEntry,
+		type HostConfigEntry,
+		type ServiceBanner,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
@@ -188,54 +190,77 @@
 		},
 	]);
 
+	const liveBanners = $derived(normalizeServices(statusData));
+	const bannersMap = $derived.by(() => {
+		const m = new Map<string, ServiceBanner>();
+		for (const b of liveBanners) {
+			if (b.id) m.set(b.id.toLowerCase(), b);
+			m.set(b.name.toLowerCase(), b);
+		}
+		return m;
+	});
+
+	function getBanner(id: string, name: string): ServiceBanner | undefined {
+		return bannersMap.get(id.toLowerCase()) ?? bannersMap.get(name.toLowerCase());
+	}
+
+	function getStatusDotColor(banner?: ServiceBanner) {
+		if (!banner) return "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]";
+		const s = banner.state.toLowerCase();
+		if (s === "online" || s === "active") return "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]";
+		if (s === "starting") return "bg-amber-500 animate-pulse";
+		if (s === "inactive" || s === "offline") return "bg-zinc-500";
+		return "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.8)]";
+	}
+
 	const subsystemServices = [
 		{
+			id: "ra",
 			name: "IPv6 Router Advertisements",
 			tag: "RADVD / SLAAC",
 			proto: "ICMPv6 (NDP)",
 			desc: "Autoconfiguration prefix announcements (GUA/ULA)",
-			href: "/network/devices",
-			color: "emerald",
+			href: "/network",
 		},
 		{
+			id: "dhcpv4",
 			name: "DHCPv4 Server",
 			tag: "Dynamic Leases",
 			proto: "UDP Port 67",
 			desc: "IPv4 address allocation with option 3 (gateway) & 6 (DNS)",
-			href: "/dhcp/leases",
-			color: "teal",
+			href: "/dhcp",
 		},
 		{
+			id: "dhcpv6",
 			name: "DHCPv6 Server",
 			tag: "Stateful / Stateless",
 			proto: "UDP Port 547",
 			desc: "IPv6 stateful address & prefix delegation",
-			href: "/dhcp/pools",
-			color: "sky",
+			href: "/dhcp",
 		},
 		{
+			id: "dns",
 			name: "DNS Resolver & Engine",
 			tag: "DNS Cache & Block",
 			proto: "UDP/TCP Port 53",
 			desc: "Upstream recursive forwarding, cache, & adblock filtering",
-			href: "/dns/resolver",
-			color: "indigo",
+			href: "/dns",
 		},
 		{
+			id: "tftp",
 			name: "Bootstrapping TFTP",
 			tag: "PXE Boot",
 			proto: "UDP Port 69",
 			desc: "Network boot firmware & image distribution server",
-			href: "/system/status",
-			color: "amber",
+			href: "/system",
 		},
 		{
+			id: "pppoe",
 			name: "PPPoE Concentrator",
-			tag: "Relay / Access Point",
+			tag: "Relay / Tunnel",
 			proto: "PPPoverEthernet",
 			desc: "DSL/FTTH encapsulation & point-to-point tunneling",
-			href: "/pppoe",
-			color: "purple",
+			href: "/system",
 		},
 	];
 </script>
@@ -350,6 +375,8 @@
 			</Card.Header>
 			<Card.Content class="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
 				{#each subsystemServices as svc (svc.name)}
+					{@const banner = getBanner(svc.id, svc.name)}
+					{@const dotClass = getStatusDotColor(banner)}
 					<a
 						href={svc.href}
 						class="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 transition-all hover:bg-muted/40 hover:border-zinc-700 group"
@@ -358,7 +385,12 @@
 							<span class="text-foreground font-semibold text-xs group-hover:text-emerald-400 transition-colors">
 								{svc.name}
 							</span>
-							<span class="size-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"></span>
+							<div class="flex items-center gap-1.5">
+								{#if banner}
+									<span class="text-muted-foreground text-[10px] capitalize font-mono">{banner.state}</span>
+								{/if}
+								<span class="size-2 rounded-full {dotClass}"></span>
+							</div>
 						</div>
 
 						<p class="text-muted-foreground text-[11px] leading-relaxed">
@@ -369,7 +401,17 @@
 							<Badge variant="secondary" class="text-[9px] font-mono px-1.5 py-0">
 								{svc.tag}
 							</Badge>
-							<span class="text-muted-foreground">{svc.proto}</span>
+							<span class="text-muted-foreground">
+								{#if banner?.stats?.leases_active}
+									{banner.stats.leases_active} leases
+								{:else if banner?.stats?.cache_hit_rate}
+									Hit Rate: {banner.stats.cache_hit_rate}
+								{:else if banner?.stats?.state}
+									{banner.stats.state}
+								{:else}
+									{svc.proto}
+								{/if}
+							</span>
 						</div>
 					</a>
 				{/each}
