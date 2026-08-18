@@ -183,11 +183,12 @@ impl ClientContext {
             }
         }
 
-        // 6. Fire ConfigChanged event to notify all active services
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+        // 6. Spawn delayed ReloadConfig event to allow RPC response to flush cleanly
+        let bus = self.ctx.bus().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+        });
 
         Response::Setup(SetupResponse {
             success: true,

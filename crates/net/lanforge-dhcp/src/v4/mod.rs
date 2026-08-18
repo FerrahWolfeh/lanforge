@@ -162,7 +162,7 @@ impl AsyncService for Dhcpv4Service {
             let pools = ctx.get_dhcp_v4_pools();
 
             if pools.is_empty() {
-                warn!("⚠️ DHCPv4 enabled but no pools configured — server will remain idle");
+                warn!("DHCPv4: Service enabled but no pools configured — server idle");
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,

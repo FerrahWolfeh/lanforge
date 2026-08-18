@@ -77,14 +77,14 @@ impl DnsService {
             match UpstreamManager::new(&target, Arc::clone(&cache)).await {
                 Ok(mgr) => upstreams.push(mgr),
                 Err(e) => error!(
-                    "❌ DNS: Failed to initialize upstream {}: {}",
+                    "DNS: Failed to initialize upstream {}: {}",
                     target.addr, e
                 ),
             }
         }
 
         if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {
-            tracing::warn!("⚠️ DNS: No upstreams configured. Only local resolution will work.");
+            tracing::warn!("DNS: No upstreams configured — only local resolution active");
         }
         #[cfg(feature = "adblock")]
         let db_adblock = self.ctx.get_dns_adblock();

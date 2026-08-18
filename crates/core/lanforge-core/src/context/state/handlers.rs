@@ -106,7 +106,7 @@ impl State {
                 {
                     if dev.is_static() {
                         tracing::warn!(
-                            "⚠️ DUID change detected for static host {} ({}). Saved DUID is {:?}, but client sent {:?}. Please update your static configuration.",
+                            "State: DUID change detected for static host {} ({}). Saved DUID is {:?}, but client sent {:?}. Please update static configuration.",
                             dev.display_hostname(),
                             mac,
                             old,
@@ -114,7 +114,7 @@ impl State {
                         );
                     } else {
                         tracing::info!(
-                            "🔄 DUID migrated for host {} ({}): {:?} -> {:?}",
+                            "State: DUID migrated for host {} ({}): {:?} -> {:?}",
                             dev.display_hostname(),
                             mac,
                             old,

@@ -160,7 +160,7 @@ impl AsyncService for Dhcpv6Service {
             let pools = ctx.get_dhcp_v6_pools();
 
             if pools.is_empty() {
-                warn!("⚠️ DHCPv6 enabled but no pools configured — server will remain idle");
+                warn!("DHCPv6: Service enabled but no pools configured — server idle");
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,

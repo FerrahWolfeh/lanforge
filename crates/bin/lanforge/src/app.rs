@@ -175,7 +175,7 @@ impl Daemon {
         #[cfg(feature = "discovery")]
         if !cfg.monitor_toml.enabled {
             tracing::warn!(
-                "⚠️  Neighbor Monitor is DISABLED. Passive device discovery and 'last_seen' tracking will be unavailable."
+                "Discovery: Neighbor Monitor is disabled. Passive device discovery will be unavailable."
             );
         }
 

@@ -432,7 +432,7 @@ impl AsyncService for RaService {
             let dnssl = ctx.get_ra_dnssl();
 
             if prefixes.is_empty() {
-                warn!("⚠️ RA enabled but no prefixes configured — server will remain idle");
+                warn!("RA: Service enabled but no prefixes configured — server idle");
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,

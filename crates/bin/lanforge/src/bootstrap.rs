@@ -352,8 +352,10 @@ impl Bootstrapper {
             Ok(db) => db,
             Err(e) => {
                 warn!(
-                    "Database: Persistent database unavailable ({e}), running in pure in-memory state mode"
+                    "Database: Persistent database unavailable at '{}', running in in-memory mode",
+                    lanforge_db::sanitize_db_url(&cfg.database.url)
                 );
+                debug!("Database: Connection error detail: {e}");
                 LanforgeDb::open_in_memory().await?
             }
         };
@@ -361,7 +363,11 @@ impl Bootstrapper {
         let log_db = match LogDb::open(&cfg.database.log_url).await {
             Ok(ldb) => ldb,
             Err(e) => {
-                warn!("Database: Log file unavailable ({e}), running in in-memory log buffer");
+                warn!(
+                    "Database: Log storage unavailable at '{}', running in in-memory log buffer",
+                    cfg.database.log_url
+                );
+                debug!("Database: Log open error detail: {e}");
                 LogDb::open_in_memory()
             }
         };

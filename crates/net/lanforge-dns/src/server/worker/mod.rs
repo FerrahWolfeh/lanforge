@@ -16,7 +16,7 @@ use std::{
 };
 use tokio::task::JoinHandle;
 #[cfg(feature = "adblock")]
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Spawns the adblock list refresh manager.
 #[cfg(feature = "adblock")]
@@ -42,7 +42,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 
                 // Wait if disabled
                 if !filter.is_enabled() {
-                    info!("🛡️ Adblock: currently disabled, waiting for toggle or reload...");
+                    debug!("Adblock: currently disabled, waiting for toggle or reload");
                     loop {
                         if let Ok(evt) = rx.recv().await {
                             match evt.event {

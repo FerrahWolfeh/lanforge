@@ -85,7 +85,7 @@ where
                     ctx.clear_service_start(id);
                     return;
                 }
-                warn!("⚠️ {} failed waiting for dependency {:?}: {e}", description, dep);
+                warn!("Supervisor: {} failed waiting for dependency {:?}: {e}", description, dep);
                 deps_satisfied = false;
                 break;
             }
@@ -127,17 +127,17 @@ where
                     match shutdown_or_control {
                         Some(SystemEvent::Shutdown) => {
                             info!(
-                                "▪ {} shutdown initiated, awaiting cooperative termination (timeout: {:.1}s)",
+                                "Supervisor: {} shutdown initiated, awaiting cooperative termination (timeout: {:.1}s)",
                                 description,
                                 meta.shutdown_timeout.as_secs_f64()
                             );
                             match tokio::time::timeout(meta.shutdown_timeout, &mut serve_fut).await {
                                 Ok(res) => {
-                                    debug!("▪ {} completed graceful shutdown: {:?}", description, res);
+                                    debug!("Supervisor: {} completed graceful shutdown: {:?}", description, res);
                                 }
                                 Err(_) => {
                                     warn!(
-                                        "⚠️ {} exceeded shutdown timeout of {:.1}s — forcing abort",
+                                        "Supervisor: {} exceeded shutdown timeout of {:.1}s — forcing abort",
                                         description,
                                         meta.shutdown_timeout.as_secs_f64()
                                     );
