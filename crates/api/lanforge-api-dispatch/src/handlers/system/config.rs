@@ -135,13 +135,18 @@ impl ClientContext {
 
         if overwrite {
             // Clear existing static hosts
-            let devices = self.ctx.all_devices();
-            for dev in &devices {
-                if dev.origin != lanforge_types::device::Origin::Dynamic {
-                    let _ = self
-                        .ctx
-                        .apply(lanforge_types::update::DeviceUpdate::Remove(dev.mac));
-                }
+            let static_macs = self.ctx.with_state(|state| {
+                state
+                    .devices
+                    .values()
+                    .filter(|dev| dev.origin != lanforge_types::device::Origin::Dynamic)
+                    .map(|dev| dev.mac)
+                    .collect::<Vec<_>>()
+            });
+            for mac in static_macs {
+                let _ = self
+                    .ctx
+                    .apply(lanforge_types::update::DeviceUpdate::Remove(mac));
             }
 
             // Clear DNS rewrites, upstreams, adblock URLs, allowlist

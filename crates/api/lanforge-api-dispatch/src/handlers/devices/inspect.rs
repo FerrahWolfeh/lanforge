@@ -13,10 +13,13 @@ impl ClientContext {
             || {
                 target.parse::<IpAddr>().map_or_else(
                     |_| {
-                        self.ctx
-                            .all_devices()
-                            .into_iter()
-                            .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
+                        self.ctx.with_state(|state| {
+                            state
+                                .devices
+                                .values()
+                                .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
+                                .cloned()
+                        })
                     },
                     |ip| {
                         self.ctx
@@ -56,12 +59,15 @@ impl ClientContext {
             m
         } else {
             // Search by hostname
-            let devices = self.ctx.all_devices();
-            let found = devices
-                .iter()
-                .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase());
-            match found {
-                Some(d) => d.mac,
+            let found_mac = self.ctx.with_state(|state| {
+                state
+                    .devices
+                    .values()
+                    .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
+                    .map(|d| d.mac)
+            });
+            match found_mac {
+                Some(m) => m,
                 None => {
                     return Response::Error {
                         error: format!("Target '{target}' not found (not a MAC or known Hostname)"),

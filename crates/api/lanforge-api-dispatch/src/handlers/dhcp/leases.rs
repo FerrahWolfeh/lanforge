@@ -81,33 +81,15 @@ impl ClientContext {
     }
 
     pub async fn handle_leases(&self, _count: bool) -> Response {
-        let devices = self.ctx.all_devices();
-        let mut leases = Vec::new();
-
-        for dev in &devices {
-            if let IPv4State::Dynamic(lease) = &dev.v4 {
-                leases.push(LeaseEntry {
-                    mac: dev.mac,
-                    hostname: dev.display_hostname().to_string(),
-                    address: IpAddr::V4(lease.ip),
-                    kind: LeaseKind::V4,
-                    expires: lease
-                        .expires
-                        .duration_since(UNIX_EPOCH)
-                        .map_or(0, |d| d.as_secs()),
-                    remaining_secs: lease
-                        .expires
-                        .duration_since(SystemTime::now())
-                        .map_or(0, |d| d.as_secs()),
-                });
-            }
-            for v6_state in &dev.v6 {
-                if let IPv6State::Dynamic(lease) = v6_state {
-                    leases.push(LeaseEntry {
+        let leases = self.ctx.with_state(|state| {
+            let mut list = Vec::new();
+            for dev in state.devices.values() {
+                if let IPv4State::Dynamic(lease) = &dev.v4 {
+                    list.push(LeaseEntry {
                         mac: dev.mac,
                         hostname: dev.display_hostname().to_string(),
-                        address: IpAddr::V6(lease.ip),
-                        kind: LeaseKind::V6,
+                        address: IpAddr::V4(lease.ip),
+                        kind: LeaseKind::V4,
                         expires: lease
                             .expires
                             .duration_since(UNIX_EPOCH)
@@ -118,24 +100,27 @@ impl ClientContext {
                             .map_or(0, |d| d.as_secs()),
                     });
                 }
+                for v6_state in &dev.v6 {
+                    if let IPv6State::Dynamic(lease) = v6_state {
+                        list.push(LeaseEntry {
+                            mac: dev.mac,
+                            hostname: dev.display_hostname().to_string(),
+                            address: IpAddr::V6(lease.ip),
+                            kind: LeaseKind::V6,
+                            expires: lease
+                                .expires
+                                .duration_since(UNIX_EPOCH)
+                                .map_or(0, |d| d.as_secs()),
+                            remaining_secs: lease
+                                .expires
+                                .duration_since(SystemTime::now())
+                                .map_or(0, |d| d.as_secs()),
+                        });
+                    }
+                }
             }
-            for lease in &dev.v6_prefixes {
-                leases.push(LeaseEntry {
-                    mac: dev.mac,
-                    hostname: dev.display_hostname().to_string(),
-                    address: IpAddr::V6(lease.prefix),
-                    kind: LeaseKind::V6Prefix,
-                    expires: lease
-                        .expires
-                        .duration_since(UNIX_EPOCH)
-                        .map_or(0, |d| d.as_secs()),
-                    remaining_secs: lease
-                        .expires
-                        .duration_since(SystemTime::now())
-                        .map_or(0, |d| d.as_secs()),
-                });
-            }
-        }
+            list
+        });
 
         Response::Leases(LeasesResponse { leases })
     }

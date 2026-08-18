@@ -55,14 +55,11 @@ impl Daemon {
     /// Runs the daemon's main execution cycle.
     pub async fn run(mut self) -> Result<()> {
         loop {
-            let bus = self.ctx.bus();
-            let bus_rx = bus.subscribe();
-
             self.validate_features();
             self.spawn_services();
             let expected = self.registry.registered_ids();
 
-            match run_event_loop(self.bootstrap.clone(), self.ctx.clone(), bus_rx, expected).await?
+            match run_event_loop(self.bootstrap.clone(), self.ctx.clone(), expected).await?
             {
                 LoopResult::Reload => {
                     info!("Daemon: Configuration reload requested. Starting soft-reboot...");

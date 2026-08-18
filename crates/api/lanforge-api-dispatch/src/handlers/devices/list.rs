@@ -18,26 +18,27 @@ impl ClientContext {
         limit: Option<usize>,
         offset: Option<usize>,
     ) -> Response {
-        let devices = self.ctx.all_devices();
-        let mut api_devices = Vec::new();
-        let mut online = 0;
-
         let gua_prefix = self.current_gua;
         let status = self.ctx.get_status().unwrap_or_default();
         let ula_prefix = status.ula_prefix.as_ref().map(|s| s.to_addr());
 
-        for dev in &devices {
-            if !Self::device_matches_filter(dev, filter.as_ref(), method.as_ref()) {
-                continue;
-            }
+        let (api_devices, online) = self.ctx.with_state(|state| {
+            let mut list = Vec::new();
+            let mut online_count = 0;
 
-            let is_online = dev.is_online();
-            if is_online {
-                online += 1;
-            }
+            for dev in state.devices.values() {
+                if !Self::device_matches_filter(dev, filter.as_ref(), method.as_ref()) {
+                    continue;
+                }
 
-            api_devices.push(self.map_device(dev, gua_prefix, ula_prefix));
-        }
+                if dev.is_online() {
+                    online_count += 1;
+                }
+
+                list.push(self.map_device(dev, gua_prefix, ula_prefix));
+            }
+            (list, online_count)
+        });
 
         let total = api_devices.len();
         let start = offset.unwrap_or(0).min(total);

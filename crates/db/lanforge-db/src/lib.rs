@@ -1,6 +1,6 @@
 //! # Lanforge DB — Persistence Layer
 //!
-//! Synchronous SQLite storage library for the Lanforge daemon.
+//! Storage and persistence layer for the Lanforge daemon.
 //! Ensures that discovered network devices, DHCP leases, static configurations,
 //! and event history survive system restarts.
 //!
@@ -8,45 +8,41 @@
 //!
 //! This crate implements two independent persistence mechanisms:
 //!
-//! - **`LanforgeDb`** — Primary database for devices and leases (survives reboots)
-//! - **`LogDb`** — Transient event log database (24h retention, optimized for tmpfs/ramdisk)
+//! - **`LanforgeDb`** — Primary PostgreSQL database for devices, leases, and configuration.
+//! - **`LogDb`** — Transient event and DNS query log database (in-memory ring buffer with tmpfs JSONL auto-pruning).
 //!
 //! ## Execution Model
 //!
-//! All database I/O runs on a **dedicated thread** via [`DbWorker`](worker::DbWorker),
-//! which consumes events from the [`EventBus`](lanforge_core::bus::EventBus) through
-//! a [`SyncBusReceiver`](lanforge_core::service::SyncBusReceiver). This keeps the
-//! main Tokio runtime unblocked.
+//! All database I/O runs asynchronously coordinated by [`DbWorker`](worker::DbWorker),
+//! which consumes events from the [`EventBus`](lanforge_core::bus::EventBus).
 //!
 //! ## Write Strategy
 //!
 //! | Mechanism | Description |
 //! | :--- | :--- |
-//! | **Batch Upsert** | Accumulates `DeviceUpdated` in a HashMap, flushes every 2s |
-//! | **Full Snapshot** | `DeviceTableDirty` → immediate `save_table()` |
-//! | **Debounce** | 2s trailing edge + flush on idle (protects SD cards from micro-writes) |
-//! | **WAL Mode** | SQLite Write-Ahead Logging — writes don't block reads |
-//! | **CASCADE** | `ON DELETE CASCADE` automatically removes child rows |
+//! | **Batch Upsert** | Accumulates modified devices and leases, flushing on a 5s interval |
+//! | **Full Snapshot** | `StorageEvent::TableDirty` → immediate table snapshot flush |
+//! | **Log Buffer Auto-Pruning** | `LogDb` auto-trims transient entries older than 24h every 60s |
 //!
 //! ## Bootstrap Hydration Flow
 //!
 //! ```text
-//! main.rs
-//!   ├── LanforgeDb::open(path)          → opens SQLite, runs migrations
-//!   ├── db.load_table()              → reconstructs State from disk
+//! bootstrap.rs
+//!   ├── LanforgeDb::open(url)            → connects to PostgreSQL, runs migrations
+//!   ├── db.load_all_devices()            → reconstructs State from database
 //!   ├── LanforgeContext::new(bus, state)
-//!   ├── applies TOML overrides        → precedence over DB entries
-//!   └── set_db_ready(true)           → unblocks dependent workers
+//!   ├── applies TOML overrides          → configuration precedence
+//!   └── set_db_ready(true)              → unblocks dependent services
 //! ```
 //!
 //! ## Modules
 //!
 //! | Module | Responsibility |
 //! | :--- | :--- |
-//! | [`engine`] | `LanforgeDb` — schema, migrations, save/load, vacuum, prune |
-//! | [`log_engine`] | `LogDb` — transient logs with auto-pruning (24h + 50K cap) |
-//! | [`worker`] | `DbWorker` — sync service coordinating persistence |
-//! | [`error`] | `LanforgeDbError` — I/O and SQLite error hierarchy |
+//! | [`engine`] | `LanforgeDb` — Postgres database facade for devices, leases, and config |
+//! | [`log_engine`] | `LogDb` — transient logs in tmpfs with auto-pruning |
+//! | [`worker`] | `DbWorker` — async service coordinating persistence |
+//! | [`error`] | `LanforgeDbError` — database error hierarchy |
 #[cfg(not(feature = "postgres"))]
 compile_error!("The 'postgres' feature must be enabled for lanforge-db.");
 

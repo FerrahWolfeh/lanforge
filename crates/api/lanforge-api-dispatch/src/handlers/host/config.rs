@@ -11,28 +11,26 @@ use std::time::SystemTime;
 impl ClientContext {
     /// Generates a `HostsResponse` containing all manually configured host entries.
     pub async fn handle_hosts(&self) -> Response {
-        let devices = self.ctx.all_devices();
-        let mut hosts = Vec::new();
-
-        for dev in &devices {
-            if dev.origin == Origin::Dynamic {
-                continue;
-            }
-
-            hosts.push(HostConfigEntry {
-                mac: dev.mac,
-                hostname: dev.hostname.name.clone(),
-                v4_fixed: match &dev.v4 {
-                    IPv4State::Static(ip) => Some(*ip),
-                    _ => None,
-                },
-                v6_suffix: dev.v6.iter().find_map(|s| match s {
-                    IPv6State::Static(suf, _) => Some(*suf),
-                    _ => None,
-                }),
-                origin: dev.origin,
-            });
-        }
+        let hosts = self.ctx.with_state(|state| {
+            state
+                .devices
+                .values()
+                .filter(|dev| dev.origin != Origin::Dynamic)
+                .map(|dev| HostConfigEntry {
+                    mac: dev.mac,
+                    hostname: dev.hostname.name.clone(),
+                    v4_fixed: match &dev.v4 {
+                        IPv4State::Static(ip) => Some(*ip),
+                        _ => None,
+                    },
+                    v6_suffix: dev.v6.iter().find_map(|s| match s {
+                        IPv6State::Static(suf, _) => Some(*suf),
+                        _ => None,
+                    }),
+                    origin: dev.origin,
+                })
+                .collect()
+        });
 
         Response::Hosts(HostsResponse { hosts })
     }

@@ -290,16 +290,19 @@ impl Ipv6Pool {
                 }
             }
 
-            let mut used_count = 0u32;
-            for dev in ctx.all_devices() {
-                for state in &dev.v6 {
-                    if let IPv6State::Dynamic(lease) = state
-                        && Self::prefix_matches(prefix, lease.ip)
-                    {
-                        used_count = used_count.saturating_add(1);
+            let used_count = ctx.with_state(|state| {
+                let mut count = 0u32;
+                for dev in state.devices.values() {
+                    for v6_state in &dev.v6 {
+                        if let IPv6State::Dynamic(lease) = v6_state
+                            && Self::prefix_matches(prefix, lease.ip)
+                        {
+                            count = count.saturating_add(1);
+                        }
                     }
                 }
-            }
+                count
+            });
 
             let available = total_size.saturating_sub(used_count);
             let utilization_percent = if total_size > 0 {

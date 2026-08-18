@@ -577,32 +577,39 @@ impl Dhcpv6Service {
                     .collect();
                 server.pool.reserve_statics(gua_ips);
 
-                for dev in self.ctx.all_devices() {
-                    if let Some(duid) = &dev.duid {
-                        let has_gua_lease = dev.v6.iter().any(|s| {
-                            if let IPv6State::Dynamic(lease) = s {
-                                let o = lease.ip.octets();
-                                (0x20..=0x3F).contains(&o[0])
-                            } else {
-                                false
-                            }
-                        });
-                        if has_gua_lease {
-                            // Find link-local for sending
-                            if let Some(ll_ip) = dev.v6.iter().find_map(|s| {
-                                s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
-                            }) {
-                                let packet = server.build_reconfigure(duid, MessageType::Renew);
-                                let client_port = if self.config.port == 547 {
-                                    546
+                let reconfigs = self.ctx.with_state(|state| {
+                    let mut list = Vec::new();
+                    for dev in state.devices.values() {
+                        if let Some(duid) = &dev.duid {
+                            let has_gua_lease = dev.v6.iter().any(|s| {
+                                if let IPv6State::Dynamic(lease) = s {
+                                    let o = lease.ip.octets();
+                                    (0x20..=0x3F).contains(&o[0])
                                 } else {
-                                    self.config.port - 1
-                                };
-                                let dest_addr = SocketAddrV6::new(ll_ip, client_port, 0, 0);
-                                let _ = transport.send_reply(&packet, dest_addr.into());
+                                    false
+                                }
+                            });
+                            if has_gua_lease
+                                && let Some(ll_ip) = dev.v6.iter().find_map(|s| {
+                                    s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
+                                })
+                            {
+                                list.push((duid.clone(), ll_ip));
                             }
                         }
                     }
+                    list
+                });
+
+                for (duid, ll_ip) in reconfigs {
+                    let packet = server.build_reconfigure(&duid, MessageType::Renew);
+                    let client_port = if self.config.port == 547 {
+                        546
+                    } else {
+                        self.config.port - 1
+                    };
+                    let dest_addr = std::net::SocketAddrV6::new(ll_ip, client_port, 0, 0);
+                    let _ = transport.send_reply(&packet, dest_addr.into());
                 }
             }
         }

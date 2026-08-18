@@ -2,7 +2,7 @@ use crate::app::sd_notify_ready;
 use crate::config::Config;
 
 use anyhow::Result;
-use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent, TimedEvent};
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_types::identifiers::MacAddr;
@@ -13,7 +13,6 @@ use std::hash::BuildHasher;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Duration, interval};
 use tracing::{debug, error, info, warn};
@@ -28,10 +27,10 @@ pub enum LoopResult {
     Shutdown,
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn run_event_loop<S>(
     bootstrap: BootstrapResult,
     ctx: LanforgeContext,
-    mut bus_rx: Receiver<TimedEvent>,
     expected_services: HashSet<String, S>,
 ) -> Result<LoopResult>
 where
@@ -50,6 +49,10 @@ where
     let stale_check_interval = Duration::from_secs(30);
     let mut stale_timer = interval(stale_check_interval);
     stale_timer.tick().await;
+
+    let mut sys_rx = ctx.bus().subscribe_system();
+    let mut net_rx = ctx.bus().subscribe_network();
+    let mut sto_rx = ctx.bus().subscribe_storage();
 
     let mut expected_sorted: Vec<_> = expected_services.iter().cloned().collect();
     expected_sorted.sort();
@@ -104,7 +107,7 @@ where
                     }
                 }
             }
-            event = bus_rx.recv() => {
+            event = sys_rx.recv() => {
                 match event {
                     Ok(timed_event) => {
                         if let Some(res) = handle_bus_event(timed_event.event, &mut loop_ctx) {
@@ -112,10 +115,42 @@ where
                         }
                     }
                     Err(RecvError::Lagged(n)) => {
-                        warn!("EventBus: consumer lagged, lost {n} events");
+                        warn!("EventBus (system): consumer lagged, lost {n} events");
                     }
                     Err(RecvError::Closed) => {
-                        error!("EventBus: channel closed unexpectedly");
+                        error!("EventBus (system): channel closed unexpectedly");
+                        break LoopResult::Shutdown;
+                    }
+                }
+            }
+            event = net_rx.recv() => {
+                match event {
+                    Ok(timed_event) => {
+                        if let Some(res) = handle_bus_event(timed_event.event, &mut loop_ctx) {
+                            break res;
+                        }
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        warn!("EventBus (network): consumer lagged, lost {n} events");
+                    }
+                    Err(RecvError::Closed) => {
+                        error!("EventBus (network): channel closed unexpectedly");
+                        break LoopResult::Shutdown;
+                    }
+                }
+            }
+            event = sto_rx.recv() => {
+                match event {
+                    Ok(timed_event) => {
+                        if let Some(res) = handle_bus_event(timed_event.event, &mut loop_ctx) {
+                            break res;
+                        }
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        warn!("EventBus (storage): consumer lagged, lost {n} events");
+                    }
+                    Err(RecvError::Closed) => {
+                        error!("EventBus (storage): channel closed unexpectedly");
                         break LoopResult::Shutdown;
                     }
                 }

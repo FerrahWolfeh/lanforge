@@ -5,10 +5,9 @@ use lanforge_api::api::{
     ServicesStatus, StatusResponse,
 };
 use lanforge_core::context::CompiledCaps;
-use lanforge_types::device::{Device, IPv6State, Origin};
+use lanforge_types::device::{IPv6State, Origin};
 use lanforge_types::system::ServiceState;
 use std::fs::metadata;
-use std::sync::Arc;
 
 impl ClientContext {
     /// Generates a full `StatusResponse` by gathering data from the configuration
@@ -28,7 +27,40 @@ impl ClientContext {
             service_banners: self.ctx.service_banners(),
         };
 
-        let devices = self.ctx.all_devices();
+        let (total_devices, counts) = self.ctx.with_state(|state| {
+            let mut counts = (0, 0, 0, 0, 0, 0, 0); // online, static, dynamic, v4_dyn, v6_dyn, slaac, managed_cli
+            for dev in state.devices.values() {
+                if dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300 {
+                    counts.0 += 1;
+                }
+                if dev.is_static() {
+                    counts.1 += 1;
+                } else {
+                    counts.2 += 1;
+                    if dev.v4.ip().is_some() {
+                        counts.3 += 1;
+                    }
+                    if dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))) {
+                        counts.4 += 1;
+                    }
+                }
+                counts.5 += dev
+                    .v6
+                    .iter()
+                    .filter(|s| {
+                        matches!(
+                            s,
+                            IPv6State::Slaac(..) | IPv6State::Discovery(..) | IPv6State::LinkLocal(..)
+                        )
+                    })
+                    .count();
+                if dev.origin == Origin::Static {
+                    counts.6 += 1;
+                }
+            }
+            (state.devices.len(), counts)
+        });
+
         let first_upstream = self
             .db
             .load_dns_upstreams()
@@ -36,7 +68,7 @@ impl ClientContext {
             .ok()
             .and_then(|rows| rows.into_iter().next())
             .map(|r| format!("{}://{}", r.protocol, r.addr));
-        self.populate_service_and_device_stats(&mut status, &devices, first_upstream);
+        self.populate_service_and_device_stats(&mut status, total_devices, counts, first_upstream);
 
         Response::Status(Box::new(status))
     }
@@ -130,7 +162,8 @@ impl ClientContext {
     pub fn populate_service_and_device_stats(
         &self,
         status: &mut StatusResponse,
-        devices: &[Arc<Device>],
+        total_devices: usize,
+        counts: (usize, usize, usize, usize, usize, usize, usize),
         first_upstream: Option<String>,
     ) {
         let sys_status = self.ctx.get_status().unwrap_or_default();
@@ -144,37 +177,6 @@ impl ClientContext {
         status.services.ra.uptime_secs = self.uptime_secs;
         status.services.ra.gua.clone_from(&self.current_gua);
         status.services.ra.ula.clone_from(&status.network.ula);
-
-        let mut counts = (0, 0, 0, 0, 0, 0, 0); // online, static, dynamic, v4_dyn, v6_dyn, slaac, managed_cli
-        for dev in devices {
-            if dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300 {
-                counts.0 += 1;
-            }
-            if dev.is_static() {
-                counts.1 += 1;
-            } else {
-                counts.2 += 1;
-                if dev.v4.ip().is_some() {
-                    counts.3 += 1;
-                }
-                if dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))) {
-                    counts.4 += 1;
-                }
-            }
-            counts.5 += dev
-                .v6
-                .iter()
-                .filter(|s| {
-                    matches!(
-                        s,
-                        IPv6State::Slaac(..) | IPv6State::Discovery(..) | IPv6State::LinkLocal(..)
-                    )
-                })
-                .count();
-            if dev.origin == Origin::Static {
-                counts.6 += 1;
-            }
-        }
 
         status.services.dhcp_v4.leases_active = counts.3;
         status.services.dhcp_v4.state = if sys_status.dhcp_v4_enabled {
@@ -276,7 +278,7 @@ impl ClientContext {
             });
         }
 
-        status.devices.total = devices.len();
+        status.devices.total = total_devices;
         status.devices.online = counts.0;
         status.devices.static_toml = counts.1;
         status.devices.managed_cli = counts.6;
