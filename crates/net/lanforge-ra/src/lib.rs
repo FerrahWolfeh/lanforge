@@ -270,7 +270,7 @@ impl RaService {
     }
 
     async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
-        let mut handle = self.ctx.service_handle();
+        let mut handle = self.ctx.service_handle_network();
         loop {
             let event = handle.next_event().await;
             let Some(timed_event) = event else {
@@ -333,7 +333,7 @@ impl RaService {
         let mut next_ra_at = Instant::now() + state.next_interval(&current_cfg);
 
         let mut buf = [0u8; 1500];
-        let mut handle = self.ctx.service_handle();
+        let mut handle = self.ctx.service_handle_network();
 
         loop {
             let now = Instant::now();

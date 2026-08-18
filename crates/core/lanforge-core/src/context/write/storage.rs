@@ -54,7 +54,7 @@ impl LanforgeContext {
 
     /// Updates the configured `DHCPv4` pools and publishes the change event.
     pub fn update_dhcp_v4_pools(&self, pools: Vec<Dhcpv4Pool>) {
-        *self.inner.dhcp_v4_pools.write() = pools;
+        self.inner.config.write().dhcp_v4_pools = pools;
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
@@ -62,7 +62,7 @@ impl LanforgeContext {
 
     /// Updates the configured `DHCPv6` pools and publishes the change event.
     pub fn update_dhcp_v6_pools(&self, pools: Vec<Dhcpv6Pool>) {
-        *self.inner.dhcp_v6_pools.write() = pools;
+        self.inner.config.write().dhcp_v6_pools = pools;
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed));
@@ -70,7 +70,7 @@ impl LanforgeContext {
 
     /// Updates the configured DHCP & TFTP options and broadcasts config change events.
     pub fn update_dhcp_options(&self, options: DhcpOptionsConfig) {
-        *self.inner.dhcp_options.write() = options;
+        self.inner.config.write().dhcp_options = options;
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigTftpChanged));
@@ -86,9 +86,12 @@ impl LanforgeContext {
         rdnss: Vec<RdnssConfig>,
         dnssl: Vec<DnsslConfig>,
     ) {
-        *self.inner.ra_prefixes.write() = prefixes;
-        *self.inner.ra_rdnss.write() = rdnss;
-        *self.inner.ra_dnssl.write() = dnssl;
+        {
+            let mut cfg = self.inner.config.write();
+            cfg.ra_prefixes = prefixes;
+            cfg.ra_rdnss = rdnss;
+            cfg.ra_dnssl = dnssl;
+        }
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
@@ -96,7 +99,7 @@ impl LanforgeContext {
 
     /// Updates the configured DNS upstreams and publishes the change event.
     pub fn update_dns_upstreams(&self, upstreams: Vec<UpstreamTarget>) {
-        *self.inner.dns_upstreams.write() = upstreams;
+        self.inner.config.write().dns_upstreams = upstreams;
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
@@ -104,7 +107,7 @@ impl LanforgeContext {
 
     /// Updates the configured DNS rewrites and publishes the change event.
     pub fn update_dns_rewrites(&self, rewrites: Vec<RewriteRule>) {
-        *self.inner.dns_rewrites.write() = rewrites;
+        self.inner.config.write().dns_rewrites = rewrites;
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
@@ -112,7 +115,7 @@ impl LanforgeContext {
 
     /// Updates the configured DNS allowlist and publishes the change event.
     pub fn update_dns_allowlist(&self, allowlist: Vec<String>) {
-        *self.inner.dns_allowlist.write() = allowlist;
+        self.inner.config.write().dns_allowlist = allowlist;
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
@@ -120,7 +123,7 @@ impl LanforgeContext {
 
     /// Updates the configured DNS adblock config and publishes the change event.
     pub fn update_dns_adblock(&self, adblock: AdblockDbConfig) {
-        *self.inner.dns_adblock.write() = adblock;
+        self.inner.config.write().dns_adblock = adblock;
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
@@ -128,7 +131,7 @@ impl LanforgeContext {
 
     /// Updates the configured DNS adblock URLs and publishes the change event.
     pub fn update_dns_adblock_urls(&self, urls: Vec<AdblockUrlEntry>) {
-        *self.inner.dns_adblock_urls.write() = urls;
+        self.inner.config.write().dns_adblock_urls = urls;
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));

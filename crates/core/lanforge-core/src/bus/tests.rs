@@ -176,3 +176,58 @@ async fn cli_host_update_publishes_events() {
         "Deve publicar V4StaticChanged"
     );
 }
+
+#[tokio::test]
+async fn topic_partitioning_isolates_unrelated_events() {
+    let bus = make_bus();
+    let mut dns_rx = bus.subscribe_dns();
+    let mut net_rx = bus.subscribe_network();
+    let mut global_rx = bus.subscribe();
+
+    // 1. Publish a DNS event
+    let _ = bus.publish(LanforgeEvent::Dns(crate::bus::DnsEvent::CacheFlush));
+
+    // DNS and Global receive it
+    assert!(matches!(
+        dns_rx.try_recv().unwrap().event,
+        LanforgeEvent::Dns(crate::bus::DnsEvent::CacheFlush)
+    ));
+    assert!(matches!(
+        global_rx.try_recv().unwrap().event,
+        LanforgeEvent::Dns(crate::bus::DnsEvent::CacheFlush)
+    ));
+    // Network should NOT receive it
+    assert!(net_rx.try_recv().is_err());
+
+    // 2. Publish a Network event
+    let _ = bus.publish(LanforgeEvent::Network(crate::bus::NetworkEvent::InterfaceUpdated { ifindex: 2 }));
+
+    // Network and Global receive it
+    assert!(matches!(
+        net_rx.try_recv().unwrap().event,
+        LanforgeEvent::Network(crate::bus::NetworkEvent::InterfaceUpdated { ifindex: 2 })
+    ));
+    assert!(matches!(
+        global_rx.try_recv().unwrap().event,
+        LanforgeEvent::Network(crate::bus::NetworkEvent::InterfaceUpdated { ifindex: 2 })
+    ));
+    // DNS should NOT receive it
+    assert!(dns_rx.try_recv().is_err());
+
+    // 3. Publish System Shutdown
+    let _ = bus.publish(LanforgeEvent::System(crate::bus::SystemEvent::Shutdown));
+
+    // ALL topic channels receive shutdown immediately
+    assert!(matches!(
+        dns_rx.try_recv().unwrap().event,
+        LanforgeEvent::System(crate::bus::SystemEvent::Shutdown)
+    ));
+    assert!(matches!(
+        net_rx.try_recv().unwrap().event,
+        LanforgeEvent::System(crate::bus::SystemEvent::Shutdown)
+    ));
+    assert!(matches!(
+        global_rx.try_recv().unwrap().event,
+        LanforgeEvent::System(crate::bus::SystemEvent::Shutdown)
+    ));
+}

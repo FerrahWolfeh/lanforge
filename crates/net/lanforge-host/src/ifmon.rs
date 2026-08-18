@@ -211,7 +211,7 @@ impl AsyncService for AddressMonitor {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        let mut bus_rx = ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe_system();
 
         loop {
             if !ctx.is_running() {

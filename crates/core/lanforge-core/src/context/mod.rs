@@ -168,6 +168,33 @@ pub struct LanforgeContext {
     inner: Arc<LanforgeContextInner>,
 }
 
+/// Runtime subsystem configurations dynamically updateable via RPC/CLI/WebUI.
+#[derive(Debug, Clone, Default)]
+pub struct DynamicConfig {
+    /// Configured `DHCPv4` pools.
+    pub dhcp_v4_pools: Vec<Dhcpv4Pool>,
+    /// Configured `DHCPv6` pools.
+    pub dhcp_v6_pools: Vec<Dhcpv6Pool>,
+    /// Configured DHCP and TFTP scope options.
+    pub dhcp_options: DhcpOptionsConfig,
+    /// Configured RA prefixes.
+    pub ra_prefixes: Vec<RAPrefix>,
+    /// Configured RA RDNSS.
+    pub ra_rdnss: Vec<RdnssConfig>,
+    /// Configured RA DNSSL.
+    pub ra_dnssl: Vec<DnsslConfig>,
+    /// Configured DNS upstreams.
+    pub dns_upstreams: Vec<UpstreamTarget>,
+    /// Configured DNS rewrites.
+    pub dns_rewrites: Vec<RewriteRule>,
+    /// Configured DNS allowlist.
+    pub dns_allowlist: Vec<String>,
+    /// Configured DNS adblock config.
+    pub dns_adblock: AdblockDbConfig,
+    /// Configured DNS adblock source URLs.
+    pub dns_adblock_urls: Vec<AdblockUrlEntry>,
+}
+
 /// Internal state shared behind an `Arc`.
 ///
 /// This is intentionally private to enforce access patterns — all interaction
@@ -189,28 +216,8 @@ struct LanforgeContextInner {
     pppoe_ready: AtomicBool,
     /// Generic registry for shared service states/contexts.
     shared_services: RwLock<HashMap<String, Arc<dyn std::any::Any + Send + Sync>>>,
-    /// Configured `DHCPv4` pools.
-    dhcp_v4_pools: RwLock<Vec<Dhcpv4Pool>>,
-    /// Configured `DHCPv6` pools.
-    dhcp_v6_pools: RwLock<Vec<Dhcpv6Pool>>,
-    /// Configured DHCP and TFTP scope options.
-    dhcp_options: RwLock<DhcpOptionsConfig>,
-    /// Configured RA prefixes.
-    ra_prefixes: RwLock<Vec<RAPrefix>>,
-    /// Configured RA RDNSS.
-    ra_rdnss: RwLock<Vec<RdnssConfig>>,
-    /// Configured RA DNSSL.
-    ra_dnssl: RwLock<Vec<DnsslConfig>>,
-    /// Configured DNS upstreams.
-    dns_upstreams: RwLock<Vec<UpstreamTarget>>,
-    /// Configured DNS rewrites.
-    dns_rewrites: RwLock<Vec<RewriteRule>>,
-    /// Configured DNS allowlist.
-    dns_allowlist: RwLock<Vec<String>>,
-    /// Configured DNS adblock config.
-    dns_adblock: RwLock<AdblockDbConfig>,
-    /// Configured DNS adblock source URLs.
-    dns_adblock_urls: RwLock<Vec<AdblockUrlEntry>>,
+    /// Consolidated dynamic subsystem configurations.
+    config: RwLock<DynamicConfig>,
     /// Shared `DHCPv4` statistics.
     dhcpv4_stats: Arc<Dhcpv4Stats>,
     /// Shared `DHCPv6` statistics.
@@ -273,17 +280,7 @@ impl LanforgeContext {
             if_ready: AtomicBool::new(false),
             pppoe_ready: AtomicBool::new(false),
             shared_services: RwLock::new(HashMap::new()),
-            dhcp_v4_pools: RwLock::new(Vec::new()),
-            dhcp_v6_pools: RwLock::new(Vec::new()),
-            dhcp_options: RwLock::new(DhcpOptionsConfig::default()),
-            ra_prefixes: RwLock::new(Vec::new()),
-            ra_rdnss: RwLock::new(Vec::new()),
-            ra_dnssl: RwLock::new(Vec::new()),
-            dns_upstreams: RwLock::new(Vec::new()),
-            dns_rewrites: RwLock::new(Vec::new()),
-            dns_allowlist: RwLock::new(Vec::new()),
-            dns_adblock: RwLock::new(AdblockDbConfig::default()),
-            dns_adblock_urls: RwLock::new(Vec::new()),
+            config: RwLock::new(DynamicConfig::default()),
             dhcpv4_stats: Arc::new(Dhcpv4Stats::new()),
             dhcpv6_stats: Arc::new(Dhcpv6Stats::new()),
             last_db_flush: RwLock::new(None),
@@ -382,6 +379,73 @@ impl LanforgeContext {
         }
     }
 
+    /// Creates a dedicated `ServiceHandle` subscribing only to network events.
+    #[must_use]
+    pub fn service_handle_network(&self) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe_network(),
+            ctx: self.clone(),
+        }
+    }
+
+    /// Creates a dedicated `ServiceHandle` subscribing only to DNS events.
+    #[must_use]
+    pub fn service_handle_dns(&self) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe_dns(),
+            ctx: self.clone(),
+        }
+    }
+
+    /// Creates a dedicated `ServiceHandle` subscribing only to device events.
+    #[must_use]
+    pub fn service_handle_device(&self) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe_device(),
+            ctx: self.clone(),
+        }
+    }
+
+    /// Creates a dedicated `ServiceHandle` subscribing only to storage events.
+    #[must_use]
+    pub fn service_handle_storage(&self) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe_storage(),
+            ctx: self.clone(),
+        }
+    }
+
+    /// Creates a dedicated `ServiceHandle` subscribing only to `PPPoE` events.
+    #[must_use]
+    pub fn service_handle_pppoe(&self) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe_pppoe(),
+            ctx: self.clone(),
+        }
+    }
+
+    /// Returns a copy of the current dynamic subsystem configurations.
+    #[must_use]
+    pub fn config(&self) -> DynamicConfig {
+        self.inner.config.read().clone()
+    }
+
+    /// Executes a closure with read access to the dynamic configurations.
+    pub fn with_config<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&DynamicConfig) -> R,
+    {
+        f(&self.inner.config.read())
+    }
+
+    /// Executes a closure with write access to the dynamic configurations.
+    pub fn update_config<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut DynamicConfig) -> R,
+    {
+        f(&mut self.inner.config.write())
+    }
+
     /// Increments the DNS blocked queries counter.
     #[cfg(feature = "adblock")]
     pub fn inc_dns_blocked(&self) {
@@ -417,57 +481,57 @@ impl LanforgeContext {
 
     #[must_use]
     pub fn get_dhcp_v4_pools(&self) -> Vec<Dhcpv4Pool> {
-        self.inner.dhcp_v4_pools.read().clone()
+        self.inner.config.read().dhcp_v4_pools.clone()
     }
 
     #[must_use]
     pub fn get_dhcp_v6_pools(&self) -> Vec<Dhcpv6Pool> {
-        self.inner.dhcp_v6_pools.read().clone()
+        self.inner.config.read().dhcp_v6_pools.clone()
     }
 
     #[must_use]
     pub fn get_dhcp_options(&self) -> DhcpOptionsConfig {
-        self.inner.dhcp_options.read().clone()
+        self.inner.config.read().dhcp_options.clone()
     }
 
     #[must_use]
     pub fn get_ra_prefixes(&self) -> Vec<RAPrefix> {
-        self.inner.ra_prefixes.read().clone()
+        self.inner.config.read().ra_prefixes.clone()
     }
 
     #[must_use]
     pub fn get_ra_rdnss(&self) -> Vec<RdnssConfig> {
-        self.inner.ra_rdnss.read().clone()
+        self.inner.config.read().ra_rdnss.clone()
     }
 
     #[must_use]
     pub fn get_ra_dnssl(&self) -> Vec<DnsslConfig> {
-        self.inner.ra_dnssl.read().clone()
+        self.inner.config.read().ra_dnssl.clone()
     }
 
     #[must_use]
     pub fn get_dns_upstreams(&self) -> Vec<UpstreamTarget> {
-        self.inner.dns_upstreams.read().clone()
+        self.inner.config.read().dns_upstreams.clone()
     }
 
     #[must_use]
     pub fn get_dns_rewrites(&self) -> Vec<RewriteRule> {
-        self.inner.dns_rewrites.read().clone()
+        self.inner.config.read().dns_rewrites.clone()
     }
 
     #[must_use]
     pub fn get_dns_allowlist(&self) -> Vec<String> {
-        self.inner.dns_allowlist.read().clone()
+        self.inner.config.read().dns_allowlist.clone()
     }
 
     #[must_use]
     pub fn get_dns_adblock(&self) -> AdblockDbConfig {
-        self.inner.dns_adblock.read().clone()
+        self.inner.config.read().dns_adblock.clone()
     }
 
     #[must_use]
     pub fn get_dns_adblock_urls(&self) -> Vec<AdblockUrlEntry> {
-        self.inner.dns_adblock_urls.read().clone()
+        self.inner.config.read().dns_adblock_urls.clone()
     }
 
     /// Registers a decoupled status provider.

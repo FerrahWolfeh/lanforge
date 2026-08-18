@@ -15,19 +15,76 @@ pub use lanforge_types::events::{
 };
 
 pub struct EventBus {
-    tx: broadcast::Sender<TimedEvent>,
+    global: broadcast::Sender<TimedEvent>,
+    system: broadcast::Sender<TimedEvent>,
+    network: broadcast::Sender<TimedEvent>,
+    device: broadcast::Sender<TimedEvent>,
+    dns: broadcast::Sender<TimedEvent>,
+    storage: broadcast::Sender<TimedEvent>,
+    pppoe: broadcast::Sender<TimedEvent>,
 }
 
 impl EventBus {
     #[must_use]
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(1024);
-        Self { tx }
+        let (global, _) = broadcast::channel(1024);
+        let (system, _) = broadcast::channel(256);
+        let (network, _) = broadcast::channel(256);
+        let (device, _) = broadcast::channel(512);
+        let (dns, _) = broadcast::channel(512);
+        let (storage, _) = broadcast::channel(128);
+        let (pppoe, _) = broadcast::channel(128);
+        Self {
+            global,
+            system,
+            network,
+            device,
+            dns,
+            storage,
+            pppoe,
+        }
     }
 
+    /// Subscribes to the global event stream (receives all system events).
     #[must_use]
     pub fn subscribe(&self) -> Receiver<TimedEvent> {
-        self.tx.subscribe()
+        self.global.subscribe()
+    }
+
+    /// Subscribes exclusively to system lifecycle and ready events.
+    #[must_use]
+    pub fn subscribe_system(&self) -> Receiver<TimedEvent> {
+        self.system.subscribe()
+    }
+
+    /// Subscribes exclusively to network interface, prefix, and discovery trigger events.
+    #[must_use]
+    pub fn subscribe_network(&self) -> Receiver<TimedEvent> {
+        self.network.subscribe()
+    }
+
+    /// Subscribes exclusively to host device mutations and DHCP transactions.
+    #[must_use]
+    pub fn subscribe_device(&self) -> Receiver<TimedEvent> {
+        self.device.subscribe()
+    }
+
+    /// Subscribes exclusively to DNS resolution, cache, and adblock events.
+    #[must_use]
+    pub fn subscribe_dns(&self) -> Receiver<TimedEvent> {
+        self.dns.subscribe()
+    }
+
+    /// Subscribes exclusively to storage and database lifecycle events.
+    #[must_use]
+    pub fn subscribe_storage(&self) -> Receiver<TimedEvent> {
+        self.storage.subscribe()
+    }
+
+    /// Subscribes exclusively to `PPPoE` connection and keepalive events.
+    #[must_use]
+    pub fn subscribe_pppoe(&self) -> Receiver<TimedEvent> {
+        self.pppoe.subscribe()
     }
 
     #[must_use]
@@ -35,14 +92,59 @@ impl EventBus {
         #[cfg(feature = "hotpath")]
         {
             #[allow(clippy::cast_precision_loss)]
-            hotpath::gauge!("event_bus_receivers").set(self.tx.receiver_count() as f64);
+            hotpath::gauge!("event_bus_receivers").set(self.global.receiver_count() as f64);
         }
-        self.tx.send(TimedEvent::new(event)).unwrap_or(0)
+        self.publish_timed(TimedEvent::new(event))
     }
 
     #[must_use]
     pub fn publish_timed(&self, event: TimedEvent) -> usize {
-        self.tx.send(event).unwrap_or(0)
+        // Dispatch to domain topic channel
+        match &event.event {
+            LanforgeEvent::System(SystemEvent::Shutdown) => {
+                // Broadcast shutdown to every topic channel to unblock listeners immediately
+                let _ = self.system.send(event.clone());
+                let _ = self.network.send(event.clone());
+                let _ = self.device.send(event.clone());
+                let _ = self.dns.send(event.clone());
+                let _ = self.storage.send(event.clone());
+                let _ = self.pppoe.send(event.clone());
+            }
+            LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
+                let _ = self.system.send(event.clone());
+                let _ = self.network.send(event.clone());
+            }
+            LanforgeEvent::System(
+                SystemEvent::ConfigDhcpV4Changed
+                | SystemEvent::ConfigDhcpV6Changed
+                | SystemEvent::ConfigDhcpOptionsChanged,
+            ) => {
+                let _ = self.system.send(event.clone());
+                let _ = self.device.send(event.clone());
+            }
+            LanforgeEvent::System(_) => {
+                let _ = self.system.send(event.clone());
+            }
+            LanforgeEvent::Network(_) => {
+                let _ = self.network.send(event.clone());
+            }
+            LanforgeEvent::Device(_) => {
+                let _ = self.device.send(event.clone());
+            }
+            LanforgeEvent::Dns(_) => {
+                let _ = self.dns.send(event.clone());
+            }
+            LanforgeEvent::Storage(_) => {
+                let _ = self.storage.send(event.clone());
+            }
+            LanforgeEvent::Pppoe(_) => {
+                let _ = self.pppoe.send(event.clone());
+                let _ = self.dns.send(event.clone());
+            }
+        }
+
+        // Always publish to global bus for full stream receivers (SSE, CLI TUI, log buffers)
+        self.global.send(event).unwrap_or(0)
     }
 }
 
