@@ -111,12 +111,12 @@ impl Bootstrapper {
         );
 
         let bus = Arc::new(EventBus::new());
+        let target_ifindex = Self::find_target_interface(&mut cfg)?;
         let (initial_table, db, log_db) = Self::init_device_table(&mut cfg).await?;
         let db = Arc::new(db);
         let log_db = Arc::new(log_db);
         let cfg = Arc::new(cfg);
 
-        let target_ifindex = Self::find_target_interface(&cfg)?;
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
         #[cfg(feature = "dhcp")]
         {
@@ -138,17 +138,30 @@ impl Bootstrapper {
             let interfaces = pnet::datalink::interfaces();
             interfaces
                 .iter()
-                .find(|i| i.name == cfg.system.iface)
+                .find(|i| i.index == target_ifindex)
                 .and_then(|i| i.ips.iter().find(|ip| ip.is_ipv4()))
                 .map_or_else(|| "localhost".to_string(), |ip| ip.ip().to_string())
         };
+        let http_port = {
+            #[cfg(feature = "http")]
+            {
+                cfg.http_toml.listen.port()
+            }
+            #[cfg(not(feature = "http"))]
+            {
+                9090
+            }
+        };
+
+        let console_url = format!("http://{host_ip}:{http_port}");
+        let setup_url = format!("http://{host_ip}:{http_port}/setup");
 
         info!("┌─────────────────────────────────────────────────────────────┐");
         info!("│  ⚡ Lanforge — Router & Network Orchestrator                 │");
         info!("├─────────────────────────────────────────────────────────────┤");
         info!("│  LAN Interface:  {:<42} │", cfg.system.iface);
-        info!("│  Web Console:    http://{}:9090{:>20} │", host_ip, " ");
-        info!("│  First-Run:      Open http://{}:9090/setup to configure    │", host_ip);
+        info!("│  Web Console:    {:<42} │", console_url);
+        info!("│  First-Run:      {:<42} │", setup_url);
         info!("└─────────────────────────────────────────────────────────────┘");
 
         // Load DNS settings from database into context
@@ -568,18 +581,23 @@ impl Bootstrapper {
         }
     }
 
-    fn find_target_interface(cfg: &Config) -> Result<u32> {
+    fn find_target_interface(cfg: &mut Config) -> Result<u32> {
         let interfaces = interfaces();
-        if let Some(iface) = interfaces.iter().find(|iface| iface.name == cfg.system.iface) {
+        if !cfg.system.iface.is_empty()
+            && let Some(iface) = interfaces.iter().find(|iface| iface.name == cfg.system.iface)
+        {
             return Ok(iface.index);
         }
 
         if let Some(fallback) = interfaces.iter().find(|i| !i.is_loopback()) {
-            warn!(
-                target = %cfg.system.iface,
-                fallback = %fallback.name,
-                "Target interface not found, falling back to active interface"
-            );
+            if !cfg.system.iface.is_empty() {
+                warn!(
+                    target = %cfg.system.iface,
+                    fallback = %fallback.name,
+                    "Target interface not found, falling back to active interface"
+                );
+            }
+            cfg.system.iface.clone_from(&fallback.name);
             return Ok(fallback.index);
         }
 
