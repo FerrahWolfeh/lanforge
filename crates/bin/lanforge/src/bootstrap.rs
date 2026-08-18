@@ -134,38 +134,7 @@ impl Bootstrapper {
         );
         ctx.set_status(cfg.to_system_status());
 
-        let host_ip = {
-            let interfaces = pnet::datalink::interfaces();
-            interfaces
-                .iter()
-                .find(|i| i.index == target_ifindex)
-                .and_then(|i| i.ips.iter().find(|ip| ip.is_ipv4()))
-                .map_or_else(|| "localhost".to_string(), |ip| ip.ip().to_string())
-        };
-        let http_port = {
-            #[cfg(feature = "http")]
-            {
-                cfg.http_toml.listen.port()
-            }
-            #[cfg(not(feature = "http"))]
-            {
-                9090
-            }
-        };
-
-        let console_url = format!("http://{host_ip}:{http_port}");
-        let is_first_run = db.count_users().await.unwrap_or(0) == 0;
-
-        info!("┌─────────────────────────────────────────────────────────────┐");
-        info!("│  ⚡ Lanforge — Router & Network Orchestrator                 │");
-        info!("├─────────────────────────────────────────────────────────────┤");
-        info!("│  LAN Interface:  {:<42} │", cfg.system.iface);
-        info!("│  Web Console:    {:<42} │", console_url);
-        if is_first_run {
-            let setup_url = format!("{console_url}/setup");
-            info!("│  First-Run:      {:<42} │", setup_url);
-        }
-        info!("└─────────────────────────────────────────────────────────────┘");
+        ctx.set_status(cfg.to_system_status());
 
         // Load DNS settings from database into context
         #[cfg(feature = "dns")]
@@ -539,11 +508,19 @@ impl Bootstrapper {
             }
         };
 
+        let main_db_desc = if cfg.database.is_in_memory() {
+            "in-memory".to_string()
+        } else {
+            lanforge_db::sanitize_db_url(&cfg.database.url)
+        };
+        let log_db_desc = if cfg.database.log_url.contains(":memory:") || cfg.database.log_url.is_empty() {
+            "in-memory".to_string()
+        } else {
+            lanforge_db::sanitize_db_url(&cfg.database.log_url)
+        };
+
         info!(
-            "Databases initialized (Main: {}, Logs: {}, reverse resolvers: {})",
-            lanforge_db::sanitize_db_url(&cfg.database.url),
-            lanforge_db::sanitize_db_url(&cfg.database.log_url),
-            reverse_resolvers_count
+            "Databases initialized (Main: {main_db_desc}, Logs: {log_db_desc}, reverse resolvers: {reverse_resolvers_count})"
         );
         Self::inject_self_device(&mut table, cfg);
 
@@ -551,6 +528,42 @@ impl Bootstrapper {
         let _ = table.get_static_registry();
 
         Ok((table, db, log_db))
+    }
+
+    /// Prints the user-friendly startup banner when all services are fully initialized and ready.
+    pub async fn print_startup_banner(cfg: &Config, target_ifindex: u32, db: &LanforgeDb) {
+        let host_ip = {
+            let interfaces = pnet::datalink::interfaces();
+            interfaces
+                .iter()
+                .find(|i| i.index == target_ifindex)
+                .and_then(|i| i.ips.iter().find(|ip| ip.is_ipv4()))
+                .map_or_else(|| "localhost".to_string(), |ip| ip.ip().to_string())
+        };
+        let http_port = {
+            #[cfg(feature = "http")]
+            {
+                cfg.http_toml.listen.port()
+            }
+            #[cfg(not(feature = "http"))]
+            {
+                9090
+            }
+        };
+
+        let console_url = format!("http://{host_ip}:{http_port}");
+        let is_first_run = db.count_users().await.unwrap_or(0) == 0;
+
+        info!("┌─────────────────────────────────────────────────────────────┐");
+        info!("│  ⚡ Lanforge — Router & Network Orchestrator                 │");
+        info!("├─────────────────────────────────────────────────────────────┤");
+        info!("│  LAN Interface:  {:<42} │", cfg.system.iface);
+        info!("│  Web Console:    {:<42} │", console_url);
+        if is_first_run {
+            let setup_url = format!("{console_url}/setup");
+            info!("│  First-Run:      {:<42} │", setup_url);
+        }
+        info!("└─────────────────────────────────────────────────────────────┘");
     }
 
     /// Injects the host machine as a system device in the state table.

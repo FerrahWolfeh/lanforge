@@ -70,10 +70,17 @@ pub fn detect_lan_interface(configured: Option<&str>, wan_iface: Option<&str>) -
         .find(|i| !i.is_loopback() && !is_wan_name(&i.name))
         .map_or_else(|| "eth0".to_string(), |i| i.name);
 
-    warn!(
-        iface = %fallback,
-        "No optimal LAN interface detected, using fallback"
-    );
+    if fallback == "eth0" {
+        warn!(
+            iface = %fallback,
+            "No active network interface detected on host, defaulting to eth0"
+        );
+    } else {
+        info!(
+            iface = %fallback,
+            "Detected active LAN interface (virtual/testing environment)"
+        );
+    }
     fallback
 }
 

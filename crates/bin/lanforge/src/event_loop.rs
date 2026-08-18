@@ -95,6 +95,12 @@ where
             services.len(),
             services.join(", ")
         );
+        crate::bootstrap::Bootstrapper::print_startup_banner(
+            loop_ctx.cfg,
+            loop_ctx.target_ifindex,
+            loop_ctx.db,
+        )
+        .await;
         let _ = loop_ctx
             .ctx
             .bus()
