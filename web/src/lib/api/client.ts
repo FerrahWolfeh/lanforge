@@ -33,6 +33,9 @@ import type {
 	LoginResponse,
 	ReverseResolverEntry,
 	RewriteRule,
+	SetupPayload,
+	SetupResponse,
+	SetupStatusResponse,
 	StatusResponse,
 	UserInfo
 } from './types';
@@ -392,6 +395,13 @@ export const userCreate = (username: string, password: string, role?: string) =>
 export const userDelete = (username: string) => del<void>(`/users/${encodeURIComponent(username)}`);
 export const userPasswd = (username: string, new_password: string) =>
 	put<void>(`/users/${encodeURIComponent(username)}/password`, { new_password });
+
+// ---------------------------------------------------------------------------
+// Setup & Onboarding
+// ---------------------------------------------------------------------------
+
+export const getSetupStatus = () => get<SetupStatusResponse>('/system/setup-status');
+export const submitSetup = (payload: SetupPayload) => post<SetupResponse>('/system/setup', payload);
 
 // ---------------------------------------------------------------------------
 // SSE helpers

@@ -661,3 +661,59 @@ export interface SseEvent {
 	data: Record<string, unknown>;
 	ts: number; // parsed from id (ms)
 }
+
+// ---------------------------------------------------------------------------
+// Setup & Onboarding
+// ---------------------------------------------------------------------------
+
+export interface NetworkInterfaceInfo {
+	name: string;
+	mac: string | null;
+	is_physical: boolean;
+	is_up: boolean;
+	carrier_up: boolean;
+	ips: string[];
+	bus_type: string;
+}
+
+export interface SetupStatusResponse {
+	first_run: boolean;
+	detected_lan_iface: string;
+	detected_gateway: string | null;
+	detected_ula_prefix: string;
+	interfaces: NetworkInterfaceInfo[];
+}
+
+export type SetupWanConfig =
+	| {
+			mode: 'pppoe';
+			interface: string;
+			username: string;
+			password: string;
+			vlan_id?: number | null;
+			mtu?: number | null;
+	  }
+	| {
+			mode: 'system_gateway';
+			gateway_ip: string;
+	  };
+
+export interface SetupPayload {
+	admin_username: string;
+	admin_password: string;
+	lan_iface: string;
+	lan_ip: string;
+	domain_name: string;
+	dhcp_enabled: boolean;
+	dhcp_pool_start: string;
+	dhcp_pool_end: string;
+	adblock_enabled: boolean;
+	wan?: SetupWanConfig | null;
+}
+
+export interface SetupResponse {
+	success: boolean;
+	token: string;
+	username: string;
+	message: string;
+}

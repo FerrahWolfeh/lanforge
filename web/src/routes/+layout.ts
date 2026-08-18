@@ -3,14 +3,19 @@ export const prerender = false;
 
 import type { LayoutLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
-import { authStatus } from '$lib/api/client';
+import { authStatus, getSetupStatus } from '$lib/api/client';
 import { auth } from '$lib/stores/auth.svelte';
 
 export const load: LayoutLoad = async ({ url }) => {
-	// Skip auth check on the login page itself
-	if (url.pathname === '/login') return {};
+	// Skip auth check on login and setup pages
+	if (url.pathname === '/login' || url.pathname === '/setup') return {};
 
 	try {
+		const setup = await getSetupStatus().catch(() => null);
+		if (setup?.first_run) {
+			throw redirect(302, '/setup');
+		}
+
 		const status = await authStatus();
 
 		if (status.auth_required && !status.authenticated && !auth.token) {

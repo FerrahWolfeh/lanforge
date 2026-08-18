@@ -14,7 +14,7 @@
 	let { children } = $props();
 	let uptime = $state(0);
 
-	const isLoginPage = $derived($page.url.pathname === "/login");
+	const isAuthPage = $derived($page.url.pathname === "/login" || $page.url.pathname === "/setup");
 
 	onMount(() => {
 		// Poll daemon uptime every 30s
@@ -27,7 +27,7 @@
 			}
 		}
 
-		if (!isLoginPage) {
+		if (!isAuthPage) {
 			pollStatus();
 			const interval = setInterval(pollStatus, 30_000);
 			return () => {
@@ -44,7 +44,7 @@
 
 <ModeWatcher defaultMode="system" />
 
-{#if isLoginPage}
+{#if isAuthPage}
 	{@render children()}
 {:else}
 	<Sidebar.Provider>
