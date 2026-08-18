@@ -206,7 +206,10 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
     "env-filter",
     "fmt",
     "ansi",
+    "registry",
+    "std",
 ] }
+tracing-journald = { workspace = true }
 hotpath = { workspace = true, optional = true }
 tikv-jemallocator = { workspace = true, optional = true }
 
