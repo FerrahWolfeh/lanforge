@@ -158,58 +158,47 @@ impl Config {
             .parent()
             .unwrap_or_else(|| Path::new("/etc/lanforge"));
 
-        let mut service_files = vec![("database.toml", "database")];
-        #[cfg(feature = "ra")]
-        service_files.push(("ra.toml", "ra"));
-        #[cfg(feature = "dhcp")]
-        service_files.push(("dhcp.toml", "dhcp"));
-        #[cfg(feature = "dns")]
-        service_files.push(("dns.toml", "dns"));
-        #[cfg(feature = "discovery")]
-        service_files.push(("monitor.toml", "monitor"));
-        #[cfg(feature = "discovery")]
-        service_files.push(("mdns.toml", "mdns"));
-        #[cfg(feature = "uds")]
-        service_files.push(("api.toml", "api"));
-        #[cfg(feature = "http")]
-        service_files.push(("http.toml", "http"));
-        #[cfg(feature = "tftp")]
-        service_files.push(("tftp.toml", "tftp"));
-        #[cfg(feature = "pppoe")]
-        service_files.push(("pppoe.toml", "pppoe"));
-
-        for (filename, _) in service_files {
-            let path = config_dir.join(filename);
-            if path.exists() {
-                let extra = load_toml(path.to_str().unwrap());
-                match filename {
-                    "database.toml" => toml_cfg.database = extra.database,
-                    #[cfg(feature = "ra")]
-                    "ra.toml" => toml_cfg.ra = extra.ra,
-                    #[cfg(feature = "dhcp")]
-                    "dhcp.toml" => toml_cfg.dhcp = extra.dhcp,
-                    #[cfg(feature = "dns")]
-                    "dns.toml" => toml_cfg.dns = extra.dns,
-                    #[cfg(feature = "discovery")]
-                    "monitor.toml" => toml_cfg.monitor = extra.monitor,
-                    #[cfg(feature = "discovery")]
-                    "mdns.toml" => toml_cfg.mdns = extra.mdns,
-                    #[cfg(feature = "uds")]
-                    "api.toml" => toml_cfg.api = extra.api,
-                    #[cfg(feature = "http")]
-                    "http.toml" => toml_cfg.http = extra.http,
-                    #[cfg(feature = "tftp")]
-                    "tftp.toml" => toml_cfg.tftp = extra.tftp,
-                    #[cfg(feature = "pppoe")]
-                    "pppoe.toml" => toml_cfg.pppoe = extra.pppoe,
-                    _ => {}
+        macro_rules! try_load_section {
+            ($file:expr, $field:expr, $typ:ty) => {
+                let path = config_dir.join($file);
+                if path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(sec) = ::toml::from_str::<$typ>(&content) {
+                            $field = sec;
+                        } else {
+                            tracing::warn!(
+                                "[config] Failed to parse modular config '{}'",
+                                path.display()
+                            );
+                        }
+                    }
                 }
-            }
+            };
         }
+
+        try_load_section!("database.toml", toml_cfg.database, DatabaseConfig);
+        #[cfg(feature = "ra")]
+        try_load_section!("ra.toml", toml_cfg.ra, RaServiceConfig);
+        #[cfg(feature = "dhcp")]
+        try_load_section!("dhcp.toml", toml_cfg.dhcp, toml::DhcpCfg);
+        #[cfg(feature = "dns")]
+        try_load_section!("dns.toml", toml_cfg.dns, DnsConfig);
+        #[cfg(feature = "discovery")]
+        try_load_section!("monitor.toml", toml_cfg.monitor, MonitorConfig);
+        #[cfg(feature = "discovery")]
+        try_load_section!("mdns.toml", toml_cfg.mdns, MdnsConfig);
+        #[cfg(feature = "uds")]
+        try_load_section!("api.toml", toml_cfg.api, ApiConfig);
+        #[cfg(feature = "http")]
+        try_load_section!("http.toml", toml_cfg.http, HttpConfig);
+        #[cfg(feature = "tftp")]
+        try_load_section!("tftp.toml", toml_cfg.tftp, TftpConfig);
+        #[cfg(feature = "pppoe")]
+        try_load_section!("pppoe.toml", toml_cfg.pppoe, lanforge_pppoe::config::PppoeConfig);
     }
 
     fn resolve_search_domains(toml_cfg: &toml::TomlConfig) -> Vec<String> {
-        let mut domains = Vec::new();
+        let mut domains = Vec::with_capacity(4);
         for dom in &toml_cfg.system.search_domains {
             if !domains.contains(dom) {
                 domains.push(dom.clone());

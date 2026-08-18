@@ -58,8 +58,6 @@ pub struct DhcpCfg {
     pub v6: Dhcpv6Config,
 }
 
-// DhcpV4Cfg and DhcpV6Cfg have been replaced by lanforge_network equivalents
-
 /// System-wide global configuration.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
@@ -93,12 +91,6 @@ impl Default for SystemCfg {
     }
 }
 
-// GeneralCfg was removed in favor of SystemCfg and DatabaseConfig
-
-// RaCfg has been replaced by lanforge_network::ra::RaServiceConfig
-
-// DnsCfg has been replaced by lanforge_dns::DnsConfig
-
 /// Static device — read from `[[devices]]` in the TOML.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct StaticDeviceCfg {
@@ -109,8 +101,6 @@ pub struct StaticDeviceCfg {
     pub v6_suffix: Option<String>,
     pub boot_file: Option<String>,
 }
-
-// AuthCfg, HttpCfg, and TftpCfg are now handled by their respective crate configs or merged into api/tftp
 
 /// Load and parse the TOML config file, or return defaults if missing.
 pub fn load_toml(path: &str) -> TomlConfig {
@@ -205,7 +195,6 @@ pub fn load_devices_only(path: &str) -> Vec<StaticDeviceCfg> {
 
     match std::fs::read_to_string(path) {
         Ok(content) => {
-            // Try as a direct list of devices first (common in quick debug)
             #[derive(Deserialize)]
             struct DeviceList {
                 devices: Vec<StaticDeviceCfg>,
@@ -213,7 +202,6 @@ pub fn load_devices_only(path: &str) -> Vec<StaticDeviceCfg> {
             if let Ok(list) = toml::from_str::<DeviceList>(&content) {
                 return list.devices;
             }
-            // If it fails, try as a full TomlConfig and get only the devices field
             match toml::from_str::<TomlConfig>(&content) {
                 Ok(cfg) => cfg.devices,
                 Err(e) => {
@@ -232,13 +220,10 @@ pub fn load_devices_only(path: &str) -> Vec<StaticDeviceCfg> {
 // Helper for section-by-section loading
 fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
     v.get(key).map_or_else(T::default, |sec_val| {
-        match T::deserialize(sec_val.clone()) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("[config]   - [FAIL] Section [{key}]: {e} (using defaults for this section)");
-                T::default()
-            }
-        }
+        T::deserialize(sec_val.clone()).unwrap_or_else(|e| {
+            warn!("[config]   - [FAIL] Section [{key}]: {e} (using defaults for this section)");
+            T::default()
+        })
     })
 }
 
