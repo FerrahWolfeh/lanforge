@@ -77,10 +77,10 @@ where
     for s in &loop_ctx.expected_services {
         if ctx.get_service_state(s) == ServiceState::Online && loop_ctx.ready_services.insert(s.clone()) {
             info!(
-                "▸ Service '{}' already online ({}/{})",
-                s,
-                loop_ctx.ready_services.len(),
-                loop_ctx.expected_services.len()
+                service = %s,
+                ready = loop_ctx.ready_services.len(),
+                total = loop_ctx.expected_services.len(),
+                "Service already online"
             );
         }
     }
@@ -206,16 +206,16 @@ fn handle_bus_event<S: BuildHasher>(
                 && l_ctx.ready_services.insert(name.clone()) =>
         {
             info!(
-                "▸ Service '{}' reported ready ({}/{})",
-                name,
-                l_ctx.ready_services.len(),
-                l_ctx.expected_services.len()
+                service = %name,
+                ready = l_ctx.ready_services.len(),
+                total = l_ctx.expected_services.len(),
+                "Service reported ready"
             );
 
             if !l_ctx.system_ready_sent
                 && l_ctx.ready_services.len() >= l_ctx.expected_services.len()
             {
-                info!("✅ All internal services ready. System fully operational.");
+                info!("All internal services ready. System fully operational.");
                 let _ = l_ctx
                     .ctx
                     .bus()

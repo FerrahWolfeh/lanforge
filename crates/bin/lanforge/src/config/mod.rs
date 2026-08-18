@@ -767,28 +767,4 @@ impl Default for Config {
     }
 }
 
-/// Masks credentials in a database URL (e.g., `postgres://user:password@host/db` -> `postgres://user:****@host/db`)
-#[must_use]
-pub fn sanitize_db_url(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return url.to_string();
-    };
-
-    // Split the rest into host-part and path-part (if any / exists)
-    let (host_part, path_part) = rest.split_once('/').map_or((rest, ""), |(h, p)| (h, p));
-
-    if let Some((auth, host)) = host_part.split_once('@') {
-        let masked_auth = if let Some((user, _pass)) = auth.split_once(':') {
-            format!("{user}:****")
-        } else {
-            auth.to_string()
-        };
-        if path_part.is_empty() {
-            format!("{scheme}://{masked_auth}@{host}")
-        } else {
-            format!("{scheme}://{masked_auth}@{host}/{path_part}")
-        }
-    } else {
-        url.to_string()
-    }
-}
+pub use lanforge_db::sanitize_db_url;

@@ -151,19 +151,19 @@ impl AsyncService for HttpService {
             .route("/metrics", get(handle_metrics));
 
         if let Some(boot_dir) = &cfg.boot_dir {
-            info!("📂 Serving boot files from {boot_dir}");
+            info!(boot_dir = %boot_dir, "HTTP: Serving boot files");
             app = app.nest_service("/boot", ServeDir::new(boot_dir));
         }
 
         if let Some(webui_dir) = &cfg.webui_dir {
-            info!("🌐 Serving WebUI from filesystem: {webui_dir}");
+            info!(webui_dir = %webui_dir, "HTTP: Serving WebUI from filesystem");
             let index_file = Path::new(webui_dir).join("index.html");
             let serve_dir = ServeDir::new(webui_dir).fallback(ServeFile::new(index_file));
             app = app.fallback_service(serve_dir);
         } else {
             #[cfg(feature = "webui")]
             {
-                info!("🌐 Serving WebUI from embedded assets");
+                info!("HTTP: Serving WebUI from embedded assets");
                 app = app.fallback(handle_embedded_webui);
             }
         }
@@ -179,9 +179,7 @@ impl AsyncService for HttpService {
         }
 
         if cfg.auth_password_hash.is_some() {
-            info!("🔐 API Authentication enabled.");
-        } else {
-            info!("🔓 No password hash set. API Authentication disabled.");
+            info!("HTTP: API authentication enabled");
         }
 
         let app = app.with_state(state);
@@ -193,7 +191,7 @@ impl AsyncService for HttpService {
             match tls_utils::load_tls_config(cert, key) {
                 Ok(config) => Some(config),
                 Err(e) => {
-                    error!("❌ Failed to load TLS configuration: {e}. Falling back to HTTP.");
+                    error!(error = %e, "HTTPS: Failed to load TLS configuration, falling back to HTTP");
                     None
                 }
             }
@@ -220,7 +218,7 @@ impl AsyncService for HttpService {
         };
 
         if let Some(tls_config) = maybe_tls_config {
-            info!("🚀 HTTPS API listening on https://{addr}");
+            info!(addr = %addr, "HTTPS API listening");
             let config = RustlsConfig::from_config(Arc::new(tls_config));
             let handle = Handle::new();
             let shutdown_handle = handle.clone();
@@ -235,7 +233,7 @@ impl AsyncService for HttpService {
                 .await
                 .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))?;
         } else if cfg.allow_plaintext_http {
-            info!("🚀 HTTP API listening on http://{addr}");
+            info!(addr = %addr, "HTTP API listening");
             let tcp_listener = TcpListener::bind(&addr)
                 .await
                 .map_err(|e| CoreError::Generic(format!("Failed to bind to {addr}: {e}")))?;
@@ -245,7 +243,7 @@ impl AsyncService for HttpService {
                 .await
                 .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))?;
         } else {
-            let msg = "❌ TLS configuration missing (tls_cert/tls_key) and plaintext HTTP is not explicitly allowed (allow_plaintext_http = false). Refusing to start unencrypted server in production.";
+            let msg = "HTTP: TLS configuration missing and allow_plaintext_http is false. Refusing to start unencrypted server.";
             error!("{msg}");
             return Err(CoreError::Generic(msg.to_string()));
         }

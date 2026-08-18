@@ -106,7 +106,8 @@ impl PostgresDatabase {
             .await
             .map_err(|e| DbError::Backend(format!("Failed to run migrations: {e}")))?;
 
-        info!("PostgreSQL database opened at {url}");
+        let sanitized_url = lanforge_db_core::sanitize_db_url(url);
+        info!("PostgreSQL database opened at {sanitized_url}");
         Ok(Self { pool })
     }
 

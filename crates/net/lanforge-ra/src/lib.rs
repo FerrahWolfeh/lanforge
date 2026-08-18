@@ -301,12 +301,12 @@ impl RaService {
             .map_err(|e| CoreError::Generic(e.to_string()))?;
 
         info!(
-            "RA: Starting on '{}' (M={}, O={}, MaxInterval={}s, RouterLifetime={}s)",
-            current_cfg.iface,
-            u8::from(current_cfg.managed),
-            u8::from(current_cfg.other_config),
-            current_cfg.max_interval.as_secs(),
-            current_cfg.effective_router_lifetime().as_secs(),
+            iface = %current_cfg.iface,
+            managed = u8::from(current_cfg.managed),
+            other_config = u8::from(current_cfg.other_config),
+            max_interval_secs = current_cfg.max_interval.as_secs(),
+            router_lifetime_secs = current_cfg.effective_router_lifetime().as_secs(),
+            "RA: Starting service"
         );
 
         let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
@@ -668,7 +668,7 @@ fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket, NetworkErro
     sock.set_nonblocking(false)
         .map_err(|e| NetworkError::Socket(format!("O_NONBLOCK(false): {e}")))?;
 
-    info!("ICMPv6 raw socket OK — ICMP6_FILTER active (RS only), subscribed to ff02::2");
+    info!("RA: ICMPv6 raw socket active (RS only), subscribed to ff02::2");
     Ok(sock)
 }
 

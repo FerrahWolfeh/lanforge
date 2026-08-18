@@ -106,7 +106,7 @@ impl Bootstrapper {
         };
 
         info!(
-            "🚀 Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
+            "Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
             ra_print, dhcpv4_print, dhcpv6_print, dns_print
         );
 
@@ -494,9 +494,9 @@ impl Bootstrapper {
         }
 
         info!(
-            "📦 Databases initialized (Main: {}, Logs: {})",
-            crate::config::sanitize_db_url(&cfg.database.url),
-            crate::config::sanitize_db_url(&cfg.database.log_url)
+            "Databases initialized (Main: {}, Logs: {})",
+            lanforge_db::sanitize_db_url(&cfg.database.url),
+            lanforge_db::sanitize_db_url(&cfg.database.log_url)
         );
         Self::inject_self_device(&mut table, cfg);
 
@@ -517,8 +517,9 @@ impl Bootstrapper {
         {
             let mac = MacAddr(mac.octets());
             info!(
-                "⚙️ Self-Resolution: Injecting system device '{}' ({})",
-                hostname, mac
+                hostname = %hostname,
+                mac = %mac,
+                "Self-Resolution: Registered system host device"
             );
 
             // Use current V4 if available to seed the device
@@ -584,20 +585,14 @@ impl Bootstrapper {
     }
 
     fn log_welcome_banner(cfg: &Config, if_state: &InterfaceState) {
-        info!("╔══════════════════════════════════════════╗");
-        info!("║         Lanforge Network Daemon          ║");
-        info!("╠══════════════════════════════════════════╣");
-        info!("║  Interface : {:<27} ║", cfg.system.iface);
-        if let Some(ll) = if_state.link_local {
-            info!("║  Link-Local: {:<27} ║", ll);
-        }
-        if let Some(gua) = if_state.gua {
-            info!(
-                "║  GUA Prefix: {:<27} ║",
-                Ipv6Prefix::from_addr(gua).to_string()
-            );
-        }
-        info!("╚══════════════════════════════════════════╝");
+        let ll_str = if_state.link_local.map_or_else(|| "none".to_string(), |ip| ip.to_string());
+        let gua_str = if_state.gua.map_or_else(|| "none".to_string(), |ip| Ipv6Prefix::from_addr(ip).to_string());
+        info!(
+            iface = %cfg.system.iface,
+            link_local = %ll_str,
+            gua_prefix = %gua_str,
+            "Lanforge Daemon ready on interface"
+        );
     }
 
     /// Reloads static devices from configuration into the provided state table.

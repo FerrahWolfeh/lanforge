@@ -79,7 +79,7 @@ impl AsyncService for TftpService {
         self.cfg.listen_addr = local_addr.to_string();
         *self.bound_addr.write() = Some(local_addr.to_string());
 
-        info!("🚀 TFTP Server listening on {}", self.cfg.listen_addr);
+        info!(addr = %self.cfg.listen_addr, "TFTP server listening");
 
         let mut buf = [0u8; 1024];
         let socket = Arc::new(socket);
