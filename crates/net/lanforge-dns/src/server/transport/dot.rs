@@ -71,7 +71,7 @@ impl AsyncService for DotService {
             .await
             .map_err(|e| CoreError::Generic(format!("DoT bind error: {e}")))?;
 
-        info!("🚀 DoT listening on tls://{}", addr_str);
+        info!("DoT listening on tls://{}", addr_str);
 
         let mut rx = ctx.bus().subscribe();
         loop {

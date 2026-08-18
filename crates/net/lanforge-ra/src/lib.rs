@@ -185,7 +185,7 @@ impl RaState {
                 }
             }
             let prefix_type = if is_gua { "GUA" } else { "ULA" };
-            info!("RA: Internal {prefix_type} prefix state updated: {current:?}");
+            debug!("RA: Internal {prefix_type} prefix state updated: {current:?}");
             if is_gua {
                 self.last_gua = current;
             } else {
@@ -306,7 +306,7 @@ impl RaService {
             other_config = u8::from(current_cfg.other_config),
             max_interval_secs = current_cfg.max_interval.as_secs(),
             router_lifetime_secs = current_cfg.effective_router_lifetime().as_secs(),
-            "RA: Starting service"
+            "RA: Server active"
         );
 
         let iface_index = self.ctx.target_ifindex().ok_or_else(|| {

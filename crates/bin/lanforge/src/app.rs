@@ -122,21 +122,21 @@ impl Daemon {
             #[cfg(not(feature = "dns-dot"))]
             if cfg.dns_toml.dot_enabled {
                 tracing::error!(
-                    "❌ Feature 'dns-dot' (DNS-over-TLS) is enabled in configuration but not compiled in the binary!"
+                    "Feature 'dns-dot' (DNS-over-TLS) is enabled in configuration but not compiled in binary"
                 );
             }
 
             #[cfg(not(feature = "dns-doq"))]
             if cfg.dns_toml.doq_enabled {
                 tracing::error!(
-                    "❌ Feature 'dns-doq' (DNS-over-QUIC) is enabled in configuration but not compiled in the binary!"
+                    "Feature 'dns-doq' (DNS-over-QUIC) is enabled in configuration but not compiled in binary"
                 );
             }
 
             #[cfg(not(feature = "adblock"))]
             if cfg.dns_enabled && cfg.dns_toml.adblock_enabled {
                 tracing::error!(
-                    "❌ Feature 'adblock' is enabled in configuration but not compiled in the binary!"
+                    "Feature 'adblock' is enabled in configuration but not compiled in binary"
                 );
             }
         }
@@ -144,21 +144,21 @@ impl Daemon {
         #[cfg(not(feature = "http"))]
         if cfg.http_toml.enabled {
             tracing::error!(
-                "❌ Feature 'http' (REST API / Metrics) is enabled in configuration but not compiled in the binary!"
+                "Feature 'http' (REST API / Metrics) is enabled in configuration but not compiled in binary"
             );
         }
 
         // Database checks
         if cfg.database.url.starts_with("sqlite") {
             tracing::error!(
-                "❌ SQLite databases are no longer supported! Please use a PostgreSQL connection string."
+                "SQLite databases are no longer supported. Please use a PostgreSQL connection string."
             );
         }
 
         #[cfg(not(feature = "postgres"))]
         if cfg.database.url.starts_with("postgres") || cfg.database.url.starts_with("postgresql") {
             tracing::error!(
-                "❌ Database URL suggests PostgreSQL but feature 'postgres' is not compiled in!"
+                "Database URL specifies PostgreSQL but feature 'postgres' is not compiled in binary"
             );
         }
     }

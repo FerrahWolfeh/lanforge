@@ -316,12 +316,12 @@ impl Bootstrapper {
     #[allow(clippy::too_many_lines)]
     async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
         let db = LanforgeDb::open(&cfg.database).await.map_err(|e| {
-            error!("❌ Erro fatal abrindo leases DB: {e}");
+            error!("Database: Fatal error opening main database: {e}");
             e
         })?;
 
         let log_db = LogDb::open(&cfg.database.log_url).await.map_err(|e| {
-            error!("❌ Erro fatal abrindo logs DB: {e}");
+            error!("Database: Fatal error opening logs database: {e}");
             e
         })?;
 
@@ -480,23 +480,23 @@ impl Bootstrapper {
             State::new()
         });
 
-        match db.load_dns_reverse_resolvers().await {
+        let reverse_resolvers_count = match db.load_dns_reverse_resolvers().await {
             Ok(resolvers) => {
-                info!(
-                    "Loaded {} DNS reverse resolvers from database",
-                    resolvers.len()
-                );
+                let count = resolvers.len();
                 table.reverse_resolvers = resolvers;
+                count
             }
             Err(e) => {
                 warn!("Failed to load reverse resolvers from database: {e}");
+                0
             }
-        }
+        };
 
         info!(
-            "Databases initialized (Main: {}, Logs: {})",
+            "Databases initialized (Main: {}, Logs: {}, reverse resolvers: {})",
             lanforge_db::sanitize_db_url(&cfg.database.url),
-            lanforge_db::sanitize_db_url(&cfg.database.log_url)
+            lanforge_db::sanitize_db_url(&cfg.database.log_url),
+            reverse_resolvers_count
         );
         Self::inject_self_device(&mut table, cfg);
 

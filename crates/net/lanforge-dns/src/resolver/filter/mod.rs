@@ -16,7 +16,7 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use parking_lot::RwLock;
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
 
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::DnsRecordType;
@@ -173,19 +173,19 @@ impl AdBlocker {
     pub fn replace_blocklist(&self, new_list: DiskBlocklist) {
         let count = new_list.len();
         *self.blocklist.write() = Some(Arc::new(new_list));
-        info!("AdBlocker: blocklist updated with {} entries", count);
+        debug!("Adblock: blocklist updated with {} entries", count);
     }
 
     pub fn clear_blocklist(&self) {
         *self.blocklist.write() = None;
-        info!("AdBlocker: blocklist cleared");
+        debug!("Adblock: blocklist cleared");
     }
 
     pub fn replace_allowlist(&self, new_list: HashSet<String>) {
         let count = new_list.len();
         let boxed_set: HashSet<Box<str>> = new_list.into_iter().map(Box::from).collect();
         *self.allowlist.write() = Arc::new(boxed_set);
-        info!("AdBlocker: allowlist updated with {} entries", count);
+        debug!("Adblock: allowlist updated with {} entries", count);
     }
 
     pub fn replace_config(
@@ -195,7 +195,7 @@ impl AdBlocker {
         ipv6: Option<Ipv6Addr>,
     ) {
         *self.config.write() = Arc::new(AdblockRuntimeConfig { mode, ipv4, ipv6 });
-        info!("AdBlocker: runtime config updated (mode: {:?})", mode);
+        debug!("Adblock: runtime config updated (mode: {:?})", mode);
     }
 
     pub fn add_block(&self, _domain: &str) {
@@ -237,23 +237,18 @@ impl AdBlocker {
         let mut successful_urls = 0;
 
         info!(
-            "🛡️ AdBlocker: Starting {} update from {} sources",
-            name,
+            "Adblock: Starting {name} update from {} sources",
             urls.len()
         );
 
         for url in urls {
             if !self.is_enabled() {
-                info!(
-                    "🛡️ AdBlocker: stopping {} update — adblock was disabled",
-                    name
-                );
+                info!("Adblock: stopping {name} update — adblock was disabled");
                 return Err(DnsError::Generic(format!(
-                    "Adblock disabled during {} update",
-                    name
+                    "Adblock disabled during {name} update"
                 )));
             }
-            trace!("AdBlocker: fetching {}", url);
+            trace!("Adblock: fetching {}", url);
             match fetch_url(&client, url.clone()).await {
                 Ok(body_bytes) => {
                     let mut line_count = 0;
@@ -277,18 +272,17 @@ impl AdBlocker {
                             line_count += 1;
                         }
                     }
-                    info!("✅ AdBlocker: loaded {} domains from {}", line_count, url);
+                    debug!("Adblock: loaded {} domains from {}", line_count, url);
                     total_domains += line_count;
                     successful_urls += 1;
                 }
                 Err(e) => {
-                    error!("❌ AdBlocker: failed to fetch {}: {}", url, e);
+                    error!("Adblock: failed to fetch {}: {}", url, e);
                 }
             }
         }
         info!(
-            "🎉 AdBlocker: {} update complete. Total unique domains: {} (from {} total lines). Sources: {}/{}",
-            name,
+            "Adblock: {name} update complete (unique: {}, raw lines: {}, sources: {}/{})",
             new_list.len(),
             total_domains,
             successful_urls,

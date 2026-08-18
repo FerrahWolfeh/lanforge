@@ -218,7 +218,7 @@ impl AsyncService for HttpService {
         };
 
         if let Some(tls_config) = maybe_tls_config {
-            info!(addr = %addr, "HTTPS API listening");
+            info!(addr = %addr, "HTTPS: API listening");
             let config = RustlsConfig::from_config(Arc::new(tls_config));
             let handle = Handle::new();
             let shutdown_handle = handle.clone();
@@ -233,7 +233,7 @@ impl AsyncService for HttpService {
                 .await
                 .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))?;
         } else if cfg.allow_plaintext_http {
-            info!(addr = %addr, "HTTP API listening");
+            info!(addr = %addr, "HTTP: API listening");
             let tcp_listener = TcpListener::bind(&addr)
                 .await
                 .map_err(|e| CoreError::Generic(format!("Failed to bind to {addr}: {e}")))?;

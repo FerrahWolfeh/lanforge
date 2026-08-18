@@ -203,11 +203,11 @@ impl AsyncService for DiscoveryService {
         let pinger = if self.cfg.ping_enabled {
             match IcmpPinger::new(ctx.clone()) {
                 Ok(p) => {
-                    info!("DiscoveryService: Integrated active ICMP pinger initialized.");
+                    info!("Discovery: Active ICMP ping probe initialized");
                     Some(Arc::new(p))
                 }
                 Err(e) => {
-                    warn!("DiscoveryService: Failed to initialize integrated ICMP pinger: {e}");
+                    warn!("Discovery: Failed to initialize ICMP ping probe: {e}");
                     None
                 }
             }

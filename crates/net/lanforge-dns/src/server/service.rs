@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 #[lanforge_macros::lanforge_service(
     id = "dns",
@@ -98,8 +98,8 @@ impl DnsService {
         #[cfg(feature = "adblock")]
         let filter = {
             let adblock_enabled = db_adblock.enabled;
-            info!(
-                "🛡️ DNS: Adblock feature is initializing (Adblock: {})",
+            debug!(
+                "DNS: Adblock filter initializing (enabled: {})",
                 adblock_enabled,
             );
             let blocker = AdBlocker::new(adblock_enabled);

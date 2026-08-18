@@ -78,7 +78,7 @@ impl AsyncService for DoqService {
         let endpoint = Endpoint::server(server_config, addr)
             .map_err(|e| CoreError::Generic(format!("DoQ bind error: {e}")))?;
 
-        info!("🚀 DoQ listening on quic://{}", addr);
+        info!("DoQ listening on quic://{}", addr);
 
         let mut rx = ctx.bus().subscribe();
         loop {

@@ -315,7 +315,11 @@ impl Dhcpv6Service {
         let mut handle = self.ctx.service_handle();
         let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
 
-        info!("DHCPv6 state machine started");
+        info!(
+            iface = %current_cfg.iface,
+            port = current_cfg.port,
+            "DHCPv6: Server listening"
+        );
 
         loop {
             tokio::select! {

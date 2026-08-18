@@ -94,7 +94,7 @@ impl IpPool {
             .collect();
 
         for ip in recovered_ips {
-            tracing::info!("[DHCPv4] Recovering IP {ip} from DECLINE quarantine.");
+            tracing::info!("DHCPv4: Recovering IP {ip} from DECLINE quarantine");
             self.declined.remove(&ip);
             if self.is_in_range(ip) {
                 self.add_to_available(ip);

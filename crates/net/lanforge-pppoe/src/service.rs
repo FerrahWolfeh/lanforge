@@ -63,7 +63,7 @@ impl PppoeService {
         let (ifindex, mac) = self.get_interface_details()?;
 
         // 1. Discovery
-        info!("Starting PPPoE discovery on {}", self.cfg.wan_iface);
+        info!("PPPoE: Starting discovery on {}", self.cfg.wan_iface);
         let discovery = PppoeDiscovery::new(
             ifindex,
             mac,

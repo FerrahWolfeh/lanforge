@@ -133,30 +133,29 @@ pub fn load_toml(path: &str) -> TomlConfig {
     // Try parsing the whole thing first (fast path)
     match toml::from_str::<TomlConfig>(&content) {
         Ok(cfg) => {
-            info!("[config] Loaded config from '{path}'");
-            info!(
-                "[config]   {} static device(s), RA {}",
-                cfg.devices.len(),
+            let ra_status = {
+                #[cfg(feature = "ra")]
                 {
-                    #[cfg(feature = "ra")]
-                    {
-                        if cfg.ra.enabled {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        }
-                    }
-                    #[cfg(not(feature = "ra"))]
-                    {
+                    if cfg.ra.enabled {
+                        "enabled"
+                    } else {
                         "disabled"
                     }
                 }
+                #[cfg(not(feature = "ra"))]
+                {
+                    "disabled"
+                }
+            };
+            info!(
+                "Config: Loaded from '{path}' (devices: {}, RA: {ra_status})",
+                cfg.devices.len()
             );
             return cfg;
         }
         Err(e) => {
-            warn!("[config] Failed to parse '{path}' as a whole: {e}");
-            warn!("[config] Attempting to recover valid sections individually...");
+            warn!("Config: Failed to parse '{path}' as a whole: {e}");
+            warn!("Config: Attempting to recover valid sections individually...");
         }
     }
 

@@ -76,11 +76,11 @@ where
     // Pre-seed any services that already signaled ready in context before subscription
     for s in &loop_ctx.expected_services {
         if ctx.get_service_state(s) == ServiceState::Online && loop_ctx.ready_services.insert(s.clone()) {
-            info!(
-                service = %s,
-                ready = loop_ctx.ready_services.len(),
-                total = loop_ctx.expected_services.len(),
-                "Service already online"
+            debug!(
+                "Service '{}' pre-seeded online ({}/{})",
+                s,
+                loop_ctx.ready_services.len(),
+                loop_ctx.expected_services.len()
             );
         }
     }
@@ -88,7 +88,13 @@ where
     if !loop_ctx.system_ready_sent
         && loop_ctx.ready_services.len() >= loop_ctx.expected_services.len()
     {
-        info!("✅ All internal services ready. System fully operational.");
+        let mut services: Vec<_> = loop_ctx.expected_services.iter().cloned().collect();
+        services.sort();
+        info!(
+            "All {} internal services online ({}). System fully operational.",
+            services.len(),
+            services.join(", ")
+        );
         let _ = loop_ctx
             .ctx
             .bus()
@@ -205,17 +211,23 @@ fn handle_bus_event<S: BuildHasher>(
             if l_ctx.expected_services.contains(&name)
                 && l_ctx.ready_services.insert(name.clone()) =>
         {
-            info!(
-                service = %name,
-                ready = l_ctx.ready_services.len(),
-                total = l_ctx.expected_services.len(),
-                "Service reported ready"
+            debug!(
+                "Service '{}' reported ready ({}/{})",
+                name,
+                l_ctx.ready_services.len(),
+                l_ctx.expected_services.len()
             );
 
             if !l_ctx.system_ready_sent
                 && l_ctx.ready_services.len() >= l_ctx.expected_services.len()
             {
-                info!("All internal services ready. System fully operational.");
+                let mut services: Vec<_> = l_ctx.expected_services.iter().cloned().collect();
+                services.sort();
+                info!(
+                    "All {} internal services online ({}). System fully operational.",
+                    services.len(),
+                    services.join(", ")
+                );
                 let _ = l_ctx
                     .ctx
                     .bus()
