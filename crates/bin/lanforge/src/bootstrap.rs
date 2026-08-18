@@ -154,14 +154,17 @@ impl Bootstrapper {
         };
 
         let console_url = format!("http://{host_ip}:{http_port}");
-        let setup_url = format!("http://{host_ip}:{http_port}/setup");
+        let is_first_run = db.count_users().await.unwrap_or(0) == 0;
 
         info!("┌─────────────────────────────────────────────────────────────┐");
         info!("│  ⚡ Lanforge — Router & Network Orchestrator                 │");
         info!("├─────────────────────────────────────────────────────────────┤");
         info!("│  LAN Interface:  {:<42} │", cfg.system.iface);
         info!("│  Web Console:    {:<42} │", console_url);
-        info!("│  First-Run:      {:<42} │", setup_url);
+        if is_first_run {
+            let setup_url = format!("{console_url}/setup");
+            info!("│  First-Run:      {:<42} │", setup_url);
+        }
         info!("└─────────────────────────────────────────────────────────────┘");
 
         // Load DNS settings from database into context
