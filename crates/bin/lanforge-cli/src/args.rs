@@ -65,10 +65,10 @@ pub struct LanforgeArgs {
 use crate::cli::commands::tui::TuiArgs;
 use crate::cli::commands::{
     auth::AuthArgs, config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs,
-    dns::DnsArgs, host::HostArgs, lease::LeaseArgs, pppoe::PppoeArgs, service::ServiceArgs,
-    simple::ContextArgs, simple::LoginArgs, simple::PurgeArgs, simple::ReloadArgs,
-    simple::ShutdownArgs, simple::WatchArgs, status::ServicesArgs, status::StatusArgs,
-    user::UserArgs, whois::WhoisArgs, wol::WolArgs,
+    dns::DnsArgs, host::HostArgs, init::InitArgs, lease::LeaseArgs, pppoe::PppoeArgs,
+    service::ServiceArgs, simple::ContextArgs, simple::LoginArgs, simple::PurgeArgs,
+    simple::ReloadArgs, simple::ShutdownArgs, simple::WatchArgs, status::ServicesArgs,
+    status::StatusArgs, user::UserArgs, whois::WhoisArgs, wol::WolArgs,
 };
 
 use crate::cli::{Execute, LanforgeClient};
@@ -76,6 +76,8 @@ use color_eyre::eyre::Result;
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    /// First-time router and network setup wizard
+    Init(InitArgs),
     /// Service health and general status
     Status(StatusArgs),
     /// Detailed deep-dive service metrics and status banners
@@ -127,6 +129,7 @@ pub enum Command {
 impl Execute for Command {
     async fn execute(self, client: &LanforgeClient) -> Result<()> {
         match self {
+            Self::Init(args) => args.execute(client).await,
             Self::Status(args) => args.execute(client).await,
             Self::Services(args) => args.execute(client).await,
             Self::Devices(args) => args.execute(client).await,

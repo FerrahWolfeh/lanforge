@@ -12,9 +12,9 @@ use lanforge_api::api::{
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
     HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse,
-    ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
-    WhoisResponse,
+    ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
+    StatusResponse, SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse,
+    UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::auth::ApiScopes;
@@ -1061,5 +1061,13 @@ impl LanforgeClient {
         cfg: lanforge_types::network::pppoe::PppoeConfig,
     ) -> Result<SimpleSuccess> {
         dispatch!(self, post => "/pppoe/config", cfg, update_pppoe_config(cfg))
+    }
+
+    pub async fn system_setup_status(&self) -> Result<SetupStatusResponse> {
+        dispatch!(self, get => "/system/setup-status", system_setup_status())
+    }
+
+    pub async fn system_setup(&self, payload: SetupPayload) -> Result<SetupResponse> {
+        dispatch!(self, post => "/system/setup", payload, system_setup(payload))
     }
 }

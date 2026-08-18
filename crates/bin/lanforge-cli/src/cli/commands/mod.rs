@@ -5,6 +5,7 @@ pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod host;
+pub mod init;
 pub mod lease;
 pub mod pppoe;
 pub mod service;
