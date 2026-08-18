@@ -186,7 +186,7 @@ impl ClientContext {
         // 6. Spawn delayed ReloadConfig event to allow RPC response to flush cleanly
         let bus = self.ctx.bus().clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
             let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
         });
 

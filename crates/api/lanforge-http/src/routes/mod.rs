@@ -21,6 +21,7 @@ use crate::server::AppState;
 pub fn router() -> Router<AppState> {
     let v1 = Router::new()
         .merge(system::router())
+        .nest("/system", system::router())
         .nest("/auth", auth::router())
         .nest("/users", users::router())
         .nest("/devices", devices::router())

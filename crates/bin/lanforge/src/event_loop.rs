@@ -234,6 +234,12 @@ fn handle_bus_event<S: BuildHasher>(
                     services.len(),
                     services.join(", ")
                 );
+                let cfg = l_ctx.cfg.clone();
+                let db = l_ctx.db.clone();
+                let ifindex = l_ctx.target_ifindex;
+                tokio::spawn(async move {
+                    crate::bootstrap::Bootstrapper::print_startup_banner(&cfg, ifindex, &db).await;
+                });
                 let _ = l_ctx
                     .ctx
                     .bus()
