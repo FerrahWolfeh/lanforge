@@ -40,8 +40,7 @@ impl DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: std::env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "postgres://lanforge:lanforge@localhost:5432/lanforge".to_string()),
+            url: std::env::var("DATABASE_URL").unwrap_or_else(|_| "memory".to_string()),
             log_url: "/tmp/lanforge-logs.jsonl".to_string(),
             flush_interval: 60,
             max_connections: 10,
