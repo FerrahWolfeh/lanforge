@@ -16,24 +16,25 @@
 
 	const isAuthPage = $derived($page.url.pathname === "/login" || $page.url.pathname === "/setup");
 
-	onMount(() => {
-		// Poll daemon uptime every 30s
+	$effect(() => {
+		if (isAuthPage) return;
+
+		let active = true;
 		async function pollStatus() {
 			try {
 				const s = await status();
-				uptime = s.uptime_secs;
+				if (active) uptime = s.uptime_secs;
 			} catch {
 				// daemon unreachable — leave uptime as-is
 			}
 		}
 
-		if (!isAuthPage) {
-			pollStatus();
-			const interval = setInterval(pollStatus, 30_000);
-			return () => {
-				clearInterval(interval);
-			};
-		}
+		pollStatus();
+		const interval = setInterval(pollStatus, 30_000);
+		return () => {
+			active = false;
+			clearInterval(interval);
+		};
 	});
 </script>
 

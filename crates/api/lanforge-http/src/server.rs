@@ -7,11 +7,12 @@ use axum::{
     Router,
     body::Body,
     extract::{FromRef, State},
-    http::StatusCode,
     middleware::from_fn_with_state,
     response::IntoResponse,
     routing::get,
 };
+#[cfg(feature = "webui")]
+use axum::http::StatusCode;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},

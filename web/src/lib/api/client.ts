@@ -83,6 +83,14 @@ async function request<T>(
 	const json = await res.json();
 
 	if (!res.ok) {
+		if (res.status === 401 && path !== '/auth/login' && path !== '/auth/status') {
+			if (typeof localStorage !== 'undefined') {
+				localStorage.removeItem('lf_session');
+			}
+			if (typeof window !== 'undefined' && window.location.pathname !== '/login' && window.location.pathname !== '/setup') {
+				window.location.href = '/login';
+			}
+		}
 		throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
 	}
 
@@ -114,6 +122,14 @@ async function requestRaw<T>(
 	const json = await res.json();
 
 	if (!res.ok) {
+		if (res.status === 401 && path !== '/auth/login' && path !== '/auth/status') {
+			if (typeof localStorage !== 'undefined') {
+				localStorage.removeItem('lf_session');
+			}
+			if (typeof window !== 'undefined' && window.location.pathname !== '/login' && window.location.pathname !== '/setup') {
+				window.location.href = '/login';
+			}
+		}
 		throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
 	}
 
@@ -153,6 +169,7 @@ const del = <T>(path: string, body?: unknown) => request<T>('DELETE', path, body
 
 export const authStatus = () => get<AuthStatusResponse>('/auth/status');
 export const login = (req: LoginRequest) => post<LoginResponse>('/auth/login', req);
+export const logout = () => post<void>('/auth/logout');
 export const me = () => get<UserInfo>('/auth/me');
 export const changePassword = (current_password: string, new_password: string) =>
 	post<void>('/auth/change-password', { current_password, new_password });

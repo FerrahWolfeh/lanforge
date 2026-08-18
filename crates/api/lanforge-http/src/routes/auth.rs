@@ -72,9 +72,25 @@ pub fn router() -> Router<AppState> {
         .route("/tokens/{id}/renew", post(handle_renew_token))
         .route("/validate", post(handle_validate))
         .route("/login", post(handle_login))
+        .route("/logout", post(handle_logout).get(handle_logout))
         .route("/status", get(handle_status))
         .route("/me", get(handle_me))
         .route("/change-password", post(handle_change_password))
+}
+
+pub(crate) async fn handle_logout() -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = HeaderValue::from_str("session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0") {
+        headers.append(SET_COOKIE, v);
+    }
+    if let Ok(v) = HeaderValue::from_str("lanforge_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0") {
+        headers.append(SET_COOKIE, v);
+    }
+    (
+        StatusCode::OK,
+        headers,
+        Json(serde_json::json!({ "data": { "message": "Logged out successfully" } })),
+    )
 }
 
 async fn handle_list_tokens(State(state): State<AppState>) -> impl IntoResponse {

@@ -2,34 +2,58 @@ export const ssr = false;
 export const prerender = false;
 
 import type { LayoutLoad } from './$types';
-import { redirect } from '@sveltejs/kit';
+import { isRedirect, redirect } from '@sveltejs/kit';
 import { authStatus, getSetupStatus } from '$lib/api/client';
 import { auth } from '$lib/stores/auth.svelte';
 
 export const load: LayoutLoad = async ({ url }) => {
-	// Skip auth check on login and setup pages
-	if (url.pathname === '/login' || url.pathname === '/setup') return {};
-
 	try {
+		// 1. First-run / setup inspection
 		const setup = await getSetupStatus().catch(() => null);
 		if (setup?.first_run) {
-			throw redirect(302, '/setup');
+			if (url.pathname !== '/setup') {
+				throw redirect(302, '/setup');
+			}
+			return {};
 		}
 
+		// If setup is already finished, disallow visiting the setup wizard
+		if (url.pathname === '/setup') {
+			throw redirect(302, '/');
+		}
+
+		// 2. Authentication check
 		const status = await authStatus();
 
-		if (status.auth_required && !status.authenticated && !auth.token) {
-			throw redirect(302, '/login');
-		}
-
-		// If authenticated via cookie/token in status but store is empty, fetch profile
-		if (status.authenticated && !auth.user) {
-			await auth.fetchUser();
+		if (status.auth_required) {
+			if (!status.authenticated) {
+				// Not authenticated: clear any stale token and redirect to login
+				auth.clear();
+				if (url.pathname !== '/login') {
+					throw redirect(302, '/login');
+				}
+			} else {
+				// Authenticated: ensure user profile is populated
+				if (!auth.user) {
+					await auth.fetchUser();
+				}
+				// If currently on login page, redirect back to dashboard
+				if (url.pathname === '/login') {
+					throw redirect(302, '/');
+				}
+			}
+		} else {
+			// Authentication not required on this server
+			if (url.pathname === '/login') {
+				throw redirect(302, '/');
+			}
 		}
 	} catch (e) {
-		// Re-throw SvelteKit redirects
-		if (e instanceof Response || (e as { status?: number })?.status === 302) throw e;
-		// Network errors / daemon offline — let the page handle it gracefully
+		// Re-throw SvelteKit redirects so the router performs the navigation
+		if (isRedirect(e) || (e as { status?: number })?.status === 302 || (e as { status?: number })?.status === 307) {
+			throw e;
+		}
+		// Network errors / daemon offline — let the layout and pages handle offline state gracefully
 	}
 
 	return {};

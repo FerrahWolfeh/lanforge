@@ -3,6 +3,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import * as Tooltip from "$lib/components/ui/tooltip";
+	import { logout } from "$lib/api/client";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { goto } from "$app/navigation";
 	import SunIcon from "@lucide/svelte/icons/sun";
@@ -23,7 +24,12 @@
 		return m > 0 ? `${h}h ${m}m` : `${h}h`;
 	}
 
-	function handleLogout() {
+	async function handleLogout() {
+		try {
+			await logout();
+		} catch {
+			// daemon may be unreachable
+		}
 		auth.clear();
 		goto("/login");
 	}
@@ -94,7 +100,7 @@
 			</div>
 			<div class="hidden flex-col sm:flex">
 				<span class="text-xs font-semibold leading-tight"
-					>{auth.user?.username ?? "ferrahwolfeh"}</span
+					>{auth.user?.username ?? "admin"}</span
 				>
 				<span class="text-muted-foreground text-[10px] uppercase"
 					>{auth.user?.role ?? "Admin"}</span
