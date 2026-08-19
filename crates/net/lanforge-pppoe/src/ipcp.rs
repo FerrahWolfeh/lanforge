@@ -76,7 +76,7 @@ pub async fn negotiate_ipcp(
     })
 }
 
-fn build_ipcp_req(id: u8, ip: Ipv4Addr, req_dns: bool) -> Vec<u8> {
+fn build_ipcp_req(id: u8, ip: Ipv4Addr, dns1: Ipv4Addr, dns2: Ipv4Addr, req_dns: bool) -> Vec<u8> {
     let mut pkt = Vec::new();
     pkt.extend_from_slice(&PPP_IPCP.to_be_bytes());
     pkt.push(0x01); // Configure-Request
@@ -92,12 +92,12 @@ fn build_ipcp_req(id: u8, ip: Ipv4Addr, req_dns: bool) -> Vec<u8> {
         // Opt 129: Primary DNS
         opts.push(IPCP_OPT_DNS1);
         opts.push(6);
-        opts.extend_from_slice(&[0, 0, 0, 0]);
+        opts.extend_from_slice(&dns1.octets());
 
         // Opt 131: Secondary DNS
         opts.push(IPCP_OPT_DNS2);
         opts.push(6);
-        opts.extend_from_slice(&[0, 0, 0, 0]);
+        opts.extend_from_slice(&dns2.octets());
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -116,7 +116,14 @@ fn build_ipcp_ack(id: u8, data: &[u8], len: usize) -> Vec<u8> {
     ack_pkt
 }
 
-fn parse_ipcp_nak(data: &[u8], len: usize, my_ip: &mut Ipv4Addr, dns_addrs: &mut Vec<IpAddr>) {
+fn parse_ipcp_nak(
+    data: &[u8],
+    len: usize,
+    my_ip: &mut Ipv4Addr,
+    dns1: &mut Ipv4Addr,
+    dns2: &mut Ipv4Addr,
+    dns_addrs: &mut Vec<IpAddr>,
+) {
     let mut offset = 6;
     let end = 2 + len;
     while offset + 2 <= end {
@@ -134,10 +141,17 @@ fn parse_ipcp_nak(data: &[u8], len: usize, my_ip: &mut Ipv4Addr, dns_addrs: &mut
             );
             match opt_type {
                 IPCP_OPT_IP => *my_ip = ip,
-                IPCP_OPT_DNS1 | IPCP_OPT_DNS2
-                    if !ip.is_unspecified() && !dns_addrs.contains(&IpAddr::V4(ip)) =>
-                {
-                    dns_addrs.push(IpAddr::V4(ip));
+                IPCP_OPT_DNS1 => {
+                    *dns1 = ip;
+                    if !ip.is_unspecified() && !dns_addrs.contains(&IpAddr::V4(ip)) {
+                        dns_addrs.push(IpAddr::V4(ip));
+                    }
+                }
+                IPCP_OPT_DNS2 => {
+                    *dns2 = ip;
+                    if !ip.is_unspecified() && !dns_addrs.contains(&IpAddr::V4(ip)) {
+                        dns_addrs.push(IpAddr::V4(ip));
+                    }
                 }
                 _ => {}
             }
@@ -191,6 +205,8 @@ async fn negotiate_ipv4cp(
     let mut req_id = 1u8;
     let mut my_ip = Ipv4Addr::UNSPECIFIED;
     let mut peer_ip = Ipv4Addr::UNSPECIFIED;
+    let mut dns1 = Ipv4Addr::UNSPECIFIED;
+    let mut dns2 = Ipv4Addr::UNSPECIFIED;
     let mut dns_addrs = Vec::new();
 
     let mut my_ack_rcvd = false;
@@ -199,7 +215,7 @@ async fn negotiate_ipv4cp(
     let mut request_dns = true;
 
     session
-        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, request_dns))
+        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, dns1, dns2, request_dns))
         .await?;
 
     let timeout = Duration::from_secs(10);
@@ -221,7 +237,7 @@ async fn negotiate_ipv4cp(
         else {
             req_id = req_id.wrapping_add(1);
             session
-                .send_ppp_frame(&build_ipcp_req(req_id, my_ip, request_dns))
+                .send_ppp_frame(&build_ipcp_req(req_id, my_ip, dns1, dns2, request_dns))
                 .await?;
             continue;
         };
@@ -261,10 +277,17 @@ async fn negotiate_ipv4cp(
             0x03 => {
                 // Configure-Nak — server providing allocated IP and/or DNS
                 if id == req_id {
-                    parse_ipcp_nak(data, len, &mut my_ip, &mut dns_addrs);
+                    parse_ipcp_nak(
+                        data,
+                        len,
+                        &mut my_ip,
+                        &mut dns1,
+                        &mut dns2,
+                        &mut dns_addrs,
+                    );
                     req_id = req_id.wrapping_add(1);
                     session
-                        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, request_dns))
+                        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, dns1, dns2, request_dns))
                         .await?;
                 }
             }
@@ -276,7 +299,7 @@ async fn negotiate_ipv4cp(
                     }
                     req_id = req_id.wrapping_add(1);
                     session
-                        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, request_dns))
+                        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, dns1, dns2, request_dns))
                         .await?;
                 }
             }

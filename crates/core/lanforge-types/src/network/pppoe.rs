@@ -33,6 +33,37 @@ impl std::str::FromStr for AuthMethod {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PppoeDataplane {
+    /// Traditional Linux kernel data plane using /dev/ppp and `ppp_generic` module.
+    #[default]
+    Kernel,
+    /// High-performance eBPF data plane using Generic XDP (SKB mode) and TC BPF.
+    Ebpf,
+}
+
+impl std::fmt::Display for PppoeDataplane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Kernel => write!(f, "kernel"),
+            Self::Ebpf => write!(f, "ebpf"),
+        }
+    }
+}
+
+impl std::str::FromStr for PppoeDataplane {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "kernel" | "linux" | "k" => Ok(Self::Kernel),
+            "ebpf" | "xdp" | "bpf" => Ok(Self::Ebpf),
+            other => Err(format!("Unknown dataplane: {other}")),
+        }
+    }
+}
+
 /// Configuration for `nftables` performance tuning on the gateway interface.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
@@ -68,6 +99,7 @@ impl Default for PppoeNftablesConfig {
 #[serde(default)]
 pub struct PppoeConfig {
     pub enabled: bool,
+    pub dataplane: PppoeDataplane,
     pub wan_iface: String,
     pub username: String,
     pub password: String,
@@ -88,6 +120,7 @@ impl Default for PppoeConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            dataplane: PppoeDataplane::Kernel,
             wan_iface: "eth1".into(),
             username: String::new(),
             password: String::new(),

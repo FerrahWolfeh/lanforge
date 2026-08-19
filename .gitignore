@@ -18,3 +18,12 @@ web/dist/
 web/.env.local
 web/.env.*.local
 web/pnpm-debug.log*
+
+# Test & lab scripts/configs
+contrib/scripts/
+contrib/configs/
+
+# eBPF build artifacts & temporary headers
+crates/net/lanforge-pppoe/bpf/include/
+crates/net/lanforge-pppoe/bpf/*.o
+*.bpf.o

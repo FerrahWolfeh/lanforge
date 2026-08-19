@@ -33,6 +33,7 @@ hotpath = { workspace = true, optional = true }
 nix = { version = "0.31.3", features = ["socket", "ioctl", "net", "fs"] }
 md-5 = "0.11.0"
 nftables = "0.6.3"
+aya = "0.13.1"
 
 [features]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]

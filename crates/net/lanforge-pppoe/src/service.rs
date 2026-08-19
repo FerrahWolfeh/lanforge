@@ -123,18 +123,60 @@ impl PppoeService {
                 "IPCP negotiation succeeded"
             );
 
-            // 6. Handoff to kernel ppp_generic & Configure network interface
-            info!("Performing kernel ppp_generic handoff...");
-            let kernel_session = handoff_to_kernel(session.session_fd(), lcp_res.mru)?;
-            configure_interface(
-                &kernel_session.interface_name,
-                ipcp_res.local_ip,
-                ipcp_res.peer_ip,
-                ipcp_res.local_v6_ll,
-                ipcp_res.peer_v6_ll,
-                lcp_res.mru,
-            )
-            .await?;
+            // 6. Handoff to data plane & Configure network interface
+            let (interface_name, control_fd, _ebpf_session, _kernel_session) =
+                if self.cfg.dataplane == lanforge_types::network::pppoe::PppoeDataplane::Ebpf {
+                    info!(
+                        wan_iface = %self.cfg.wan_iface,
+                        "Attaching eBPF Generic XDP + TC fast-path data plane"
+                    );
+                    let ebpf_sess = crate::ebpf::EbpfSession::attach(
+                        ifindex,
+                        &self.cfg.wan_iface,
+                        disc_res.session_id,
+                        disc_res.ac_mac.0,
+                        mac.0,
+                        ipcp_res.local_ip,
+                        ipcp_res.peer_ip,
+                        lcp_res.mru,
+                    )?;
+                    configure_interface(
+                        &self.cfg.wan_iface,
+                        ipcp_res.local_ip,
+                        ipcp_res.peer_ip,
+                        Some(disc_res.ac_mac.0),
+                        ipcp_res.local_v6_ll,
+                        ipcp_res.peer_v6_ll,
+                        lcp_res.mru,
+                    )
+                    .await?;
+                    (
+                        self.cfg.wan_iface.clone(),
+                        session.session_fd().try_clone()?,
+                        Some(ebpf_sess),
+                        None,
+                    )
+                } else {
+                    info!("Performing kernel ppp_generic handoff...");
+                    let kernel_session = handoff_to_kernel(session.session_fd(), lcp_res.mru)?;
+                    configure_interface(
+                        &kernel_session.interface_name,
+                        ipcp_res.local_ip,
+                        ipcp_res.peer_ip,
+                        None,
+                        ipcp_res.local_v6_ll,
+                        ipcp_res.peer_v6_ll,
+                        lcp_res.mru,
+                    )
+                    .await?;
+                    let chan_fd = kernel_session.ppp_chan_fd.try_clone()?;
+                    (
+                        kernel_session.interface_name.clone(),
+                        chan_fd,
+                        None,
+                        Some(kernel_session),
+                    )
+                };
 
             // Apply nftables router performance tuning rules if enabled
             if self.cfg.nftables.enabled {
@@ -150,7 +192,7 @@ impl PppoeService {
 
                 if let Err(e) = crate::nftables::apply_nftables_tuning(
                     &self.cfg.nftables,
-                    &kernel_session.interface_name,
+                    &interface_name,
                     &lan_ifaces,
                 )
                 .await
@@ -162,8 +204,9 @@ impl PppoeService {
             // Update core State with connected PPPoE status
             let pppoe_status = PppoeStatusResponse {
                 enabled: true,
+                dataplane: Some(self.cfg.dataplane),
                 state: PppoeSessionState::Connected,
-                interface: Some(kernel_session.interface_name.clone()),
+                interface: Some(interface_name.clone()),
                 wan_iface: Some(self.cfg.wan_iface.clone()),
                 local_ip: ipcp_res.local_ip,
                 peer_ip: ipcp_res.peer_ip,
@@ -185,7 +228,7 @@ impl PppoeService {
                 .ctx
                 .bus()
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp {
-                    interface: kernel_session.interface_name.clone(),
+                    interface: interface_name.clone(),
                     ac_mac: Some(disc_res.ac_mac),
                     ac_name: disc_res.ac_name.clone(),
                     session_id: disc_res.session_id,
@@ -204,12 +247,13 @@ impl PppoeService {
 
             // 8. Run keepalive / monitoring loop
             info!(
-                interface = %kernel_session.interface_name,
+                interface = %interface_name,
+                dataplane = ?self.cfg.dataplane,
                 "PPPoE session established, entering keepalive monitoring loop"
             );
 
             run_keepalive(
-                &kernel_session,
+                &control_fd,
                 &self.ctx,
                 lcp_res.local_magic,
                 lcp_res.peer_magic,
@@ -296,7 +340,9 @@ impl AsyncService for PppoeService {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        if !std::path::Path::new("/dev/ppp").exists() {
+        if self.cfg.dataplane == lanforge_types::network::pppoe::PppoeDataplane::Kernel
+            && !std::path::Path::new("/dev/ppp").exists()
+        {
             warn!(
                 service = "PPPoE",
                 "/dev/ppp device unavailable (ppp_generic kernel module missing). Disabling PPPoE service."

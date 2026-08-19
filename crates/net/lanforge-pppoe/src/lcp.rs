@@ -116,7 +116,7 @@ pub struct LcpNegotiated {
 pub async fn negotiate_lcp(
     session: &PppoeSession,
     desired_mru: u16,
-    _desired_auth: AuthMethod,
+    desired_auth: AuthMethod,
 ) -> Result<LcpNegotiated, PppoeError> {
     let local_magic: u32 = rand::random();
     let mut req_id = 1u8;
@@ -138,7 +138,11 @@ pub async fn negotiate_lcp(
 
     while start.elapsed() < timeout {
         if my_ack_received && peer_ack_sent {
-            debug!("LCP negotiation complete!");
+            debug!(
+                mru = negotiated_mru,
+                auth = ?negotiated_auth,
+                "LCP negotiation complete!"
+            );
             return Ok(LcpNegotiated {
                 mru: negotiated_mru,
                 local_magic,
@@ -186,7 +190,15 @@ pub async fn negotiate_lcp(
                 }
             }
             LCP_CONF_REQ => {
-                if handle_conf_req(packet, session, &mut peer_magic, &mut negotiated_auth).await? {
+                if handle_conf_req(
+                    packet,
+                    session,
+                    desired_auth,
+                    &mut peer_magic,
+                    &mut negotiated_auth,
+                )
+                .await?
+                {
                     peer_ack_sent = true;
                 }
             }
@@ -234,6 +246,7 @@ fn handle_conf_nak(packet: &LcpPacket, negotiated_mru: &mut u16) {
 async fn handle_conf_req(
     packet: LcpPacket,
     session: &PppoeSession,
+    desired_auth: AuthMethod,
     peer_magic: &mut u32,
     negotiated_auth: &mut AuthMethod,
 ) -> Result<bool, PppoeError> {
@@ -250,20 +263,26 @@ async fn handle_conf_req(
                 }
             }
             LCP_OPT_AUTH => {
-                if opt.data.len() >= 2 {
+                if desired_auth == AuthMethod::None {
+                    // Explicitly reject authentication option if auth is disabled
+                    rej_opts.push(opt);
+                } else if opt.data.len() >= 2 {
                     let proto = u16::from_be_bytes([opt.data[0], opt.data[1]]);
-                    if proto == PPP_PAP {
+                    if proto == PPP_PAP && desired_auth == AuthMethod::Pap {
                         *negotiated_auth = AuthMethod::Pap;
                         ack_opts.push(opt);
                     } else if proto == PPP_CHAP
                         && opt.data.len() >= 3
                         && opt.data[2] == CHAP_ALG_MD5
+                        && desired_auth == AuthMethod::ChapMd5
                     {
                         *negotiated_auth = AuthMethod::ChapMd5;
                         ack_opts.push(opt);
                     } else {
                         rej_opts.push(opt);
                     }
+                } else {
+                    rej_opts.push(opt);
                 }
             }
             LCP_OPT_MRU => {

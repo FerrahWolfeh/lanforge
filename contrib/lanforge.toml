@@ -147,3 +147,51 @@ v4_ip = "192.168.0.2"
 # IPv6 suffix (/128) for static reservation within the network's ULA prefix (optional).
 # Format: "::abcd" which will be combined with the configured ULA prefix.
 v6_suffix = "::1057:cafe"
+
+
+# [pppoe] - Integrated PPPoE WAN Concentrator & Fast-Path
+[pppoe]
+# Enables the PPPoE client service for WAN broadband connectivity.
+enabled = false
+
+# Data plane engine: "kernel" (default /dev/ppp) or "ebpf" (Generic XDP + TC Fast-Path).
+dataplane = "kernel"
+
+# Physical WAN interface connected to ONT / modem (e.g., "eth1", "end1").
+wan_iface = "eth1"
+
+# ISP subscriber credentials.
+username = "user@isp.com"
+password = "secretpassword"
+
+# Authentication protocol: "chap_md5" (default), "pap", or "none".
+auth = "chap_md5"
+
+# Maximum Receive Unit (MRU). Standard is 1492 for PPPoE.
+mru = 1492
+
+# LCP Echo keepalive interval in seconds (default: 20s).
+lcp_echo_interval_secs = 20
+
+# Maximum consecutive failed keepalives before reconnecting (default: 5).
+lcp_echo_max_failures = 5
+
+# Reconnect delay in seconds after a disconnected session (default: 10s).
+reconnect_delay_secs = 10
+
+# Send PADT frame to BRAS on service shutdown (default: true).
+send_padt_on_shutdown = true
+
+# Discovery PADI retries and timeout.
+discovery_padi_retries = 5
+discovery_padi_timeout_secs = 3
+
+# nftables router tuning settings
+[pppoe.nftables]
+enabled = true
+table_name = "lanforge"
+flow_offload = true
+mss_clamping = true
+bypass_dns = true
+bypass_vowifi = true
+masquerade = true

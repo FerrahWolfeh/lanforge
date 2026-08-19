@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use lanforge_types::network::pppoe::PppoeNftablesConfig;
 use nftables::{
     batch::Batch,
-    expr::{Expression, Meta, MetaKey, NamedExpression, RT, RTKey, TcpOption},
+    expr::{Expression, Meta, MetaKey, NamedExpression, TcpOption},
     helper::{self, NftablesError},
     schema::{Chain, FlowTable, NfListObject, Rule, Table},
     stmt::{Flow, Mangle, Match, Operator, Return, SetOp, Statement},
@@ -41,8 +41,13 @@ fn build_ruleset(
         handle: None,
     }));
 
+    // Flow offloading is only applicable to virtual ppp interfaces (kernel mode).
+    // In eBPF mode on physical interfaces, XDP + TC is already the fastpath, so we avoid
+    // kernel flowtable bypasses that skip TC egress encapsulation.
+    let flow_offload_active = cfg.flow_offload && (ppp_iface.starts_with("ppp") || ppp_iface.is_empty());
+
     // 2. Flowtable (if flow offload is enabled)
-    if cfg.flow_offload {
+    if flow_offload_active {
         let mut devices: Vec<String> = Vec::new();
         if !ppp_iface.is_empty() {
             devices.push(ppp_iface.to_string());
@@ -80,17 +85,37 @@ fn build_ruleset(
         policy: Some(NfChainPolicy::Accept),
     }));
 
+    // 3b. Output chain (for local host traffic MSS clamping)
+    let output_chain_name = "output";
+    if cfg.mss_clamping {
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone().into(),
+            name: output_chain_name.into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Output),
+            prio: Some(-10),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+    }
+
     // 4. Rules
-    let add_rule = |stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
+    let add_chain_rule = |target_chain: &str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
         NfListObject::Rule(Rule {
             family: NfFamily::INet,
             table: table.clone().into(),
-            chain: chain_name.into(),
+            chain: target_chain.to_string().into(),
             expr: stmts.into(),
             handle: None,
             index: None,
             comment: None,
         })
+    };
+    let add_rule = |stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
+        add_chain_rule(chain_name, stmts)
     };
 
     // DNS bypass (prevent flowtable socket buffer errors)
@@ -151,7 +176,7 @@ fn build_ruleset(
     }
 
     // Fast path flow offloading: ip/ip6 protocol { tcp, udp } flow add @f
-    if cfg.flow_offload {
+    if flow_offload_active {
         let flowtable_ref = format!("@{flowtable_name}");
         let flow_stmt = Statement::Flow(Flow {
             op: SetOp::Add,
@@ -195,30 +220,71 @@ fn build_ruleset(
         ]));
     }
 
-    // TCP MSS clamping: tcp flags syn tcp option maxseg size set rt mtu
+    // TCP MSS clamping: clamp MSS to 1452 (IPv4) and 1432 (IPv6) to fit 1492 MTU on PPPoE (both forwarded and local output traffic)
     if cfg.mss_clamping {
-        batch.add(add_rule(vec![
-            Statement::Match(Match {
-                left: Expression::Named(NamedExpression::Payload(
-                    nftables::expr::Payload::PayloadField(nftables::expr::PayloadField {
-                        protocol: "tcp".into(),
-                        field: "flags".into(),
-                    }),
-                )),
-                right: Expression::String("syn".into()),
-                op: Operator::IN,
-            }),
-            Statement::Mangle(Mangle {
-                key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                    name: "maxseg".into(),
-                    field: Some("size".into()),
-                })),
-                value: Expression::Named(NamedExpression::RT(RT {
-                    key: RTKey::MTU,
-                    family: None,
-                })),
-            }),
-        ]));
+        for target_chain in [chain_name, output_chain_name] {
+            // IPv4 MSS Clamping: 1452 (1492 MTU - 40B IPv4+TCP headers)
+            batch.add(add_chain_rule(target_chain, vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(
+                        nftables::expr::Payload::PayloadField(nftables::expr::PayloadField {
+                            protocol: "ip".into(),
+                            field: "protocol".into(),
+                        }),
+                    )),
+                    right: Expression::String("tcp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(
+                        nftables::expr::Payload::PayloadField(nftables::expr::PayloadField {
+                            protocol: "tcp".into(),
+                            field: "flags".into(),
+                        }),
+                    )),
+                    right: Expression::String("syn".into()),
+                    op: Operator::IN,
+                }),
+                Statement::Mangle(Mangle {
+                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                        name: "maxseg".into(),
+                        field: Some("size".into()),
+                    })),
+                    value: Expression::Number(1452),
+                }),
+            ]));
+
+            // IPv6 MSS Clamping: 1432 (1492 MTU - 60B IPv6+TCP headers)
+            batch.add(add_chain_rule(target_chain, vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(
+                        nftables::expr::Payload::PayloadField(nftables::expr::PayloadField {
+                            protocol: "ip6".into(),
+                            field: "nexthdr".into(),
+                        }),
+                    )),
+                    right: Expression::String("tcp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(
+                        nftables::expr::Payload::PayloadField(nftables::expr::PayloadField {
+                            protocol: "tcp".into(),
+                            field: "flags".into(),
+                        }),
+                    )),
+                    right: Expression::String("syn".into()),
+                    op: Operator::IN,
+                }),
+                Statement::Mangle(Mangle {
+                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                        name: "maxseg".into(),
+                        field: Some("size".into()),
+                    })),
+                    value: Expression::Number(1432),
+                }),
+            ]));
+        }
     }
 
     // 5. Postrouting NAT chain (if masquerade is enabled)
@@ -242,6 +308,13 @@ fn build_ruleset(
             table: table.into(),
             chain: nat_chain_name.into(),
             expr: vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::Nfproto,
+                    })),
+                    right: Expression::String("ipv4".into()),
+                    op: Operator::EQ,
+                }),
                 Statement::Match(Match {
                     left: Expression::Named(NamedExpression::Meta(Meta {
                         key: MetaKey::Oifname,
@@ -385,7 +458,8 @@ mod tests {
         assert!(json.contains("\"@f\""));
         // MSS clamping
         assert!(json.contains("\"maxseg\""));
-        assert!(json.contains("mtu"));
+        assert!(json.contains("1452"));
+        assert!(json.contains("1432"));
         // NAT masquerade
         assert!(json.contains("\"postrouting\""));
         assert!(json.contains("\"masquerade\""));

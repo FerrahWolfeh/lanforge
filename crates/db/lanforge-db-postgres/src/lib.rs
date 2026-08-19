@@ -4,7 +4,9 @@ pub mod dto;
 pub mod mapping;
 
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig, PppoeNftablesConfig};
+use lanforge_types::network::pppoe::{
+    AuthMethod, PppoeConfig, PppoeDataplane, PppoeNftablesConfig,
+};
 
 // Helper macros to reduce query boilerplate
 macro_rules! exec {
@@ -2235,7 +2237,7 @@ impl PppoeConfigStore for PostgresDatabase {
         Box::pin(async move {
             use sqlx::Row;
             let row = sqlx::query(
-                "SELECT enabled, wan_iface, username, password, auth, mru, lcp_echo_interval_secs, \
+                "SELECT enabled, dataplane, wan_iface, username, password, auth, mru, lcp_echo_interval_secs, \
                  lcp_echo_max_failures, reconnect_delay_secs, nft_enabled, nft_table_name, \
                  nft_flow_offload, nft_mss_clamping, nft_bypass_dns, nft_bypass_vowifi, nft_custom_rules_file \
                  FROM pppoe.config WHERE id = 1"
@@ -2246,6 +2248,11 @@ impl PppoeConfigStore for PostgresDatabase {
 
             if let Some(r) = row {
                 let enabled: bool = r.try_get("enabled").map_err(map_err)?;
+                let dataplane: PppoeDataplane = r
+                    .try_get::<String, _>("dataplane")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_default();
                 let wan_iface: String = r.try_get("wan_iface").map_err(map_err)?;
                 let username: String = r.try_get("username").map_err(map_err)?;
                 let password: String = r.try_get("password").map_err(map_err)?;
@@ -2289,6 +2296,7 @@ impl PppoeConfigStore for PostgresDatabase {
                     .unwrap_or(AuthMethod::ChapMd5);
                 Ok(Some(PppoeConfig {
                     enabled,
+                    dataplane,
                     wan_iface,
                     username,
                     password,
@@ -2321,6 +2329,7 @@ impl PppoeConfigStore for PostgresDatabase {
 
     fn save_pppoe_config<'a>(&'a self, cfg: &'a PppoeConfig) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
+            let dataplane_str = cfg.dataplane.to_string();
             let auth_str = cfg.auth.to_string();
             let mru = i32::from(cfg.mru);
             let echo_interval = cfg.lcp_echo_interval_secs as i64;
@@ -2330,14 +2339,15 @@ impl PppoeConfigStore for PostgresDatabase {
             let padi_timeout = cfg.discovery_padi_timeout_secs as i64;
 
             sqlx::query(
-                "INSERT INTO pppoe.config (id, enabled, wan_iface, username, password, auth, mru, \
+                "INSERT INTO pppoe.config (id, enabled, dataplane, wan_iface, username, password, auth, mru, \
                  lcp_echo_interval_secs, lcp_echo_max_failures, reconnect_delay_secs, \
                  send_padt_on_shutdown, discovery_padi_retries, discovery_padi_timeout_secs, \
                  nft_enabled, nft_table_name, nft_flow_offload, nft_mss_clamping, \
                  nft_bypass_dns, nft_bypass_vowifi, nft_custom_rules_file)
-                 VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                 VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                  ON CONFLICT (id) DO UPDATE SET
                    enabled = EXCLUDED.enabled,
+                   dataplane = EXCLUDED.dataplane,
                    wan_iface = EXCLUDED.wan_iface,
                    username = EXCLUDED.username,
                    password = EXCLUDED.password,
@@ -2358,6 +2368,7 @@ impl PppoeConfigStore for PostgresDatabase {
                    nft_custom_rules_file = EXCLUDED.nft_custom_rules_file",
             )
             .bind(cfg.enabled)
+            .bind(&dataplane_str)
             .bind(&cfg.wan_iface)
             .bind(&cfg.username)
             .bind(&cfg.password)

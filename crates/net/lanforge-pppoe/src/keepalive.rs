@@ -1,5 +1,4 @@
 use crate::error::PppoeError;
-use crate::kernel::KernelSession;
 use crate::lcp::{LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 
@@ -11,18 +10,14 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, warn};
 
 pub async fn run_keepalive(
-    kernel_session: &KernelSession,
+    control_fd: &OwnedFd,
     ctx: &LanforgeContext,
     local_magic: u32,
     _peer_magic: u32,
     echo_interval_secs: u64,
     max_failures: u32,
 ) -> Result<(), PppoeError> {
-    // ppp_chan_fd is the PPPoE channel descriptor connected to the ISP socket.
-    // In Linux kernel ppp_generic, all PPP control frames (LCP, IPCP, etc.)
-    // must be read and written on the channel fd, while ppp_unit_fd (ppp0)
-    // is used by the kernel network stack for IP packet routing.
-    let chan_fd_clone = kernel_session.ppp_chan_fd.try_clone()?;
+    let chan_fd_clone = control_fd.try_clone()?;
     let async_chan_fd = AsyncFd::new(chan_fd_clone)?;
     let mut bus_rx = ctx.bus().subscribe();
 
@@ -30,6 +25,14 @@ pub async fn run_keepalive(
     let mut consecutive_failures = 0u32;
     let mut interval_timer = tokio::time::interval(Duration::from_secs(echo_interval_secs));
     interval_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // Skip initial immediate tick so first Echo-Request is sent after the full interval
+    interval_timer.tick().await;
+
+    debug!(
+        echo_interval_secs,
+        max_failures,
+        "Keepalive monitoring loop initialized, waiting for first interval tick"
+    );
 
     let mut buf = [0u8; 1500];
 
@@ -162,6 +165,97 @@ async fn process_readable_chan_fd(
     .await
 }
 
+async fn send_protocol_reject(
+    async_chan_fd: &AsyncFd<OwnedFd>,
+    proto: u16,
+    data: &[u8],
+) {
+    if (proto & 0x8000) != 0 && proto != 0x8021 && proto != 0x8057 {
+        let mut rej = Vec::with_capacity(6 + data.len());
+        rej.extend_from_slice(&PPP_LCP.to_be_bytes());
+        rej.push(8 /* LCP_PROT_REJ */);
+        rej.push(1 /* id */);
+        #[allow(clippy::cast_possible_truncation)]
+        let rej_len = (4 + data.len()) as u16;
+        rej.extend_from_slice(&rej_len.to_be_bytes());
+        rej.extend_from_slice(data);
+        if let Ok(mut wguard) = async_chan_fd.writable().await {
+            let _ = nix::unistd::write(async_chan_fd.get_ref(), &rej);
+            wguard.clear_ready();
+            debug!(
+                proto = %format!("0x{proto:04x}"),
+                "Sent LCP Protocol-Reject for unsupported protocol"
+            );
+        }
+    }
+}
+
+struct LcpPacket<'a> {
+    code: u8,
+    id: u8,
+    len: usize,
+    data: &'a [u8],
+}
+
+async fn handle_lcp_code(
+    ctx: &LanforgeContext,
+    async_chan_fd: &AsyncFd<OwnedFd>,
+    pkt: &LcpPacket<'_>,
+    local_magic: u32,
+    consecutive_failures: &mut u32,
+) -> Result<Option<PppoeError>, PppoeError> {
+    match pkt.code {
+        LCP_ECHO_REP => {
+            if *consecutive_failures > 0 {
+                let _ = ctx
+                    .bus()
+                    .publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveRestored));
+            }
+            *consecutive_failures = 0;
+            debug!(id = pkt.id, "Received LCP Echo-Reply from peer");
+        }
+        LCP_ECHO_REQ => {
+            let mut reply = Vec::with_capacity(2 + pkt.len);
+            reply.extend_from_slice(&PPP_LCP.to_be_bytes());
+            reply.push(LCP_ECHO_REP);
+            reply.push(pkt.id);
+            #[allow(clippy::cast_possible_truncation)]
+            reply.extend_from_slice(&(pkt.len as u16).to_be_bytes());
+            reply.extend_from_slice(&local_magic.to_be_bytes());
+            if pkt.len > 8 {
+                reply.extend_from_slice(&pkt.data[10..2 + pkt.len]);
+            }
+
+            if let Ok(mut wguard) = async_chan_fd.writable().await {
+                let _ = nix::unistd::write(async_chan_fd.get_ref(), &reply);
+                wguard.clear_ready();
+                debug!(id = pkt.id, "Received LCP Echo-Request from peer, sent Echo-Reply");
+            }
+        }
+        LCP_TERM_REQ => {
+            let mut ack = Vec::with_capacity(6);
+            ack.extend_from_slice(&PPP_LCP.to_be_bytes());
+            ack.push(LCP_TERM_ACK);
+            ack.push(pkt.id);
+            ack.extend_from_slice(&4u16.to_be_bytes());
+
+            if let Ok(mut wguard) = async_chan_fd.writable().await {
+                let _ = nix::unistd::write(async_chan_fd.get_ref(), &ack);
+                wguard.clear_ready();
+            }
+            warn!(id = pkt.id, "Peer sent LCP Terminate-Request!");
+            return Ok(Some(PppoeError::LcpFailed(
+                "Peer terminated LCP session".into(),
+            )));
+        }
+        _ => {
+            debug!(code = pkt.code, id = pkt.id, len = pkt.len, "Received other LCP frame code");
+        }
+    }
+
+    Ok(None)
+}
+
 async fn handle_lcp_frame(
     ctx: &LanforgeContext,
     async_chan_fd: &AsyncFd<OwnedFd>,
@@ -187,6 +281,7 @@ async fn handle_lcp_frame(
             len = raw_buf.len(),
             "Received non-LCP PPP frame on chan_fd"
         );
+        send_protocol_reject(async_chan_fd, proto, data).await;
         return Ok(None);
     }
 
@@ -210,57 +305,19 @@ async fn handle_lcp_frame(
         return Ok(None);
     }
 
-    match code {
-        LCP_ECHO_REP => {
-            if *consecutive_failures > 0 {
-                let _ = ctx
-                    .bus()
-                    .publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveRestored));
-            }
-            *consecutive_failures = 0;
-            debug!(id, "Received LCP Echo-Reply from peer");
-        }
+    let pkt = LcpPacket {
+        code,
+        id,
+        len,
+        data,
+    };
 
-        LCP_ECHO_REQ => {
-            // RFC 1661 Sec 5.8: Respond to peer LCP Echo-Request with Echo-Reply
-            let mut reply = Vec::with_capacity(2 + len);
-            reply.extend_from_slice(&PPP_LCP.to_be_bytes());
-            reply.push(LCP_ECHO_REP);
-            reply.push(id);
-            #[allow(clippy::cast_possible_truncation)]
-            reply.extend_from_slice(&(len as u16).to_be_bytes());
-            reply.extend_from_slice(&local_magic.to_be_bytes());
-            if len > 8 {
-                reply.extend_from_slice(&data[10..2 + len]);
-            }
-
-            if let Ok(mut wguard) = async_chan_fd.writable().await {
-                let _ = nix::unistd::write(async_chan_fd.get_ref(), &reply);
-                wguard.clear_ready();
-                debug!(id, "Received LCP Echo-Request from peer, sent Echo-Reply");
-            }
-        }
-        LCP_TERM_REQ => {
-            // Peer requested LCP termination
-            let mut ack = Vec::with_capacity(6);
-            ack.extend_from_slice(&PPP_LCP.to_be_bytes());
-            ack.push(LCP_TERM_ACK);
-            ack.push(id);
-            ack.extend_from_slice(&4u16.to_be_bytes());
-
-            if let Ok(mut wguard) = async_chan_fd.writable().await {
-                let _ = nix::unistd::write(async_chan_fd.get_ref(), &ack);
-                wguard.clear_ready();
-            }
-            warn!(id, "Peer sent LCP Terminate-Request!");
-            return Ok(Some(PppoeError::LcpFailed(
-                "Peer terminated LCP session".into(),
-            )));
-        }
-        _ => {
-            debug!(code, id, len, "Received other LCP frame code");
-        }
-    }
-
-    Ok(None)
+    handle_lcp_code(
+        ctx,
+        async_chan_fd,
+        &pkt,
+        local_magic,
+        consecutive_failures,
+    )
+    .await
 }
