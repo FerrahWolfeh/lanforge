@@ -17,6 +17,7 @@ struct EthtoolValue {
     data: u32,
 }
 
+#[allow(clippy::cast_possible_wrap)]
 fn set_ethtool_flag(ifname: &str, cmd: u32, val: u32) -> Result<(), PppoeError> {
     let sock = socket(
         AddressFamily::Inet,
@@ -30,7 +31,7 @@ fn set_ethtool_flag(ifname: &str, cmd: u32, val: u32) -> Result<(), PppoeError> 
         .map_err(|_| PppoeError::NegotiationFailed("Invalid interface name".into()))?;
     let bytes = c_ifname.as_bytes();
     for (i, &b) in bytes[..bytes.len().min(15)].iter().enumerate() {
-        ifr.ifr_name[i] = b.cast_signed();
+        ifr.ifr_name[i] = b as libc::c_char;
     }
 
     let mut ev = EthtoolValue { cmd, data: val };
