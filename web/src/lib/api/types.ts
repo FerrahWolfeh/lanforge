@@ -717,3 +717,59 @@ export interface SetupResponse {
 	username: string;
 	message: string;
 }
+
+// ---------------------------------------------------------------------------
+// PPPoE
+// ---------------------------------------------------------------------------
+
+export type PppoeDataplane = 'kernel' | 'ebpf';
+export type PppoeAuthMethod = 'none' | 'pap' | 'chap_md5';
+export type PppoeSessionState = 'disconnected' | 'authenticating' | 'connected' | 'reconnecting';
+
+export interface PppoeNftablesConfig {
+	enabled: boolean;
+	table_name: string;
+	flow_offload: boolean;
+	mss_clamping: boolean;
+	bypass_dns: boolean;
+	bypass_vowifi: boolean;
+	masquerade: boolean;
+	custom_rules_file: string | null;
+}
+
+export interface PppoeConfig {
+	enabled: boolean;
+	dataplane: PppoeDataplane;
+	wan_iface: string;
+	username: string;
+	password: string;
+	service_name: string | null;
+	ac_name: string | null;
+	auth: PppoeAuthMethod;
+	mru: number;
+	lcp_echo_interval_secs: number;
+	lcp_echo_max_failures: number;
+	reconnect_delay_secs: number;
+	send_padt_on_shutdown: boolean;
+	discovery_padi_retries: number;
+	discovery_padi_timeout_secs: number;
+	nftables: PppoeNftablesConfig;
+}
+
+export interface PppoeStatusResponse {
+	enabled: boolean;
+	dataplane?: PppoeDataplane | null;
+	state: PppoeSessionState;
+	interface: string | null;
+	wan_iface: string | null;
+	local_ip: string | null;
+	peer_ip: string | null;
+	ac_mac: string | null;
+	ac_name: string | null;
+	session_id: number | null;
+	mru: number | null;
+	dns_servers: string[];
+	uptime_secs: number | null;
+	reconnect_attempts: number;
+	last_error: string | null;
+}

@@ -39,6 +39,11 @@
 					href: "/network/hosts",
 					icon: BookmarkIcon,
 				},
+				{
+					label: "PPPoE WAN",
+					href: "/network/pppoe",
+					icon: PlugZapIcon,
+				},
 			],
 		},
 		{
@@ -135,37 +140,6 @@
 				</Sidebar.GroupContent>
 			</Sidebar.Group>
 		{/each}
-
-		<!-- PPPoE — disabled, coming soon -->
-		<Sidebar.Group>
-			<Sidebar.GroupLabel>PPPoE</Sidebar.GroupLabel>
-			<Sidebar.GroupContent>
-				<Sidebar.Menu>
-					<Sidebar.MenuItem>
-						<Tooltip.Provider>
-							<Tooltip.Root>
-								<Tooltip.Trigger class="w-full">
-									<Sidebar.MenuButton
-										class="cursor-not-allowed opacity-50"
-										aria-disabled="true"
-									>
-										<PlugZapIcon />
-										<span>PPPoE</span>
-										<LockIcon class="ml-auto" />
-									</Sidebar.MenuButton>
-								</Tooltip.Trigger>
-								<Tooltip.Content side="right">
-									<p class="text-xs">
-										Coming soon — API surface not yet
-										defined
-									</p>
-								</Tooltip.Content>
-							</Tooltip.Root>
-						</Tooltip.Provider>
-					</Sidebar.MenuItem>
-				</Sidebar.Menu>
-			</Sidebar.GroupContent>
-		</Sidebar.Group>
 	</Sidebar.Content>
 
 	<Sidebar.Footer>

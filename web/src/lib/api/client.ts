@@ -37,7 +37,9 @@ import type {
 	SetupResponse,
 	SetupStatusResponse,
 	StatusResponse,
-	UserInfo
+	UserInfo,
+	PppoeConfig,
+	PppoeStatusResponse
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -412,6 +414,16 @@ export const userCreate = (username: string, password: string, role?: string) =>
 export const userDelete = (username: string) => del<void>(`/users/${encodeURIComponent(username)}`);
 export const userPasswd = (username: string, new_password: string) =>
 	put<void>(`/users/${encodeURIComponent(username)}/password`, { new_password });
+
+// ---------------------------------------------------------------------------
+// PPPoE WAN & Fast-Path
+// ---------------------------------------------------------------------------
+
+export const pppoeStatus = () => get<PppoeStatusResponse>('/pppoe/status');
+export const pppoeConfig = () => get<PppoeConfig>('/pppoe/config');
+export const pppoeUpdateConfig = (cfg: PppoeConfig) => post<void>('/pppoe/config', cfg);
+export const pppoeReconnect = () => post<void>('/pppoe/reconnect');
+export const pppoeDisconnect = () => post<void>('/pppoe/disconnect');
 
 // ---------------------------------------------------------------------------
 // Setup & Onboarding
