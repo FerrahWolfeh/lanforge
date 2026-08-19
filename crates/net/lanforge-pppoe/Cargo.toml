@@ -27,6 +27,7 @@ libc = { workspace = true }
 rtnetlink = { workspace = true }
 rand = { workspace = true }
 pnet = { workspace = true }
+futures = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 # Third party protocol / low level

@@ -1,10 +1,10 @@
 use crate::error::PppoeError;
 use aya::maps::HashMap;
-use aya::programs::tc::{qdisc_add_clsact, TcAttachType};
+use aya::programs::tc::{qdisc_add_clsact, SchedClassifierLinkId, TcAttachType};
+use aya::programs::xdp::XdpLinkId;
 use aya::programs::{SchedClassifier, Xdp, XdpFlags};
 use aya::{Ebpf, Pod};
 use std::net::Ipv4Addr;
-use std::process::Command;
 use tracing::{debug, info};
 
 #[repr(C)]
@@ -28,6 +28,8 @@ pub struct EbpfSession {
     pub ifindex: u32,
     pub ifname: String,
     pub session_id: u16,
+    xdp_link: Option<XdpLinkId>,
+    tc_link: Option<SchedClassifierLinkId>,
 }
 
 #[repr(C, align(8))]
@@ -57,47 +59,49 @@ impl EbpfSession {
         })?;
 
         debug!(ifname, "Attaching XDP PPPoE ingress decapsulator");
-        if let Some(prog) = bpf.program_mut("pppoe_ingress_decap") {
+        let xdp_link = if let Some(prog) = bpf.program_mut("pppoe_ingress_decap") {
             let xdp: &mut Xdp = prog
                 .try_into()
                 .map_err(|e| PppoeError::NegotiationFailed(format!("Invalid XDP ingress program: {e}")))?;
             xdp.load().map_err(|e| {
                 PppoeError::NegotiationFailed(format!("Failed to load XDP ingress program: {e}"))
             })?;
-            xdp.attach(ifname, XdpFlags::SKB_MODE).map_err(|e| {
+            let link_id = xdp.attach(ifname, XdpFlags::SKB_MODE).map_err(|e| {
                 PppoeError::NegotiationFailed(format!(
                     "Failed to attach XDP ingress decapsulator to {ifname}: {e}"
                 ))
             })?;
             info!(ifname, "XDP PPPoE ingress decapsulator successfully attached");
+            Some(link_id)
         } else {
             return Err(PppoeError::NegotiationFailed(
                 "XDP program pppoe_ingress_decap not found in bytecode".into(),
             ));
-        }
+        };
 
         // Add clsact qdisc if not already present
         let _ = qdisc_add_clsact(ifname);
 
         debug!(ifname, "Attaching TC PPPoE egress encapsulator and MSS clamper");
-        if let Some(prog) = bpf.program_mut("pppoe_egress_encap") {
+        let tc_link = if let Some(prog) = bpf.program_mut("pppoe_egress_encap") {
             let tc_out: &mut SchedClassifier = prog
                 .try_into()
                 .map_err(|e| PppoeError::NegotiationFailed(format!("Invalid TC egress program: {e}")))?;
             tc_out.load().map_err(|e| {
                 PppoeError::NegotiationFailed(format!("Failed to load TC egress program: {e}"))
             })?;
-            tc_out.attach(ifname, TcAttachType::Egress).map_err(|e| {
+            let link_id = tc_out.attach(ifname, TcAttachType::Egress).map_err(|e| {
                 PppoeError::NegotiationFailed(format!(
                     "Failed to attach TC egress classifier to {ifname}: {e}"
                 ))
             })?;
             info!(ifname, "TC PPPoE egress encapsulator successfully attached");
+            Some(link_id)
         } else {
             return Err(PppoeError::NegotiationFailed(
                 "TC program pppoe_egress_encap not found in bytecode".into(),
             ));
-        }
+        };
 
         // Compute MSS clamp (1492 - 40 = 1452 by default)
         let mss_clamp = mru.saturating_sub(40);
@@ -135,6 +139,8 @@ impl EbpfSession {
             ifindex,
             ifname: ifname.to_string(),
             session_id,
+            xdp_link,
+            tc_link,
         })
     }
 
@@ -151,31 +157,22 @@ impl EbpfSession {
             let _ = map.remove(&0u32);
         }
 
-        // 1. Detach XDP program from physical interface
-        let _ = Command::new("ip")
-            .args(["link", "set", "dev", &self.ifname, "xdp", "off"])
-            .output();
+        if let Some(link_id) = self.xdp_link.take()
+            && let Some(prog) = self.bpf.program_mut("pppoe_ingress_decap")
+            && let Ok(xdp) = <&mut Xdp>::try_from(prog)
+        {
+            let _ = xdp.detach(link_id);
+        }
 
-        // 2. Remove TC clsact qdisc from physical interface
-        let _ = Command::new("tc")
-            .args(["qdisc", "del", "dev", &self.ifname, "clsact"])
-            .output();
+        if let Some(link_id) = self.tc_link.take()
+            && let Some(prog) = self.bpf.program_mut("pppoe_egress_encap")
+            && let Ok(tc) = <&mut SchedClassifier>::try_from(prog)
+        {
+            let _ = tc.detach(link_id);
+        }
 
-        // 3. Restore standard hardware TSO/GSO/TX offloads
-        let _ = Command::new("ethtool")
-            .args([
-                "-K",
-                &self.ifname,
-                "tso",
-                "on",
-                "gso",
-                "on",
-                "tx",
-                "on",
-                "tx-checksum-ip-generic",
-                "on",
-            ])
-            .output();
+        // Restore standard hardware TSO/GSO/TX offloads via native kernel ioctl
+        crate::kernel::sysctl::restore_interface_offloads(&self.ifname);
     }
 }
 

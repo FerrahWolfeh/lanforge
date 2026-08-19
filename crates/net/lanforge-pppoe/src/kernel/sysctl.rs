@@ -1,5 +1,47 @@
+use crate::error::PppoeError;
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
+use std::ffi::CString;
+use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::process::Command;
+use tracing::debug;
+
+const SIOCETHTOOL: libc::c_ulong = 0x8946;
+
+const ETHTOOL_STXCSUM: u32 = 0x0000_0017;
+const ETHTOOL_STSO: u32 = 0x0000_001f;
+const ETHTOOL_SGSO: u32 = 0x0000_0029;
+
+#[repr(C)]
+struct EthtoolValue {
+    cmd: u32,
+    data: u32,
+}
+
+fn set_ethtool_flag(ifname: &str, cmd: u32, val: u32) -> Result<(), PppoeError> {
+    let sock = socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )?;
+
+    let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
+    let c_ifname = CString::new(ifname)
+        .map_err(|_| PppoeError::NegotiationFailed("Invalid interface name".into()))?;
+    let bytes = c_ifname.as_bytes();
+    for (i, &b) in bytes[..bytes.len().min(15)].iter().enumerate() {
+        ifr.ifr_name[i] = b.cast_signed();
+    }
+
+    let mut ev = EthtoolValue { cmd, data: val };
+    ifr.ifr_ifru.ifru_data = std::ptr::addr_of_mut!(ev).cast::<libc::c_char>();
+
+    unsafe {
+        let _ = libc::ioctl(sock.as_raw_fd(), SIOCETHTOOL, &raw mut ifr);
+    }
+
+    Ok(())
+}
 
 pub fn enable_interface_procfs(ifname: &str) {
     // accept_ra = 2 is MANDATORY on a router (where IPv6 forwarding is enabled).
@@ -35,28 +77,19 @@ pub fn enable_interface_procfs(ifname: &str) {
         let _ = std::fs::write(&accept_local_path, "1");
     }
 
-    // Clamp GSO segment size to match PPPoE MTU (1492) while preserving hardware TX/RX/GRO offloads
-    let _ = Command::new("ip")
-        .args([
-            "link",
-            "set",
-            "dev",
-            ifname,
-            "gso_max_size",
-            "1492",
-            "gso_max_segs",
-            "1",
-        ])
-        .output();
-    let _ = Command::new("ethtool")
-        .args(["-K", ifname, "tso", "off", "gso", "off"])
-        .output();
+    // Disable TSO/GSO via kernel SIOCETHTOOL ioctl
+    let _ = set_ethtool_flag(ifname, ETHTOOL_STSO, 0);
+    let _ = set_ethtool_flag(ifname, ETHTOOL_SGSO, 0);
 
-    // For physical interfaces in eBPF mode, disable hardware TX checksum offload so the kernel IP stack
-    // calculates L4 (TCP/UDP) checksums in software before TC egress PPPoE encapsulation (mirroring ppp0 behavior).
+    // For physical interfaces in eBPF mode, disable hardware TX checksum offload via kernel ioctl
     if !ifname.starts_with("ppp") {
-        let _ = Command::new("ethtool")
-            .args(["-K", ifname, "tx", "off", "tx-checksum-ip-generic", "off"])
-            .output();
+        let _ = set_ethtool_flag(ifname, ETHTOOL_STXCSUM, 0);
     }
+}
+
+pub fn restore_interface_offloads(ifname: &str) {
+    debug!(ifname, "Restoring network interface offloads via kernel ioctl");
+    let _ = set_ethtool_flag(ifname, ETHTOOL_STSO, 1);
+    let _ = set_ethtool_flag(ifname, ETHTOOL_SGSO, 1);
+    let _ = set_ethtool_flag(ifname, ETHTOOL_STXCSUM, 1);
 }

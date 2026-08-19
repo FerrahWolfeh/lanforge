@@ -1,12 +1,13 @@
 use crate::error::PppoeError;
+use futures::TryStreamExt;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
-use rtnetlink::packet_route::address::{AddressAttribute, AddressHeaderFlags};
+use rtnetlink::packet_route::address::{AddressAttribute, AddressHeaderFlags, AddressScope};
+use rtnetlink::packet_route::neighbour::{NeighbourAttribute, NeighbourState};
 use rtnetlink::packet_route::route::RouteScope;
-use rtnetlink::RouteMessageBuilder;
+use rtnetlink::{IpVersion, RouteMessageBuilder};
 use std::ffi::CString;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::AsRawFd;
-use tokio::process::Command;
 use tracing::{debug, warn};
 
 nix::ioctl_write_ptr_bad!(siocsifaddr, 0x8916, libc::ifreq);
@@ -37,8 +38,7 @@ pub fn setup_interface_ifreq(
 
     // Set MTU:
     // - For virtual ppp interfaces (e.g. ppp0), MTU is the negotiated PPPoE MRU (1492).
-    // - For physical/Ethernet interfaces in eBPF mode (e.g. wan0), the physical interface MTU must be 1500
-    //   so that the 1492-byte IP packet + 8-byte PPPoE header (1500 bytes total) is transmitted without driver drops.
+    // - For physical/Ethernet interfaces in eBPF mode (e.g. wan0), the physical interface MTU must be 1500.
     let dev_mtu = if ifname.starts_with("ppp") {
         mtu
     } else {
@@ -117,8 +117,31 @@ pub fn setup_interface_ifreq(
     Ok(ifindex)
 }
 
+pub async fn assign_ipv4_address(ifindex: u32, local: Ipv4Addr, peer: Option<Ipv4Addr>) {
+    match rtnetlink::new_connection() {
+        Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for IP addr"),
+        Ok((conn, handle, _)) => {
+            tokio::spawn(conn);
+            let mut req = handle.address().add(ifindex, IpAddr::V4(local), 32);
+            if let Some(peer_ip) = peer {
+                req.message_mut()
+                    .attributes
+                    .push(AddressAttribute::Address(IpAddr::V4(peer_ip)));
+                req.message_mut()
+                    .attributes
+                    .push(AddressAttribute::Local(IpAddr::V4(local)));
+            }
+            let result = req.replace().execute().await;
+            if let Err(e) = result
+                && !e.to_string().contains("File exists")
+            {
+                warn!(error = %e, "Failed to assign IPv4 address via rtnetlink");
+            }
+        }
+    }
+}
+
 pub async fn add_ipv4_peer_route(
-    ifname: &str,
     ifindex: u32,
     peer: Ipv4Addr,
     local: Option<Ipv4Addr>,
@@ -144,65 +167,31 @@ pub async fn add_ipv4_peer_route(
             }
         }
     }
-
-    let mut cmd = Command::new("ip");
-    cmd.args([
-        "route",
-        "replace",
-        &format!("{peer}/32"),
-        "dev",
-        ifname,
-        "scope",
-        "link",
-        "metric",
-        "50",
-        "mtu",
-        "1492",
-        "advmss",
-        "1452",
-    ]);
-    if let Some(src) = local {
-        cmd.args(["src", &src.to_string()]);
-    }
-    let _ = cmd.output().await;
 }
 
-pub async fn add_static_neighbour(ifname: &str, peer: Ipv4Addr, mac: [u8; 6]) {
-    let mac_str = format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    );
-    let result = Command::new("ip")
-        .args([
-            "neigh",
-            "replace",
-            &peer.to_string(),
-            "dev",
-            ifname,
-            "lladdr",
-            &mac_str,
-            "nud",
-            "permanent",
-        ])
-        .status()
-        .await;
-    match result {
-        Ok(s) if s.success() => {
-            debug!(
-                ifname,
-                peer = %peer,
-                mac = %mac_str,
-                "Installed static neighbour entry for peer gateway"
-            );
+pub async fn add_static_neighbour(ifindex: u32, peer: Ipv4Addr, mac: [u8; 6]) {
+    match rtnetlink::new_connection() {
+        Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for neighbour"),
+        Ok((conn, handle, _)) => {
+            tokio::spawn(conn);
+            let mut req = handle.neighbours().add(ifindex, IpAddr::V4(peer));
+            req.message_mut().header.state = NeighbourState::Permanent;
+            req.message_mut()
+                .attributes
+                .push(NeighbourAttribute::LinkLayerAddress(mac.to_vec()));
+            let result = req.replace().execute().await;
+            if let Err(e) = result
+                && !e.to_string().contains("File exists")
+            {
+                warn!(error = %e, "Failed to install static neighbour entry");
+            } else {
+                debug!(ifindex, peer = %peer, "Installed static neighbour entry via rtnetlink");
+            }
         }
-        Err(e) => {
-            warn!(error = %e, "Failed to run ip neigh replace for peer gateway");
-        }
-        _ => {}
     }
 }
 
-pub async fn add_ipv4_default_route(ifname: &str, ifindex: u32, peer: Ipv4Addr) {
+pub async fn add_ipv4_default_route(ifindex: u32, peer: Ipv4Addr) {
     match rtnetlink::new_connection() {
         Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for route"),
         Ok((conn, handle, _)) => {
@@ -221,30 +210,9 @@ pub async fn add_ipv4_default_route(ifname: &str, ifindex: u32, peer: Ipv4Addr) 
             }
         }
     }
-
-    let _ = Command::new("ip")
-        .args([
-            "route",
-            "replace",
-            "default",
-            "via",
-            &peer.to_string(),
-            "dev",
-            ifname,
-            "metric",
-            "100",
-            "mtu",
-            "1492",
-            "advmss",
-            "1452",
-        ])
-        .output()
-        .await;
 }
 
-#[allow(clippy::too_many_lines)]
 pub async fn add_ipv6_link_local(
-    ifname: &str,
     ifindex: u32,
     v6_ll: Ipv6Addr,
     peer_v6_ll: Option<Ipv6Addr>,
@@ -260,6 +228,9 @@ pub async fn add_ipv6_link_local(
                 req.message_mut()
                     .attributes
                     .push(AddressAttribute::Address(IpAddr::V6(peer)));
+                req.message_mut()
+                    .attributes
+                    .push(AddressAttribute::Local(IpAddr::V6(v6_ll)));
             }
             let result = req.execute().await;
             if let Err(e) = result
@@ -267,102 +238,28 @@ pub async fn add_ipv6_link_local(
             {
                 warn!(error = %e, "Failed to assign IPv6 link-local address");
             }
+
+            if let (Some(peer), Some(mac)) = (peer_v6_ll, peer_mac) {
+                let mut neigh_req = handle.neighbours().add(ifindex, IpAddr::V6(peer));
+                neigh_req.message_mut().header.state = NeighbourState::Permanent;
+                neigh_req
+                    .message_mut()
+                    .attributes
+                    .push(NeighbourAttribute::LinkLayerAddress(mac.to_vec()));
+                let _ = neigh_req.replace().execute().await;
+            }
+
+            // IPv6 default route
+            let mut route_builder = RouteMessageBuilder::<Ipv6Addr>::new()
+                .destination_prefix(Ipv6Addr::UNSPECIFIED, 0)
+                .output_interface(ifindex)
+                .priority(100);
+            if let Some(peer) = peer_v6_ll {
+                route_builder = route_builder.gateway(peer);
+            }
+            let route = route_builder.build();
+            let _ = handle.route().add(route).replace().execute().await;
         }
-    }
-
-    if let Some(peer) = peer_v6_ll {
-        let _ = Command::new("ip")
-            .args([
-                "-6",
-                "addr",
-                "replace",
-                &v6_ll.to_string(),
-                "peer",
-                &format!("{peer}/128"),
-                "dev",
-                ifname,
-                "scope",
-                "link",
-                "nodad",
-            ])
-            .output()
-            .await;
-    } else {
-        let _ = Command::new("ip")
-            .args([
-                "-6",
-                "addr",
-                "replace",
-                &format!("{v6_ll}/64"),
-                "dev",
-                ifname,
-                "scope",
-                "link",
-            ])
-            .output()
-            .await;
-    }
-
-    if let (Some(peer), Some(mac)) = (peer_v6_ll, peer_mac) {
-        let mac_str = format!(
-            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-        );
-        let _ = Command::new("ip")
-            .args([
-                "-6",
-                "neigh",
-                "replace",
-                &peer.to_string(),
-                "dev",
-                ifname,
-                "lladdr",
-                &mac_str,
-                "nud",
-                "permanent",
-            ])
-            .output()
-            .await;
-    }
-
-    if let Some(peer) = peer_v6_ll {
-        let _ = Command::new("ip")
-            .args([
-                "-6",
-                "route",
-                "replace",
-                "default",
-                "via",
-                &peer.to_string(),
-                "dev",
-                ifname,
-                "metric",
-                "100",
-                "mtu",
-                "1492",
-                "advmss",
-                "1432",
-            ])
-            .output()
-            .await;
-    } else {
-        let _ = Command::new("ip")
-            .args([
-                "-6",
-                "route",
-                "replace",
-                "default",
-                "dev",
-                ifname,
-                "metric",
-                "100",
-                "mtu",
-                "1492",
-                "advmss",
-                "1432",
-            ])
-            .output()
-            .await;
     }
 }
 
@@ -372,38 +269,59 @@ pub async fn deconfigure_routes_and_addrs(
     peer_ip: Option<Ipv4Addr>,
 ) {
     if is_ebpf && !ifname.starts_with("ppp") {
-        debug!(ifname, "Deconfiguring eBPF physical interface routes and IP addresses");
+        debug!(ifname, "Deconfiguring eBPF physical interface routes and IP addresses via rtnetlink");
 
-        // 1. Delete default IPv4 and IPv6 routes via WAN
-        let _ = Command::new("ip")
-            .args(["route", "del", "default", "dev", ifname])
-            .output()
-            .await;
-        let _ = Command::new("ip")
-            .args(["-6", "route", "del", "default", "dev", ifname])
-            .output()
-            .await;
-
-        // 2. Delete peer route and static neighbour entry
-        if let Some(peer) = peer_ip {
-            let _ = Command::new("ip")
-                .args(["route", "del", &format!("{peer}/32"), "dev", ifname])
-                .output()
-                .await;
-            let _ = Command::new("ip")
-                .args(["neigh", "del", &peer.to_string(), "dev", ifname])
-                .output()
-                .await;
+        let Ok(c_ifname) = CString::new(ifname) else {
+            return;
+        };
+        let ifindex = unsafe { libc::if_nametoindex(c_ifname.as_ptr()) };
+        if ifindex == 0 {
+            return;
         }
 
-        // 3. Flush assigned IPv4 and IPv6 addresses
-        let _ = Command::new("ip")
-            .args(["-4", "addr", "flush", "dev", ifname, "scope", "global"])
-            .output()
-            .await;
-        let _ = Command::new("ip")
-            .args(["-6", "addr", "flush", "dev", ifname, "scope", "global"])
-            .output()
-            .await;
+        if let Ok((conn, handle, _)) = rtnetlink::new_connection() {
+            tokio::spawn(conn);
+
+            // 1. Delete default IPv4 route
+            let default_v4 = RouteMessageBuilder::<Ipv4Addr>::new()
+                .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+                .output_interface(ifindex)
+                .build();
+            let _ = handle.route().del(default_v4).execute().await;
+
+            // 2. Delete peer route and static neighbour entry
+            if let Some(peer) = peer_ip {
+                let peer_route = RouteMessageBuilder::<Ipv4Addr>::new()
+                    .destination_prefix(peer, 32)
+                    .output_interface(ifindex)
+                    .build();
+                let _ = handle.route().del(peer_route).execute().await;
+                let mut neigh_stream = handle
+                    .neighbours()
+                    .get()
+                    .set_family(IpVersion::V4)
+                    .execute();
+                while let Ok(Some(msg)) = neigh_stream.try_next().await {
+                    if msg.header.ifindex == ifindex {
+                        let _ = handle.neighbours().del(msg).execute().await;
+                    }
+                }
+            }
+
+            // 3. Delete default IPv6 route
+            let default_v6 = RouteMessageBuilder::<Ipv6Addr>::new()
+                .destination_prefix(Ipv6Addr::UNSPECIFIED, 0)
+                .output_interface(ifindex)
+                .build();
+            let _ = handle.route().del(default_v6).execute().await;
+
+            // 4. Flush global IPv4 / IPv6 addresses
+            let mut addr_stream = handle.address().get().set_link_index_filter(ifindex).execute();
+            while let Ok(Some(addr_msg)) = addr_stream.try_next().await {
+                if addr_msg.header.scope == AddressScope::Universe {
+                    let _ = handle.address().del(addr_msg).execute().await;
+                }
+            }
+        }
     }
 }

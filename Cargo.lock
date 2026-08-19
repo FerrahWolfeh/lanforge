@@ -2894,6 +2894,7 @@ name = "lanforge-pppoe"
 version = "0.1.0"
 dependencies = [
  "aya",
+ "futures",
  "hotpath",
  "lanforge-core",
  "lanforge-macros",
