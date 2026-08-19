@@ -23,14 +23,16 @@ use lanforge_types::identifiers::MacAddr;
     name = "PPPoE Client",
     critical = false,
     retries = 0,
-    base_backoff = 10,
+    base_backoff = 5,
     max_backoff = 10,
+    shutdown_timeout = 10,
     describe = format!("PPPoE on {} (user: {})", self.cfg.wan_iface, self.cfg.username)
 )]
 pub struct PppoeService {
     cfg: PppoeConfig,
     ctx: LanforgeContext,
     attempt: u32,
+    active_session: Option<(MacAddr, MacAddr, u16)>,
 }
 
 impl PppoeService {
@@ -40,6 +42,7 @@ impl PppoeService {
             cfg,
             ctx,
             attempt: 0,
+            active_session: None,
         }
     }
 
@@ -73,6 +76,7 @@ impl PppoeService {
             self.cfg.ac_name.clone(),
         );
         let disc_res = discovery.run().await?;
+        self.active_session = Some((mac, disc_res.ac_mac, disc_res.session_id));
         info!(
             ac_mac = %disc_res.ac_mac,
             ac_name = disc_res.ac_name.as_deref().unwrap_or("unknown"),
@@ -268,15 +272,17 @@ impl PppoeService {
             crate::nftables::cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
         }
 
-        if self.cfg.send_padt_on_shutdown {
-            let _ = discovery::send_padt(
-                &self.cfg.wan_iface,
-                mac,
-                disc_res.ac_mac,
-                disc_res.session_id,
-            );
-        } else {
-            info!("Skipping PPPoE PADT frame on shutdown (send_padt_on_shutdown = false)");
+        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take() {
+            if self.cfg.send_padt_on_shutdown {
+                let _ = discovery::send_padt(
+                    &self.cfg.wan_iface,
+                    wan_mac,
+                    ac_mac,
+                    session_id,
+                );
+            } else {
+                info!("Skipping PPPoE PADT frame on shutdown (send_padt_on_shutdown = false)");
+            }
         }
 
         let reason = match &flow_res {
@@ -295,6 +301,23 @@ impl PppoeService {
             .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }));
 
         flow_res
+    }
+}
+
+fn is_shutdown_or_stop_event(event: &LanforgeEvent) -> bool {
+    match event {
+        LanforgeEvent::System(SystemEvent::Shutdown) => true,
+        LanforgeEvent::System(SystemEvent::ServiceControl { id, action })
+            if id == "pppoe"
+                && matches!(
+                    action,
+                    lanforge_types::system::ServiceAction::Stop
+                        | lanforge_types::system::ServiceAction::Restart
+                ) =>
+        {
+            true
+        }
+        _ => false,
     }
 }
 
@@ -358,41 +381,57 @@ impl AsyncService for PppoeService {
 
         let mut bus_rx = ctx.bus().subscribe();
 
-        loop {
+        'main_loop: loop {
             if !ctx.is_running() {
-                break;
+                break 'main_loop;
             }
 
-            match self.run_session_flow().await {
-                Ok(()) => {
-                    info!("PPPoE service session finished cleanly");
-                    break;
+            tokio::select! {
+                biased;
+                event_res = bus_rx.recv() => {
+                    if let Ok(timed) = event_res && is_shutdown_or_stop_event(&timed.event) {
+                        info!("PPPoE service received shutdown/stop event, exiting serve loop");
+                        break 'main_loop;
+                    }
                 }
-                Err(e) => {
-                    self.attempt += 1;
-                    warn!(
-                        attempt = self.attempt,
-                        error = %e,
-                        delay_secs = self.cfg.reconnect_delay_secs,
-                        "PPPoE session error, scheduling reconnection"
-                    );
+                flow_res = self.run_session_flow() => {
+                    match flow_res {
+                        Ok(()) => {
+                            info!("PPPoE service session finished cleanly");
+                            break 'main_loop;
+                        }
+                        Err(e) => {
+                            if !ctx.is_running() {
+                                break 'main_loop;
+                            }
+                            self.attempt += 1;
+                            warn!(
+                                attempt = self.attempt,
+                                error = %e,
+                                delay_secs = self.cfg.reconnect_delay_secs,
+                                "PPPoE session error, scheduling reconnection"
+                            );
 
-                    let _ =
-                        ctx
-                            .bus()
-                            .publish(LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
-                                attempt: self.attempt,
-                                next_retry_secs: self.cfg.reconnect_delay_secs,
-                            }));
+                            let _ =
+                                ctx
+                                    .bus()
+                                    .publish(LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
+                                        attempt: self.attempt,
+                                        next_retry_secs: self.cfg.reconnect_delay_secs,
+                                    }));
 
-                    let delay = Duration::from_secs(self.cfg.reconnect_delay_secs);
-                    tokio::select! {
-                        () = tokio::time::sleep(delay) => {}
-                        res = bus_rx.recv() => {
-                            if let Ok(timed) = res
-                                && matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-                                    break;
+                            let delay = Duration::from_secs(self.cfg.reconnect_delay_secs);
+                            tokio::select! {
+                                () = tokio::time::sleep(delay) => {}
+                                res = bus_rx.recv() => {
+                                    if let Ok(timed) = res
+                                        && is_shutdown_or_stop_event(&timed.event)
+                                    {
+                                        info!("PPPoE service received shutdown during reconnect delay");
+                                        break 'main_loop;
+                                    }
                                 }
+                            }
                         }
                     }
                 }
@@ -404,6 +443,25 @@ impl AsyncService for PppoeService {
 
     async fn cleanup(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         ctx.set_pppoe_ready(false);
+        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take() {
+            if self.cfg.send_padt_on_shutdown {
+                info!(
+                    wan_iface = %self.cfg.wan_iface,
+                    session_id,
+                    "Sending PPPoE PADT frame during service cleanup"
+                );
+                let _ = discovery::send_padt(
+                    &self.cfg.wan_iface,
+                    wan_mac,
+                    ac_mac,
+                    session_id,
+                );
+            }
+        }
+        if self.cfg.nftables.enabled {
+            crate::nftables::cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
+        }
+        let _ = ctx.apply(DeviceUpdate::PppoeStatusUpdated { status: None });
         Ok(())
     }
 }

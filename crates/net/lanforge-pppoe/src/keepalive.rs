@@ -68,9 +68,23 @@ pub async fn run_keepalive(
 
             res = bus_rx.recv() => {
                 let Ok(event) = res else { continue; };
-                if matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-                    debug!("Shutdown received during keepalive loop");
-                    return Ok(());
+                match event.event {
+                    LanforgeEvent::System(SystemEvent::Shutdown) => {
+                        debug!("Shutdown received during keepalive loop");
+                        return Ok(());
+                    }
+                    LanforgeEvent::System(SystemEvent::ServiceControl { ref id, ref action })
+                        if id == "pppoe"
+                            && matches!(
+                                action,
+                                lanforge_types::system::ServiceAction::Stop
+                                    | lanforge_types::system::ServiceAction::Restart
+                            ) =>
+                    {
+                        debug!("ServiceControl {:?} received during keepalive loop", action);
+                        return Ok(());
+                    }
+                    _ => {}
                 }
             }
         }
