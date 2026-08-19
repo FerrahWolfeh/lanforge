@@ -149,6 +149,32 @@ impl EbpfSession {
             let _ = map.remove(&self.ifindex);
             let _ = map.remove(&0u32);
         }
+
+        // 1. Detach XDP program from physical interface
+        let _ = std::process::Command::new("ip")
+            .args(["link", "set", "dev", &self.ifname, "xdp", "off"])
+            .output();
+
+        // 2. Remove TC clsact qdisc from physical interface
+        let _ = std::process::Command::new("tc")
+            .args(["qdisc", "del", "dev", &self.ifname, "clsact"])
+            .output();
+
+        // 3. Restore standard hardware TSO/GSO/TX offloads
+        let _ = std::process::Command::new("ethtool")
+            .args([
+                "-K",
+                &self.ifname,
+                "tso",
+                "on",
+                "gso",
+                "on",
+                "tx",
+                "on",
+                "tx-checksum-ip-generic",
+                "on",
+            ])
+            .output();
     }
 }
 

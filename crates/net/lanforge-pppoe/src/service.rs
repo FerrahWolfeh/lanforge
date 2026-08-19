@@ -272,6 +272,13 @@ impl PppoeService {
             crate::nftables::cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
         }
 
+        crate::kernel::deconfigure_interface(
+            &self.cfg.wan_iface,
+            self.cfg.dataplane == lanforge_types::network::pppoe::PppoeDataplane::Ebpf,
+            None,
+        )
+        .await;
+
         if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take() {
             if self.cfg.send_padt_on_shutdown {
                 let _ = discovery::send_padt(
@@ -443,24 +450,30 @@ impl AsyncService for PppoeService {
 
     async fn cleanup(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         ctx.set_pppoe_ready(false);
-        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take() {
-            if self.cfg.send_padt_on_shutdown {
-                info!(
-                    wan_iface = %self.cfg.wan_iface,
-                    session_id,
-                    "Sending PPPoE PADT frame during service cleanup"
-                );
-                let _ = discovery::send_padt(
-                    &self.cfg.wan_iface,
-                    wan_mac,
-                    ac_mac,
-                    session_id,
-                );
-            }
+        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
+            && self.cfg.send_padt_on_shutdown
+        {
+            info!(
+                wan_iface = %self.cfg.wan_iface,
+                session_id,
+                "Sending PPPoE PADT frame during service cleanup"
+            );
+            let _ = discovery::send_padt(
+                &self.cfg.wan_iface,
+                wan_mac,
+                ac_mac,
+                session_id,
+            );
         }
         if self.cfg.nftables.enabled {
             crate::nftables::cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
         }
+        crate::kernel::deconfigure_interface(
+            &self.cfg.wan_iface,
+            self.cfg.dataplane == lanforge_types::network::pppoe::PppoeDataplane::Ebpf,
+            None,
+        )
+        .await;
         let _ = ctx.apply(DeviceUpdate::PppoeStatusUpdated { status: None });
         Ok(())
     }

@@ -567,3 +567,45 @@ async fn add_ipv6_link_local(
             .await;
     }
 }
+
+pub async fn deconfigure_interface(
+    ifname: &str,
+    is_ebpf: bool,
+    peer_ip: Option<Ipv4Addr>,
+) {
+    if is_ebpf && !ifname.starts_with("ppp") {
+        debug!(ifname, "Deconfiguring eBPF physical interface routes and IP addresses");
+
+        // 1. Delete default IPv4 and IPv6 routes via WAN
+        let _ = tokio::process::Command::new("ip")
+            .args(["route", "del", "default", "dev", ifname])
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("ip")
+            .args(["-6", "route", "del", "default", "dev", ifname])
+            .output()
+            .await;
+
+        // 2. Delete peer route and static neighbour entry
+        if let Some(peer) = peer_ip {
+            let _ = tokio::process::Command::new("ip")
+                .args(["route", "del", &format!("{peer}/32"), "dev", ifname])
+                .output()
+                .await;
+            let _ = tokio::process::Command::new("ip")
+                .args(["neigh", "del", &peer.to_string(), "dev", ifname])
+                .output()
+                .await;
+        }
+
+        // 3. Flush assigned IPv4 and IPv6 addresses
+        let _ = tokio::process::Command::new("ip")
+            .args(["-4", "addr", "flush", "dev", ifname, "scope", "global"])
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("ip")
+            .args(["-6", "addr", "flush", "dev", ifname, "scope", "global"])
+            .output()
+            .await;
+    }
+}
