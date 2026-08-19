@@ -1,8 +1,11 @@
-use crate::cli::{Execute, LanforgeClient};
+use crate::cli::{
+    Execute, LanforgeClient,
+    wizard::confirm_destructive,
+};
 use clap::Subcommand;
 use color_eyre::eyre::{Result, eyre};
 use iocraft::prelude::*;
-use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig};
+use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig, PppoeDataplane};
 use lanforge_types::system::PppoeStatusResponse;
 use std::str::FromStr;
 
@@ -39,6 +42,9 @@ pub struct PppoeSetConfigArgs {
     /// Enable or disable `PPPoE` service (true/false)
     #[arg(long)]
     pub enabled: Option<bool>,
+    /// Data plane implementation: 'kernel' (default, /dev/ppp) or 'ebpf' (Generic XDP + TC)
+    #[arg(long)]
+    pub dataplane: Option<String>,
     /// Physical WAN interface name (e.g. eth1, end1)
     #[arg(long)]
     pub wan_iface: Option<String>,
@@ -122,6 +128,23 @@ impl Execute for PppoeArgs {
                 let mut updated = set_args.enabled.is_some();
                 if let Some(enabled) = set_args.enabled {
                     cfg.enabled = enabled;
+                }
+                if let Some(dp_str) = set_args.dataplane {
+                    let new_dp = dp_str
+                        .parse::<PppoeDataplane>()
+                        .map_err(|e| eyre!("Invalid dataplane: {e}"))?;
+                    if new_dp == PppoeDataplane::Ebpf && cfg.dataplane != PppoeDataplane::Ebpf {
+                        println!("⚠️  WARNING: eBPF mode for PPPoE is EXPERIMENTAL and prone to bugs, packet handling quirks, and instability.");
+                        if !confirm_destructive(
+                            client,
+                            "Are you sure you want to enable experimental eBPF mode?",
+                        )? {
+                            println!("Aborted: PPPoE configuration update cancelled.");
+                            return Ok(());
+                        }
+                    }
+                    cfg.dataplane = new_dp;
+                    updated = true;
                 }
                 if let Some(iface) = set_args.wan_iface {
                     cfg.wan_iface = iface;
@@ -223,6 +246,13 @@ fn render_pppoe_status(status: &PppoeStatusResponse, ascii: bool) {
             .join(", ")
     };
 
+    let (dp_str, dp_color) = match status.dataplane {
+        Some(PppoeDataplane::Ebpf) => {
+            ("eBPF Fast-Path (Generic XDP + TC) [EXPERIMENTAL / UNSTABLE]", Color::Yellow)
+        }
+        _ => ("Linux Kernel (ppp_generic)", Color::Cyan),
+    };
+
     element! {
         View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
             View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
@@ -231,6 +261,10 @@ fn render_pppoe_status(status: &PppoeStatusResponse, ascii: bool) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Session State: ", weight: Weight::Bold)
                 Text(content: state_str, color: state_color, weight: Weight::Bold)
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Data Plane: ", color: Color::DarkGrey)
+                Text(content: dp_str.to_string(), color: dp_color, weight: Weight::Bold)
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Virtual Interface: ", color: Color::DarkGrey)
@@ -282,6 +316,12 @@ fn render_pppoe_config(cfg: &PppoeConfig, ascii: bool) {
     } else {
         "No (Debug/Fast-Reconnect)"
     };
+    let (dp_str, dp_color) = match cfg.dataplane {
+        PppoeDataplane::Ebpf => {
+            ("eBPF (Generic XDP + TC Fast-Path) [EXPERIMENTAL]", Color::Yellow)
+        }
+        PppoeDataplane::Kernel => ("Kernel (ppp_generic)", Color::Cyan),
+    };
 
     element! {
         View(flex_direction: FlexDirection::Column, padding: 1, padding_left: 2) {
@@ -291,6 +331,10 @@ fn render_pppoe_config(cfg: &PppoeConfig, ascii: bool) {
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Service Enabled: ", weight: Weight::Bold)
                 Text(content: enabled_str, color: enabled_color, weight: Weight::Bold)
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "Data Plane: ", color: Color::DarkGrey)
+                Text(content: dp_str.to_string(), color: dp_color, weight: Weight::Bold)
             }
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "WAN Interface: ", color: Color::DarkGrey)
